@@ -56,10 +56,10 @@ function createChatRouter({ chatService, cliBackend }) {
   });
 
   // ── List conversations ─────────────────────────────────────────────────────
-  router.get('/conversations', (req, res) => {
+  router.get('/conversations', async (req, res) => {
     try {
       const q = req.query.q || '';
-      const convs = q ? chatService.searchConversations(q) : chatService.listConversations();
+      const convs = q ? await chatService.searchConversations(q) : await chatService.listConversations();
       res.json({ conversations: convs });
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -67,9 +67,9 @@ function createChatRouter({ chatService, cliBackend }) {
   });
 
   // ── Get single conversation ────────────────────────────────────────────────
-  router.get('/conversations/:id', (req, res) => {
+  router.get('/conversations/:id', async (req, res) => {
     try {
-      const conv = chatService.getConversation(req.params.id);
+      const conv = await chatService.getConversation(req.params.id);
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
       res.json(conv);
     } catch (err) {
@@ -78,9 +78,9 @@ function createChatRouter({ chatService, cliBackend }) {
   });
 
   // ── Create conversation ────────────────────────────────────────────────────
-  router.post('/conversations', csrfGuard, (req, res) => {
+  router.post('/conversations', csrfGuard, async (req, res) => {
     try {
-      const conv = chatService.createConversation(req.body.title, req.body.workingDir);
+      const conv = await chatService.createConversation(req.body.title, req.body.workingDir);
       res.json(conv);
     } catch (err) {
       res.status(500).json({ error: err.message });
@@ -88,9 +88,9 @@ function createChatRouter({ chatService, cliBackend }) {
   });
 
   // ── Rename conversation ────────────────────────────────────────────────────
-  router.put('/conversations/:id', csrfGuard, (req, res) => {
+  router.put('/conversations/:id', csrfGuard, async (req, res) => {
     try {
-      const conv = chatService.renameConversation(req.params.id, req.body.title);
+      const conv = await chatService.renameConversation(req.params.id, req.body.title);
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
       res.json(conv);
     } catch (err) {
@@ -99,7 +99,7 @@ function createChatRouter({ chatService, cliBackend }) {
   });
 
   // ── Delete conversation ────────────────────────────────────────────────────
-  router.delete('/conversations/:id', csrfGuard, (req, res) => {
+  router.delete('/conversations/:id', csrfGuard, async (req, res) => {
     try {
       // Abort any active stream
       const entry = activeStreams.get(req.params.id);
@@ -107,7 +107,7 @@ function createChatRouter({ chatService, cliBackend }) {
         entry.abort();
         activeStreams.delete(req.params.id);
       }
-      const ok = chatService.deleteConversation(req.params.id);
+      const ok = await chatService.deleteConversation(req.params.id);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
     } catch (err) {
@@ -116,11 +116,11 @@ function createChatRouter({ chatService, cliBackend }) {
   });
 
   // ── Download conversation as markdown ──────────────────────────────────────
-  router.get('/conversations/:id/download', (req, res) => {
+  router.get('/conversations/:id/download', async (req, res) => {
     try {
-      const md = chatService.conversationToMarkdown(req.params.id);
+      const md = await chatService.conversationToMarkdown(req.params.id);
       if (!md) return res.status(404).json({ error: 'Conversation not found' });
-      const conv = chatService.getConversation(req.params.id);
+      const conv = await chatService.getConversation(req.params.id);
       const filename = (conv.title || 'conversation').replace(/[^a-zA-Z0-9-_ ]/g, '').substring(0, 50).trim() + '.md';
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
@@ -131,9 +131,9 @@ function createChatRouter({ chatService, cliBackend }) {
   });
 
   // ── Session history ────────────────────────────────────────────────────────
-  router.get('/conversations/:id/sessions', (req, res) => {
+  router.get('/conversations/:id/sessions', async (req, res) => {
     try {
-      const sessions = chatService.getSessionHistory(req.params.id);
+      const sessions = await chatService.getSessionHistory(req.params.id);
       if (!sessions) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ sessions });
     } catch (err) {
@@ -142,13 +142,13 @@ function createChatRouter({ chatService, cliBackend }) {
   });
 
   // ── Reset session ──────────────────────────────────────────────────────────
-  router.post('/conversations/:id/reset', csrfGuard, (req, res) => {
+  router.post('/conversations/:id/reset', csrfGuard, async (req, res) => {
     try {
       // Block if streaming
       if (activeStreams.has(req.params.id)) {
         return res.status(409).json({ error: 'Cannot reset session while streaming' });
       }
-      const result = chatService.resetSession(req.params.id);
+      const result = await chatService.resetSession(req.params.id);
       if (!result) return res.status(404).json({ error: 'Conversation not found' });
       res.json(result);
     } catch (err) {
@@ -165,17 +165,17 @@ function createChatRouter({ chatService, cliBackend }) {
       return res.status(400).json({ error: 'Message content required' });
     }
 
-    const conv = chatService.getConversation(convId);
+    const conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
 
     // Update backend if changed
     if (backend && backend !== conv.backend) {
       conv.backend = backend;
-      chatService.saveConversation(conv);
+      await chatService.saveConversation(conv);
     }
 
     // Add user message
-    const userMsg = chatService.addMessage(convId, 'user', content.trim(), backend || conv.backend);
+    const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backend || conv.backend);
 
     // Determine if this is the first message in the current Claude Code session
     const currentSession = conv.sessions[conv.sessions.length - 1];
@@ -249,7 +249,7 @@ function createChatRouter({ chatService, cliBackend }) {
             const finalContent = resultText || fullResponse;
             console.log(`[chat] Stream done for conv=${convId}, responseLen=${finalContent.length}`);
             if (finalContent.trim()) {
-              const assistantMsg = chatService.addMessage(convId, 'assistant', finalContent.trim(), backend);
+              const assistantMsg = await chatService.addMessage(convId, 'assistant', finalContent.trim(), backend);
               res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
             }
             res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
@@ -284,8 +284,8 @@ function createChatRouter({ chatService, cliBackend }) {
   // ── File upload ─────────────────────────────────────────────────────────────
   const upload = multer({
     storage: multer.diskStorage({
-      destination: (req, file, cb) => {
-        const conv = chatService.getConversation(req.params.id);
+      destination: async (req, file, cb) => {
+        const conv = await chatService.getConversation(req.params.id);
         const dir = conv?.workingDir || cliBackend.workingDir;
         cb(null, dir);
       },
@@ -307,17 +307,17 @@ function createChatRouter({ chatService, cliBackend }) {
   });
 
   // ── Settings ───────────────────────────────────────────────────────────────
-  router.get('/settings', (req, res) => {
+  router.get('/settings', async (req, res) => {
     try {
-      res.json(chatService.getSettings());
+      res.json(await chatService.getSettings());
     } catch (err) {
       res.status(500).json({ error: err.message });
     }
   });
 
-  router.put('/settings', csrfGuard, (req, res) => {
+  router.put('/settings', csrfGuard, async (req, res) => {
     try {
-      const settings = chatService.saveSettings(req.body);
+      const settings = await chatService.saveSettings(req.body);
       res.json(settings);
     } catch (err) {
       res.status(500).json({ error: err.message });
