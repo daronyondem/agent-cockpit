@@ -51,11 +51,30 @@ app.get('/api/csrf-token', (req, res) => {
 
 const chatService = new ChatService(__dirname);
 const cliBackend = new CLIBackend({ workingDir: config.DEFAULT_WORKSPACE });
-const chatRouter = createChatRouter({ chatService, cliBackend });
+const { router: chatRouter, shutdown: chatShutdown } = createChatRouter({ chatService, cliBackend });
 app.use('/api/chat', chatRouter);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-app.listen(config.PORT, () => {
+const server = app.listen(config.PORT, () => {
   console.log(`Agent Cockpit running on port ${config.PORT}`);
 });
+
+function shutdown(signal) {
+  console.log(`\n[shutdown] Received ${signal}, shutting down gracefully...`);
+
+  chatShutdown();
+
+  server.close(() => {
+    console.log('[shutdown] HTTP server closed');
+    process.exit(0);
+  });
+
+  setTimeout(() => {
+    console.error('[shutdown] Forcing exit after 10s timeout');
+    process.exit(1);
+  }, 10000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
