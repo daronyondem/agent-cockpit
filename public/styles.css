@@ -439,6 +439,19 @@
     color: var(--text);
   }
 
+  .chat-msg-avatar-svg {
+    background: none !important;
+    border-radius: 6px !important;
+    overflow: hidden;
+    padding: 0;
+  }
+
+  .chat-msg-avatar-svg svg {
+    width: 28px;
+    height: 28px;
+    display: block;
+  }
+
   .chat-msg-body {
     flex: 1;
     min-width: 0;
