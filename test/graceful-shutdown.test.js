@@ -7,7 +7,15 @@ const PORT = 3399;
 function startServer() {
   return spawn('node', ['server.js'], {
     cwd: ROOT,
-    env: { ...process.env, PORT: String(PORT) },
+    env: {
+      ...process.env,
+      PORT: String(PORT),
+      SESSION_SECRET: 'test-secret',
+      GOOGLE_CLIENT_ID: 'test-client-id',
+      GOOGLE_CLIENT_SECRET: 'test-client-secret',
+      GOOGLE_CALLBACK_URL: 'http://localhost:3399/auth/google/callback',
+      ALLOWED_EMAIL: 'test@test.com',
+    },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
@@ -44,7 +52,9 @@ function waitForExit(server) {
 async function testSignal(signal) {
   const server = startServer();
   let stdout = '';
+  let stderr = '';
   server.stdout.on('data', (d) => { stdout += d.toString(); });
+  server.stderr.on('data', (d) => { stderr += d.toString(); });
 
   await waitForReady(server);
   server.kill(signal);
