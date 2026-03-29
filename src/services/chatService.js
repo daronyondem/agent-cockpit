@@ -234,6 +234,14 @@ class ChatService {
     }));
   }
 
+  async sessionToMarkdown(convId, sessionNumber) {
+    const conv = await this.getConversation(convId);
+    if (!conv) return null;
+    const session = conv.sessions.find(s => s.number === sessionNumber);
+    if (!session) return null;
+    return this._sessionToMarkdown(conv, session);
+  }
+
   _sessionToMarkdown(conv, session) {
     const lines = [
       `# ${conv.title}`,
