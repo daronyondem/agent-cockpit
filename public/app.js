@@ -7,6 +7,23 @@ function esc(str) {
     .replace(/"/g, '&quot;');
 }
 
+// ─── Theme ───────────────────────────────────────────────────────────────────
+function applyTheme(theme) {
+  let resolved = theme;
+  if (theme === 'system') {
+    resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  document.documentElement.setAttribute('data-theme', resolved);
+  try { localStorage.setItem('agent-cockpit-theme', theme); } catch (e) {}
+}
+
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  const cached = localStorage.getItem('agent-cockpit-theme') || 'system';
+  if (cached === 'system') applyTheme('system');
+});
+
+applyTheme(localStorage.getItem('agent-cockpit-theme') || 'system');
+
 // ─── State ────────────────────────────────────────────────────────────────────
 let csrfToken = null;
 
@@ -75,6 +92,12 @@ function chatInit() {
   chatInitialized = true;
   chatWireEvents();
   chatLoadConversations();
+
+  // Sync theme from server settings
+  chatFetch('settings').then(res => res.json()).then(s => {
+    chatSettingsData = s;
+    applyTheme(s.theme || 'system');
+  }).catch(() => {});
 }
 
 function chatWireEvents() {
@@ -1191,6 +1214,7 @@ async function chatSaveSettings() {
       responseStyle: document.getElementById('chat-settings-style')?.value || '',
     },
   };
+  applyTheme(settings.theme);
   try {
     await chatFetch('settings', { method: 'PUT', body: settings });
     chatSettingsData = settings;
