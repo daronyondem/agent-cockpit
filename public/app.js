@@ -1056,7 +1056,7 @@ async function chatShowSessions() {
     });
     document.querySelectorAll('.chat-dl-session-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        window.open(apiUrl(`conversations/${chatActiveConvId}/sessions/${btn.dataset.session}/download`), '_blank');
+        window.open(apiUrl(`chat/conversations/${chatActiveConvId}/sessions/${btn.dataset.session}/download`), '_blank');
       });
     });
   } catch (err) {
