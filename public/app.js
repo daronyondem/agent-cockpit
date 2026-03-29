@@ -1035,7 +1035,10 @@ async function chatShowSessions() {
               <div style="display:flex;align-items:center;gap:8px;">
                 <strong>Session ${s.number}</strong> ${status}
               </div>
-              <button class="chat-header-btn chat-view-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">View</button>
+              <div style="display:flex;gap:6px;">
+                <button class="chat-header-btn chat-dl-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">Download</button>
+                <button class="chat-header-btn chat-view-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">View</button>
+              </div>
             </div>
             <div style="font-size:11px;color:var(--muted);margin-top:2px;">
               Started: ${esc(started)}${ended ? ` — Ended: ${esc(ended)}` : ''}
@@ -1050,6 +1053,11 @@ async function chatShowSessions() {
     chatShowModal('Session History', html);
     document.querySelectorAll('.chat-view-session-btn').forEach(btn => {
       btn.addEventListener('click', () => chatViewSession(Number(btn.dataset.session)));
+    });
+    document.querySelectorAll('.chat-dl-session-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        window.open(apiUrl(`conversations/${chatActiveConvId}/sessions/${btn.dataset.session}/download`), '_blank');
+      });
     });
   } catch (err) {
     alert('Failed to load sessions: ' + err.message);

@@ -130,6 +130,23 @@ function createChatRouter({ chatService, cliBackend }) {
     }
   });
 
+  // ── Download session as markdown ────────────────────────────────────────────
+  router.get('/conversations/:id/sessions/:num/download', async (req, res) => {
+    try {
+      const sessionNumber = Number(req.params.num);
+      const md = await chatService.sessionToMarkdown(req.params.id, sessionNumber);
+      if (!md) return res.status(404).json({ error: 'Session not found' });
+      const conv = await chatService.getConversation(req.params.id);
+      const title = (conv.title || 'conversation').replace(/[^a-zA-Z0-9-_ ]/g, '').substring(0, 50).trim();
+      const filename = `${title}-session-${sessionNumber}.md`;
+      res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(md);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Session history ────────────────────────────────────────────────────────
   router.get('/conversations/:id/sessions', async (req, res) => {
     try {
