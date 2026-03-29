@@ -1,6 +1,7 @@
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
+const FileStore = require('session-file-store')(session);
 const config = require('./src/config');
 const { setupAuth, requireAuth } = require('./src/middleware/auth');
 const { ensureCsrfToken } = require('./src/middleware/csrf');
@@ -16,6 +17,11 @@ app.set('trust proxy', 1);
 applySecurity(app);
 
 app.use(session({
+  store: new FileStore({
+    path: path.join(__dirname, 'data', 'sessions'),
+    ttl: 24 * 60 * 60,
+    retries: 0,
+  }),
   secret: config.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
