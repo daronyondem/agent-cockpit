@@ -1,5 +1,14 @@
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const rateLimit = require('express-rate-limit');
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,                   // 20 attempts per window
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: 'Too many authentication attempts, please try again later.',
+});
 
 function setupAuth(app, config) {
   passport.use(new GoogleStrategy(
@@ -23,9 +32,9 @@ function setupAuth(app, config) {
   app.use(passport.initialize());
   app.use(passport.session());
 
-  app.get('/auth/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+  app.get('/auth/google', authLimiter, passport.authenticate('google', { scope: ['profile', 'email'] }));
 
-  app.get('/auth/google/callback',
+  app.get('/auth/google/callback', authLimiter,
     passport.authenticate('google', { failureRedirect: '/auth/denied' }),
     (req, res) => res.redirect('/'));
 
