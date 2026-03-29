@@ -1,6 +1,5 @@
 const { spawn } = require('child_process');
 const path = require('path');
-const assert = require('assert');
 
 const ROOT = path.resolve(__dirname, '..');
 const PORT = 3399;
@@ -44,43 +43,24 @@ function waitForExit(server) {
 
 async function testSignal(signal) {
   const server = startServer();
-  let stderr = '';
   let stdout = '';
   server.stdout.on('data', (d) => { stdout += d.toString(); });
-  server.stderr.on('data', (d) => { stderr += d.toString(); });
 
   await waitForReady(server);
   server.kill(signal);
   const exitCode = await waitForExit(server);
 
-  assert.strictEqual(exitCode, 0, `Expected exit code 0 for ${signal}, got ${exitCode}\nstderr: ${stderr}`);
-  assert.ok(stdout.includes(`Received ${signal}`), `Expected shutdown log for ${signal}\nstdout: ${stdout}`);
-  assert.ok(stdout.includes('HTTP server closed'), `Expected server closed log\nstdout: ${stdout}`);
+  expect(exitCode).toBe(0);
+  expect(stdout).toContain(`Received ${signal}`);
+  expect(stdout).toContain('HTTP server closed');
 }
 
-async function run() {
-  const tests = [
-    ['SIGINT shuts down gracefully', () => testSignal('SIGINT')],
-    ['SIGTERM shuts down gracefully', () => testSignal('SIGTERM')],
-  ];
+describe('graceful shutdown', () => {
+  test('SIGINT shuts down gracefully', async () => {
+    await testSignal('SIGINT');
+  }, 15000);
 
-  let passed = 0;
-  let failed = 0;
-
-  for (const [name, fn] of tests) {
-    try {
-      await fn();
-      console.log(`  ✓ ${name}`);
-      passed++;
-    } catch (err) {
-      console.log(`  ✗ ${name}`);
-      console.log(`    ${err.message}`);
-      failed++;
-    }
-  }
-
-  console.log(`\n${passed} passed, ${failed} failed`);
-  process.exit(failed > 0 ? 1 : 0);
-}
-
-run();
+  test('SIGTERM shuts down gracefully', async () => {
+    await testSignal('SIGTERM');
+  }, 15000);
+});

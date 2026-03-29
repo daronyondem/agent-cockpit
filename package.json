@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "start": "node server.js",
-    "test": "node test/graceful-shutdown.test.js"
+    "test": "jest"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
@@ -15,5 +15,8 @@
     "on-headers": "^1.0.2",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0"
+  },
+  "devDependencies": {
+    "jest": "^30.3.0"
   }
 }
