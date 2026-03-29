@@ -1,4 +1,5 @@
 const fs = require('fs');
+const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
 
@@ -10,7 +11,7 @@ class ChatService {
     this.artifactsDir = path.join(this.baseDir, 'artifacts');
     this.settingsFile = path.join(this.baseDir, 'settings.json');
 
-    // Ensure directories exist
+    // Ensure directories exist (sync in constructor only — runs once at startup)
     for (const dir of [this.conversationsDir, this.archivesDir, this.artifactsDir]) {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     }
@@ -26,7 +27,7 @@ class ChatService {
     return crypto.randomUUID();
   }
 
-  createConversation(title, workingDir) {
+  async createConversation(title, workingDir) {
     const id = this._newId();
     const now = new Date().toISOString();
     const sessionId = this._newId();
@@ -48,28 +49,40 @@ class ChatService {
         messageCount: 0,
       }],
     };
-    fs.writeFileSync(this._convPath(id), JSON.stringify(conv, null, 2), 'utf8');
+    await fsp.writeFile(this._convPath(id), JSON.stringify(conv, null, 2), 'utf8');
     return conv;
   }
 
-  getConversation(id) {
+  async getConversation(id) {
     const p = this._convPath(id);
-    if (!fs.existsSync(p)) return null;
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
+    try {
+      const data = await fsp.readFile(p, 'utf8');
+      return JSON.parse(data);
+    } catch (err) {
+      if (err.code === 'ENOENT') return null;
+      throw err;
+    }
   }
 
-  saveConversation(conv) {
+  async saveConversation(conv) {
     conv.updatedAt = new Date().toISOString();
-    fs.writeFileSync(this._convPath(conv.id), JSON.stringify(conv, null, 2), 'utf8');
+    await fsp.writeFile(this._convPath(conv.id), JSON.stringify(conv, null, 2), 'utf8');
   }
 
-  listConversations() {
-    if (!fs.existsSync(this.conversationsDir)) return [];
-    const files = fs.readdirSync(this.conversationsDir).filter(f => f.endsWith('.json'));
+  async listConversations() {
+    let files;
+    try {
+      files = await fsp.readdir(this.conversationsDir);
+    } catch (err) {
+      if (err.code === 'ENOENT') return [];
+      throw err;
+    }
+    files = files.filter(f => f.endsWith('.json'));
     const convs = [];
     for (const f of files) {
       try {
-        const conv = JSON.parse(fs.readFileSync(path.join(this.conversationsDir, f), 'utf8'));
+        const data = await fsp.readFile(path.join(this.conversationsDir, f), 'utf8');
+        const conv = JSON.parse(data);
         convs.push({
           id: conv.id,
           title: conv.title,
@@ -89,27 +102,29 @@ class ChatService {
     return convs;
   }
 
-  renameConversation(id, newTitle) {
-    const conv = this.getConversation(id);
+  async renameConversation(id, newTitle) {
+    const conv = await this.getConversation(id);
     if (!conv) return null;
     conv.title = newTitle;
-    this.saveConversation(conv);
+    await this.saveConversation(conv);
     return conv;
   }
 
-  deleteConversation(id) {
+  async deleteConversation(id) {
     const p = this._convPath(id);
-    if (fs.existsSync(p)) {
-      fs.unlinkSync(p);
+    try {
+      await fsp.unlink(p);
       return true;
+    } catch (err) {
+      if (err.code === 'ENOENT') return false;
+      throw err;
     }
-    return false;
   }
 
   // ── Messages ───────────────────────────────────────────────────────────────
 
-  addMessage(convId, role, content, backend) {
-    const conv = this.getConversation(convId);
+  async addMessage(convId, role, content, backend) {
+    const conv = await this.getConversation(convId);
     if (!conv) return null;
 
     const msg = {
@@ -131,12 +146,12 @@ class ChatService {
     const currentSession = conv.sessions[conv.sessions.length - 1];
     if (currentSession) currentSession.messageCount++;
 
-    this.saveConversation(conv);
+    await this.saveConversation(conv);
     return msg;
   }
 
-  updateMessageContent(convId, messageId, newContent) {
-    const conv = this.getConversation(convId);
+  async updateMessageContent(convId, messageId, newContent) {
+    const conv = await this.getConversation(convId);
     if (!conv) return null;
 
     const msgIndex = conv.messages.findIndex(m => m.id === messageId);
@@ -154,14 +169,14 @@ class ChatService {
       timestamp: new Date().toISOString(),
     };
     conv.messages.push(msg);
-    this.saveConversation(conv);
+    await this.saveConversation(conv);
     return { conversation: conv, message: msg };
   }
 
   // ── Session Management ─────────────────────────────────────────────────────
 
-  resetSession(convId) {
-    const conv = this.getConversation(convId);
+  async resetSession(convId) {
+    const conv = await this.getConversation(convId);
     if (!conv) return null;
 
     const now = new Date();
@@ -170,7 +185,7 @@ class ChatService {
     // Archive current session to markdown
     const archiveContent = this._sessionToMarkdown(conv, currentSession);
     const archiveFilename = `${conv.id}_${currentSession.number}_${now.toISOString().replace(/[:.]/g, '-')}.md`;
-    fs.writeFileSync(
+    await fsp.writeFile(
       path.join(this.archivesDir, archiveFilename),
       archiveContent,
       'utf8'
@@ -202,7 +217,7 @@ class ChatService {
       messageCount: 0,
     });
 
-    this.saveConversation(conv);
+    await this.saveConversation(conv);
     return {
       conversation: conv,
       archiveFilename,
@@ -210,8 +225,8 @@ class ChatService {
     };
   }
 
-  getSessionHistory(convId) {
-    const conv = this.getConversation(convId);
+  async getSessionHistory(convId) {
+    const conv = await this.getConversation(convId);
     if (!conv) return null;
     return conv.sessions.map(s => ({
       ...s,
@@ -263,8 +278,8 @@ class ChatService {
 
   // ── Download entire conversation as Markdown ───────────────────────────────
 
-  conversationToMarkdown(convId) {
-    const conv = this.getConversation(convId);
+  async conversationToMarkdown(convId) {
+    const conv = await this.getConversation(convId);
     if (!conv) return null;
 
     const lines = [
@@ -300,37 +315,44 @@ class ChatService {
 
   // ── Search ─────────────────────────────────────────────────────────────────
 
-  searchConversations(query) {
+  async searchConversations(query) {
     if (!query) return this.listConversations();
     const q = query.toLowerCase();
-    const all = this.listConversations();
-    return all.filter(c => {
-      if (c.title.toLowerCase().includes(q)) return true;
-      if (c.lastMessage && c.lastMessage.toLowerCase().includes(q)) return true;
+    const all = await this.listConversations();
+    const results = [];
+    for (const c of all) {
+      if (c.title.toLowerCase().includes(q)) { results.push(c); continue; }
+      if (c.lastMessage && c.lastMessage.toLowerCase().includes(q)) { results.push(c); continue; }
       // Deep search: load full conversation
-      const conv = this.getConversation(c.id);
-      if (!conv) return false;
-      return conv.messages.some(m => m.content.toLowerCase().includes(q));
-    });
+      const conv = await this.getConversation(c.id);
+      if (!conv) continue;
+      if (conv.messages.some(m => m.content.toLowerCase().includes(q))) results.push(c);
+    }
+    return results;
   }
 
   // ── Settings ───────────────────────────────────────────────────────────────
 
-  getSettings() {
-    if (!fs.existsSync(this.settingsFile)) {
-      return {
-        theme: 'system',
-        sendBehavior: 'enter',
-        customInstructions: { aboutUser: '', responseStyle: '' },
-        defaultBackend: 'claude-code',
-        workingDirectory: '',
-      };
+  async getSettings() {
+    try {
+      const data = await fsp.readFile(this.settingsFile, 'utf8');
+      return JSON.parse(data);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        return {
+          theme: 'system',
+          sendBehavior: 'enter',
+          customInstructions: { aboutUser: '', responseStyle: '' },
+          defaultBackend: 'claude-code',
+          workingDirectory: '',
+        };
+      }
+      throw err;
     }
-    return JSON.parse(fs.readFileSync(this.settingsFile, 'utf8'));
   }
 
-  saveSettings(settings) {
-    fs.writeFileSync(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8');
+  async saveSettings(settings) {
+    await fsp.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8');
     return settings;
   }
 }
