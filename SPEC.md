@@ -617,6 +617,13 @@ Single-page layout:
 
 **File:** `public/app.js` (~1325 lines)
 
+#### Constants
+
+```javascript
+CHAT_BACKENDS[]             // Array of { id, label } backend definitions; currently: [{ id: 'claude-code', label: 'Claude Code' }]
+CLAUDE_CODE_ICON            // Inline SVG string (28×28) — rounded-square icon used as avatar for Claude Code assistant messages
+```
+
 #### Global State
 
 ```javascript
@@ -758,6 +765,7 @@ Theme is applied by setting `data-theme` attribute on `<html>`:
 #### Key Components
 
 - **Message bubbles**: user (blue tint) aligned right, assistant (surface) aligned left
+- **Message avatars**: user messages show 👤 emoji in circular accent-colored badge; Claude Code assistant messages show an inline SVG icon (`.chat-msg-avatar-svg` — `border-radius: 6px`, no background, 28×28); other backends fall back to ⚡ emoji; error messages show `!` in red badge
 - **Code blocks**: dark background (`#1e1e2e`), header with language label and copy button, expandable for blocks > ~25 lines
 - **Modal**: centered overlay, max-width 600px, close button, scrollable body
 - **Context menu**: absolute positioned, border, shadow, appears on right-click
