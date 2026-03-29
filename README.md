@@ -61,3 +61,29 @@ Use the ngrok-provided URL to reach your local Agent Cockpit from any device. Ma
 7. Add `http://localhost:3334/auth/google/callback` to **Authorized redirect URIs**.
 8. Copy the Client ID and Client Secret into your `.env` file.
 9. Set `ALLOWED_EMAIL` to the Google account email you want to grant access.
+
+## Recommended Claude Code CLI Settings
+
+Agent Cockpit spawns Claude Code CLI processes on your behalf. To get the best experience, consider adding these settings to your `~/.claude/settings.json`:
+
+```json
+{
+  "attribution": {
+    "gitCommit": "",
+    "pullRequest": ""
+  },
+  "permissions": {
+    "allow": [
+      "Edit(**)"
+    ]
+  }
+}
+```
+
+**What these do:**
+
+- **`attribution.gitCommit: ""`** removes the `Co-Authored-By: Claude` trailer from git commits, so commits show only your name as author.
+- **`attribution.pullRequest: ""`** removes the Claude attribution from pull request descriptions.
+- **`permissions.allow: ["Edit(**)"]`** gives Claude Code permission to edit any file without prompting for confirmation. This is useful when running through Agent Cockpit since there is no interactive terminal to approve file edits. Without this, Claude Code may silently skip edits it considers outside its default allowed paths.
+
+These settings are optional but recommended for a smoother experience when using Agent Cockpit as your primary interface to Claude Code.
