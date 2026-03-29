@@ -102,9 +102,9 @@ function createChatRouter({ chatService, cliBackend }) {
   router.delete('/conversations/:id', csrfGuard, (req, res) => {
     try {
       // Abort any active stream
-      const abort = activeStreams.get(req.params.id);
-      if (abort) {
-        abort();
+      const entry = activeStreams.get(req.params.id);
+      if (entry) {
+        entry.abort();
         activeStreams.delete(req.params.id);
       }
       const ok = chatService.deleteConversation(req.params.id);
@@ -271,9 +271,9 @@ function createChatRouter({ chatService, cliBackend }) {
 
   // ── Abort streaming ────────────────────────────────────────────────────────
   router.post('/conversations/:id/abort', csrfGuard, (req, res) => {
-    const abort = activeStreams.get(req.params.id);
-    if (abort) {
-      abort();
+    const entry = activeStreams.get(req.params.id);
+    if (entry) {
+      entry.abort();
       activeStreams.delete(req.params.id);
       res.json({ ok: true });
     } else {
@@ -324,7 +324,16 @@ function createChatRouter({ chatService, cliBackend }) {
     }
   });
 
-  return router;
+  // ── Shutdown helper (abort all active CLI processes) ────────────────────────
+  function shutdown() {
+    for (const [convId, entry] of activeStreams) {
+      console.log(`[shutdown] Aborting active stream for conv=${convId}`);
+      entry.abort();
+    }
+    activeStreams.clear();
+  }
+
+  return { router, shutdown };
 }
 
 module.exports = { createChatRouter };
