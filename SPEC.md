@@ -475,6 +475,15 @@ Field: files[] (max 10 files)
 - File size limit: 50MB per file
 - Returns `{ files: [{ name, path, size }] }` where `path` is the absolute filesystem path to the uploaded file in the artifacts directory
 
+**Delete uploaded file:**
+```
+DELETE /api/chat/conversations/:id/upload/:filename  [CSRF]
+```
+
+- Sanitizes filename identically to upload: `/` and `\` replaced by `_`
+- Path traversal guard: verifies resolved path stays under `artifactsDir`
+- Returns `{ ok: true }`. `404` if file not found. `400` if path invalid.
+
 ### 9.7 Settings
 
 **Get settings:**
@@ -719,7 +728,8 @@ chatContextMenuEl           // Active context menu DOM element
 chatSettingsData            // Settings object from server
 chatInitialized             // Boolean — prevents double init
 chatPendingWorkingDir       // Working dir selected for new conversation
-chatPendingFiles[]          // Files queued for upload
+chatPendingFiles[]          // Pending upload entries: { file, status, progress, result, xhr }
+_ensureConvPromise          // Promise cache for concurrent chatEnsureConversation calls
 ```
 
 **`chatStreamingState` Map entry shape:**
@@ -758,32 +768,50 @@ chatPendingFiles[]          // Files queued for upload
 - `chatCreateConversationWithDir(workingDir)` — POSTs new conversation, adds to list, selects it
 - `chatSelectConversation(id)` — fetches full conversation, renders messages, updates header
 - `chatRenameConversation(id)` — prompts for new name, PUTs update
-- `chatDeleteConversation(id)` — confirms, DELETEs, clears selection if active
+- `chatDeleteConversation(id)` — confirms, DELETEs, clears selection if active. When the active conversation is deleted: aborts in-flight uploads, clears pending file chips, resets send button state, and renders the empty state.
 - `chatLoadConversations(query)` — fetches list, renders sidebar
 - `chatGroupConversations(convs)` — groups by relative date: "Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older"
 
 #### Messaging
 
-- `chatSendMessage()` — POSTs message, initializes `chatStreamingState` entry for the conversation, opens EventSource to `/stream`. The SSE loop writes all state to the Map entry rather than closure-local variables, enabling state persistence across conversation switches. After `chatRenderMessages()` renders the user message, the streaming bubble is only created if one wasn't already created by the render's streaming state restoration (guarded by `!state.streamingMsgEl` check to prevent duplicate bubbles).
+- `chatSendMessage()` — Gathers completed file paths from `chatPendingFiles` (no upload at send time — files are already on the server), appends `[Uploaded files: ...]` to message content, then POSTs message. Creates conversation if none exists (text-only messages without prior file attach). Initializes `chatStreamingState` entry for the conversation, opens EventSource to `/stream`. The SSE loop writes all state to the Map entry rather than closure-local variables, enabling state persistence across conversation switches. After `chatRenderMessages()` renders the user message, the streaming bubble is only created if one wasn't already created by the render's streaming state restoration (guarded by `!state.streamingMsgEl` check to prevent duplicate bubbles).
 - `chatStopStreaming()` — POSTs abort endpoint
 - `chatAppendStreamingMessage()` — inserts empty assistant message bubble with pulsing cursor
 - `chatUpdateStreamingMessage(msgEl, content, thinking)` — renders Markdown incrementally into the streaming bubble. Optionally shows thinking block in a collapsible `<details>` element.
 - `chatUpdateStreamingActivity(msgEl, tools, agents, planMode)` — renders rich tool activity display: activity history (completed tools with checkmarks), current tool with description, agent cards with spinners and type labels, plan mode banner.
 - `chatShowPlanApproval(msgEl, convId)` — shows approve/reject buttons for plan approval. On click, POSTs to `/conversations/:id/input` with `"yes"` or `"no"`, clears `pendingInteraction` state.
 - `chatShowUserQuestion(msgEl, convId, event)` — renders question text, clickable option buttons, and text input. On selection, POSTs answer to `/conversations/:id/input`, clears `pendingInteraction` state.
-- `chatUpdateSendButtonState()` — updates send button to show stop (■) when the current conversation is streaming, or send (↑) when idle. Called on conversation switch and stream completion.
+- `chatUpdateSendButtonState()` — updates send button to show stop (■) when the current conversation is streaming, or send (↑) when idle. Disables send when any upload is in progress (`status === 'uploading'`). Enables when text or completed files exist. Called on conversation switch, stream completion, upload progress, and file add/remove.
 - `chatRetryLast()` — sends the last user message again (for regeneration)
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API) — reads SSE lines from the response body, parses `data:` lines as JSON
 - **Streaming state restoration:** When `chatRenderMessages()` is called and `chatStreamingState` has an entry for the active conversation, it re-creates the streaming bubble and restores the UI: pending interactions (plan approval/user question), accumulated text/thinking, or active tool/agent display. Uses `streamingMsgEl.isConnected` to detect orphaned DOM nodes destroyed by `innerHTML` replacement. On `assistant_message` events, streaming state (content, thinking, tools, agents) is reset **before** calling `chatRenderMessages()` so the restored bubble shows typing dots rather than stale content duplicating the completed message.
 
 #### File Handling
 
+Files upload **immediately on attach**, not when the message is sent. Each file gets its own upload with per-file progress tracking via `XMLHttpRequest` (not `fetch`, which lacks upload progress events).
+
 - Drag-and-drop onto chat area → `chatAddPendingFiles(files)`
-- Paste from clipboard → detects image, creates File from blob
+- Paste from clipboard → detects image, creates File from blob with unique timestamp-based name
 - File input button → opens native file picker
-- `chatRenderFileChips()` — shows file names, sizes, and remove buttons above textarea
-- `chatUploadFiles(convId, files)` — POSTs FormData to upload endpoint
-- Files are uploaded when the user sends a message, before the message content is sent. The absolute file paths (from the upload response's `path` field) are embedded in the message text as `[Uploaded files: /abs/path/to/file1, /abs/path/to/file2]`, giving Claude Code CLI the full paths to read the files regardless of its working directory.
+- `chatEnsureConversation()` — auto-creates a conversation if none exists when files are attached. Uses promise caching (`_ensureConvPromise`) to handle concurrent calls from multiple files attached simultaneously.
+- `chatUploadSingleFile(convId, entry)` — uploads one file via XHR. Updates `entry.progress` on `xhr.upload.onprogress`, sets `entry.status` to `'done'` or `'error'` on completion. Stores XHR reference on entry for abort support.
+- `chatAddPendingFiles(files)` — creates entries with `status: 'uploading'`, renders chips immediately, ensures conversation exists, then fires parallel uploads.
+- `chatRemovePendingFile(index)` — if uploading: aborts XHR. If completed: fires DELETE to `/conversations/:id/upload/:filename` (fire-and-forget). Splices entry from array and re-renders.
+- `chatRenderFileChips()` — renders file chips with: progress bar (3px at bottom, accent color) during upload, checkmark icon on completion, error indicator on failure. Remove button always available.
+- `chatSelectConversation(id)` — aborts in-flight uploads and clears pending files when switching conversations.
+- When the message is sent, `chatSendMessage()` reads completed file paths from `chatPendingFiles` entries and embeds them as `[Uploaded files: /abs/path/to/file1, /abs/path/to/file2]`. No upload occurs at send time.
+- Send button is disabled while any upload is in progress.
+
+**`chatPendingFiles` entry shape:**
+```javascript
+{
+  file: File,                    // Browser File object
+  status: 'uploading'|'done'|'error',
+  progress: number,              // 0-100
+  result: { name, path, size }|null, // Server response on success
+  xhr: XMLHttpRequest|null       // For abort support
+}
+```
 
 #### Session Management
 
@@ -868,7 +896,7 @@ Theme is applied by setting `data-theme` attribute on `<html>`:
 - **Code blocks**: dark background (`#1e1e2e`), header with language label and copy button, expandable for blocks > ~25 lines
 - **Modal**: centered overlay, max-width 600px, close button, scrollable body
 - **Context menu**: absolute positioned, border, shadow, appears on right-click
-- **File chips**: horizontal row of chips showing filename, size, and remove button
+- **File chips**: horizontal row of chips showing filename, size, thumbnail (images), and remove button. Each chip has `position: relative; overflow: hidden` for the progress bar overlay. Upload states: progress bar (`.chat-file-chip-progress` / `.chat-file-chip-progress-bar`, 3px absolute bottom, accent color, `transition: width 0.15s`), done checkmark (`.chat-file-chip-done`), error indicator (`.chat-file-chip-error`, red). Error state adds `.error` class with red border.
 - **Drag-and-drop overlay**: full-screen overlay when dragging files
 - **Prompt cards**: centered cards in empty state for quick conversation starters
 - **Sidebar footer**: Settings and Sign Out buttons at bottom of sidebar
@@ -1003,7 +1031,7 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 
 ### Framework: Jest 30.x
 
-### Test Files (95 tests total)
+### Test Files (98 tests total)
 
 **`test/chatService.test.js`** (38 tests):
 - Creates conversations with title, working directory
@@ -1027,11 +1055,12 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - **extractToolDetails** (29 tests): Tests all 13 tool types — Read (with/without path), Write (with/without path, plan file detection), Edit (with/without path), Bash (with description/command/nothing, long command truncation at 60 chars), Grep (with pattern+glob, pattern only, nothing), Glob (with/without pattern), Agent (with/without inputs, subagentType default), TodoWrite, WebSearch (with/without query), WebFetch (with/without URL), EnterPlanMode, ExitPlanMode, AskUserQuestion (with/without questions). Tests edge cases: unknown tool, block id preservation, missing input graceful handling, shortenPath behavior (short paths unchanged, long paths shortened to last 2 segments).
 - **CLIBackend** (4 tests): Constructor defaults to `~/.openclaw/workspace`, `sendMessage` returns `{ stream, abort, sendInput }`, abort yields error and done events, `sendInput` does not throw after abort.
 
-**`test/chat.test.js`** (14 tests):
+**`test/chat.test.js`** (17 tests):
 - Uses mock CLI backend with configurable events and Express test server
 - **POST /input**: returns `ok:false` when no active stream, forwards text to `sendInput`, handles empty text, requires CSRF token
 - **SSE tool_activity forwarding**: enriched fields (tool, description, id), `isAgent` flag with `subagentType`, `isPlanMode`/`planAction`, `isQuestion` with `questions` array
 - **Turn boundary intermediate messages**: saves intermediate message on turn_boundary, saves thinking with intermediate message, skips empty boundaries, skips non-streaming text, saves result text as final message when no streaming deltas
+- **DELETE /upload/:filename**: deletes uploaded file, returns 404 for non-existent, sanitizes slashes in filename matching upload behavior
 - **POST /abort**: returns `ok:false` when no active stream
 
 **`test/graceful-shutdown.test.js`** (2 tests):
