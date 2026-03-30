@@ -79,11 +79,12 @@ agent-cockpit/
 │       └── cliBackend.js               # Claude CLI process spawning and streaming
 ├── public/
 │   ├── index.html                      # HTML shell (79 lines)
-│   ├── app.js                          # All frontend JavaScript (~1325 lines)
-│   └── styles.css                      # All CSS with light/dark theme (~1050 lines)
+│   ├── app.js                          # All frontend JavaScript (~1560 lines)
+│   └── styles.css                      # All CSS with light/dark theme (~1400 lines)
 ├── test/
-│   ├── chatService.test.js             # ChatService unit tests (28 tests)
-│   ├── cliBackend.test.js              # CLIBackend unit tests (4 tests)
+│   ├── chat.test.js                    # Chat route tests — /input endpoint, SSE forwarding, turn boundaries (15 tests)
+│   ├── chatService.test.js             # ChatService unit tests (41 tests)
+│   ├── cliBackend.test.js              # CLIBackend + extractToolDetails unit tests (33 tests)
 │   ├── graceful-shutdown.test.js       # Server shutdown tests (2 tests)
 │   └── sessionStore.test.js            # Session file-store tests (4 tests)
 └── data/                               # Runtime data (gitignored, created at startup)
@@ -404,19 +405,61 @@ GET /api/chat/conversations/:id/stream
 
 **SSE event format:**
 ```
-data: {"type":"text","content":"chunk of response text"}\n\n
+data: {"type":"text","content":"chunk of response text","streaming":true}\n\n
+data: {"type":"thinking","content":"thinking text","streaming":true}\n\n
+data: {"type":"tool_activity","tool":"Read","description":"Reading `app.js`","id":"tool_1"}\n\n
+data: {"type":"tool_activity","tool":"Agent","description":"Explore code","isAgent":true,"subagentType":"Explore"}\n\n
+data: {"type":"tool_activity","tool":"EnterPlanMode","isPlanMode":true,"planAction":"enter","description":"Entering plan mode"}\n\n
+data: {"type":"tool_activity","tool":"ExitPlanMode","isPlanMode":true,"planAction":"exit","description":"Plan ready for approval"}\n\n
+data: {"type":"tool_activity","tool":"AskUserQuestion","isQuestion":true,"questions":[...],"description":"Asking a question"}\n\n
+data: {"type":"turn_boundary"}\n\n
+data: {"type":"result","content":"final result text"}\n\n
 data: {"type":"assistant_message","message":{...full message object}}\n\n
 data: {"type":"error","error":"error message"}\n\n
 data: {"type":"done"}\n\n
 ```
 
-On stream completion: if there's response content, saves it as an assistant message, sends the `assistant_message` event, then sends `done`.
+**SSE event types:**
+
+| Type | Fields | Description |
+|------|--------|-------------|
+| `text` | `content`, `streaming` | Text delta from assistant. `streaming: true` for new content (vs. replayed history) |
+| `thinking` | `content`, `streaming` | Extended thinking delta from assistant |
+| `tool_activity` | `tool`, `description`, `id`, + optional enriched fields | Tool use notification with human-readable description |
+| `turn_boundary` | (none) | Marks boundary between assistant turns (e.g., between tool use rounds) |
+| `result` | `content` | Final result text from CLI |
+| `assistant_message` | `message` | Saved assistant message (intermediate on turn boundary, or final) |
+| `error` | `error` | Error message string |
+| `done` | (none) | Stream complete |
+
+**Enriched `tool_activity` fields** (set by `extractToolDetails()`):
+
+| Field | When set | Description |
+|-------|----------|-------------|
+| `isAgent` | Agent tool | Indicates sub-agent invocation |
+| `subagentType` | Agent tool | Agent type: `'Explore'`, `'general-purpose'`, etc. |
+| `isPlanMode` | EnterPlanMode, ExitPlanMode | Plan mode state change |
+| `planAction` | EnterPlanMode, ExitPlanMode | `'enter'` or `'exit'` |
+| `isQuestion` | AskUserQuestion | Interactive question for user |
+| `questions` | AskUserQuestion | Array of question objects with options |
+| `isPlanFile` | Write tool | `true` when writing to `.claude/plans/` |
+
+**Turn boundary behavior:** When a `turn_boundary` event arrives, the router saves any accumulated streaming content (text + thinking) as an intermediate assistant message. This preserves multi-turn responses (e.g., text before and after tool use) in the conversation history.
+
+On stream completion: if there's response content, saves it as an assistant message, sends the `assistant_message` event, then sends `done`. If only a `result` event was received (no streaming deltas), the result text is saved as the final message.
 
 **Abort streaming:**
 ```
 POST /api/chat/conversations/:id/abort  [CSRF]
 ```
 Kills the CLI process (SIGTERM), removes from activeStreams. Returns `{ ok: true }` or `{ ok: false, message: 'No active stream' }`.
+
+**Send interactive input:**
+```
+POST /api/chat/conversations/:id/input  [CSRF]
+Body: { text: string }
+```
+Writes text to the CLI process's stdin pipe for interactive responses (plan approval, user questions). Returns `{ ok: true }` on success, or `{ ok: false, message: 'No active stream' }` if no active stream exists.
 
 ### 9.6 File Upload
 
@@ -496,6 +539,7 @@ Writes the full body to `data/chat/settings.json`.
   content: string,              // Message text
   backend: string,              // Backend that generated the response
   timestamp: string,            // ISO 8601
+  thinking?: string,            // Extended thinking text (assistant messages only, omitted if empty/null)
   isSessionDivider?: boolean,   // true for session reset markers
   sessionNumber?: number        // Set on session divider messages
 }
@@ -523,7 +567,7 @@ Writes the full body to `data/chat/settings.json`.
 | `listConversations()` | Reads all `.json` files in conversations dir. Returns summaries sorted by `updatedAt` desc. Each summary: `{ id, title, createdAt, updatedAt, backend, workingDir, messageCount, lastMessage }` where `lastMessage` is first 100 chars of last message content. |
 | `renameConversation(id, newTitle)` | Updates title and saves. Returns `null` if not found. |
 | `deleteConversation(id)` | Deletes the JSON file. Returns `true`/`false`. |
-| `addMessage(convId, role, content, backend)` | Appends message. Auto-titles from first user message (80 chars, newlines→spaces). Increments current session's `messageCount`. |
+| `addMessage(convId, role, content, backend, thinking)` | Appends message. Auto-titles from first user message (80 chars, newlines→spaces). Increments current session's `messageCount`. Optional `thinking` parameter stores extended thinking text on the message (omitted if falsy). |
 | `updateMessageContent(convId, messageId, newContent)` | Forks conversation: truncates all messages after the target message, adds edited content as a new message. Returns `{ conversation, message }`. |
 | `resetSession(convId)` | Archives current session to Markdown file in `archives/`. Marks session as ended. Inserts a session divider message. Creates new session with fresh UUID. Returns `{ conversation, archiveFilename, newSessionNumber }`. |
 | `getSessionHistory(convId)` | Returns sessions array with computed `isCurrent` flag. |
@@ -540,6 +584,31 @@ Writes the full body to `data/chat/settings.json`.
 
 **Constructor:** `new CLIBackend(options)` — takes `{ workingDir }`, defaults to `~/.openclaw/workspace`.
 
+#### Helper Functions
+
+**`shortenPath(filePath)`** — shortens long file paths for display. Returns the original path if ≤3 segments, otherwise `.../{last}/{two}.js`. Returns empty string for falsy input.
+
+**`extractToolDetails(block)`** — parses a `tool_use` content block and returns an enriched detail object for UI display. Handles all Claude Code tool types:
+
+| Tool | Description format |
+|------|-------------------|
+| `Read` | `Reading \`{shortenPath}\`` or `Reading file` |
+| `Write` | `Writing \`{shortenPath}\``, sets `isPlanFile` if path contains `.claude/plans/` |
+| `Edit` | `Editing \`{shortenPath}\`` or `Editing file` |
+| `Bash` | Uses `input.description` if present, else `Running: \`{command}\`` (truncated at 60 chars), else `Running command` |
+| `Grep` | `Searching for \`{pattern}\` in {glob}` or `Searching files` |
+| `Glob` | `Finding files matching \`{pattern}\`` or `Finding files` |
+| `Agent` | Uses `input.description`, sets `isAgent: true`, `subagentType` (default `'general-purpose'`) |
+| `TodoWrite` | `Updating task list` |
+| `WebSearch` | `Searching: \`{query}\`` or `Searching the web` |
+| `WebFetch` | `Fetching: {url}` or `Fetching web content` |
+| `EnterPlanMode` | `Entering plan mode`, sets `isPlanMode: true`, `planAction: 'enter'` |
+| `ExitPlanMode` | `Plan ready for approval`, sets `isPlanMode: true`, `planAction: 'exit'` |
+| `AskUserQuestion` | `Asking a question`, sets `isQuestion: true`, `questions` array |
+| (unknown) | `Using {name}` |
+
+All detail objects include `tool` (name), `id` (block id or null), and `description`.
+
 #### `sendMessage(message, options)`
 
 **Parameters:**
@@ -548,7 +617,11 @@ Writes the full body to `data/chat/settings.json`.
 - `options.isNewSession` — boolean: `--session-id` (new) vs `--resume` (existing)
 - `options.workingDir` — optional override for CLI working directory
 
-**Returns:** `{ stream: AsyncIterable<StreamEvent>, abort: Function }`
+**Returns:** `{ stream: AsyncIterable<StreamEvent>, abort: Function, sendInput: Function }`
+
+- `stream` — async iterable yielding stream events
+- `abort()` — sets aborted flag and sends SIGTERM to CLI process
+- `sendInput(text)` — writes text + newline to the CLI process's stdin pipe (for interactive responses like plan approval and user questions). Safe to call after abort (no-op if process is gone).
 
 **Per-request state** — each call creates its own `state` object with `proc` and `aborted` flag. No shared mutable state between concurrent requests.
 
@@ -566,14 +639,20 @@ claude --print \
 **Process spawn:**
 - Command: `claude` (must be on PATH)
 - Working directory: `options.workingDir` or constructor default
-- stdio: stdin `ignore`, stdout `pipe`, stderr `pipe`
+- stdio: stdin `pipe`, stdout `pipe`, stderr `pipe`
 - Environment: inherits `process.env`
 
 **Stream parsing:**
 - Buffers stdout line-by-line
 - Each line is parsed as JSON
-- Event type `assistant` with `message.content[].text` → yields `{ type: 'text', content }`
-- Event type `content_block_delta` with `delta.text` → yields `{ type: 'text', content }`
+- Event type `assistant` with `message.content[]`:
+  - `type: 'text'` → yields `{ type: 'text', content }`
+  - `type: 'thinking'` → yields `{ type: 'thinking', content }`
+  - `type: 'tool_use'` → yields `{ type: 'tool_activity', ...extractToolDetails(block) }`
+- Event type `content_block_delta`:
+  - `delta.type: 'text_delta'` → yields `{ type: 'text', content, streaming: true }`
+  - `delta.type: 'thinking_delta'` → yields `{ type: 'thinking', content, streaming: true }`
+- Event type `user` → yields `{ type: 'turn_boundary' }`
 - Event type `result` → yields `{ type: 'result', content }`
 - Unparseable lines → yields `{ type: 'text', content: line }`
 - On close with non-zero exit code → yields `{ type: 'error', error: stderrOutput }`
@@ -615,7 +694,7 @@ Single-page layout:
 
 ### 11.2 Frontend JavaScript
 
-**File:** `public/app.js` (~1325 lines)
+**File:** `public/app.js` (~1560 lines)
 
 #### Constants
 
@@ -632,6 +711,7 @@ chatConversations[]         // Array of conversation summaries
 chatActiveConvId            // UUID of selected conversation
 chatActiveConv              // Full conversation object
 chatStreamingConvs          // Set of conversation IDs with active streams
+chatStreamingState          // Map<convId, StreamState> — per-conversation streaming state for persistence across view switches
 chatAbortController         // Current abort controller (not used for SSE; abort via API)
 chatSidebarCollapsed        // Boolean
 chatSearchTimeout           // Debounce timer for search
@@ -640,6 +720,19 @@ chatSettingsData            // Settings object from server
 chatInitialized             // Boolean — prevents double init
 chatPendingWorkingDir       // Working dir selected for new conversation
 chatPendingFiles[]          // Files queued for upload
+```
+
+**`chatStreamingState` Map entry shape:**
+```javascript
+{
+  assistantContent: string,      // Accumulated streaming text
+  assistantThinking: string,     // Accumulated thinking text
+  activeTools: Array,            // Current tool_activity events
+  activeAgents: Array,           // Current agent cards
+  planModeActive: boolean,       // Plan mode banner visible
+  pendingInteraction: object|null, // { type: 'planApproval' } or { type: 'userQuestion', event }
+  streamingMsgEl: HTMLElement|null // Reference to current streaming bubble DOM element
+}
 ```
 
 #### API Communication
@@ -671,12 +764,17 @@ chatPendingFiles[]          // Files queued for upload
 
 #### Messaging
 
-- `chatSendMessage()` — POSTs message, creates streaming message element, opens EventSource to `/stream`
+- `chatSendMessage()` — POSTs message, initializes `chatStreamingState` entry for the conversation, opens EventSource to `/stream`. The SSE loop writes all state to the Map entry rather than closure-local variables, enabling state persistence across conversation switches.
 - `chatStopStreaming()` — POSTs abort endpoint
 - `chatAppendStreamingMessage()` — inserts empty assistant message bubble with pulsing cursor
-- `chatUpdateStreamingMessage(msgEl, content)` — renders Markdown incrementally into the streaming bubble
+- `chatUpdateStreamingMessage(msgEl, content, thinking)` — renders Markdown incrementally into the streaming bubble. Optionally shows thinking block in a collapsible `<details>` element.
+- `chatUpdateStreamingActivity(msgEl, tools, agents, planMode)` — renders rich tool activity display: activity history (completed tools with checkmarks), current tool with description, agent cards with spinners and type labels, plan mode banner.
+- `chatShowPlanApproval(msgEl, convId)` — shows approve/reject buttons for plan approval. On click, POSTs to `/conversations/:id/input` with `"yes"` or `"no"`, clears `pendingInteraction` state.
+- `chatShowUserQuestion(msgEl, convId, event)` — renders question text, clickable option buttons, and text input. On selection, POSTs answer to `/conversations/:id/input`, clears `pendingInteraction` state.
+- `chatUpdateSendButtonState()` — updates send button to show stop (■) when the current conversation is streaming, or send (↑) when idle. Called on conversation switch and stream completion.
 - `chatRetryLast()` — sends the last user message again (for regeneration)
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API) — reads SSE lines from the response body, parses `data:` lines as JSON
+- **Streaming state restoration:** When `chatRenderMessages()` is called and `chatStreamingState` has an entry for the active conversation, it re-creates the streaming bubble and restores the UI: pending interactions (plan approval/user question), accumulated text/thinking, or active tool/agent display. Uses `streamingMsgEl.isConnected` to detect orphaned DOM nodes destroyed by `innerHTML` replacement.
 
 #### File Handling
 
@@ -718,6 +816,7 @@ chatPendingFiles[]          // Files queued for upload
 - `chatShowModal(title, bodyHtml)` — generic modal with overlay, close button
 - `chatShowContextMenu(e, convId)` — right-click context menu on conversation items (Rename, Delete)
 - `esc(str)` — HTML entity escaping for `&`, `<`, `>`, `"`
+- `escWithCode(str)` — like `esc()` but also converts backtick-wrapped text to `<code>` elements (for tool descriptions)
 
 #### Keyboard Shortcuts
 
@@ -728,7 +827,7 @@ chatPendingFiles[]          // Files queued for upload
 
 ### 11.3 CSS & Theming
 
-**File:** `public/styles.css` (~1050 lines)
+**File:** `public/styles.css` (~1400 lines)
 
 #### Theme System
 
@@ -773,6 +872,12 @@ Theme is applied by setting `data-theme` attribute on `<html>`:
 - **Drag-and-drop overlay**: full-screen overlay when dragging files
 - **Prompt cards**: centered cards in empty state for quick conversation starters
 - **Sidebar footer**: Settings and Sign Out buttons at bottom of sidebar
+- **Activity history** (`.chat-activity-history`): completed tool activities shown with checkmark icons and muted text
+- **Agent cards** (`.chat-agent-card`): sub-agent visualization with spinning animation (`.chat-agent-spinner`), agent type label, and description text
+- **Plan mode banner** (`.chat-plan-mode-banner`): green accent indicator showing "Plan mode active"
+- **Plan approval** (`.chat-plan-approval`): card with approve/reject buttons for interactive plan approval
+- **User question** (`.chat-user-question`): question text with clickable option buttons and text input fallback
+- **Streaming indicator dot** (`.chat-conv-streaming-dot`): 8×8 pulsing dot next to streaming conversations in sidebar, uses `streaming-pulse` keyframe animation (1.5s ease-in-out infinite)
 
 #### Responsive
 
@@ -813,7 +918,7 @@ All data is file-based. No database.
 
 ## 13. Active Streams Management
 
-The chat router maintains an in-memory `Map<conversationId, { stream, abort, backend }>`:
+The chat router maintains an in-memory `Map<conversationId, { stream, abort, sendInput, backend }>`:
 
 - **Set** when `POST /conversations/:id/message` spawns a CLI process
 - **Read** when `GET /conversations/:id/stream` connects the SSE endpoint
@@ -896,14 +1001,17 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 
 ### Framework: Jest 30.x
 
-### Test Files
+### Test Files (95 tests total)
 
-**`test/chatService.test.js`** (28 tests):
+**`test/chatService.test.js`** (41 tests):
 - Creates conversations with title, working directory
 - Lists conversations sorted by updatedAt
 - Gets, renames, deletes conversations
 - Handles missing conversation (returns null)
 - Adds messages, verifies auto-titling from first user message
+- Stores `thinking` field when provided on assistant messages
+- Persists `thinking` field to disk (verified via fresh ChatService instance)
+- Omits `thinking` field when not provided, null, or empty string
 - Updates message content (fork behavior: truncates subsequent messages)
 - Resets sessions: archives, creates divider, starts new session
 - Gets session history with isCurrent flag
@@ -912,11 +1020,16 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - Gets and saves settings with defaults
 - Uses temporary directories (`os.tmpdir()`) for isolation
 
-**`test/cliBackend.test.js`** (4 tests):
-- Constructor defaults to `~/.openclaw/workspace`
-- `sendMessage` returns object with `stream` and `abort` function
-- Verifies abort triggers SIGTERM on process
-- Stream iteration yields events
+**`test/cliBackend.test.js`** (33 tests):
+- **extractToolDetails** (29 tests): Tests all 13 tool types — Read (with/without path), Write (with/without path, plan file detection), Edit (with/without path), Bash (with description/command/nothing, long command truncation at 60 chars), Grep (with pattern+glob, pattern only, nothing), Glob (with/without pattern), Agent (with/without inputs, subagentType default), TodoWrite, WebSearch (with/without query), WebFetch (with/without URL), EnterPlanMode, ExitPlanMode, AskUserQuestion (with/without questions). Tests edge cases: unknown tool, block id preservation, missing input graceful handling, shortenPath behavior (short paths unchanged, long paths shortened to last 2 segments).
+- **CLIBackend** (4 tests): Constructor defaults to `~/.openclaw/workspace`, `sendMessage` returns `{ stream, abort, sendInput }`, abort yields error and done events, `sendInput` does not throw after abort.
+
+**`test/chat.test.js`** (15 tests):
+- Uses mock CLI backend with configurable events and Express test server
+- **POST /input**: returns `ok:false` when no active stream, forwards text to `sendInput`, handles empty text, requires CSRF token
+- **SSE tool_activity forwarding**: enriched fields (tool, description, id), `isAgent` flag with `subagentType`, `isPlanMode`/`planAction`, `isQuestion` with `questions` array
+- **Turn boundary intermediate messages**: saves intermediate message on turn_boundary, saves thinking with intermediate message, skips empty boundaries, skips non-streaming text, saves result text as final message when no streaming deltas
+- **POST /abort**: returns `ok:false` when no active stream
 
 **`test/graceful-shutdown.test.js`** (2 tests):
 - Spawns actual server process with dummy env vars
