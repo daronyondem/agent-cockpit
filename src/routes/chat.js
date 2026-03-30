@@ -200,12 +200,12 @@ function createChatRouter({ chatService, cliBackend }) {
 
     // Start CLI streaming — store stream reference for the GET SSE endpoint
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} workingDir=${conv.workingDir || 'default'}`);
-    const { stream, abort } = cliBackend.sendMessage(content.trim(), {
+    const { stream, abort, sendInput } = cliBackend.sendMessage(content.trim(), {
       sessionId: conv.currentSessionId,
       isNewSession,
       workingDir: conv.workingDir || null,
     });
-    activeStreams.set(convId, { stream, abort, backend: backend || conv.backend });
+    activeStreams.set(convId, { stream, abort, sendInput, backend: backend || conv.backend });
 
     // Return the user message — frontend will open GET SSE for streaming
     res.json({ userMessage: userMsg, streamReady: true });
@@ -247,7 +247,9 @@ function createChatRouter({ chatService, cliBackend }) {
     });
 
     let fullResponse = '';
+    let thinkingText = '';
     let resultText = null;
+    let hasStreamingDeltas = false;
 
     (async () => {
       try {
@@ -256,18 +258,46 @@ function createChatRouter({ chatService, cliBackend }) {
 
           if (event.type === 'text') {
             fullResponse += event.content;
-            res.write(`data: ${JSON.stringify({ type: 'text', content: event.content })}\n\n`);
+            // Only forward streaming deltas to client (skip replayed history)
+            if (event.streaming) {
+              hasStreamingDeltas = true;
+              res.write(`data: ${JSON.stringify({ type: 'text', content: event.content })}\n\n`);
+            }
+          } else if (event.type === 'thinking') {
+            thinkingText += event.content;
+            if (event.streaming) {
+              res.write(`data: ${JSON.stringify({ type: 'thinking', content: event.content })}\n\n`);
+            }
+          } else if (event.type === 'turn_boundary') {
+            // Tool use happened — save accumulated text as an intermediate message
+            if (hasStreamingDeltas && fullResponse.trim()) {
+              console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}`);
+              const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null);
+              res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: intermediateMsg })}\n\n`);
+            }
+            fullResponse = '';
+            thinkingText = '';
+            hasStreamingDeltas = false;
+          } else if (event.type === 'tool_activity') {
+            const { type: _t, ...rest } = event;
+            res.write(`data: ${JSON.stringify({ type: 'tool_activity', ...rest })}\n\n`);
           } else if (event.type === 'result') {
             resultText = event.content;
           } else if (event.type === 'error') {
             console.error(`[chat] Stream error for conv=${convId}:`, event.error);
             res.write(`data: ${JSON.stringify({ type: 'error', error: event.error })}\n\n`);
           } else if (event.type === 'done') {
-            const finalContent = resultText || fullResponse;
-            console.log(`[chat] Stream done for conv=${convId}, responseLen=${finalContent.length}`);
-            if (finalContent.trim()) {
-              const assistantMsg = await chatService.addMessage(convId, 'assistant', finalContent.trim(), backend);
+            // Save remaining text or result as the final message
+            if (hasStreamingDeltas && fullResponse.trim()) {
+              console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}`);
+              const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null);
               res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
+            } else if (resultText && resultText.trim()) {
+              console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}`);
+              const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null);
+              res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
+            } else {
+              console.log(`[chat] Stream done for conv=${convId}, no content to save`);
             }
             res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
           }
@@ -292,6 +322,19 @@ function createChatRouter({ chatService, cliBackend }) {
     if (entry) {
       entry.abort();
       activeStreams.delete(req.params.id);
+      res.json({ ok: true });
+    } else {
+      res.json({ ok: false, message: 'No active stream' });
+    }
+  });
+
+  // ── Send input to CLI stdin (plan approval, user questions) ─────────────────
+  router.post('/conversations/:id/input', csrfGuard, (req, res) => {
+    const entry = activeStreams.get(req.params.id);
+    if (entry && entry.sendInput) {
+      const text = (req.body.text || '').toString();
+      console.log(`[chat] Sending stdin input for conv=${req.params.id}: ${text.substring(0, 100)}`);
+      entry.sendInput(text);
       res.json({ ok: true });
     } else {
       res.json({ ok: false, message: 'No active stream' });

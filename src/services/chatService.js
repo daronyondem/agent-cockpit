@@ -123,7 +123,7 @@ class ChatService {
 
   // ── Messages ───────────────────────────────────────────────────────────────
 
-  async addMessage(convId, role, content, backend) {
+  async addMessage(convId, role, content, backend, thinking) {
     const conv = await this.getConversation(convId);
     if (!conv) return null;
 
@@ -134,6 +134,10 @@ class ChatService {
       backend: backend || conv.backend,
       timestamp: new Date().toISOString(),
     };
+
+    if (thinking) {
+      msg.thinking = thinking;
+    }
 
     conv.messages.push(msg);
 

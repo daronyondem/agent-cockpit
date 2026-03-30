@@ -2,6 +2,97 @@ const { spawn } = require('child_process');
 const path = require('path');
 const os = require('os');
 
+function shortenPath(filePath) {
+  if (!filePath) return '';
+  const parts = filePath.split('/');
+  if (parts.length <= 3) return filePath;
+  return '.../' + parts.slice(-2).join('/');
+}
+
+function extractToolDetails(block) {
+  const name = block.name;
+  const input = block.input || {};
+  const detail = { tool: name, id: block.id || null };
+
+  switch (name) {
+    case 'Read':
+      detail.description = input.file_path
+        ? `Reading \`${shortenPath(input.file_path)}\``
+        : 'Reading file';
+      break;
+    case 'Write':
+      detail.description = input.file_path
+        ? `Writing \`${shortenPath(input.file_path)}\``
+        : 'Writing file';
+      detail.isPlanFile = !!(input.file_path && input.file_path.includes('.claude/plans/'));
+      break;
+    case 'Edit':
+      detail.description = input.file_path
+        ? `Editing \`${shortenPath(input.file_path)}\``
+        : 'Editing file';
+      break;
+    case 'Bash':
+      if (input.description) {
+        detail.description = input.description;
+      } else if (input.command) {
+        const cmd = input.command.length > 60
+          ? input.command.substring(0, 60) + '...'
+          : input.command;
+        detail.description = `Running: \`${cmd}\``;
+      } else {
+        detail.description = 'Running command';
+      }
+      break;
+    case 'Grep':
+      detail.description = input.pattern
+        ? `Searching for \`${input.pattern}\`${input.glob ? ` in ${input.glob}` : ''}`
+        : 'Searching files';
+      break;
+    case 'Glob':
+      detail.description = input.pattern
+        ? `Finding files matching \`${input.pattern}\``
+        : 'Finding files';
+      break;
+    case 'Agent':
+      detail.description = input.description || 'Running sub-agent';
+      detail.subagentType = input.subagent_type || 'general-purpose';
+      detail.isAgent = true;
+      break;
+    case 'TodoWrite':
+      detail.description = 'Updating task list';
+      break;
+    case 'WebSearch':
+      detail.description = input.query
+        ? `Searching: \`${input.query}\``
+        : 'Searching the web';
+      break;
+    case 'WebFetch':
+      detail.description = input.url
+        ? `Fetching: ${input.url}`
+        : 'Fetching web content';
+      break;
+    case 'EnterPlanMode':
+      detail.description = 'Entering plan mode';
+      detail.isPlanMode = true;
+      detail.planAction = 'enter';
+      break;
+    case 'ExitPlanMode':
+      detail.description = 'Plan ready for approval';
+      detail.isPlanMode = true;
+      detail.planAction = 'exit';
+      break;
+    case 'AskUserQuestion':
+      detail.description = 'Asking a question';
+      detail.isQuestion = true;
+      detail.questions = input.questions || [];
+      break;
+    default:
+      detail.description = `Using ${name}`;
+  }
+
+  return detail;
+}
+
 class CLIBackend {
   constructor(options = {}) {
     this.workingDir = options.workingDir || path.resolve(os.homedir(), '.openclaw', 'workspace');
@@ -11,7 +102,7 @@ class CLIBackend {
    * Send a message and get a streaming response.
    * @param {string} message - The user message
    * @param {object} options - { sessionId: string, isNewSession: boolean }
-   * @returns {object} { stream: AsyncIterable<StreamEvent>, abort: Function }
+   * @returns {object} { stream, abort, sendInput }
    */
   sendMessage(message, options = {}) {
     // Per-request state — not shared across requests
@@ -25,8 +116,13 @@ class CLIBackend {
         state.proc = null;
       }
     };
+    const sendInput = (text) => {
+      if (state.proc && state.proc.stdin && !state.proc.stdin.destroyed) {
+        state.proc.stdin.write(text + '\n');
+      }
+    };
 
-    return { stream, abort };
+    return { stream, abort, sendInput };
   }
 
   async *_createStream(message, options, state) {
@@ -48,18 +144,16 @@ class CLIBackend {
 
     args.push('-p', message);
 
-    // CLI backend uses its own configured model (e.g. ~/.claude/settings.json)
-
     try {
       const cwd = workingDir || this.workingDir;
       console.log(`[cliBackend] spawning claude, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} cwd=${cwd}`);
       const proc = spawn('claude', args, {
         cwd,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env },
       });
 
-      // Store on per-request state so abort() can find it
+      // Store on per-request state so abort() and sendInput() can find it
       state.proc = proc;
 
       let buffer = '';
@@ -79,17 +173,25 @@ class CLIBackend {
           if (!line.trim()) continue;
           try {
             const event = JSON.parse(line);
-            console.log(`[cliBackend] parsed event type=${event.type}`);
+            console.log(`[cliBackend] parsed event type=${event.type}`, event.type === 'content_block_delta' ? `delta.type=${event.delta?.type}` : '');
             if (event.type === 'assistant' && event.message) {
               for (const block of (event.message.content || [])) {
                 if (block.type === 'text' && block.text) {
                   textQueue.push({ type: 'text', content: block.text });
+                } else if (block.type === 'thinking' && block.thinking) {
+                  textQueue.push({ type: 'thinking', content: block.thinking });
+                } else if (block.type === 'tool_use' && block.name) {
+                  textQueue.push({ type: 'tool_activity', ...extractToolDetails(block) });
                 }
               }
             } else if (event.type === 'content_block_delta') {
               if (event.delta && event.delta.type === 'text_delta' && event.delta.text) {
-                textQueue.push({ type: 'text', content: event.delta.text });
+                textQueue.push({ type: 'text', content: event.delta.text, streaming: true });
+              } else if (event.delta && event.delta.type === 'thinking_delta' && event.delta.thinking) {
+                textQueue.push({ type: 'thinking', content: event.delta.thinking, streaming: true });
               }
+            } else if (event.type === 'user') {
+              textQueue.push({ type: 'turn_boundary' });
             } else if (event.type === 'result') {
               if (event.result) {
                 textQueue.push({ type: 'result', content: event.result });
@@ -119,7 +221,9 @@ class CLIBackend {
           try {
             const event = JSON.parse(buffer);
             if (event.type === 'content_block_delta' && event.delta?.text) {
-              textQueue.push({ type: 'text', content: event.delta.text });
+              textQueue.push({ type: 'text', content: event.delta.text, streaming: true });
+            } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && event.delta?.thinking) {
+              textQueue.push({ type: 'thinking', content: event.delta.thinking, streaming: true });
             } else if (event.type === 'result' && event.result) {
               textQueue.push({ type: 'result', content: event.result });
             }

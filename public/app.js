@@ -7,6 +7,10 @@ function esc(str) {
     .replace(/"/g, '&quot;');
 }
 
+function escWithCode(str) {
+  return esc(str).replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
 // ─── Theme ───────────────────────────────────────────────────────────────────
 function applyTheme(theme) {
   let resolved = theme;
@@ -14,6 +18,11 @@ function applyTheme(theme) {
     resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   }
   document.documentElement.setAttribute('data-theme', resolved);
+  const hljsLink = document.getElementById('hljs-theme');
+  if (hljsLink) {
+    const hljsStyle = resolved === 'dark' ? 'github-dark' : 'github';
+    hljsLink.href = `https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/${hljsStyle}.min.css`;
+  }
   try { localStorage.setItem('agent-cockpit-theme', theme); } catch (e) {}
 }
 
@@ -54,6 +63,7 @@ let chatConversations = [];
 let chatActiveConvId = null;
 let chatActiveConv = null;
 let chatStreamingConvs = new Set();
+let chatStreamingState = new Map(); // convId -> { assistantContent, assistantThinking, activeTools, activeAgents, planModeActive, pendingInteraction, streamingMsgEl }
 let chatAbortController = null;
 let chatSidebarCollapsed = false;
 let chatSearchTimeout = null;
@@ -376,13 +386,15 @@ function chatRenderConvList() {
     html += `<div class="chat-conv-group-label">${esc(label)}</div>`;
     for (const c of convs) {
       const isActive = c.id === chatActiveConvId;
-      const folderLabel = c.workingDir ? c.workingDir.split('/').pop() : 'workspace';
+      const isStreaming = chatStreamingConvs.has(c.id);
+      const folderLabel = c.workingDir ? c.workingDir.split('/').filter(Boolean).slice(-2).join('/') : 'workspace';
       html += `
         <div class="chat-conv-item${isActive ? ' active' : ''}" data-conv-id="${esc(c.id)}">
           <div style="flex:1;min-width:0;">
             <span class="chat-conv-item-title">${esc(c.title)}</span>
             <div class="chat-conv-item-workdir" title="${esc(c.workingDir || 'Default workspace')}">📁 ${esc(folderLabel)}</div>
           </div>
+          ${isStreaming ? '<span class="chat-conv-streaming-dot"></span>' : ''}
           <button class="chat-conv-item-menu" data-conv-menu="${esc(c.id)}" title="Options">⋯</button>
         </div>
       `;
@@ -498,6 +510,22 @@ async function chatShowFolderPicker(initialPath) {
 }
 window.chatShowFolderPicker = chatShowFolderPicker;
 
+function chatUpdateSendButtonState() {
+  const sendBtn = document.getElementById('chat-send-btn');
+  if (!sendBtn) return;
+  const isStreaming = chatStreamingConvs.has(chatActiveConvId);
+  if (isStreaming) {
+    sendBtn.disabled = false;
+    sendBtn.textContent = '■';
+    sendBtn.classList.add('stop');
+  } else {
+    sendBtn.textContent = '↑';
+    sendBtn.classList.remove('stop');
+    const ta = document.getElementById('chat-textarea');
+    sendBtn.disabled = !(ta && ta.value.trim());
+  }
+}
+
 async function chatSelectConversation(id) {
   if (id === chatActiveConvId) return;
   try {
@@ -507,6 +535,7 @@ async function chatSelectConversation(id) {
     chatRenderConvList();
     chatRenderMessages();
     chatUpdateHeader();
+    chatUpdateSendButtonState();
     const backendSelect = document.getElementById('chat-backend-select');
     if (backendSelect && chatActiveConv.backend) {
       backendSelect.value = chatActiveConv.backend;
@@ -563,7 +592,7 @@ function chatUpdateHeader() {
   }
   if (wdEl) {
     if (chatActiveConv && chatActiveConv.workingDir) {
-      const folderName = chatActiveConv.workingDir.split('/').pop() || chatActiveConv.workingDir;
+      const folderName = chatActiveConv.workingDir.split('/').filter(Boolean).slice(-2).join('/') || chatActiveConv.workingDir;
       wdEl.textContent = '📁 ' + folderName;
       wdEl.title = chatActiveConv.workingDir;
       wdEl.style.display = '';
@@ -667,6 +696,7 @@ function chatRenderMessages() {
     const roleLabel = isUser ? 'You' : 'Assistant';
     const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
     const rendered = chatRenderMarkdown(msg.content);
+    const thinkingHtml = msg.thinking ? chatRenderThinkingBlock(msg.thinking, false) : '';
 
     html += `
       <div class="chat-msg ${esc(msg.role)}" data-msg-id="${esc(msg.id)}">
@@ -674,7 +704,7 @@ function chatRenderMessages() {
           <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
           <div class="chat-msg-body">
             <div class="chat-msg-role">${roleLabel} ${backendLabel}</div>
-            <div class="chat-msg-content">${rendered}</div>
+            <div class="chat-msg-content">${thinkingHtml}${rendered}</div>
             <div class="chat-msg-actions">
               <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
             </div>
@@ -687,7 +717,36 @@ function chatRenderMessages() {
   container.innerHTML = html;
   chatWireMessageActions(container);
   chatHighlightCode(container);
+
+  // Restore streaming UI if this conversation has an active stream
+  const streamState = chatStreamingState.get(chatActiveConvId);
+  if (streamState) {
+    const msgEl = chatAppendStreamingMessage();
+    streamState.streamingMsgEl = msgEl;
+
+    if (streamState.pendingInteraction) {
+      if (streamState.pendingInteraction.type === 'planApproval') {
+        chatShowPlanApproval(msgEl, chatActiveConvId);
+      } else if (streamState.pendingInteraction.type === 'userQuestion') {
+        chatShowUserQuestion(msgEl, chatActiveConvId, streamState.pendingInteraction.event);
+      }
+    } else if (streamState.assistantContent || streamState.assistantThinking) {
+      chatUpdateStreamingMessage(msgEl, streamState.assistantContent, streamState.assistantThinking);
+    } else if (streamState.activeTools.length || streamState.activeAgents.length || streamState.planModeActive) {
+      chatUpdateStreamingActivity(msgEl, streamState.activeTools, streamState.activeAgents, streamState.planModeActive);
+    }
+    // else: default typing dots shown by chatAppendStreamingMessage
+  }
+
   chatScrollToBottom();
+}
+
+function chatRenderThinkingBlock(thinking, expanded) {
+  const openAttr = expanded ? ' open' : '';
+  return `<details class="chat-thinking-block"${openAttr}>
+    <summary class="chat-thinking-toggle">Thinking</summary>
+    <div class="chat-thinking-content">${chatRenderMarkdown(thinking)}</div>
+  </details>`;
 }
 
 function chatRenderMarkdown(text) {
@@ -824,11 +883,17 @@ async function chatSendMessage() {
 
   // Start streaming
   chatStreamingConvs.add(targetConvId);
-  if (sendBtn) {
-    sendBtn.disabled = false;
-    sendBtn.textContent = '■';
-    sendBtn.classList.add('stop');
-  }
+  chatStreamingState.set(targetConvId, {
+    assistantContent: '',
+    assistantThinking: '',
+    activeTools: [],
+    activeAgents: [],
+    planModeActive: false,
+    pendingInteraction: null,
+    streamingMsgEl: null,
+  });
+  chatRenderConvList();
+  chatUpdateSendButtonState();
 
   try {
     const response = await fetch(chatApiUrl(`conversations/${targetConvId}/message`), {
@@ -853,8 +918,12 @@ async function chatSendMessage() {
       chatRenderMessages();
     }
 
-    let streamingMsgEl = (chatActiveConvId === targetConvId) ? chatAppendStreamingMessage() : null;
-    let assistantContent = '';
+    const state = chatStreamingState.get(targetConvId);
+    if (!state) return; // cleaned up before stream started
+
+    if (chatActiveConvId === targetConvId) {
+      state.streamingMsgEl = chatAppendStreamingMessage();
+    }
 
     const sseResponse = await fetch(chatApiUrl(`conversations/${targetConvId}/stream`), {
       credentials: 'same-origin',
@@ -879,26 +948,75 @@ async function chatSendMessage() {
 
         try {
           const event = JSON.parse(jsonStr);
+          const st = chatStreamingState.get(targetConvId);
+          if (!st) break; // state was cleaned up
           const isStillActive = (chatActiveConvId === targetConvId);
 
-          if (event.type === 'text') {
-            assistantContent += event.content;
-            if (isStillActive && streamingMsgEl) {
-              chatUpdateStreamingMessage(streamingMsgEl, assistantContent);
+          // Ensure DOM element exists when active, detect orphaned nodes
+          if (isStillActive && (!st.streamingMsgEl || !st.streamingMsgEl.isConnected)) {
+            st.streamingMsgEl = chatAppendStreamingMessage();
+          }
+
+          if (event.type === 'thinking') {
+            st.assistantThinking += event.content;
+            if (isStillActive) {
+              chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
+            }
+          } else if (event.type === 'text') {
+            st.assistantContent += event.content;
+            st.activeTools = [];
+            st.activeAgents = [];
+            st.pendingInteraction = null;
+            if (isStillActive) {
+              chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
+            }
+          } else if (event.type === 'tool_activity') {
+            if (event.isAgent) {
+              st.activeAgents.push({ subagentType: event.subagentType || 'agent', description: event.description || '' });
+            } else if (event.isPlanMode) {
+              if (event.planAction === 'enter') st.planModeActive = true;
+              else if (event.planAction === 'exit') st.planModeActive = false;
+            }
+            if (!event.isAgent && !event.isPlanMode) {
+              st.activeTools.push({ tool: event.tool, description: event.description || '' });
+            }
+            // Track pending interactions for restoration on switch-back
+            if (event.isPlanMode && event.planAction === 'exit') {
+              st.pendingInteraction = { type: 'planApproval' };
+            } else if (event.isQuestion) {
+              st.pendingInteraction = { type: 'userQuestion', event };
+            }
+            if (isStillActive) {
+              if (event.isPlanMode && event.planAction === 'exit') {
+                chatShowPlanApproval(st.streamingMsgEl, targetConvId);
+              } else if (event.isQuestion) {
+                chatShowUserQuestion(st.streamingMsgEl, targetConvId, event);
+              } else {
+                chatUpdateStreamingActivity(st.streamingMsgEl, st.activeTools, st.activeAgents, st.planModeActive);
+              }
             }
           } else if (event.type === 'assistant_message') {
             if (isStillActive && chatActiveConv) {
               chatActiveConv.messages.push(event.message);
               chatRenderMessages();
               chatUpdateHeader();
+              // chatRenderMessages will re-create streaming bubble via state check
             }
             chatLoadConversations();
-            assistantContent = '';
-            streamingMsgEl = null;
+            st.assistantContent = '';
+            st.assistantThinking = '';
+            st.activeTools = [];
+            st.activeAgents = [];
+            st.planModeActive = false;
+            st.pendingInteraction = null;
           } else if (event.type === 'error') {
+            st.pendingInteraction = null;
             if (isStillActive) chatAppendError(event.error);
           } else if (event.type === 'done') {
-            // Stream complete
+            if (st.streamingMsgEl && st.streamingMsgEl.isConnected) {
+              st.streamingMsgEl.remove();
+            }
+            chatStreamingState.delete(targetConvId);
           }
         } catch {}
       }
@@ -909,13 +1027,13 @@ async function chatSendMessage() {
     }
   } finally {
     chatStreamingConvs.delete(targetConvId);
-    const sendBtnFinal = document.getElementById('chat-send-btn');
-    if (sendBtnFinal) {
-      sendBtnFinal.textContent = '↑';
-      sendBtnFinal.classList.remove('stop');
-      const ta = document.getElementById('chat-textarea');
-      sendBtnFinal.disabled = !(ta && ta.value.trim());
+    const finalState = chatStreamingState.get(targetConvId);
+    if (finalState && finalState.streamingMsgEl && finalState.streamingMsgEl.isConnected) {
+      finalState.streamingMsgEl.remove();
     }
+    chatStreamingState.delete(targetConvId);
+    chatUpdateSendButtonState();
+    chatRenderConvList();
   }
 }
 
@@ -945,13 +1063,188 @@ function chatAppendStreamingMessage() {
   return msgEl;
 }
 
-function chatUpdateStreamingMessage(msgEl, content) {
+function chatUpdateStreamingMessage(msgEl, content, thinking) {
   if (!msgEl) return;
   const contentEl = msgEl.querySelector('.chat-msg-content');
   if (contentEl) {
-    contentEl.innerHTML = chatRenderMarkdown(content);
+    let html = '';
+    if (thinking) {
+      html += chatRenderThinkingBlock(thinking, true);
+    }
+    if (content) {
+      html += chatRenderMarkdown(content);
+    } else if (thinking) {
+      html += '<div class="chat-thinking-status">Thinking...</div>';
+    }
+    contentEl.innerHTML = html;
     chatHighlightCode(contentEl);
   }
+  chatScrollToBottom();
+}
+
+function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
+  if (!msgEl) return;
+  const contentEl = msgEl.querySelector('.chat-msg-content');
+  if (!contentEl) return;
+
+  let html = '';
+
+  // Activity history (completed tools with checkmarks)
+  if (tools.length > 1) {
+    html += '<div class="chat-activity-history">';
+    for (let i = 0; i < tools.length - 1; i++) {
+      const t = tools[i];
+      const desc = t.description ? escWithCode(t.description) : esc(t.tool || 'Tool');
+      html += `<div class="chat-activity-history-item"><span class="chat-activity-check">✓</span> ${desc}</div>`;
+    }
+    html += '</div>';
+  }
+
+  // Current active tool
+  if (tools.length > 0) {
+    const current = tools[tools.length - 1];
+    const desc = current.description ? escWithCode(current.description) : esc(current.tool || 'Working');
+    html += `<div class="chat-activity-indicator">
+      <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
+      <span class="chat-activity-label">${desc}</span>
+    </div>`;
+  }
+
+  // Agent cards
+  if (agents.length > 0) {
+    html += '<div class="chat-agent-cards">';
+    for (const agent of agents) {
+      const agentType = esc(agent.subagentType || 'agent');
+      const agentDesc = agent.description ? escWithCode(agent.description) : '';
+      html += `<div class="chat-agent-card">
+        <div class="chat-agent-spinner"></div>
+        <div class="chat-agent-card-header">
+          <span class="chat-agent-type">${agentType}</span>
+          ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
+        </div>
+      </div>`;
+    }
+    html += '</div>';
+  }
+
+  // Plan mode banner
+  if (planMode) {
+    html += `<div class="chat-plan-mode-banner">
+      <span class="chat-plan-mode-icon">📋</span> Planning mode active
+    </div>`;
+  }
+
+  if (!html) {
+    html = `<div class="chat-activity-indicator">
+      <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
+      <span class="chat-activity-label">Working...</span>
+    </div>`;
+  }
+
+  contentEl.innerHTML = html;
+  chatScrollToBottom();
+}
+
+function chatShowPlanApproval(msgEl, convId) {
+  if (!msgEl) return;
+  const contentEl = msgEl.querySelector('.chat-msg-content');
+  if (!contentEl) return;
+  contentEl.innerHTML = `
+    <div class="chat-plan-approval">
+      <div class="chat-plan-approval-title">Plan ready for review</div>
+      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">The assistant has prepared a plan and is waiting for your approval.</div>
+      <div class="chat-plan-approval-actions">
+        <button class="chat-plan-approval-btn approve" data-action="approve">Approve</button>
+        <button class="chat-plan-approval-btn reject" data-action="reject">Reject</button>
+      </div>
+    </div>
+  `;
+  contentEl.querySelectorAll('.chat-plan-approval-btn').forEach(btn => {
+    btn.onclick = async () => {
+      const action = btn.dataset.action;
+      const text = action === 'approve' ? 'yes' : 'no';
+      try {
+        await fetch(chatApiUrl(`conversations/${convId}/input`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken || '' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ text }),
+        });
+        const approvalState = chatStreamingState.get(convId);
+        if (approvalState) approvalState.pendingInteraction = null;
+        contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
+      } catch (err) {
+        contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
+      }
+    };
+  });
+  chatScrollToBottom();
+}
+
+function chatShowUserQuestion(msgEl, convId, event) {
+  if (!msgEl) return;
+  const contentEl = msgEl.querySelector('.chat-msg-content');
+  if (!contentEl) return;
+
+  const questions = event.questions || [];
+  const questionText = questions.length > 0 ? (questions[0].question || 'Input needed') : (event.description || 'Input needed');
+  const options = questions.length > 0 ? (questions[0].options || []) : [];
+
+  let optionsHtml = '';
+  if (options.length > 0) {
+    optionsHtml = '<div class="chat-user-question-options">';
+    for (let i = 0; i < options.length; i++) {
+      const opt = options[i];
+      optionsHtml += `<button class="chat-user-question-option" data-value="${esc(opt.label || opt)}">${esc(opt.label || opt)}${opt.description ? `<br><span style="font-size:11px;color:var(--muted);font-weight:normal;">${esc(opt.description)}</span>` : ''}</button>`;
+    }
+    optionsHtml += '</div>';
+  }
+
+  contentEl.innerHTML = `
+    <div class="chat-user-question">
+      <div class="chat-user-question-header">Question</div>
+      <div class="chat-user-question-text">${escWithCode(questionText)}</div>
+      ${optionsHtml}
+      <input class="chat-user-question-input" type="text" placeholder="Type your answer...">
+      <button class="chat-user-question-submit" disabled>Send</button>
+    </div>
+  `;
+
+  const input = contentEl.querySelector('.chat-user-question-input');
+  const submitBtn = contentEl.querySelector('.chat-user-question-submit');
+
+  // Option buttons
+  contentEl.querySelectorAll('.chat-user-question-option').forEach(optBtn => {
+    optBtn.onclick = () => {
+      contentEl.querySelectorAll('.chat-user-question-option').forEach(b => b.classList.remove('selected'));
+      optBtn.classList.add('selected');
+      input.value = optBtn.dataset.value;
+      submitBtn.disabled = false;
+    };
+  });
+
+  input.oninput = () => { submitBtn.disabled = !input.value.trim(); };
+  input.onkeydown = (e) => { if (e.key === 'Enter' && input.value.trim()) submitBtn.click(); };
+
+  submitBtn.onclick = async () => {
+    const text = input.value.trim();
+    if (!text) return;
+    submitBtn.disabled = true;
+    try {
+      await fetch(chatApiUrl(`conversations/${convId}/input`), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken || '' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ text }),
+      });
+      const questionState = chatStreamingState.get(convId);
+      if (questionState) questionState.pendingInteraction = null;
+      contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Answered: ${esc(text)}</div>`;
+    } catch (err) {
+      contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
+    }
+  };
+
   chatScrollToBottom();
 }
 
@@ -1113,13 +1406,14 @@ function chatViewSession(sessionNumber) {
       const roleLabel = isUser ? 'You' : 'Assistant';
       const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(typeof CHAT_BACKENDS !== 'undefined' ? (CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend) : msg.backend)}</span>` : '';
       const rendered = chatRenderMarkdown(msg.content);
+      const thinkingHtml = msg.thinking ? chatRenderThinkingBlock(msg.thinking, false) : '';
       msgsHtml += `
         <div class="chat-msg ${esc(msg.role)}">
           <div class="chat-msg-wrapper">
             <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
             <div class="chat-msg-body">
               <div class="chat-msg-role">${roleLabel} ${backendLabel}</div>
-              <div class="chat-msg-content">${rendered}</div>
+              <div class="chat-msg-content">${thinkingHtml}${rendered}</div>
             </div>
           </div>
         </div>

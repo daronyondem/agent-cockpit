@@ -151,6 +151,46 @@ describe('addMessage', () => {
   test('returns null for non-existent conversation', async () => {
     expect(await service.addMessage('nope', 'user', 'hi')).toBeNull();
   });
+
+  test('stores thinking field when provided', async () => {
+    const conv = await service.createConversation();
+    const msg = await service.addMessage(conv.id, 'assistant', 'Response text', 'claude-code', 'I need to think about this...');
+    expect(msg.thinking).toBe('I need to think about this...');
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded.messages[0].thinking).toBe('I need to think about this...');
+  });
+
+  test('persists thinking field to disk', async () => {
+    const conv = await service.createConversation();
+    await service.addMessage(conv.id, 'assistant', 'Answer', 'claude-code', 'Thinking deeply');
+
+    // Re-read from disk via a fresh service instance
+    const service2 = new ChatService(tmpDir);
+    const loaded = await service2.getConversation(conv.id);
+    expect(loaded.messages[0].thinking).toBe('Thinking deeply');
+  });
+
+  test('omits thinking field when not provided', async () => {
+    const conv = await service.createConversation();
+    const msg = await service.addMessage(conv.id, 'assistant', 'No thinking');
+    expect(msg.thinking).toBeUndefined();
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded.messages[0].thinking).toBeUndefined();
+  });
+
+  test('omits thinking field when null', async () => {
+    const conv = await service.createConversation();
+    const msg = await service.addMessage(conv.id, 'assistant', 'Null thinking', 'claude-code', null);
+    expect(msg.thinking).toBeUndefined();
+  });
+
+  test('omits thinking field when empty string', async () => {
+    const conv = await service.createConversation();
+    const msg = await service.addMessage(conv.id, 'assistant', 'Empty thinking', 'claude-code', '');
+    expect(msg.thinking).toBeUndefined();
+  });
 });
 
 describe('updateMessageContent', () => {
