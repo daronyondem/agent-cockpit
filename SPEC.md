@@ -348,7 +348,7 @@ Returns updated conversation. `404` if not found.
 ```
 DELETE /api/chat/conversations/:id  [CSRF]
 ```
-Aborts any active stream for this conversation first. Returns `{ ok: true }`. `404` if not found.
+Aborts any active stream for this conversation first. Deletes the conversation JSON file and cleans up the per-conversation artifacts subdirectory. Returns `{ ok: true }`. `404` if not found.
 
 ### 9.3 Download
 
@@ -470,10 +470,10 @@ Field: files[] (max 10 files)
 ```
 
 - Uses Multer with diskStorage
-- Destination: conversation's `workingDir`, or `cliBackend.workingDir` as fallback
+- Destination: `data/chat/artifacts/{conversationId}/` — per-conversation subdirectory created on first upload (`mkdir recursive`)
 - Filename: original name with `/` and `\` replaced by `_`
 - File size limit: 50MB per file
-- Returns `{ files: [{ name, path, size }] }`
+- Returns `{ files: [{ name, path, size }] }` where `path` is the absolute filesystem path to the uploaded file in the artifacts directory
 
 ### 9.7 Settings
 
@@ -566,7 +566,7 @@ Writes the full body to `data/chat/settings.json`.
 | `saveConversation(conv)` | Updates `updatedAt`, writes JSON to disk with 2-space indentation. |
 | `listConversations()` | Reads all `.json` files in conversations dir. Returns summaries sorted by `updatedAt` desc. Each summary: `{ id, title, createdAt, updatedAt, backend, workingDir, messageCount, lastMessage }` where `lastMessage` is first 100 chars of last message content. |
 | `renameConversation(id, newTitle)` | Updates title and saves. Returns `null` if not found. |
-| `deleteConversation(id)` | Deletes the JSON file. Returns `true`/`false`. |
+| `deleteConversation(id)` | Deletes the JSON file and removes the per-conversation artifacts subdirectory (`data/chat/artifacts/{id}/`) if it exists. Returns `true`/`false`. |
 | `addMessage(convId, role, content, backend, thinking)` | Appends message. Auto-titles from first user message (80 chars, newlines→spaces). Increments current session's `messageCount`. Optional `thinking` parameter stores extended thinking text on the message (omitted if falsy). |
 | `updateMessageContent(convId, messageId, newContent)` | Forks conversation: truncates all messages after the target message, adds edited content as a new message. Returns `{ conversation, message }`. |
 | `resetSession(convId)` | Archives current session to Markdown file in `archives/`. Marks session as ended. Inserts a session divider message. Creates new session with fresh UUID. Returns `{ conversation, archiveFilename, newSessionNumber }`. |
@@ -764,7 +764,7 @@ chatPendingFiles[]          // Files queued for upload
 
 #### Messaging
 
-- `chatSendMessage()` — POSTs message, initializes `chatStreamingState` entry for the conversation, opens EventSource to `/stream`. The SSE loop writes all state to the Map entry rather than closure-local variables, enabling state persistence across conversation switches.
+- `chatSendMessage()` — POSTs message, initializes `chatStreamingState` entry for the conversation, opens EventSource to `/stream`. The SSE loop writes all state to the Map entry rather than closure-local variables, enabling state persistence across conversation switches. After `chatRenderMessages()` renders the user message, the streaming bubble is only created if one wasn't already created by the render's streaming state restoration (guarded by `!state.streamingMsgEl` check to prevent duplicate bubbles).
 - `chatStopStreaming()` — POSTs abort endpoint
 - `chatAppendStreamingMessage()` — inserts empty assistant message bubble with pulsing cursor
 - `chatUpdateStreamingMessage(msgEl, content, thinking)` — renders Markdown incrementally into the streaming bubble. Optionally shows thinking block in a collapsible `<details>` element.
@@ -774,7 +774,7 @@ chatPendingFiles[]          // Files queued for upload
 - `chatUpdateSendButtonState()` — updates send button to show stop (■) when the current conversation is streaming, or send (↑) when idle. Called on conversation switch and stream completion.
 - `chatRetryLast()` — sends the last user message again (for regeneration)
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API) — reads SSE lines from the response body, parses `data:` lines as JSON
-- **Streaming state restoration:** When `chatRenderMessages()` is called and `chatStreamingState` has an entry for the active conversation, it re-creates the streaming bubble and restores the UI: pending interactions (plan approval/user question), accumulated text/thinking, or active tool/agent display. Uses `streamingMsgEl.isConnected` to detect orphaned DOM nodes destroyed by `innerHTML` replacement.
+- **Streaming state restoration:** When `chatRenderMessages()` is called and `chatStreamingState` has an entry for the active conversation, it re-creates the streaming bubble and restores the UI: pending interactions (plan approval/user question), accumulated text/thinking, or active tool/agent display. Uses `streamingMsgEl.isConnected` to detect orphaned DOM nodes destroyed by `innerHTML` replacement. On `assistant_message` events, streaming state (content, thinking, tools, agents) is reset **before** calling `chatRenderMessages()` so the restored bubble shows typing dots rather than stale content duplicating the completed message.
 
 #### File Handling
 
@@ -783,7 +783,7 @@ chatPendingFiles[]          // Files queued for upload
 - File input button → opens native file picker
 - `chatRenderFileChips()` — shows file names, sizes, and remove buttons above textarea
 - `chatUploadFiles(convId, files)` — POSTs FormData to upload endpoint
-- Files are uploaded when the user sends a message, before the message content is sent
+- Files are uploaded when the user sends a message, before the message content is sent. The absolute file paths (from the upload response's `path` field) are embedded in the message text as `[Uploaded files: /abs/path/to/file1, /abs/path/to/file2]`, giving Claude Code CLI the full paths to read the files regardless of its working directory.
 
 #### Session Management
 
@@ -911,8 +911,10 @@ All data is file-based. No database.
 - Single JSON file for user preferences
 
 ### Artifacts
-- Path: `data/chat/artifacts/`
-- Directory created at startup, reserved for future use
+- Path: `data/chat/artifacts/{conversationId}/`
+- Per-conversation subdirectories created on first file upload
+- Stores uploaded files separate from the project workspace
+- Cleaned up when the conversation is deleted
 
 ---
 
@@ -1003,10 +1005,11 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 
 ### Test Files (95 tests total)
 
-**`test/chatService.test.js`** (41 tests):
+**`test/chatService.test.js`** (38 tests):
 - Creates conversations with title, working directory
 - Lists conversations sorted by updatedAt
 - Gets, renames, deletes conversations
+- Cleans up artifacts directory on conversation deletion
 - Handles missing conversation (returns null)
 - Adds messages, verifies auto-titling from first user message
 - Stores `thinking` field when provided on assistant messages
@@ -1020,11 +1023,11 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - Gets and saves settings with defaults
 - Uses temporary directories (`os.tmpdir()`) for isolation
 
-**`test/cliBackend.test.js`** (33 tests):
+**`test/cliBackend.test.js`** (37 tests):
 - **extractToolDetails** (29 tests): Tests all 13 tool types — Read (with/without path), Write (with/without path, plan file detection), Edit (with/without path), Bash (with description/command/nothing, long command truncation at 60 chars), Grep (with pattern+glob, pattern only, nothing), Glob (with/without pattern), Agent (with/without inputs, subagentType default), TodoWrite, WebSearch (with/without query), WebFetch (with/without URL), EnterPlanMode, ExitPlanMode, AskUserQuestion (with/without questions). Tests edge cases: unknown tool, block id preservation, missing input graceful handling, shortenPath behavior (short paths unchanged, long paths shortened to last 2 segments).
 - **CLIBackend** (4 tests): Constructor defaults to `~/.openclaw/workspace`, `sendMessage` returns `{ stream, abort, sendInput }`, abort yields error and done events, `sendInput` does not throw after abort.
 
-**`test/chat.test.js`** (15 tests):
+**`test/chat.test.js`** (14 tests):
 - Uses mock CLI backend with configurable events and Express test server
 - **POST /input**: returns `ok:false` when no active stream, forwards text to `sendInput`, handles empty text, requires CSRF token
 - **SSE tool_activity forwarding**: enriched fields (tool, description, id), `isAgent` flag with `subagentType`, `isPlanMode`/`planAction`, `isQuestion` with `questions` array
