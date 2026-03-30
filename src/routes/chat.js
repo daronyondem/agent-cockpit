@@ -84,6 +84,36 @@ function createChatRouter({ chatService, cliBackend }) {
     }
   });
 
+  // ── Delete directory ────────────────────────────────────────────────────────
+  router.post('/rmdir', csrfGuard, (req, res) => {
+    try {
+      const { dirPath } = req.body;
+      if (!dirPath) {
+        return res.status(400).json({ error: 'dirPath is required' });
+      }
+      const resolved = path.resolve(dirPath);
+      const parent = path.dirname(resolved);
+      if (parent === resolved) {
+        return res.status(400).json({ error: 'Cannot delete filesystem root' });
+      }
+      if (!fs.existsSync(resolved)) {
+        return res.status(404).json({ error: 'Folder does not exist' });
+      }
+      const stat = fs.statSync(resolved);
+      if (!stat.isDirectory()) {
+        return res.status(400).json({ error: 'Path is not a directory' });
+      }
+      try {
+        fs.rmSync(resolved, { recursive: true, force: true });
+      } catch (rmErr) {
+        return res.status(403).json({ error: 'Permission denied' });
+      }
+      res.json({ deleted: resolved, parent });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── List conversations ─────────────────────────────────────────────────────
   router.get('/conversations', async (req, res) => {
     try {

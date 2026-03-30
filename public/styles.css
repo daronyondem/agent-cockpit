@@ -1353,6 +1353,73 @@
     color: var(--text);
   }
   .folder-browser-default:hover { background: var(--border); }
+  .folder-browser-path-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .folder-browser-path-row .folder-browser-path {
+    flex: 1;
+    min-width: 0;
+    margin-bottom: 0;
+  }
+  .folder-browser-path-actions {
+    display: flex;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .folder-browser-icon-btn {
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--fg);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0;
+  }
+  .folder-browser-icon-btn:hover { background: var(--surface2); }
+  .folder-browser-delete-btn:hover { background: var(--blocked, #dc2626); color: white; }
+  .folder-browser-confirm-delete {
+    padding: 16px;
+    text-align: center;
+    font-size: 13px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface2);
+  }
+  .folder-browser-confirm-actions {
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    margin-top: 12px;
+  }
+  .folder-browser-confirm-yes {
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: none;
+    background: var(--blocked, #dc2626);
+    color: white;
+    font-weight: 600;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .folder-browser-confirm-yes:hover { opacity: 0.9; }
+  .folder-browser-confirm-no {
+    padding: 6px 16px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--fg);
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .folder-browser-confirm-no:hover { background: var(--border); }
   .folder-browser-toolbar {
     display: flex;
     align-items: center;

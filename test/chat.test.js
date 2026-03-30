@@ -538,3 +538,52 @@ describe('POST /mkdir', () => {
     fs.chmodSync(readonlyDir, 0o755);
   });
 });
+
+// ── POST /rmdir ─────────────────────────────────────────────────────────────
+
+describe('POST /rmdir', () => {
+  test('deletes a folder and returns parent path', async () => {
+    const target = path.join(tmpDir, 'to-delete');
+    fs.mkdirSync(target);
+    fs.writeFileSync(path.join(target, 'file.txt'), 'data');
+    const res = await makeRequest('POST', '/api/chat/rmdir', { dirPath: target });
+    expect(res.status).toBe(200);
+    expect(res.body.deleted).toBe(target);
+    expect(res.body.parent).toBe(tmpDir);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  test('recursively deletes nested contents', async () => {
+    const target = path.join(tmpDir, 'nested');
+    fs.mkdirSync(path.join(target, 'sub', 'deep'), { recursive: true });
+    fs.writeFileSync(path.join(target, 'sub', 'deep', 'file.txt'), 'data');
+    const res = await makeRequest('POST', '/api/chat/rmdir', { dirPath: target });
+    expect(res.status).toBe(200);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  test('returns 400 when dirPath is missing', async () => {
+    const res = await makeRequest('POST', '/api/chat/rmdir', {});
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 400 when trying to delete filesystem root', async () => {
+    const res = await makeRequest('POST', '/api/chat/rmdir', { dirPath: '/' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Cannot delete filesystem root');
+  });
+
+  test('returns 404 when folder does not exist', async () => {
+    const res = await makeRequest('POST', '/api/chat/rmdir', { dirPath: path.join(tmpDir, 'nonexistent') });
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Folder does not exist');
+  });
+
+  test('returns 400 when path is a file not a directory', async () => {
+    const filePath = path.join(tmpDir, 'afile.txt');
+    fs.writeFileSync(filePath, 'data');
+    const res = await makeRequest('POST', '/api/chat/rmdir', { dirPath: filePath });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Path is not a directory');
+  });
+});

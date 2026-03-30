@@ -316,6 +316,20 @@ GET /api/chat/browse?path=<dir_path>&showHidden=true|false
 }
 ```
 
+**Create directory:**
+```
+POST /api/chat/mkdir  [CSRF]
+Body: { parentPath: string, name: string }
+```
+Creates a new subdirectory inside `parentPath`. Validates that `name` does not contain `/`, `\`, or path traversal characters (`.`, `..`). Confirms the resolved path stays within `parentPath`. Returns `{ created: "/absolute/path/to/new/dir" }`. Returns `400` for invalid input, `403` for permission denied, `409` if the folder already exists.
+
+**Delete directory:**
+```
+POST /api/chat/rmdir  [CSRF]
+Body: { dirPath: string }
+```
+Recursively deletes the directory at `dirPath` and all its contents. Validates that the path exists, is a directory, and is not the filesystem root. Returns `{ deleted: "/absolute/path", parent: "/parent/path" }`. Returns `400` for invalid input or root deletion attempt, `403` for permission denied, `404` if the folder does not exist.
+
 ### 9.2 Conversations
 
 **List conversations:**
@@ -740,7 +754,7 @@ _ensureConvPromise          // Promise cache for concurrent chatEnsureConversati
   activeTools: Array,            // Current tool_activity events
   activeAgents: Array,           // Current agent cards
   planModeActive: boolean,       // Plan mode banner visible
-  pendingInteraction: object|null, // { type: 'planApproval' } or { type: 'userQuestion', event }
+  pendingInteraction: object|null, // { type: 'planApproval', planContent: string } or { type: 'userQuestion', event }
   streamingMsgEl: HTMLElement|null // Reference to current streaming bubble DOM element
 }
 ```
@@ -779,7 +793,7 @@ _ensureConvPromise          // Promise cache for concurrent chatEnsureConversati
 - `chatAppendStreamingMessage()` — inserts empty assistant message bubble with pulsing cursor
 - `chatUpdateStreamingMessage(msgEl, content, thinking)` — renders Markdown incrementally into the streaming bubble. Optionally shows thinking block in a collapsible `<details>` element.
 - `chatUpdateStreamingActivity(msgEl, tools, agents, planMode)` — renders rich tool activity display: activity history (completed tools with checkmarks), current tool with description, agent cards with spinners and type labels, plan mode banner.
-- `chatShowPlanApproval(msgEl, convId)` — shows approve/reject buttons for plan approval. On click, POSTs to `/conversations/:id/input` with `"yes"` or `"no"`, clears `pendingInteraction` state.
+- `chatShowPlanApproval(msgEl, convId, planContent)` — renders the accumulated plan content as markdown above approve/reject buttons. On click, POSTs to `/conversations/:id/input` with `"yes"` or `"no"`, clears `pendingInteraction` state. Plan content is preserved after approval/rejection and survives conversation switching via `pendingInteraction.planContent`.
 - `chatShowUserQuestion(msgEl, convId, event)` — renders question text, clickable option buttons, and text input. On selection, POSTs answer to `/conversations/:id/input`, clears `pendingInteraction` state.
 - `chatUpdateSendButtonState()` — updates send button to show stop (■) when the current conversation is streaming, or send (↑) when idle. Disables send when any upload is in progress (`status === 'uploading'`). Enables when text or completed files exist. Called on conversation switch, stream completion, upload progress, and file add/remove.
 - `chatRetryLast()` — sends the last user message again (for regeneration)
@@ -840,7 +854,7 @@ Files upload **immediately on attach**, not when the message is sent. Each file 
 - `chatRenderMessages()` — renders all messages in the active conversation
 - `chatRenderMarkdown(text)` — uses `marked.parse()` for Markdown rendering
 - `chatHighlightCode(container)` — applies highlight.js to `<code>` blocks, adds copy buttons and expandable wrappers for long code blocks
-- `chatShowFolderPicker(initialPath)` — modal with directory browser (calls `GET /api/chat/browse`), supports navigation, hidden file toggle, manual path entry
+- `chatShowFolderPicker(initialPath)` — modal with directory browser (calls `GET /api/chat/browse`), supports navigation, hidden file toggle, new folder creation (calls `POST /api/chat/mkdir`), parent folder navigation button, and delete current folder button with confirmation (calls `POST /api/chat/rmdir`)
 - `chatShowModal(title, bodyHtml)` — generic modal with overlay, close button
 - `chatShowContextMenu(e, convId)` — right-click context menu on conversation items (Rename, Delete)
 - `esc(str)` — HTML entity escaping for `&`, `<`, `>`, `"`
@@ -903,7 +917,8 @@ Theme is applied by setting `data-theme` attribute on `<html>`:
 - **Activity history** (`.chat-activity-history`): completed tool activities shown with checkmark icons and muted text
 - **Agent cards** (`.chat-agent-card`): sub-agent visualization with spinning animation (`.chat-agent-spinner`), agent type label, and description text
 - **Plan mode banner** (`.chat-plan-mode-banner`): green accent indicator showing "Plan mode active"
-- **Plan approval** (`.chat-plan-approval`): card with approve/reject buttons for interactive plan approval
+- **Plan approval** (`.chat-plan-approval`): card with approve/reject buttons for interactive plan approval. Plan content rendered above the card in a scrollable container (`.chat-plan-approval-content`, max-height 400px)
+- **Folder picker toolbar** (`.folder-browser-toolbar`): flex row with hidden files toggle and "+ New Folder" button. Path row (`.folder-browser-path-row`) includes parent navigation and delete icon buttons (`.folder-browser-icon-btn`). Delete button shows red hover state. Inline folder name input (`.folder-browser-new-input`). Delete confirmation dialog (`.folder-browser-confirm-delete`) replaces the folder list with a warning message and red Delete / Cancel buttons
 - **User question** (`.chat-user-question`): question text with clickable option buttons and text input fallback
 - **Streaming indicator dot** (`.chat-conv-streaming-dot`): 8×8 pulsing dot next to streaming conversations in sidebar, uses `streaming-pulse` keyframe animation (1.5s ease-in-out infinite)
 

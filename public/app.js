@@ -583,7 +583,13 @@ async function chatShowFolderPicker(initialPath) {
 
     const bodyHtml = `
       <div class="chat-modal-body">
-        <div class="folder-browser-path" title="${esc(data.currentPath)}">${esc(data.currentPath)}</div>
+        <div class="folder-browser-path-row">
+          <div class="folder-browser-path" title="${esc(data.currentPath)}">${esc(data.currentPath)}</div>
+          <div class="folder-browser-path-actions">
+            ${data.parent ? `<button class="folder-browser-icon-btn" id="folder-go-parent" title="Go to parent folder">&#x2191;</button>` : ''}
+            ${data.parent ? `<button class="folder-browser-icon-btn folder-browser-delete-btn" id="folder-delete-btn" title="Delete this folder">&#x1F5D1;</button>` : ''}
+          </div>
+        </div>
         <div class="folder-browser-toolbar">
           <label class="folder-browser-toggle">
             <input type="checkbox" id="folder-show-hidden" ${showHidden ? 'checked' : ''} /> Show hidden folders
@@ -653,6 +659,46 @@ async function chatShowFolderPicker(initialPath) {
       if (e.key === 'Enter') createNewFolder();
       if (e.key === 'Escape') { newInputRow.style.display = 'none'; newBtn.style.display = ''; }
     };
+
+    // Parent navigation button
+    const goParentBtn = document.getElementById('folder-go-parent');
+    if (goParentBtn) goParentBtn.onclick = () => loadDir(data.parent);
+
+    // Delete folder button with confirmation
+    const deleteBtn = document.getElementById('folder-delete-btn');
+    if (deleteBtn) {
+      deleteBtn.onclick = () => {
+        const folderName = data.currentPath.split('/').pop() || data.currentPath;
+        const confirmEl = document.createElement('div');
+        confirmEl.className = 'folder-browser-confirm-delete';
+        confirmEl.innerHTML = `
+          <span>Delete <strong>${esc(folderName)}</strong> and all its contents?</span>
+          <div class="folder-browser-confirm-actions">
+            <button class="folder-browser-confirm-yes" id="folder-delete-yes">Delete</button>
+            <button class="folder-browser-confirm-no" id="folder-delete-no">Cancel</button>
+          </div>
+        `;
+        const list = document.getElementById('folder-browser-list');
+        if (list) list.replaceWith(confirmEl);
+        document.getElementById('folder-delete-no').onclick = () => renderFolderBrowser(data);
+        document.getElementById('folder-delete-yes').onclick = async () => {
+          try {
+            await chatFetch('rmdir', { method: 'POST', body: { dirPath: data.currentPath } });
+            loadDir(data.parent);
+          } catch (err) {
+            const pathEl = document.querySelector('.folder-browser-path');
+            if (pathEl) {
+              const origText = pathEl.textContent;
+              const origColor = pathEl.style.color;
+              pathEl.textContent = '\u26a0\ufe0f ' + (err.message || 'Failed to delete folder');
+              pathEl.style.color = 'var(--blocked, #dc2626)';
+              setTimeout(() => { pathEl.textContent = origText; pathEl.style.color = origColor; }, 2000);
+            }
+            renderFolderBrowser(data);
+          }
+        };
+      };
+    }
   }
 
   loadDir(browsePath);
