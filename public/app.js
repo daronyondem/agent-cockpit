@@ -868,10 +868,10 @@ async function chatSendMessage() {
   if (filesToUpload.length) {
     try {
       const uploadResult = await chatUploadFiles(chatActiveConvId, filesToUpload);
-      const names = uploadResult.files.map(f => f.name).join(', ');
+      const paths = uploadResult.files.map(f => f.path).join(', ');
       content = content
-        ? content + '\n\n[Uploaded files: ' + names + ']'
-        : '[Uploaded files: ' + names + ']';
+        ? content + '\n\n[Uploaded files: ' + paths + ']'
+        : '[Uploaded files: ' + paths + ']';
     } catch (err) {
       alert('File upload failed: ' + err.message);
       return;
