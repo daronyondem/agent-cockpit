@@ -108,6 +108,16 @@ describe('deleteConversation', () => {
   test('returns false for non-existent id', async () => {
     expect(await service.deleteConversation('nope')).toBe(false);
   });
+
+  test('cleans up artifacts directory on delete', async () => {
+    const conv = await service.createConversation('Artifact Cleanup');
+    const artifactDir = path.join(tmpDir, 'data', 'chat', 'artifacts', conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(artifactDir, 'test.txt'), 'hello');
+
+    expect(await service.deleteConversation(conv.id)).toBe(true);
+    expect(fs.existsSync(artifactDir)).toBe(false);
+  });
 });
 
 // ── Messages ─────────────────────────────────────────────────────────────────

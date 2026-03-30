@@ -114,11 +114,18 @@ class ChatService {
     const p = this._convPath(id);
     try {
       await fsp.unlink(p);
-      return true;
     } catch (err) {
       if (err.code === 'ENOENT') return false;
       throw err;
     }
+    // Clean up uploaded artifacts for this conversation
+    const artifactDir = path.join(this.artifactsDir, id);
+    try {
+      await fsp.rm(artifactDir, { recursive: true, force: true });
+    } catch {
+      // Ignore cleanup errors — directory may not exist
+    }
+    return true;
   }
 
   // ── Messages ───────────────────────────────────────────────────────────────

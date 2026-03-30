@@ -345,8 +345,8 @@ function createChatRouter({ chatService, cliBackend }) {
   const upload = multer({
     storage: multer.diskStorage({
       destination: async (req, file, cb) => {
-        const conv = await chatService.getConversation(req.params.id);
-        const dir = conv?.workingDir || cliBackend.workingDir;
+        const dir = path.join(chatService.artifactsDir, req.params.id);
+        await fs.promises.mkdir(dir, { recursive: true });
         cb(null, dir);
       },
       filename: (req, file, cb) => {
