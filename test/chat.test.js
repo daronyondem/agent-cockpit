@@ -430,6 +430,41 @@ describe('Turn boundary intermediate messages', () => {
   });
 });
 
+// ── DELETE /conversations/:id/upload/:filename ────────────────────────────────
+
+describe('DELETE /conversations/:id/upload/:filename', () => {
+  test('deletes an uploaded file', async () => {
+    const conv = await chatService.createConversation('Test');
+    const artifactDir = path.join(tmpDir, 'data', 'chat', 'artifacts', conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(artifactDir, 'test.txt'), 'hello');
+
+    const res = await makeRequest('DELETE', `/api/chat/conversations/${conv.id}/upload/test.txt`);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(fs.existsSync(path.join(artifactDir, 'test.txt'))).toBe(false);
+  });
+
+  test('returns 404 for non-existent file', async () => {
+    const conv = await chatService.createConversation('Test');
+    const res = await makeRequest('DELETE', `/api/chat/conversations/${conv.id}/upload/nope.txt`);
+    expect(res.status).toBe(404);
+  });
+
+  test('sanitizes slashes in filename', async () => {
+    const conv = await chatService.createConversation('Test');
+    const artifactDir = path.join(tmpDir, 'data', 'chat', 'artifacts', conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(artifactDir, 'a_b.txt'), 'data');
+
+    // Filename with slash gets sanitized to underscore, matching upload behavior
+    const res = await makeRequest('DELETE', `/api/chat/conversations/${conv.id}/upload/a%2Fb.txt`);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(fs.existsSync(path.join(artifactDir, 'a_b.txt'))).toBe(false);
+  });
+});
+
 // ── POST /conversations/:id/abort ───────────────────────────────────────────
 
 describe('POST /conversations/:id/abort', () => {

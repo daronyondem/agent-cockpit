@@ -1119,6 +1119,11 @@
     font-size: 11px;
     color: var(--text);
     max-width: 220px;
+    position: relative;
+    overflow: hidden;
+  }
+  .chat-file-chip.error {
+    border-color: var(--blocked, #dc2626);
   }
 
   .chat-file-chip-thumb {
@@ -1153,6 +1158,33 @@
     flex-shrink: 0;
   }
   .chat-file-chip-remove:hover { color: var(--text); }
+
+  .chat-file-chip-progress {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 3px;
+    background: var(--border);
+    border-radius: 0 0 8px 8px;
+    overflow: hidden;
+  }
+  .chat-file-chip-progress-bar {
+    height: 100%;
+    background: var(--accent-chat);
+    transition: width 0.15s ease;
+  }
+  .chat-file-chip-done {
+    color: var(--accent-chat);
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .chat-file-chip-error {
+    color: var(--blocked, #dc2626);
+    font-weight: 700;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
 
   .chat-drop-overlay {
     position: absolute;

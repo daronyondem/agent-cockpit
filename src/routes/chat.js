@@ -366,6 +366,22 @@ function createChatRouter({ chatService, cliBackend }) {
     res.json({ files });
   });
 
+  router.delete('/conversations/:id/upload/:filename', csrfGuard, async (req, res) => {
+    const safe = req.params.filename.replace(/[\/\\]/g, '_');
+    const filePath = path.join(chatService.artifactsDir, req.params.id, safe);
+    // Path traversal guard
+    if (!path.resolve(filePath).startsWith(path.resolve(chatService.artifactsDir))) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+    try {
+      await fs.promises.unlink(filePath);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err.code === 'ENOENT') return res.status(404).json({ error: 'File not found' });
+      res.status(500).json({ error: 'Failed to delete file' });
+    }
+  });
+
   // ── Settings ───────────────────────────────────────────────────────────────
   router.get('/settings', async (req, res) => {
     try {

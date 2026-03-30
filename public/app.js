@@ -71,7 +71,8 @@ let chatContextMenuEl = null;
 let chatSettingsData = null;
 let chatInitialized = false;
 let chatPendingWorkingDir = null;
-let chatPendingFiles = [];
+let chatPendingFiles = []; // Each: { file, status: 'uploading'|'done'|'error', progress, result, xhr }
+let _ensureConvPromise = null;
 
 function chatApiUrl(path) {
   return apiUrl('chat/' + path);
@@ -132,13 +133,15 @@ function chatWireEvents() {
   if (textarea) {
     textarea.oninput = () => {
       chatAutoResize(textarea);
-      const sendBtn = document.getElementById('chat-send-btn');
-      if (sendBtn) sendBtn.disabled = !textarea.value.trim() && !chatPendingFiles.length && !chatStreamingConvs.has(chatActiveConvId);
+      chatUpdateSendButtonState();
     };
     textarea.onkeydown = (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        if (textarea.value.trim() || chatPendingFiles.length) chatSendMessage();
+        const hasUploading = chatPendingFiles.some(entry => entry.status === 'uploading');
+        if (!hasUploading && (textarea.value.trim() || chatPendingFiles.some(entry => entry.status === 'done'))) {
+          chatSendMessage();
+        }
       }
     };
     textarea.addEventListener('paste', (e) => {
@@ -255,20 +258,111 @@ function chatFormatFileSize(bytes) {
   return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
 }
 
-function chatAddPendingFiles(files) {
-  chatPendingFiles.push(...files);
+async function chatEnsureConversation() {
+  if (chatActiveConvId) return chatActiveConvId;
+  if (_ensureConvPromise) return _ensureConvPromise;
+  _ensureConvPromise = (async () => {
+    try {
+      const body = chatPendingWorkingDir ? { workingDir: chatPendingWorkingDir } : {};
+      chatPendingWorkingDir = null;
+      const res = await chatFetch('conversations', { method: 'POST', body });
+      const conv = await res.json();
+      chatActiveConvId = conv.id;
+      chatActiveConv = conv;
+      chatLoadConversations();
+      chatUpdateHeader();
+      chatRenderMessages();
+      return conv.id;
+    } finally {
+      _ensureConvPromise = null;
+    }
+  })();
+  return _ensureConvPromise;
+}
+
+async function chatUploadSingleFile(convId, entry) {
+  if (!csrfToken) await fetchCsrfToken();
+  return new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    entry.xhr = xhr;
+    const formData = new FormData();
+    formData.append('files', entry.file);
+    xhr.open('POST', chatApiUrl(`conversations/${convId}/upload`));
+    xhr.setRequestHeader('x-csrf-token', csrfToken || '');
+    xhr.withCredentials = true;
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) {
+        entry.progress = Math.round((e.loaded / e.total) * 100);
+        chatRenderFileChips();
+      }
+    };
+    xhr.onload = () => {
+      entry.xhr = null;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const resp = JSON.parse(xhr.responseText);
+          entry.status = 'done';
+          entry.result = resp.files[0];
+        } catch {
+          entry.status = 'error';
+        }
+      } else {
+        entry.status = 'error';
+      }
+      chatRenderFileChips();
+      chatUpdateSendButtonState();
+      resolve();
+    };
+    xhr.onerror = () => {
+      entry.xhr = null;
+      entry.status = 'error';
+      chatRenderFileChips();
+      chatUpdateSendButtonState();
+      resolve();
+    };
+    xhr.onabort = () => {
+      entry.xhr = null;
+      resolve();
+    };
+    xhr.send(formData);
+  });
+}
+
+async function chatAddPendingFiles(files) {
+  const newEntries = files.map(f => ({ file: f, status: 'uploading', progress: 0, result: null, xhr: null }));
+  chatPendingFiles.push(...newEntries);
   chatRenderFileChips();
-  const sendBtn = document.getElementById('chat-send-btn');
-  const ta = document.getElementById('chat-textarea');
-  if (sendBtn) sendBtn.disabled = !chatPendingFiles.length && !(ta && ta.value.trim());
+  chatUpdateSendButtonState();
+  try {
+    const convId = await chatEnsureConversation();
+    for (const entry of newEntries) {
+      if (entry.status === 'uploading') {
+        chatUploadSingleFile(convId, entry);
+      }
+    }
+  } catch (err) {
+    for (const entry of newEntries) {
+      entry.status = 'error';
+      entry.xhr = null;
+    }
+    chatRenderFileChips();
+    chatUpdateSendButtonState();
+    alert('Failed to create conversation: ' + err.message);
+  }
 }
 
 function chatRemovePendingFile(index) {
+  const entry = chatPendingFiles[index];
+  if (!entry) return;
+  if (entry.status === 'uploading' && entry.xhr) {
+    entry.xhr.abort();
+  }
+  if (entry.status === 'done' && entry.result && chatActiveConvId) {
+    chatFetch(`conversations/${chatActiveConvId}/upload/${encodeURIComponent(entry.result.name)}`, { method: 'DELETE' }).catch(() => {});
+  }
   chatPendingFiles.splice(index, 1);
   chatRenderFileChips();
-  const sendBtn = document.getElementById('chat-send-btn');
-  const ta = document.getElementById('chat-textarea');
-  if (sendBtn) sendBtn.disabled = !chatPendingFiles.length && !(ta && ta.value.trim());
+  chatUpdateSendButtonState();
 }
 
 function chatRenderFileChips() {
@@ -280,13 +374,22 @@ function chatRenderFileChips() {
     return;
   }
   container.style.display = 'flex';
-  container.innerHTML = chatPendingFiles.map((f, i) => {
+  container.innerHTML = chatPendingFiles.map((entry, i) => {
+    const f = entry.file;
     const isImage = f.type && f.type.startsWith('image/');
     const thumbHtml = isImage ? `<img class="chat-file-chip-thumb" src="${URL.createObjectURL(f)}" alt="">` : '';
-    return `<div class="chat-file-chip">
+    let statusHtml = '';
+    if (entry.status === 'uploading') {
+      statusHtml = `<div class="chat-file-chip-progress"><div class="chat-file-chip-progress-bar" style="width:${entry.progress}%"></div></div>`;
+    }
+    const doneIcon = entry.status === 'done' ? '<span class="chat-file-chip-done">&#10003;</span>' : '';
+    const errorIcon = entry.status === 'error' ? '<span class="chat-file-chip-error" title="Upload failed">!</span>' : '';
+    return `<div class="chat-file-chip${entry.status === 'error' ? ' error' : ''}">
       ${thumbHtml}
       <span class="chat-file-chip-name" title="${esc(f.name)}">${esc(f.name)}</span>
       <span class="chat-file-chip-size">${chatFormatFileSize(f.size)}</span>
+      ${doneIcon}${errorIcon}
+      ${statusHtml}
       <button class="chat-file-chip-remove" data-file-index="${i}" title="Remove">&times;</button>
     </div>`;
   }).join('');
@@ -522,12 +625,21 @@ function chatUpdateSendButtonState() {
     sendBtn.textContent = '↑';
     sendBtn.classList.remove('stop');
     const ta = document.getElementById('chat-textarea');
-    sendBtn.disabled = !(ta && ta.value.trim());
+    const hasText = ta && ta.value.trim();
+    const hasCompletedFiles = chatPendingFiles.some(e => e.status === 'done');
+    const hasUploading = chatPendingFiles.some(e => e.status === 'uploading');
+    sendBtn.disabled = hasUploading || (!hasText && !hasCompletedFiles);
   }
 }
 
 async function chatSelectConversation(id) {
   if (id === chatActiveConvId) return;
+  // Abort in-flight uploads and clear pending files from previous conversation
+  for (const entry of chatPendingFiles) {
+    if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
+  }
+  chatPendingFiles = [];
+  chatRenderFileChips();
   try {
     const res = await chatFetch(`conversations/${id}`);
     chatActiveConv = await res.json();
@@ -564,10 +676,17 @@ async function chatDeleteConversation(id) {
   try {
     await chatFetch(`conversations/${id}`, { method: 'DELETE' });
     if (chatActiveConvId === id) {
+      // Abort in-flight uploads and clear pending files
+      for (const entry of chatPendingFiles) {
+        if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
+      }
+      chatPendingFiles = [];
+      chatRenderFileChips();
       chatActiveConvId = null;
       chatActiveConv = null;
       chatRenderMessages();
       chatUpdateHeader();
+      chatUpdateSendButtonState();
     }
     chatLoadConversations();
   } catch (err) {
@@ -836,18 +955,27 @@ function chatScrollToBottom() {
 async function chatSendMessage() {
   const textarea = document.getElementById('chat-textarea');
   const hasText = textarea && textarea.value.trim();
-  const hasFiles = chatPendingFiles.length > 0;
+  const completedFiles = chatPendingFiles.filter(e => e.status === 'done');
+  const hasFiles = completedFiles.length > 0;
   if ((!hasText && !hasFiles) || chatStreamingConvs.has(chatActiveConvId)) return;
+  if (chatPendingFiles.some(e => e.status === 'uploading')) return;
 
   let content = textarea ? textarea.value.trim() : '';
   if (textarea) { textarea.value = ''; chatAutoResize(textarea); }
-  const filesToUpload = chatPendingFiles.slice();
+
+  // Gather uploaded file paths and clear pending files
+  if (hasFiles) {
+    const paths = completedFiles.map(e => e.result.path).join(', ');
+    content = content
+      ? content + '\n\n[Uploaded files: ' + paths + ']'
+      : '[Uploaded files: ' + paths + ']';
+  }
   chatPendingFiles = [];
   chatRenderFileChips();
   const sendBtn = document.getElementById('chat-send-btn');
   if (sendBtn) sendBtn.disabled = true;
 
-  // Create conversation if none active
+  // Create conversation if none active (text-only messages without prior file attach)
   if (!chatActiveConvId) {
     try {
       const body = chatPendingWorkingDir ? { workingDir: chatPendingWorkingDir } : {};
@@ -860,20 +988,6 @@ async function chatSendMessage() {
       chatUpdateHeader();
     } catch (err) {
       alert('Failed to create conversation: ' + err.message);
-      return;
-    }
-  }
-
-  // Upload files if any
-  if (filesToUpload.length) {
-    try {
-      const uploadResult = await chatUploadFiles(chatActiveConvId, filesToUpload);
-      const paths = uploadResult.files.map(f => f.path).join(', ');
-      content = content
-        ? content + '\n\n[Uploaded files: ' + paths + ']'
-        : '[Uploaded files: ' + paths + ']';
-    } catch (err) {
-      alert('File upload failed: ' + err.message);
       return;
     }
   }
