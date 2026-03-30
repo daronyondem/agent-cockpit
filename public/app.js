@@ -676,10 +676,17 @@ async function chatDeleteConversation(id) {
   try {
     await chatFetch(`conversations/${id}`, { method: 'DELETE' });
     if (chatActiveConvId === id) {
+      // Abort in-flight uploads and clear pending files
+      for (const entry of chatPendingFiles) {
+        if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
+      }
+      chatPendingFiles = [];
+      chatRenderFileChips();
       chatActiveConvId = null;
       chatActiveConv = null;
       chatRenderMessages();
       chatUpdateHeader();
+      chatUpdateSendButtonState();
     }
     chatLoadConversations();
   } catch (err) {
