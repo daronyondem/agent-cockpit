@@ -475,3 +475,66 @@ describe('POST /conversations/:id/abort', () => {
     expect(res.body.ok).toBe(false);
   });
 });
+
+// ── POST /mkdir ─────────────────────────────────────────────────────────────
+
+describe('POST /mkdir', () => {
+  test('creates a folder and returns its path', async () => {
+    const res = await makeRequest('POST', '/api/chat/mkdir', { parentPath: tmpDir, name: 'new-folder' });
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(path.join(tmpDir, 'new-folder'));
+    expect(fs.existsSync(path.join(tmpDir, 'new-folder'))).toBe(true);
+  });
+
+  test('returns 400 when parentPath is missing', async () => {
+    const res = await makeRequest('POST', '/api/chat/mkdir', { name: 'test' });
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 400 when name is missing', async () => {
+    const res = await makeRequest('POST', '/api/chat/mkdir', { parentPath: tmpDir });
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects name containing slash', async () => {
+    const res = await makeRequest('POST', '/api/chat/mkdir', { parentPath: tmpDir, name: 'a/b' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid folder name');
+  });
+
+  test('rejects name containing backslash', async () => {
+    const res = await makeRequest('POST', '/api/chat/mkdir', { parentPath: tmpDir, name: 'a\\b' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid folder name');
+  });
+
+  test('rejects dot-dot traversal', async () => {
+    const res = await makeRequest('POST', '/api/chat/mkdir', { parentPath: tmpDir, name: '..' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid folder name');
+  });
+
+  test('rejects single dot', async () => {
+    const res = await makeRequest('POST', '/api/chat/mkdir', { parentPath: tmpDir, name: '.' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid folder name');
+  });
+
+  test('returns 409 when folder already exists', async () => {
+    fs.mkdirSync(path.join(tmpDir, 'existing'));
+    const res = await makeRequest('POST', '/api/chat/mkdir', { parentPath: tmpDir, name: 'existing' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('Folder already exists');
+  });
+
+  test('returns 403 for read-only parent directory', async () => {
+    const readonlyDir = path.join(tmpDir, 'readonly');
+    fs.mkdirSync(readonlyDir);
+    fs.chmodSync(readonlyDir, 0o444);
+    const res = await makeRequest('POST', '/api/chat/mkdir', { parentPath: readonlyDir, name: 'nope' });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe('Permission denied');
+    // Restore permissions for cleanup
+    fs.chmodSync(readonlyDir, 0o755);
+  });
+});

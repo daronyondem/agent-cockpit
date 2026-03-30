@@ -55,6 +55,35 @@ function createChatRouter({ chatService, cliBackend }) {
     }
   });
 
+  // ── Create directory ───────────────────────────────────────────────────────
+  router.post('/mkdir', csrfGuard, (req, res) => {
+    try {
+      const { parentPath, name } = req.body;
+      if (!parentPath || !name) {
+        return res.status(400).json({ error: 'parentPath and name are required' });
+      }
+      if (/[/\\]/.test(name) || name === '.' || name === '..') {
+        return res.status(400).json({ error: 'Invalid folder name' });
+      }
+      const parent = path.resolve(parentPath);
+      const fullPath = path.resolve(parent, name);
+      if (path.dirname(fullPath) !== parent) {
+        return res.status(400).json({ error: 'Invalid folder name' });
+      }
+      if (fs.existsSync(fullPath)) {
+        return res.status(409).json({ error: 'Folder already exists' });
+      }
+      try {
+        fs.mkdirSync(fullPath);
+      } catch (mkdirErr) {
+        return res.status(403).json({ error: 'Permission denied' });
+      }
+      res.json({ created: fullPath });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── List conversations ─────────────────────────────────────────────────────
   router.get('/conversations', async (req, res) => {
     try {

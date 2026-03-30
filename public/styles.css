@@ -775,6 +775,13 @@
     font-size: 14px;
   }
 
+  /* Plan content shown above approval card */
+  .chat-plan-approval-content {
+    max-height: 400px;
+    overflow-y: auto;
+    margin-bottom: 8px;
+  }
+
   /* Plan approval card */
   .chat-plan-approval {
     border: 1px solid var(--border);
@@ -1346,17 +1353,59 @@
     color: var(--text);
   }
   .folder-browser-default:hover { background: var(--border); }
+  .folder-browser-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
   .folder-browser-toggle {
     display: flex;
     align-items: center;
     gap: 6px;
     font-size: 12px;
     color: var(--muted);
-    margin-bottom: 12px;
     cursor: pointer;
     user-select: none;
   }
   .folder-browser-toggle input { margin: 0; }
+  .folder-browser-new-btn {
+    font-size: 12px;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--fg);
+    cursor: pointer;
+    font-weight: 600;
+  }
+  .folder-browser-new-btn:hover { background: var(--surface2); }
+  .folder-browser-new-input {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+  .folder-browser-new-input input {
+    flex: 1;
+    padding: 5px 8px;
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--fg);
+    font-size: 13px;
+    outline: none;
+  }
+  .folder-browser-new-input button {
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--surface);
+    color: var(--fg);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .folder-browser-new-input button:hover { background: var(--surface2); }
 
   .chat-header-workdir {
     font-size: 11px;

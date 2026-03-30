@@ -584,9 +584,17 @@ async function chatShowFolderPicker(initialPath) {
     const bodyHtml = `
       <div class="chat-modal-body">
         <div class="folder-browser-path" title="${esc(data.currentPath)}">${esc(data.currentPath)}</div>
-        <label class="folder-browser-toggle">
-          <input type="checkbox" id="folder-show-hidden" ${showHidden ? 'checked' : ''} /> Show hidden folders
-        </label>
+        <div class="folder-browser-toolbar">
+          <label class="folder-browser-toggle">
+            <input type="checkbox" id="folder-show-hidden" ${showHidden ? 'checked' : ''} /> Show hidden folders
+          </label>
+          <button class="folder-browser-new-btn" id="folder-new-btn" title="New Folder">+ New Folder</button>
+        </div>
+        <div class="folder-browser-new-input" id="folder-new-input" style="display:none;">
+          <input type="text" id="folder-new-name" placeholder="Folder name" autocomplete="off" />
+          <button id="folder-new-confirm" title="Create">&#10003;</button>
+          <button id="folder-new-cancel" title="Cancel">&#10005;</button>
+        </div>
         <div class="folder-browser-list" id="folder-browser-list">${listHtml}</div>
       </div>
       <div class="folder-browser-actions" style="padding:12px 20px;border-top:1px solid var(--border);">
@@ -607,6 +615,44 @@ async function chatShowFolderPicker(initialPath) {
     };
     document.getElementById('folder-select-this').onclick = () => chatCreateConversationWithDir(data.currentPath);
     document.getElementById('folder-use-default').onclick = () => chatCreateConversationWithDir(null);
+
+    // New Folder logic
+    const newBtn = document.getElementById('folder-new-btn');
+    const newInputRow = document.getElementById('folder-new-input');
+    const newNameInput = document.getElementById('folder-new-name');
+    newBtn.onclick = () => {
+      newInputRow.style.display = 'flex';
+      newBtn.style.display = 'none';
+      newNameInput.value = '';
+      newNameInput.focus();
+    };
+    document.getElementById('folder-new-cancel').onclick = () => {
+      newInputRow.style.display = 'none';
+      newBtn.style.display = '';
+    };
+    async function createNewFolder() {
+      const name = newNameInput.value.trim();
+      if (!name) return;
+      try {
+        const res = await chatFetch('mkdir', { method: 'POST', body: { parentPath: data.currentPath, name } });
+        const result = await res.json();
+        loadDir(result.created);
+      } catch (err) {
+        const pathEl = document.querySelector('.folder-browser-path');
+        if (pathEl) {
+          const origText = pathEl.textContent;
+          const origColor = pathEl.style.color;
+          pathEl.textContent = '\u26a0\ufe0f ' + (err.message || 'Failed to create folder');
+          pathEl.style.color = 'var(--blocked, #dc2626)';
+          setTimeout(() => { pathEl.textContent = origText; pathEl.style.color = origColor; }, 2000);
+        }
+      }
+    }
+    document.getElementById('folder-new-confirm').onclick = createNewFolder;
+    newNameInput.onkeydown = (e) => {
+      if (e.key === 'Enter') createNewFolder();
+      if (e.key === 'Escape') { newInputRow.style.display = 'none'; newBtn.style.display = ''; }
+    };
   }
 
   loadDir(browsePath);
@@ -845,7 +891,7 @@ function chatRenderMessages() {
 
     if (streamState.pendingInteraction) {
       if (streamState.pendingInteraction.type === 'planApproval') {
-        chatShowPlanApproval(msgEl, chatActiveConvId);
+        chatShowPlanApproval(msgEl, chatActiveConvId, streamState.pendingInteraction.planContent);
       } else if (streamState.pendingInteraction.type === 'userQuestion') {
         chatShowUserQuestion(msgEl, chatActiveConvId, streamState.pendingInteraction.event);
       }
@@ -1078,11 +1124,19 @@ async function chatSendMessage() {
             }
           } else if (event.type === 'text') {
             st.assistantContent += event.content;
-            st.activeTools = [];
-            st.activeAgents = [];
-            st.pendingInteraction = null;
-            if (isStillActive) {
-              chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
+            if (st.pendingInteraction && st.pendingInteraction.type === 'planApproval') {
+              // Update stored plan content and re-render approval with new text
+              st.pendingInteraction.planContent = st.assistantContent;
+              if (isStillActive) {
+                chatShowPlanApproval(st.streamingMsgEl, targetConvId, st.assistantContent);
+              }
+            } else {
+              st.activeTools = [];
+              st.activeAgents = [];
+              st.pendingInteraction = null;
+              if (isStillActive) {
+                chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
+              }
             }
           } else if (event.type === 'tool_activity') {
             if (event.isAgent) {
@@ -1096,13 +1150,13 @@ async function chatSendMessage() {
             }
             // Track pending interactions for restoration on switch-back
             if (event.isPlanMode && event.planAction === 'exit') {
-              st.pendingInteraction = { type: 'planApproval' };
+              st.pendingInteraction = { type: 'planApproval', planContent: st.assistantContent };
             } else if (event.isQuestion) {
               st.pendingInteraction = { type: 'userQuestion', event };
             }
             if (isStillActive) {
               if (event.isPlanMode && event.planAction === 'exit') {
-                chatShowPlanApproval(st.streamingMsgEl, targetConvId);
+                chatShowPlanApproval(st.streamingMsgEl, targetConvId, st.assistantContent);
               } else if (event.isQuestion) {
                 chatShowUserQuestion(st.streamingMsgEl, targetConvId, event);
               } else {
@@ -1261,20 +1315,22 @@ function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
   chatScrollToBottom();
 }
 
-function chatShowPlanApproval(msgEl, convId) {
+function chatShowPlanApproval(msgEl, convId, planContent) {
   if (!msgEl) return;
   const contentEl = msgEl.querySelector('.chat-msg-content');
   if (!contentEl) return;
+  const planHtml = planContent ? chatRenderMarkdown(planContent) : '';
   contentEl.innerHTML = `
+    ${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}
     <div class="chat-plan-approval">
       <div class="chat-plan-approval-title">Plan ready for review</div>
-      <div style="font-size:12px;color:var(--muted);margin-bottom:8px;">The assistant has prepared a plan and is waiting for your approval.</div>
       <div class="chat-plan-approval-actions">
         <button class="chat-plan-approval-btn approve" data-action="approve">Approve</button>
         <button class="chat-plan-approval-btn reject" data-action="reject">Reject</button>
       </div>
     </div>
   `;
+  chatHighlightCode(contentEl);
   contentEl.querySelectorAll('.chat-plan-approval-btn').forEach(btn => {
     btn.onclick = async () => {
       const action = btn.dataset.action;
@@ -1288,7 +1344,8 @@ function chatShowPlanApproval(msgEl, convId) {
         });
         const approvalState = chatStreamingState.get(convId);
         if (approvalState) approvalState.pendingInteraction = null;
-        contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
+        contentEl.innerHTML = `${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
+        chatHighlightCode(contentEl);
       } catch (err) {
         contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
       }
