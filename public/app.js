@@ -921,7 +921,7 @@ async function chatSendMessage() {
     const state = chatStreamingState.get(targetConvId);
     if (!state) return; // cleaned up before stream started
 
-    if (chatActiveConvId === targetConvId) {
+    if (chatActiveConvId === targetConvId && !state.streamingMsgEl) {
       state.streamingMsgEl = chatAppendStreamingMessage();
     }
 
@@ -996,19 +996,21 @@ async function chatSendMessage() {
               }
             }
           } else if (event.type === 'assistant_message') {
-            if (isStillActive && chatActiveConv) {
-              chatActiveConv.messages.push(event.message);
-              chatRenderMessages();
-              chatUpdateHeader();
-              // chatRenderMessages will re-create streaming bubble via state check
-            }
-            chatLoadConversations();
+            // Reset streaming state before re-render so the restored bubble
+            // shows typing dots instead of stale content duplicating the
+            // completed message that chatRenderMessages is about to display.
             st.assistantContent = '';
             st.assistantThinking = '';
             st.activeTools = [];
             st.activeAgents = [];
             st.planModeActive = false;
             st.pendingInteraction = null;
+            if (isStillActive && chatActiveConv) {
+              chatActiveConv.messages.push(event.message);
+              chatRenderMessages();
+              chatUpdateHeader();
+            }
+            chatLoadConversations();
           } else if (event.type === 'error') {
             st.pendingInteraction = null;
             if (isStillActive) chatAppendError(event.error);
