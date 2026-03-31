@@ -46,6 +46,7 @@ class ChatService {
       throw err;
     }
     for (const hash of dirs) {
+      if (hash.startsWith('.')) continue;
       const index = await this._readWorkspaceIndex(hash);
       if (!index || !index.conversations) continue;
       for (const conv of index.conversations) {
@@ -239,6 +240,7 @@ class ChatService {
     }
 
     for (const hash of dirs) {
+      if (hash.startsWith('.')) continue;
       const index = await this._readWorkspaceIndex(hash);
       if (!index || !index.conversations) continue;
       for (const conv of index.conversations) {
