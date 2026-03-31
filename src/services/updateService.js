@@ -74,6 +74,8 @@ class UpdateService {
         if (line.startsWith('?? ecosystem.config.js')) return false;
         if (line.startsWith('?? .DS_Store')) return false;
         if (line.startsWith('?? .claude/')) return false;
+        if (line.startsWith('?? coverage/')) return false;
+        if (line.startsWith('?? plans/')) return false;
         return true;
       });
       if (significantChanges.length > 0) {
