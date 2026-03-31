@@ -1,4 +1,4 @@
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const path = require('path');
 
 /**
@@ -111,15 +111,17 @@ class UpdateService {
         return { success: false, steps, error: 'Failed to install dependencies: ' + err.message };
       }
 
-      // Step 4: PM2 restart
-      try {
-        const ecosystemPath = path.join(this._appRoot, 'ecosystem.config.js');
-        const out = await this._exec('pm2', ['restart', ecosystemPath], 30000);
-        steps.push({ name: 'pm2 restart', success: true, output: out.trim() });
-      } catch (err) {
-        steps.push({ name: 'pm2 restart', success: false, output: err.message });
-        return { success: false, steps, error: 'Failed to restart server via PM2: ' + err.message };
-      }
+      // Step 4: PM2 restart — fire and forget, because PM2 will kill this
+      // process before execFile can report success. We spawn detached so the
+      // PM2 CLI outlives our process, and return immediately.
+      const ecosystemPath = path.join(this._appRoot, 'ecosystem.config.js');
+      const pm2 = spawn('pm2', ['restart', ecosystemPath], {
+        cwd: this._appRoot,
+        detached: true,
+        stdio: 'ignore',
+      });
+      pm2.unref();
+      steps.push({ name: 'pm2 restart', success: true, output: 'Restart signal sent' });
 
       return { success: true, steps };
     } finally {
