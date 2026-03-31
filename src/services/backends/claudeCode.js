@@ -58,6 +58,9 @@ function extractToolDetails(block) {
         ? `Writing \`${shortenPath(input.file_path)}\``
         : 'Writing file';
       detail.isPlanFile = !!(input.file_path && input.file_path.includes('.claude/plans/'));
+      if (detail.isPlanFile && input.content) {
+        detail.planContent = input.content;
+      }
       break;
     case 'Edit':
       detail.description = input.file_path

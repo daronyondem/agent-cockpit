@@ -1265,13 +1265,15 @@ async function chatSendMessage() {
             }
             // Track pending interactions for restoration on switch-back
             if (event.isPlanMode && event.planAction === 'exit') {
-              st.pendingInteraction = { type: 'planApproval', planContent: st.assistantContent };
+              // Prefer plan file content (from Write tool) over streamed text summary
+              const planContent = event.planContent || st.assistantContent;
+              st.pendingInteraction = { type: 'planApproval', planContent };
             } else if (event.isQuestion) {
               st.pendingInteraction = { type: 'userQuestion', event };
             }
             if (isStillActive) {
               if (event.isPlanMode && event.planAction === 'exit') {
-                chatShowPlanApproval(st.streamingMsgEl, targetConvId, st.assistantContent);
+                chatShowPlanApproval(st.streamingMsgEl, targetConvId, st.pendingInteraction.planContent);
               } else if (event.isQuestion) {
                 chatShowUserQuestion(st.streamingMsgEl, targetConvId, event);
               } else {
@@ -1282,12 +1284,16 @@ async function chatSendMessage() {
             // Reset streaming state before re-render so the restored bubble
             // shows typing dots instead of stale content duplicating the
             // completed message that chatRenderMessages is about to display.
+            // Preserve pending interactions (plan approval, user questions)
+            // so they survive intermediate message saves — chatRenderMessages()
+            // will restore the UI from pendingInteraction.
+            const savedInteraction = st.pendingInteraction;
             st.assistantContent = '';
             st.assistantThinking = '';
             st.activeTools = [];
             st.activeAgents = [];
             st.planModeActive = false;
-            st.pendingInteraction = null;
+            st.pendingInteraction = savedInteraction;
             if (isStillActive && chatActiveConv) {
               chatActiveConv.messages.push(event.message);
               chatRenderMessages();
@@ -1298,10 +1304,15 @@ async function chatSendMessage() {
             st.pendingInteraction = null;
             if (isStillActive) chatAppendError(event.error);
           } else if (event.type === 'done') {
-            if (st.streamingMsgEl && st.streamingMsgEl.isConnected) {
-              st.streamingMsgEl.remove();
+            if (st.pendingInteraction) {
+              // Keep the streaming bubble alive for pending interactions
+              // (plan approval, user questions) so the user can still act on them
+            } else {
+              if (st.streamingMsgEl && st.streamingMsgEl.isConnected) {
+                st.streamingMsgEl.remove();
+              }
+              chatStreamingState.delete(targetConvId);
             }
-            chatStreamingState.delete(targetConvId);
           }
         } catch {}
       }
@@ -1460,7 +1471,13 @@ function chatShowPlanApproval(msgEl, convId, planContent) {
           body: JSON.stringify({ text }),
         });
         const approvalState = chatStreamingState.get(convId);
-        if (approvalState) approvalState.pendingInteraction = null;
+        if (approvalState) {
+          approvalState.pendingInteraction = null;
+          // If the stream already ended, clean up the streaming state now
+          if (!approvalState.streamingMsgEl || !approvalState.streamingMsgEl.isConnected) {
+            chatStreamingState.delete(convId);
+          }
+        }
         contentEl.innerHTML = `${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
         chatHighlightCode(contentEl);
       } catch (err) {

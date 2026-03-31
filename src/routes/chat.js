@@ -379,6 +379,7 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
     let thinkingText = '';
     let resultText = null;
     let hasStreamingDeltas = false;
+    let pendingPlanContent = '';  // Plan file content from Write tool (Claude Code specific)
 
     (async () => {
       try {
@@ -408,7 +409,15 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
             thinkingText = '';
             hasStreamingDeltas = false;
           } else if (event.type === 'tool_activity') {
-            const { type: _t, ...rest } = event;
+            // Track plan file content written by Claude Code's Write tool
+            if (event.isPlanFile && event.planContent) {
+              pendingPlanContent = event.planContent;
+            }
+            const { type: _t, planContent: _pc, ...rest } = event;
+            // Attach accumulated plan content when ExitPlanMode fires
+            if (rest.isPlanMode && rest.planAction === 'exit' && pendingPlanContent) {
+              rest.planContent = pendingPlanContent;
+            }
             res.write(`data: ${JSON.stringify({ type: 'tool_activity', ...rest })}\n\n`);
           } else if (event.type === 'result') {
             resultText = event.content;
