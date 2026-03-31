@@ -3,7 +3,7 @@ const { BackendRegistry } = require('../src/services/backends/registry');
 const { ClaudeCodeAdapter } = require('../src/services/backends/claudeCode');
 
 // extractToolDetails / shortenPath are not public on the class, so access via exports
-const { extractToolDetails, shortenPath } = require('../src/services/backends/claudeCode');
+const { extractToolDetails, shortenPath, sanitizeSystemPrompt, isApiError } = require('../src/services/backends/claudeCode');
 
 const fs = require('fs');
 const vm = require('vm');
@@ -321,6 +321,65 @@ describe('shortenPath via Read tool', () => {
   });
 });
 
+// ── sanitizeSystemPrompt ──────────────────────────────────────────────────
+
+describe('sanitizeSystemPrompt', () => {
+  test('returns empty string for null/undefined', () => {
+    expect(sanitizeSystemPrompt(null)).toBe('');
+    expect(sanitizeSystemPrompt(undefined)).toBe('');
+    expect(sanitizeSystemPrompt('')).toBe('');
+  });
+
+  test('returns non-string types as empty', () => {
+    expect(sanitizeSystemPrompt(42)).toBe('');
+    expect(sanitizeSystemPrompt({})).toBe('');
+  });
+
+  test('passes through normal text unchanged', () => {
+    expect(sanitizeSystemPrompt('You are a helpful assistant.')).toBe('You are a helpful assistant.');
+  });
+
+  test('preserves newlines, tabs, and carriage returns', () => {
+    expect(sanitizeSystemPrompt('line1\nline2\ttab\r')).toBe('line1\nline2\ttab\r');
+  });
+
+  test('strips control characters', () => {
+    expect(sanitizeSystemPrompt('hello\x00world\x07!')).toBe('helloworld!');
+    expect(sanitizeSystemPrompt('\x01\x02\x03safe\x1F')).toBe('safe');
+  });
+
+  test('truncates at max length', () => {
+    const long = 'a'.repeat(60000);
+    const result = sanitizeSystemPrompt(long);
+    expect(result.length).toBe(50000);
+  });
+});
+
+// ── isApiError ─────────────────────────────────────────────────────────────
+
+describe('isApiError', () => {
+  test('detects API Error: 500 pattern', () => {
+    expect(isApiError('API Error: 500 {"type":"error"}')).toBe(true);
+  });
+
+  test('detects API Error: 429 pattern', () => {
+    expect(isApiError('API Error: 429 rate limited')).toBe(true);
+  });
+
+  test('detects with leading whitespace', () => {
+    expect(isApiError('  API Error: 500 server error')).toBe(true);
+  });
+
+  test('rejects normal text', () => {
+    expect(isApiError('Hello world')).toBe(false);
+    expect(isApiError('The API returned an error')).toBe(false);
+  });
+
+  test('rejects partial match', () => {
+    expect(isApiError('API Error without code')).toBe(false);
+  });
+});
+
 // ── ClaudeCodeAdapter sendMessage ──────────────────────────────────────────
 
 describe('ClaudeCodeAdapter sendMessage', () => {
@@ -381,6 +440,82 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     const idx = capturedArgs.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThan(-1);
     expect(capturedArgs[idx + 1]).toBe('You are a helpful assistant');
+  });
+
+  test('sanitizes system prompt with control characters', async () => {
+    let capturedArgs;
+    let streamRef;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd, args) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-sanitize',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: 'Be helpful\x00\x07 and safe',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    const idx = capturedArgs.indexOf('--append-system-prompt');
+    expect(idx).toBeGreaterThan(-1);
+    expect(capturedArgs[idx + 1]).toBe('Be helpful and safe');
+  });
+
+  test('omits --append-system-prompt when systemPrompt is only control chars', async () => {
+    let capturedArgs;
+    let streamRef;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd, args) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-ctrl-only',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '\x00\x01\x02',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    expect(capturedArgs).not.toContain('--append-system-prompt');
   });
 
   test('omits --append-system-prompt when systemPrompt is empty', async () => {

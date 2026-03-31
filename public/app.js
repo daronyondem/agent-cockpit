@@ -1538,10 +1538,32 @@ function chatShowUserQuestion(msgEl, convId, event) {
   chatScrollToBottom();
 }
 
+function chatFormatErrorMessage(errorMsg) {
+  // Parse "API Error: 500 {...json...}" into a friendly message
+  const apiMatch = errorMsg.match(/^API Error:\s*(\d{3})\s*(.*)/s);
+  if (apiMatch) {
+    const code = apiMatch[1];
+    const rest = apiMatch[2].trim();
+    let detail = '';
+    try {
+      const parsed = JSON.parse(rest);
+      detail = (parsed.error && parsed.error.message) || parsed.message || '';
+    } catch {
+      detail = rest;
+    }
+    if (code === '500') return 'The API returned an internal server error. This is usually a temporary issue — try again.';
+    if (code === '429') return 'Rate limit exceeded. Please wait a moment before retrying.';
+    if (code === '529') return 'The API is temporarily overloaded. Please try again shortly.';
+    return `API error ${code}${detail ? ': ' + detail : ''}`;
+  }
+  return errorMsg;
+}
+
 function chatAppendError(errorMsg) {
   const container = document.getElementById('chat-messages');
   if (!container) return;
 
+  const friendly = chatFormatErrorMessage(errorMsg);
   const errEl = document.createElement('div');
   errEl.className = 'chat-msg assistant';
   errEl.innerHTML = `
@@ -1549,7 +1571,7 @@ function chatAppendError(errorMsg) {
       <div class="chat-msg-avatar" style="background:#fee2e2;color:#dc2626;">!</div>
       <div class="chat-msg-body">
         <div class="chat-msg-role" style="color:#dc2626;">Error</div>
-        <div class="chat-msg-content" style="color:#dc2626;">${esc(errorMsg)}</div>
+        <div class="chat-msg-content" style="color:#dc2626;">${esc(friendly)}</div>
         <div class="chat-msg-actions" style="opacity:1;">
           <button class="chat-msg-action" onclick="chatRetryLast()">Retry</button>
         </div>
