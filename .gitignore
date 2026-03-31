@@ -3,3 +3,8 @@ data/
 .env
 *.log
 TASK.md
+.DS_Store
+.claude/
+coverage/
+ecosystem.config.js
+plans/
