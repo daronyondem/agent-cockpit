@@ -854,7 +854,6 @@ function chatShowContextMenu(e, convId) {
   menu.className = 'chat-context-menu';
   menu.innerHTML = `
     <button class="chat-context-menu-item" data-action="rename">Rename</button>
-    <button class="chat-context-menu-item" data-action="archive">Archive</button>
     <button class="chat-context-menu-item danger" data-action="delete">Delete</button>
   `;
   menu.style.left = e.clientX + 'px';
@@ -864,7 +863,6 @@ function chatShowContextMenu(e, convId) {
     item.onclick = () => {
       chatCloseContextMenu();
       if (item.dataset.action === 'rename') chatRenameConversation(convId);
-      else if (item.dataset.action === 'archive') chatResetSession(convId);
       else if (item.dataset.action === 'delete') chatDeleteConversation(convId);
     };
   });
