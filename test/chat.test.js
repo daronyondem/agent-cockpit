@@ -5,6 +5,8 @@ const path = require('path');
 const os = require('os');
 const { ChatService } = require('../src/services/chatService');
 const { createChatRouter } = require('../src/routes/chat');
+const { BaseBackendAdapter } = require('../src/services/backends/base');
+const { BackendRegistry } = require('../src/services/backends/registry');
 
 // ── Test helpers ────────────────────────────────────────────────────────────
 
@@ -12,37 +14,50 @@ const DEFAULT_WORKSPACE = '/tmp/test-workspace';
 let tmpDir, chatService, app, server, baseUrl;
 const CSRF_TOKEN = 'test-csrf-token';
 
-function createMockCLIBackend() {
-  return {
-    workingDir: '/tmp',
-    _lastMessage: null,
-    _lastOptions: null,
-    _mockEvents: [],
-    _sendInputCalls: [],
+class MockBackendAdapter extends BaseBackendAdapter {
+  constructor() {
+    super({ workingDir: '/tmp' });
+    this._lastMessage = null;
+    this._lastOptions = null;
+    this._mockEvents = [];
+    this._sendInputCalls = [];
+  }
 
-    setMockEvents(events) {
-      this._mockEvents = events;
-    },
+  get metadata() {
+    return {
+      id: 'claude-code',
+      label: 'Claude Code',
+      icon: null,
+      capabilities: { thinking: true, planMode: true, agents: true, toolActivity: true, userQuestions: true, stdinInput: true },
+    };
+  }
 
-    sendMessage(message, options) {
-      this._lastMessage = message;
-      this._lastOptions = options;
-      const events = this._mockEvents.slice();
-      const self = this;
+  setMockEvents(events) {
+    this._mockEvents = events;
+  }
 
-      async function* createStream() {
-        for (const event of events) {
-          yield event;
-        }
+  sendMessage(message, options) {
+    this._lastMessage = message;
+    this._lastOptions = options;
+    const events = this._mockEvents.slice();
+    const self = this;
+
+    async function* createStream() {
+      for (const event of events) {
+        yield event;
       }
+    }
 
-      return {
-        stream: createStream(),
-        abort: () => {},
-        sendInput: (text) => { self._sendInputCalls.push(text); },
-      };
-    },
-  };
+    return {
+      stream: createStream(),
+      abort: () => {},
+      sendInput: (text) => { self._sendInputCalls.push(text); },
+    };
+  }
+
+  async generateSummary(messages, fallback) {
+    return fallback || `Session (${messages.length} messages)`;
+  }
 }
 
 function makeRequest(method, urlPath, body) {
@@ -97,13 +112,15 @@ function readSSE(urlPath) {
 
 // ── Setup / Teardown ────────────────────────────────────────────────────────
 
-let mockBackend;
+let mockBackend, backendRegistry;
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatroute-'));
-  chatService = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+  mockBackend = new MockBackendAdapter();
+  backendRegistry = new BackendRegistry();
+  backendRegistry.register(mockBackend);
+  chatService = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE, backendRegistry });
   await chatService.initialize();
-  mockBackend = createMockCLIBackend();
 
   app = express();
   app.use(express.json());
@@ -114,7 +131,7 @@ beforeEach(async () => {
     next();
   });
 
-  const { router } = createChatRouter({ chatService, cliBackend: mockBackend });
+  const { router } = createChatRouter({ chatService, backendRegistry });
   app.use('/api/chat', router);
 
   await new Promise((resolve) => {

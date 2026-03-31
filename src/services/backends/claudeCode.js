@@ -1,6 +1,13 @@
-const { spawn } = require('child_process');
+const { spawn, execFile } = require('child_process');
 const path = require('path');
 const os = require('os');
+const { BaseBackendAdapter } = require('./base');
+
+// ── Icon ────────────────────────────────────────────────────────────────────
+
+const CLAUDE_CODE_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" rx="128" fill="#D37D5B"/><path d="M256 220L285 85L305 92L275 225L380 145L395 165L285 245L440 265L435 290L285 275L390 380L365 400L265 295L295 440L265 445L245 295L180 420L155 405L230 280L100 340L90 315L225 260L70 250L75 225L225 235L110 145L130 130L235 215L170 85L195 80L245 210L256 220Z" fill="#F9EDE6"/></svg>';
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function shortenPath(filePath) {
   if (!filePath) return '';
@@ -93,19 +100,31 @@ function extractToolDetails(block) {
   return detail;
 }
 
-class CLIBackend {
+// ── Adapter ─────────────────────────────────────────────────────────────────
+
+class ClaudeCodeAdapter extends BaseBackendAdapter {
   constructor(options = {}) {
+    super(options);
     this.workingDir = options.workingDir || path.resolve(os.homedir(), '.openclaw', 'workspace');
   }
 
-  /**
-   * Send a message and get a streaming response.
-   * @param {string} message - The user message
-   * @param {object} options - { sessionId: string, isNewSession: boolean }
-   * @returns {object} { stream, abort, sendInput }
-   */
+  get metadata() {
+    return {
+      id: 'claude-code',
+      label: 'Claude Code',
+      icon: CLAUDE_CODE_ICON,
+      capabilities: {
+        thinking: true,
+        planMode: true,
+        agents: true,
+        toolActivity: true,
+        userQuestions: true,
+        stdinInput: true,
+      },
+    };
+  }
+
   sendMessage(message, options = {}) {
-    // Per-request state — not shared across requests
     const state = { proc: null, aborted: false };
 
     const stream = this._createStream(message, options, state);
@@ -125,6 +144,34 @@ class CLIBackend {
     return { stream, abort, sendInput };
   }
 
+  async generateSummary(messages, fallback) {
+    if (!messages || messages.length === 0) return fallback || 'Empty session';
+    try {
+      let sessionText = '';
+      for (const msg of messages) {
+        const role = msg.role === 'user' ? 'User' : 'Assistant';
+        const content = msg.content.substring(0, 500);
+        sessionText += `${role}: ${content}\n\n`;
+        if (sessionText.length > 4000) break;
+      }
+      const prompt = `Summarize the following chat session in one concise sentence (100-150 characters max). Only output the summary, nothing else:\n\n${sessionText}`;
+
+      return await new Promise((resolve) => {
+        execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
+          if (err || !stdout.trim()) {
+            resolve(fallback || `Session (${messages.length} messages)`);
+          } else {
+            resolve(stdout.trim().substring(0, 200));
+          }
+        });
+      });
+    } catch {
+      return fallback || `Session (${messages.length} messages)`;
+    }
+  }
+
+  // ── Private ───────────────────────────────────────────────────────────────
+
   async *_createStream(message, options, state) {
     const { sessionId, isNewSession, workingDir, systemPrompt } = options;
 
@@ -135,7 +182,6 @@ class CLIBackend {
       '--verbose',
     ];
 
-    // First message in session: create new session; subsequent: resume existing
     if (isNewSession) {
       args.push('--session-id', sessionId);
       if (systemPrompt) {
@@ -149,14 +195,13 @@ class CLIBackend {
 
     try {
       const cwd = workingDir || this.workingDir;
-      console.log(`[cliBackend] spawning claude, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} cwd=${cwd}`);
+      console.log(`[claudeCode] spawning claude, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} cwd=${cwd}`);
       const proc = spawn('claude', args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env },
       });
 
-      // Store on per-request state so abort() and sendInput() can find it
       state.proc = proc;
 
       let buffer = '';
@@ -167,7 +212,7 @@ class CLIBackend {
 
       proc.stdout.on('data', (chunk) => {
         const raw = chunk.toString();
-        console.log(`[cliBackend] stdout chunk (${raw.length} bytes)`);
+        console.log(`[claudeCode] stdout chunk (${raw.length} bytes)`);
         buffer += raw;
         const lines = buffer.split('\n');
         buffer = lines.pop();
@@ -176,7 +221,7 @@ class CLIBackend {
           if (!line.trim()) continue;
           try {
             const event = JSON.parse(line);
-            console.log(`[cliBackend] parsed event type=${event.type}`, event.type === 'content_block_delta' ? `delta.type=${event.delta?.type}` : '');
+            console.log(`[claudeCode] parsed event type=${event.type}`, event.type === 'content_block_delta' ? `delta.type=${event.delta?.type}` : '');
             if (event.type === 'assistant' && event.message) {
               for (const block of (event.message.content || [])) {
                 if (block.type === 'text' && block.text) {
@@ -212,12 +257,12 @@ class CLIBackend {
 
       proc.stderr.on('data', (chunk) => {
         const s = chunk.toString();
-        console.log(`[cliBackend] stderr: ${s.substring(0, 300)}`);
+        console.log(`[claudeCode] stderr: ${s.substring(0, 300)}`);
         stderrOutput += s;
       });
 
       proc.on('close', (code, signal) => {
-        console.log(`[cliBackend] process closed code=${code} signal=${signal} bufferLen=${buffer.length}`);
+        console.log(`[claudeCode] process closed code=${code} signal=${signal} bufferLen=${buffer.length}`);
         done = true;
         state.proc = null;
         if (buffer.trim()) {
@@ -247,7 +292,7 @@ class CLIBackend {
       });
 
       proc.on('error', (err) => {
-        console.error(`[cliBackend] spawn error:`, err.message);
+        console.error(`[claudeCode] spawn error:`, err.message);
         done = true;
         state.proc = null;
         textQueue.push({ type: 'error', error: err.message });
@@ -258,7 +303,6 @@ class CLIBackend {
         }
       });
 
-      // Yield events as they arrive
       while (true) {
         if (state.aborted) {
           yield { type: 'error', error: 'Aborted by user' };
@@ -285,4 +329,4 @@ class CLIBackend {
   }
 }
 
-module.exports = { CLIBackend };
+module.exports = { ClaudeCodeAdapter, extractToolDetails, shortenPath };

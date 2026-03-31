@@ -2,8 +2,6 @@ const fs = require('fs');
 const fsp = fs.promises;
 const path = require('path');
 const crypto = require('crypto');
-const { execFile } = require('child_process');
-
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
 
 class ChatService {
@@ -13,6 +11,7 @@ class ChatService {
     this.artifactsDir = path.join(this.baseDir, 'artifacts');
     this.settingsFile = path.join(this.baseDir, 'settings.json');
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
+    this._backendRegistry = options.backendRegistry || null;
     this._convWorkspaceMap = new Map(); // convId -> workspaceHash
 
     // Old dirs — kept as properties for migration detection
@@ -119,30 +118,13 @@ class ChatService {
     return { hash, index, convEntry };
   }
 
-  async _generateSessionSummary(messages, fallback) {
+  async _generateSessionSummary(messages, fallback, backendId) {
     if (!messages || messages.length === 0) return fallback || 'Empty session';
-    try {
-      let sessionText = '';
-      for (const msg of messages) {
-        const role = msg.role === 'user' ? 'User' : 'Assistant';
-        const content = msg.content.substring(0, 500);
-        sessionText += `${role}: ${content}\n\n`;
-        if (sessionText.length > 4000) break;
-      }
-      const prompt = `Summarize the following chat session in one concise sentence (100-150 characters max). Only output the summary, nothing else:\n\n${sessionText}`;
-
-      return await new Promise((resolve) => {
-        execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
-          if (err || !stdout.trim()) {
-            resolve(fallback || `Session (${messages.length} messages)`);
-          } else {
-            resolve(stdout.trim().substring(0, 200));
-          }
-        });
-      });
-    } catch {
-      return fallback || `Session (${messages.length} messages)`;
+    const adapter = this._backendRegistry?.get(backendId || 'claude-code');
+    if (adapter) {
+      return adapter.generateSummary(messages, fallback);
     }
+    return fallback || `Session (${messages.length} messages)`;
   }
 
   // ── Conversation CRUD ──────────────────────────────────────────────────────
@@ -421,9 +403,9 @@ class ChatService {
     const sessionFile = await this._readSessionFile(hash, convId, currentSessionNumber);
     const currentMessages = sessionFile ? sessionFile.messages : [];
 
-    // Generate summary via Claude Code CLI
+    // Generate summary via backend adapter
     const fallback = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
-    const summary = await this._generateSessionSummary(currentMessages, fallback);
+    const summary = await this._generateSessionSummary(currentMessages, fallback, convEntry.backend);
 
     // Mark current session as inactive in index
     activeSession.active = false;
