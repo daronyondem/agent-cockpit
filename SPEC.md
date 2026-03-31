@@ -47,6 +47,7 @@ Install Agent Cockpit on a machine that has Claude Code CLI installed. Expose th
 
 ### CI/CD
 - **GitHub Actions** — runs tests on PRs against main
+- **GitHub Actions** — auto-bumps patch version on merge to main
 
 ---
 
@@ -64,7 +65,8 @@ agent-cockpit/
 ├── SPEC.md                             # This file
 ├── .github/
 │   └── workflows/
-│       └── test.yml                    # CI: run Jest on PRs to main
+│       ├── test.yml                    # CI: run Jest on PRs to main
+│       └── version-bump.yml            # Auto-bump patch version on merge to main
 ├── src/
 │   ├── config/
 │   │   └── index.js                    # Loads env vars with defaults
@@ -534,6 +536,13 @@ Body: settings object
 ```
 Writes the full body to `data/chat/settings.json`.
 
+### 9.11 Version
+
+```
+GET /api/chat/version
+```
+Returns `{ version: string }` read from `package.json`. No CSRF required (read-only).
+
 ---
 
 ## 10. Backend Services
@@ -789,6 +798,7 @@ Single-page layout:
       - `.chat-conv-list` — conversation list (populated by JS)
       - `.chat-sidebar-footer` — Settings button
       - `.chat-sidebar-footer` — Sign Out button
+      - `.chat-sidebar-version` — App version label (fetched from `/api/chat/version`)
     - `.chat-main` — right panel:
       - `.chat-header` — sidebar toggle, title, action buttons (Download, Reset, Sessions)
       - `.chat-messages` — message area with empty state (prompt cards)
@@ -995,6 +1005,7 @@ Theme is applied by setting `data-theme` attribute on `<html>`:
 - **Drag-and-drop overlay**: full-screen overlay when dragging files
 - **Prompt cards**: centered cards in empty state for quick conversation starters
 - **Sidebar footer**: Settings and Sign Out buttons at bottom of sidebar
+- **Version label** (`.chat-sidebar-version`): small muted text below Sign Out showing the app version (e.g., "v0.1.0"), fetched from `/api/chat/version` on init
 - **Activity history** (`.chat-activity-history`): completed tool activities shown with checkmark icons and muted text
 - **Agent cards** (`.chat-agent-card`): sub-agent visualization with spinning animation (`.chat-agent-spinner`), agent type label, and description text
 - **Plan mode banner** (`.chat-plan-mode-banner`): green accent indicator showing "Plan mode active"
@@ -1148,13 +1159,14 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - **extractToolDetails** (29 tests): Tests all 13 tool types — Read (with/without path), Write (with/without path, plan file detection), Edit (with/without path), Bash (with description/command/nothing, long command truncation at 60 chars), Grep (with pattern+glob, pattern only, nothing), Glob (with/without pattern), Agent (with/without inputs, subagentType default), TodoWrite, WebSearch (with/without query), WebFetch (with/without URL), EnterPlanMode, ExitPlanMode, AskUserQuestion (with/without questions). Tests edge cases: unknown tool, block id preservation, missing input graceful handling, shortenPath behavior (short paths unchanged, long paths shortened to last 2 segments).
 - **CLIBackend** (4 tests): Constructor defaults to `~/.openclaw/workspace`, `sendMessage` returns `{ stream, abort, sendInput }`, abort yields error and done events, `sendInput` does not throw after abort.
 
-**`test/chat.test.js`** (17 tests):
+**`test/chat.test.js`** (18 tests):
 - Uses mock CLI backend with configurable events and Express test server
 - **POST /input**: returns `ok:false` when no active stream, forwards text to `sendInput`, handles empty text, requires CSRF token
 - **SSE tool_activity forwarding**: enriched fields (tool, description, id), `isAgent` flag with `subagentType`, `isPlanMode`/`planAction`, `isQuestion` with `questions` array
 - **Turn boundary intermediate messages**: saves intermediate message on turn_boundary, saves thinking with intermediate message, skips empty boundaries, skips non-streaming text, saves result text as final message when no streaming deltas
 - **DELETE /upload/:filename**: deletes uploaded file, returns 404 for non-existent, sanitizes slashes in filename matching upload behavior
 - **POST /abort**: returns `ok:false` when no active stream
+- **GET /version**: returns version from package.json
 
 **`test/graceful-shutdown.test.js`** (2 tests):
 - Spawns actual server process with dummy env vars
@@ -1193,6 +1205,22 @@ Runs on every PR against `main` via GitHub Actions. Tests must pass to merge (br
 2. Setup Node.js 18 with npm cache
 3. `npm ci`
 4. `npm test`
+
+### File: `.github/workflows/version-bump.yml`
+
+**Trigger:** Push to `main` branch (i.e., merged PRs)
+
+**Skip condition:** Commits starting with `chore: bump version` are skipped to prevent infinite loops.
+
+**Job:** `bump` on `ubuntu-latest` with `contents: write` permission
+
+**Steps:**
+1. Checkout code
+2. Setup Node.js 18
+3. Run `npm version patch --no-git-tag-version`
+4. Commit as `chore: bump version to X.Y.Z`
+5. Tag as `vX.Y.Z`
+6. Push commit and tag to `main`
 
 ---
 

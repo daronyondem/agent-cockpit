@@ -693,3 +693,14 @@ describe('POST /rmdir', () => {
     expect(res.body.error).toBe('Path is not a directory');
   });
 });
+
+// ── GET /api/chat/version ──────────────────────────────────────────────────
+
+describe('GET /api/chat/version', () => {
+  test('returns version from package.json', async () => {
+    const expected = require('../package.json').version;
+    const res = await makeRequest('GET', '/api/chat/version');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ version: expected });
+  });
+});
