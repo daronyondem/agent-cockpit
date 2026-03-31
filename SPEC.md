@@ -769,6 +769,7 @@ chatConversations[]         // Array of conversation summaries
 chatActiveConvId            // UUID of selected conversation
 chatActiveConv              // Full conversation object
 chatStreamingConvs          // Set of conversation IDs with active streams
+chatResettingConvs          // Set of conversation IDs with in-progress session resets
 chatStreamingState          // Map<convId, StreamState> — per-conversation streaming state for persistence across view switches
 chatAbortController         // Current abort controller (not used for SSE; abort via API)
 chatSidebarCollapsed        // Boolean
@@ -830,7 +831,7 @@ _ensureConvPromise          // Promise cache for concurrent chatEnsureConversati
 - `chatUpdateStreamingActivity(msgEl, tools, agents, planMode)` — renders rich tool activity display: activity history (completed tools with checkmarks), current tool with description, agent cards with spinners and type labels, plan mode banner.
 - `chatShowPlanApproval(msgEl, convId, planContent)` — renders the accumulated plan content as markdown above approve/reject buttons. On click, POSTs to `/conversations/:id/input` with `"yes"` or `"no"`, clears `pendingInteraction` state. Plan content is preserved after approval/rejection and survives conversation switching via `pendingInteraction.planContent`.
 - `chatShowUserQuestion(msgEl, convId, event)` — renders question text, clickable option buttons, and text input. On selection, POSTs answer to `/conversations/:id/input`, clears `pendingInteraction` state.
-- `chatUpdateSendButtonState()` — updates send button to show stop (■) when the current conversation is streaming, or send (↑) when idle. Disables send when any upload is in progress (`status === 'uploading'`). Enables when text or completed files exist. Called on conversation switch, stream completion, upload progress, and file add/remove.
+- `chatUpdateSendButtonState()` — updates send button to show stop (■) when the current conversation is streaming, or send (↑) when idle. Disables send when any upload is in progress (`status === 'uploading'`), or when the conversation is resetting (`chatResettingConvs`). Enables when text or completed files exist. Called on conversation switch, stream completion, upload progress, file add/remove, and session reset start/end.
 - `chatRetryLast()` — sends the last user message again (for regeneration)
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API) — reads SSE lines from the response body, parses `data:` lines as JSON
 - **Streaming state restoration:** When `chatRenderMessages()` is called and `chatStreamingState` has an entry for the active conversation, it re-creates the streaming bubble and restores the UI: pending interactions (plan approval/user question), accumulated text/thinking, or active tool/agent display. Uses `streamingMsgEl.isConnected` to detect orphaned DOM nodes destroyed by `innerHTML` replacement. On `assistant_message` events, streaming state (content, thinking, tools, agents) is reset **before** calling `chatRenderMessages()` so the restored bubble shows typing dots rather than stale content duplicating the completed message.
@@ -864,7 +865,7 @@ Files upload **immediately on attach**, not when the message is sent. Each file 
 
 #### Session Management
 
-- `chatResetSession()` — POSTs reset endpoint, handles updated response shape (no `archiveFilename`, includes `archivedSession` with summary)
+- `chatResetSession()` — adds convId to `chatResettingConvs` (disables send button and reset button), shows "Archiving session..." progress indicator with typing-dots animation in the messages area, POSTs reset endpoint, updates conversation on success, cleans up state in `finally` block. Prevents double-clicks via `chatResettingConvs` guard. On conversation switch, reset button state is synced to reflect in-progress resets.
 - `chatShowSessions()` — opens modal with session list showing `summary` field from archive index, each with "View" and "Download" buttons
 - `chatViewSession(sessionNumber)` — async, fetches archived session messages from `GET /conversations/:id/sessions/:num/messages` API endpoint (not from local messages array)
 - Session download: navigates to `GET .../sessions/:num/download`

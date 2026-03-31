@@ -63,6 +63,7 @@ let chatConversations = [];
 let chatActiveConvId = null;
 let chatActiveConv = null;
 let chatStreamingConvs = new Set();
+let chatResettingConvs = new Set();
 let chatStreamingState = new Map(); // convId -> { assistantContent, assistantThinking, activeTools, activeAgents, planModeActive, pendingInteraction, streamingMsgEl }
 let chatAbortController = null;
 let chatSidebarCollapsed = false;
@@ -725,6 +726,7 @@ function chatUpdateSendButtonState() {
   const sendBtn = document.getElementById('chat-send-btn');
   if (!sendBtn) return;
   const isStreaming = chatStreamingConvs.has(chatActiveConvId);
+  const isResetting = chatResettingConvs.has(chatActiveConvId);
   if (isStreaming) {
     sendBtn.disabled = false;
     sendBtn.textContent = '■';
@@ -736,7 +738,7 @@ function chatUpdateSendButtonState() {
     const hasText = ta && ta.value.trim();
     const hasCompletedFiles = chatPendingFiles.some(e => e.status === 'done');
     const hasUploading = chatPendingFiles.some(e => e.status === 'uploading');
-    sendBtn.disabled = hasUploading || (!hasText && !hasCompletedFiles);
+    sendBtn.disabled = isResetting || hasUploading || (!hasText && !hasCompletedFiles);
   }
 }
 
@@ -756,6 +758,11 @@ async function chatSelectConversation(id) {
     chatRenderMessages();
     chatUpdateHeader();
     chatUpdateSendButtonState();
+    const resetBtn = document.getElementById('chat-reset-btn');
+    if (resetBtn) {
+      resetBtn.disabled = chatResettingConvs.has(id);
+      resetBtn.textContent = chatResettingConvs.has(id) ? '↻ Resetting...' : '↻ Reset';
+    }
     const backendSelect = document.getElementById('chat-backend-select');
     if (backendSelect && chatActiveConv.backend) {
       backendSelect.value = chatActiveConv.backend;
@@ -1060,7 +1067,7 @@ async function chatSendMessage() {
   const hasText = textarea && textarea.value.trim();
   const completedFiles = chatPendingFiles.filter(e => e.status === 'done');
   const hasFiles = completedFiles.length > 0;
-  if ((!hasText && !hasFiles) || chatStreamingConvs.has(chatActiveConvId)) return;
+  if ((!hasText && !hasFiles) || chatStreamingConvs.has(chatActiveConvId) || chatResettingConvs.has(chatActiveConvId)) return;
   if (chatPendingFiles.some(e => e.status === 'uploading')) return;
 
   let content = textarea ? textarea.value.trim() : '';
@@ -1527,7 +1534,41 @@ window.chatRetryLast = chatRetryLast;
 async function chatResetSession(convIdOverride) {
   const convId = typeof convIdOverride === 'string' ? convIdOverride : chatActiveConvId;
   if (!convId) return;
-  if (chatStreamingConvs.has(chatActiveConvId)) { alert('Cannot reset session while streaming.'); return; }
+  if (chatStreamingConvs.has(convId)) { alert('Cannot reset session while streaming.'); return; }
+  if (chatResettingConvs.has(convId)) return;
+
+  // Enter resetting state
+  chatResettingConvs.add(convId);
+  chatUpdateSendButtonState();
+
+  const resetBtn = document.getElementById('chat-reset-btn');
+  if (resetBtn) { resetBtn.disabled = true; resetBtn.textContent = '↻ Resetting...'; }
+
+  // Show progress indicator in messages area
+  let progressEl = null;
+  if (convId === chatActiveConvId) {
+    const container = document.getElementById('chat-messages');
+    if (container) {
+      progressEl = document.createElement('div');
+      progressEl.className = 'chat-msg assistant';
+      progressEl.id = 'chat-reset-progress';
+      progressEl.innerHTML = `
+        <div class="chat-msg-wrapper">
+          <div class="chat-msg-avatar chat-msg-avatar-svg">${CLAUDE_CODE_ICON}</div>
+          <div class="chat-msg-body">
+            <div class="chat-msg-role">System</div>
+            <div class="chat-msg-content">
+              <div class="chat-activity-indicator">
+                <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
+                <span class="chat-activity-label">Archiving session...</span>
+              </div>
+            </div>
+          </div>
+        </div>`;
+      container.appendChild(progressEl);
+      chatScrollToBottom();
+    }
+  }
 
   try {
     const res = await chatFetch(`conversations/${convId}/reset`, { method: 'POST', body: {} });
@@ -1536,8 +1577,16 @@ async function chatResetSession(convIdOverride) {
       chatActiveConv = data.conversation;
       chatRenderMessages();
     }
+    chatLoadConversations();
   } catch (err) {
+    if (progressEl && progressEl.isConnected) progressEl.remove();
     alert('Session reset failed: ' + err.message);
+  } finally {
+    chatResettingConvs.delete(convId);
+    const leftover = document.getElementById('chat-reset-progress');
+    if (leftover) leftover.remove();
+    if (resetBtn) { resetBtn.disabled = false; resetBtn.textContent = '↻ Reset'; }
+    chatUpdateSendButtonState();
   }
 }
 
