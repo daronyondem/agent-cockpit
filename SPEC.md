@@ -162,10 +162,12 @@ The server initializes in this exact order:
 9. **Mount CSRF token endpoint** at `GET /api/csrf-token`
 10. **Initialize ChatService** with `__dirname` as app root and `{ defaultWorkspace: config.DEFAULT_WORKSPACE }` options
 11. **Initialize CLIBackend** with `DEFAULT_WORKSPACE`
-12. **Mount chat router** at `/api/chat`
-13. **Serve static files** from `public/`
-14. **Initialize ChatService** via `chatService.initialize()` — migrates legacy `conversations/` and `archives/` directories to workspace format if present (renames old dirs to `_backup`), then builds the in-memory convId→workspace lookup map.
-15. **Listen** on configured PORT (inside `initialize().then()` callback)
+12. **Initialize UpdateService** with `__dirname` as app root
+13. **Mount chat router** at `/api/chat` — receives `chatService`, `cliBackend`, and `updateService`
+14. **Serve static files** from `public/`
+15. **Initialize ChatService** via `chatService.initialize()` — migrates legacy `conversations/` and `archives/` directories to workspace format if present (renames old dirs to `_backup`), then builds the in-memory convId→workspace lookup map.
+16. **Start UpdateService** via `updateService.start()` — runs initial remote version check, then polls every 15 minutes
+17. **Listen** on configured PORT (inside `initialize().then()` callback)
 
 ### Graceful Shutdown
 
