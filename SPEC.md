@@ -996,7 +996,9 @@ _ensureConvPromise          // Promise cache for concurrent chatEnsureConversati
   activeAgents: Array,           // Current agent cards
   planModeActive: boolean,       // Plan mode banner visible
   pendingInteraction: object|null, // { type: 'planApproval', planContent: string } or { type: 'userQuestion', event }
-  streamingMsgEl: HTMLElement|null // Reference to current streaming bubble DOM element
+  streamingMsgEl: HTMLElement|null, // Reference to current streaming bubble DOM element
+  streamStartTime: number,       // Date.now() when streaming began (for elapsed timer)
+  elapsedTimerInterval: number|null // setInterval ID for live elapsed timer updates
 }
 ```
 
@@ -1031,15 +1033,16 @@ _ensureConvPromise          // Promise cache for concurrent chatEnsureConversati
 
 - `chatSendMessage()` — Gathers completed file paths from `chatPendingFiles` (no upload at send time — files are already on the server), appends `[Uploaded files: ...]` to message content, then POSTs message. Creates conversation if none exists (text-only messages without prior file attach). Initializes `chatStreamingState` entry for the conversation, opens EventSource to `/stream`. The SSE loop writes all state to the Map entry rather than closure-local variables, enabling state persistence across conversation switches. After `chatRenderMessages()` renders the user message, the streaming bubble is only created if one wasn't already created by the render's streaming state restoration (guarded by `!state.streamingMsgEl` check to prevent duplicate bubbles).
 - `chatStopStreaming()` — POSTs abort endpoint
-- `chatAppendStreamingMessage()` — inserts empty assistant message bubble with pulsing cursor
+- `chatAppendStreamingMessage()` — inserts empty assistant message bubble with pulsing cursor and an elapsed timer element in the role header
 - `chatUpdateStreamingMessage(msgEl, content, thinking)` — renders Markdown incrementally into the streaming bubble. Optionally shows thinking block in a collapsible `<details>` element.
 - `chatUpdateStreamingActivity(msgEl, tools, agents, planMode)` — renders rich tool activity display: activity history (completed tools with checkmarks), current tool with description, agent cards with spinners and type labels, plan mode banner.
+- `chatStartElapsedTimer(convId)` — starts a 1-second interval that updates the `.chat-elapsed-timer` element in the streaming bubble with the elapsed time since `streamStartTime`. Self-cleans if the DOM element is disconnected. Called when streaming begins and on conversation switch restore.
 - `chatShowPlanApproval(msgEl, convId, planContent)` — renders the accumulated plan content as markdown above approve/reject buttons. On click, POSTs to `/conversations/:id/input` with `"yes"` or `"no"`, clears `pendingInteraction` state. Plan content is preserved after approval/rejection and survives conversation switching via `pendingInteraction.planContent`.
 - `chatShowUserQuestion(msgEl, convId, event)` — renders question text, clickable option buttons, and text input. On selection, POSTs answer to `/conversations/:id/input`, clears `pendingInteraction` state.
 - `chatUpdateSendButtonState()` — updates send button to show stop (■) when the current conversation is streaming, or send (↑) when idle. Disables send when any upload is in progress (`status === 'uploading'`), or when the conversation is resetting (`chatResettingConvs`). Enables when text or completed files exist. Called on conversation switch, stream completion, upload progress, file add/remove, and session reset start/end.
 - `chatRetryLast()` — sends the last user message again (for regeneration)
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API) — reads SSE lines from the response body, parses `data:` lines as JSON
-- **Streaming state restoration:** When `chatRenderMessages()` is called and `chatStreamingState` has an entry for the active conversation, it re-creates the streaming bubble and restores the UI: pending interactions (plan approval/user question), accumulated text/thinking, or active tool/agent display. Uses `streamingMsgEl.isConnected` to detect orphaned DOM nodes destroyed by `innerHTML` replacement. On `assistant_message` events, streaming state (content, thinking, tools, agents) is reset **before** calling `chatRenderMessages()` so the restored bubble shows typing dots rather than stale content duplicating the completed message.
+- **Streaming state restoration:** When `chatRenderMessages()` is called and `chatStreamingState` has an entry for the active conversation, it re-creates the streaming bubble, restores the UI (pending interactions, accumulated text/thinking, or active tool/agent display), and restarts the elapsed timer via `chatStartElapsedTimer()`. Uses `streamingMsgEl.isConnected` to detect orphaned DOM nodes destroyed by `innerHTML` replacement. On `assistant_message` events, streaming state (content, thinking, tools, agents) is reset **before** calling `chatRenderMessages()` so the restored bubble shows typing dots rather than stale content duplicating the completed message.
 
 #### File Handling
 
@@ -1109,7 +1112,9 @@ When rendering messages, `chatRenderUploadedFiles(html)` runs as a post-processi
 
 - `chatToggleSidebar()` — adds/removes `.collapsed` CSS class
 - `chatAutoResize(textarea)` — sets height to scrollHeight, max ~200px
-- `chatRenderMessages()` — renders all messages in the active conversation
+- `chatRenderMessages()` — renders all messages in the active conversation. Each message displays a timestamp (formatted by `chatFormatTimestamp`) in the role header. Assistant messages also show elapsed time since the preceding user message (e.g., "(45s)").
+- `chatFormatTimestamp(isoString)` — formats ISO 8601 timestamp for display: time-only for today ("3:42 PM"), "Yesterday 3:42 PM", or "Mar 15 3:42 PM" for older messages
+- `chatFormatElapsed(ms)` — formats milliseconds as human-readable duration ("45s" or "2m 03s")
 - `chatRenderMarkdown(text)` — uses `marked.parse()` for Markdown rendering
 - `chatHighlightCode(container)` — applies highlight.js to `<code>` blocks, adds copy buttons and expandable wrappers for long code blocks
 - `chatShowFolderPicker(initialPath)` — modal with directory browser (calls `GET /api/chat/browse`), supports navigation, hidden file toggle, new folder creation (calls `POST /api/chat/mkdir`), parent folder navigation button, and delete current folder button with confirmation (calls `POST /api/chat/rmdir`)

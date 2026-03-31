@@ -527,6 +527,35 @@
     opacity: 0.7;
   }
 
+  .chat-msg-time {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--muted);
+    opacity: 0.6;
+    white-space: nowrap;
+  }
+
+  .chat-msg-elapsed {
+    margin-left: 6px;
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--muted);
+    opacity: 0.5;
+  }
+  .chat-msg-elapsed::before { content: '('; }
+  .chat-msg-elapsed::after { content: ')'; }
+
+  .chat-elapsed-timer {
+    margin-left: auto;
+    font-size: 10px;
+    font-weight: 400;
+    color: var(--muted);
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+
   .chat-msg-content {
     font-size: 14px;
     line-height: 1.65;

@@ -11,6 +11,30 @@ function escWithCode(str) {
   return esc(str).replace(/`([^`]+)`/g, '<code>$1</code>');
 }
 
+// ─── Timestamp / elapsed formatting ─────────────────────────────────────────
+function chatFormatTimestamp(isoString) {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  if (isNaN(date.getTime())) return '';
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+  const timeStr = date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  if (isToday) return timeStr;
+  if (isYesterday) return `Yesterday ${timeStr}`;
+  return date.toLocaleDateString([], { month: 'short', day: 'numeric' }) + ' ' + timeStr;
+}
+
+function chatFormatElapsed(ms) {
+  const totalSec = Math.floor(ms / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  if (min === 0) return `${sec}s`;
+  return `${min}m ${sec < 10 ? '0' : ''}${sec}s`;
+}
+
 // ─── Theme ───────────────────────────────────────────────────────────────────
 function applyTheme(theme) {
   let resolved = theme;
@@ -966,7 +990,8 @@ function chatRenderMessages() {
   const currentSessionMsgs = chatActiveConv.messages;
 
   let html = '';
-  for (const msg of currentSessionMsgs) {
+  for (let mi = 0; mi < currentSessionMsgs.length; mi++) {
+    const msg = currentSessionMsgs[mi];
 
     const isUser = msg.role === 'user';
     const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
@@ -978,12 +1003,28 @@ function chatRenderMessages() {
     const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
     const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
 
+    // Elapsed time for assistant messages (time since preceding user message)
+    let elapsedLabel = '';
+    if (!isUser && msg.timestamp) {
+      for (let j = mi - 1; j >= 0; j--) {
+        if (currentSessionMsgs[j].role === 'user' && currentSessionMsgs[j].timestamp) {
+          const delta = new Date(msg.timestamp) - new Date(currentSessionMsgs[j].timestamp);
+          if (delta > 0 && delta < 3600000) {
+            elapsedLabel = `<span class="chat-msg-elapsed">${chatFormatElapsed(delta)}</span>`;
+          }
+          break;
+        }
+      }
+    }
+
+    const timeLabel = msg.timestamp ? `<span class="chat-msg-time">${chatFormatTimestamp(msg.timestamp)}${elapsedLabel}</span>` : '';
+
     html += `
       <div class="chat-msg ${esc(msg.role)}" data-msg-id="${esc(msg.id)}">
         <div class="chat-msg-wrapper">
           <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
           <div class="chat-msg-body">
-            <div class="chat-msg-role">${roleLabel} ${backendLabel}</div>
+            <div class="chat-msg-role">${roleLabel} ${backendLabel}${timeLabel}</div>
             <div class="chat-msg-content">${thinkingHtml}${rendered}</div>
             <div class="chat-msg-actions">
               <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
@@ -1003,6 +1044,7 @@ function chatRenderMessages() {
   if (streamState) {
     const msgEl = chatAppendStreamingMessage();
     streamState.streamingMsgEl = msgEl;
+    chatStartElapsedTimer(chatActiveConvId);
 
     if (streamState.pendingInteraction) {
       if (streamState.pendingInteraction.type === 'planApproval') {
@@ -1220,6 +1262,8 @@ async function chatSendMessage() {
     planModeActive: false,
     pendingInteraction: null,
     streamingMsgEl: null,
+    streamStartTime: Date.now(),
+    elapsedTimerInterval: null,
   });
   chatRenderConvList();
   chatUpdateSendButtonState();
@@ -1252,6 +1296,7 @@ async function chatSendMessage() {
 
     if (chatActiveConvId === targetConvId && !state.streamingMsgEl) {
       state.streamingMsgEl = chatAppendStreamingMessage();
+      chatStartElapsedTimer(targetConvId);
     }
 
     const sseResponse = await fetch(chatApiUrl(`conversations/${targetConvId}/stream`), {
@@ -1358,6 +1403,7 @@ async function chatSendMessage() {
             st.pendingInteraction = null;
             if (isStillActive) chatAppendError(event.error);
           } else if (event.type === 'done') {
+            if (st.elapsedTimerInterval) clearInterval(st.elapsedTimerInterval);
             if (st.pendingInteraction) {
               // Keep the streaming bubble alive for pending interactions
               // (plan approval, user questions) so the user can still act on them
@@ -1378,8 +1424,11 @@ async function chatSendMessage() {
   } finally {
     chatStreamingConvs.delete(targetConvId);
     const finalState = chatStreamingState.get(targetConvId);
-    if (finalState && finalState.streamingMsgEl && finalState.streamingMsgEl.isConnected) {
-      finalState.streamingMsgEl.remove();
+    if (finalState) {
+      if (finalState.elapsedTimerInterval) clearInterval(finalState.elapsedTimerInterval);
+      if (finalState.streamingMsgEl && finalState.streamingMsgEl.isConnected) {
+        finalState.streamingMsgEl.remove();
+      }
     }
     chatStreamingState.delete(targetConvId);
     chatUpdateSendButtonState();
@@ -1399,7 +1448,7 @@ function chatAppendStreamingMessage() {
     <div class="chat-msg-wrapper">
       <div class="chat-msg-avatar${icon ? ' chat-msg-avatar-svg' : ''}">${icon || DEFAULT_BACKEND_ICON}</div>
       <div class="chat-msg-body">
-        <div class="chat-msg-role">Assistant</div>
+        <div class="chat-msg-role">Assistant<span class="chat-elapsed-timer"></span></div>
         <div class="chat-msg-content">
           <div class="chat-typing">
             <div class="chat-typing-dot"></div>
@@ -1497,6 +1546,23 @@ function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
   chatScrollToBottom();
 }
 
+function chatStartElapsedTimer(convId) {
+  const state = chatStreamingState.get(convId);
+  if (!state || state.elapsedTimerInterval) return;
+  // Show initial value immediately
+  const timerEl = state.streamingMsgEl?.querySelector('.chat-elapsed-timer');
+  if (timerEl) timerEl.textContent = chatFormatElapsed(Date.now() - state.streamStartTime);
+  state.elapsedTimerInterval = setInterval(() => {
+    const st = chatStreamingState.get(convId);
+    if (!st || !st.streamingMsgEl || !st.streamingMsgEl.isConnected) {
+      clearInterval(state.elapsedTimerInterval);
+      return;
+    }
+    const el = st.streamingMsgEl.querySelector('.chat-elapsed-timer');
+    if (el) el.textContent = chatFormatElapsed(Date.now() - st.streamStartTime);
+  }, 1000);
+}
+
 function chatShowPlanApproval(msgEl, convId, planContent) {
   if (!msgEl) return;
   const contentEl = msgEl.querySelector('.chat-msg-content');
@@ -1526,6 +1592,7 @@ function chatShowPlanApproval(msgEl, convId, planContent) {
         });
         const approvalState = chatStreamingState.get(convId);
         if (approvalState) {
+          if (approvalState.elapsedTimerInterval) clearInterval(approvalState.elapsedTimerInterval);
           approvalState.pendingInteraction = null;
           // If the stream already ended, clean up the streaming state now
           if (!approvalState.streamingMsgEl || !approvalState.streamingMsgEl.isConnected) {
