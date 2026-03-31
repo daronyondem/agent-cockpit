@@ -78,7 +78,8 @@ agent-cockpit/
 │   │   └── chat.js                     # All chat API routes
 │   └── services/
 │       ├── chatService.js              # Conversation CRUD, messages, sessions, settings
-│       └── cliBackend.js               # Claude CLI process spawning and streaming
+│       ├── cliBackend.js               # Claude CLI process spawning and streaming
+│       └── updateService.js            # Self-update: version checking, git pull, PM2 restart
 ├── public/
 │   ├── index.html                      # HTML shell (79 lines)
 │   ├── app.js                          # All frontend JavaScript (~1560 lines)
@@ -88,7 +89,8 @@ agent-cockpit/
 │   ├── chatService.test.js             # ChatService unit tests — CRUD, messages, sessions, workspace storage, migration, markdown export, workspace context (93 tests)
 │   ├── cliBackend.test.js              # CLIBackend + extractToolDetails unit tests (33 tests)
 │   ├── graceful-shutdown.test.js       # Server shutdown tests (2 tests)
-│   └── sessionStore.test.js            # Session file-store tests (4 tests)
+│   ├── sessionStore.test.js            # Session file-store tests (4 tests)
+│   └── updateService.test.js           # UpdateService unit tests — version comparison, status, trigger guards
 └── data/                               # Runtime data (gitignored, created at startup)
     ├── chat/
     │   ├── workspaces/                 # Workspace-based storage
@@ -543,7 +545,52 @@ Writes the full body to `data/chat/settings.json`.
 ```
 GET /api/chat/version
 ```
-Returns `{ version: string }` read from `package.json`. No CSRF required (read-only).
+Returns `{ version: string, remoteVersion: string|null, updateAvailable: boolean }` read from `package.json` and the update service. No CSRF required (read-only).
+
+### 9.12 Self-Update
+
+**Check update status:**
+```
+GET /api/chat/update-status
+```
+Returns cached update status from the server-side version checker:
+```json
+{
+  "localVersion": "0.1.5",
+  "remoteVersion": "0.1.6",
+  "updateAvailable": true,
+  "lastCheckAt": "2026-03-31T10:00:00.000Z",
+  "lastError": null,
+  "updateInProgress": false
+}
+```
+No CSRF required (read-only). The server checks the remote `origin/main` branch every 15 minutes via `git fetch` + `git show origin/main:package.json`.
+
+**Trigger update:**
+```
+POST /api/chat/update-trigger  [CSRF]
+```
+Executes the full update sequence:
+1. Checks for active CLI streams — refuses if any conversations are actively streaming
+2. Checks `git status --porcelain` — refuses if uncommitted changes exist (ignoring runtime artifacts like `data/`, `.env`, `ecosystem.config.js`)
+3. `git checkout main`
+4. `git pull origin main`
+5. `npm install --production`
+6. `pm2 restart ecosystem.config.js`
+
+Returns:
+```json
+{
+  "success": true,
+  "steps": [
+    { "name": "git checkout main", "success": true, "output": "..." },
+    { "name": "git pull origin main", "success": true, "output": "..." },
+    { "name": "npm install", "success": true, "output": "..." },
+    { "name": "pm2 restart", "success": true, "output": "..." }
+  ]
+}
+```
+On failure, `success` is `false` and an `error` field describes which step failed. The concurrent update guard (`updateInProgress` flag) prevents multiple triggers from running simultaneously.
 
 ---
 
@@ -782,6 +829,55 @@ claude --print \
 - Generator yields events from a queue
 - Waits with `Promise` resolved by stdout/close events or a 100ms timeout
 
+### 10.3 UpdateService
+
+**File:** `src/services/updateService.js`
+
+**Constructor:** `new UpdateService(appRoot)`
+- Reads `localVersion` from `<appRoot>/package.json`
+- Initializes in-memory state: `_latestRemoteVersion`, `_lastCheckAt`, `_lastError`, `_updateInProgress`
+
+**Methods:**
+
+#### `start()`
+Begins periodic version checks. Runs `_checkRemoteVersion()` immediately, then every 15 minutes via `setInterval` (unref'd so it doesn't block process exit).
+
+#### `stop()`
+Clears the polling interval. Called during graceful shutdown via the router's `shutdown()` function.
+
+#### `getStatus()`
+Returns cached update status:
+```js
+{
+  localVersion: '0.1.5',
+  remoteVersion: '0.1.6',      // null if never checked
+  updateAvailable: true,         // simple numeric semver comparison
+  lastCheckAt: '2026-03-31T...', // ISO timestamp
+  lastError: null,
+  updateInProgress: false
+}
+```
+
+#### `triggerUpdate({ hasActiveStreams })`
+Executes the full update sequence with guards:
+1. **Concurrent guard** — returns error if `_updateInProgress` is true
+2. **Active streams guard** — calls `hasActiveStreams()` callback (provided by router, checks `activeStreams.size > 0`); refuses if CLI streams are active
+3. **Dirty tree guard** — runs `git status --porcelain`, filters out expected runtime artifacts (`data/`, `.env`, `ecosystem.config.js`, `.DS_Store`, `.claude/`); refuses if significant changes remain
+4. **git checkout main** (timeout: 30s)
+5. **git pull origin main** (timeout: 60s)
+6. **npm install --production** (timeout: 120s)
+7. **pm2 restart ecosystem.config.js** (timeout: 30s)
+
+Each step is recorded in a `steps[]` array. On failure, returns immediately with the failed step and error message. The `_updateInProgress` flag is reset in a `finally` block.
+
+All commands use `child_process.execFile` (no shell) with `cwd` set to `appRoot`.
+
+#### `_checkRemoteVersion()`
+Runs `git fetch origin main` then `git show origin/main:package.json`. Parses JSON to extract the remote version. On failure, sets `_lastError` and logs but does not throw.
+
+#### `_isNewer(remote, local)`
+Simple three-part numeric comparison: splits on `.`, compares each part numerically left-to-right.
+
 ---
 
 ## 11. Frontend
@@ -800,7 +896,7 @@ Single-page layout:
       - `.chat-conv-list` — conversation list (populated by JS)
       - `.chat-sidebar-footer` — Settings button
       - `.chat-sidebar-footer` — Sign Out button
-      - `.chat-sidebar-version` — App version label (fetched from `/api/chat/version`)
+      - `.chat-sidebar-version` — App version label + update indicator (fetched from `/api/chat/version`)
     - `.chat-main` — right panel:
       - `.chat-header` — sidebar toggle, title, action buttons (Download, Reset, Sessions)
       - `.chat-messages` — message area with empty state (prompt cards)
@@ -1061,6 +1157,7 @@ The chat router maintains an in-memory `Map<conversationId, { stream, abort, sen
 - **Deleted** when: stream completes, client disconnects, abort is called, conversation is deleted, or server shuts down
 - **Prevents** concurrent streams per conversation (only one active CLI process per conversation at a time)
 - **Blocks** session reset while streaming (returns `409`)
+- **Blocks** self-update while any stream is active (update would kill CLI processes via PM2 restart)
 
 ---
 
@@ -1181,6 +1278,14 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - Session retrieves correctly after write
 - Session survives store recreation (simulates server restart)
 - Session destroy removes the file
+
+**`test/updateService.test.js`**:
+- Tests `_isNewer` semver comparison (equal, newer, older, different segment counts)
+- Tests `getStatus` returns correct initial state
+- Tests `triggerUpdate` guards: blocks when update already in progress, blocks when active streams exist, blocks when working tree is dirty
+- Tests `triggerUpdate` step execution and error reporting
+- Tests `start/stop` interval management
+- Uses mocked `child_process.execFile` — no real git or pm2 calls
 
 ### Running Tests
 

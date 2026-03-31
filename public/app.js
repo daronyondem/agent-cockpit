@@ -107,11 +107,17 @@ function chatInit() {
   chatWireEvents();
   chatLoadConversations();
 
-  // Show app version in sidebar
+  // Show app version in sidebar + check for updates
   chatFetch('version').then(res => res.json()).then(v => {
-    const el = document.getElementById('chat-version-label');
-    if (el && v.version) el.textContent = 'v' + v.version;
+    const textEl = document.getElementById('chat-version-text');
+    if (textEl && v.version) textEl.textContent = 'v' + v.version;
+    chatCheckUpdateIndicator(v);
   }).catch(() => {});
+
+  // Poll for update status every 5 minutes (reads server-cached state, no git ops)
+  setInterval(() => {
+    chatFetch('update-status').then(res => res.json()).then(chatCheckUpdateIndicator).catch(() => {});
+  }, 5 * 60 * 1000);
 
   // Sync theme from server settings
   chatFetch('settings').then(res => res.json()).then(s => {
@@ -1827,6 +1833,113 @@ function chatCloseModal() {
   if (overlay) overlay.remove();
 }
 window.chatCloseModal = chatCloseModal;
+
+// ── Self-update UI ───────────────────────────────────────────────────────────
+
+function chatCheckUpdateIndicator(status) {
+  const indicator = document.getElementById('chat-update-indicator');
+  if (!indicator) return;
+  if (status.updateAvailable && status.remoteVersion) {
+    indicator.textContent = 'v' + status.remoteVersion + ' available';
+    indicator.title = 'Update to v' + status.remoteVersion;
+    indicator.style.display = '';
+    indicator.onclick = () => chatShowUpdateModal(status);
+  } else {
+    indicator.style.display = 'none';
+    indicator.onclick = null;
+  }
+}
+
+function chatShowUpdateModal(status) {
+  const localVer = status.localVersion || status.version || '?';
+  const remoteVer = status.remoteVersion || '?';
+  const html = `
+    <div class="chat-modal-body" style="padding:16px;">
+      <div style="margin-bottom:16px;">
+        <div style="font-size:13px;color:var(--muted);margin-bottom:6px;">
+          Current version: <strong>v${esc(localVer)}</strong>
+        </div>
+        <div style="font-size:13px;color:var(--muted);margin-bottom:16px;">
+          Available version: <strong>v${esc(remoteVer)}</strong>
+        </div>
+        <div style="font-size:12px;color:var(--muted);margin-bottom:16px;">
+          This will pull the latest code from main, install dependencies, and restart the server.
+          The page will reload automatically.
+        </div>
+      </div>
+      <div id="chat-update-status" style="display:none;margin-bottom:12px;"></div>
+      <button class="chat-settings-save" id="chat-update-confirm-btn">Update Now</button>
+    </div>
+  `;
+  chatShowModal('Update Available', html);
+  document.getElementById('chat-update-confirm-btn').addEventListener('click', chatTriggerUpdate);
+}
+
+async function chatTriggerUpdate() {
+  const statusEl = document.getElementById('chat-update-status');
+  const btn = document.getElementById('chat-update-confirm-btn');
+  if (statusEl) {
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<div style="color:var(--muted);font-size:13px;">Updating... This may take a moment.</div>';
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Updating...';
+  }
+
+  try {
+    const res = await chatFetch('update-trigger', { method: 'POST' });
+    const result = await res.json();
+
+    if (result.success) {
+      if (statusEl) {
+        statusEl.innerHTML = '<div style="color:var(--done);font-size:13px;">Update successful! Restarting server...</div>';
+      }
+      setTimeout(() => chatShowRestartOverlay(), 1000);
+      setTimeout(() => window.location.reload(), 6000);
+    } else {
+      if (statusEl) {
+        const stepsHtml = (result.steps || []).map(s =>
+          '<div style="font-size:12px;color:' + (s.success ? 'var(--done)' : 'var(--danger)') + ';">'
+          + (s.success ? '&#10003; ' : '&#10007; ') + esc(s.name) + '</div>'
+        ).join('');
+        statusEl.innerHTML =
+          '<div style="color:var(--danger);font-size:13px;margin-bottom:8px;">'
+          + esc(result.error) + '</div>' + stepsHtml;
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Retry Update';
+      }
+    }
+  } catch (err) {
+    // If the server restarted before sending the response, we get a network error
+    if (err.message === 'Failed to fetch' || err.name === 'TypeError') {
+      chatShowRestartOverlay();
+      setTimeout(() => window.location.reload(), 5000);
+      return;
+    }
+    if (statusEl) {
+      statusEl.innerHTML = '<div style="color:var(--danger);font-size:13px;">Update failed: ' + esc(err.message) + '</div>';
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Retry Update';
+    }
+  }
+}
+
+function chatShowRestartOverlay() {
+  chatCloseModal();
+  const overlay = document.createElement('div');
+  overlay.id = 'chat-restart-overlay';
+  overlay.innerHTML =
+    '<div style="text-align:center;">'
+    + '<div style="font-size:18px;font-weight:600;margin-bottom:8px;">Restarting Server...</div>'
+    + '<div style="font-size:13px;color:var(--muted);">The page will reload automatically.</div>'
+    + '</div>';
+  document.body.appendChild(overlay);
+}
 
 // ── Keyboard shortcuts ────────────────────────────────────────────────────────
 

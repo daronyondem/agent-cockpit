@@ -5,7 +5,7 @@ const path = require('path');
 const multer = require('multer');
 const { csrfGuard } = require('../middleware/csrf');
 
-function createChatRouter({ chatService, cliBackend }) {
+function createChatRouter({ chatService, cliBackend, updateService }) {
   const router = express.Router();
   const packageJson = require('../../package.json');
 
@@ -14,7 +14,31 @@ function createChatRouter({ chatService, cliBackend }) {
 
   // ── Version ─────────────────────────────────────────────────────────────────
   router.get('/version', (req, res) => {
-    res.json({ version: packageJson.version });
+    const status = updateService ? updateService.getStatus() : {};
+    res.json({
+      version: packageJson.version,
+      remoteVersion: status.remoteVersion || null,
+      updateAvailable: status.updateAvailable || false,
+    });
+  });
+
+  // ── Update status ──────────────────────────────────────────────────────────
+  router.get('/update-status', (req, res) => {
+    if (!updateService) return res.json({ updateAvailable: false });
+    res.json(updateService.getStatus());
+  });
+
+  // ── Trigger update ─────────────────────────────────────────────────────────
+  router.post('/update-trigger', csrfGuard, async (req, res) => {
+    if (!updateService) return res.status(501).json({ error: 'Update service not available' });
+    try {
+      const result = await updateService.triggerUpdate({
+        hasActiveStreams: () => activeStreams.size > 0,
+      });
+      res.json(result);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // ── Browse directories ─────────────────────────────────────────────────────
@@ -500,6 +524,7 @@ function createChatRouter({ chatService, cliBackend }) {
       entry.abort();
     }
     activeStreams.clear();
+    if (updateService) updateService.stop();
   }
 
   return { router, shutdown };
