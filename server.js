@@ -8,7 +8,8 @@ const { ensureCsrfToken } = require('./src/middleware/csrf');
 const { applySecurity } = require('./src/middleware/security');
 const { createChatRouter } = require('./src/routes/chat');
 const { ChatService } = require('./src/services/chatService');
-const { CLIBackend } = require('./src/services/cliBackend');
+const { BackendRegistry } = require('./src/services/backends/registry');
+const { ClaudeCodeAdapter } = require('./src/services/backends/claudeCode');
 const { UpdateService } = require('./src/services/updateService');
 
 const app = express();
@@ -56,10 +57,12 @@ app.get('/api/csrf-token', (req, res) => {
   res.json({ csrfToken: req.session.csrfToken });
 });
 
-const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE });
-const cliBackend = new CLIBackend({ workingDir: config.DEFAULT_WORKSPACE });
+const backendRegistry = new BackendRegistry();
+backendRegistry.register(new ClaudeCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
+
+const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
 const updateService = new UpdateService(__dirname);
-const { router: chatRouter, shutdown: chatShutdown } = createChatRouter({ chatService, cliBackend, updateService });
+const { router: chatRouter, shutdown: chatShutdown } = createChatRouter({ chatService, backendRegistry, updateService });
 app.use('/api/chat', chatRouter);
 
 app.use(express.static(path.join(__dirname, 'public')));

@@ -116,8 +116,11 @@ agent-cockpit/
 │   │   └── security.js       # Helmet CSP configuration
 │   ├── routes/chat.js        # All chat API routes
 │   └── services/
-│       ├── chatService.js    # Conversation CRUD, messages, sessions, settings
-│       └── cliBackend.js     # CLI process spawning and streaming
+│       ├── backends/
+│       │   ├── base.js           # Base adapter interface for CLI backends
+│       │   ├── claudeCode.js     # Claude Code CLI adapter
+│       │   └── registry.js       # Backend registry
+│       └── chatService.js    # Conversation CRUD, messages, sessions, settings
 ├── public/
 │   ├── index.html            # HTML shell
 │   ├── app.js                # Frontend JavaScript
@@ -139,7 +142,7 @@ Tests use Jest and run with:
 npm test
 ```
 
-Tests cover ChatService CRUD/messaging/sessions, CLIBackend streaming, graceful shutdown (SIGINT/SIGTERM), and session file-store persistence.
+Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, extractToolDetails), graceful shutdown (SIGINT/SIGTERM), and session file-store persistence.
 
 CI runs tests automatically on every pull request against `main` via GitHub Actions.
 

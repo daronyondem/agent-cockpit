@@ -52,11 +52,50 @@ async function fetchCsrfToken() {
 
 // ─── Chat UI ──────────────────────────────────────────────────────────────────
 
-const CHAT_BACKENDS = [
-  { id: 'claude-code', label: 'Claude Code' },
-];
+let CHAT_BACKENDS = [];
+let BACKEND_CAPABILITIES = {};
+let BACKEND_ICONS = {};
+const DEFAULT_BACKEND_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" rx="128" fill="#888"/><text x="256" y="320" text-anchor="middle" fill="#fff" font-size="280" font-family="sans-serif">⚡</text></svg>';
 
-const CLAUDE_CODE_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" rx="128" fill="#D37D5B"/><path d="M256 220L285 85L305 92L275 225L380 145L395 165L285 245L440 265L435 290L285 275L390 380L365 400L265 295L295 440L265 445L245 295L180 420L155 405L230 280L100 340L90 315L225 260L70 250L75 225L225 235L110 145L130 130L235 215L170 85L195 80L245 210L256 220Z" fill="#F9EDE6"/></svg>';
+async function loadBackends() {
+  try {
+    const res = await fetch(apiUrl('/chat/backends'), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`Failed to load backends (${res.status})`);
+    const data = await res.json();
+    CHAT_BACKENDS = data.backends.map(b => ({ id: b.id, label: b.label }));
+    for (const b of data.backends) {
+      BACKEND_CAPABILITIES[b.id] = b.capabilities || {};
+      BACKEND_ICONS[b.id] = b.icon || null;
+    }
+    populateBackendSelects();
+  } catch (err) {
+    console.error('[loadBackends]', err);
+    // Fallback so the UI still works
+    CHAT_BACKENDS = [{ id: 'claude-code', label: 'Claude Code' }];
+    populateBackendSelects();
+  }
+}
+
+function populateBackendSelects() {
+  const selects = document.querySelectorAll('#chat-backend-select, #chat-settings-backend');
+  for (const sel of selects) {
+    const current = sel.value;
+    sel.innerHTML = CHAT_BACKENDS.map(b =>
+      `<option value="${esc(b.id)}">${esc(b.label)}</option>`
+    ).join('');
+    if (current && [...sel.options].some(o => o.value === current)) {
+      sel.value = current;
+    }
+  }
+}
+
+function getBackendIcon(backendId) {
+  return BACKEND_ICONS[backendId] || DEFAULT_BACKEND_ICON;
+}
+
+function getBackendCapabilities(backendId) {
+  return BACKEND_CAPABILITIES[backendId] || {};
+}
 
 // Chat state
 let chatConversations = [];
@@ -105,6 +144,7 @@ function chatInit() {
   }
   chatInitialized = true;
   chatWireEvents();
+  loadBackends();
   chatLoadConversations();
 
   // Show app version in sidebar + check for updates
@@ -929,13 +969,14 @@ function chatRenderMessages() {
   for (const msg of currentSessionMsgs) {
 
     const isUser = msg.role === 'user';
-    const isClaudeCode = !isUser && msg.backend === 'claude-code';
-    const avatar = isUser ? '👤' : (isClaudeCode ? CLAUDE_CODE_ICON : '⚡');
-    const avatarClass = isClaudeCode ? ' chat-msg-avatar-svg' : '';
+    const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
+    const avatar = isUser ? '👤' : (backendIcon || DEFAULT_BACKEND_ICON);
+    const avatarClass = !isUser && backendIcon ? ' chat-msg-avatar-svg' : '';
     const roleLabel = isUser ? 'You' : 'Assistant';
     const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
     const rendered = chatRenderMarkdown(msg.content);
-    const thinkingHtml = msg.thinking ? chatRenderThinkingBlock(msg.thinking, false) : '';
+    const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
+    const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
 
     html += `
       <div class="chat-msg ${esc(msg.role)}" data-msg-id="${esc(msg.id)}">
@@ -1112,7 +1153,7 @@ async function chatSendMessage() {
     }
   }
 
-  const backend = document.getElementById('chat-backend-select')?.value || 'claude-code';
+  const backend = document.getElementById('chat-backend-select')?.value || (CHAT_BACKENDS[0]?.id || 'claude-code');
   const targetConvId = chatActiveConvId;
 
   // Start streaming
@@ -1285,11 +1326,13 @@ function chatAppendStreamingMessage() {
   const container = document.getElementById('chat-messages');
   if (!container) return null;
 
+  const currentBackend = chatActiveConv?.backend || 'claude-code';
+  const icon = getBackendIcon(currentBackend);
   const msgEl = document.createElement('div');
   msgEl.className = 'chat-msg assistant streaming';
   msgEl.innerHTML = `
     <div class="chat-msg-wrapper">
-      <div class="chat-msg-avatar chat-msg-avatar-svg">${CLAUDE_CODE_ICON}</div>
+      <div class="chat-msg-avatar${icon ? ' chat-msg-avatar-svg' : ''}">${icon || DEFAULT_BACKEND_ICON}</div>
       <div class="chat-msg-body">
         <div class="chat-msg-role">Assistant</div>
         <div class="chat-msg-content">
@@ -1564,7 +1607,7 @@ async function chatResetSession(convIdOverride) {
       progressEl.id = 'chat-reset-progress';
       progressEl.innerHTML = `
         <div class="chat-msg-wrapper">
-          <div class="chat-msg-avatar chat-msg-avatar-svg">${CLAUDE_CODE_ICON}</div>
+          <div class="chat-msg-avatar chat-msg-avatar-svg">${getBackendIcon(chatActiveConv?.backend || 'claude-code')}</div>
           <div class="chat-msg-body">
             <div class="chat-msg-role">System</div>
             <div class="chat-msg-content">
@@ -1680,13 +1723,14 @@ async function chatViewSession(sessionNumber) {
   } else {
     for (const msg of sessionMsgs) {
       const isUser = msg.role === 'user';
-      const isClaudeCode = !isUser && msg.backend === 'claude-code';
-      const avatar = isUser ? '👤' : (isClaudeCode ? CLAUDE_CODE_ICON : '⚡');
-      const avatarClass = isClaudeCode ? ' chat-msg-avatar-svg' : '';
+      const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
+      const avatar = isUser ? '👤' : (backendIcon || DEFAULT_BACKEND_ICON);
+      const avatarClass = !isUser && backendIcon ? ' chat-msg-avatar-svg' : '';
       const roleLabel = isUser ? 'You' : 'Assistant';
-      const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(typeof CHAT_BACKENDS !== 'undefined' ? (CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend) : msg.backend)}</span>` : '';
+      const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
       const rendered = chatRenderMarkdown(msg.content);
-      const thinkingHtml = msg.thinking ? chatRenderThinkingBlock(msg.thinking, false) : '';
+      const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
+      const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
       msgsHtml += `
         <div class="chat-msg ${esc(msg.role)}">
           <div class="chat-msg-wrapper">
@@ -1750,7 +1794,7 @@ async function chatShowSettings() {
     const res = await chatFetch('settings');
     chatSettingsData = await res.json();
   } catch {
-    chatSettingsData = { theme: 'system', sendBehavior: 'enter', systemPrompt: '', defaultBackend: 'claude-code' };
+    chatSettingsData = { theme: 'system', sendBehavior: 'enter', systemPrompt: '', defaultBackend: CHAT_BACKENDS[0]?.id || 'claude-code' };
   }
 
   const s = chatSettingsData;
@@ -1793,7 +1837,7 @@ async function chatSaveSettings() {
   const settings = {
     theme: document.getElementById('chat-settings-theme')?.value || 'system',
     sendBehavior: document.getElementById('chat-settings-send')?.value || 'enter',
-    defaultBackend: document.getElementById('chat-settings-backend')?.value || 'claude-code',
+    defaultBackend: document.getElementById('chat-settings-backend')?.value || (CHAT_BACKENDS[0]?.id || 'claude-code'),
     systemPrompt: document.getElementById('chat-settings-system-prompt')?.value || '',
   };
   applyTheme(settings.theme);
