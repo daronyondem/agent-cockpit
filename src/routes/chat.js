@@ -5,12 +5,17 @@ const path = require('path');
 const multer = require('multer');
 const { csrfGuard } = require('../middleware/csrf');
 
-function createChatRouter({ chatService, cliBackend, updateService }) {
+function createChatRouter({ chatService, backendRegistry, updateService }) {
   const router = express.Router();
   const packageJson = require('../../package.json');
 
   // Track active streams so we can abort them
   const activeStreams = new Map();
+
+  // ── Available backends ──────────────────────────────────────────────────────
+  router.get('/backends', (req, res) => {
+    res.json({ backends: backendRegistry.list() });
+  });
 
   // ── Version ─────────────────────────────────────────────────────────────────
   router.get('/version', (req, res) => {
@@ -314,15 +319,22 @@ function createChatRouter({ chatService, cliBackend, updateService }) {
       systemPrompt = settings.systemPrompt || '';
     }
 
+    // Resolve backend adapter from registry
+    const backendId = backend || conv.backend;
+    const adapter = backendRegistry.get(backendId);
+    if (!adapter) {
+      return res.status(400).json({ error: `Unknown backend: ${backendId}` });
+    }
+
     // Start CLI streaming — store stream reference for the GET SSE endpoint
-    console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} workingDir=${conv.workingDir || 'default'}`);
-    const { stream, abort, sendInput } = cliBackend.sendMessage(cliMessage, {
+    console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} backend=${backendId} workingDir=${conv.workingDir || 'default'}`);
+    const { stream, abort, sendInput } = adapter.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
       isNewSession,
       workingDir: conv.workingDir || null,
       systemPrompt,
     });
-    activeStreams.set(convId, { stream, abort, sendInput, backend: backend || conv.backend });
+    activeStreams.set(convId, { stream, abort, sendInput, backend: backendId });
 
     // Return the user message — frontend will open GET SSE for streaming
     res.json({ userMessage: userMsg, streamReady: true });
@@ -405,10 +417,17 @@ function createChatRouter({ chatService, cliBackend, updateService }) {
             res.write(`data: ${JSON.stringify({ type: 'error', error: event.error })}\n\n`);
           } else if (event.type === 'done') {
             // Save remaining text or result as the final message
+            // Check if the accumulated text is actually an API error
+            const apiErrPattern = /^API Error:\s*\d{3}\s/;
             if (hasStreamingDeltas && fullResponse.trim()) {
-              console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}`);
-              const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null);
-              res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
+              if (apiErrPattern.test(fullResponse.trim())) {
+                console.log(`[chat] Stream done for conv=${convId}, detected API error in text — not saving as message`);
+                res.write(`data: ${JSON.stringify({ type: 'error', error: fullResponse.trim() })}\n\n`);
+              } else {
+                console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}`);
+                const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null);
+                res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
+              }
             } else if (resultText && resultText.trim()) {
               console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}`);
               const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null);

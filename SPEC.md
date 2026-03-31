@@ -77,17 +77,20 @@ agent-cockpit/
 │   ├── routes/
 │   │   └── chat.js                     # All chat API routes
 │   └── services/
+│       ├── backends/
+│       │   ├── base.js                 # BaseBackendAdapter — interface for all CLI backends
+│       │   ├── claudeCode.js           # Claude Code adapter — CLI spawning, stream parsing, tool details
+│       │   └── registry.js             # BackendRegistry — maps backend IDs to adapter instances
 │       ├── chatService.js              # Conversation CRUD, messages, sessions, settings
-│       ├── cliBackend.js               # Claude CLI process spawning and streaming
 │       └── updateService.js            # Self-update: version checking, git pull, PM2 restart
 ├── public/
 │   ├── index.html                      # HTML shell (79 lines)
 │   ├── app.js                          # All frontend JavaScript (~1560 lines)
 │   └── styles.css                      # All CSS with light/dark theme (~1400 lines)
 ├── test/
-│   ├── chat.test.js                    # Chat route tests — /input, SSE forwarding, turn boundaries, session messages, workspace injection, mkdir, rmdir (39 tests)
-│   ├── chatService.test.js             # ChatService unit tests — CRUD, messages, sessions, workspace storage, migration, markdown export, workspace context (93 tests)
-│   ├── cliBackend.test.js              # CLIBackend + extractToolDetails unit tests (33 tests)
+│   ├── backends.test.js                # Backend adapter tests — BaseBackendAdapter, BackendRegistry, ClaudeCodeAdapter, extractToolDetails
+│   ├── chat.test.js                    # Chat route tests — /input, SSE forwarding, turn boundaries, session messages, workspace injection, mkdir, rmdir
+│   ├── chatService.test.js             # ChatService unit tests — CRUD, messages, sessions, workspace storage, migration, markdown export, workspace context
 │   ├── graceful-shutdown.test.js       # Server shutdown tests (2 tests)
 │   ├── sessionStore.test.js            # Session file-store tests (4 tests)
 │   └── updateService.test.js           # UpdateService unit tests — version comparison, status, trigger guards
@@ -160,10 +163,10 @@ The server initializes in this exact order:
 7. **Apply `ensureCsrfToken` middleware** globally
 8. **Parse JSON bodies** with `express.json()`
 9. **Mount CSRF token endpoint** at `GET /api/csrf-token`
-10. **Initialize ChatService** with `__dirname` as app root and `{ defaultWorkspace: config.DEFAULT_WORKSPACE }` options
-11. **Initialize CLIBackend** with `DEFAULT_WORKSPACE`
+10. **Create BackendRegistry** and register `ClaudeCodeAdapter` with `{ workingDir: config.DEFAULT_WORKSPACE }`
+11. **Initialize ChatService** with `__dirname` as app root and `{ defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry }` options
 12. **Initialize UpdateService** with `__dirname` as app root
-13. **Mount chat router** at `/api/chat` — receives `chatService`, `cliBackend`, and `updateService`
+13. **Mount chat router** at `/api/chat` — receives `chatService`, `backendRegistry`, and `updateService`
 14. **Serve static files** from `public/`
 15. **Initialize ChatService** via `chatService.initialize()` — migrates legacy `conversations/` and `archives/` directories to workspace format if present (renames old dirs to `_backup`), then builds the in-memory convId→workspace lookup map.
 16. **Start UpdateService** via `updateService.start()` — runs initial remote version check, then polls every 15 minutes
@@ -409,7 +412,15 @@ POST /api/chat/conversations/:id/reset  [CSRF]
 ```
 Returns `409` if conversation is currently streaming. Marks the active session as inactive in the workspace index (sets summary, endedAt), creates a new session entry + file, generates LLM summary. Returns `{ conversation, newSessionNumber, archivedSession }` where `archivedSession` includes `summary`, `messageCount`, etc.
 
-### 9.5 Messaging and Streaming
+### 9.5 Backends
+
+**List available backends:**
+```
+GET /api/chat/backends
+```
+Returns `{ backends: [{ id, label, icon, capabilities }] }` — metadata for every registered backend adapter. The frontend uses this to populate backend selectors and gate UI features based on capabilities.
+
+### 9.6 Messaging and Streaming
 
 **Send message:**
 ```
@@ -419,9 +430,10 @@ Body: { content: string, backend?: string }
 - Validates content is a non-empty string
 - Saves user message to conversation (raw content, no injection)
 - Updates conversation backend if changed via `chatService.updateConversationBackend()`
+- Resolves the backend adapter from `backendRegistry.get(backend)` — returns `400` if unknown
 - Determines if this is a new CLI session (first message in current session) or a resume
 - On new sessions: prepends workspace context injection prompt to the CLI message (not stored in messages)
-- Spawns CLI process via `cliBackend.sendMessage()`
+- Spawns CLI process via `adapter.sendMessage()`
 - Stores stream reference in `activeStreams` map
 - Returns `{ userMessage: Message, streamReady: true }`
 
@@ -741,17 +753,40 @@ On first startup after upgrade, `initialize()` detects the legacy `conversations
 4. Writes workspace index + session files to new `workspaces/{hash}/` structure
 5. Renames `conversations/` → `conversations_backup/` and `archives/` → `archives_backup/`
 
-### 10.2 CLIBackend
+### 10.2 Backend Adapter System
 
-**File:** `src/services/cliBackend.js`
+The CLI backend layer uses a **pluggable adapter pattern** so new CLI tools can be added without modifying routes, chat service, or frontend code.
 
-**Constructor:** `new CLIBackend(options)` — takes `{ workingDir }`, defaults to `~/.openclaw/workspace`.
+#### BaseBackendAdapter (`src/services/backends/base.js`)
 
-#### Helper Functions
+Abstract base class. Every backend must extend this and implement:
 
-**`shortenPath(filePath)`** — shortens long file paths for display. Returns the original path if ≤3 segments, otherwise `.../{last}/{two}.js`. Returns empty string for falsy input.
+- **`get metadata`** — returns `{ id, label, icon, capabilities }` where capabilities is `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans)
+- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding normalised events (see below)
+- **`generateSummary(messages, fallback)`** — returns a one-line summary string for session archival
 
-**`extractToolDetails(block)`** — parses a `tool_use` content block and returns an enriched detail object for UI display. Handles all Claude Code tool types:
+#### BackendRegistry (`src/services/backends/registry.js`)
+
+Maps backend IDs to adapter instances.
+
+- **`register(adapter)`** — stores adapter by `adapter.metadata.id`. First registered becomes default. Validates `instanceof BaseBackendAdapter`.
+- **`get(id)`** — returns adapter or `null`
+- **`list()`** — returns metadata array (safe for frontend)
+- **`getDefault()`** — returns first registered adapter or `null`
+
+#### ClaudeCodeAdapter (`src/services/backends/claudeCode.js`)
+
+Claude Code CLI adapter. Extends `BaseBackendAdapter`.
+
+**Constructor:** `new ClaudeCodeAdapter(options)` — takes `{ workingDir }`, defaults to `~/.openclaw/workspace`.
+
+**Metadata:** `id: 'claude-code'`, all capabilities enabled, includes SVG icon.
+
+**Private helpers:**
+
+**`shortenPath(filePath)`** — shortens long file paths for display. Returns the original path if ≤3 segments, otherwise `.../{last}/{two}.js`.
+
+**`extractToolDetails(block)`** — parses a `tool_use` content block into an enriched detail object:
 
 | Tool | Description format |
 |------|-------------------|
@@ -779,10 +814,11 @@ All detail objects include `tool` (name), `id` (block id or null), and `descript
 - `options.sessionId` — UUID for the CLI session
 - `options.isNewSession` — boolean: `--session-id` (new) vs `--resume` (existing)
 - `options.workingDir` — optional override for CLI working directory
+- `options.systemPrompt` — optional system prompt for new sessions
 
 **Returns:** `{ stream: AsyncIterable<StreamEvent>, abort: Function, sendInput: Function }`
 
-- `stream` — async iterable yielding stream events
+- `stream` — async iterable yielding normalised stream events
 - `abort()` — sets aborted flag and sends SIGTERM to CLI process
 - `sendInput(text)` — writes text + newline to the CLI process's stdin pipe (for interactive responses like plan approval and user questions). Safe to call after abort (no-op if process is gone).
 
@@ -794,8 +830,9 @@ claude --print \
   --permission-mode bypassPermissions \
   --output-format stream-json \
   --verbose \
-  [--session-id <uuid>]    # if isNewSession
-  [--resume <uuid>]        # if not isNewSession
+  [--session-id <uuid>]              # if isNewSession
+  [--append-system-prompt <prompt>]  # if isNewSession and systemPrompt
+  [--resume <uuid>]                  # if not isNewSession
   -p "<user message>"
 ```
 
@@ -805,31 +842,33 @@ claude --print \
 - stdio: stdin `pipe`, stdout `pipe`, stderr `pipe`
 - Environment: inherits `process.env`
 
-**Stream parsing:**
-- Buffers stdout line-by-line
-- Each line is parsed as JSON
-- Event type `assistant` with `message.content[]`:
-  - `type: 'text'` → yields `{ type: 'text', content }`
-  - `type: 'thinking'` → yields `{ type: 'thinking', content }`
-  - `type: 'tool_use'` → yields `{ type: 'tool_activity', ...extractToolDetails(block) }`
-- Event type `content_block_delta`:
-  - `delta.type: 'text_delta'` → yields `{ type: 'text', content, streaming: true }`
-  - `delta.type: 'thinking_delta'` → yields `{ type: 'thinking', content, streaming: true }`
-- Event type `user` → yields `{ type: 'turn_boundary' }`
-- Event type `result` → yields `{ type: 'result', content }`
-- Unparseable lines → yields `{ type: 'text', content: line }`
-- On close with non-zero exit code → yields `{ type: 'error', error: stderrOutput }`
-- On process error → yields `{ type: 'error', error: err.message }`
-- Always yields `{ type: 'done' }` at end
+#### `generateSummary(messages, fallback)`
 
-**Abort:**
-- Sets `aborted` flag
-- Sends SIGTERM to child process
-- Stream yields `{ type: 'error', error: 'Aborted by user' }` then `{ type: 'done' }`
+Generates a one-line session summary by spawning `claude --print -p <prompt>` with a 30-second timeout. Falls back to `fallback` string on error.
 
-**Polling loop:**
-- Generator yields events from a queue
-- Waits with `Promise` resolved by stdout/close events or a 100ms timeout
+#### Normalised Stream Event Contract
+
+All adapters must yield events matching this contract:
+
+| Event type | Fields | Description |
+|---|---|---|
+| `text` | `content`, `streaming?` | Text content (`streaming: true` for deltas) |
+| `thinking` | `content`, `streaming?` | Extended thinking content |
+| `tool_activity` | `tool`, `description`, `id?`, plus flags | Tool invocation info |
+| `turn_boundary` | — | Marks end of assistant turn (tool use boundary) |
+| `result` | `content` | Final result text |
+| `error` | `error` | Error message string |
+| `done` | — | Stream complete |
+
+Backends that don't support certain capabilities simply never emit those event types.
+
+#### Adding a New Backend
+
+1. Create `src/services/backends/myBackend.js` extending `BaseBackendAdapter`
+2. Implement `metadata`, `sendMessage()`, and `generateSummary()`
+3. Register in `server.js`: `backendRegistry.register(new MyBackendAdapter({ workingDir: ... }))`
+
+No changes needed in routes, chat service, or frontend — the adapter's metadata and capabilities drive the UI automatically.
 
 ### 10.3 UpdateService
 
@@ -1236,9 +1275,16 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 
 ### Framework: Jest 30.x
 
-### Test Files (98 tests total)
+### Test Files (227 tests total)
 
-**`test/chatService.test.js`** (38 tests):
+**`test/backends.test.js`**:
+- **BaseBackendAdapter**: `metadata`, `sendMessage`, `generateSummary` all throw on base class; stores `workingDir` from options
+- **BackendRegistry**: register and get adapter, `get` returns null for unknown ID, `list` returns metadata array, `getDefault` returns first registered (or null when empty), rejects non-BaseBackendAdapter, supports multiple adapters
+- **ClaudeCodeAdapter metadata**: correct shape (id, label, icon, capabilities), default and custom working directory
+- **extractToolDetails** (29 tests): Tests all 13 tool types — Read (with/without path), Write (with/without path, plan file detection), Edit (with/without path), Bash (with description/command/nothing, long command truncation at 60 chars), Grep (with pattern+glob, pattern only, nothing), Glob (with/without pattern), Agent (with/without inputs, subagentType default), TodoWrite, WebSearch (with/without query), WebFetch (with/without URL), EnterPlanMode, ExitPlanMode, AskUserQuestion (with/without questions). Tests edge cases: unknown tool, block id preservation, missing input graceful handling, shortenPath behavior (short paths unchanged, long paths shortened to last 2 segments).
+- **ClaudeCodeAdapter sendMessage**: returns `{ stream, abort, sendInput }`, `--append-system-prompt` included/omitted correctly, `--resume` on continued sessions, abort yields error and done events, `sendInput` safe after abort.
+
+**`test/chatService.test.js`**:
 - Creates conversations with title, working directory
 - Lists conversations sorted by updatedAt
 - Gets, renames, deletes conversations
@@ -1256,12 +1302,8 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - Gets and saves settings with defaults
 - Uses temporary directories (`os.tmpdir()`) for isolation
 
-**`test/cliBackend.test.js`** (37 tests):
-- **extractToolDetails** (29 tests): Tests all 13 tool types — Read (with/without path), Write (with/without path, plan file detection), Edit (with/without path), Bash (with description/command/nothing, long command truncation at 60 chars), Grep (with pattern+glob, pattern only, nothing), Glob (with/without pattern), Agent (with/without inputs, subagentType default), TodoWrite, WebSearch (with/without query), WebFetch (with/without URL), EnterPlanMode, ExitPlanMode, AskUserQuestion (with/without questions). Tests edge cases: unknown tool, block id preservation, missing input graceful handling, shortenPath behavior (short paths unchanged, long paths shortened to last 2 segments).
-- **CLIBackend** (4 tests): Constructor defaults to `~/.openclaw/workspace`, `sendMessage` returns `{ stream, abort, sendInput }`, abort yields error and done events, `sendInput` does not throw after abort.
-
-**`test/chat.test.js`** (18 tests):
-- Uses mock CLI backend with configurable events and Express test server
+**`test/chat.test.js`**:
+- Uses `MockBackendAdapter` (extends `BaseBackendAdapter`) registered in `BackendRegistry`, with Express test server
 - **POST /input**: returns `ok:false` when no active stream, forwards text to `sendInput`, handles empty text, requires CSRF token
 - **SSE tool_activity forwarding**: enriched fields (tool, description, id), `isAgent` flag with `subagentType`, `isPlanMode`/`planAction`, `isQuestion` with `questions` array
 - **Turn boundary intermediate messages**: saves intermediate message on turn_boundary, saves thinking with intermediate message, skips empty boundaries, skips non-streaming text, saves result text as final message when no streaming deltas

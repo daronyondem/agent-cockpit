@@ -3,8 +3,11 @@ const path = require('path');
 // ── Mock child_process.execFile ─────────────────────────────────────────────
 
 const mockExecFileFn = jest.fn();
+const mockSpawnResult = { unref: jest.fn() };
+const mockSpawnFn = jest.fn(() => mockSpawnResult);
 jest.mock('child_process', () => ({
   execFile: (...args) => mockExecFileFn(...args),
+  spawn: (...args) => mockSpawnFn(...args),
 }));
 
 const { UpdateService } = require('../src/services/updateService');
@@ -37,6 +40,8 @@ describe('UpdateService', () => {
   beforeEach(() => {
     service = new UpdateService(appRoot);
     mockExecFileFn.mockReset();
+    mockSpawnFn.mockClear();
+    mockSpawnResult.unref.mockClear();
   });
 
   afterEach(() => {
@@ -182,7 +187,6 @@ describe('UpdateService', () => {
         { stdout: 'Already on \'main\'\n' }, // git checkout
         { stdout: 'Already up to date.\n' }, // git pull
         { stdout: 'up to date\n' }, // npm install
-        { stdout: 'restarted\n' }, // pm2 restart
       ]);
 
       const result = await service.triggerUpdate({
@@ -190,6 +194,7 @@ describe('UpdateService', () => {
       });
       expect(result.success).toBe(true);
       expect(result.steps).toHaveLength(4);
+      expect(mockSpawnFn).toHaveBeenCalled();
     });
 
     test('executes all steps on success', async () => {
@@ -198,7 +203,6 @@ describe('UpdateService', () => {
         { stdout: 'Already on \'main\'\n' }, // git checkout
         { stdout: 'Updating abc..def\n' }, // git pull
         { stdout: 'added 0 packages\n' }, // npm install
-        { stdout: '[PM2] restarted\n' }, // pm2 restart
       ]);
 
       const result = await service.triggerUpdate({
@@ -211,6 +215,9 @@ describe('UpdateService', () => {
       expect(result.steps[2].name).toBe('npm install');
       expect(result.steps[3].name).toBe('pm2 restart');
       result.steps.forEach(s => expect(s.success).toBe(true));
+      // PM2 restart uses detached spawn (fire-and-forget)
+      expect(mockSpawnFn).toHaveBeenCalledWith('pm2', expect.arrayContaining(['restart']), expect.objectContaining({ detached: true }));
+      expect(mockSpawnResult.unref).toHaveBeenCalled();
     });
 
     test('stops at first failed step and reports error', async () => {
@@ -243,7 +250,6 @@ describe('UpdateService', () => {
     test('resets updateInProgress flag after success', async () => {
       mockExecFile([
         { stdout: '' },
-        { stdout: 'ok' },
         { stdout: 'ok' },
         { stdout: 'ok' },
         { stdout: 'ok' },
