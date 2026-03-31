@@ -602,6 +602,36 @@ describe('DELETE /conversations/:id/upload/:filename', () => {
   });
 });
 
+// ── GET /conversations/:id/files/:filename ──────────────────────────────────
+
+describe('GET /conversations/:id/files/:filename', () => {
+  test('serves an uploaded file', async () => {
+    const conv = await chatService.createConversation('Test');
+    const artifactDir = path.join(tmpDir, 'data', 'chat', 'artifacts', conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(artifactDir, 'photo.png'), 'fakeimage');
+
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/files/photo.png`);
+    expect(res.status).toBe(200);
+  });
+
+  test('returns 404 for non-existent file', async () => {
+    const conv = await chatService.createConversation('Test');
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/files/nope.png`);
+    expect(res.status).toBe(404);
+  });
+
+  test('sanitizes slashes in filename', async () => {
+    const conv = await chatService.createConversation('Test');
+    const artifactDir = path.join(tmpDir, 'data', 'chat', 'artifacts', conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(artifactDir, 'a_b.png'), 'data');
+
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/files/a%2Fb.png`);
+    expect(res.status).toBe(200);
+  });
+});
+
 // ── POST /conversations/:id/abort ───────────────────────────────────────────
 
 describe('POST /conversations/:id/abort', () => {
