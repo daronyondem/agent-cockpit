@@ -82,16 +82,20 @@ agent-cockpit/
 │   ├── app.js                          # All frontend JavaScript (~1560 lines)
 │   └── styles.css                      # All CSS with light/dark theme (~1400 lines)
 ├── test/
-│   ├── chat.test.js                    # Chat route tests — /input endpoint, SSE forwarding, turn boundaries (15 tests)
-│   ├── chatService.test.js             # ChatService unit tests (41 tests)
+│   ├── chat.test.js                    # Chat route tests — /input, SSE forwarding, turn boundaries, session messages, mkdir, rmdir (36 tests)
+│   ├── chatService.test.js             # ChatService unit tests — CRUD, messages, sessions, archives, migration, markdown export (86 tests)
 │   ├── cliBackend.test.js              # CLIBackend + extractToolDetails unit tests (33 tests)
 │   ├── graceful-shutdown.test.js       # Server shutdown tests (2 tests)
 │   └── sessionStore.test.js            # Session file-store tests (4 tests)
 └── data/                               # Runtime data (gitignored, created at startup)
     ├── chat/
-    │   ├── conversations/              # JSON files, one per conversation
-    │   ├── archives/                   # Markdown session archives
-    │   ├── artifacts/                  # Reserved directory for uploads
+    │   ├── conversations/              # JSON files, one per conversation (current session only)
+    │   ├── archives/                   # Per-conversation archive folders
+    │   │   └── {convId}/
+    │   │       ├── index.json          # Session index with summaries
+    │   │       ├── session-1.json      # Archived session data
+    │   │       └── session-N.json
+    │   ├── artifacts/                  # Per-conversation upload directory
     │   └── settings.json               # User settings
     └── sessions/                       # Express session JSON files
 ```
@@ -156,7 +160,8 @@ The server initializes in this exact order:
 11. **Initialize CLIBackend** with `DEFAULT_WORKSPACE`
 12. **Mount chat router** at `/api/chat`
 13. **Serve static files** from `public/`
-14. **Listen** on configured PORT
+14. **Run migrations** via `chatService.migrateAllConversations()` — converts legacy conversations (with `sessions` array and divider messages) to the new archive format. Idempotent; skips already-migrated conversations.
+15. **Listen** on configured PORT (inside migration `.then()` callback)
 
 ### Graceful Shutdown
 
@@ -384,13 +389,19 @@ Returns a `.md` file attachment for the specified session number. Filename: `{ti
 ```
 GET /api/chat/conversations/:id/sessions
 ```
-Returns `{ sessions: Session[] }` with `isCurrent` computed flag.
+Returns `{ sessions: Session[] }` with `isCurrent` flag, `summary` field for archived sessions.
+
+**Get session messages:**
+```
+GET /api/chat/conversations/:id/sessions/:num/messages
+```
+Returns `{ messages: Message[] }` for the specified session number. Loads from archive file for past sessions, from conversation for current session. Returns `400` for invalid session number, `404` if session not found.
 
 **Reset session:**
 ```
 POST /api/chat/conversations/:id/reset  [CSRF]
 ```
-Returns `409` if conversation is currently streaming. Archives current session to Markdown, starts a new session with a fresh UUID. Returns `{ conversation, archiveFilename, newSessionNumber }`.
+Returns `409` if conversation is currently streaming. Archives current session to JSON in `archives/{convId}/`, generates LLM summary, clears conversation messages, starts a new session with a fresh UUID. Returns `{ conversation, newSessionNumber, archivedSession }` where `archivedSession` includes `summary`, `messageCount`, etc.
 
 ### 9.5 Messaging and Streaming
 
@@ -538,6 +549,8 @@ Writes the full body to `data/chat/settings.json`.
 
 #### Data Model: Conversation
 
+The conversation JSON file contains only the **current session's** messages. Past sessions are stored in per-conversation archive folders.
+
 ```javascript
 {
   id: string,              // UUIDv4
@@ -548,10 +561,11 @@ Writes the full body to `data/chat/settings.json`.
   workingDir: string|null, // Filesystem path for CLI working directory
   currentSessionId: string,// UUID of the active CLI session
   sessionNumber: number,   // Current session number (1-based)
-  messages: Message[],     // All messages across all sessions
-  sessions: Session[]      // Session metadata
+  messages: Message[]      // ONLY current session messages (no dividers)
 }
 ```
+
+No `sessions` array — session history lives in `archives/{convId}/index.json`.
 
 #### Data Model: Message
 
@@ -562,21 +576,38 @@ Writes the full body to `data/chat/settings.json`.
   content: string,              // Message text
   backend: string,              // Backend that generated the response
   timestamp: string,            // ISO 8601
-  thinking?: string,            // Extended thinking text (assistant messages only, omitted if empty/null)
-  isSessionDivider?: boolean,   // true for session reset markers
-  sessionNumber?: number        // Set on session divider messages
+  thinking?: string             // Extended thinking text (assistant messages only, omitted if empty/null)
 }
 ```
 
-#### Data Model: Session
+#### Data Model: Archive Index (`archives/{convId}/index.json`)
 
 ```javascript
 {
-  number: number,          // 1-based session number
-  sessionId: string,       // UUID passed to CLI as session ID
-  startedAt: string,       // ISO 8601
-  endedAt: string|null,    // ISO 8601 when session ends, null if current
-  messageCount: number     // Messages in this session
+  conversationId: string,       // UUID matching conversation
+  conversationTitle: string,    // Conversation title at time of last archive
+  sessions: [{
+    number: number,             // 1-based session number
+    file: string,               // Filename: "session-N.json"
+    sessionId: string,          // UUID passed to CLI
+    startedAt: string,          // ISO 8601
+    endedAt: string,            // ISO 8601
+    messageCount: number,       // Messages in this session
+    summary: string             // LLM-generated one-line summary (100-150 chars)
+  }]
+}
+```
+
+#### Data Model: Session Archive (`archives/{convId}/session-N.json`)
+
+```javascript
+{
+  sessionNumber: number,        // 1-based session number
+  sessionId: string,            // UUID passed to CLI
+  startedAt: string,            // ISO 8601
+  endedAt: string,              // ISO 8601
+  messageCount: number,         // Messages in this session
+  messages: Message[]           // Full message array for this session
 }
 ```
 
@@ -584,19 +615,23 @@ Writes the full body to `data/chat/settings.json`.
 
 | Method | Description |
 |--------|-------------|
-| `createConversation(title, workingDir)` | Creates conversation with initial session. Title defaults to 'New Chat'. |
+| `createConversation(title, workingDir)` | Creates conversation with `currentSessionId`, `sessionNumber: 1`, empty `messages[]`. No `sessions` array. Title defaults to 'New Chat'. |
 | `getConversation(id)` | Reads JSON from disk. Returns `null` if file not found (ENOENT). |
 | `saveConversation(conv)` | Updates `updatedAt`, writes JSON to disk with 2-space indentation. |
 | `listConversations()` | Reads all `.json` files in conversations dir. Returns summaries sorted by `updatedAt` desc. Each summary: `{ id, title, createdAt, updatedAt, backend, workingDir, messageCount, lastMessage }` where `lastMessage` is first 100 chars of last message content. |
 | `renameConversation(id, newTitle)` | Updates title and saves. Returns `null` if not found. |
-| `deleteConversation(id)` | Deletes the JSON file and removes the per-conversation artifacts subdirectory (`data/chat/artifacts/{id}/`) if it exists. Returns `true`/`false`. |
-| `addMessage(convId, role, content, backend, thinking)` | Appends message. Auto-titles from first user message (80 chars, newlines→spaces). Increments current session's `messageCount`. Optional `thinking` parameter stores extended thinking text on the message (omitted if falsy). |
+| `deleteConversation(id)` | Deletes the JSON file, the per-conversation artifacts subdirectory (`artifacts/{id}/`), and the archive directory (`archives/{id}/`). Returns `true`/`false`. |
+| `addMessage(convId, role, content, backend, thinking)` | Appends message to `conv.messages`. Auto-titles when `conv.title === 'New Chat'` (80 chars, newlines→spaces). Optional `thinking` parameter stores extended thinking text (omitted if falsy). |
 | `updateMessageContent(convId, messageId, newContent)` | Forks conversation: truncates all messages after the target message, adds edited content as a new message. Returns `{ conversation, message }`. |
-| `resetSession(convId)` | Archives current session to Markdown file in `archives/`. Marks session as ended. Inserts a session divider message. Creates new session with fresh UUID. Returns `{ conversation, archiveFilename, newSessionNumber }`. |
-| `getSessionHistory(convId)` | Returns sessions array with computed `isCurrent` flag. |
-| `sessionToMarkdown(convId, sessionNumber)` | Public wrapper for `_sessionToMarkdown`. |
-| `_sessionToMarkdown(conv, session)` | Generates Markdown for a single session. Format: title, session metadata, then each message with role, timestamp, backend, and content. |
-| `conversationToMarkdown(convId)` | Exports entire conversation as Markdown including session reset markers. |
+| `resetSession(convId)` | Archives current session to `archives/{convId}/session-N.json`. Generates LLM summary via `_generateSessionSummary()`. Updates `archives/{convId}/index.json`. Clears `conv.messages`, increments `sessionNumber`, sets new `currentSessionId`. Removes legacy `sessions` array if present. Returns `{ conversation, newSessionNumber, archivedSession }`. |
+| `getSessionHistory(convId)` | Reads from archive `index.json` + appends current session with `isCurrent: true`. Returns array with `summary` field for archived sessions. |
+| `getSessionMessages(convId, sessionNumber)` | Returns messages from archive file for past sessions, or from `conv.messages` for current session. |
+| `sessionToMarkdown(convId, sessionNumber)` | Loads from archive file for past sessions, from `conv.messages` for current. Uses `_messagesToMarkdown()` shared helper. |
+| `_messagesToMarkdown(title, convId, sessionMeta, messages)` | Generates Markdown for a single session. Format: title, session metadata, then each message with role, timestamp, backend, and content. |
+| `conversationToMarkdown(convId)` | Stitches all archived sessions + current session into a single Markdown document. |
+| `_generateSessionSummary(messages, fallback)` | Spawns `claude --print -p "<prompt>"` for a one-line summary (100-150 chars). 30s timeout. Falls back gracefully to `fallback` string on failure. |
+| `migrateConversation(convId)` | Converts legacy format (with `sessions` array and divider messages) to new archive format. Extracts old sessions using divider counting, writes archive files with `"(Migrated session)"` summary. Idempotent — skips if no `sessions` array. |
+| `migrateAllConversations()` | Iterates all conversation files, calls `migrateConversation()`. Logs count of migrated conversations. |
 | `searchConversations(query)` | Case-insensitive search. First checks title and last message from summaries, then deep-searches full message content for remaining conversations. |
 | `getSettings()` | Returns settings from disk or defaults. |
 | `saveSettings(settings)` | Writes settings to disk. |
@@ -805,7 +840,7 @@ _ensureConvPromise          // Promise cache for concurrent chatEnsureConversati
 Files upload **immediately on attach**, not when the message is sent. Each file gets its own upload with per-file progress tracking via `XMLHttpRequest` (not `fetch`, which lacks upload progress events).
 
 - Drag-and-drop onto chat area → `chatAddPendingFiles(files)`
-- Paste from clipboard → detects image, creates File from blob with unique timestamp-based name
+- Paste from clipboard → detects images (creates File from blob with timestamp-based name) and large text (≥1000 characters, creates `pasted-text-YYYYMMDD-HHmmss.txt` File object)
 - File input button → opens native file picker
 - `chatEnsureConversation()` — auto-creates a conversation if none exists when files are attached. Uses promise caching (`_ensureConvPromise`) to handle concurrent calls from multiple files attached simultaneously.
 - `chatUploadSingleFile(convId, entry)` — uploads one file via XHR. Updates `entry.progress` on `xhr.upload.onprogress`, sets `entry.status` to `'done'` or `'error'` on completion. Stores XHR reference on entry for abort support.
@@ -829,9 +864,9 @@ Files upload **immediately on attach**, not when the message is sent. Each file 
 
 #### Session Management
 
-- `chatResetSession()` — POSTs reset endpoint, reloads conversation
-- `chatShowSessions()` — opens modal with session list, each with "View" and "Download" buttons
-- `chatViewSession(sessionNumber)` — fetches session Markdown, displays in modal
+- `chatResetSession()` — POSTs reset endpoint, handles updated response shape (no `archiveFilename`, includes `archivedSession` with summary)
+- `chatShowSessions()` — opens modal with session list showing `summary` field from archive index, each with "View" and "Download" buttons
+- `chatViewSession(sessionNumber)` — async, fetches archived session messages from `GET /conversations/:id/sessions/:num/messages` API endpoint (not from local messages array)
 - Session download: navigates to `GET .../sessions/:num/download`
 
 #### Downloads
