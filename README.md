@@ -125,8 +125,8 @@ agent-cockpit/
 ├── test/                     # Jest test suites
 └── data/                     # Runtime data (gitignored)
     ├── chat/
-    │   ├── conversations/    # Conversation JSON files
-    │   ├── archives/         # Session Markdown archives
+    │   ├── workspaces/       # Workspace-based conversation storage
+    │   ├── artifacts/        # Per-conversation uploaded files
     │   └── settings.json     # User settings
     └── sessions/             # Express session files
 ```

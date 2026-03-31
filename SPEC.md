@@ -6,7 +6,7 @@ This document is a complete specification for Agent Cockpit. It contains every d
 
 ## 1. Project Overview
 
-**Agent Cockpit** is a web-based chat interface for interacting with the Claude Code CLI. It runs on the same machine as the CLI tools. The server spawns local `claude` CLI processes, streams responses back to the browser via Server-Sent Events (SSE), and stores conversations as JSON files on disk.
+**Agent Cockpit** is a web-based chat interface for interacting with the Claude Code CLI. It runs on the same machine as the CLI tools. The server spawns local `claude` CLI processes, streams responses back to the browser via Server-Sent Events (SSE), and stores conversations in workspace-scoped JSON files on disk.
 
 ### Core Use Case
 
@@ -1014,15 +1014,12 @@ Theme is applied by setting `data-theme` attribute on `<html>`:
 
 All data is file-based. No database.
 
-### Conversations
-- Path: `data/chat/conversations/{uuid}.json`
+### Workspaces
+- Path: `data/chat/workspaces/{hash}/index.json` — single source of truth for all conversations in a workspace
+- Path: `data/chat/workspaces/{hash}/{convId}/session-N.json` — per-session message files (both active and archived)
+- Hash: `SHA-256(workspacePath).substring(0, 16)` — deterministic mapping from workspace path to folder name
+- Conversations sharing the same `workingDir` are grouped under one workspace
 - Format: JSON with 2-space indentation
-- Contains full conversation history, all messages, all session metadata
-
-### Archives
-- Path: `data/chat/archives/{convId}_{sessionNumber}_{timestamp}.md`
-- Created when a session is reset
-- Markdown format with headers, timestamps, roles
 
 ### Sessions (Express)
 - Path: `data/sessions/`
