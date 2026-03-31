@@ -523,11 +523,13 @@ Returns settings object. Defaults if file doesn't exist:
 {
   "theme": "system",
   "sendBehavior": "enter",
-  "customInstructions": { "aboutUser": "", "responseStyle": "" },
+  "systemPrompt": "",
   "defaultBackend": "claude-code",
   "workingDirectory": ""
 }
 ```
+
+The `systemPrompt` field is passed to the Claude CLI via `--append-system-prompt` at the start of each new session. It is additive — Claude Code's built-in system prompt is preserved. Legacy `customInstructions` objects are auto-migrated to `systemPrompt` on first read.
 
 **Save settings:**
 ```

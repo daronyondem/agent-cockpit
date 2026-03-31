@@ -283,12 +283,20 @@ function createChatRouter({ chatService, cliBackend }) {
       if (ctx) cliMessage = ctx + '\n\n' + cliMessage;
     }
 
+    // Fetch system prompt for new sessions
+    let systemPrompt = '';
+    if (isNewSession) {
+      const settings = await chatService.getSettings();
+      systemPrompt = settings.systemPrompt || '';
+    }
+
     // Start CLI streaming — store stream reference for the GET SSE endpoint
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} workingDir=${conv.workingDir || 'default'}`);
     const { stream, abort, sendInput } = cliBackend.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
       isNewSession,
       workingDir: conv.workingDir || null,
+      systemPrompt,
     });
     activeStreams.set(convId, { stream, abort, sendInput, backend: backend || conv.backend });
 

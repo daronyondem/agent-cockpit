@@ -1746,7 +1746,7 @@ async function chatShowSettings() {
     const res = await chatFetch('settings');
     chatSettingsData = await res.json();
   } catch {
-    chatSettingsData = { theme: 'system', sendBehavior: 'enter', customInstructions: { aboutUser: '', responseStyle: '' }, defaultBackend: 'claude-code' };
+    chatSettingsData = { theme: 'system', sendBehavior: 'enter', systemPrompt: '', defaultBackend: 'claude-code' };
   }
 
   const s = chatSettingsData;
@@ -1774,12 +1774,9 @@ async function chatShowSettings() {
         </select>
       </div>
       <div class="chat-settings-group">
-        <div class="chat-settings-label">What would you like the assistant to know about you?</div>
-        <textarea class="chat-settings-textarea" id="chat-settings-about">${esc(s.customInstructions?.aboutUser || '')}</textarea>
-      </div>
-      <div class="chat-settings-group">
-        <div class="chat-settings-label">How would you like the assistant to respond?</div>
-        <textarea class="chat-settings-textarea" id="chat-settings-style">${esc(s.customInstructions?.responseStyle || '')}</textarea>
+        <div class="chat-settings-label">System Prompt</div>
+        <div class="chat-settings-desc">Prepended to every new CLI session.</div>
+        <textarea class="chat-settings-textarea" id="chat-settings-system-prompt" style="min-height:120px">${esc(s.systemPrompt || '')}</textarea>
       </div>
       <button class="chat-settings-save" onclick="chatSaveSettings()">Save Settings</button>
     </div>
@@ -1793,10 +1790,7 @@ async function chatSaveSettings() {
     theme: document.getElementById('chat-settings-theme')?.value || 'system',
     sendBehavior: document.getElementById('chat-settings-send')?.value || 'enter',
     defaultBackend: document.getElementById('chat-settings-backend')?.value || 'claude-code',
-    customInstructions: {
-      aboutUser: document.getElementById('chat-settings-about')?.value || '',
-      responseStyle: document.getElementById('chat-settings-style')?.value || '',
-    },
+    systemPrompt: document.getElementById('chat-settings-system-prompt')?.value || '',
   };
   applyTheme(settings.theme);
   try {

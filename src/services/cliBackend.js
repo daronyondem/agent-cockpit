@@ -126,7 +126,7 @@ class CLIBackend {
   }
 
   async *_createStream(message, options, state) {
-    const { sessionId, isNewSession, workingDir } = options;
+    const { sessionId, isNewSession, workingDir, systemPrompt } = options;
 
     const args = [
       '--print',
@@ -138,6 +138,9 @@ class CLIBackend {
     // First message in session: create new session; subsequent: resume existing
     if (isNewSession) {
       args.push('--session-id', sessionId);
+      if (systemPrompt) {
+        args.push('--append-system-prompt', systemPrompt);
+      }
     } else {
       args.push('--resume', sessionId);
     }
