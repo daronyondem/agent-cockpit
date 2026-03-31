@@ -1029,6 +1029,40 @@ function chatRenderThinkingBlock(thinking, expanded) {
   </details>`;
 }
 
+const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+
+function chatRenderUploadedFiles(html) {
+  // Replace [Uploaded files: path1, path2] with inline images for image files.
+  // This runs on the final HTML, so the pattern may be inside <p> tags.
+  return html.replace(/<p>\s*\[Uploaded files?:\s*([^\]]+)\]\s*<\/p>|(\[Uploaded files?:\s*([^\]]+)\])/g, (match, pInner, bare, bareInner) => {
+    const pathList = pInner || bareInner;
+    if (!pathList) return match;
+    const paths = pathList.split(',').map(p => p.trim());
+    const parts = [];
+    const nonImages = [];
+    for (const fullPath of paths) {
+      const filename = fullPath.split('/').pop();
+      if (IMAGE_EXTENSIONS.test(filename)) {
+        const segments = fullPath.replace(/\\/g, '/').split('/');
+        const artifactsIdx = segments.lastIndexOf('artifacts');
+        const convId = artifactsIdx >= 0 ? segments[artifactsIdx + 1] : chatActiveConvId;
+        const url = chatApiUrl(`conversations/${encodeURIComponent(convId)}/files/${encodeURIComponent(filename)}`);
+        parts.push(`<div class="chat-inline-image-wrap"><img class="chat-inline-image" src="${url}" alt="${esc(filename)}" title="${esc(filename)}" onclick="chatOpenLightbox(this.src)"></div>`);
+      } else {
+        nonImages.push(filename);
+      }
+    }
+    let result = '';
+    if (nonImages.length) {
+      result += `<p>[Uploaded files: ${nonImages.join(', ')}]</p>`;
+    }
+    if (parts.length) {
+      result += parts.join('');
+    }
+    return result;
+  });
+}
+
 function chatRenderMarkdown(text) {
   if (!text) return '';
   if (typeof marked !== 'undefined') {
@@ -1055,9 +1089,29 @@ function chatRenderMarkdown(text) {
         ${collapsible ? '<div class="chat-code-expand" onclick="chatToggleCodeBlock(this)">Show more</div>' : ''}
       </div>`;
     };
-    return marked.parse(text, { renderer, breaks: true });
+    let html = marked.parse(text, { renderer, breaks: true });
+    return chatRenderUploadedFiles(html);
   }
-  return esc(text).replace(/\n/g, '<br>');
+  let html = esc(text).replace(/\n/g, '<br>');
+  return chatRenderUploadedFiles(html);
+}
+
+function chatOpenLightbox(src) {
+  const overlay = document.getElementById('chat-lightbox');
+  const img = document.getElementById('chat-lightbox-img');
+  img.src = src;
+  overlay.classList.add('active');
+  document.addEventListener('keydown', chatLightboxEscHandler);
+}
+
+function chatCloseLightbox() {
+  const overlay = document.getElementById('chat-lightbox');
+  overlay.classList.remove('active');
+  document.removeEventListener('keydown', chatLightboxEscHandler);
+}
+
+function chatLightboxEscHandler(e) {
+  if (e.key === 'Escape') chatCloseLightbox();
 }
 
 function chatHighlightCode(container) {

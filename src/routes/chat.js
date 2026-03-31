@@ -511,6 +511,21 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
     res.json({ files });
   });
 
+  // Serve uploaded files (images, etc.)
+  router.get('/conversations/:id/files/:filename', async (req, res) => {
+    const safe = req.params.filename.replace(/[\/\\]/g, '_');
+    const filePath = path.join(chatService.artifactsDir, req.params.id, safe);
+    if (!path.resolve(filePath).startsWith(path.resolve(chatService.artifactsDir))) {
+      return res.status(400).json({ error: 'Invalid path' });
+    }
+    try {
+      await fs.promises.access(filePath);
+      res.sendFile(path.resolve(filePath));
+    } catch {
+      res.status(404).json({ error: 'File not found' });
+    }
+  });
+
   router.delete('/conversations/:id/upload/:filename', csrfGuard, async (req, res) => {
     const safe = req.params.filename.replace(/[\/\\]/g, '_');
     const filePath = path.join(chatService.artifactsDir, req.params.id, safe);

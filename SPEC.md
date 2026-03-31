@@ -528,6 +528,17 @@ DELETE /api/chat/conversations/:id/upload/:filename  [CSRF]
 - Path traversal guard: verifies resolved path stays under `artifactsDir`
 - Returns `{ ok: true }`. `404` if file not found. `400` if path invalid.
 
+**Serve uploaded file:**
+```
+GET /api/chat/conversations/:id/files/:filename
+```
+
+- Sanitizes filename identically to upload: `/` and `\` replaced by `_`
+- Path traversal guard: verifies resolved path stays under `artifactsDir`
+- Serves the file via `res.sendFile()` with proper MIME type
+- `404` if file not found. `400` if path invalid.
+- No CSRF required (GET request, used by `<img>` tags)
+
 ### 9.7 Settings
 
 **Get settings:**
@@ -1057,6 +1068,23 @@ Files upload **immediately on attach**, not when the message is sent. Each file 
 }
 ```
 
+#### Inline Image Display
+
+When rendering messages, `chatRenderUploadedFiles(html)` runs as a post-processing step after markdown parsing. It detects `[Uploaded files: ...]` patterns in the rendered HTML and replaces image file references with inline `<img>` tags.
+
+- **Supported extensions**: `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.bmp`
+- **URL construction**: extracts conversation ID from the artifact path (`artifacts/{convId}/{filename}`) and builds a URL via `chatApiUrl('conversations/{convId}/files/{filename}')` pointing to the file serving endpoint
+- **Non-image files**: remain as text `[Uploaded files: filename]`
+- **Regex**: matches both `<p>[Uploaded files: ...]</p>` (standalone paragraph) and bare `[Uploaded files: ...]` (inline)
+- **Styling**: `.chat-inline-image` — `max-width: 300px`, `max-height: 300px`, `border-radius: 8px`, `cursor: pointer`
+
+**Lightbox (click-to-enlarge):**
+
+- Clicking an inline image calls `chatOpenLightbox(src)` which shows a full-screen overlay (`#chat-lightbox`)
+- Overlay: fixed position, dark backdrop (`rgba(0,0,0,0.85)`), `z-index: 9999`
+- Full-size image: `max-width: 90vw`, `max-height: 90vh`, `object-fit: contain`
+- Close: click backdrop or press Escape (via `chatLightboxEscHandler`)
+
 #### Session Management
 
 - `chatResetSession()` — adds convId to `chatResettingConvs` (disables send button and reset button), shows "Archiving session..." progress indicator with typing-dots animation in the messages area, POSTs reset endpoint, updates conversation on success, cleans up state in `finally` block. Prevents double-clicks via `chatResettingConvs` guard. On conversation switch, reset button state is synced to reflect in-progress resets.
@@ -1150,6 +1178,8 @@ Theme is applied by setting `data-theme` attribute on `<html>`:
 - **Plan mode banner** (`.chat-plan-mode-banner`): green accent indicator showing "Plan mode active"
 - **Plan approval** (`.chat-plan-approval`): card with approve/reject buttons for interactive plan approval. Plan content rendered above the card in a scrollable container (`.chat-plan-approval-content`, max-height 400px)
 - **Folder picker toolbar** (`.folder-browser-toolbar`): flex row with hidden files toggle and "+ New Folder" button. Path row (`.folder-browser-path-row`) includes parent navigation and delete icon buttons (`.folder-browser-icon-btn`). Delete button shows red hover state. Inline folder name input (`.folder-browser-new-input`). Delete confirmation dialog (`.folder-browser-confirm-delete`) replaces the folder list with a warning message and red Delete / Cancel buttons
+- **Inline images** (`.chat-inline-image`): uploaded images rendered inline in messages at max 300×300px, click to open lightbox
+- **Lightbox** (`.chat-lightbox`): full-screen overlay for viewing images at full size (90vw×90vh max), click backdrop or Escape to close
 - **User question** (`.chat-user-question`): question text with clickable option buttons and text input fallback
 - **Streaming indicator dot** (`.chat-conv-streaming-dot`): 8×8 pulsing dot next to streaming conversations in sidebar, uses `streaming-pulse` keyframe animation (1.5s ease-in-out infinite)
 
@@ -1308,6 +1338,7 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - **SSE tool_activity forwarding**: enriched fields (tool, description, id), `isAgent` flag with `subagentType`, `isPlanMode`/`planAction`, `isQuestion` with `questions` array
 - **Turn boundary intermediate messages**: saves intermediate message on turn_boundary, saves thinking with intermediate message, skips empty boundaries, skips non-streaming text, saves result text as final message when no streaming deltas
 - **DELETE /upload/:filename**: deletes uploaded file, returns 404 for non-existent, sanitizes slashes in filename matching upload behavior
+- **GET /files/:filename**: serves uploaded file, returns 404 for non-existent, sanitizes slashes in filename
 - **POST /abort**: returns `ok:false` when no active stream
 - **GET /version**: returns version from package.json
 
