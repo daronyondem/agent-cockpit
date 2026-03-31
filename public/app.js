@@ -63,6 +63,7 @@ let chatConversations = [];
 let chatActiveConvId = null;
 let chatActiveConv = null;
 let chatStreamingConvs = new Set();
+let chatResettingConvs = new Set();
 let chatStreamingState = new Map(); // convId -> { assistantContent, assistantThinking, activeTools, activeAgents, planModeActive, pendingInteraction, streamingMsgEl }
 let chatAbortController = null;
 let chatSidebarCollapsed = false;
@@ -164,6 +165,22 @@ function chatWireEvents() {
       if (files.length) {
         e.preventDefault();
         chatAddPendingFiles(files);
+        return;
+      }
+      // Convert large text pastes (1000+ chars) to text file attachments
+      const pastedText = e.clipboardData.getData('text/plain');
+      if (pastedText && pastedText.length >= 1000) {
+        e.preventDefault();
+        const now = new Date();
+        const ts = now.getFullYear()
+          + String(now.getMonth() + 1).padStart(2, '0')
+          + String(now.getDate()).padStart(2, '0')
+          + '-'
+          + String(now.getHours()).padStart(2, '0')
+          + String(now.getMinutes()).padStart(2, '0')
+          + String(now.getSeconds()).padStart(2, '0');
+        const textFile = new File([pastedText], `pasted-text-${ts}.txt`, { type: 'text/plain' });
+        chatAddPendingFiles([textFile]);
       }
     });
   }
@@ -709,6 +726,7 @@ function chatUpdateSendButtonState() {
   const sendBtn = document.getElementById('chat-send-btn');
   if (!sendBtn) return;
   const isStreaming = chatStreamingConvs.has(chatActiveConvId);
+  const isResetting = chatResettingConvs.has(chatActiveConvId);
   if (isStreaming) {
     sendBtn.disabled = false;
     sendBtn.textContent = '■';
@@ -720,7 +738,7 @@ function chatUpdateSendButtonState() {
     const hasText = ta && ta.value.trim();
     const hasCompletedFiles = chatPendingFiles.some(e => e.status === 'done');
     const hasUploading = chatPendingFiles.some(e => e.status === 'uploading');
-    sendBtn.disabled = hasUploading || (!hasText && !hasCompletedFiles);
+    sendBtn.disabled = isResetting || hasUploading || (!hasText && !hasCompletedFiles);
   }
 }
 
@@ -740,6 +758,11 @@ async function chatSelectConversation(id) {
     chatRenderMessages();
     chatUpdateHeader();
     chatUpdateSendButtonState();
+    const resetBtn = document.getElementById('chat-reset-btn');
+    if (resetBtn) {
+      resetBtn.disabled = chatResettingConvs.has(id);
+      resetBtn.textContent = chatResettingConvs.has(id) ? '↻ Resetting...' : '↻ Reset';
+    }
     const backendSelect = document.getElementById('chat-backend-select');
     if (backendSelect && chatActiveConv.backend) {
       backendSelect.value = chatActiveConv.backend;
@@ -889,13 +912,8 @@ function chatRenderMessages() {
     return;
   }
 
-  // Only show messages from the current session (after the last session divider)
-  const allMsgs = chatActiveConv.messages;
-  let lastDividerIdx = -1;
-  for (let i = allMsgs.length - 1; i >= 0; i--) {
-    if (allMsgs[i].isSessionDivider) { lastDividerIdx = i; break; }
-  }
-  const currentSessionMsgs = lastDividerIdx >= 0 ? allMsgs.slice(lastDividerIdx + 1) : allMsgs;
+  // Messages are already just the current session (archived sessions live in separate files)
+  const currentSessionMsgs = chatActiveConv.messages;
 
   let html = '';
   for (const msg of currentSessionMsgs) {
@@ -1049,7 +1067,7 @@ async function chatSendMessage() {
   const hasText = textarea && textarea.value.trim();
   const completedFiles = chatPendingFiles.filter(e => e.status === 'done');
   const hasFiles = completedFiles.length > 0;
-  if ((!hasText && !hasFiles) || chatStreamingConvs.has(chatActiveConvId)) return;
+  if ((!hasText && !hasFiles) || chatStreamingConvs.has(chatActiveConvId) || chatResettingConvs.has(chatActiveConvId)) return;
   if (chatPendingFiles.some(e => e.status === 'uploading')) return;
 
   let content = textarea ? textarea.value.trim() : '';
@@ -1516,7 +1534,41 @@ window.chatRetryLast = chatRetryLast;
 async function chatResetSession(convIdOverride) {
   const convId = typeof convIdOverride === 'string' ? convIdOverride : chatActiveConvId;
   if (!convId) return;
-  if (chatStreamingConvs.has(chatActiveConvId)) { alert('Cannot reset session while streaming.'); return; }
+  if (chatStreamingConvs.has(convId)) { alert('Cannot reset session while streaming.'); return; }
+  if (chatResettingConvs.has(convId)) return;
+
+  // Enter resetting state
+  chatResettingConvs.add(convId);
+  chatUpdateSendButtonState();
+
+  const resetBtn = document.getElementById('chat-reset-btn');
+  if (resetBtn) { resetBtn.disabled = true; resetBtn.textContent = '↻ Resetting...'; }
+
+  // Show progress indicator in messages area
+  let progressEl = null;
+  if (convId === chatActiveConvId) {
+    const container = document.getElementById('chat-messages');
+    if (container) {
+      progressEl = document.createElement('div');
+      progressEl.className = 'chat-msg assistant';
+      progressEl.id = 'chat-reset-progress';
+      progressEl.innerHTML = `
+        <div class="chat-msg-wrapper">
+          <div class="chat-msg-avatar chat-msg-avatar-svg">${CLAUDE_CODE_ICON}</div>
+          <div class="chat-msg-body">
+            <div class="chat-msg-role">System</div>
+            <div class="chat-msg-content">
+              <div class="chat-activity-indicator">
+                <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
+                <span class="chat-activity-label">Archiving session...</span>
+              </div>
+            </div>
+          </div>
+        </div>`;
+      container.appendChild(progressEl);
+      chatScrollToBottom();
+    }
+  }
 
   try {
     const res = await chatFetch(`conversations/${convId}/reset`, { method: 'POST', body: {} });
@@ -1525,8 +1577,16 @@ async function chatResetSession(convIdOverride) {
       chatActiveConv = data.conversation;
       chatRenderMessages();
     }
+    chatLoadConversations();
   } catch (err) {
+    if (progressEl && progressEl.isConnected) progressEl.remove();
     alert('Session reset failed: ' + err.message);
+  } finally {
+    chatResettingConvs.delete(convId);
+    const leftover = document.getElementById('chat-reset-progress');
+    if (leftover) leftover.remove();
+    if (resetBtn) { resetBtn.disabled = false; resetBtn.textContent = '↻ Reset'; }
+    chatUpdateSendButtonState();
   }
 }
 
@@ -1556,6 +1616,7 @@ async function chatShowSessions() {
                 <button class="chat-header-btn chat-view-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">View</button>
               </div>
             </div>
+            ${s.summary ? `<div style="font-size:12px;color:var(--fg);margin-top:4px;">${esc(s.summary)}</div>` : ''}
             <div style="font-size:11px;color:var(--muted);margin-top:2px;">
               Started: ${esc(started)}${ended ? ` — Ended: ${esc(ended)}` : ''}
               · ${s.messageCount} messages
@@ -1580,35 +1641,26 @@ async function chatShowSessions() {
   }
 }
 
-function chatViewSession(sessionNumber) {
+async function chatViewSession(sessionNumber) {
   if (!chatActiveConv) return;
   chatCloseModal();
 
-  const msgs = chatActiveConv.messages;
-  const dividerIndices = [];
-  for (let i = 0; i < msgs.length; i++) {
-    if (msgs[i].isSessionDivider) dividerIndices.push(i);
+  let sessionMsgs;
+  try {
+    if (sessionNumber === chatActiveConv.sessionNumber) {
+      sessionMsgs = chatActiveConv.messages;
+    } else {
+      const res = await chatFetch(`conversations/${chatActiveConvId}/sessions/${sessionNumber}/messages`);
+      const data = await res.json();
+      sessionMsgs = data.messages || [];
+    }
+  } catch (err) {
+    alert('Failed to load session: ' + err.message);
+    return;
   }
-
-  let start, end;
-  if (sessionNumber === 1) {
-    start = 0;
-    end = dividerIndices.length > 0 ? dividerIndices[0] : msgs.length;
-  } else {
-    const divIdx = dividerIndices[sessionNumber - 2];
-    if (divIdx === undefined) return;
-    start = divIdx + 1;
-    const nextDiv = dividerIndices[sessionNumber - 1];
-    end = nextDiv !== undefined ? nextDiv : msgs.length;
-  }
-
-  const sessionMsgs = msgs.slice(start, end);
 
   let sessionDate = '';
-  if (sessionNumber > 1 && dividerIndices[sessionNumber - 2] !== undefined) {
-    const divMsg = msgs[dividerIndices[sessionNumber - 2]];
-    sessionDate = new Date(divMsg.timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  } else if (sessionMsgs.length > 0 && sessionMsgs[0].timestamp) {
+  if (sessionMsgs.length > 0 && sessionMsgs[0].timestamp) {
     sessionDate = new Date(sessionMsgs[0].timestamp).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
 
@@ -1617,7 +1669,6 @@ function chatViewSession(sessionNumber) {
     msgsHtml = '<div style="color:var(--muted);font-size:13px;padding:16px 0;">No messages in this session.</div>';
   } else {
     for (const msg of sessionMsgs) {
-      if (msg.isSessionDivider) continue;
       const isUser = msg.role === 'user';
       const isClaudeCode = !isUser && msg.backend === 'claude-code';
       const avatar = isUser ? '👤' : (isClaudeCode ? CLAUDE_CODE_ICON : '⚡');

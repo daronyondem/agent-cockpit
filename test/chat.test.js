@@ -539,6 +539,49 @@ describe('POST /mkdir', () => {
   });
 });
 
+// ── GET /conversations/:id/sessions/:num/messages ──────────────────────────
+
+describe('GET /conversations/:id/sessions/:num/messages', () => {
+  test('returns current session messages', async () => {
+    const conv = await chatService.createConversation('Test');
+    await chatService.addMessage(conv.id, 'user', 'Hello');
+    await chatService.addMessage(conv.id, 'assistant', 'Hi');
+
+    const loaded = await chatService.getConversation(conv.id);
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/sessions/${loaded.sessionNumber}/messages`);
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(2);
+    expect(res.body.messages[0].content).toBe('Hello');
+  });
+
+  test('returns archived session messages', async () => {
+    const conv = await chatService.createConversation('Test');
+    await chatService.addMessage(conv.id, 'user', 'Old msg');
+
+    // Mock summary generation to avoid CLI calls
+    chatService._generateSessionSummary = async (msgs, fallback) => fallback;
+    await chatService.resetSession(conv.id);
+
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/sessions/1/messages`);
+    expect(res.status).toBe(200);
+    expect(res.body.messages).toHaveLength(1);
+    expect(res.body.messages[0].content).toBe('Old msg');
+  });
+
+  test('returns 404 for non-existent session', async () => {
+    const conv = await chatService.createConversation('Test');
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/sessions/99/messages`);
+    expect(res.status).toBe(404);
+  });
+
+  test('returns 400 for invalid session number', async () => {
+    const conv = await chatService.createConversation('Test');
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/sessions/0/messages`);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid session number');
+  });
+});
+
 // ── POST /rmdir ─────────────────────────────────────────────────────────────
 
 describe('POST /rmdir', () => {

@@ -62,25 +62,31 @@ app.use('/api/chat', chatRouter);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-const server = app.listen(config.PORT, () => {
-  console.log(`Agent Cockpit running on port ${config.PORT}`);
-});
-
-function shutdown(signal) {
-  console.log(`\n[shutdown] Received ${signal}, shutting down gracefully...`);
-
-  chatShutdown();
-
-  server.close(() => {
-    console.log('[shutdown] HTTP server closed');
-    process.exit(0);
+// Run migrations before starting the server
+chatService.migrateAllConversations().then(() => {
+  const server = app.listen(config.PORT, () => {
+    console.log(`Agent Cockpit running on port ${config.PORT}`);
   });
 
-  setTimeout(() => {
-    console.error('[shutdown] Forcing exit after 10s timeout');
-    process.exit(1);
-  }, 10000).unref();
-}
+  function shutdown(signal) {
+    console.log(`\n[shutdown] Received ${signal}, shutting down gracefully...`);
 
-process.on('SIGTERM', () => shutdown('SIGTERM'));
-process.on('SIGINT', () => shutdown('SIGINT'));
+    chatShutdown();
+
+    server.close(() => {
+      console.log('[shutdown] HTTP server closed');
+      process.exit(0);
+    });
+
+    setTimeout(() => {
+      console.error('[shutdown] Forcing exit after 10s timeout');
+      process.exit(1);
+    }, 10000).unref();
+  }
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}).catch(err => {
+  console.error('[migration] Fatal migration error:', err);
+  process.exit(1);
+});

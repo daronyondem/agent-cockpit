@@ -22,7 +22,7 @@ function startServer() {
 
 function waitForReady(server) {
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('Server did not start in time')), 5000);
+    const timeout = setTimeout(() => reject(new Error('Server did not start in time')), 10000);
     server.stdout.on('data', (chunk) => {
       if (chunk.toString().includes('running on port')) {
         clearTimeout(timeout);

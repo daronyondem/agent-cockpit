@@ -356,6 +356,7 @@
   }
 
   .chat-header-btn:hover { border-color: var(--muted); color: var(--text); }
+  .chat-header-btn:disabled { opacity: 0.4; cursor: not-allowed; pointer-events: none; }
 
   /* ── Messages Area ────────────────────────────────────────── */
   .chat-messages {

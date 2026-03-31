@@ -217,6 +217,21 @@ function createChatRouter({ chatService, cliBackend }) {
     }
   });
 
+  // ── Get session messages ───────────────────────────────────────────────────
+  router.get('/conversations/:id/sessions/:num/messages', async (req, res) => {
+    try {
+      const sessionNumber = Number(req.params.num);
+      if (!sessionNumber || sessionNumber < 1) {
+        return res.status(400).json({ error: 'Invalid session number' });
+      }
+      const messages = await chatService.getSessionMessages(req.params.id, sessionNumber);
+      if (!messages) return res.status(404).json({ error: 'Session not found' });
+      res.json({ messages });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Reset session ──────────────────────────────────────────────────────────
   router.post('/conversations/:id/reset', csrfGuard, async (req, res) => {
     try {
@@ -254,8 +269,7 @@ function createChatRouter({ chatService, cliBackend }) {
     const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backend || conv.backend);
 
     // Determine if this is the first message in the current Claude Code session
-    const currentSession = conv.sessions[conv.sessions.length - 1];
-    const isNewSession = !currentSession || currentSession.messageCount === 0;
+    const isNewSession = conv.messages.length === 0;
 
     // Start CLI streaming — store stream reference for the GET SSE endpoint
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} workingDir=${conv.workingDir || 'default'}`);
