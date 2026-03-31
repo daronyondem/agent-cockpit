@@ -7,9 +7,15 @@ const { csrfGuard } = require('../middleware/csrf');
 
 function createChatRouter({ chatService, cliBackend }) {
   const router = express.Router();
+  const packageJson = require('../../package.json');
 
   // Track active streams so we can abort them
   const activeStreams = new Map();
+
+  // ── Version ─────────────────────────────────────────────────────────────────
+  router.get('/version', (req, res) => {
+    res.json({ version: packageJson.version });
+  });
 
   // ── Browse directories ─────────────────────────────────────────────────────
   router.get('/browse', (req, res) => {
