@@ -1,14 +1,22 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const crypto = require('crypto');
 const { ChatService } = require('../src/services/chatService');
+
+const DEFAULT_WORKSPACE = '/tmp/test-workspace';
 
 let tmpDir;
 let service;
 
-beforeEach(() => {
+function workspaceHash(p) {
+  return crypto.createHash('sha256').update(p).digest('hex').substring(0, 16);
+}
+
+beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-'));
-  service = new ChatService(tmpDir);
+  service = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+  await service.initialize();
 });
 
 afterEach(() => {
@@ -25,7 +33,6 @@ describe('createConversation', () => {
     expect(conv.sessionNumber).toBe(1);
     expect(conv.currentSessionId).toBeDefined();
     expect(conv.backend).toBe('claude-code');
-    expect(conv.sessions).toBeUndefined();
   });
 
   test('creates with custom title and working dir', async () => {
@@ -34,12 +41,34 @@ describe('createConversation', () => {
     expect(conv.workingDir).toBe('/tmp/work');
   });
 
-  test('persists to disk', async () => {
-    const conv = await service.createConversation('Disk Test');
-    const file = path.join(tmpDir, 'data', 'chat', 'conversations', `${conv.id}.json`);
-    expect(fs.existsSync(file)).toBe(true);
-    const loaded = JSON.parse(fs.readFileSync(file, 'utf8'));
-    expect(loaded.title).toBe('Disk Test');
+  test('uses default workspace when no workingDir given', async () => {
+    const conv = await service.createConversation('Test');
+    expect(conv.workingDir).toBe(DEFAULT_WORKSPACE);
+  });
+
+  test('persists workspace index and session file to disk', async () => {
+    const conv = await service.createConversation('Disk Test', '/tmp/work');
+    const hash = workspaceHash('/tmp/work');
+    const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
+    expect(fs.existsSync(indexPath)).toBe(true);
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    expect(index.workspacePath).toBe('/tmp/work');
+    expect(index.conversations).toHaveLength(1);
+    expect(index.conversations[0].title).toBe('Disk Test');
+
+    const sessionPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, conv.id, 'session-1.json');
+    expect(fs.existsSync(sessionPath)).toBe(true);
+  });
+
+  test('two conversations with same workingDir share workspace', async () => {
+    const c1 = await service.createConversation('First', '/tmp/shared');
+    const c2 = await service.createConversation('Second', '/tmp/shared');
+    const hash = workspaceHash('/tmp/shared');
+    const index = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json'), 'utf8'
+    ));
+    expect(index.conversations).toHaveLength(2);
+    expect(index.conversations.map(c => c.id).sort()).toEqual([c1.id, c2.id].sort());
   });
 });
 
@@ -48,11 +77,12 @@ describe('getConversation', () => {
     expect(await service.getConversation('does-not-exist')).toBeNull();
   });
 
-  test('returns the saved conversation', async () => {
+  test('returns the saved conversation with messages', async () => {
     const conv = await service.createConversation('Get Test');
     const loaded = await service.getConversation(conv.id);
     expect(loaded.id).toBe(conv.id);
     expect(loaded.title).toBe('Get Test');
+    expect(loaded.messages).toEqual([]);
   });
 });
 
@@ -65,14 +95,6 @@ describe('listConversations', () => {
     const c1 = await service.createConversation('First');
     const c2 = await service.createConversation('Second');
 
-    // Force c1 to have an older updatedAt
-    const conv1 = await service.getConversation(c1.id);
-    conv1.updatedAt = '2020-01-01T00:00:00.000Z';
-    fs.writeFileSync(
-      path.join(tmpDir, 'data', 'chat', 'conversations', `${c1.id}.json`),
-      JSON.stringify(conv1, null, 2), 'utf8'
-    );
-
     await service.addMessage(c2.id, 'user', 'hello');
 
     const list = await service.listConversations();
@@ -81,6 +103,12 @@ describe('listConversations', () => {
     expect(list[0].messageCount).toBe(1);
     expect(list[0].lastMessage).toBe('hello');
     expect(list[1].id).toBe(c1.id);
+  });
+
+  test('includes workingDir in listing', async () => {
+    await service.createConversation('Test', '/tmp/myproject');
+    const list = await service.listConversations();
+    expect(list[0].workingDir).toBe('/tmp/myproject');
   });
 });
 
@@ -120,19 +148,43 @@ describe('deleteConversation', () => {
     expect(fs.existsSync(artifactDir)).toBe(false);
   });
 
-  test('cleans up archives directory on delete', async () => {
-    const conv = await service.createConversation('Archive Cleanup');
+  test('cleans up session files on delete', async () => {
+    const conv = await service.createConversation('Session Cleanup', '/tmp/work');
     await service.addMessage(conv.id, 'user', 'Hello');
 
-    // Mock _generateSessionSummary to avoid CLI calls in tests
     service._generateSessionSummary = async (msgs, fallback) => fallback;
     await service.resetSession(conv.id);
 
-    const archiveDir = path.join(tmpDir, 'data', 'chat', 'archives', conv.id);
-    expect(fs.existsSync(archiveDir)).toBe(true);
+    const hash = workspaceHash('/tmp/work');
+    const convDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, conv.id);
+    expect(fs.existsSync(convDir)).toBe(true);
 
     expect(await service.deleteConversation(conv.id)).toBe(true);
-    expect(fs.existsSync(archiveDir)).toBe(false);
+    expect(fs.existsSync(convDir)).toBe(false);
+  });
+
+  test('removes conversation from workspace index', async () => {
+    const c1 = await service.createConversation('Keep', '/tmp/shared');
+    const c2 = await service.createConversation('Delete', '/tmp/shared');
+
+    await service.deleteConversation(c2.id);
+
+    const hash = workspaceHash('/tmp/shared');
+    const index = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json'), 'utf8'
+    ));
+    expect(index.conversations).toHaveLength(1);
+    expect(index.conversations[0].id).toBe(c1.id);
+  });
+});
+
+describe('updateConversationBackend', () => {
+  test('updates backend in workspace index', async () => {
+    const conv = await service.createConversation('Test');
+    await service.updateConversationBackend(conv.id, 'openai');
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded.backend).toBe('openai');
   });
 });
 
@@ -170,7 +222,6 @@ describe('addMessage', () => {
     const conv = await service.createConversation();
     await service.addMessage(conv.id, 'user', 'First question');
 
-    // After rename to a non-default title, second message shouldn't change it
     await service.renameConversation(conv.id, 'Custom Title');
     await service.addMessage(conv.id, 'user', 'Another question');
     const loaded = await service.getConversation(conv.id);
@@ -195,7 +246,8 @@ describe('addMessage', () => {
     await service.addMessage(conv.id, 'assistant', 'Answer', 'claude-code', 'Thinking deeply');
 
     // Re-read from disk via a fresh service instance
-    const service2 = new ChatService(tmpDir);
+    const service2 = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+    await service2.initialize();
     const loaded = await service2.getConversation(conv.id);
     expect(loaded.messages[0].thinking).toBe('Thinking deeply');
   });
@@ -219,6 +271,18 @@ describe('addMessage', () => {
     const conv = await service.createConversation();
     const msg = await service.addMessage(conv.id, 'assistant', 'Empty thinking', 'claude-code', '');
     expect(msg.thinking).toBeUndefined();
+  });
+
+  test('updates lastActivity and lastMessage in workspace index', async () => {
+    const conv = await service.createConversation('Test', '/tmp/idx');
+    await service.addMessage(conv.id, 'user', 'Index check message');
+
+    const hash = workspaceHash('/tmp/idx');
+    const index = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json'), 'utf8'
+    ));
+    expect(index.conversations[0].lastMessage).toBe('Index check message');
+    expect(index.conversations[0].lastActivity).toBeDefined();
   });
 });
 
@@ -249,7 +313,6 @@ describe('updateMessageContent', () => {
 
 describe('resetSession', () => {
   beforeEach(() => {
-    // Mock _generateSessionSummary to avoid CLI calls in tests
     service._generateSessionSummary = async (msgs, fallback) => 'Test summary for session';
   });
 
@@ -265,33 +328,41 @@ describe('resetSession', () => {
     expect(result.archivedSession.messageCount).toBe(2);
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.sessions).toBeUndefined();
     expect(loaded.sessionNumber).toBe(2);
     expect(loaded.messages).toHaveLength(0);
   });
 
-  test('creates archive files on disk', async () => {
-    const conv = await service.createConversation();
+  test('creates session files on disk', async () => {
+    const conv = await service.createConversation('Test', '/tmp/reset-test');
     await service.addMessage(conv.id, 'user', 'Hello');
 
     await service.resetSession(conv.id);
 
-    const archiveDir = path.join(tmpDir, 'data', 'chat', 'archives', conv.id);
-    expect(fs.existsSync(archiveDir)).toBe(true);
+    const hash = workspaceHash('/tmp/reset-test');
+    const convDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, conv.id);
 
-    // Check index.json
-    const index = JSON.parse(fs.readFileSync(path.join(archiveDir, 'index.json'), 'utf8'));
-    expect(index.sessions).toHaveLength(1);
-    expect(index.sessions[0].number).toBe(1);
-    expect(index.sessions[0].summary).toBe('Test summary for session');
+    // Check session-1.json (archived)
+    const session1 = JSON.parse(fs.readFileSync(path.join(convDir, 'session-1.json'), 'utf8'));
+    expect(session1.messages).toHaveLength(1);
+    expect(session1.messages[0].content).toBe('Hello');
+    expect(session1.endedAt).toBeDefined();
 
-    // Check session-1.json
-    const session = JSON.parse(fs.readFileSync(path.join(archiveDir, 'session-1.json'), 'utf8'));
-    expect(session.messages).toHaveLength(1);
-    expect(session.messages[0].content).toBe('Hello');
+    // Check session-2.json (new active)
+    const session2 = JSON.parse(fs.readFileSync(path.join(convDir, 'session-2.json'), 'utf8'));
+    expect(session2.messages).toHaveLength(0);
+
+    // Check workspace index
+    const index = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json'), 'utf8'
+    ));
+    const convEntry = index.conversations.find(c => c.id === conv.id);
+    expect(convEntry.sessions).toHaveLength(2);
+    expect(convEntry.sessions[0].active).toBe(false);
+    expect(convEntry.sessions[0].summary).toBe('Test summary for session');
+    expect(convEntry.sessions[1].active).toBe(true);
   });
 
-  test('multiple resets create sequential archives', async () => {
+  test('multiple resets create sequential sessions', async () => {
     const conv = await service.createConversation();
     await service.addMessage(conv.id, 'user', 'Session 1 msg');
     await service.resetSession(conv.id);
@@ -302,16 +373,6 @@ describe('resetSession', () => {
     const loaded = await service.getConversation(conv.id);
     expect(loaded.sessionNumber).toBe(3);
     expect(loaded.messages).toHaveLength(0);
-
-    const archiveDir = path.join(tmpDir, 'data', 'chat', 'archives', conv.id);
-    const index = JSON.parse(fs.readFileSync(path.join(archiveDir, 'index.json'), 'utf8'));
-    expect(index.sessions).toHaveLength(2);
-    expect(index.sessions[0].number).toBe(1);
-    expect(index.sessions[1].number).toBe(2);
-
-    // Verify session files
-    expect(fs.existsSync(path.join(archiveDir, 'session-1.json'))).toBe(true);
-    expect(fs.existsSync(path.join(archiveDir, 'session-2.json'))).toBe(true);
   });
 
   test('returns null for non-existent conversation', async () => {
@@ -456,130 +517,229 @@ describe('sessionToMarkdown', () => {
   });
 });
 
-// ── Migration ───────────────────────────────────────────────────────────────
+// ── Workspace Context ────────────────────────────────────────────────────────
 
-describe('migrateConversation', () => {
-  test('migrates legacy conversation with sessions array', async () => {
-    // Create a legacy-format conversation with sessions array and dividers
-    const conv = await service.createConversation('Legacy Conv');
-    const convPath = path.join(tmpDir, 'data', 'chat', 'conversations', `${conv.id}.json`);
-
-    const legacyConv = {
-      ...conv,
-      sessions: [
-        { number: 1, sessionId: 'sess-1', startedAt: '2024-01-01T00:00:00Z', endedAt: '2024-01-01T01:00:00Z', messageCount: 2 },
-        { number: 2, sessionId: 'sess-2', startedAt: '2024-01-01T01:00:00Z', endedAt: null, messageCount: 1 },
-      ],
-      messages: [
-        { id: 'm1', role: 'user', content: 'Hello', backend: 'claude-code', timestamp: '2024-01-01T00:00:00Z' },
-        { id: 'm2', role: 'assistant', content: 'Hi', backend: 'claude-code', timestamp: '2024-01-01T00:30:00Z' },
-        { id: 'div1', role: 'system', content: 'Session reset', isSessionDivider: true, timestamp: '2024-01-01T01:00:00Z' },
-        { id: 'm3', role: 'user', content: 'New session', backend: 'claude-code', timestamp: '2024-01-01T01:30:00Z' },
-      ],
-    };
-    fs.writeFileSync(convPath, JSON.stringify(legacyConv, null, 2), 'utf8');
-
-    const result = await service.migrateConversation(conv.id);
-    expect(result).toBe(true);
-
-    // Verify conversation file is updated
-    const migrated = await service.getConversation(conv.id);
-    expect(migrated.sessions).toBeUndefined();
-    expect(migrated.messages).toHaveLength(1);
-    expect(migrated.messages[0].content).toBe('New session');
-
-    // Verify archive files
-    const archiveDir = path.join(tmpDir, 'data', 'chat', 'archives', conv.id);
-    expect(fs.existsSync(archiveDir)).toBe(true);
-
-    const index = JSON.parse(fs.readFileSync(path.join(archiveDir, 'index.json'), 'utf8'));
-    expect(index.sessions).toHaveLength(1);
-    expect(index.sessions[0].summary).toBe('(Migrated session)');
-
-    const session = JSON.parse(fs.readFileSync(path.join(archiveDir, 'session-1.json'), 'utf8'));
-    expect(session.messages).toHaveLength(2);
-    expect(session.messages[0].content).toBe('Hello');
+describe('getWorkspaceContext', () => {
+  test('returns injection prompt with workspace path', async () => {
+    const conv = await service.createConversation('Test', '/tmp/ctx-test');
+    const ctx = service.getWorkspaceContext(conv.id);
+    expect(ctx).toContain('Workspace discussion history');
+    const hash = workspaceHash('/tmp/ctx-test');
+    expect(ctx).toContain(hash);
+    expect(ctx).toContain('index.json');
   });
 
-  test('removes sessions array even with single session', async () => {
-    const conv = await service.createConversation('Single Session');
-    const convPath = path.join(tmpDir, 'data', 'chat', 'conversations', `${conv.id}.json`);
-
-    const legacyConv = {
-      ...conv,
-      sessions: [
-        { number: 1, sessionId: 'sess-1', startedAt: '2024-01-01T00:00:00Z', endedAt: null, messageCount: 1 },
-      ],
-      messages: [
-        { id: 'm1', role: 'user', content: 'Hello', backend: 'claude-code', timestamp: '2024-01-01T00:00:00Z' },
-      ],
-    };
-    fs.writeFileSync(convPath, JSON.stringify(legacyConv, null, 2), 'utf8');
-
-    const result = await service.migrateConversation(conv.id);
-    expect(result).toBe(true);
-
-    const migrated = await service.getConversation(conv.id);
-    expect(migrated.sessions).toBeUndefined();
-    expect(migrated.messages).toHaveLength(1);
-  });
-
-  test('skips already migrated conversations', async () => {
-    const conv = await service.createConversation('Already Migrated');
-    // New-format conversations don't have sessions array
-    const result = await service.migrateConversation(conv.id);
-    expect(result).toBe(false);
-  });
-
-  test('is idempotent', async () => {
-    const conv = await service.createConversation('Idempotent');
-    const convPath = path.join(tmpDir, 'data', 'chat', 'conversations', `${conv.id}.json`);
-
-    const legacyConv = {
-      ...conv,
-      sessions: [
-        { number: 1, sessionId: 'sess-1', startedAt: '2024-01-01T00:00:00Z', endedAt: '2024-01-01T01:00:00Z', messageCount: 1 },
-        { number: 2, sessionId: 'sess-2', startedAt: '2024-01-01T01:00:00Z', endedAt: null, messageCount: 0 },
-      ],
-      messages: [
-        { id: 'm1', role: 'user', content: 'Hello', backend: 'claude-code', timestamp: '2024-01-01T00:00:00Z' },
-        { id: 'div1', role: 'system', content: 'Session reset', isSessionDivider: true, timestamp: '2024-01-01T01:00:00Z' },
-      ],
-    };
-    fs.writeFileSync(convPath, JSON.stringify(legacyConv, null, 2), 'utf8');
-
-    await service.migrateConversation(conv.id);
-    // Second call should be a no-op (sessions array is gone)
-    const result2 = await service.migrateConversation(conv.id);
-    expect(result2).toBe(false);
+  test('returns null for non-existent conversation', () => {
+    expect(service.getWorkspaceContext('nope')).toBeNull();
   });
 });
 
-describe('migrateAllConversations', () => {
-  test('migrates all legacy conversations', async () => {
-    const conv1 = await service.createConversation('Legacy 1');
-    const conv2 = await service.createConversation('Legacy 2');
+// ── Migration ───────────────────────────────────────────────────────────────
 
-    // Make them legacy format
-    for (const conv of [conv1, conv2]) {
-      const convPath = path.join(tmpDir, 'data', 'chat', 'conversations', `${conv.id}.json`);
-      const legacyConv = {
-        ...conv,
-        sessions: [{ number: 1, sessionId: 's1', startedAt: conv.createdAt, endedAt: null, messageCount: 0 }],
-      };
-      fs.writeFileSync(convPath, JSON.stringify(legacyConv, null, 2), 'utf8');
-    }
+describe('migration from legacy format', () => {
+  test('migrates conversations to workspace format', async () => {
+    // Set up legacy directory structure
+    const convDir = path.join(tmpDir, 'data', 'chat', 'conversations');
+    fs.mkdirSync(convDir, { recursive: true });
 
-    await service.migrateAllConversations();
+    const convId = crypto.randomUUID();
+    const conv = {
+      id: convId,
+      title: 'Legacy Conv',
+      backend: 'claude-code',
+      workingDir: '/tmp/legacy-project',
+      currentSessionId: 'sess-1',
+      sessionNumber: 1,
+      updatedAt: '2024-06-01T00:00:00Z',
+      messages: [
+        { id: 'm1', role: 'user', content: 'Hello', backend: 'claude-code', timestamp: '2024-06-01T00:00:00Z' },
+        { id: 'm2', role: 'assistant', content: 'Hi', backend: 'claude-code', timestamp: '2024-06-01T00:01:00Z' },
+      ],
+    };
+    fs.writeFileSync(path.join(convDir, `${convId}.json`), JSON.stringify(conv, null, 2));
 
-    const loaded1 = await service.getConversation(conv1.id);
-    const loaded2 = await service.getConversation(conv2.id);
-    expect(loaded1.sessions).toBeUndefined();
-    expect(loaded2.sessions).toBeUndefined();
+    // Create fresh service and initialize (triggers migration)
+    const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+    await svc.initialize();
+
+    // Old dir should be renamed to backup
+    expect(fs.existsSync(convDir)).toBe(false);
+    expect(fs.existsSync(convDir + '_backup')).toBe(true);
+
+    // Should be able to load the conversation
+    const loaded = await svc.getConversation(convId);
+    expect(loaded).not.toBeNull();
+    expect(loaded.title).toBe('Legacy Conv');
+    expect(loaded.messages).toHaveLength(2);
+
+    // Workspace index should exist
+    const hash = workspaceHash('/tmp/legacy-project');
+    const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
+    expect(fs.existsSync(indexPath)).toBe(true);
   });
 
-  test('does not error on empty directory', async () => {
-    await expect(service.migrateAllConversations()).resolves.not.toThrow();
+  test('migrates conversations with archived sessions', async () => {
+    const convDir = path.join(tmpDir, 'data', 'chat', 'conversations');
+    const archivesDir = path.join(tmpDir, 'data', 'chat', 'archives');
+    fs.mkdirSync(convDir, { recursive: true });
+
+    const convId = crypto.randomUUID();
+
+    // Conversation file (current session 2)
+    const conv = {
+      id: convId,
+      title: 'Archived Conv',
+      backend: 'claude-code',
+      workingDir: '/tmp/archived-project',
+      currentSessionId: 'sess-2',
+      sessionNumber: 2,
+      updatedAt: '2024-06-02T00:00:00Z',
+      messages: [
+        { id: 'm3', role: 'user', content: 'New session msg', backend: 'claude-code', timestamp: '2024-06-02T00:00:00Z' },
+      ],
+    };
+    fs.writeFileSync(path.join(convDir, `${convId}.json`), JSON.stringify(conv, null, 2));
+
+    // Archive files
+    const archiveConvDir = path.join(archivesDir, convId);
+    fs.mkdirSync(archiveConvDir, { recursive: true });
+
+    const archiveIndex = {
+      conversationId: convId,
+      conversationTitle: 'Archived Conv',
+      sessions: [{
+        number: 1,
+        file: 'session-1.json',
+        sessionId: 'sess-1',
+        startedAt: '2024-06-01T00:00:00Z',
+        endedAt: '2024-06-01T12:00:00Z',
+        messageCount: 2,
+        summary: 'Discussed the project setup',
+      }],
+    };
+    fs.writeFileSync(path.join(archiveConvDir, 'index.json'), JSON.stringify(archiveIndex, null, 2));
+
+    const session1 = {
+      sessionNumber: 1,
+      sessionId: 'sess-1',
+      startedAt: '2024-06-01T00:00:00Z',
+      endedAt: '2024-06-01T12:00:00Z',
+      messages: [
+        { id: 'm1', role: 'user', content: 'Old msg 1', backend: 'claude-code', timestamp: '2024-06-01T00:00:00Z' },
+        { id: 'm2', role: 'assistant', content: 'Old reply', backend: 'claude-code', timestamp: '2024-06-01T00:01:00Z' },
+      ],
+    };
+    fs.writeFileSync(path.join(archiveConvDir, 'session-1.json'), JSON.stringify(session1, null, 2));
+
+    // Initialize
+    const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+    await svc.initialize();
+
+    // Verify migration
+    expect(fs.existsSync(convDir)).toBe(false);
+    expect(fs.existsSync(archivesDir)).toBe(false);
+
+    const loaded = await svc.getConversation(convId);
+    expect(loaded.title).toBe('Archived Conv');
+    expect(loaded.messages).toHaveLength(1);
+    expect(loaded.sessionNumber).toBe(2);
+
+    // Verify archived session is accessible
+    const sessions = await svc.getSessionHistory(convId);
+    expect(sessions).toHaveLength(2);
+    expect(sessions[0].summary).toBe('Discussed the project setup');
+    expect(sessions[0].isCurrent).toBe(false);
+    expect(sessions[1].isCurrent).toBe(true);
+
+    // Verify archived messages are accessible
+    const archivedMsgs = await svc.getSessionMessages(convId, 1);
+    expect(archivedMsgs).toHaveLength(2);
+    expect(archivedMsgs[0].content).toBe('Old msg 1');
+  });
+
+  test('migrates legacy sessions with dividers', async () => {
+    const convDir = path.join(tmpDir, 'data', 'chat', 'conversations');
+    fs.mkdirSync(convDir, { recursive: true });
+
+    const convId = crypto.randomUUID();
+    const conv = {
+      id: convId,
+      title: 'Divider Conv',
+      backend: 'claude-code',
+      workingDir: '/tmp/divider',
+      currentSessionId: 'sess-2',
+      sessionNumber: 2,
+      updatedAt: '2024-06-02T00:00:00Z',
+      sessions: [
+        { number: 1, sessionId: 'sess-1', startedAt: '2024-06-01T00:00:00Z', endedAt: '2024-06-01T12:00:00Z', messageCount: 2 },
+        { number: 2, sessionId: 'sess-2', startedAt: '2024-06-02T00:00:00Z', endedAt: null, messageCount: 1 },
+      ],
+      messages: [
+        { id: 'm1', role: 'user', content: 'Session 1 msg', backend: 'claude-code', timestamp: '2024-06-01T00:00:00Z' },
+        { id: 'm2', role: 'assistant', content: 'Reply', backend: 'claude-code', timestamp: '2024-06-01T00:01:00Z' },
+        { id: 'div1', role: 'system', content: 'Session reset', isSessionDivider: true, timestamp: '2024-06-01T12:00:00Z' },
+        { id: 'm3', role: 'user', content: 'Session 2 msg', backend: 'claude-code', timestamp: '2024-06-02T00:00:00Z' },
+      ],
+    };
+    fs.writeFileSync(path.join(convDir, `${convId}.json`), JSON.stringify(conv, null, 2));
+
+    const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+    await svc.initialize();
+
+    const loaded = await svc.getConversation(convId);
+    expect(loaded.messages).toHaveLength(1);
+    expect(loaded.messages[0].content).toBe('Session 2 msg');
+    expect(loaded.sessionNumber).toBe(2);
+
+    const archivedMsgs = await svc.getSessionMessages(convId, 1);
+    expect(archivedMsgs).toHaveLength(2);
+    expect(archivedMsgs[0].content).toBe('Session 1 msg');
+  });
+
+  test('groups conversations by workspace during migration', async () => {
+    const convDir = path.join(tmpDir, 'data', 'chat', 'conversations');
+    fs.mkdirSync(convDir, { recursive: true });
+
+    const conv1 = {
+      id: crypto.randomUUID(),
+      title: 'Same WS 1',
+      backend: 'claude-code',
+      workingDir: '/tmp/shared-ws',
+      currentSessionId: 's1',
+      sessionNumber: 1,
+      updatedAt: '2024-06-01T00:00:00Z',
+      messages: [],
+    };
+    const conv2 = {
+      id: crypto.randomUUID(),
+      title: 'Same WS 2',
+      backend: 'claude-code',
+      workingDir: '/tmp/shared-ws',
+      currentSessionId: 's2',
+      sessionNumber: 1,
+      updatedAt: '2024-06-02T00:00:00Z',
+      messages: [],
+    };
+    fs.writeFileSync(path.join(convDir, `${conv1.id}.json`), JSON.stringify(conv1, null, 2));
+    fs.writeFileSync(path.join(convDir, `${conv2.id}.json`), JSON.stringify(conv2, null, 2));
+
+    const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+    await svc.initialize();
+
+    const hash = workspaceHash('/tmp/shared-ws');
+    const index = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json'), 'utf8'
+    ));
+    expect(index.conversations).toHaveLength(2);
+  });
+
+  test('does not error on empty conversations directory', async () => {
+    const convDir = path.join(tmpDir, 'data', 'chat', 'conversations');
+    fs.mkdirSync(convDir, { recursive: true });
+
+    const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+    await expect(svc.initialize()).resolves.not.toThrow();
+    expect(fs.existsSync(convDir)).toBe(false); // renamed to _backup
   });
 });
 

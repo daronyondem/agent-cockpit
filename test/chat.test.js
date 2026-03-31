@@ -8,6 +8,7 @@ const { createChatRouter } = require('../src/routes/chat');
 
 // ── Test helpers ────────────────────────────────────────────────────────────
 
+const DEFAULT_WORKSPACE = '/tmp/test-workspace';
 let tmpDir, chatService, app, server, baseUrl;
 const CSRF_TOKEN = 'test-csrf-token';
 
@@ -98,9 +99,10 @@ function readSSE(urlPath) {
 
 let mockBackend;
 
-beforeEach((done) => {
+beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatroute-'));
-  chatService = new ChatService(tmpDir);
+  chatService = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+  await chatService.initialize();
   mockBackend = createMockCLIBackend();
 
   app = express();
@@ -115,10 +117,12 @@ beforeEach((done) => {
   const { router } = createChatRouter({ chatService, cliBackend: mockBackend });
   app.use('/api/chat', router);
 
-  server = app.listen(0, () => {
-    const port = server.address().port;
-    baseUrl = `http://127.0.0.1:${port}`;
-    done();
+  await new Promise((resolve) => {
+    server = app.listen(0, () => {
+      const port = server.address().port;
+      baseUrl = `http://127.0.0.1:${port}`;
+      resolve();
+    });
   });
 });
 
@@ -427,6 +431,65 @@ describe('Turn boundary intermediate messages', () => {
     const assistantMessages = events.filter(e => e.type === 'assistant_message');
     expect(assistantMessages).toHaveLength(1);
     expect(assistantMessages[0].message.content).toBe('The final result');
+  });
+});
+
+// ── Workspace context injection ──────────────────────────────────────────────
+
+describe('Workspace context injection', () => {
+  test('injects workspace context on new session message', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/inject-test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    // The CLI should receive the injected message
+    expect(mockBackend._lastMessage).toContain('Workspace discussion history');
+    expect(mockBackend._lastMessage).toContain('Hello');
+  });
+
+  test('does not inject context on subsequent messages', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/inject-test');
+    // Add a message first so it's not a new session
+    await chatService.addMessage(conv.id, 'user', 'First msg');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Second msg',
+      backend: 'claude-code',
+    });
+
+    // The CLI should receive just the message, no injection
+    expect(mockBackend._lastMessage).toBe('Second msg');
+    expect(mockBackend._lastMessage).not.toContain('Workspace discussion history');
+  });
+
+  test('stores user message without injection in conversation', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/inject-test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    const res = await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    // The stored message should NOT contain the injection
+    expect(res.body.userMessage.content).toBe('Hello');
   });
 });
 
