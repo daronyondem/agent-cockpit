@@ -248,6 +248,118 @@ describe('CLIBackend', () => {
       await sleep(500);
     }, 10000);
 
+    test('includes --append-system-prompt for new sessions with systemPrompt', async () => {
+      let capturedArgs;
+      let streamRef;
+      jest.isolateModules(() => {
+        jest.mock('child_process', () => ({
+          spawn: (_cmd, args) => {
+            capturedArgs = args;
+            const { EventEmitter } = require('events');
+            const proc = new EventEmitter();
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.stdin = { write: () => {}, destroyed: false };
+            proc.kill = () => {};
+            setTimeout(() => proc.emit('close', 0, null), 10);
+            return proc;
+          },
+        }));
+        const { CLIBackend: IsolatedBackend } = require('../src/services/cliBackend');
+        const backend = new IsolatedBackend({ workingDir: '/tmp' });
+        const { stream } = backend.sendMessage('hello', {
+          sessionId: 'test-sys-prompt',
+          isNewSession: true,
+          workingDir: '/tmp',
+          systemPrompt: 'You are a helpful assistant',
+        });
+        streamRef = stream;
+      });
+
+      // Iterate the stream to trigger spawn
+      for await (const event of streamRef) {
+        if (event.type === 'done') break;
+      }
+
+      expect(capturedArgs).toBeDefined();
+      const idx = capturedArgs.indexOf('--append-system-prompt');
+      expect(idx).toBeGreaterThan(-1);
+      expect(capturedArgs[idx + 1]).toBe('You are a helpful assistant');
+    });
+
+    test('omits --append-system-prompt when systemPrompt is empty', async () => {
+      let capturedArgs;
+      let streamRef;
+      jest.isolateModules(() => {
+        jest.mock('child_process', () => ({
+          spawn: (_cmd, args) => {
+            capturedArgs = args;
+            const { EventEmitter } = require('events');
+            const proc = new EventEmitter();
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.stdin = { write: () => {}, destroyed: false };
+            proc.kill = () => {};
+            setTimeout(() => proc.emit('close', 0, null), 10);
+            return proc;
+          },
+        }));
+        const { CLIBackend: IsolatedBackend } = require('../src/services/cliBackend');
+        const backend = new IsolatedBackend({ workingDir: '/tmp' });
+        const { stream } = backend.sendMessage('hello', {
+          sessionId: 'test-no-prompt',
+          isNewSession: true,
+          workingDir: '/tmp',
+          systemPrompt: '',
+        });
+        streamRef = stream;
+      });
+
+      for await (const event of streamRef) {
+        if (event.type === 'done') break;
+      }
+
+      expect(capturedArgs).toBeDefined();
+      expect(capturedArgs).not.toContain('--append-system-prompt');
+    });
+
+    test('omits --append-system-prompt on resumed sessions', async () => {
+      let capturedArgs;
+      let streamRef;
+      jest.isolateModules(() => {
+        jest.mock('child_process', () => ({
+          spawn: (_cmd, args) => {
+            capturedArgs = args;
+            const { EventEmitter } = require('events');
+            const proc = new EventEmitter();
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.stdin = { write: () => {}, destroyed: false };
+            proc.kill = () => {};
+            setTimeout(() => proc.emit('close', 0, null), 10);
+            return proc;
+          },
+        }));
+        const { CLIBackend: IsolatedBackend } = require('../src/services/cliBackend');
+        const backend = new IsolatedBackend({ workingDir: '/tmp' });
+        const { stream } = backend.sendMessage('hello', {
+          sessionId: 'test-resume',
+          isNewSession: false,
+          workingDir: '/tmp',
+          systemPrompt: 'You are a helpful assistant',
+        });
+        streamRef = stream;
+      });
+
+      for await (const event of streamRef) {
+        if (event.type === 'done') break;
+      }
+
+      expect(capturedArgs).toBeDefined();
+      expect(capturedArgs).not.toContain('--append-system-prompt');
+      expect(capturedArgs).toContain('--resume');
+    });
+
     test('abort yields error and done events', async () => {
       const backend = new CLIBackend({ workingDir: '/tmp' });
       const { stream, abort } = backend.sendMessage('hello', {

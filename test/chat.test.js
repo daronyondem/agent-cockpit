@@ -493,6 +493,63 @@ describe('Workspace context injection', () => {
   });
 });
 
+// ── System prompt passthrough ──────────────────────────────────────────────
+
+describe('System prompt passthrough', () => {
+  test('passes systemPrompt to backend on new session', async () => {
+    // Save a system prompt to settings
+    await chatService.saveSettings({ theme: 'system', systemPrompt: 'You are a pirate' });
+
+    const conv = await chatService.createConversation('Test');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Ahoy', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions.systemPrompt).toBe('You are a pirate');
+  });
+
+  test('passes empty systemPrompt when none configured', async () => {
+    const conv = await chatService.createConversation('Test');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions.systemPrompt).toBe('');
+  });
+
+  test('does not pass systemPrompt on subsequent messages', async () => {
+    await chatService.saveSettings({ theme: 'system', systemPrompt: 'You are a pirate' });
+
+    const conv = await chatService.createConversation('Test');
+    await chatService.addMessage(conv.id, 'user', 'First msg');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Second msg',
+      backend: 'claude-code',
+    });
+
+    // On resumed sessions, systemPrompt should be empty (not fetched)
+    expect(mockBackend._lastOptions.systemPrompt).toBe('');
+  });
+});
+
 // ── DELETE /conversations/:id/upload/:filename ────────────────────────────────
 
 describe('DELETE /conversations/:id/upload/:filename', () => {
