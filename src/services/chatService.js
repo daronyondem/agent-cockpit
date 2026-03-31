@@ -841,13 +841,29 @@ class ChatService {
   async getSettings() {
     try {
       const data = await fsp.readFile(this.settingsFile, 'utf8');
-      return JSON.parse(data);
+      const settings = JSON.parse(data);
+
+      // Migrate legacy customInstructions to systemPrompt
+      if (settings.customInstructions && settings.systemPrompt === undefined) {
+        const parts = [];
+        if (settings.customInstructions.aboutUser) {
+          parts.push(settings.customInstructions.aboutUser.trim());
+        }
+        if (settings.customInstructions.responseStyle) {
+          parts.push(settings.customInstructions.responseStyle.trim());
+        }
+        settings.systemPrompt = parts.join('\n\n');
+        delete settings.customInstructions;
+        await this.saveSettings(settings);
+      }
+
+      return settings;
     } catch (err) {
       if (err.code === 'ENOENT') {
         return {
           theme: 'system',
           sendBehavior: 'enter',
-          customInstructions: { aboutUser: '', responseStyle: '' },
+          systemPrompt: '',
           defaultBackend: 'claude-code',
           workingDirectory: '',
         };

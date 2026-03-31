@@ -523,7 +523,7 @@ Returns settings object. Defaults if file doesn't exist:
 {
   "theme": "system",
   "sendBehavior": "enter",
-  "customInstructions": { "aboutUser": "", "responseStyle": "" },
+  "systemPrompt": "",
   "defaultBackend": "claude-code",
   "workingDirectory": ""
 }
