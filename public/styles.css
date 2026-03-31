@@ -294,6 +294,14 @@
 
   .chat-sidebar-footer:hover { background: var(--surface2); }
 
+  .chat-sidebar-version {
+    padding: 6px 12px;
+    font-size: 10px;
+    color: var(--text-secondary);
+    text-align: center;
+    opacity: 0.6;
+  }
+
   /* ── Chat Main Panel ──────────────────────────────────────── */
   .chat-main {
     flex: 1;

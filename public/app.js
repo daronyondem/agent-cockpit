@@ -107,6 +107,12 @@ function chatInit() {
   chatWireEvents();
   chatLoadConversations();
 
+  // Show app version in sidebar
+  chatFetch('version').then(res => res.json()).then(v => {
+    const el = document.getElementById('chat-version-label');
+    if (el && v.version) el.textContent = 'v' + v.version;
+  }).catch(() => {});
+
   // Sync theme from server settings
   chatFetch('settings').then(res => res.json()).then(s => {
     chatSettingsData = s;
