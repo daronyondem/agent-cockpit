@@ -9,6 +9,32 @@ const CLAUDE_CODE_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+const MAX_SYSTEM_PROMPT_LENGTH = 50000;
+
+/**
+ * Strip control characters (keep newlines, tabs, carriage returns) and
+ * enforce a max length so the CLI argument stays safe and bounded.
+ */
+function sanitizeSystemPrompt(prompt) {
+  if (!prompt || typeof prompt !== 'string') return '';
+  // Remove control chars except \n \r \t
+  let cleaned = prompt.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+  if (cleaned.length > MAX_SYSTEM_PROMPT_LENGTH) {
+    cleaned = cleaned.substring(0, MAX_SYSTEM_PROMPT_LENGTH);
+  }
+  return cleaned;
+}
+
+const API_ERROR_PATTERN = /^API Error:\s*\d{3}\s/;
+
+/**
+ * Detect whether text content is an API error message from the Claude CLI
+ * (e.g. "API Error: 500 {"type":"error",...}").
+ */
+function isApiError(text) {
+  return API_ERROR_PATTERN.test(text.trim());
+}
+
 function shortenPath(filePath) {
   if (!filePath) return '';
   const parts = filePath.split('/');
@@ -184,8 +210,9 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
 
     if (isNewSession) {
       args.push('--session-id', sessionId);
-      if (systemPrompt) {
-        args.push('--append-system-prompt', systemPrompt);
+      const cleanPrompt = sanitizeSystemPrompt(systemPrompt);
+      if (cleanPrompt) {
+        args.push('--append-system-prompt', cleanPrompt);
       }
     } else {
       args.push('--resume', sessionId);
@@ -242,7 +269,12 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
               textQueue.push({ type: 'turn_boundary' });
             } else if (event.type === 'result') {
               if (event.result) {
-                textQueue.push({ type: 'result', content: event.result });
+                const resultStr = typeof event.result === 'string' ? event.result : JSON.stringify(event.result);
+                if (isApiError(resultStr)) {
+                  textQueue.push({ type: 'error', error: resultStr.trim() });
+                } else {
+                  textQueue.push({ type: 'result', content: event.result });
+                }
               }
             }
           } catch {
@@ -329,4 +361,4 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
   }
 }
 
-module.exports = { ClaudeCodeAdapter, extractToolDetails, shortenPath };
+module.exports = { ClaudeCodeAdapter, extractToolDetails, shortenPath, sanitizeSystemPrompt, isApiError };
