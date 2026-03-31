@@ -758,6 +758,8 @@ describe('GET /api/chat/version', () => {
     const expected = require('../package.json').version;
     const res = await makeRequest('GET', '/api/chat/version');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ version: expected });
+    expect(res.body.version).toBe(expected);
+    expect(res.body).toHaveProperty('remoteVersion');
+    expect(res.body).toHaveProperty('updateAvailable');
   });
 });
