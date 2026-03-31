@@ -1338,16 +1338,12 @@ async function chatSendMessage() {
             }
           } else if (event.type === 'text') {
             st.assistantContent += event.content;
-            if (st.pendingInteraction && st.pendingInteraction.type === 'planApproval') {
-              // Update stored plan content and re-render approval with new text
-              st.pendingInteraction.planContent = st.assistantContent;
-              if (isStillActive) {
-                chatShowPlanApproval(st.streamingMsgEl, targetConvId, st.assistantContent);
-              }
+            if (st.pendingInteraction) {
+              // Pending interaction (plan approval, user question) — don't overwrite
+              // dialog with streaming text. Just accumulate assistantContent silently.
             } else {
               st.activeTools = [];
               st.activeAgents = [];
-              st.pendingInteraction = null;
               if (isStillActive) {
                 chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
               }
@@ -1375,7 +1371,8 @@ async function chatSendMessage() {
                 chatShowPlanApproval(st.streamingMsgEl, targetConvId, st.pendingInteraction.planContent);
               } else if (event.isQuestion) {
                 chatShowUserQuestion(st.streamingMsgEl, targetConvId, event);
-              } else {
+              } else if (!st.pendingInteraction) {
+                // Only render tool activity if no pending interaction (plan approval, user question)
                 chatUpdateStreamingActivity(st.streamingMsgEl, st.activeTools, st.activeAgents, st.planModeActive);
               }
             }
@@ -1426,11 +1423,18 @@ async function chatSendMessage() {
     const finalState = chatStreamingState.get(targetConvId);
     if (finalState) {
       if (finalState.elapsedTimerInterval) clearInterval(finalState.elapsedTimerInterval);
-      if (finalState.streamingMsgEl && finalState.streamingMsgEl.isConnected) {
-        finalState.streamingMsgEl.remove();
+      if (finalState.pendingInteraction) {
+        // Keep the streaming bubble alive for pending interactions
+        // (plan approval, user questions) so the user can still act on them
+      } else {
+        if (finalState.streamingMsgEl && finalState.streamingMsgEl.isConnected) {
+          finalState.streamingMsgEl.remove();
+        }
+        chatStreamingState.delete(targetConvId);
       }
+    } else {
+      chatStreamingState.delete(targetConvId);
     }
-    chatStreamingState.delete(targetConvId);
     chatUpdateSendButtonState();
     chatRenderConvList();
   }
@@ -1594,8 +1598,8 @@ function chatShowPlanApproval(msgEl, convId, planContent) {
         if (approvalState) {
           if (approvalState.elapsedTimerInterval) clearInterval(approvalState.elapsedTimerInterval);
           approvalState.pendingInteraction = null;
-          // If the stream already ended, clean up the streaming state now
-          if (!approvalState.streamingMsgEl || !approvalState.streamingMsgEl.isConnected) {
+          // If the stream has ended (no longer in chatStreamingConvs), fully clean up
+          if (!chatStreamingConvs.has(convId)) {
             chatStreamingState.delete(convId);
           }
         }
@@ -1666,7 +1670,12 @@ function chatShowUserQuestion(msgEl, convId, event) {
         body: JSON.stringify({ text }),
       });
       const questionState = chatStreamingState.get(convId);
-      if (questionState) questionState.pendingInteraction = null;
+      if (questionState) {
+        questionState.pendingInteraction = null;
+        if (!chatStreamingConvs.has(convId)) {
+          chatStreamingState.delete(convId);
+        }
+      }
       contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Answered: ${esc(text)}</div>`;
     } catch (err) {
       contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
