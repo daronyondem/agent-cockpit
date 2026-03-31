@@ -82,19 +82,19 @@ agent-cockpit/
 │   ├── app.js                          # All frontend JavaScript (~1560 lines)
 │   └── styles.css                      # All CSS with light/dark theme (~1400 lines)
 ├── test/
-│   ├── chat.test.js                    # Chat route tests — /input, SSE forwarding, turn boundaries, session messages, mkdir, rmdir (36 tests)
-│   ├── chatService.test.js             # ChatService unit tests — CRUD, messages, sessions, archives, migration, markdown export (86 tests)
+│   ├── chat.test.js                    # Chat route tests — /input, SSE forwarding, turn boundaries, session messages, workspace injection, mkdir, rmdir (39 tests)
+│   ├── chatService.test.js             # ChatService unit tests — CRUD, messages, sessions, workspace storage, migration, markdown export, workspace context (93 tests)
 │   ├── cliBackend.test.js              # CLIBackend + extractToolDetails unit tests (33 tests)
 │   ├── graceful-shutdown.test.js       # Server shutdown tests (2 tests)
 │   └── sessionStore.test.js            # Session file-store tests (4 tests)
 └── data/                               # Runtime data (gitignored, created at startup)
     ├── chat/
-    │   ├── conversations/              # JSON files, one per conversation (current session only)
-    │   ├── archives/                   # Per-conversation archive folders
-    │   │   └── {convId}/
-    │   │       ├── index.json          # Session index with summaries
-    │   │       ├── session-1.json      # Archived session data
-    │   │       └── session-N.json
+    │   ├── workspaces/                 # Workspace-based storage
+    │   │   └── {workspace-hash}/       # SHA-256(workspacePath).substring(0,16)
+    │   │       ├── index.json          # Source of truth: all conversations + session metadata
+    │   │       └── {convId}/
+    │   │           ├── session-1.json  # Archived session
+    │   │           └── session-N.json  # Active session (updated every message)
     │   ├── artifacts/                  # Per-conversation upload directory
     │   └── settings.json               # User settings
     └── sessions/                       # Express session JSON files
@@ -156,12 +156,12 @@ The server initializes in this exact order:
 7. **Apply `ensureCsrfToken` middleware** globally
 8. **Parse JSON bodies** with `express.json()`
 9. **Mount CSRF token endpoint** at `GET /api/csrf-token`
-10. **Initialize ChatService** with `__dirname` as app root
+10. **Initialize ChatService** with `__dirname` as app root and `{ defaultWorkspace: config.DEFAULT_WORKSPACE }` options
 11. **Initialize CLIBackend** with `DEFAULT_WORKSPACE`
 12. **Mount chat router** at `/api/chat`
 13. **Serve static files** from `public/`
-14. **Run migrations** via `chatService.migrateAllConversations()` — converts legacy conversations (with `sessions` array and divider messages) to the new archive format. Idempotent; skips already-migrated conversations.
-15. **Listen** on configured PORT (inside migration `.then()` callback)
+14. **Initialize ChatService** via `chatService.initialize()` — migrates legacy `conversations/` and `archives/` directories to workspace format if present (renames old dirs to `_backup`), then builds the in-memory convId→workspace lookup map.
+15. **Listen** on configured PORT (inside `initialize().then()` callback)
 
 ### Graceful Shutdown
 
@@ -367,7 +367,7 @@ Returns updated conversation. `404` if not found.
 ```
 DELETE /api/chat/conversations/:id  [CSRF]
 ```
-Aborts any active stream for this conversation first. Deletes the conversation JSON file and cleans up the per-conversation artifacts subdirectory. Returns `{ ok: true }`. `404` if not found.
+Aborts any active stream for this conversation first. Removes the conversation from its workspace index, deletes the conversation's session folder (`workspaces/{hash}/{convId}/`), and cleans up the per-conversation artifacts subdirectory. Returns `{ ok: true }`. `404` if not found.
 
 ### 9.3 Download
 
@@ -401,7 +401,7 @@ Returns `{ messages: Message[] }` for the specified session number. Loads from a
 ```
 POST /api/chat/conversations/:id/reset  [CSRF]
 ```
-Returns `409` if conversation is currently streaming. Archives current session to JSON in `archives/{convId}/`, generates LLM summary, clears conversation messages, starts a new session with a fresh UUID. Returns `{ conversation, newSessionNumber, archivedSession }` where `archivedSession` includes `summary`, `messageCount`, etc.
+Returns `409` if conversation is currently streaming. Marks the active session as inactive in the workspace index (sets summary, endedAt), creates a new session entry + file, generates LLM summary. Returns `{ conversation, newSessionNumber, archivedSession }` where `archivedSession` includes `summary`, `messageCount`, etc.
 
 ### 9.5 Messaging and Streaming
 
@@ -411,9 +411,10 @@ POST /api/chat/conversations/:id/message  [CSRF]
 Body: { content: string, backend?: string }
 ```
 - Validates content is a non-empty string
-- Saves user message to conversation
-- Updates conversation backend if changed
+- Saves user message to conversation (raw content, no injection)
+- Updates conversation backend if changed via `chatService.updateConversationBackend()`
 - Determines if this is a new CLI session (first message in current session) or a resume
+- On new sessions: prepends workspace context injection prompt to the CLI message (not stored in messages)
 - Spawns CLI process via `cliBackend.sendMessage()`
 - Stores stream reference in `activeStreams` map
 - Returns `{ userMessage: Message, streamReady: true }`
@@ -541,31 +542,68 @@ Writes the full body to `data/chat/settings.json`.
 
 **File:** `src/services/chatService.js`
 
-**Constructor:** `new ChatService(appRoot)`
+**Constructor:** `new ChatService(appRoot, options)`
 - Sets `baseDir` to `<appRoot>/data/chat`
-- Creates directories synchronously at startup (only time sync I/O is used): `conversations/`, `archives/`, `artifacts/`
+- `options.defaultWorkspace` — fallback workspace path when `workingDir` is not provided (defaults to `/tmp/default-workspace`)
+- Creates directories synchronously at startup (only time sync I/O is used): `workspaces/`, `artifacts/`
+- Initializes `_convWorkspaceMap` (in-memory `Map<convId, workspaceHash>`)
 
-**All methods are `async`** and use `fs.promises` for file I/O.
+**All methods are `async`** (except `getWorkspaceContext()`) and use `fs.promises` for file I/O.
 
-#### Data Model: Conversation
+#### Storage Architecture
 
-The conversation JSON file contains only the **current session's** messages. Past sessions are stored in per-conversation archive folders.
+All data is organized by **workspace**. A workspace corresponds to a `workingDir` — all conversations sharing the same working directory live under one workspace folder. The workspace `index.json` is the single source of truth for conversation metadata. Session files hold messages.
+
+```
+data/chat/workspaces/{workspace-hash}/
+├── index.json              # All conversations + session metadata
+├── {convId-1}/
+│   ├── session-1.json      # Archived
+│   └── session-2.json      # Active (updated every message)
+└── {convId-2}/
+    └── session-1.json
+```
+
+**Workspace hash:** `SHA-256(workspacePath).substring(0, 16)` — deterministic mapping from path to hash.
+
+**ConvId → workspace lookup:** In-memory `Map`, built on startup by scanning all workspace indexes. Avoids filesystem scans on every operation.
+
+#### Data Model: Workspace Index (`workspaces/{hash}/index.json`)
 
 ```javascript
 {
-  id: string,              // UUIDv4
-  title: string,           // Auto-set from first user message (max 80 chars)
-  createdAt: string,       // ISO 8601
-  updatedAt: string,       // ISO 8601, updated on every save
-  backend: string,         // 'claude-code'
-  workingDir: string|null, // Filesystem path for CLI working directory
-  currentSessionId: string,// UUID of the active CLI session
-  sessionNumber: number,   // Current session number (1-based)
-  messages: Message[]      // ONLY current session messages (no dividers)
+  workspacePath: string,        // Absolute path to the workspace directory
+  conversations: [{
+    id: string,                 // UUIDv4
+    title: string,              // Auto-set from first user message (max 80 chars)
+    backend: string,            // 'claude-code'
+    currentSessionId: string,   // UUID of the active CLI session
+    lastActivity: string,       // ISO 8601, updated on every message
+    lastMessage: string|null,   // First 100 chars of last message content
+    sessions: [{
+      number: number,           // 1-based session number
+      sessionId: string,        // UUID passed to CLI
+      summary: string|null,     // LLM-generated summary (null for active session)
+      active: boolean,          // true for current session, false for archived
+      messageCount: number,     // Messages in this session
+      startedAt: string,        // ISO 8601
+      endedAt: string|null      // ISO 8601 (null for active session)
+    }]
+  }]
 }
 ```
 
-No `sessions` array — session history lives in `archives/{convId}/index.json`.
+#### Data Model: Session File (`workspaces/{hash}/{convId}/session-N.json`)
+
+```javascript
+{
+  sessionNumber: number,        // 1-based session number
+  sessionId: string,            // UUID passed to CLI
+  startedAt: string,            // ISO 8601
+  endedAt: string|null,         // ISO 8601 (null for active session)
+  messages: Message[]           // Full message array for this session
+}
+```
 
 #### Data Model: Message
 
@@ -580,34 +618,19 @@ No `sessions` array — session history lives in `archives/{convId}/index.json`.
 }
 ```
 
-#### Data Model: Archive Index (`archives/{convId}/index.json`)
+#### Data Model: API Response (getConversation)
+
+Assembles a flat object from workspace index + active session file for API compatibility:
 
 ```javascript
 {
-  conversationId: string,       // UUID matching conversation
-  conversationTitle: string,    // Conversation title at time of last archive
-  sessions: [{
-    number: number,             // 1-based session number
-    file: string,               // Filename: "session-N.json"
-    sessionId: string,          // UUID passed to CLI
-    startedAt: string,          // ISO 8601
-    endedAt: string,            // ISO 8601
-    messageCount: number,       // Messages in this session
-    summary: string             // LLM-generated one-line summary (100-150 chars)
-  }]
-}
-```
-
-#### Data Model: Session Archive (`archives/{convId}/session-N.json`)
-
-```javascript
-{
-  sessionNumber: number,        // 1-based session number
-  sessionId: string,            // UUID passed to CLI
-  startedAt: string,            // ISO 8601
-  endedAt: string,              // ISO 8601
-  messageCount: number,         // Messages in this session
-  messages: Message[]           // Full message array for this session
+  id: string,
+  title: string,
+  backend: string,
+  workingDir: string,           // The workspace path
+  currentSessionId: string,
+  sessionNumber: number,        // Active session number
+  messages: Message[]           // Active session messages
 }
 ```
 
@@ -615,26 +638,48 @@ No `sessions` array — session history lives in `archives/{convId}/index.json`.
 
 | Method | Description |
 |--------|-------------|
-| `createConversation(title, workingDir)` | Creates conversation with `currentSessionId`, `sessionNumber: 1`, empty `messages[]`. No `sessions` array. Title defaults to 'New Chat'. |
-| `getConversation(id)` | Reads JSON from disk. Returns `null` if file not found (ENOENT). |
-| `saveConversation(conv)` | Updates `updatedAt`, writes JSON to disk with 2-space indentation. |
-| `listConversations()` | Reads all `.json` files in conversations dir. Returns summaries sorted by `updatedAt` desc. Each summary: `{ id, title, createdAt, updatedAt, backend, workingDir, messageCount, lastMessage }` where `lastMessage` is first 100 chars of last message content. |
-| `renameConversation(id, newTitle)` | Updates title and saves. Returns `null` if not found. |
-| `deleteConversation(id)` | Deletes the JSON file, the per-conversation artifacts subdirectory (`artifacts/{id}/`), and the archive directory (`archives/{id}/`). Returns `true`/`false`. |
-| `addMessage(convId, role, content, backend, thinking)` | Appends message to `conv.messages`. Auto-titles when `conv.title === 'New Chat'` (80 chars, newlines→spaces). Optional `thinking` parameter stores extended thinking text (omitted if falsy). |
-| `updateMessageContent(convId, messageId, newContent)` | Forks conversation: truncates all messages after the target message, adds edited content as a new message. Returns `{ conversation, message }`. |
-| `resetSession(convId)` | Archives current session to `archives/{convId}/session-N.json`. Generates LLM summary via `_generateSessionSummary()`. Updates `archives/{convId}/index.json`. Clears `conv.messages`, increments `sessionNumber`, sets new `currentSessionId`. Removes legacy `sessions` array if present. Returns `{ conversation, newSessionNumber, archivedSession }`. |
-| `getSessionHistory(convId)` | Reads from archive `index.json` + appends current session with `isCurrent: true`. Returns array with `summary` field for archived sessions. |
-| `getSessionMessages(convId, sessionNumber)` | Returns messages from archive file for past sessions, or from `conv.messages` for current session. |
-| `sessionToMarkdown(convId, sessionNumber)` | Loads from archive file for past sessions, from `conv.messages` for current. Uses `_messagesToMarkdown()` shared helper. |
-| `_messagesToMarkdown(title, convId, sessionMeta, messages)` | Generates Markdown for a single session. Format: title, session metadata, then each message with role, timestamp, backend, and content. |
-| `conversationToMarkdown(convId)` | Stitches all archived sessions + current session into a single Markdown document. |
-| `_generateSessionSummary(messages, fallback)` | Spawns `claude --print -p "<prompt>"` for a one-line summary (100-150 chars). 30s timeout. Falls back gracefully to `fallback` string on failure. |
-| `migrateConversation(convId)` | Converts legacy format (with `sessions` array and divider messages) to new archive format. Extracts old sessions using divider counting, writes archive files with `"(Migrated session)"` summary. Idempotent — skips if no `sessions` array. |
-| `migrateAllConversations()` | Iterates all conversation files, calls `migrateConversation()`. Logs count of migrated conversations. |
-| `searchConversations(query)` | Case-insensitive search. First checks title and last message from summaries, then deep-searches full message content for remaining conversations. |
+| `initialize()` | Runs migration if legacy `conversations/` dir exists, then builds the in-memory convId→workspace lookup map. Called once at server startup. |
+| `createConversation(title, workingDir)` | Creates conversation entry in workspace index + empty session-1.json file. Falls back to `_defaultWorkspace` if no workingDir. Returns API-compatible conversation object. |
+| `getConversation(id)` | Looks up workspace via in-memory map, reads index + active session file. Returns API-compatible object with messages. Returns `null` if not found. |
+| `listConversations()` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc. Each summary: `{ id, title, updatedAt, backend, workingDir, messageCount, lastMessage }`. |
+| `renameConversation(id, newTitle)` | Updates title in workspace index. Returns full conversation via `getConversation()`. Returns `null` if not found. |
+| `deleteConversation(id)` | Removes from workspace index, deletes `{convId}/` session folder and `artifacts/{id}/`. Removes from lookup map. Returns `true`/`false`. |
+| `updateConversationBackend(convId, backend)` | Updates backend field in workspace index. |
+| `addMessage(convId, role, content, backend, thinking)` | Appends message to active session file + updates workspace index (`lastActivity`, `lastMessage`, `messageCount`). Auto-titles when title is 'New Chat'. Optional `thinking` parameter (omitted if falsy). |
+| `updateMessageContent(convId, messageId, newContent)` | Forks: truncates messages in active session file after target, adds edited content as new message. Returns `{ conversation, message }`. |
+| `resetSession(convId)` | Marks active session as inactive (sets summary, endedAt), creates new session entry + file. Generates LLM summary via `_generateSessionSummary()`. Returns `{ conversation, newSessionNumber, archivedSession }`. |
+| `getSessionHistory(convId)` | Reads sessions array from workspace index. Returns array with `isCurrent` flag and `summary` field. |
+| `getSessionMessages(convId, sessionNumber)` | Reads session file directly. Returns messages array or `null`. |
+| `sessionToMarkdown(convId, sessionNumber)` | Reads session file, uses `_messagesToMarkdown()` helper. |
+| `conversationToMarkdown(convId)` | Reads all session files for a conversation, stitches into single Markdown document. |
+| `getWorkspaceContext(convId)` | **Synchronous.** Returns 4-line injection prompt string with absolute path to workspace folder, or `null` if convId not found. |
+| `_generateSessionSummary(messages, fallback)` | Spawns `claude --print -p "<prompt>"` for a one-line summary (100-150 chars). 30s timeout. Falls back gracefully. |
+| `searchConversations(query)` | Case-insensitive search. Checks title and lastMessage first, then deep-searches all session files for remaining conversations. |
 | `getSettings()` | Returns settings from disk or defaults. |
 | `saveSettings(settings)` | Writes settings to disk. |
+
+#### Workspace Context Injection
+
+When a new CLI session starts (first message in a session), the router prepends a context prompt to the CLI message (not stored in conversation messages):
+
+```
+[Workspace discussion history is available at {abs_workspace_path}/
+Read index.json for all past and current conversations in this workspace with per-session summaries.
+Each conversation subfolder contains session-N.json files with full message histories.
+When the user references previous work, decisions, or discussions, consult the relevant session files for context.]
+```
+
+This gives Claude Code access to all past conversations and sessions in the workspace without requiring any file copying or workspace pollution.
+
+#### Migration
+
+On first startup after upgrade, `initialize()` detects the legacy `conversations/` directory and runs `_migrateToWorkspaces()`:
+
+1. Reads all conversation JSON files from `conversations/`
+2. Groups conversations by workspace (using `workingDir` or default)
+3. For each conversation: reads any existing `archives/{convId}/` data, handles legacy `sessions` array with dividers
+4. Writes workspace index + session files to new `workspaces/{hash}/` structure
+5. Renames `conversations/` → `conversations_backup/` and `archives/` → `archives_backup/`
 
 ### 10.2 CLIBackend
 

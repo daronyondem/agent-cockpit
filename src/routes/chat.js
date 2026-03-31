@@ -261,8 +261,7 @@ function createChatRouter({ chatService, cliBackend }) {
 
     // Update backend if changed
     if (backend && backend !== conv.backend) {
-      conv.backend = backend;
-      await chatService.saveConversation(conv);
+      await chatService.updateConversationBackend(convId, backend);
     }
 
     // Add user message
@@ -271,9 +270,16 @@ function createChatRouter({ chatService, cliBackend }) {
     // Determine if this is the first message in the current Claude Code session
     const isNewSession = conv.messages.length === 0;
 
+    // Build CLI message — inject workspace context on new sessions
+    let cliMessage = content.trim();
+    if (isNewSession) {
+      const ctx = chatService.getWorkspaceContext(convId);
+      if (ctx) cliMessage = ctx + '\n\n' + cliMessage;
+    }
+
     // Start CLI streaming — store stream reference for the GET SSE endpoint
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} workingDir=${conv.workingDir || 'default'}`);
-    const { stream, abort, sendInput } = cliBackend.sendMessage(content.trim(), {
+    const { stream, abort, sendInput } = cliBackend.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
       isNewSession,
       workingDir: conv.workingDir || null,

@@ -55,15 +55,15 @@ app.get('/api/csrf-token', (req, res) => {
   res.json({ csrfToken: req.session.csrfToken });
 });
 
-const chatService = new ChatService(__dirname);
+const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE });
 const cliBackend = new CLIBackend({ workingDir: config.DEFAULT_WORKSPACE });
 const { router: chatRouter, shutdown: chatShutdown } = createChatRouter({ chatService, cliBackend });
 app.use('/api/chat', chatRouter);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Run migrations before starting the server
-chatService.migrateAllConversations().then(() => {
+// Initialize workspace storage and run any pending migrations
+chatService.initialize().then(() => {
   const server = app.listen(config.PORT, () => {
     console.log(`Agent Cockpit running on port ${config.PORT}`);
   });
@@ -87,6 +87,6 @@ chatService.migrateAllConversations().then(() => {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT', () => shutdown('SIGINT'));
 }).catch(err => {
-  console.error('[migration] Fatal migration error:', err);
+  console.error('[startup] Fatal initialization error:', err);
   process.exit(1);
 });
