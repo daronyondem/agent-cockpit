@@ -39,6 +39,7 @@ class BaseBackendAdapter {
    *   { type: 'tool_activity', tool, description, id?, ...flags }
    *   { type: 'turn_boundary' }
    *   { type: 'result',        content }
+   *   { type: 'usage',         usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd } }
    *   { type: 'error',         error }
    *   { type: 'done' }
    */

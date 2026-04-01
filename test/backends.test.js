@@ -3,7 +3,7 @@ const { BackendRegistry } = require('../src/services/backends/registry');
 const { ClaudeCodeAdapter } = require('../src/services/backends/claudeCode');
 
 // extractToolDetails / shortenPath are not public on the class, so access via exports
-const { extractToolDetails, shortenPath, sanitizeSystemPrompt, isApiError } = require('../src/services/backends/claudeCode');
+const { extractToolDetails, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError } = require('../src/services/backends/claudeCode');
 
 const fs = require('fs');
 const vm = require('vm');
@@ -396,6 +396,65 @@ describe('isApiError', () => {
 
   test('rejects partial match', () => {
     expect(isApiError('API Error without code')).toBe(false);
+  });
+});
+
+// ── extractUsage ──────────────────────────────────────────────────────────
+
+describe('extractUsage', () => {
+  test('returns null when no usage or cost data', () => {
+    expect(extractUsage({ type: 'result', result: 'done' })).toBeNull();
+  });
+
+  test('extracts full usage data from result event', () => {
+    const event = {
+      type: 'result',
+      result: 'done',
+      cost_usd: 0.05,
+      usage: {
+        input_tokens: 1000,
+        output_tokens: 500,
+        cache_read_input_tokens: 200,
+        cache_creation_input_tokens: 100,
+      },
+    };
+    const result = extractUsage(event);
+    expect(result).toEqual({
+      type: 'usage',
+      usage: {
+        inputTokens: 1000,
+        outputTokens: 500,
+        cacheReadTokens: 200,
+        cacheWriteTokens: 100,
+        costUsd: 0.05,
+      },
+    });
+  });
+
+  test('extracts cost when usage object is missing', () => {
+    const result = extractUsage({ type: 'result', cost_usd: 0.01 });
+    expect(result).not.toBeNull();
+    expect(result.usage.costUsd).toBe(0.01);
+    expect(result.usage.inputTokens).toBe(0);
+    expect(result.usage.outputTokens).toBe(0);
+  });
+
+  test('handles partial usage object', () => {
+    const result = extractUsage({
+      type: 'result',
+      cost_usd: 0.02,
+      usage: { input_tokens: 500 },
+    });
+    expect(result.usage.inputTokens).toBe(500);
+    expect(result.usage.outputTokens).toBe(0);
+    expect(result.usage.cacheReadTokens).toBe(0);
+    expect(result.usage.cacheWriteTokens).toBe(0);
+    expect(result.usage.costUsd).toBe(0.02);
+  });
+
+  test('returns null for event with no usage and no cost_usd', () => {
+    expect(extractUsage({ type: 'result' })).toBeNull();
+    expect(extractUsage({})).toBeNull();
   });
 });
 

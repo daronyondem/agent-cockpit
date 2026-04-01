@@ -77,6 +77,13 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
     currentSessionId: string,   // UUID of the active CLI session
     lastActivity: string,       // ISO 8601, updated on every message
     lastMessage: string|null,   // First 100 chars of last message content
+    usage: {                     // Cumulative token/cost tracking (null until first result)
+      inputTokens: number,
+      outputTokens: number,
+      cacheReadTokens: number,
+      cacheWriteTokens: number,
+      costUsd: number
+    }|null,
     sessions: [{
       number: number,           // 1-based session number
       sessionId: string,        // UUID passed to CLI
@@ -84,7 +91,8 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
       active: boolean,          // true for current session, false for archived
       messageCount: number,
       startedAt: string,        // ISO 8601
-      endedAt: string|null      // ISO 8601 (null for active session)
+      endedAt: string|null,     // ISO 8601 (null for active session)
+      usage: Usage|null         // Per-session token/cost totals (same shape as conversation usage)
     }]
   }]
 }
@@ -127,7 +135,8 @@ Flat object assembled from workspace index + active session file:
   workingDir: string,           // The workspace path
   currentSessionId: string,
   sessionNumber: number,        // Active session number
-  messages: Message[]           // Active session messages
+  messages: Message[],          // Active session messages
+  usage: Usage                  // Cumulative token/cost totals (zeroed if no usage yet)
 }
 ```
 
@@ -241,6 +250,7 @@ data: {"type":"<type>", ...fields}\n\n
 | `result` | `content` | Final result text from CLI |
 | `assistant_message` | `message` | Saved assistant message (intermediate or final) |
 | `title_updated` | `title` | Conversation title was auto-updated (sent after first assistant message in a reset session) |
+| `usage` | `usage` | Cumulative token/cost totals for the conversation (sent after each CLI result event) |
 | `error` | `error` | Error message string |
 | `done` | — | Stream complete |
 
@@ -259,6 +269,8 @@ data: {"type":"<type>", ...fields}\n\n
 **Turn boundary behavior:** On `turn_boundary`, accumulated streaming content (text + thinking) is saved as an intermediate assistant message, and a `turn_complete` event is always sent to the client (even when there is no text to save). This allows the frontend to clear stale tool activity spinners when tools finish executing. On stream completion, final content is saved and `assistant_message` + `done` events are sent.
 
 **Auto title update:** When a new session starts after a reset (session number > 1) and the first assistant message is saved, the server asynchronously generates a new conversation title via `generateTitle()` on the backend adapter. A `title_updated` SSE event is sent with the new title. The title update fires only once per session (on the first assistant message) and does not block the stream.
+
+**Usage tracking:** Backend adapters can yield `{ type: 'usage', usage: {...} }` events. The Claude Code adapter extracts usage data (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `cost_usd`) from CLI `result` events and normalises the field names to camelCase. The server accumulates usage on both the conversation and active session in the workspace index via `chatService.addUsage()`, then forwards a `usage` SSE event containing the updated cumulative totals. The frontend displays total tokens and cost in the conversation header. Backends that do not emit usage events simply leave the counters at zero.
 
 **Abort streaming:**
 ```
@@ -464,6 +476,8 @@ claude --print \
 
 All detail objects include `tool`, `id` (block id or null), and `description`. Long file paths are shortened to `.../{last}/{two}.js` when >3 segments.
 
+**`extractUsage(event)`** — parses `result` events for usage data. Returns `{ type: 'usage', usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd } }` or `null` if no usage data is present. Field mapping: `input_tokens` → `inputTokens`, `output_tokens` → `outputTokens`, `cache_read_input_tokens` → `cacheReadTokens`, `cache_creation_input_tokens` → `cacheWriteTokens`, `cost_usd` → `costUsd`.
+
 **`generateSummary(messages, fallback)`** — spawns `claude --print -p <prompt>` with 30s timeout. Falls back gracefully.
 
 **`generateTitle(userMessage, fallback)`** — spawns `claude --print -p <prompt>` with 30s timeout to generate a short title (max 60 chars) from the user's first message. Falls back to truncated user message.
@@ -613,7 +627,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 
 - Flexbox: sidebar (fixed 280px) + main area (flex: 1)
 - Sidebar: new chat button, search, conversation list grouped by workspace, settings, sign out, version label
-- Main area: header with title + action buttons, messages container, input area with backend selector + file chips + textarea
+- Main area: header with title + usage indicator + action buttons, messages container, input area with backend selector + file chips + textarea
 - Responsive: below ~768px sidebar overlays content
 
 ### Conversation Management
@@ -629,12 +643,13 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API)
 - **Streaming state persistence:** `chatStreamingState` Map stores per-conversation state (accumulated text, thinking, tools, agents, tool/agent history, pending interactions). State survives conversation switches — on return, the streaming bubble is recreated and restored.
 - **Elapsed timer:** live timer in streaming bubble header, self-cleans on DOM disconnect
-- **Unified streaming content:** A single `chatUpdateStreamingContent()` function renders all streaming state (thinking, text, tool history, active tool, agents, plan mode) together in one stacked view. Text content and tool activity accumulate and remain visible simultaneously — new progress updates stack below previous content rather than replacing it. Completed tools show checkmarks and elapsed durations, the current active tool shows a spinner with a live timer, and agent cards show spinner when running, checkmark when completed.
+- **Unified streaming content:** A single `chatUpdateStreamingContent()` function renders all streaming state (thinking, text, tool history, active tools, agents, plan mode) together in one stacked view. Text content and tool activity accumulate and remain visible simultaneously — new progress updates stack below previous content rather than replacing it. Tools are split by their `completed` flag: completed tools show checkmarks and elapsed durations, ALL active (non-completed) tools show spinners with live timers simultaneously. Agent cards show spinner when running, checkmark when completed.
 - **Turn boundaries:** intermediate assistant messages saved, content reset. `turn_complete` event archives active tools/agents to history so spinners stop but the accumulated history persists.
 - **Thinking events:** archive active tool/agent state to history, ensuring spinners don't persist while the model thinks after tool execution, while preserving the operation log.
 - **Plan approval:** renders plan as markdown with approve/reject buttons → POSTs to `/input`
 - **User questions:** renders question text + option buttons → POSTs answer to `/input`
 - **Auto title update:** handles `title_updated` SSE event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
+- **Usage display:** a small indicator in the conversation header shows cumulative token count and USD cost. Updated in real-time when `usage` SSE events arrive during streaming. Displays on hover a tooltip with input/output/cache token breakdown and cost. Hidden when no usage data exists (e.g. new conversation).
 - **Stream cleanup:** `chatCleanupStreamState()` accepts `{ force }` option. The `finally` block uses `force: true` to ensure cleanup even when a pending interaction was never resolved. Interaction response handlers also use forced cleanup when the stream has already ended.
 - **Send button state:** shows stop (■) when streaming, send (↑) when idle. Disabled during uploads or session resets.
 
@@ -765,9 +780,9 @@ Update OAuth callback URLs to include the ngrok URL.
 
 | File | Focus |
 |------|-------|
-| `test/backends.test.js` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails |
-| `test/chat.test.js` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, auto title update on session reset, file upload/serve, workspace instructions |
-| `test/chatService.test.js` | ChatService CRUD, messages, sessions, generateAndUpdateTitle, workspace storage, migration, markdown export |
+| `test/backends.test.js` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractUsage |
+| `test/chat.test.js` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
+| `test/chatService.test.js` | ChatService CRUD, messages, sessions, generateAndUpdateTitle, usage tracking (addUsage, getUsage), workspace storage, migration, markdown export |
 | `test/draftState.test.js` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/graceful-shutdown.test.js` | Server shutdown on SIGINT/SIGTERM |
 | `test/sessionStore.test.js` | Session file-store persistence |

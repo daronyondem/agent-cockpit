@@ -1078,3 +1078,77 @@ describe('GET /api/chat/version', () => {
     expect(res.body).toHaveProperty('updateAvailable');
   });
 });
+
+// ── Usage event forwarding ───────────────────────────────────────────────────
+
+describe('SSE usage event forwarding', () => {
+  test('forwards usage events via SSE and persists to conversation', async () => {
+    const conv = await chatService.createConversation('Usage Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hello', streaming: true },
+      { type: 'usage', usage: { inputTokens: 1000, outputTokens: 500, cacheReadTokens: 100, cacheWriteTokens: 50, costUsd: 0.05 } },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test usage',
+      backend: 'claude-code',
+    });
+
+    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    // Verify usage event was forwarded
+    const usageEvent = events.find(e => e.type === 'usage');
+    expect(usageEvent).toBeDefined();
+    expect(usageEvent.usage.inputTokens).toBe(1000);
+    expect(usageEvent.usage.outputTokens).toBe(500);
+    expect(usageEvent.usage.costUsd).toBe(0.05);
+
+    // Verify usage was persisted
+    const loaded = await chatService.getConversation(conv.id);
+    expect(loaded.usage.inputTokens).toBe(1000);
+    expect(loaded.usage.outputTokens).toBe(500);
+    expect(loaded.usage.costUsd).toBe(0.05);
+  });
+
+  test('accumulates usage across multiple usage events', async () => {
+    const conv = await chatService.createConversation('Multi Usage');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'First turn', streaming: true },
+      { type: 'usage', usage: { inputTokens: 500, outputTokens: 200, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.02 } },
+      { type: 'turn_boundary' },
+      { type: 'text', content: 'Second turn', streaming: true },
+      { type: 'usage', usage: { inputTokens: 300, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 } },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'multi turn',
+      backend: 'claude-code',
+    });
+
+    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const usageEvents = events.filter(e => e.type === 'usage');
+    expect(usageEvents).toHaveLength(2);
+
+    // Second event should show cumulative totals
+    expect(usageEvents[1].usage.inputTokens).toBe(800);
+    expect(usageEvents[1].usage.outputTokens).toBe(300);
+    expect(usageEvents[1].usage.costUsd).toBeCloseTo(0.03);
+  });
+
+  test('getConversation includes usage in response', async () => {
+    const conv = await chatService.createConversation('API Usage');
+    await chatService.addUsage(conv.id, { inputTokens: 2000, outputTokens: 1000, cacheReadTokens: 500, cacheWriteTokens: 200, costUsd: 0.10 });
+
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.usage).toBeDefined();
+    expect(res.body.usage.inputTokens).toBe(2000);
+    expect(res.body.usage.outputTokens).toBe(1000);
+    expect(res.body.usage.costUsd).toBe(0.10);
+  });
+});

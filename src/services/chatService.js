@@ -208,6 +208,7 @@ class ChatService {
       currentSessionId: convEntry.currentSessionId,
       sessionNumber,
       messages,
+      usage: convEntry.usage || this._emptyUsage(),
     };
   }
 
@@ -236,6 +237,7 @@ class ChatService {
           workspaceHash: hash,
           messageCount: activeSession ? activeSession.messageCount : 0,
           lastMessage: conv.lastMessage,
+          usage: conv.usage || null,
         });
       }
     }
@@ -859,6 +861,47 @@ class ChatService {
         console.error(`[migration] Failed to rename ${oldName}:`, err.message);
       }
     }
+  }
+
+  // ── Usage Tracking ─────────────────────────────────────────────────────────
+
+  _emptyUsage() {
+    return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
+  }
+
+  async addUsage(convId, usage) {
+    if (!usage) return null;
+    const result = await this._getConvFromIndex(convId);
+    if (!result) return null;
+    const { hash, index, convEntry } = result;
+
+    if (!convEntry.usage) convEntry.usage = this._emptyUsage();
+    convEntry.usage.inputTokens += usage.inputTokens || 0;
+    convEntry.usage.outputTokens += usage.outputTokens || 0;
+    convEntry.usage.cacheReadTokens += usage.cacheReadTokens || 0;
+    convEntry.usage.cacheWriteTokens += usage.cacheWriteTokens || 0;
+    convEntry.usage.costUsd += usage.costUsd || 0;
+
+    // Also track on active session
+    const activeSession = convEntry.sessions.find(s => s.active);
+    if (activeSession) {
+      if (!activeSession.usage) activeSession.usage = this._emptyUsage();
+      activeSession.usage.inputTokens += usage.inputTokens || 0;
+      activeSession.usage.outputTokens += usage.outputTokens || 0;
+      activeSession.usage.cacheReadTokens += usage.cacheReadTokens || 0;
+      activeSession.usage.cacheWriteTokens += usage.cacheWriteTokens || 0;
+      activeSession.usage.costUsd += usage.costUsd || 0;
+    }
+
+    await this._writeWorkspaceIndex(hash, index);
+    return convEntry.usage;
+  }
+
+  async getUsage(convId) {
+    const result = await this._getConvFromIndex(convId);
+    if (!result) return null;
+    const { convEntry } = result;
+    return convEntry.usage || this._emptyUsage();
   }
 
   // ── Settings ───────────────────────────────────────────────────────────────

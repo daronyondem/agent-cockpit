@@ -129,6 +129,27 @@ function extractToolDetails(block) {
   return detail;
 }
 
+/**
+ * Extract normalised usage data from a Claude CLI result event.
+ * Returns a { type: 'usage', usage: {...} } object, or null if no usage info.
+ */
+function extractUsage(event) {
+  const raw = event.usage;
+  const hasCost = typeof event.cost_usd === 'number';
+  if (!raw && !hasCost) return null;
+
+  return {
+    type: 'usage',
+    usage: {
+      inputTokens: raw?.input_tokens || 0,
+      outputTokens: raw?.output_tokens || 0,
+      cacheReadTokens: raw?.cache_read_input_tokens || 0,
+      cacheWriteTokens: raw?.cache_creation_input_tokens || 0,
+      costUsd: event.cost_usd || 0,
+    },
+  };
+}
+
 // ── Adapter ─────────────────────────────────────────────────────────────────
 
 class ClaudeCodeAdapter extends BaseBackendAdapter {
@@ -301,6 +322,11 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
                   textQueue.push({ type: 'result', content: event.result });
                 }
               }
+              // Extract usage data from result event
+              const usageEvent = extractUsage(event);
+              if (usageEvent) {
+                textQueue.push(usageEvent);
+              }
             }
           } catch {
             textQueue.push({ type: 'text', content: line });
@@ -329,8 +355,14 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
               textQueue.push({ type: 'text', content: event.delta.text, streaming: true });
             } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && event.delta?.thinking) {
               textQueue.push({ type: 'thinking', content: event.delta.thinking, streaming: true });
-            } else if (event.type === 'result' && event.result) {
-              textQueue.push({ type: 'result', content: event.result });
+            } else if (event.type === 'result') {
+              if (event.result) {
+                textQueue.push({ type: 'result', content: event.result });
+              }
+              const usageEvent = extractUsage(event);
+              if (usageEvent) {
+                textQueue.push(usageEvent);
+              }
             }
           } catch {
             if (buffer.trim()) {
@@ -386,4 +418,4 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
   }
 }
 
-module.exports = { ClaudeCodeAdapter, extractToolDetails, shortenPath, sanitizeSystemPrompt, isApiError };
+module.exports = { ClaudeCodeAdapter, extractToolDetails, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError };
