@@ -1621,23 +1621,22 @@ function chatUpdateStreamingContent(msgEl, st) {
     html += '<div class="chat-thinking-status">Thinking...</div>';
   }
 
-  // 3. Tool activity (combined history + active)
+  // 3. Tool activity (combined history + active, split by completed flag)
   const tools = chatCombinedTools(st);
   const agents = chatCombinedAgents(st);
 
-  const lastTool = tools.length > 0 ? tools[tools.length - 1] : null;
-  const lastToolIsActive = lastTool && !lastTool.completed;
-  const historyTools = lastToolIsActive ? tools.slice(0, -1) : tools;
+  const completedTools = tools.filter(t => t.completed);
+  const runningTools = tools.filter(t => !t.completed);
 
-  // Activity history (completed tools with checkmarks)
-  if (historyTools.length > 0) {
+  // Completed tools (with checkmarks)
+  if (completedTools.length > 0) {
     html += '<div class="chat-activity-history">';
-    for (let i = 0; i < historyTools.length; i++) {
-      const t = historyTools[i];
+    for (let i = 0; i < completedTools.length; i++) {
+      const t = completedTools[i];
       const desc = t.description ? escWithCode(t.description) : esc(t.tool || 'Tool');
       let durationMs = t.duration;
       if (!durationMs && t.startTime) {
-        const nextStart = (historyTools[i + 1] || lastTool)?.startTime || Date.now();
+        const nextStart = (completedTools[i + 1] || runningTools[0])?.startTime || Date.now();
         durationMs = nextStart - t.startTime;
       }
       const elapsed = durationMs ? chatFormatElapsedShort(durationMs) : '';
@@ -1646,10 +1645,10 @@ function chatUpdateStreamingContent(msgEl, st) {
     html += '</div>';
   }
 
-  // Current active tool (with spinner)
-  if (lastToolIsActive) {
-    const desc = lastTool.description ? escWithCode(lastTool.description) : esc(lastTool.tool || 'Working');
-    const initialElapsed = lastTool.startTime ? chatFormatElapsed(Date.now() - lastTool.startTime) : '';
+  // Active tools (with spinners — all of them, not just the last)
+  for (const tool of runningTools) {
+    const desc = tool.description ? escWithCode(tool.description) : esc(tool.tool || 'Working');
+    const initialElapsed = tool.startTime ? chatFormatElapsed(Date.now() - tool.startTime) : '';
     html += `<div class="chat-activity-indicator">
       <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
       <span class="chat-activity-label">${desc}</span>
@@ -1759,12 +1758,13 @@ function chatStartActivityTimer(convId) {
       state.activityTimerInterval = null;
       return;
     }
-    // Update current tool timer
-    const toolTimerEl = st.streamingMsgEl.querySelector('.chat-activity-timer-live');
-    if (toolTimerEl && st.activeTools.length > 0) {
-      const current = st.activeTools[st.activeTools.length - 1];
-      if (current.startTime) toolTimerEl.textContent = chatFormatElapsed(Date.now() - current.startTime);
-    }
+    // Update all active tool timers
+    const toolTimerEls = st.streamingMsgEl.querySelectorAll('.chat-activity-timer-live');
+    toolTimerEls.forEach((el, idx) => {
+      if (idx < st.activeTools.length && st.activeTools[idx].startTime) {
+        el.textContent = chatFormatElapsed(Date.now() - st.activeTools[idx].startTime);
+      }
+    });
     // Update agent card timers
     const agentTimerEls = st.streamingMsgEl.querySelectorAll('.chat-agent-timer-live');
     agentTimerEls.forEach((el, idx) => {
