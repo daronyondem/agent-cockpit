@@ -809,6 +809,31 @@
     font-size: 11px;
     padding: 1px 3px;
   }
+  .chat-activity-history-desc {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chat-activity-elapsed {
+    margin-left: auto;
+    font-size: 10px;
+    color: var(--muted);
+    opacity: 0.7;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .chat-activity-timer-live {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--muted);
+    opacity: 0.8;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
 
   /* Agent cards */
   .chat-agent-cards {
@@ -861,6 +886,15 @@
   }
   @keyframes chatAgentSpin {
     to { transform: rotate(360deg); }
+  }
+  .chat-agent-timer-live {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--muted);
+    opacity: 0.8;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
   }
 
   /* Plan mode banner */
