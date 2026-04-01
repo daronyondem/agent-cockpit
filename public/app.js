@@ -205,6 +205,45 @@ function chatInit() {
 }
 
 function chatWireEvents() {
+  // Use event delegation for conversation list — attaching handlers to each
+  // child after every innerHTML rebuild causes lost clicks when the DOM is
+  // rebuilt between mousedown and mouseup (e.g. during streaming re-renders).
+  const convList = document.getElementById('chat-conv-list');
+  if (convList && !convList._delegated) {
+    convList._delegated = true;
+    convList.addEventListener('click', (e) => {
+      // Workspace instructions button
+      const instrBtn = e.target.closest('.chat-conv-group-instructions-btn');
+      if (instrBtn) {
+        e.stopPropagation();
+        chatShowWorkspaceInstructions(instrBtn.dataset.wsHash, instrBtn.dataset.wsLabel);
+        return;
+      }
+      // Group header toggle
+      const groupHeader = e.target.closest('.chat-conv-group-header');
+      if (groupHeader) {
+        const grp = groupHeader.dataset.group;
+        const isNowCollapsed = !chatGetCollapsedGroups()[grp];
+        chatSetGroupCollapsed(grp, isNowCollapsed);
+        chatRenderConvList();
+        return;
+      }
+      // Context menu button
+      const menuBtn = e.target.closest('.chat-conv-item-menu');
+      if (menuBtn) {
+        e.stopPropagation();
+        chatShowContextMenu(e, menuBtn.dataset.convMenu);
+        return;
+      }
+      // Conversation item selection
+      const convItem = e.target.closest('.chat-conv-item');
+      if (convItem) {
+        chatSelectConversation(convItem.dataset.convId);
+        return;
+      }
+    });
+  }
+
   const newBtn = document.getElementById('chat-new-btn');
   if (newBtn) newBtn.onclick = chatNewConversation;
 
@@ -559,6 +598,14 @@ async function chatLoadConversations(query) {
     const data = await res.json();
     chatConversations = data.conversations || [];
     chatRenderConvList();
+    // Sync active conversation title with authoritative server data
+    if (chatActiveConv && chatActiveConvId) {
+      const match = chatConversations.find(c => c.id === chatActiveConvId);
+      if (match && match.title !== chatActiveConv.title) {
+        chatActiveConv.title = match.title;
+        chatUpdateHeader();
+      }
+    }
   } catch (err) {
     console.error('Failed to load conversations:', err);
   }
@@ -628,40 +675,6 @@ function chatRenderConvList() {
     }
   }
   list.innerHTML = html;
-
-  // Wire group toggle events
-  list.querySelectorAll('.chat-conv-group-header').forEach(el => {
-    el.onclick = (e) => {
-      if (e.target.closest('.chat-conv-group-instructions-btn')) return;
-      const grp = el.dataset.group;
-      const isNowCollapsed = !chatGetCollapsedGroups()[grp];
-      chatSetGroupCollapsed(grp, isNowCollapsed);
-      chatRenderConvList();
-    };
-  });
-
-  // Wire workspace instructions buttons
-  list.querySelectorAll('.chat-conv-group-instructions-btn').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      chatShowWorkspaceInstructions(btn.dataset.wsHash, btn.dataset.wsLabel);
-    };
-  });
-
-  // Wire click events
-  list.querySelectorAll('.chat-conv-item').forEach(el => {
-    el.onclick = (e) => {
-      if (e.target.closest('.chat-conv-item-menu')) return;
-      chatSelectConversation(el.dataset.convId);
-    };
-  });
-
-  list.querySelectorAll('.chat-conv-item-menu').forEach(btn => {
-    btn.onclick = (e) => {
-      e.stopPropagation();
-      chatShowContextMenu(e, btn.dataset.convMenu);
-    };
-  });
 }
 
 // ── Conversation operations ───────────────────────────────────────────────────
