@@ -1,3 +1,4 @@
+const net = require('net');
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
@@ -67,8 +68,27 @@ app.use('/api/chat', chatRouter);
 
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Port guard — prevent orphan processes and port conflicts
+function checkPort(port) {
+  return new Promise((resolve) => {
+    const tester = net.createServer()
+      .once('error', () => resolve(false))
+      .once('listening', () => { tester.close(() => resolve(true)); })
+      .listen(port);
+  });
+}
+
 // Initialize workspace storage and run any pending migrations
-chatService.initialize().then(() => {
+chatService.initialize().then(async () => {
+  const portFree = await checkPort(config.PORT);
+  if (!portFree) {
+    console.error(
+      `[FATAL] Port ${config.PORT} is already in use. ` +
+      `Use pm2 to manage this server: npx pm2 restart <app-name>`
+    );
+    process.exit(1);
+  }
+
   updateService.start();
 
   const server = app.listen(config.PORT, () => {
