@@ -559,6 +559,14 @@ async function chatLoadConversations(query) {
     const data = await res.json();
     chatConversations = data.conversations || [];
     chatRenderConvList();
+    // Sync active conversation title with authoritative server data
+    if (chatActiveConv && chatActiveConvId) {
+      const match = chatConversations.find(c => c.id === chatActiveConvId);
+      if (match && match.title !== chatActiveConv.title) {
+        chatActiveConv.title = match.title;
+        chatUpdateHeader();
+      }
+    }
   } catch (err) {
     console.error('Failed to load conversations:', err);
   }
