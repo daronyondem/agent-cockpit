@@ -1,6 +1,12 @@
-# Agent Cockpit
+<p align="center">
+  <img src="public/logo-text.svg" alt="Agent Cockpit" width="500" />
+</p>
 
-A web-based chat interface for interacting with Claude Code CLI sessions. Agent Cockpit runs on the same machine as your CLI tools, giving you remote browser-based access to them. Install it on your own machine, expose it through a tunnel like [ngrok](https://ngrok.com/), and you can interact with your local Claude Code CLI from anywhere — your phone, a tablet, or another computer.
+<p align="center">
+  A web-based chat interface for interacting with Claude Code CLI sessions remotely from any device.
+</p>
+
+---
 
 ## How It Works
 
@@ -14,13 +20,20 @@ This means:
 ## Features
 
 - **Real-time streaming** — responses stream live via SSE as the CLI generates them
-- **Conversation management** — create, rename, search, and delete conversations
-- **Session management** — reset CLI sessions, view session history, download session archives as Markdown
-- **File uploads** — drag-and-drop, paste from clipboard, or use the attach button
+- **Multi-workspace support** — conversations are organized by workspace directory, each with its own instruction set
+- **Per-workspace instructions** — customize the system prompt for each project directory
+- **Conversation management** — create, rename, search, and delete conversations grouped by workspace
+- **Session management** — reset CLI sessions, view session history with LLM-generated summaries, download session archives as Markdown
+- **Auto-generated titles** — conversation titles are automatically generated from the first message
+- **File uploads** — drag-and-drop, paste from clipboard, or use the attach button with inline image previews
+- **Draft persistence** — unsent messages and attached files are preserved when switching conversations
 - **Working directory selection** — each conversation can target a different project directory
+- **Plan mode and interactive questions** — approve plans and answer questions from the CLI directly in the browser
 - **Dark and light themes** — system-aware theme with manual override
 - **Google and GitHub OAuth** — email whitelist for access control
 - **Download conversations** — export entire conversations or individual sessions as Markdown
+- **Self-update** — check for updates and apply them from the UI with one click
+- **Pluggable backend system** — extensible adapter architecture for adding new CLI backends
 - **Graceful shutdown** — clean process cleanup on SIGTERM/SIGINT
 - **File-based storage** — conversations, sessions, and settings stored as JSON on disk (no database)
 
@@ -119,19 +132,22 @@ agent-cockpit/
 │       ├── backends/
 │       │   ├── base.js           # Base adapter interface for CLI backends
 │       │   ├── claudeCode.js     # Claude Code CLI adapter
-│       │   └── registry.js       # Backend registry
-│       └── chatService.js    # Conversation CRUD, messages, sessions, settings
+│       │   └── registry.js       # Backend registry (pluggable adapter system)
+│       ├── chatService.js    # Conversation CRUD, messages, sessions, workspaces
+│       └── updateService.js  # Self-update: version checking, git pull, PM2 restart
 ├── public/
 │   ├── index.html            # HTML shell
-│   ├── app.js                # Frontend JavaScript
+│   ├── app.js                # Frontend JavaScript (vanilla, no build step)
 │   └── styles.css            # CSS with light/dark themes
 ├── test/                     # Jest test suites
 └── data/                     # Runtime data (gitignored)
     ├── chat/
-    │   ├── workspaces/       # Workspace-based conversation storage
-    │   ├── artifacts/        # Per-conversation uploaded files
-    │   └── settings.json     # User settings
-    └── sessions/             # Express session files
+    │   ├── workspaces/{hash}/  # Workspace-based conversation storage
+    │   │   ├── index.json      # Conversations + session metadata
+    │   │   └── {convId}/       # Session files per conversation
+    │   ├── artifacts/          # Per-conversation uploaded files
+    │   └── settings.json       # User settings
+    └── sessions/               # Express session files
 ```
 
 ## Testing
@@ -142,9 +158,9 @@ Tests use Jest and run with:
 npm test
 ```
 
-Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, extractToolDetails), graceful shutdown (SIGINT/SIGTERM), and session file-store persistence.
+Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, extractToolDetails), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, and self-update service.
 
-CI runs tests automatically on every pull request against `main` via GitHub Actions.
+CI runs tests automatically on every pull request against `main` via GitHub Actions. Version bumps are automated on merge to `main`.
 
 ## Recommended Claude Code CLI Settings
 
