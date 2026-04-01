@@ -143,6 +143,7 @@ let chatPendingWorkingDir = null;
 let chatPendingFiles = []; // Each: { file, status: 'uploading'|'done'|'error', progress, result, xhr }
 let chatDraftState = new Map(); // convId|'__new__' -> { text, pendingFiles }
 let _ensureConvPromise = null;
+let chatConvLoadGen = 0; // generation counter for chatLoadConversations to discard stale responses
 
 function chatApiUrl(path) {
   return apiUrl('chat/' + path);
@@ -592,9 +593,11 @@ function chatToggleSidebar() {
 // ── Conversation list ─────────────────────────────────────────────────────────
 
 async function chatLoadConversations(query) {
+  const gen = ++chatConvLoadGen;
   try {
     const q = query ? `?q=${encodeURIComponent(query)}` : '';
     const res = await chatFetch(`conversations${q}`);
+    if (gen !== chatConvLoadGen) return; // stale response — a newer call was made
     const data = await res.json();
     chatConversations = data.conversations || [];
     chatRenderConvList();
@@ -1564,6 +1567,9 @@ async function chatSendMessage() {
     chatCleanupStreamState(targetConvId, { force: true });
     chatUpdateSendButtonState();
     chatRenderConvList();
+    // Refresh conversation list from server to pick up title changes and message counts.
+    // The generation counter in chatLoadConversations discards any stale in-flight responses.
+    chatLoadConversations();
   }
 }
 
