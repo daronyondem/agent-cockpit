@@ -1154,11 +1154,11 @@ function chatRenderMessages() {
       } else if (streamState.pendingInteraction.type === 'userQuestion') {
         chatShowUserQuestion(msgEl, chatActiveConvId, streamState.pendingInteraction.event);
       }
-    } else if (streamState.assistantContent || streamState.assistantThinking) {
-      chatUpdateStreamingMessage(msgEl, streamState.assistantContent, streamState.assistantThinking);
-    } else if (chatCombinedTools(streamState).length || chatCombinedAgents(streamState).length || streamState.planModeActive) {
-      chatUpdateStreamingActivity(msgEl, chatCombinedTools(streamState), chatCombinedAgents(streamState), streamState.planModeActive);
-      chatStartActivityTimer(chatActiveConvId);
+    } else {
+      chatUpdateStreamingContent(msgEl, streamState);
+      if (chatCombinedTools(streamState).length || chatCombinedAgents(streamState).length) {
+        chatStartActivityTimer(chatActiveConvId);
+      }
     }
     // else: default typing dots shown by chatAppendStreamingMessage
   }
@@ -1462,13 +1462,13 @@ async function chatSendMessage() {
               chatArchiveActiveState(st);
             }
             if (isStillActive) {
-              chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
+              chatUpdateStreamingContent(st.streamingMsgEl, st);
             }
           } else if (event.type === 'turn_complete') {
             // Tools finished executing — archive to history so spinners stop but history persists
             chatArchiveActiveState(st);
             if (isStillActive && !st.pendingInteraction) {
-              chatUpdateStreamingActivity(st.streamingMsgEl, chatCombinedTools(st), chatCombinedAgents(st), st.planModeActive);
+              chatUpdateStreamingContent(st.streamingMsgEl, st);
             }
           } else if (event.type === 'text') {
             st.assistantContent += event.content;
@@ -1478,7 +1478,7 @@ async function chatSendMessage() {
             } else {
               if (st.activeTools.length || st.activeAgents.length) chatArchiveActiveState(st);
               if (isStillActive) {
-                chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
+                chatUpdateStreamingContent(st.streamingMsgEl, st);
               }
             }
           } else if (event.type === 'tool_activity') {
@@ -1506,7 +1506,7 @@ async function chatSendMessage() {
                 chatShowUserQuestion(st.streamingMsgEl, targetConvId, event);
               } else if (!st.pendingInteraction) {
                 // Only render tool activity if no pending interaction (plan approval, user question)
-                chatUpdateStreamingActivity(st.streamingMsgEl, chatCombinedTools(st), chatCombinedAgents(st), st.planModeActive);
+                chatUpdateStreamingContent(st.streamingMsgEl, st);
                 chatStartActivityTimer(targetConvId);
               }
             }
@@ -1595,57 +1595,30 @@ function chatAppendStreamingMessage() {
   return msgEl;
 }
 
-function chatUpdateStreamingMessage(msgEl, content, thinking) {
-  if (!msgEl) return;
-  const contentEl = msgEl.querySelector('.chat-msg-content');
-  if (contentEl) {
-    let html = '';
-    if (thinking) {
-      html += chatRenderThinkingBlock(thinking, true);
-    }
-    if (content) {
-      html += chatRenderMarkdown(content);
-    } else if (thinking) {
-      html += '<div class="chat-thinking-status">Thinking...</div>';
-    }
-    contentEl.innerHTML = html;
-    chatHighlightCode(contentEl);
-  }
-  chatScrollToBottom();
-}
-
-/** Archive active tools/agents to history before clearing, preserving elapsed durations. */
-function chatArchiveActiveState(st) {
-  const now = Date.now();
-  for (const tool of st.activeTools) {
-    st.toolHistory.push({ ...tool, completed: true, duration: tool.startTime ? now - tool.startTime : null });
-  }
-  st.activeTools = [];
-  for (const agent of st.activeAgents) {
-    st.agentHistory.push({ ...agent, completed: true, duration: agent.startTime ? now - agent.startTime : null });
-  }
-  st.activeAgents = [];
-  if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
-}
-
-/** Build combined tools array (history + active) for rendering. */
-function chatCombinedTools(st) {
-  return [...st.toolHistory, ...st.activeTools];
-}
-
-/** Build combined agents array (history + active) for rendering. */
-function chatCombinedAgents(st) {
-  return [...st.agentHistory, ...st.activeAgents];
-}
-
-function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
+/** Unified streaming render — stacks text, thinking, tool history, and active tool in one view. */
+function chatUpdateStreamingContent(msgEl, st) {
   if (!msgEl) return;
   const contentEl = msgEl.querySelector('.chat-msg-content');
   if (!contentEl) return;
 
   let html = '';
 
-  // Determine which tools are completed history vs active
+  // 1. Thinking block
+  if (st.assistantThinking) {
+    html += chatRenderThinkingBlock(st.assistantThinking, true);
+  }
+
+  // 2. Text content
+  if (st.assistantContent) {
+    html += chatRenderMarkdown(st.assistantContent);
+  } else if (st.assistantThinking) {
+    html += '<div class="chat-thinking-status">Thinking...</div>';
+  }
+
+  // 3. Tool activity (combined history + active)
+  const tools = chatCombinedTools(st);
+  const agents = chatCombinedAgents(st);
+
   const lastTool = tools.length > 0 ? tools[tools.length - 1] : null;
   const lastToolIsActive = lastTool && !lastTool.completed;
   const historyTools = lastToolIsActive ? tools.slice(0, -1) : tools;
@@ -1710,12 +1683,13 @@ function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
   }
 
   // Plan mode banner
-  if (planMode) {
+  if (st.planModeActive) {
     html += `<div class="chat-plan-mode-banner">
       <span class="chat-plan-mode-icon">📋</span> Planning mode active
     </div>`;
   }
 
+  // Fallback: typing dots if nothing to show
   if (!html) {
     html = `<div class="chat-activity-indicator">
       <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
@@ -1724,7 +1698,32 @@ function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
   }
 
   contentEl.innerHTML = html;
+  if (st.assistantContent || st.assistantThinking) chatHighlightCode(contentEl);
   chatScrollToBottom();
+}
+
+/** Archive active tools/agents to history before clearing, preserving elapsed durations. */
+function chatArchiveActiveState(st) {
+  const now = Date.now();
+  for (const tool of st.activeTools) {
+    st.toolHistory.push({ ...tool, completed: true, duration: tool.startTime ? now - tool.startTime : null });
+  }
+  st.activeTools = [];
+  for (const agent of st.activeAgents) {
+    st.agentHistory.push({ ...agent, completed: true, duration: agent.startTime ? now - agent.startTime : null });
+  }
+  st.activeAgents = [];
+  if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
+}
+
+/** Build combined tools array (history + active) for rendering. */
+function chatCombinedTools(st) {
+  return [...st.toolHistory, ...st.activeTools];
+}
+
+/** Build combined agents array (history + active) for rendering. */
+function chatCombinedAgents(st) {
+  return [...st.agentHistory, ...st.activeAgents];
 }
 
 function chatStartElapsedTimer(convId) {
