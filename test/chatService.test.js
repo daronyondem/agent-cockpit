@@ -218,6 +218,16 @@ describe('addMessage', () => {
     expect(loaded.title).toBe('First question');
   });
 
+  test('does not fallback auto-title in post-reset sessions', async () => {
+    const conv = await service.createConversation();
+    await service.addMessage(conv.id, 'user', 'First question');
+    await service.resetSession(conv.id);
+    // After reset, title is "New Chat"; first message in session 2 should NOT auto-title
+    await service.addMessage(conv.id, 'user', 'New topic after reset');
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded.title).toBe('New Chat');
+  });
+
   test('re-titles after session reset when title reverts to New Chat', async () => {
     const conv = await service.createConversation();
     await service.addMessage(conv.id, 'user', 'First question');

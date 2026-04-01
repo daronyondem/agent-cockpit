@@ -365,7 +365,7 @@ Unauthenticated requests redirect to `/auth/login`.
 | `renameConversation(id, newTitle)` | Updates title in workspace index. Returns full conversation or `null`. |
 | `deleteConversation(id)` | Removes from index, deletes session folder + artifacts, removes from lookup map. |
 | `updateConversationBackend(convId, backend)` | Updates backend field in workspace index. |
-| `addMessage(convId, role, content, backend, thinking)` | Appends to active session + updates index metadata. Auto-titles on first user message. `thinking` omitted if falsy. |
+| `addMessage(convId, role, content, backend, thinking)` | Appends to active session + updates index metadata. Auto-titles on first user message (session 1 only; post-reset sessions rely on LLM title generation). `thinking` omitted if falsy. |
 | `updateMessageContent(convId, messageId, newContent)` | Truncates after target message, adds edited content as new message. |
 | `generateAndUpdateTitle(convId, userMessage)` | Generates a new title via the backend adapter's `generateTitle()` and persists it. Returns the new title or `null`. |
 | `resetSession(convId)` | Archives active session (summary, endedAt), creates new session, resets title to "New Chat". Returns `{ conversation, newSessionNumber, archivedSession }`. |
@@ -658,7 +658,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 
 ### Session Management
 
-- **Reset:** archives active session with LLM summary, creates new session, resets conversation title to "New Chat". Shows "Archiving session..." indicator. Blocked during streaming. Double-click prevented via `chatResettingConvs` set.
+- **Reset:** archives active session with LLM summary, creates new session, resets conversation title to "New Chat" in both header and sidebar. Shows "Archiving session..." indicator. Blocked during streaming. Double-click prevented via `chatResettingConvs` set.
 - **History modal:** lists sessions with summaries, view and download buttons
 - **View session:** fetches archived messages from API
 
