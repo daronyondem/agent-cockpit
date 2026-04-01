@@ -16,4 +16,4 @@ Always use pm2:
   1. Run existing tests and ensure they pass.
   2. Add new tests for any new functionality or endpoints.
   3. Update existing tests if behavior changed.
-  4. Update SPEC.md to reflect all changes (endpoints, methods, UI behavior, test inventory).
+  4. Update SPEC.md to reflect all changes (endpoints, methods, UI behavior, test file list).
