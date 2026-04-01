@@ -1299,12 +1299,12 @@ function chatScrollToBottom() {
 
 // ── Sending messages ──────────────────────────────────────────────────────────
 
-function chatCleanupStreamState(convId) {
+function chatCleanupStreamState(convId, { force = false } = {}) {
   const st = chatStreamingState.get(convId);
   if (!st) return;
   if (st.elapsedTimerInterval) clearInterval(st.elapsedTimerInterval);
   if (st.activityTimerInterval) clearInterval(st.activityTimerInterval);
-  if (st.pendingInteraction) {
+  if (st.pendingInteraction && !force) {
     // Keep the streaming bubble alive for pending interactions
     // (plan approval, user questions) so the user can still act on them
     return;
@@ -1442,8 +1442,22 @@ async function chatSendMessage() {
 
           if (event.type === 'thinking') {
             st.assistantThinking += event.content;
+            // Clear stale tool activity so spinners don't persist while model thinks
+            if (st.activeTools.length || st.activeAgents.length) {
+              st.activeTools = [];
+              st.activeAgents = [];
+              if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
+            }
             if (isStillActive) {
               chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
+            }
+          } else if (event.type === 'turn_complete') {
+            // Tools finished executing — clear tool activity so spinners stop
+            st.activeTools = [];
+            st.activeAgents = [];
+            if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
+            if (isStillActive && !st.pendingInteraction) {
+              chatUpdateStreamingActivity(st.streamingMsgEl, st.activeTools, st.activeAgents, st.planModeActive);
             }
           } else if (event.type === 'text') {
             st.assistantContent += event.content;
@@ -1529,7 +1543,8 @@ async function chatSendMessage() {
     }
   } finally {
     chatStreamingConvs.delete(targetConvId);
-    chatCleanupStreamState(targetConvId);
+    // Force cleanup — stream has ended, no more events will arrive
+    chatCleanupStreamState(targetConvId, { force: true });
     chatUpdateSendButtonState();
     chatRenderConvList();
   }
@@ -1727,11 +1742,10 @@ function chatShowPlanApproval(msgEl, convId, planContent) {
         });
         const approvalState = chatStreamingState.get(convId);
         if (approvalState) {
-          if (approvalState.elapsedTimerInterval) clearInterval(approvalState.elapsedTimerInterval);
           approvalState.pendingInteraction = null;
           // If the stream has ended (no longer in chatStreamingConvs), fully clean up
           if (!chatStreamingConvs.has(convId)) {
-            chatStreamingState.delete(convId);
+            chatCleanupStreamState(convId, { force: true });
           }
         }
         contentEl.innerHTML = `${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
@@ -1803,8 +1817,9 @@ function chatShowUserQuestion(msgEl, convId, event) {
       const questionState = chatStreamingState.get(convId);
       if (questionState) {
         questionState.pendingInteraction = null;
+        // If the stream has ended (no longer in chatStreamingConvs), fully clean up
         if (!chatStreamingConvs.has(convId)) {
-          chatStreamingState.delete(convId);
+          chatCleanupStreamState(convId, { force: true });
         }
       }
       contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Answered: ${esc(text)}</div>`;

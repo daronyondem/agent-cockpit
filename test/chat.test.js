@@ -451,6 +451,83 @@ describe('Turn boundary intermediate messages', () => {
   });
 });
 
+// ── Turn complete event forwarding ───────────────────────────────────────────
+
+describe('Turn complete event forwarding', () => {
+  test('sends turn_complete event on turn_boundary even without text', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'turn_boundary' }, // boundary with no preceding text
+      { type: 'text', content: 'Final', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    // Should have turn_complete event even though no text was saved
+    const turnCompletes = events.filter(e => e.type === 'turn_complete');
+    expect(turnCompletes).toHaveLength(1);
+  });
+
+  test('sends turn_complete alongside assistant_message when text exists', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'First response', streaming: true },
+      { type: 'turn_boundary' },
+      { type: 'text', content: 'Second response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    // Should have both assistant_message and turn_complete
+    const assistantMessages = events.filter(e => e.type === 'assistant_message');
+    const turnCompletes = events.filter(e => e.type === 'turn_complete');
+    expect(assistantMessages).toHaveLength(2);
+    expect(turnCompletes).toHaveLength(1);
+
+    // turn_complete should come after the intermediate assistant_message
+    const assistantIdx = events.findIndex(e => e.type === 'assistant_message');
+    const turnCompleteIdx = events.findIndex(e => e.type === 'turn_complete');
+    expect(turnCompleteIdx).toBeGreaterThan(assistantIdx);
+  });
+
+  test('sends turn_complete for each turn_boundary', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'First', streaming: true },
+      { type: 'turn_boundary' },
+      { type: 'text', content: 'Second', streaming: true },
+      { type: 'turn_boundary' },
+      { type: 'text', content: 'Third', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const turnCompletes = events.filter(e => e.type === 'turn_complete');
+    expect(turnCompletes).toHaveLength(2);
+  });
+});
+
 // ── Workspace context injection ──────────────────────────────────────────────
 
 describe('Workspace context injection', () => {

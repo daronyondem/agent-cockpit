@@ -420,6 +420,8 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
               const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null);
               res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: intermediateMsg })}\n\n`);
             }
+            // Always notify frontend that tools completed, even when no text to save
+            res.write(`data: ${JSON.stringify({ type: 'turn_complete' })}\n\n`);
             fullResponse = '';
             thinkingText = '';
             hasStreamingDeltas = false;
