@@ -1019,6 +1019,59 @@ function chatUpdateHeader() {
       wdEl.style.display = 'none';
     }
   }
+  chatUpdateUsageDisplay();
+}
+
+function chatFormatTokenCount(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
+  return String(n);
+}
+
+function chatFormatCost(usd) {
+  if (usd < 0.01) return '$' + usd.toFixed(4);
+  if (usd < 1) return '$' + usd.toFixed(3);
+  return '$' + usd.toFixed(2);
+}
+
+function chatUpdateUsageDisplay() {
+  let el = document.getElementById('chat-header-usage');
+  const usage = chatActiveConv?.usage;
+  const hasUsage = usage && (usage.inputTokens > 0 || usage.outputTokens > 0 || usage.costUsd > 0);
+
+  if (!hasUsage) {
+    if (el) el.style.display = 'none';
+    return;
+  }
+
+  if (!el) {
+    const actions = document.querySelector('.chat-header-actions');
+    if (!actions) return;
+    el = document.createElement('div');
+    el.className = 'chat-header-usage';
+    el.id = 'chat-header-usage';
+    actions.parentElement.insertBefore(el, actions);
+  }
+
+  const totalTokens = (usage.inputTokens || 0) + (usage.outputTokens || 0);
+  const cacheTokens = (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0);
+
+  let tooltipLines = [
+    `Input: ${chatFormatTokenCount(usage.inputTokens)} tokens`,
+    `Output: ${chatFormatTokenCount(usage.outputTokens)} tokens`,
+  ];
+  if (cacheTokens > 0) {
+    tooltipLines.push(`Cache read: ${chatFormatTokenCount(usage.cacheReadTokens)}`);
+    tooltipLines.push(`Cache write: ${chatFormatTokenCount(usage.cacheWriteTokens)}`);
+  }
+  if (usage.costUsd > 0) {
+    tooltipLines.push(`Cost: ${chatFormatCost(usage.costUsd)}`);
+  }
+
+  el.title = tooltipLines.join('\n');
+  el.innerHTML = `<span class="chat-usage-tokens">${chatFormatTokenCount(totalTokens)} tokens</span>`
+    + (usage.costUsd > 0 ? `<span class="chat-usage-cost">${chatFormatCost(usage.costUsd)}</span>` : '');
+  el.style.display = '';
 }
 
 // ── Context menu ──────────────────────────────────────────────────────────────
@@ -1544,6 +1597,12 @@ async function chatSendMessage() {
               sidebarConv.title = event.title;
               chatRenderConvList();
             }
+          } else if (event.type === 'usage') {
+            // Update usage on active conversation
+            if (isStillActive && chatActiveConv) {
+              chatActiveConv.usage = event.usage;
+              chatUpdateUsageDisplay();
+            }
           } else if (event.type === 'error') {
             st.pendingInteraction = null;
             chatArchiveActiveState(st);
@@ -1621,23 +1680,22 @@ function chatUpdateStreamingContent(msgEl, st) {
     html += '<div class="chat-thinking-status">Thinking...</div>';
   }
 
-  // 3. Tool activity (combined history + active)
+  // 3. Tool activity (combined history + active, split by completed flag)
   const tools = chatCombinedTools(st);
   const agents = chatCombinedAgents(st);
 
-  const lastTool = tools.length > 0 ? tools[tools.length - 1] : null;
-  const lastToolIsActive = lastTool && !lastTool.completed;
-  const historyTools = lastToolIsActive ? tools.slice(0, -1) : tools;
+  const completedTools = tools.filter(t => t.completed);
+  const runningTools = tools.filter(t => !t.completed);
 
-  // Activity history (completed tools with checkmarks)
-  if (historyTools.length > 0) {
+  // Completed tools (with checkmarks)
+  if (completedTools.length > 0) {
     html += '<div class="chat-activity-history">';
-    for (let i = 0; i < historyTools.length; i++) {
-      const t = historyTools[i];
+    for (let i = 0; i < completedTools.length; i++) {
+      const t = completedTools[i];
       const desc = t.description ? escWithCode(t.description) : esc(t.tool || 'Tool');
       let durationMs = t.duration;
       if (!durationMs && t.startTime) {
-        const nextStart = (historyTools[i + 1] || lastTool)?.startTime || Date.now();
+        const nextStart = (completedTools[i + 1] || runningTools[0])?.startTime || Date.now();
         durationMs = nextStart - t.startTime;
       }
       const elapsed = durationMs ? chatFormatElapsedShort(durationMs) : '';
@@ -1646,10 +1704,10 @@ function chatUpdateStreamingContent(msgEl, st) {
     html += '</div>';
   }
 
-  // Current active tool (with spinner)
-  if (lastToolIsActive) {
-    const desc = lastTool.description ? escWithCode(lastTool.description) : esc(lastTool.tool || 'Working');
-    const initialElapsed = lastTool.startTime ? chatFormatElapsed(Date.now() - lastTool.startTime) : '';
+  // Active tools (with spinners — all of them, not just the last)
+  for (const tool of runningTools) {
+    const desc = tool.description ? escWithCode(tool.description) : esc(tool.tool || 'Working');
+    const initialElapsed = tool.startTime ? chatFormatElapsed(Date.now() - tool.startTime) : '';
     html += `<div class="chat-activity-indicator">
       <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
       <span class="chat-activity-label">${desc}</span>
@@ -1759,12 +1817,13 @@ function chatStartActivityTimer(convId) {
       state.activityTimerInterval = null;
       return;
     }
-    // Update current tool timer
-    const toolTimerEl = st.streamingMsgEl.querySelector('.chat-activity-timer-live');
-    if (toolTimerEl && st.activeTools.length > 0) {
-      const current = st.activeTools[st.activeTools.length - 1];
-      if (current.startTime) toolTimerEl.textContent = chatFormatElapsed(Date.now() - current.startTime);
-    }
+    // Update all active tool timers
+    const toolTimerEls = st.streamingMsgEl.querySelectorAll('.chat-activity-timer-live');
+    toolTimerEls.forEach((el, idx) => {
+      if (idx < st.activeTools.length && st.activeTools[idx].startTime) {
+        el.textContent = chatFormatElapsed(Date.now() - st.activeTools[idx].startTime);
+      }
+    });
     // Update agent card timers
     const agentTimerEls = st.streamingMsgEl.querySelectorAll('.chat-agent-timer-live');
     agentTimerEls.forEach((el, idx) => {

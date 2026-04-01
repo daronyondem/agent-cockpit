@@ -959,3 +959,130 @@ describe('settings', () => {
     expect(loaded.customInstructions).toBeUndefined();
   });
 });
+
+// ── Usage Tracking ──────────────────────────────────────────────────────────
+
+describe('addUsage', () => {
+  test('accumulates usage on conversation', async () => {
+    const conv = await service.createConversation('Usage Test');
+
+    const updated = await service.addUsage(conv.id, {
+      inputTokens: 1000,
+      outputTokens: 500,
+      cacheReadTokens: 200,
+      cacheWriteTokens: 100,
+      costUsd: 0.05,
+    });
+
+    expect(updated.inputTokens).toBe(1000);
+    expect(updated.outputTokens).toBe(500);
+    expect(updated.cacheReadTokens).toBe(200);
+    expect(updated.cacheWriteTokens).toBe(100);
+    expect(updated.costUsd).toBe(0.05);
+  });
+
+  test('accumulates across multiple calls', async () => {
+    const conv = await service.createConversation('Multi Usage');
+
+    await service.addUsage(conv.id, { inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 5, costUsd: 0.01 });
+    const updated = await service.addUsage(conv.id, { inputTokens: 200, outputTokens: 100, cacheReadTokens: 20, cacheWriteTokens: 10, costUsd: 0.02 });
+
+    expect(updated.inputTokens).toBe(300);
+    expect(updated.outputTokens).toBe(150);
+    expect(updated.cacheReadTokens).toBe(30);
+    expect(updated.cacheWriteTokens).toBe(15);
+    expect(updated.costUsd).toBe(0.03);
+  });
+
+  test('returns null for unknown conversation', async () => {
+    const result = await service.addUsage('nonexistent', { inputTokens: 100, outputTokens: 50 });
+    expect(result).toBeNull();
+  });
+
+  test('returns null when usage is null', async () => {
+    const conv = await service.createConversation('Null Usage');
+    const result = await service.addUsage(conv.id, null);
+    expect(result).toBeNull();
+  });
+
+  test('also tracks usage on active session', async () => {
+    const conv = await service.createConversation('Session Usage');
+    await service.addUsage(conv.id, { inputTokens: 500, outputTokens: 250, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.03 });
+
+    // Read index directly to verify session-level usage
+    const hash = workspaceHash(DEFAULT_WORKSPACE);
+    const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const convEntry = index.conversations.find(c => c.id === conv.id);
+    const activeSession = convEntry.sessions.find(s => s.active);
+
+    expect(activeSession.usage.inputTokens).toBe(500);
+    expect(activeSession.usage.outputTokens).toBe(250);
+    expect(activeSession.usage.costUsd).toBe(0.03);
+  });
+});
+
+describe('getUsage', () => {
+  test('returns empty usage for new conversation', async () => {
+    const conv = await service.createConversation('Empty Usage');
+    const usage = await service.getUsage(conv.id);
+    expect(usage.inputTokens).toBe(0);
+    expect(usage.outputTokens).toBe(0);
+    expect(usage.cacheReadTokens).toBe(0);
+    expect(usage.cacheWriteTokens).toBe(0);
+    expect(usage.costUsd).toBe(0);
+  });
+
+  test('returns accumulated usage', async () => {
+    const conv = await service.createConversation('Get Usage');
+    await service.addUsage(conv.id, { inputTokens: 1000, outputTokens: 500, cacheReadTokens: 100, cacheWriteTokens: 50, costUsd: 0.05 });
+
+    const usage = await service.getUsage(conv.id);
+    expect(usage.inputTokens).toBe(1000);
+    expect(usage.outputTokens).toBe(500);
+    expect(usage.costUsd).toBe(0.05);
+  });
+
+  test('returns null for unknown conversation', async () => {
+    const result = await service.getUsage('nonexistent');
+    expect(result).toBeNull();
+  });
+});
+
+describe('getConversation includes usage', () => {
+  test('returns empty usage for new conversation', async () => {
+    const conv = await service.createConversation('With Usage');
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded.usage).toBeDefined();
+    expect(loaded.usage.inputTokens).toBe(0);
+  });
+
+  test('returns accumulated usage', async () => {
+    const conv = await service.createConversation('With Usage');
+    await service.addUsage(conv.id, { inputTokens: 500, outputTokens: 250, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.02 });
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded.usage.inputTokens).toBe(500);
+    expect(loaded.usage.outputTokens).toBe(250);
+    expect(loaded.usage.costUsd).toBe(0.02);
+  });
+});
+
+describe('listConversations includes usage', () => {
+  test('returns usage in conversation list', async () => {
+    const conv = await service.createConversation('List Usage');
+    await service.addUsage(conv.id, { inputTokens: 300, outputTokens: 150, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 });
+
+    const list = await service.listConversations();
+    const found = list.find(c => c.id === conv.id);
+    expect(found.usage).toBeDefined();
+    expect(found.usage.inputTokens).toBe(300);
+    expect(found.usage.costUsd).toBe(0.01);
+  });
+
+  test('returns null usage for conversation without usage', async () => {
+    await service.createConversation('No Usage');
+    const list = await service.listConversations();
+    expect(list[0].usage).toBeNull();
+  });
+});

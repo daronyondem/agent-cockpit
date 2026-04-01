@@ -459,6 +459,12 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
             res.write(`data: ${JSON.stringify({ type: 'tool_activity', ...rest })}\n\n`);
           } else if (event.type === 'result') {
             resultText = event.content;
+          } else if (event.type === 'usage') {
+            // Persist usage and forward to client
+            const updated = await chatService.addUsage(convId, event.usage);
+            if (!res.writableEnded) {
+              res.write(`data: ${JSON.stringify({ type: 'usage', usage: updated || event.usage })}\n\n`);
+            }
           } else if (event.type === 'error') {
             console.error(`[chat] Stream error for conv=${convId}:`, event.error);
             res.write(`data: ${JSON.stringify({ type: 'error', error: event.error })}\n\n`);
