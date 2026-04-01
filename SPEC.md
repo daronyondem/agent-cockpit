@@ -89,8 +89,9 @@ agent-cockpit/
 │   └── styles.css                      # All CSS with light/dark theme (~1400 lines)
 ├── test/
 │   ├── backends.test.js                # Backend adapter tests — BaseBackendAdapter, BackendRegistry, ClaudeCodeAdapter, extractToolDetails
-│   ├── chat.test.js                    # Chat route tests — /input, SSE forwarding, turn boundaries, session messages, workspace injection, mkdir, rmdir
-│   ├── chatService.test.js             # ChatService unit tests — CRUD, messages, sessions, workspace storage, migration, markdown export, workspace context
+│   ├── chat.test.js                    # Chat route tests — /input, SSE forwarding, turn boundaries, session messages, workspace injection, workspace instructions API, mkdir, rmdir
+│   ├── chatService.test.js             # ChatService unit tests — CRUD, messages, sessions, workspace storage, workspace instructions, migration, markdown export, workspace context
+│   ├── draftState.test.js              # Draft state unit tests — chatSaveDraft, chatRestoreDraft, key migration, cleanup, round-trip (11 tests)
 │   ├── graceful-shutdown.test.js       # Server shutdown tests (2 tests)
 │   ├── sessionStore.test.js            # Session file-store tests (4 tests)
 │   └── updateService.test.js           # UpdateService unit tests — version comparison, status, trigger guards
@@ -350,7 +351,7 @@ Recursively deletes the directory at `dirPath` and all its contents. Validates t
 ```
 GET /api/chat/conversations?q=<search_query>
 ```
-Returns `{ conversations: ConversationSummary[] }` sorted by `updatedAt` descending. If `q` is provided, searches titles, last messages, and full message content.
+Returns `{ conversations: ConversationSummary[] }` sorted by `updatedAt` descending. Each summary includes `workspaceHash` (the workspace's storage hash). If `q` is provided, searches titles, last messages, and full message content.
 
 **Get single conversation:**
 ```
@@ -565,6 +566,29 @@ Body: settings object
 ```
 Writes the full body to `data/chat/settings.json`.
 
+### 9.8 Workspace Instructions
+
+Per-workspace instructions that are appended to the global system prompt on new sessions. Stored in the workspace `index.json` under the `instructions` field.
+
+**Get workspace instructions:**
+```
+GET /api/chat/workspaces/:hash/instructions
+```
+Returns `{ instructions: string }`. Returns empty string if no instructions are set. `404` if workspace not found.
+
+**Save workspace instructions:**
+```
+PUT /api/chat/workspaces/:hash/instructions  [CSRF]
+Body: { instructions: string }
+```
+Returns `{ instructions: string }`. `400` if `instructions` is not a string. `404` if workspace not found.
+
+**System prompt composition on new sessions:**
+1. Global system prompt (from `settings.json`)
+2. Workspace instructions (from workspace `index.json`)
+
+Both are concatenated with `\n\n` separator and passed as a single `--append-system-prompt` to the CLI adapter. On subsequent messages (session resume), neither is sent.
+
 ### 9.11 Version
 
 ```
@@ -662,6 +686,7 @@ data/chat/workspaces/{workspace-hash}/
 ```javascript
 {
   workspacePath: string,        // Absolute path to the workspace directory
+  instructions: string,         // Per-workspace instructions (appended to global system prompt on new sessions)
   conversations: [{
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
@@ -730,7 +755,7 @@ Assembles a flat object from workspace index + active session file for API compa
 | `initialize()` | Runs migration if legacy `conversations/` dir exists, then builds the in-memory convId→workspace lookup map. Called once at server startup. |
 | `createConversation(title, workingDir)` | Creates conversation entry in workspace index + empty session-1.json file. Falls back to `_defaultWorkspace` if no workingDir. Returns API-compatible conversation object. |
 | `getConversation(id)` | Looks up workspace via in-memory map, reads index + active session file. Returns API-compatible object with messages. Returns `null` if not found. |
-| `listConversations()` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc. Each summary: `{ id, title, updatedAt, backend, workingDir, messageCount, lastMessage }`. |
+| `listConversations()` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc. Each summary: `{ id, title, updatedAt, backend, workingDir, workspaceHash, messageCount, lastMessage }`. |
 | `renameConversation(id, newTitle)` | Updates title in workspace index. Returns full conversation via `getConversation()`. Returns `null` if not found. |
 | `deleteConversation(id)` | Removes from workspace index, deletes `{convId}/` session folder and `artifacts/{id}/`. Removes from lookup map. Returns `true`/`false`. |
 | `updateConversationBackend(convId, backend)` | Updates backend field in workspace index. |
@@ -741,6 +766,9 @@ Assembles a flat object from workspace index + active session file for API compa
 | `getSessionMessages(convId, sessionNumber)` | Reads session file directly. Returns messages array or `null`. |
 | `sessionToMarkdown(convId, sessionNumber)` | Reads session file, uses `_messagesToMarkdown()` helper. |
 | `conversationToMarkdown(convId)` | Reads all session files for a conversation, stitches into single Markdown document. |
+| `getWorkspaceInstructions(hash)` | Returns instructions string from workspace index, empty string if unset, or `null` if workspace not found. |
+| `setWorkspaceInstructions(hash, instructions)` | Saves instructions to workspace index. Returns the saved string, or `null` if workspace not found. |
+| `getWorkspaceHashForConv(convId)` | Returns workspace hash for a conversation, or `null` if not found. |
 | `getWorkspaceContext(convId)` | **Synchronous.** Returns 4-line injection prompt string with absolute path to workspace folder, or `null` if convId not found. |
 | `_generateSessionSummary(messages, fallback)` | Spawns `claude --print -p "<prompt>"` for a one-line summary (100-150 chars). 30s timeout. Falls back gracefully. |
 | `searchConversations(query)` | Case-insensitive search. Checks title and lastMessage first, then deep-searches all session files for remaining conversations. |
@@ -954,7 +982,7 @@ Single-page layout:
     - `.chat-sidebar` — left panel:
       - `.chat-sidebar-header` — collapse toggle + "New Chat" button
       - `.chat-search` — search input
-      - `.chat-conv-list` — conversation list grouped by workspace (populated by JS); each group has a collapsible header (`.chat-conv-group-header`) with chevron toggle, workspace label, and count badge when collapsed
+      - `.chat-conv-list` — conversation list grouped by workspace (populated by JS); each group has a collapsible header (`.chat-conv-group-header`) with chevron toggle, workspace label, count badge when collapsed, and workspace instructions button (`.chat-conv-group-instructions-btn`, pencil icon, visible on hover)
       - `.chat-sidebar-footer` — Settings button
       - `.chat-sidebar-footer` — Sign Out button
       - `.chat-sidebar-version` — App version label + update indicator (fetched from `/api/chat/version`)
@@ -993,6 +1021,7 @@ chatSettingsData            // Settings object from server
 chatInitialized             // Boolean — prevents double init
 chatPendingWorkingDir       // Working dir selected for new conversation
 chatPendingFiles[]          // Pending upload entries: { file, status, progress, result, xhr }
+chatDraftState              // Map<convId|'__new__', { text, pendingFiles }> — per-conversation message box drafts
 _ensureConvPromise          // Promise cache for concurrent chatEnsureConversation calls
 ```
 
@@ -1036,7 +1065,7 @@ _ensureConvPromise          // Promise cache for concurrent chatEnsureConversati
 - `chatRenameConversation(id)` — prompts for new name, PUTs update
 - `chatDeleteConversation(id)` — confirms, DELETEs, clears selection if active. When the active conversation is deleted: aborts in-flight uploads, clears pending file chips, resets send button state, and renders the empty state.
 - `chatLoadConversations(query)` — fetches list, renders sidebar
-- `chatGroupConversations(convs)` — groups conversations by workspace (last 2 path segments of `workingDir`), returning `{ label: { fullPath, convs[] } }`
+- `chatGroupConversations(convs)` — groups conversations by workspace (last 2 path segments of `workingDir`), returning `{ label: { fullPath, hash, convs[] } }`
 - `chatGetCollapsedGroups()` — reads collapsed workspace group state from localStorage
 - `chatSetGroupCollapsed(label, collapsed)` — persists collapse toggle for a workspace group to localStorage
 
@@ -1067,7 +1096,13 @@ Files upload **immediately on attach**, not when the message is sent. Each file 
 - `chatAddPendingFiles(files)` — creates entries with `status: 'uploading'`, renders chips immediately, ensures conversation exists, then fires parallel uploads.
 - `chatRemovePendingFile(index)` — if uploading: aborts XHR. If completed: fires DELETE to `/conversations/:id/upload/:filename` (fire-and-forget). Splices entry from array and re-renders.
 - `chatRenderFileChips()` — renders file chips with: progress bar (3px at bottom, accent color) during upload, checkmark icon on completion, error indicator on failure. Remove button always available.
-- `chatSelectConversation(id)` — aborts in-flight uploads and clears pending files when switching conversations.
+- `chatSaveDraft()` — saves the current textarea text and `chatPendingFiles` into `chatDraftState` keyed by `chatActiveConvId` (or `'__new__'`). Deletes the entry if both text and files are empty.
+- `chatRestoreDraft(convId)` — restores textarea text and `chatPendingFiles` from `chatDraftState` for the given conversation (or `'__new__'`). Resets to empty if no draft exists. Calls `chatAutoResize`, `chatRenderFileChips`, and `chatUpdateSendButtonState`.
+- `chatSelectConversation(id)` — saves the current draft, aborts in-flight uploads, then restores the target conversation's draft when switching.
+- `chatCreateConversationWithDir(workingDir)` — saves the current draft before switching to the new conversation and restores any existing draft for it.
+- `chatDeleteConversation(id)` — removes the deleted conversation's draft from `chatDraftState`.
+- `chatEnsureConversation()` — migrates the `'__new__'` draft key to the real conversation ID when a conversation is auto-created.
+- `chatSendMessage()` — clears the draft for the active conversation (and the `'__new__'` key if applicable) after sending.
 - When the message is sent, `chatSendMessage()` reads completed file paths from `chatPendingFiles` entries and embeds them as `[Uploaded files: /abs/path/to/file1, /abs/path/to/file2]`. No upload occurs at send time.
 - Send button is disabled while any upload is in progress.
 
@@ -1118,6 +1153,12 @@ When rendering messages, `chatRenderUploadedFiles(html)` runs as a post-processi
   - Send behavior: Enter to send / Shift+Enter to send
   - Working directory text input
 - `chatSaveSettings()` — PUTs settings, applies theme immediately
+
+#### Workspace Instructions Modal
+
+- `chatShowWorkspaceInstructions(hash, label)` — opens modal with textarea for per-workspace instructions. Fetches current instructions from `GET /workspaces/:hash/instructions`.
+- `chatSaveWorkspaceInstructions(hash)` — PUTs instructions to `PUT /workspaces/:hash/instructions`, closes modal on success.
+- Triggered by clicking the pencil icon (`.chat-conv-group-instructions-btn`) on workspace group headers in the sidebar. Icon is only visible on hover.
 
 #### UI Utilities
 
@@ -1321,7 +1362,7 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 
 ### Framework: Jest 30.x
 
-### Test Files (227 tests total)
+### Test Files (273 tests total)
 
 **`test/backends.test.js`**:
 - **BaseBackendAdapter**: `metadata`, `sendMessage`, `generateSummary` all throw on base class; stores `workingDir` from options
@@ -1346,6 +1387,9 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - Exports session and conversation to Markdown
 - Searches conversations by title, last message, and full content
 - Gets and saves settings with defaults
+- Workspace instructions: get/set/persist/clear, returns null for non-existent workspace
+- `getWorkspaceHashForConv`: returns hash or null
+- `listConversations` includes `workspaceHash` in each summary
 - Uses temporary directories (`os.tmpdir()`) for isolation
 
 **`test/chat.test.js`**:
@@ -1357,6 +1401,15 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - **GET /files/:filename**: serves uploaded file, returns 404 for non-existent, sanitizes slashes in filename
 - **POST /abort**: returns `ok:false` when no active stream
 - **GET /version**: returns version from package.json
+- **Workspace instructions API**: GET returns empty instructions (200) or 404, PUT saves and returns instructions, validates string type (400), returns 404 for non-existent workspace
+- **Workspace instructions in system prompt**: combines global + workspace instructions on new session, sends only workspace instructions when no global prompt, omits on subsequent messages
+
+**`test/draftState.test.js`** (11 tests):
+- **chatSaveDraft**: saves textarea text for active conversation, saves pending files, uses `__new__` key when no active conversation, deletes draft when text and files both empty, keeps draft if only files present
+- **chatRestoreDraft**: restores saved text and files, clears textarea and files when no draft exists, uses `__new__` key when convId is falsy
+- **Draft key migration**: migrates `__new__` draft to real conversation ID on creation
+- **Draft cleanup**: deleting a conversation removes its draft
+- **Round-trip**: switching between two conversations preserves both drafts independently
 
 **`test/graceful-shutdown.test.js`** (2 tests):
 - Spawns actual server process with dummy env vars

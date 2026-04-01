@@ -233,6 +233,7 @@ class ChatService {
           updatedAt: conv.lastActivity,
           backend: conv.backend,
           workingDir: index.workspacePath,
+          workspaceHash: hash,
           messageCount: activeSession ? activeSession.messageCount : 0,
           lastMessage: conv.lastMessage,
         });
@@ -566,6 +567,26 @@ class ChatService {
     }
 
     return lines.join('\n');
+  }
+
+  // ── Workspace Instructions ──────────────────────────────────────────────────
+
+  async getWorkspaceInstructions(hash) {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    return index.instructions || '';
+  }
+
+  async setWorkspaceInstructions(hash, instructions) {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    index.instructions = instructions || '';
+    await this._writeWorkspaceIndex(hash, index);
+    return index.instructions;
+  }
+
+  getWorkspaceHashForConv(convId) {
+    return this._convWorkspaceMap.get(convId) || null;
   }
 
   // ── Workspace Context ──────────────────────────────────────────────────────

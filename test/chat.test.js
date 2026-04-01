@@ -798,6 +798,118 @@ describe('POST /rmdir', () => {
   });
 });
 
+// ── Workspace instructions API ─────────────────────────────────────────────
+
+describe('GET /workspaces/:hash/instructions', () => {
+  test('returns empty instructions for workspace with no instructions', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ws-api');
+    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/instructions`);
+    expect(res.status).toBe(200);
+    expect(res.body.instructions).toBe('');
+  });
+
+  test('returns 404 for non-existent workspace', async () => {
+    const res = await makeRequest('GET', '/api/chat/workspaces/nonexistent123/instructions');
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('PUT /workspaces/:hash/instructions', () => {
+  test('saves and returns instructions', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ws-put');
+    const hash = chatService.getWorkspaceHashForConv(conv.id);
+
+    const res = await makeRequest('PUT', `/api/chat/workspaces/${hash}/instructions`, {
+      instructions: 'Always use TypeScript',
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.instructions).toBe('Always use TypeScript');
+
+    // Verify persisted
+    const getRes = await makeRequest('GET', `/api/chat/workspaces/${hash}/instructions`);
+    expect(getRes.body.instructions).toBe('Always use TypeScript');
+  });
+
+  test('returns 400 when instructions is not a string', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ws-bad');
+    const hash = chatService.getWorkspaceHashForConv(conv.id);
+
+    const res = await makeRequest('PUT', `/api/chat/workspaces/${hash}/instructions`, {
+      instructions: 123,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('instructions must be a string');
+  });
+
+  test('returns 404 for non-existent workspace', async () => {
+    const res = await makeRequest('PUT', '/api/chat/workspaces/nonexistent123/instructions', {
+      instructions: 'test',
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('Workspace instructions in system prompt', () => {
+  test('combines global system prompt with workspace instructions on new session', async () => {
+    await chatService.saveSettings({ theme: 'system', systemPrompt: 'Global prompt' });
+
+    const conv = await chatService.createConversation('Test', '/tmp/ws-combo');
+    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    await chatService.setWorkspaceInstructions(hash, 'Workspace instructions');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions.systemPrompt).toContain('Global prompt');
+    expect(mockBackend._lastOptions.systemPrompt).toContain('Workspace instructions');
+  });
+
+  test('sends only workspace instructions when no global prompt', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ws-only');
+    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    await chatService.setWorkspaceInstructions(hash, 'Only workspace');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions.systemPrompt).toBe('Only workspace');
+  });
+
+  test('does not include workspace instructions on subsequent messages', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ws-resume');
+    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    await chatService.setWorkspaceInstructions(hash, 'Workspace instructions');
+    await chatService.addMessage(conv.id, 'user', 'First msg');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Second msg',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions.systemPrompt).toBe('');
+  });
+});
+
 // ── GET /api/chat/version ──────────────────────────────────────────────────
 
 describe('GET /api/chat/version', () => {

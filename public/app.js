@@ -141,6 +141,7 @@ let chatSettingsData = null;
 let chatInitialized = false;
 let chatPendingWorkingDir = null;
 let chatPendingFiles = []; // Each: { file, status: 'uploading'|'done'|'error', progress, result, xhr }
+let chatDraftState = new Map(); // convId|'__new__' -> { text, pendingFiles }
 let _ensureConvPromise = null;
 
 function chatApiUrl(path) {
@@ -373,6 +374,11 @@ async function chatEnsureConversation() {
       chatPendingWorkingDir = null;
       const res = await chatFetch('conversations', { method: 'POST', body });
       const conv = await res.json();
+      // Migrate __new__ draft to real conversation ID
+      if (chatDraftState.has('__new__')) {
+        chatDraftState.set(conv.id, chatDraftState.get('__new__'));
+        chatDraftState.delete('__new__');
+      }
       chatActiveConvId = conv.id;
       chatActiveConv = conv;
       chatLoadConversations();
@@ -564,7 +570,7 @@ function chatGroupConversations(convs) {
     const label = c.workingDir
       ? c.workingDir.split('/').filter(Boolean).slice(-2).join('/')
       : 'workspace';
-    if (!groups[label]) groups[label] = { fullPath: c.workingDir || '', convs: [] };
+    if (!groups[label]) groups[label] = { fullPath: c.workingDir || '', hash: c.workspaceHash || '', convs: [] };
     groups[label].convs.push(c);
   }
   return groups;
@@ -603,6 +609,7 @@ function chatRenderConvList() {
         <svg class="chat-conv-group-chevron${isCollapsed ? ' collapsed' : ''}" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4.5 6L8 9.5L11.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="chat-conv-group-label">${esc(label)}</span>
         ${isCollapsed ? `<span class="chat-conv-group-count">${count}</span>` : ''}
+        ${group.hash ? `<button class="chat-conv-group-instructions-btn" data-ws-hash="${esc(group.hash)}" data-ws-label="${esc(label)}" title="Workspace instructions"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 4.5l-2-2L3 11l-.5 2.5L5 13l8.5-8.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.5 3.5l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>` : ''}
       </div>`;
     if (!isCollapsed) {
       for (const c of group.convs) {
@@ -624,11 +631,20 @@ function chatRenderConvList() {
 
   // Wire group toggle events
   list.querySelectorAll('.chat-conv-group-header').forEach(el => {
-    el.onclick = () => {
+    el.onclick = (e) => {
+      if (e.target.closest('.chat-conv-group-instructions-btn')) return;
       const grp = el.dataset.group;
       const isNowCollapsed = !chatGetCollapsedGroups()[grp];
       chatSetGroupCollapsed(grp, isNowCollapsed);
       chatRenderConvList();
+    };
+  });
+
+  // Wire workspace instructions buttons
+  list.querySelectorAll('.chat-conv-group-instructions-btn').forEach(btn => {
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      chatShowWorkspaceInstructions(btn.dataset.wsHash, btn.dataset.wsLabel);
     };
   });
 
@@ -656,6 +672,11 @@ async function chatNewConversation() {
 
 async function chatCreateConversationWithDir(workingDir) {
   try {
+    // Save draft from current conversation before switching
+    chatSaveDraft();
+    for (const entry of chatPendingFiles) {
+      if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
+    }
     const body = workingDir ? { workingDir } : {};
     const res = await chatFetch('conversations', { method: 'POST', body });
     const conv = await res.json();
@@ -664,6 +685,7 @@ async function chatCreateConversationWithDir(workingDir) {
     await chatLoadConversations();
     chatRenderMessages();
     chatUpdateHeader();
+    chatRestoreDraft(conv.id);
     chatCloseModal();
     const textarea = document.getElementById('chat-textarea');
     if (textarea) textarea.focus();
@@ -852,14 +874,46 @@ function chatUpdateSendButtonState() {
   }
 }
 
+function chatSaveDraft() {
+  const key = chatActiveConvId || '__new__';
+  const textarea = document.getElementById('chat-textarea');
+  const text = textarea ? textarea.value : '';
+  if (!text && !chatPendingFiles.length) {
+    chatDraftState.delete(key);
+    return;
+  }
+  chatDraftState.set(key, { text, pendingFiles: chatPendingFiles });
+}
+
+function chatRestoreDraft(convId) {
+  const key = convId || '__new__';
+  const draft = chatDraftState.get(key);
+  const textarea = document.getElementById('chat-textarea');
+  if (draft) {
+    if (textarea) {
+      textarea.value = draft.text;
+      chatAutoResize(textarea);
+    }
+    chatPendingFiles = draft.pendingFiles;
+  } else {
+    if (textarea) {
+      textarea.value = '';
+      chatAutoResize(textarea);
+    }
+    chatPendingFiles = [];
+  }
+  chatRenderFileChips();
+  chatUpdateSendButtonState();
+}
+
 async function chatSelectConversation(id) {
   if (id === chatActiveConvId) return;
-  // Abort in-flight uploads and clear pending files from previous conversation
+  // Save current draft before switching
+  chatSaveDraft();
+  // Abort in-flight uploads from current conversation (they are saved as-is in draft)
   for (const entry of chatPendingFiles) {
     if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
   }
-  chatPendingFiles = [];
-  chatRenderFileChips();
   try {
     const res = await chatFetch(`conversations/${id}`);
     chatActiveConv = await res.json();
@@ -867,7 +921,7 @@ async function chatSelectConversation(id) {
     chatRenderConvList();
     chatRenderMessages();
     chatUpdateHeader();
-    chatUpdateSendButtonState();
+    chatRestoreDraft(id);
     const resetBtn = document.getElementById('chat-reset-btn');
     if (resetBtn) {
       resetBtn.disabled = chatResettingConvs.has(id);
@@ -900,6 +954,7 @@ async function chatDeleteConversation(id) {
   if (!confirm('Delete this conversation? This cannot be undone.')) return;
   try {
     await chatFetch(`conversations/${id}`, { method: 'DELETE' });
+    chatDraftState.delete(id);
     if (chatActiveConvId === id) {
       // Abort in-flight uploads and clear pending files
       for (const entry of chatPendingFiles) {
@@ -1285,6 +1340,7 @@ async function chatSendMessage() {
 
   // Create conversation if none active (text-only messages without prior file attach)
   if (!chatActiveConvId) {
+    chatDraftState.delete('__new__');
     try {
       const body = chatPendingWorkingDir ? { workingDir: chatPendingWorkingDir } : {};
       chatPendingWorkingDir = null;
@@ -1300,6 +1356,7 @@ async function chatSendMessage() {
     }
   }
 
+  chatDraftState.delete(chatActiveConvId);
   const backend = document.getElementById('chat-backend-select')?.value || (CHAT_BACKENDS[0]?.id || 'claude-code');
   const targetConvId = chatActiveConvId;
 
@@ -2093,6 +2150,45 @@ async function chatSaveSettings() {
   }
 }
 window.chatSaveSettings = chatSaveSettings;
+
+// ── Workspace Instructions modal ─────────────────────────────────────────────
+
+async function chatShowWorkspaceInstructions(hash, label) {
+  let instructions = '';
+  try {
+    const res = await chatFetch(`workspaces/${encodeURIComponent(hash)}/instructions`);
+    const data = await res.json();
+    instructions = data.instructions || '';
+  } catch {
+    // Workspace may not have instructions yet
+  }
+
+  const html = `
+    <div class="chat-modal-body">
+      <div class="chat-settings-group">
+        <div class="chat-settings-desc">Additional instructions prepended to every new CLI session in this workspace. Combined with the global system prompt.</div>
+        <textarea class="chat-settings-textarea" id="chat-ws-instructions" style="min-height:160px">${esc(instructions)}</textarea>
+      </div>
+      <button class="chat-settings-save" onclick="chatSaveWorkspaceInstructions('${esc(hash)}')">Save</button>
+    </div>
+  `;
+
+  chatShowModal(`Instructions: ${label}`, html);
+}
+
+async function chatSaveWorkspaceInstructions(hash) {
+  const instructions = document.getElementById('chat-ws-instructions')?.value || '';
+  try {
+    await chatFetch(`workspaces/${encodeURIComponent(hash)}/instructions`, {
+      method: 'PUT',
+      body: { instructions },
+    });
+    chatCloseModal();
+  } catch (err) {
+    alert('Failed to save workspace instructions: ' + err.message);
+  }
+}
+window.chatSaveWorkspaceInstructions = chatSaveWorkspaceInstructions;
 
 // ── Modal helper ──────────────────────────────────────────────────────────────
 
