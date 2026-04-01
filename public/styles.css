@@ -957,6 +957,12 @@
     white-space: nowrap;
     flex-shrink: 0;
   }
+  .chat-agent-card-done {
+    opacity: 0.65;
+  }
+  .chat-agent-card-done .chat-activity-check {
+    flex-shrink: 0;
+  }
 
   /* Plan mode banner */
   .chat-plan-mode-banner {

@@ -627,10 +627,11 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 
 - `chatSendMessage()` gathers completed file paths from pending uploads, appends `[Uploaded files: ...]` to content, POSTs message, opens SSE stream
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API)
-- **Streaming state persistence:** `chatStreamingState` Map stores per-conversation state (accumulated text, thinking, tools, agents, pending interactions). State survives conversation switches — on return, the streaming bubble is recreated and restored.
+- **Streaming state persistence:** `chatStreamingState` Map stores per-conversation state (accumulated text, thinking, tools, agents, tool/agent history, pending interactions). State survives conversation switches — on return, the streaming bubble is recreated and restored.
 - **Elapsed timer:** live timer in streaming bubble header, self-cleans on DOM disconnect
-- **Turn boundaries:** intermediate assistant messages saved, content reset. `turn_complete` event clears active tool/agent spinners so the UI reflects that tools have finished.
-- **Thinking events:** clear stale tool/agent activity state, ensuring spinners don't persist while the model thinks after tool execution.
+- **Activity history:** Completed tools and agents are archived to `toolHistory`/`agentHistory` arrays that persist across thinking/text/turn transitions. The full operation history is displayed as a stacking list with checkmarks and elapsed durations, while the current active tool shows a spinner with a live timer. Agent cards show spinner when running, checkmark when completed.
+- **Turn boundaries:** intermediate assistant messages saved, content reset. `turn_complete` event archives active tools/agents to history so spinners stop but the accumulated history persists.
+- **Thinking events:** archive active tool/agent state to history, ensuring spinners don't persist while the model thinks after tool execution, while preserving the operation log.
 - **Plan approval:** renders plan as markdown with approve/reject buttons → POSTs to `/input`
 - **User questions:** renders question text + option buttons → POSTs answer to `/input`
 - **Auto title update:** handles `title_updated` SSE event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
