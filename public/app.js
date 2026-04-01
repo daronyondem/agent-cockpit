@@ -183,6 +183,14 @@ function chatInit() {
     chatCheckUpdateIndicator(v);
   }).catch(() => {});
 
+  // Click version number to trigger a manual version check
+  const versionLabel = document.getElementById('chat-version-text');
+  if (versionLabel) {
+    versionLabel.style.cursor = 'pointer';
+    versionLabel.title = 'Click to check for updates';
+    versionLabel.addEventListener('click', chatManualVersionCheck);
+  }
+
   // Poll for update status every 5 minutes (reads server-cached state, no git ops)
   setInterval(() => {
     chatFetch('update-status').then(res => res.json()).then(chatCheckUpdateIndicator).catch(() => {});
@@ -2093,6 +2101,21 @@ function chatCloseModal() {
 window.chatCloseModal = chatCloseModal;
 
 // ── Self-update UI ───────────────────────────────────────────────────────────
+
+async function chatManualVersionCheck() {
+  const textEl = document.getElementById('chat-version-text');
+  if (!textEl) return;
+  const original = textEl.textContent;
+  textEl.textContent = 'checking…';
+  try {
+    const res = await chatFetch('check-version', { method: 'POST' });
+    const status = await res.json();
+    textEl.textContent = 'v' + (status.localVersion || original.replace(/^v/, ''));
+    chatCheckUpdateIndicator(status);
+  } catch {
+    textEl.textContent = original;
+  }
+}
 
 function chatCheckUpdateIndicator(status) {
   const indicator = document.getElementById('chat-update-indicator');

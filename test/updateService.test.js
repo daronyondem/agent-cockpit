@@ -150,6 +150,33 @@ describe('UpdateService', () => {
     });
   });
 
+  // ── checkNow ───────────────────────────────────────────────────────────
+
+  describe('checkNow', () => {
+    test('triggers a version check and returns status', async () => {
+      mockExecFile([
+        { stdout: '' }, // git fetch
+        { stdout: JSON.stringify({ version: '0.3.0' }) }, // git show
+      ]);
+
+      const status = await service.checkNow();
+      expect(status.remoteVersion).toBe('0.3.0');
+      expect(status.lastCheckAt).not.toBeNull();
+      expect(status.updateAvailable).toBe(true);
+    });
+
+    test('returns status with error when check fails', async () => {
+      mockExecFile([
+        { error: 'network error' },
+      ]);
+
+      const status = await service.checkNow();
+      expect(status.lastError).toBe('network error');
+      expect(status.remoteVersion).toBeNull();
+      expect(status.updateAvailable).toBe(false);
+    });
+  });
+
   // ── triggerUpdate guards ──────────────────────────────────────────────
 
   describe('triggerUpdate', () => {
