@@ -954,7 +954,7 @@ Single-page layout:
     - `.chat-sidebar` — left panel:
       - `.chat-sidebar-header` — collapse toggle + "New Chat" button
       - `.chat-search` — search input
-      - `.chat-conv-list` — conversation list (populated by JS)
+      - `.chat-conv-list` — conversation list grouped by workspace (populated by JS); each group has a collapsible header (`.chat-conv-group-header`) with chevron toggle, workspace label, and count badge when collapsed
       - `.chat-sidebar-footer` — Settings button
       - `.chat-sidebar-footer` — Sign Out button
       - `.chat-sidebar-version` — App version label + update indicator (fetched from `/api/chat/version`)
@@ -1036,7 +1036,9 @@ _ensureConvPromise          // Promise cache for concurrent chatEnsureConversati
 - `chatRenameConversation(id)` — prompts for new name, PUTs update
 - `chatDeleteConversation(id)` — confirms, DELETEs, clears selection if active. When the active conversation is deleted: aborts in-flight uploads, clears pending file chips, resets send button state, and renders the empty state.
 - `chatLoadConversations(query)` — fetches list, renders sidebar
-- `chatGroupConversations(convs)` — groups by relative date: "Today", "Yesterday", "Previous 7 Days", "Previous 30 Days", "Older"
+- `chatGroupConversations(convs)` — groups conversations by workspace (last 2 path segments of `workingDir`), returning `{ label: { fullPath, convs[] } }`
+- `chatGetCollapsedGroups()` — reads collapsed workspace group state from localStorage
+- `chatSetGroupCollapsed(label, collapsed)` — persists collapse toggle for a workspace group to localStorage
 
 #### Messaging
 
