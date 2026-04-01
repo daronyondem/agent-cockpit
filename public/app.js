@@ -1143,8 +1143,8 @@ function chatRenderMessages() {
       }
     } else if (streamState.assistantContent || streamState.assistantThinking) {
       chatUpdateStreamingMessage(msgEl, streamState.assistantContent, streamState.assistantThinking);
-    } else if ((streamState.activeTools && streamState.activeTools.length) || (streamState.activeAgents && streamState.activeAgents.length) || streamState.planModeActive) {
-      chatUpdateStreamingActivity(msgEl, streamState.activeTools || [], streamState.activeAgents || [], streamState.planModeActive);
+    } else if (chatCombinedTools(streamState).length || chatCombinedAgents(streamState).length || streamState.planModeActive) {
+      chatUpdateStreamingActivity(msgEl, chatCombinedTools(streamState), chatCombinedAgents(streamState), streamState.planModeActive);
       chatStartActivityTimer(chatActiveConvId);
     }
     // else: default typing dots shown by chatAppendStreamingMessage
@@ -1367,6 +1367,8 @@ async function chatSendMessage() {
     assistantThinking: '',
     activeTools: [],
     activeAgents: [],
+    toolHistory: [],
+    agentHistory: [],
     planModeActive: false,
     pendingInteraction: null,
     streamingMsgEl: null,
@@ -1442,22 +1444,18 @@ async function chatSendMessage() {
 
           if (event.type === 'thinking') {
             st.assistantThinking += event.content;
-            // Clear stale tool activity so spinners don't persist while model thinks
+            // Archive active tools/agents to history so spinners stop but history persists
             if (st.activeTools.length || st.activeAgents.length) {
-              st.activeTools = [];
-              st.activeAgents = [];
-              if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
+              chatArchiveActiveState(st);
             }
             if (isStillActive) {
               chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
             }
           } else if (event.type === 'turn_complete') {
-            // Tools finished executing — clear tool activity so spinners stop
-            st.activeTools = [];
-            st.activeAgents = [];
-            if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
+            // Tools finished executing — archive to history so spinners stop but history persists
+            chatArchiveActiveState(st);
             if (isStillActive && !st.pendingInteraction) {
-              chatUpdateStreamingActivity(st.streamingMsgEl, st.activeTools, st.activeAgents, st.planModeActive);
+              chatUpdateStreamingActivity(st.streamingMsgEl, chatCombinedTools(st), chatCombinedAgents(st), st.planModeActive);
             }
           } else if (event.type === 'text') {
             st.assistantContent += event.content;
@@ -1465,9 +1463,7 @@ async function chatSendMessage() {
               // Pending interaction (plan approval, user question) — don't overwrite
               // dialog with streaming text. Just accumulate assistantContent silently.
             } else {
-              st.activeTools = [];
-              st.activeAgents = [];
-              if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
+              if (st.activeTools.length || st.activeAgents.length) chatArchiveActiveState(st);
               if (isStillActive) {
                 chatUpdateStreamingMessage(st.streamingMsgEl, st.assistantContent, st.assistantThinking);
               }
@@ -1497,7 +1493,7 @@ async function chatSendMessage() {
                 chatShowUserQuestion(st.streamingMsgEl, targetConvId, event);
               } else if (!st.pendingInteraction) {
                 // Only render tool activity if no pending interaction (plan approval, user question)
-                chatUpdateStreamingActivity(st.streamingMsgEl, st.activeTools, st.activeAgents, st.planModeActive);
+                chatUpdateStreamingActivity(st.streamingMsgEl, chatCombinedTools(st), chatCombinedAgents(st), st.planModeActive);
                 chatStartActivityTimer(targetConvId);
               }
             }
@@ -1511,11 +1507,9 @@ async function chatSendMessage() {
             const savedInteraction = st.pendingInteraction;
             st.assistantContent = '';
             st.assistantThinking = '';
-            st.activeTools = [];
-            st.activeAgents = [];
+            chatArchiveActiveState(st);
             st.planModeActive = false;
             st.pendingInteraction = savedInteraction;
-            if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
             if (isStillActive && chatActiveConv) {
               chatActiveConv.messages.push(event.message);
               chatRenderMessages();
@@ -1536,10 +1530,8 @@ async function chatSendMessage() {
             }
           } else if (event.type === 'error') {
             st.pendingInteraction = null;
-            st.activeTools = [];
-            st.activeAgents = [];
+            chatArchiveActiveState(st);
             st.planModeActive = false;
-            if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
             if (isStillActive) chatAppendError(event.error);
           } else if (event.type === 'done') {
             chatCleanupStreamState(targetConvId);
@@ -1609,6 +1601,30 @@ function chatUpdateStreamingMessage(msgEl, content, thinking) {
   chatScrollToBottom();
 }
 
+/** Archive active tools/agents to history before clearing, preserving elapsed durations. */
+function chatArchiveActiveState(st) {
+  const now = Date.now();
+  for (const tool of st.activeTools) {
+    st.toolHistory.push({ ...tool, completed: true, duration: tool.startTime ? now - tool.startTime : null });
+  }
+  st.activeTools = [];
+  for (const agent of st.activeAgents) {
+    st.agentHistory.push({ ...agent, completed: true, duration: agent.startTime ? now - agent.startTime : null });
+  }
+  st.activeAgents = [];
+  if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
+}
+
+/** Build combined tools array (history + active) for rendering. */
+function chatCombinedTools(st) {
+  return [...st.toolHistory, ...st.activeTools];
+}
+
+/** Build combined agents array (history + active) for rendering. */
+function chatCombinedAgents(st) {
+  return [...st.agentHistory, ...st.activeAgents];
+}
+
 function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
   if (!msgEl) return;
   const contentEl = msgEl.querySelector('.chat-msg-content');
@@ -1616,15 +1632,20 @@ function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
 
   let html = '';
 
+  // Determine which tools are completed history vs active
+  const lastTool = tools.length > 0 ? tools[tools.length - 1] : null;
+  const lastToolIsActive = lastTool && !lastTool.completed;
+  const historyTools = lastToolIsActive ? tools.slice(0, -1) : tools;
+
   // Activity history (completed tools with checkmarks)
-  if (tools.length > 1) {
+  if (historyTools.length > 0) {
     html += '<div class="chat-activity-history">';
-    for (let i = 0; i < tools.length - 1; i++) {
-      const t = tools[i];
+    for (let i = 0; i < historyTools.length; i++) {
+      const t = historyTools[i];
       const desc = t.description ? escWithCode(t.description) : esc(t.tool || 'Tool');
       let durationMs = t.duration;
       if (!durationMs && t.startTime) {
-        const nextStart = tools[i + 1].startTime || Date.now();
+        const nextStart = (historyTools[i + 1] || lastTool)?.startTime || Date.now();
         durationMs = nextStart - t.startTime;
       }
       const elapsed = durationMs ? chatFormatElapsedShort(durationMs) : '';
@@ -1633,11 +1654,10 @@ function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
     html += '</div>';
   }
 
-  // Current active tool
-  if (tools.length > 0) {
-    const current = tools[tools.length - 1];
-    const desc = current.description ? escWithCode(current.description) : esc(current.tool || 'Working');
-    const initialElapsed = current.startTime ? chatFormatElapsed(Date.now() - current.startTime) : '';
+  // Current active tool (with spinner)
+  if (lastToolIsActive) {
+    const desc = lastTool.description ? escWithCode(lastTool.description) : esc(lastTool.tool || 'Working');
+    const initialElapsed = lastTool.startTime ? chatFormatElapsed(Date.now() - lastTool.startTime) : '';
     html += `<div class="chat-activity-indicator">
       <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
       <span class="chat-activity-label">${desc}</span>
@@ -1645,21 +1665,33 @@ function chatUpdateStreamingActivity(msgEl, tools, agents, planMode) {
     </div>`;
   }
 
-  // Agent cards
+  // Agent cards (completed + active)
   if (agents.length > 0) {
     html += '<div class="chat-agent-cards">';
     for (const agent of agents) {
       const agentType = esc(agent.subagentType || 'agent');
       const agentDesc = agent.description ? escWithCode(agent.description) : '';
-      const initialElapsed = agent.startTime ? chatFormatElapsed(Date.now() - agent.startTime) : '';
-      html += `<div class="chat-agent-card">
-        <div class="chat-agent-spinner"></div>
-        <div class="chat-agent-card-header">
-          <span class="chat-agent-type">${agentType}</span>
-          ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
-        </div>
-        ${initialElapsed ? `<span class="chat-agent-timer-live">${initialElapsed}</span>` : ''}
-      </div>`;
+      if (agent.completed) {
+        const elapsed = agent.duration ? chatFormatElapsedShort(agent.duration) : '';
+        html += `<div class="chat-agent-card chat-agent-card-done">
+          <span class="chat-activity-check">✓</span>
+          <div class="chat-agent-card-header">
+            <span class="chat-agent-type">${agentType}</span>
+            ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
+          </div>
+          ${elapsed ? `<span class="chat-activity-elapsed">${elapsed}</span>` : ''}
+        </div>`;
+      } else {
+        const initialElapsed = agent.startTime ? chatFormatElapsed(Date.now() - agent.startTime) : '';
+        html += `<div class="chat-agent-card">
+          <div class="chat-agent-spinner"></div>
+          <div class="chat-agent-card-header">
+            <span class="chat-agent-type">${agentType}</span>
+            ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
+          </div>
+          ${initialElapsed ? `<span class="chat-agent-timer-live">${initialElapsed}</span>` : ''}
+        </div>`;
+      }
     }
     html += '</div>';
   }
