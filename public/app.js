@@ -1059,8 +1059,8 @@ function chatRenderMessages() {
       }
     } else if (streamState.assistantContent || streamState.assistantThinking) {
       chatUpdateStreamingMessage(msgEl, streamState.assistantContent, streamState.assistantThinking);
-    } else if (streamState.activeTools.length || streamState.activeAgents.length || streamState.planModeActive) {
-      chatUpdateStreamingActivity(msgEl, streamState.activeTools, streamState.activeAgents, streamState.planModeActive);
+    } else if ((streamState.activeTools && streamState.activeTools.length) || (streamState.activeAgents && streamState.activeAgents.length) || streamState.planModeActive) {
+      chatUpdateStreamingActivity(msgEl, streamState.activeTools || [], streamState.activeAgents || [], streamState.planModeActive);
       chatStartActivityTimer(chatActiveConvId);
     }
     // else: default typing dots shown by chatAppendStreamingMessage
@@ -1214,6 +1214,22 @@ function chatScrollToBottom() {
 }
 
 // ── Sending messages ──────────────────────────────────────────────────────────
+
+function chatCleanupStreamState(convId) {
+  const st = chatStreamingState.get(convId);
+  if (!st) return;
+  if (st.elapsedTimerInterval) clearInterval(st.elapsedTimerInterval);
+  if (st.activityTimerInterval) clearInterval(st.activityTimerInterval);
+  if (st.pendingInteraction) {
+    // Keep the streaming bubble alive for pending interactions
+    // (plan approval, user questions) so the user can still act on them
+    return;
+  }
+  if (st.streamingMsgEl && st.streamingMsgEl.isConnected) {
+    st.streamingMsgEl.remove();
+  }
+  chatStreamingState.delete(convId);
+}
 
 async function chatSendMessage() {
   const textarea = document.getElementById('chat-textarea');
@@ -1408,21 +1424,17 @@ async function chatSendMessage() {
             chatLoadConversations();
           } else if (event.type === 'error') {
             st.pendingInteraction = null;
+            st.activeTools = [];
+            st.activeAgents = [];
+            st.planModeActive = false;
+            if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
             if (isStillActive) chatAppendError(event.error);
           } else if (event.type === 'done') {
-            if (st.elapsedTimerInterval) clearInterval(st.elapsedTimerInterval);
-            if (st.activityTimerInterval) clearInterval(st.activityTimerInterval);
-            if (st.pendingInteraction) {
-              // Keep the streaming bubble alive for pending interactions
-              // (plan approval, user questions) so the user can still act on them
-            } else {
-              if (st.streamingMsgEl && st.streamingMsgEl.isConnected) {
-                st.streamingMsgEl.remove();
-              }
-              chatStreamingState.delete(targetConvId);
-            }
+            chatCleanupStreamState(targetConvId);
           }
-        } catch {}
+        } catch (parseErr) {
+          console.warn('SSE event parse/handling error:', parseErr);
+        }
       }
     }
   } catch (err) {
@@ -1431,22 +1443,7 @@ async function chatSendMessage() {
     }
   } finally {
     chatStreamingConvs.delete(targetConvId);
-    const finalState = chatStreamingState.get(targetConvId);
-    if (finalState) {
-      if (finalState.elapsedTimerInterval) clearInterval(finalState.elapsedTimerInterval);
-      if (finalState.activityTimerInterval) clearInterval(finalState.activityTimerInterval);
-      if (finalState.pendingInteraction) {
-        // Keep the streaming bubble alive for pending interactions
-        // (plan approval, user questions) so the user can still act on them
-      } else {
-        if (finalState.streamingMsgEl && finalState.streamingMsgEl.isConnected) {
-          finalState.streamingMsgEl.remove();
-        }
-        chatStreamingState.delete(targetConvId);
-      }
-    } else {
-      chatStreamingState.delete(targetConvId);
-    }
+    chatCleanupStreamState(targetConvId);
     chatUpdateSendButtonState();
     chatRenderConvList();
   }
