@@ -323,11 +323,15 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
       if (ctx) cliMessage = ctx + '\n\n' + cliMessage;
     }
 
-    // Fetch system prompt for new sessions
+    // Fetch system prompt + workspace instructions for new sessions
     let systemPrompt = '';
     if (isNewSession) {
       const settings = await chatService.getSettings();
-      systemPrompt = settings.systemPrompt || '';
+      const globalPrompt = settings.systemPrompt || '';
+      const wsHash = chatService.getWorkspaceHashForConv(convId);
+      const wsInstructions = wsHash ? (await chatService.getWorkspaceInstructions(wsHash)) || '' : '';
+      const parts = [globalPrompt, wsInstructions].filter(Boolean);
+      systemPrompt = parts.join('\n\n');
     }
 
     // Resolve backend adapter from registry
@@ -550,6 +554,31 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
     } catch (err) {
       if (err.code === 'ENOENT') return res.status(404).json({ error: 'File not found' });
       res.status(500).json({ error: 'Failed to delete file' });
+    }
+  });
+
+  // ── Workspace instructions ──────────────────────────────────────────────────
+  router.get('/workspaces/:hash/instructions', async (req, res) => {
+    try {
+      const instructions = await chatService.getWorkspaceInstructions(req.params.hash);
+      if (instructions === null) return res.status(404).json({ error: 'Workspace not found' });
+      res.json({ instructions });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  router.put('/workspaces/:hash/instructions', csrfGuard, async (req, res) => {
+    try {
+      const { instructions } = req.body;
+      if (typeof instructions !== 'string') {
+        return res.status(400).json({ error: 'instructions must be a string' });
+      }
+      const result = await chatService.setWorkspaceInstructions(req.params.hash, instructions);
+      if (result === null) return res.status(404).json({ error: 'Workspace not found' });
+      res.json({ instructions: result });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   });
 

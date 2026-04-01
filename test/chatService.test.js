@@ -534,6 +534,76 @@ describe('getWorkspaceContext', () => {
   });
 });
 
+// ── Workspace Instructions ──────────────────────────────────────────────────
+
+describe('getWorkspaceInstructions', () => {
+  test('returns empty string for workspace with no instructions', async () => {
+    await service.createConversation('Test', '/tmp/ws-inst');
+    const hash = workspaceHash('/tmp/ws-inst');
+    const instructions = await service.getWorkspaceInstructions(hash);
+    expect(instructions).toBe('');
+  });
+
+  test('returns null for non-existent workspace', async () => {
+    const instructions = await service.getWorkspaceInstructions('nonexistent');
+    expect(instructions).toBeNull();
+  });
+});
+
+describe('setWorkspaceInstructions', () => {
+  test('saves and retrieves instructions', async () => {
+    await service.createConversation('Test', '/tmp/ws-inst');
+    const hash = workspaceHash('/tmp/ws-inst');
+    await service.setWorkspaceInstructions(hash, 'Always use TypeScript');
+    const instructions = await service.getWorkspaceInstructions(hash);
+    expect(instructions).toBe('Always use TypeScript');
+  });
+
+  test('persists instructions to disk', async () => {
+    await service.createConversation('Test', '/tmp/ws-persist');
+    const hash = workspaceHash('/tmp/ws-persist');
+    await service.setWorkspaceInstructions(hash, 'Use functional components');
+
+    const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    expect(index.instructions).toBe('Use functional components');
+  });
+
+  test('clears instructions when set to empty string', async () => {
+    await service.createConversation('Test', '/tmp/ws-clear');
+    const hash = workspaceHash('/tmp/ws-clear');
+    await service.setWorkspaceInstructions(hash, 'Some instructions');
+    await service.setWorkspaceInstructions(hash, '');
+    const instructions = await service.getWorkspaceInstructions(hash);
+    expect(instructions).toBe('');
+  });
+
+  test('returns null for non-existent workspace', async () => {
+    const result = await service.setWorkspaceInstructions('nonexistent', 'test');
+    expect(result).toBeNull();
+  });
+});
+
+describe('getWorkspaceHashForConv', () => {
+  test('returns hash for existing conversation', async () => {
+    const conv = await service.createConversation('Test', '/tmp/hash-test');
+    const hash = service.getWorkspaceHashForConv(conv.id);
+    expect(hash).toBe(workspaceHash('/tmp/hash-test'));
+  });
+
+  test('returns null for non-existent conversation', () => {
+    expect(service.getWorkspaceHashForConv('nope')).toBeNull();
+  });
+});
+
+describe('listConversations includes workspaceHash', () => {
+  test('each conversation has workspaceHash', async () => {
+    await service.createConversation('Test', '/tmp/list-hash');
+    const list = await service.listConversations();
+    expect(list[0].workspaceHash).toBe(workspaceHash('/tmp/list-hash'));
+  });
+});
+
 // ── Migration ───────────────────────────────────────────────────────────────
 
 describe('migration from legacy format', () => {

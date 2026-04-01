@@ -259,6 +259,23 @@
     margin-left: auto;
   }
 
+  .chat-conv-group-instructions-btn {
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--muted);
+    padding: 2px;
+    margin-left: auto;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    opacity: 0;
+    transition: opacity 0.12s, color 0.12s;
+    flex-shrink: 0;
+  }
+  .chat-conv-group-header:hover .chat-conv-group-instructions-btn { opacity: 1; }
+  .chat-conv-group-instructions-btn:hover { color: var(--text); }
+
   .chat-conv-item {
     padding: 8px 10px 8px 30px;
     border-radius: 6px;
