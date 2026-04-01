@@ -1988,6 +1988,7 @@ async function chatResetSession(convIdOverride) {
     if (convId === chatActiveConvId) {
       chatActiveConv = data.conversation;
       chatRenderMessages();
+      chatUpdateHeader();
     }
     chatLoadConversations();
   } catch (err) {

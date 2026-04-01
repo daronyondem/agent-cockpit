@@ -313,14 +313,15 @@ class ChatService {
       msg.thinking = thinking;
     }
 
-    // Auto-title from first user message (only if still default title)
-    if (role === 'user' && convEntry.title === 'New Chat') {
-      convEntry.title = content.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
-    }
-
     // Find active session
     const activeSession = convEntry.sessions.find(s => s.active);
     const sessionNumber = activeSession ? activeSession.number : 1;
+
+    // Auto-title from first user message (only if still default title).
+    // Skip for post-reset sessions (sessionNumber > 1) — LLM generates a proper title.
+    if (role === 'user' && convEntry.title === 'New Chat' && sessionNumber <= 1) {
+      convEntry.title = content.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+    }
 
     // Read session file, add message, write back
     let sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
