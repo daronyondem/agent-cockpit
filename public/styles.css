@@ -215,17 +215,52 @@
     padding: 6px;
   }
 
-  .chat-conv-group-label {
-    font-size: 10px;
-    font-weight: 600;
+  .chat-conv-group-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 8px;
+    margin: 4px 0 0;
+    cursor: pointer;
+    border-radius: 6px;
+    user-select: none;
+    background: var(--surface2);
+    transition: background 0.12s;
+  }
+  .chat-conv-group-header:first-child { margin-top: 0; }
+  .chat-conv-group-header:hover { background: var(--border); }
+
+  .chat-conv-group-chevron {
     color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.08em;
-    padding: 10px 8px 4px;
+    flex-shrink: 0;
+    transition: transform 0.15s ease;
+  }
+  .chat-conv-group-chevron.collapsed { transform: rotate(-90deg); }
+
+  .chat-conv-group-label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    opacity: 0.55;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .chat-conv-group-count {
+    font-size: 10px;
+    font-weight: 500;
+    color: var(--muted);
+    background: var(--surface2);
+    padding: 0 6px;
+    border-radius: 10px;
+    line-height: 18px;
+    flex-shrink: 0;
+    margin-left: auto;
   }
 
   .chat-conv-item {
-    padding: 10px 10px;
+    padding: 8px 10px 8px 30px;
     border-radius: 6px;
     cursor: pointer;
     display: flex;
@@ -237,19 +272,19 @@
   }
 
   .chat-conv-item:hover { background: var(--surface2); }
-  .chat-conv-item.active { background: rgba(99,102,241,0.08); }
+  .chat-conv-item.active { background: transparent; }
 
   .chat-conv-item-title {
     display: block;
     font-size: 13px;
-    font-weight: 500;
+    font-weight: 400;
     color: var(--text);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
 
-  .chat-conv-item.active .chat-conv-item-title { color: var(--accent-chat); font-weight: 600; }
+  .chat-conv-item.active .chat-conv-item-title { color: var(--accent-chat); font-weight: 500; }
 
   .chat-conv-item-menu {
     background: none;
@@ -1633,14 +1668,6 @@
     max-width: 300px;
   }
 
-  .chat-conv-item-workdir {
-    font-size: 10px;
-    color: var(--muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    margin-top: 2px;
-  }
 
   .chat-settings-group {
     margin-bottom: 20px;

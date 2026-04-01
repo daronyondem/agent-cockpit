@@ -552,24 +552,27 @@ async function chatLoadConversations(query) {
 
 function chatGroupConversations(convs) {
   const groups = {};
-  const now = new Date();
-  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
-  const week = new Date(today); week.setDate(week.getDate() - 7);
-  const month = new Date(today); month.setDate(month.getDate() - 30);
-
   for (const c of convs) {
-    const d = new Date(c.updatedAt);
-    let label;
-    if (d >= today) label = 'Today';
-    else if (d >= yesterday) label = 'Yesterday';
-    else if (d >= week) label = 'Previous 7 Days';
-    else if (d >= month) label = 'Previous 30 Days';
-    else label = d.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-    if (!groups[label]) groups[label] = [];
-    groups[label].push(c);
+    const label = c.workingDir
+      ? c.workingDir.split('/').filter(Boolean).slice(-2).join('/')
+      : 'workspace';
+    if (!groups[label]) groups[label] = { fullPath: c.workingDir || '', convs: [] };
+    groups[label].convs.push(c);
   }
   return groups;
+}
+
+function chatGetCollapsedGroups() {
+  try {
+    return JSON.parse(localStorage.getItem('chatCollapsedGroups') || '{}');
+  } catch { return {}; }
+}
+
+function chatSetGroupCollapsed(label, collapsed) {
+  const state = chatGetCollapsedGroups();
+  if (collapsed) state[label] = true;
+  else delete state[label];
+  localStorage.setItem('chatCollapsedGroups', JSON.stringify(state));
 }
 
 function chatRenderConvList() {
@@ -582,26 +585,44 @@ function chatRenderConvList() {
   }
 
   const groups = chatGroupConversations(chatConversations);
+  const collapsed = chatGetCollapsedGroups();
   let html = '';
-  for (const [label, convs] of Object.entries(groups)) {
-    html += `<div class="chat-conv-group-label">${esc(label)}</div>`;
-    for (const c of convs) {
-      const isActive = c.id === chatActiveConvId;
-      const isStreaming = chatStreamingConvs.has(c.id);
-      const folderLabel = c.workingDir ? c.workingDir.split('/').filter(Boolean).slice(-2).join('/') : 'workspace';
-      html += `
-        <div class="chat-conv-item${isActive ? ' active' : ''}" data-conv-id="${esc(c.id)}">
-          <div style="flex:1;min-width:0;">
-            <span class="chat-conv-item-title">${esc(c.title)}</span>
-            <div class="chat-conv-item-workdir" title="${esc(c.workingDir || 'Default workspace')}">📁 ${esc(folderLabel)}</div>
+  for (const [label, group] of Object.entries(groups)) {
+    const isCollapsed = !!collapsed[label];
+    const count = group.convs.length;
+    html += `
+      <div class="chat-conv-group-header" data-group="${esc(label)}" title="${esc(group.fullPath || 'Default workspace')}">
+        <svg class="chat-conv-group-chevron${isCollapsed ? ' collapsed' : ''}" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4.5 6L8 9.5L11.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span class="chat-conv-group-label">${esc(label)}</span>
+        ${isCollapsed ? `<span class="chat-conv-group-count">${count}</span>` : ''}
+      </div>`;
+    if (!isCollapsed) {
+      for (const c of group.convs) {
+        const isActive = c.id === chatActiveConvId;
+        const isStreaming = chatStreamingConvs.has(c.id);
+        html += `
+          <div class="chat-conv-item${isActive ? ' active' : ''}" data-conv-id="${esc(c.id)}">
+            <div style="flex:1;min-width:0;">
+              <span class="chat-conv-item-title">${esc(c.title)}</span>
+            </div>
+            ${isStreaming ? '<span class="chat-conv-streaming-dot"></span>' : ''}
+            <button class="chat-conv-item-menu" data-conv-menu="${esc(c.id)}" title="Options">⋯</button>
           </div>
-          ${isStreaming ? '<span class="chat-conv-streaming-dot"></span>' : ''}
-          <button class="chat-conv-item-menu" data-conv-menu="${esc(c.id)}" title="Options">⋯</button>
-        </div>
-      `;
+        `;
+      }
     }
   }
   list.innerHTML = html;
+
+  // Wire group toggle events
+  list.querySelectorAll('.chat-conv-group-header').forEach(el => {
+    el.onclick = () => {
+      const grp = el.dataset.group;
+      const isNowCollapsed = !chatGetCollapsedGroups()[grp];
+      chatSetGroupCollapsed(grp, isNowCollapsed);
+      chatRenderConvList();
+    };
+  });
 
   // Wire click events
   list.querySelectorAll('.chat-conv-item').forEach(el => {
