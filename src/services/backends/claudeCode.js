@@ -225,7 +225,7 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
 
     try {
       const cwd = workingDir || this.workingDir;
-      console.log(`[claudeCode] spawning claude, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} cwd=${cwd}`);
+      console.log(`[claudeCode] spawning claude, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} systemPromptLen=${(systemPrompt || '').length} cwd=${cwd}`);
       const proc = spawn('claude', args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],

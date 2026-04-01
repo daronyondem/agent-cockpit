@@ -141,6 +141,7 @@ let chatSettingsData = null;
 let chatInitialized = false;
 let chatPendingWorkingDir = null;
 let chatPendingFiles = []; // Each: { file, status: 'uploading'|'done'|'error', progress, result, xhr }
+let chatDraftState = new Map(); // convId|'__new__' -> { text, pendingFiles }
 let _ensureConvPromise = null;
 
 function chatApiUrl(path) {
@@ -373,6 +374,11 @@ async function chatEnsureConversation() {
       chatPendingWorkingDir = null;
       const res = await chatFetch('conversations', { method: 'POST', body });
       const conv = await res.json();
+      // Migrate __new__ draft to real conversation ID
+      if (chatDraftState.has('__new__')) {
+        chatDraftState.set(conv.id, chatDraftState.get('__new__'));
+        chatDraftState.delete('__new__');
+      }
       chatActiveConvId = conv.id;
       chatActiveConv = conv;
       chatLoadConversations();
@@ -666,6 +672,11 @@ async function chatNewConversation() {
 
 async function chatCreateConversationWithDir(workingDir) {
   try {
+    // Save draft from current conversation before switching
+    chatSaveDraft();
+    for (const entry of chatPendingFiles) {
+      if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
+    }
     const body = workingDir ? { workingDir } : {};
     const res = await chatFetch('conversations', { method: 'POST', body });
     const conv = await res.json();
@@ -674,6 +685,7 @@ async function chatCreateConversationWithDir(workingDir) {
     await chatLoadConversations();
     chatRenderMessages();
     chatUpdateHeader();
+    chatRestoreDraft(conv.id);
     chatCloseModal();
     const textarea = document.getElementById('chat-textarea');
     if (textarea) textarea.focus();
@@ -862,14 +874,46 @@ function chatUpdateSendButtonState() {
   }
 }
 
+function chatSaveDraft() {
+  const key = chatActiveConvId || '__new__';
+  const textarea = document.getElementById('chat-textarea');
+  const text = textarea ? textarea.value : '';
+  if (!text && !chatPendingFiles.length) {
+    chatDraftState.delete(key);
+    return;
+  }
+  chatDraftState.set(key, { text, pendingFiles: chatPendingFiles });
+}
+
+function chatRestoreDraft(convId) {
+  const key = convId || '__new__';
+  const draft = chatDraftState.get(key);
+  const textarea = document.getElementById('chat-textarea');
+  if (draft) {
+    if (textarea) {
+      textarea.value = draft.text;
+      chatAutoResize(textarea);
+    }
+    chatPendingFiles = draft.pendingFiles;
+  } else {
+    if (textarea) {
+      textarea.value = '';
+      chatAutoResize(textarea);
+    }
+    chatPendingFiles = [];
+  }
+  chatRenderFileChips();
+  chatUpdateSendButtonState();
+}
+
 async function chatSelectConversation(id) {
   if (id === chatActiveConvId) return;
-  // Abort in-flight uploads and clear pending files from previous conversation
+  // Save current draft before switching
+  chatSaveDraft();
+  // Abort in-flight uploads from current conversation (they are saved as-is in draft)
   for (const entry of chatPendingFiles) {
     if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
   }
-  chatPendingFiles = [];
-  chatRenderFileChips();
   try {
     const res = await chatFetch(`conversations/${id}`);
     chatActiveConv = await res.json();
@@ -877,7 +921,7 @@ async function chatSelectConversation(id) {
     chatRenderConvList();
     chatRenderMessages();
     chatUpdateHeader();
-    chatUpdateSendButtonState();
+    chatRestoreDraft(id);
     const resetBtn = document.getElementById('chat-reset-btn');
     if (resetBtn) {
       resetBtn.disabled = chatResettingConvs.has(id);
@@ -910,6 +954,7 @@ async function chatDeleteConversation(id) {
   if (!confirm('Delete this conversation? This cannot be undone.')) return;
   try {
     await chatFetch(`conversations/${id}`, { method: 'DELETE' });
+    chatDraftState.delete(id);
     if (chatActiveConvId === id) {
       // Abort in-flight uploads and clear pending files
       for (const entry of chatPendingFiles) {
@@ -1295,6 +1340,7 @@ async function chatSendMessage() {
 
   // Create conversation if none active (text-only messages without prior file attach)
   if (!chatActiveConvId) {
+    chatDraftState.delete('__new__');
     try {
       const body = chatPendingWorkingDir ? { workingDir: chatPendingWorkingDir } : {};
       chatPendingWorkingDir = null;
@@ -1310,6 +1356,7 @@ async function chatSendMessage() {
     }
   }
 
+  chatDraftState.delete(chatActiveConvId);
   const backend = document.getElementById('chat-backend-select')?.value || (CHAT_BACKENDS[0]?.id || 'claude-code');
   const targetConvId = chatActiveConvId;
 

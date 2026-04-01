@@ -91,6 +91,7 @@ agent-cockpit/
 │   ├── backends.test.js                # Backend adapter tests — BaseBackendAdapter, BackendRegistry, ClaudeCodeAdapter, extractToolDetails
 │   ├── chat.test.js                    # Chat route tests — /input, SSE forwarding, turn boundaries, session messages, workspace injection, workspace instructions API, mkdir, rmdir
 │   ├── chatService.test.js             # ChatService unit tests — CRUD, messages, sessions, workspace storage, workspace instructions, migration, markdown export, workspace context
+│   ├── draftState.test.js              # Draft state unit tests — chatSaveDraft, chatRestoreDraft, key migration, cleanup, round-trip (11 tests)
 │   ├── graceful-shutdown.test.js       # Server shutdown tests (2 tests)
 │   ├── sessionStore.test.js            # Session file-store tests (4 tests)
 │   └── updateService.test.js           # UpdateService unit tests — version comparison, status, trigger guards
@@ -1020,6 +1021,7 @@ chatSettingsData            // Settings object from server
 chatInitialized             // Boolean — prevents double init
 chatPendingWorkingDir       // Working dir selected for new conversation
 chatPendingFiles[]          // Pending upload entries: { file, status, progress, result, xhr }
+chatDraftState              // Map<convId|'__new__', { text, pendingFiles }> — per-conversation message box drafts
 _ensureConvPromise          // Promise cache for concurrent chatEnsureConversation calls
 ```
 
@@ -1094,7 +1096,13 @@ Files upload **immediately on attach**, not when the message is sent. Each file 
 - `chatAddPendingFiles(files)` — creates entries with `status: 'uploading'`, renders chips immediately, ensures conversation exists, then fires parallel uploads.
 - `chatRemovePendingFile(index)` — if uploading: aborts XHR. If completed: fires DELETE to `/conversations/:id/upload/:filename` (fire-and-forget). Splices entry from array and re-renders.
 - `chatRenderFileChips()` — renders file chips with: progress bar (3px at bottom, accent color) during upload, checkmark icon on completion, error indicator on failure. Remove button always available.
-- `chatSelectConversation(id)` — aborts in-flight uploads and clears pending files when switching conversations.
+- `chatSaveDraft()` — saves the current textarea text and `chatPendingFiles` into `chatDraftState` keyed by `chatActiveConvId` (or `'__new__'`). Deletes the entry if both text and files are empty.
+- `chatRestoreDraft(convId)` — restores textarea text and `chatPendingFiles` from `chatDraftState` for the given conversation (or `'__new__'`). Resets to empty if no draft exists. Calls `chatAutoResize`, `chatRenderFileChips`, and `chatUpdateSendButtonState`.
+- `chatSelectConversation(id)` — saves the current draft, aborts in-flight uploads, then restores the target conversation's draft when switching.
+- `chatCreateConversationWithDir(workingDir)` — saves the current draft before switching to the new conversation and restores any existing draft for it.
+- `chatDeleteConversation(id)` — removes the deleted conversation's draft from `chatDraftState`.
+- `chatEnsureConversation()` — migrates the `'__new__'` draft key to the real conversation ID when a conversation is auto-created.
+- `chatSendMessage()` — clears the draft for the active conversation (and the `'__new__'` key if applicable) after sending.
 - When the message is sent, `chatSendMessage()` reads completed file paths from `chatPendingFiles` entries and embeds them as `[Uploaded files: /abs/path/to/file1, /abs/path/to/file2]`. No upload occurs at send time.
 - Send button is disabled while any upload is in progress.
 
@@ -1354,7 +1362,7 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 
 ### Framework: Jest 30.x
 
-### Test Files (262 tests total)
+### Test Files (273 tests total)
 
 **`test/backends.test.js`**:
 - **BaseBackendAdapter**: `metadata`, `sendMessage`, `generateSummary` all throw on base class; stores `workingDir` from options
@@ -1395,6 +1403,13 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 - **GET /version**: returns version from package.json
 - **Workspace instructions API**: GET returns empty instructions (200) or 404, PUT saves and returns instructions, validates string type (400), returns 404 for non-existent workspace
 - **Workspace instructions in system prompt**: combines global + workspace instructions on new session, sends only workspace instructions when no global prompt, omits on subsequent messages
+
+**`test/draftState.test.js`** (11 tests):
+- **chatSaveDraft**: saves textarea text for active conversation, saves pending files, uses `__new__` key when no active conversation, deletes draft when text and files both empty, keeps draft if only files present
+- **chatRestoreDraft**: restores saved text and files, clears textarea and files when no draft exists, uses `__new__` key when convId is falsy
+- **Draft key migration**: migrates `__new__` draft to real conversation ID on creation
+- **Draft cleanup**: deleting a conversation removes its draft
+- **Round-trip**: switching between two conversations preserves both drafts independently
 
 **`test/graceful-shutdown.test.js`** (2 tests):
 - Spawns actual server process with dummy env vars
