@@ -2192,7 +2192,7 @@ function chatShowRestartOverlay() {
   const overlay = document.createElement('div');
   overlay.id = 'chat-restart-overlay';
   overlay.innerHTML =
-    '<div style="text-align:center;">'
+    '<div class="restart-dialog">'
     + '<div style="font-size:18px;font-weight:600;margin-bottom:8px;">Restarting Server...</div>'
     + '<div style="font-size:13px;color:var(--muted);">The page will reload automatically.</div>'
     + '</div>';
