@@ -4,12 +4,9 @@ NEVER run `node server.js` directly. This causes orphan processes and port confl
 
 Always use pm2:
 - Start: `npx pm2 start ecosystem.config.js`
-- Restart: `npx pm2 restart agent-cockpit-dev`
-- Stop: `npx pm2 stop agent-cockpit-dev`
-- Logs: `npx pm2 logs agent-cockpit-dev`
-
-This is the **dev** instance running on port 3335 (`chat-dev.dytunnel.work`).
-The production instance runs separately from `/Users/daronyondem/Sites/agent-cockpit` on port 3334.
+- Restart: `npx pm2 restart [sitename]`
+- Stop: `npx pm2 stop [sitename]`
+- Logs: `npx pm2 logs [sitename]`
 
 # Commits & PRs
 
