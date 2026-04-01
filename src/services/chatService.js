@@ -387,6 +387,26 @@ class ChatService {
     return { conversation, message: msg };
   }
 
+  async generateAndUpdateTitle(convId, userMessage) {
+    const result = await this._getConvFromIndex(convId);
+    if (!result) return null;
+    const { hash, index, convEntry } = result;
+
+    const adapter = this._backendRegistry?.get(convEntry.backend || 'claude-code');
+    const fallback = userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+    let newTitle;
+    if (adapter && typeof adapter.generateTitle === 'function') {
+      newTitle = await adapter.generateTitle(userMessage, fallback);
+    } else {
+      newTitle = fallback;
+    }
+
+    convEntry.title = newTitle;
+    await this._writeWorkspaceIndex(hash, index);
+
+    return newTitle;
+  }
+
   // ── Session Management ─────────────────────────────────────────────────────
 
   async resetSession(convId) {

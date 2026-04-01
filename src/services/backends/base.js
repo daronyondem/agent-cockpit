@@ -56,6 +56,17 @@ class BaseBackendAdapter {
   async generateSummary(/* messages, fallback */) {
     throw new Error('BaseBackendAdapter.generateSummary must be implemented by subclass');
   }
+
+  /**
+   * Generate a short conversation title from the first user message of a new session.
+   *
+   * @param {string} userMessage – The first user message in the session
+   * @param {string} fallback    – Fallback title if generation fails
+   * @returns {Promise<string>}
+   */
+  async generateTitle(userMessage, fallback) {
+    return fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+  }
 }
 
 module.exports = { BaseBackendAdapter };

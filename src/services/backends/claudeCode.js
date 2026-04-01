@@ -199,6 +199,28 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
     }
   }
 
+  async generateTitle(userMessage, fallback) {
+    if (!userMessage || typeof userMessage !== 'string' || !userMessage.trim()) {
+      return fallback || 'New Chat';
+    }
+    try {
+      const truncated = userMessage.substring(0, 2000);
+      const prompt = `Generate a short, descriptive title (max 60 characters) for a conversation that starts with this user message. Only output the title text, nothing else — no quotes, no prefix:\n\n${truncated}`;
+
+      return await new Promise((resolve) => {
+        execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
+          if (err || !stdout.trim()) {
+            resolve(fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat');
+          } else {
+            resolve(stdout.trim().substring(0, 80));
+          }
+        });
+      });
+    } catch {
+      return fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+    }
+  }
+
   // ── Private ───────────────────────────────────────────────────────────────
 
   async *_createStream(message, options, state) {

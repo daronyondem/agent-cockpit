@@ -29,6 +29,25 @@ describe('BaseBackendAdapter', () => {
     await expect(adapter.generateSummary([], 'fallback')).rejects.toThrow('must be implemented');
   });
 
+  test('generateTitle returns fallback by default', async () => {
+    const adapter = new BaseBackendAdapter();
+    const title = await adapter.generateTitle('Hello world', 'My Fallback');
+    expect(title).toBe('My Fallback');
+  });
+
+  test('generateTitle truncates user message when no fallback', async () => {
+    const adapter = new BaseBackendAdapter();
+    const longMsg = 'A'.repeat(100);
+    const title = await adapter.generateTitle(longMsg);
+    expect(title).toBe('A'.repeat(80));
+  });
+
+  test('generateTitle returns New Chat for empty message', async () => {
+    const adapter = new BaseBackendAdapter();
+    const title = await adapter.generateTitle('', null);
+    expect(title).toBe('New Chat');
+  });
+
   test('stores workingDir from options', () => {
     const adapter = new BaseBackendAdapter({ workingDir: '/tmp/test' });
     expect(adapter.workingDir).toBe('/tmp/test');
