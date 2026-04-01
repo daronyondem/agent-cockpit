@@ -658,7 +658,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 
 ### Session Management
 
-- **Reset:** archives active session with LLM summary, creates new session, resets conversation title to "New Chat" in both header and sidebar. Shows "Archiving session..." indicator. Blocked during streaming. Double-click prevented via `chatResettingConvs` set.
+- **Reset:** archives active session with LLM summary, creates new session, resets conversation title to "New Chat" in both header and sidebar. Shows "Archiving session..." indicator. Blocked during streaming. Double-click prevented via `chatResettingConvs` set. Header title is also synced from server data whenever the conversation list reloads (via `chatLoadConversations`), ensuring the header stays consistent even if the inline update is missed.
 - **History modal:** lists sessions with summaries, view and download buttons
 - **View session:** fetches archived messages from API
 
