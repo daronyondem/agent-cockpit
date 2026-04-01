@@ -236,7 +236,8 @@ data: {"type":"<type>", ...fields}\n\n
 | `text` | `content`, `streaming` | Text delta from assistant |
 | `thinking` | `content`, `streaming` | Extended thinking delta |
 | `tool_activity` | `tool`, `description`, `id`, + enriched fields | Tool use notification (see enriched fields below) |
-| `turn_boundary` | — | Marks boundary between assistant turns |
+| `turn_boundary` | — | Marks boundary between assistant turns (internal — not forwarded to client) |
+| `turn_complete` | — | Notifies client that tools finished and a new turn is starting |
 | `result` | `content` | Final result text from CLI |
 | `assistant_message` | `message` | Saved assistant message (intermediate or final) |
 | `error` | `error` | Error message string |
@@ -254,7 +255,7 @@ data: {"type":"<type>", ...fields}\n\n
 | `questions` | AskUserQuestion | Array of question objects with options |
 | `isPlanFile` | Write tool | `true` when writing to `.claude/plans/` |
 
-**Turn boundary behavior:** On `turn_boundary`, accumulated streaming content (text + thinking) is saved as an intermediate assistant message. On stream completion, final content is saved and `assistant_message` + `done` events are sent.
+**Turn boundary behavior:** On `turn_boundary`, accumulated streaming content (text + thinking) is saved as an intermediate assistant message, and a `turn_complete` event is always sent to the client (even when there is no text to save). This allows the frontend to clear stale tool activity spinners when tools finish executing. On stream completion, final content is saved and `assistant_message` + `done` events are sent.
 
 **Abort streaming:**
 ```
@@ -621,9 +622,11 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API)
 - **Streaming state persistence:** `chatStreamingState` Map stores per-conversation state (accumulated text, thinking, tools, agents, pending interactions). State survives conversation switches — on return, the streaming bubble is recreated and restored.
 - **Elapsed timer:** live timer in streaming bubble header, self-cleans on DOM disconnect
-- **Turn boundaries:** intermediate assistant messages saved, content reset
+- **Turn boundaries:** intermediate assistant messages saved, content reset. `turn_complete` event clears active tool/agent spinners so the UI reflects that tools have finished.
+- **Thinking events:** clear stale tool/agent activity state, ensuring spinners don't persist while the model thinks after tool execution.
 - **Plan approval:** renders plan as markdown with approve/reject buttons → POSTs to `/input`
 - **User questions:** renders question text + option buttons → POSTs answer to `/input`
+- **Stream cleanup:** `chatCleanupStreamState()` accepts `{ force }` option. The `finally` block uses `force: true` to ensure cleanup even when a pending interaction was never resolved. Interaction response handlers also use forced cleanup when the stream has already ended.
 - **Send button state:** shows stop (■) when streaming, send (↑) when idle. Disabled during uploads or session resets.
 
 ### File Handling
@@ -754,7 +757,7 @@ Update OAuth callback URLs to include the ngrok URL.
 | File | Focus |
 |------|-------|
 | `test/backends.test.js` | BaseBackendAdapter, BackendRegistry, ClaudeCodeAdapter, extractToolDetails |
-| `test/chat.test.js` | Chat routes: /input, SSE forwarding, turn boundaries, file upload/serve, workspace instructions |
+| `test/chat.test.js` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, file upload/serve, workspace instructions |
 | `test/chatService.test.js` | ChatService CRUD, messages, sessions, workspace storage, migration, markdown export |
 | `test/draftState.test.js` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/graceful-shutdown.test.js` | Server shutdown on SIGINT/SIGTERM |
