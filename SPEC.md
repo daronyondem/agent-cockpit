@@ -194,7 +194,7 @@ Recursively deletes directory. Refuses filesystem root. Returns `{ deleted, pare
 |--------|------|------|-------------|
 | GET | `/conversations/:id/sessions` | — | Session list with `isCurrent` flag and `summary`. |
 | GET | `/conversations/:id/sessions/:num/messages` | — | Messages for a specific session. `400`/`404` on error. |
-| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session. `409` if streaming. Returns `{ conversation, newSessionNumber, archivedSession }`. |
+| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session, resets title to "New Chat". `409` if streaming. Returns `{ conversation, newSessionNumber, archivedSession }`. |
 
 ### 3.5 Backends
 
@@ -368,7 +368,7 @@ Unauthenticated requests redirect to `/auth/login`.
 | `addMessage(convId, role, content, backend, thinking)` | Appends to active session + updates index metadata. Auto-titles on first user message. `thinking` omitted if falsy. |
 | `updateMessageContent(convId, messageId, newContent)` | Truncates after target message, adds edited content as new message. |
 | `generateAndUpdateTitle(convId, userMessage)` | Generates a new title via the backend adapter's `generateTitle()` and persists it. Returns the new title or `null`. |
-| `resetSession(convId)` | Archives active session (summary, endedAt), creates new session. Returns `{ conversation, newSessionNumber, archivedSession }`. |
+| `resetSession(convId)` | Archives active session (summary, endedAt), creates new session, resets title to "New Chat". Returns `{ conversation, newSessionNumber, archivedSession }`. |
 | `getSessionHistory(convId)` | Returns sessions array with `isCurrent` flag and `summary`. |
 | `getSessionMessages(convId, sessionNumber)` | Reads session file directly. Returns messages or `null`. |
 | `sessionToMarkdown(convId, sessionNumber)` | Exports single session as markdown. |
@@ -657,7 +657,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 
 ### Session Management
 
-- **Reset:** archives active session with LLM summary, creates new session. Shows "Archiving session..." indicator. Blocked during streaming. Double-click prevented via `chatResettingConvs` set.
+- **Reset:** archives active session with LLM summary, creates new session, resets conversation title to "New Chat". Shows "Archiving session..." indicator. Blocked during streaming. Double-click prevented via `chatResettingConvs` set.
 - **History modal:** lists sessions with summaries, view and download buttons
 - **View session:** fetches archived messages from API
 
