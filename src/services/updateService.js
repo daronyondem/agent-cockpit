@@ -31,6 +31,12 @@ class UpdateService {
     }
   }
 
+  /** Trigger an immediate version check and return the updated status. */
+  async checkNow() {
+    await this._checkRemoteVersion();
+    return this.getStatus();
+  }
+
   /** Return cached update status. */
   getStatus() {
     return {

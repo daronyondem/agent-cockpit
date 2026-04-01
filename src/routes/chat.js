@@ -33,6 +33,17 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
     res.json(updateService.getStatus());
   });
 
+  // ── Manual version check ────────────────────────────────────────────────────
+  router.post('/check-version', csrfGuard, async (req, res) => {
+    if (!updateService) return res.status(501).json({ error: 'Update service not available' });
+    try {
+      const status = await updateService.checkNow();
+      res.json(status);
+    } catch (err) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // ── Trigger update ─────────────────────────────────────────────────────────
   router.post('/update-trigger', csrfGuard, async (req, res) => {
     if (!updateService) return res.status(501).json({ error: 'Update service not available' });
