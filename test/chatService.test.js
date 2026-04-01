@@ -376,6 +376,15 @@ describe('resetSession', () => {
     const loaded = await service.getConversation(conv.id);
     expect(loaded.sessionNumber).toBe(2);
     expect(loaded.messages).toHaveLength(0);
+    expect(loaded.title).toBe('New Chat');
+  });
+
+  test('resets conversation title to New Chat', async () => {
+    const conv = await service.createConversation('My Custom Title');
+    await service.addMessage(conv.id, 'user', 'Hello');
+
+    const result = await service.resetSession(conv.id);
+    expect(result.conversation.title).toBe('New Chat');
   });
 
   test('creates session files on disk', async () => {

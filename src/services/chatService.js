@@ -445,6 +445,7 @@ class ChatService {
     const newSessionId = this._newId();
 
     convEntry.currentSessionId = newSessionId;
+    convEntry.title = 'New Chat';
     convEntry.sessions.push({
       number: newSessionNumber,
       sessionId: newSessionId,
