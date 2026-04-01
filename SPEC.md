@@ -591,6 +591,12 @@ Returns cached update status from the server-side version checker:
 ```
 No CSRF required (read-only). The server checks the remote `origin/main` branch every 15 minutes via `git fetch` + `git show origin/main:package.json`.
 
+**Manual version check:**
+```
+POST /api/chat/check-version  [CSRF]
+```
+Triggers an immediate remote version check (git fetch + parse remote package.json) and returns the full update status object. Used when the user clicks the version label in the sidebar to check for updates on demand rather than waiting for the 15-minute poll.
+
 **Trigger update:**
 ```
 POST /api/chat/update-trigger  [CSRF]
@@ -910,6 +916,9 @@ Returns cached update status:
 }
 ```
 
+#### `checkNow()`
+Triggers an immediate `_checkRemoteVersion()` call (bypassing the 15-minute interval) and returns the result of `getStatus()`. Used by the `POST /api/chat/check-version` endpoint.
+
 #### `triggerUpdate({ hasActiveStreams })`
 Executes the full update sequence with guards:
 1. **Concurrent guard** — returns error if `_updateInProgress` is true
@@ -1177,7 +1186,7 @@ Theme is applied by setting `data-theme` attribute on `<html>`:
 - **Drag-and-drop overlay**: full-screen overlay when dragging files
 - **Prompt cards**: centered cards in empty state for quick conversation starters
 - **Sidebar footer**: Settings and Sign Out buttons at bottom of sidebar
-- **Version label** (`.chat-sidebar-version`): small muted text below Sign Out showing the app version (e.g., "v0.1.0"), fetched from `/api/chat/version` on init
+- **Version label** (`.chat-sidebar-version`): small muted text below Sign Out showing the app version (e.g., "v0.1.0"), fetched from `/api/chat/version` on init. Clickable — triggers a manual version check via `POST /api/chat/check-version`, shows "checking…" during the request, and updates the update indicator with the result
 - **Activity history** (`.chat-activity-history`): completed tool activities shown with checkmark icons and muted text
 - **Agent cards** (`.chat-agent-card`): sub-agent visualization with spinning animation (`.chat-agent-spinner`), agent type label, and description text
 - **Plan mode banner** (`.chat-plan-mode-banner`): green accent indicator showing "Plan mode active"
@@ -1362,6 +1371,7 @@ The `isNewSession` flag is determined by checking if the current session's `mess
 **`test/updateService.test.js`**:
 - Tests `_isNewer` semver comparison (equal, newer, older, different segment counts)
 - Tests `getStatus` returns correct initial state
+- Tests `checkNow` triggers immediate version check and returns status (success and failure cases)
 - Tests `triggerUpdate` guards: blocks when update already in progress, blocks when active streams exist, blocks when working tree is dirty
 - Tests `triggerUpdate` step execution and error reporting
 - Tests `start/stop` interval management
