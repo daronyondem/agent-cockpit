@@ -58,6 +58,10 @@ class MockBackendAdapter extends BaseBackendAdapter {
   async generateSummary(messages, fallback) {
     return fallback || `Session (${messages.length} messages)`;
   }
+
+  async generateTitle(userMessage, fallback) {
+    return this._mockTitle || fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+  }
 }
 
 function makeRequest(method, urlPath, body) {
@@ -525,6 +529,81 @@ describe('Turn complete event forwarding', () => {
 
     const turnCompletes = events.filter(e => e.type === 'turn_complete');
     expect(turnCompletes).toHaveLength(2);
+  });
+});
+
+// ── Auto title update on new session ────────────────────────────────────────
+
+describe('Auto title update on new session', () => {
+  test('sends title_updated event after first assistant message in reset session', async () => {
+    const conv = await chatService.createConversation('Original Title');
+    await chatService.addMessage(conv.id, 'user', 'Old topic');
+    await chatService.addMessage(conv.id, 'assistant', 'Old response');
+    await chatService.resetSession(conv.id);
+
+    mockBackend._mockTitle = 'New Topic Title';
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'New response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'New topic question',
+      backend: 'claude-code',
+    });
+
+    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const titleEvents = events.filter(e => e.type === 'title_updated');
+    expect(titleEvents).toHaveLength(1);
+    expect(titleEvents[0].title).toBe('New Topic Title');
+
+    // Verify title was persisted
+    const loaded = await chatService.getConversation(conv.id);
+    expect(loaded.title).toBe('New Topic Title');
+  });
+
+  test('does not send title_updated on first session', async () => {
+    const conv = await chatService.createConversation('New Chat');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'First response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello world',
+      backend: 'claude-code',
+    });
+
+    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const titleEvents = events.filter(e => e.type === 'title_updated');
+    expect(titleEvents).toHaveLength(0);
+  });
+
+  test('sends title_updated only once even with multiple assistant messages', async () => {
+    const conv = await chatService.createConversation('Original');
+    await chatService.addMessage(conv.id, 'user', 'Old msg');
+    await chatService.resetSession(conv.id);
+
+    mockBackend._mockTitle = 'Updated Title';
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'First part', streaming: true },
+      { type: 'turn_boundary' },
+      { type: 'text', content: 'Second part', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'New session question',
+      backend: 'claude-code',
+    });
+
+    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const titleEvents = events.filter(e => e.type === 'title_updated');
+    expect(titleEvents).toHaveLength(1);
   });
 });
 

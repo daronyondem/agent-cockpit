@@ -240,6 +240,7 @@ data: {"type":"<type>", ...fields}\n\n
 | `turn_complete` | — | Notifies client that tools finished and a new turn is starting |
 | `result` | `content` | Final result text from CLI |
 | `assistant_message` | `message` | Saved assistant message (intermediate or final) |
+| `title_updated` | `title` | Conversation title was auto-updated (sent after first assistant message in a reset session) |
 | `error` | `error` | Error message string |
 | `done` | — | Stream complete |
 
@@ -256,6 +257,8 @@ data: {"type":"<type>", ...fields}\n\n
 | `isPlanFile` | Write tool | `true` when writing to `.claude/plans/` |
 
 **Turn boundary behavior:** On `turn_boundary`, accumulated streaming content (text + thinking) is saved as an intermediate assistant message, and a `turn_complete` event is always sent to the client (even when there is no text to save). This allows the frontend to clear stale tool activity spinners when tools finish executing. On stream completion, final content is saved and `assistant_message` + `done` events are sent.
+
+**Auto title update:** When a new session starts after a reset (session number > 1) and the first assistant message is saved, the server asynchronously generates a new conversation title via `generateTitle()` on the backend adapter. A `title_updated` SSE event is sent with the new title. The title update fires only once per session (on the first assistant message) and does not block the stream.
 
 **Abort streaming:**
 ```
@@ -364,6 +367,7 @@ Unauthenticated requests redirect to `/auth/login`.
 | `updateConversationBackend(convId, backend)` | Updates backend field in workspace index. |
 | `addMessage(convId, role, content, backend, thinking)` | Appends to active session + updates index metadata. Auto-titles on first user message. `thinking` omitted if falsy. |
 | `updateMessageContent(convId, messageId, newContent)` | Truncates after target message, adds edited content as new message. |
+| `generateAndUpdateTitle(convId, userMessage)` | Generates a new title via the backend adapter's `generateTitle()` and persists it. Returns the new title or `null`. |
 | `resetSession(convId)` | Archives active session (summary, endedAt), creates new session. Returns `{ conversation, newSessionNumber, archivedSession }`. |
 | `getSessionHistory(convId)` | Returns sessions array with `isCurrent` flag and `summary`. |
 | `getSessionMessages(convId, sessionNumber)` | Reads session file directly. Returns messages or `null`. |
@@ -407,6 +411,7 @@ Abstract base class. Every backend must implement:
 - **`get metadata`** — returns `{ id, label, icon, capabilities }` where capabilities: `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans)
 - **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the SSE event contract in Section 3
 - **`generateSummary(messages, fallback)`** — returns a one-line summary string
+- **`generateTitle(userMessage, fallback)`** — returns a short conversation title. Base class provides a default that truncates the user message to 80 chars.
 
 #### BackendRegistry (`src/services/backends/registry.js`)
 
@@ -461,10 +466,12 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
 
 **`generateSummary(messages, fallback)`** — spawns `claude --print -p <prompt>` with 30s timeout. Falls back gracefully.
 
+**`generateTitle(userMessage, fallback)`** — spawns `claude --print -p <prompt>` with 30s timeout to generate a short title (max 60 chars) from the user's first message. Falls back to truncated user message.
+
 #### Adding a New Backend
 
 1. Create `src/services/backends/myBackend.js` extending `BaseBackendAdapter`
-2. Implement `metadata`, `sendMessage()`, `generateSummary()`
+2. Implement `metadata`, `sendMessage()`, `generateSummary()`, and optionally `generateTitle()`
 3. Register in `server.js` — no other changes needed
 
 ### 4.3 UpdateService
@@ -626,6 +633,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 - **Thinking events:** clear stale tool/agent activity state, ensuring spinners don't persist while the model thinks after tool execution.
 - **Plan approval:** renders plan as markdown with approve/reject buttons → POSTs to `/input`
 - **User questions:** renders question text + option buttons → POSTs answer to `/input`
+- **Auto title update:** handles `title_updated` SSE event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
 - **Stream cleanup:** `chatCleanupStreamState()` accepts `{ force }` option. The `finally` block uses `force: true` to ensure cleanup even when a pending interaction was never resolved. Interaction response handlers also use forced cleanup when the stream has already ended.
 - **Send button state:** shows stop (■) when streaming, send (↑) when idle. Disabled during uploads or session resets.
 
@@ -756,9 +764,9 @@ Update OAuth callback URLs to include the ngrok URL.
 
 | File | Focus |
 |------|-------|
-| `test/backends.test.js` | BaseBackendAdapter, BackendRegistry, ClaudeCodeAdapter, extractToolDetails |
-| `test/chat.test.js` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, file upload/serve, workspace instructions |
-| `test/chatService.test.js` | ChatService CRUD, messages, sessions, workspace storage, migration, markdown export |
+| `test/backends.test.js` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails |
+| `test/chat.test.js` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, auto title update on session reset, file upload/serve, workspace instructions |
+| `test/chatService.test.js` | ChatService CRUD, messages, sessions, generateAndUpdateTitle, workspace storage, migration, markdown export |
 | `test/draftState.test.js` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/graceful-shutdown.test.js` | Server shutdown on SIGINT/SIGTERM |
 | `test/sessionStore.test.js` | Session file-store persistence |

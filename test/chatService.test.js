@@ -309,6 +309,52 @@ describe('updateMessageContent', () => {
   });
 });
 
+// ── Title Generation ────────────────────────────────────────────────────────
+
+describe('generateAndUpdateTitle', () => {
+  test('updates conversation title with fallback when no adapter', async () => {
+    const conv = await service.createConversation('Old Title');
+    const newTitle = await service.generateAndUpdateTitle(conv.id, 'How do I deploy to production?');
+    expect(newTitle).toBe('How do I deploy to production?');
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded.title).toBe('How do I deploy to production?');
+  });
+
+  test('truncates long messages in fallback title', async () => {
+    const conv = await service.createConversation('Old Title');
+    const longMsg = 'A'.repeat(100);
+    const newTitle = await service.generateAndUpdateTitle(conv.id, longMsg);
+    expect(newTitle).toBe('A'.repeat(80));
+  });
+
+  test('uses adapter generateTitle when available', async () => {
+    const { BackendRegistry } = require('../src/services/backends/registry');
+    const { BaseBackendAdapter } = require('../src/services/backends/base');
+
+    class TitleAdapter extends BaseBackendAdapter {
+      get metadata() { return { id: 'claude-code', label: 'Test', icon: null, capabilities: {} }; }
+      sendMessage() { return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} }; }
+      async generateSummary(msgs, fb) { return fb; }
+      async generateTitle(msg) { return 'LLM Generated Title'; }
+    }
+
+    const registry = new BackendRegistry();
+    registry.register(new TitleAdapter());
+    const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE, backendRegistry: registry });
+    await svc.initialize();
+
+    const conv = await svc.createConversation('Old Title');
+    const newTitle = await svc.generateAndUpdateTitle(conv.id, 'some message');
+    expect(newTitle).toBe('LLM Generated Title');
+    const loaded = await svc.getConversation(conv.id);
+    expect(loaded.title).toBe('LLM Generated Title');
+  });
+
+  test('returns null for non-existent conversation', async () => {
+    expect(await service.generateAndUpdateTitle('nonexistent', 'msg')).toBeNull();
+  });
+});
+
 // ── Session Management ───────────────────────────────────────────────────────
 
 describe('resetSession', () => {

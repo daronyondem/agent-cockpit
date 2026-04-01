@@ -349,7 +349,9 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
       workingDir: conv.workingDir || null,
       systemPrompt,
     });
-    activeStreams.set(convId, { stream, abort, sendInput, backend: backendId });
+    // Flag for auto-title update: new session after a reset (session > 1)
+    const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
+    activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });
 
     // Return the user message — frontend will open GET SSE for streaming
     res.json({ userMessage: userMsg, streamReady: true });
@@ -395,6 +397,24 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
     let resultText = null;
     let hasStreamingDeltas = false;
     let pendingPlanContent = '';  // Plan file content from Write tool (Claude Code specific)
+    let titleUpdateTriggered = false;
+    let titleUpdatePromise = null;
+
+    // Helper: trigger async title update after first assistant message in a new session
+    function maybeUpdateTitle() {
+      if (titleUpdateTriggered || !entry.needsTitleUpdate || !entry.titleUpdateMessage) return;
+      titleUpdateTriggered = true;
+      titleUpdatePromise = chatService.generateAndUpdateTitle(convId, entry.titleUpdateMessage)
+        .then((newTitle) => {
+          if (newTitle && !res.writableEnded) {
+            console.log(`[chat] Title updated for conv=${convId}: ${newTitle}`);
+            res.write(`data: ${JSON.stringify({ type: 'title_updated', title: newTitle })}\n\n`);
+          }
+        })
+        .catch((err) => {
+          console.error(`[chat] Failed to update title for conv=${convId}:`, err.message);
+        });
+    }
 
     (async () => {
       try {
@@ -419,6 +439,7 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
               console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}`);
               const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null);
               res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: intermediateMsg })}\n\n`);
+              maybeUpdateTitle();
             }
             // Always notify frontend that tools completed, even when no text to save
             res.write(`data: ${JSON.stringify({ type: 'turn_complete' })}\n\n`);
@@ -453,14 +474,18 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
                 console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}`);
                 const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null);
                 res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
+                maybeUpdateTitle();
               }
             } else if (resultText && resultText.trim()) {
               console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}`);
               const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null);
               res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
+              maybeUpdateTitle();
             } else {
               console.log(`[chat] Stream done for conv=${convId}, no content to save`);
             }
+            // Wait for pending title update before closing the stream
+            if (titleUpdatePromise) await titleUpdatePromise;
             res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
           }
         }

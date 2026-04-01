@@ -1522,6 +1522,18 @@ async function chatSendMessage() {
               chatUpdateHeader();
             }
             chatLoadConversations();
+          } else if (event.type === 'title_updated') {
+            // Server generated a new title after a session reset
+            if (isStillActive && chatActiveConv) {
+              chatActiveConv.title = event.title;
+              chatUpdateHeader();
+            }
+            // Update sidebar conversation list
+            const sidebarConv = chatConversations.find(c => c.id === targetConvId);
+            if (sidebarConv) {
+              sidebarConv.title = event.title;
+              chatRenderConvList();
+            }
           } else if (event.type === 'error') {
             st.pendingInteraction = null;
             st.activeTools = [];
