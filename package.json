@@ -1,6 +1,6 @@
 {
   "name": "agent-cockpit",
-  "version": "0.1.18",
+  "version": "0.1.19",
   "private": true,
   "scripts": {
     "start": "node server.js",
