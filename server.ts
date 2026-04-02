@@ -1,17 +1,20 @@
-const net = require('net');
-const path = require('path');
-const express = require('express');
-const session = require('express-session');
-const FileStore = require('session-file-store')(session);
-const config = require('./src/config');
-const { setupAuth, requireAuth } = require('./src/middleware/auth');
-const { ensureCsrfToken } = require('./src/middleware/csrf');
-const { applySecurity } = require('./src/middleware/security');
-const { createChatRouter } = require('./src/routes/chat');
-const { ChatService } = require('./src/services/chatService');
-const { BackendRegistry } = require('./src/services/backends/registry');
-const { ClaudeCodeAdapter } = require('./src/services/backends/claudeCode');
-const { UpdateService } = require('./src/services/updateService');
+import net from 'net';
+import path from 'path';
+import express from 'express';
+import session from 'express-session';
+import FileStoreFactory from 'session-file-store';
+import config from './src/config';
+import { setupAuth, requireAuth } from './src/middleware/auth';
+import { ensureCsrfToken } from './src/middleware/csrf';
+import { applySecurity } from './src/middleware/security';
+import { createChatRouter } from './src/routes/chat';
+import { ChatService } from './src/services/chatService';
+import { BackendRegistry } from './src/services/backends/registry';
+import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
+import { UpdateService } from './src/services/updateService';
+import type { Request, Response, NextFunction } from './src/types';
+
+const FileStore = FileStoreFactory(session);
 
 const app = express();
 
@@ -37,12 +40,14 @@ app.use(session({
 }));
 
 // Passport 0.7 regenerate/save polyfill — must come BEFORE setupAuth
-app.use((req, res, next) => {
+app.use((req: Request, _res: Response, next: NextFunction) => {
   if (req.session && !req.session.regenerate) {
-    req.session.regenerate = (cb) => cb();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (req.session as any).regenerate = (cb: () => void) => cb();
   }
   if (req.session && !req.session.save) {
-    req.session.save = (cb) => cb();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (req.session as any).save = (cb: () => void) => cb();
   }
   next();
 });
@@ -54,7 +59,7 @@ app.use(ensureCsrfToken);
 
 app.use(express.json());
 
-app.get('/api/csrf-token', (req, res) => {
+app.get('/api/csrf-token', (req: Request, res: Response) => {
   res.json({ csrfToken: req.session.csrfToken });
 });
 
@@ -69,7 +74,7 @@ app.use('/api/chat', chatRouter);
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Port guard — prevent orphan processes and port conflicts
-function checkPort(port) {
+function checkPort(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const tester = net.createServer()
       .once('error', () => resolve(false))
@@ -95,7 +100,7 @@ chatService.initialize().then(async () => {
     console.log(`Agent Cockpit running on port ${config.PORT}`);
   });
 
-  function shutdown(signal) {
+  function shutdown(signal: string) {
     console.log(`\n[shutdown] Received ${signal}, shutting down gracefully...`);
 
     chatShutdown();

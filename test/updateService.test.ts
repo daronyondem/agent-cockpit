@@ -1,4 +1,4 @@
-const path = require('path');
+import path from 'path';
 
 // ── Mock child_process.execFile ─────────────────────────────────────────────
 
@@ -6,19 +6,18 @@ const mockExecFileFn = jest.fn();
 const mockSpawnResult = { unref: jest.fn() };
 const mockSpawnFn = jest.fn(() => mockSpawnResult);
 jest.mock('child_process', () => ({
-  execFile: (...args) => mockExecFileFn(...args),
-  spawn: (...args) => mockSpawnFn(...args),
+  execFile: function () { return mockExecFileFn.apply(null, arguments); },
+  spawn: function () { return mockSpawnFn.apply(null, arguments); },
 }));
 
-const { UpdateService } = require('../src/services/updateService');
+import { UpdateService } from '../src/services/updateService';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-function mockExecFile(responses) {
+function mockExecFile(responses: Array<{ stdout?: string; stderr?: string; error?: string }>) {
   let callIndex = 0;
-  mockExecFileFn.mockImplementation((cmd, args, opts, cb) => {
-    const key = cmd + ' ' + args.join(' ');
-    const entry = responses[callIndex++] || responses[key];
+  mockExecFileFn.mockImplementation((_cmd: string, _args: string[], _opts: any, cb: Function) => {
+    const entry = responses[callIndex++];
     if (!entry) {
       cb(null, '', '');
       return;
@@ -34,7 +33,7 @@ function mockExecFile(responses) {
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('UpdateService', () => {
-  let service;
+  let service: UpdateService;
   const appRoot = path.join(__dirname, '..');
 
   beforeEach(() => {
@@ -52,36 +51,36 @@ describe('UpdateService', () => {
 
   describe('_isNewer', () => {
     test('returns false when versions are equal', () => {
-      expect(service._isNewer('0.1.5', '0.1.5')).toBe(false);
+      expect((service as any)._isNewer('0.1.5', '0.1.5')).toBe(false);
     });
 
     test('returns true when remote is newer (patch)', () => {
-      expect(service._isNewer('0.1.6', '0.1.5')).toBe(true);
+      expect((service as any)._isNewer('0.1.6', '0.1.5')).toBe(true);
     });
 
     test('returns true when remote is newer (minor)', () => {
-      expect(service._isNewer('0.2.0', '0.1.9')).toBe(true);
+      expect((service as any)._isNewer('0.2.0', '0.1.9')).toBe(true);
     });
 
     test('returns true when remote is newer (major)', () => {
-      expect(service._isNewer('1.0.0', '0.9.9')).toBe(true);
+      expect((service as any)._isNewer('1.0.0', '0.9.9')).toBe(true);
     });
 
     test('returns false when remote is older', () => {
-      expect(service._isNewer('0.1.4', '0.1.5')).toBe(false);
+      expect((service as any)._isNewer('0.1.4', '0.1.5')).toBe(false);
     });
 
     test('returns false when remote is null', () => {
-      expect(service._isNewer(null, '0.1.5')).toBe(false);
+      expect((service as any)._isNewer(null, '0.1.5')).toBe(false);
     });
 
     test('returns false when local is null', () => {
-      expect(service._isNewer('0.1.5', null)).toBe(false);
+      expect((service as any)._isNewer('0.1.5', null)).toBe(false);
     });
 
     test('handles different segment counts', () => {
-      expect(service._isNewer('0.1.5.1', '0.1.5')).toBe(true);
-      expect(service._isNewer('0.1.5', '0.1.5.1')).toBe(false);
+      expect((service as any)._isNewer('0.1.5.1', '0.1.5')).toBe(true);
+      expect((service as any)._isNewer('0.1.5', '0.1.5.1')).toBe(false);
     });
   });
 
@@ -99,7 +98,7 @@ describe('UpdateService', () => {
     });
 
     test('returns updateAvailable true when remote is newer', () => {
-      service._latestRemoteVersion = '99.0.0';
+      (service as any)._latestRemoteVersion = '99.0.0';
       const status = service.getStatus();
       expect(status.updateAvailable).toBe(true);
       expect(status.remoteVersion).toBe('99.0.0');
@@ -110,17 +109,16 @@ describe('UpdateService', () => {
 
   describe('start / stop', () => {
     test('starts and stops the polling interval', () => {
-      // Mock the version check to avoid real git calls
       mockExecFile([
-        { stdout: '' }, // git fetch
-        { stdout: JSON.stringify({ version: '0.1.5' }) }, // git show
+        { stdout: '' },
+        { stdout: JSON.stringify({ version: '0.1.5' }) },
       ]);
 
       service.start();
-      expect(service._checkInterval).not.toBeNull();
+      expect((service as any)._checkInterval).not.toBeNull();
 
       service.stop();
-      expect(service._checkInterval).toBeNull();
+      expect((service as any)._checkInterval).toBeNull();
     });
   });
 
@@ -129,14 +127,14 @@ describe('UpdateService', () => {
   describe('_checkRemoteVersion', () => {
     test('updates remote version on success', async () => {
       mockExecFile([
-        { stdout: '' }, // git fetch
-        { stdout: JSON.stringify({ version: '0.2.0' }) }, // git show
+        { stdout: '' },
+        { stdout: JSON.stringify({ version: '0.2.0' }) },
       ]);
 
-      await service._checkRemoteVersion();
-      expect(service._latestRemoteVersion).toBe('0.2.0');
-      expect(service._lastCheckAt).not.toBeNull();
-      expect(service._lastError).toBeNull();
+      await (service as any)._checkRemoteVersion();
+      expect((service as any)._latestRemoteVersion).toBe('0.2.0');
+      expect((service as any)._lastCheckAt).not.toBeNull();
+      expect((service as any)._lastError).toBeNull();
     });
 
     test('sets lastError on failure', async () => {
@@ -144,9 +142,9 @@ describe('UpdateService', () => {
         { error: 'fatal: could not fetch' },
       ]);
 
-      await service._checkRemoteVersion();
-      expect(service._lastError).toBe('fatal: could not fetch');
-      expect(service._latestRemoteVersion).toBeNull();
+      await (service as any)._checkRemoteVersion();
+      expect((service as any)._lastError).toBe('fatal: could not fetch');
+      expect((service as any)._latestRemoteVersion).toBeNull();
     });
   });
 
@@ -155,8 +153,8 @@ describe('UpdateService', () => {
   describe('checkNow', () => {
     test('triggers a version check and returns status', async () => {
       mockExecFile([
-        { stdout: '' }, // git fetch
-        { stdout: JSON.stringify({ version: '0.3.0' }) }, // git show
+        { stdout: '' },
+        { stdout: JSON.stringify({ version: '0.3.0' }) },
       ]);
 
       const status = await service.checkNow();
@@ -181,7 +179,7 @@ describe('UpdateService', () => {
 
   describe('triggerUpdate', () => {
     test('blocks when update is already in progress', async () => {
-      service._updateInProgress = true;
+      (service as any)._updateInProgress = true;
       const result = await service.triggerUpdate();
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/already in progress/);
@@ -197,7 +195,7 @@ describe('UpdateService', () => {
 
     test('blocks when working tree is dirty', async () => {
       mockExecFile([
-        { stdout: ' M server.js\n' }, // git status --porcelain
+        { stdout: ' M server.js\n' },
       ]);
 
       const result = await service.triggerUpdate({
@@ -208,12 +206,11 @@ describe('UpdateService', () => {
     });
 
     test('ignores expected untracked files in git status', async () => {
-      // git status shows only runtime artifacts -> should proceed
       mockExecFile([
-        { stdout: '?? data/sessions/abc.json\n?? .env\n?? ecosystem.config.js\n?? .DS_Store\n?? .claude/something\n' }, // git status
-        { stdout: 'Already on \'main\'\n' }, // git checkout
-        { stdout: 'Already up to date.\n' }, // git pull
-        { stdout: 'up to date\n' }, // npm install
+        { stdout: '?? data/sessions/abc.json\n?? .env\n?? ecosystem.config.js\n?? .DS_Store\n?? .claude/something\n' },
+        { stdout: 'Already on \'main\'\n' },
+        { stdout: 'Already up to date.\n' },
+        { stdout: 'up to date\n' },
       ]);
 
       const result = await service.triggerUpdate({
@@ -226,10 +223,10 @@ describe('UpdateService', () => {
 
     test('executes all steps on success', async () => {
       mockExecFile([
-        { stdout: '' }, // git status (clean)
-        { stdout: 'Already on \'main\'\n' }, // git checkout
-        { stdout: 'Updating abc..def\n' }, // git pull
-        { stdout: 'added 0 packages\n' }, // npm install
+        { stdout: '' },
+        { stdout: 'Already on \'main\'\n' },
+        { stdout: 'Updating abc..def\n' },
+        { stdout: 'added 0 packages\n' },
       ]);
 
       const result = await service.triggerUpdate({
@@ -242,16 +239,15 @@ describe('UpdateService', () => {
       expect(result.steps[2].name).toBe('npm install');
       expect(result.steps[3].name).toBe('pm2 restart');
       result.steps.forEach(s => expect(s.success).toBe(true));
-      // PM2 restart uses detached spawn (fire-and-forget)
       expect(mockSpawnFn).toHaveBeenCalledWith('pm2', expect.arrayContaining(['restart']), expect.objectContaining({ detached: true }));
       expect(mockSpawnResult.unref).toHaveBeenCalled();
     });
 
     test('stops at first failed step and reports error', async () => {
       mockExecFile([
-        { stdout: '' }, // git status (clean)
-        { stdout: 'Switched to branch \'main\'\n' }, // git checkout
-        { error: 'fatal: could not connect to remote' }, // git pull fails
+        { stdout: '' },
+        { stdout: 'Switched to branch \'main\'\n' },
+        { error: 'fatal: could not connect to remote' },
       ]);
 
       const result = await service.triggerUpdate({
@@ -266,12 +262,12 @@ describe('UpdateService', () => {
 
     test('resets updateInProgress flag after failure', async () => {
       mockExecFile([
-        { stdout: '' }, // git status
-        { error: 'checkout failed' }, // git checkout fails
+        { stdout: '' },
+        { error: 'checkout failed' },
       ]);
 
       await service.triggerUpdate({ hasActiveStreams: () => false });
-      expect(service._updateInProgress).toBe(false);
+      expect((service as any)._updateInProgress).toBe(false);
     });
 
     test('resets updateInProgress flag after success', async () => {
@@ -283,7 +279,7 @@ describe('UpdateService', () => {
       ]);
 
       await service.triggerUpdate({ hasActiveStreams: () => false });
-      expect(service._updateInProgress).toBe(false);
+      expect((service as any)._updateInProgress).toBe(false);
     });
   });
 });

@@ -1,7 +1,20 @@
-const { spawn, execFile } = require('child_process');
-const path = require('path');
-const os = require('os');
-const { BaseBackendAdapter } = require('./base');
+import { spawn, execFile, type ChildProcess } from 'child_process';
+import path from 'path';
+import os from 'os';
+import { BaseBackendAdapter } from './base';
+import type {
+  BackendMetadata,
+  SendMessageOptions,
+  SendMessageResult,
+  StreamEvent,
+  Message,
+  ToolDetail,
+  ToolOutcomeResult,
+  UsageEvent,
+  CliEvent,
+  CliToolUseBlock,
+  CliToolResultBlock,
+} from '../../types';
 
 // ── Icon ────────────────────────────────────────────────────────────────────
 
@@ -11,13 +24,8 @@ const CLAUDE_CODE_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill
 
 const MAX_SYSTEM_PROMPT_LENGTH = 50000;
 
-/**
- * Strip control characters (keep newlines, tabs, carriage returns) and
- * enforce a max length so the CLI argument stays safe and bounded.
- */
-function sanitizeSystemPrompt(prompt) {
+export function sanitizeSystemPrompt(prompt: string | null | undefined): string {
   if (!prompt || typeof prompt !== 'string') return '';
-  // Remove control chars except \n \r \t
   let cleaned = prompt.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
   if (cleaned.length > MAX_SYSTEM_PROMPT_LENGTH) {
     cleaned = cleaned.substring(0, MAX_SYSTEM_PROMPT_LENGTH);
@@ -27,56 +35,42 @@ function sanitizeSystemPrompt(prompt) {
 
 const API_ERROR_PATTERN = /^API Error:\s*\d{3}\s/;
 
-/**
- * Detect whether text content is an API error message from the Claude CLI
- * (e.g. "API Error: 500 {"type":"error",...}").
- */
-function isApiError(text) {
+export function isApiError(text: string): boolean {
   return API_ERROR_PATTERN.test(text.trim());
 }
 
-function shortenPath(filePath) {
+export function shortenPath(filePath: string): string {
   if (!filePath) return '';
   const parts = filePath.split('/');
   if (parts.length <= 3) return filePath;
   return '.../' + parts.slice(-2).join('/');
 }
 
-/**
- * Extract a short outcome summary from a tool_result content string.
- * Returns { outcome: string, status: 'success'|'error'|'warning'|null } or null.
- */
-function extractToolOutcome(toolName, content) {
+export function extractToolOutcome(toolName: string | undefined, content: unknown): ToolOutcomeResult | null {
   if (content == null) return null;
   const text = typeof content === 'string' ? content : JSON.stringify(content);
   if (!text) return null;
 
-  // Bash: detect exit codes
   if (toolName === 'Bash') {
-    // Claude Code tool results often include exit code info
     const exitMatch = text.match(/exit (?:code|status)[:\s]*(\d+)/i) || text.match(/exited with (\d+)/i);
     if (exitMatch) {
       const code = parseInt(exitMatch[1], 10);
       return { outcome: `exit ${code}`, status: code === 0 ? 'success' : 'error' };
     }
-    // Check for common error patterns
     if (/error|ENOENT|command not found|permission denied/i.test(text.slice(0, 500))) {
       return { outcome: 'error', status: 'error' };
     }
     return { outcome: 'done', status: 'success' };
   }
 
-  // Grep: count matches
   if (toolName === 'Grep') {
     const lines = text.split('\n').filter(l => l.trim());
     if (text.includes('No matches found') || lines.length === 0) {
       return { outcome: '0 matches', status: 'warning' };
     }
-    // Count non-empty lines as approximate matches
     return { outcome: `${lines.length} match${lines.length !== 1 ? 'es' : ''}`, status: 'success' };
   }
 
-  // Glob: count files
   if (toolName === 'Glob') {
     const lines = text.split('\n').filter(l => l.trim());
     if (lines.length === 0 || text.includes('No files found') || text.includes('No matches')) {
@@ -85,7 +79,6 @@ function extractToolOutcome(toolName, content) {
     return { outcome: `${lines.length} file${lines.length !== 1 ? 's' : ''}`, status: 'success' };
   }
 
-  // Read: success or not found
   if (toolName === 'Read') {
     if (/not found|does not exist|ENOENT|no such file/i.test(text.slice(0, 200))) {
       return { outcome: 'not found', status: 'error' };
@@ -93,7 +86,6 @@ function extractToolOutcome(toolName, content) {
     return { outcome: 'read', status: 'success' };
   }
 
-  // Write: success
   if (toolName === 'Write') {
     if (/error|failed/i.test(text.slice(0, 200))) {
       return { outcome: 'failed', status: 'error' };
@@ -101,7 +93,6 @@ function extractToolOutcome(toolName, content) {
     return { outcome: 'written', status: 'success' };
   }
 
-  // Edit: success or no match
   if (toolName === 'Edit') {
     if (/not found|no match|not unique/i.test(text.slice(0, 300))) {
       return { outcome: 'no match', status: 'error' };
@@ -109,7 +100,6 @@ function extractToolOutcome(toolName, content) {
     return { outcome: 'edited', status: 'success' };
   }
 
-  // Agent: success or error
   if (toolName === 'Agent') {
     if (/error|failed|exception/i.test(text.slice(0, 300))) {
       return { outcome: 'error', status: 'error' };
@@ -117,7 +107,6 @@ function extractToolOutcome(toolName, content) {
     return { outcome: 'done', status: 'success' };
   }
 
-  // WebSearch/WebFetch
   if (toolName === 'WebSearch') {
     const lines = text.split('\n').filter(l => l.trim());
     return { outcome: `${Math.max(lines.length, 1)} result${lines.length !== 1 ? 's' : ''}`, status: 'success' };
@@ -132,38 +121,38 @@ function extractToolOutcome(toolName, content) {
   return null;
 }
 
-function extractToolDetails(block) {
+export function extractToolDetails(block: CliToolUseBlock): ToolDetail {
   const name = block.name;
-  const input = block.input || {};
-  const detail = { tool: name, id: block.id || null };
+  const input = (block.input || {}) as Record<string, unknown>;
+  const detail: ToolDetail = { tool: name, id: block.id || null, description: '' };
 
   switch (name) {
     case 'Read':
       detail.description = input.file_path
-        ? `Reading \`${shortenPath(input.file_path)}\``
+        ? `Reading \`${shortenPath(input.file_path as string)}\``
         : 'Reading file';
       break;
     case 'Write':
       detail.description = input.file_path
-        ? `Writing \`${shortenPath(input.file_path)}\``
+        ? `Writing \`${shortenPath(input.file_path as string)}\``
         : 'Writing file';
-      detail.isPlanFile = !!(input.file_path && input.file_path.includes('.claude/plans/'));
+      detail.isPlanFile = !!(input.file_path && (input.file_path as string).includes('.claude/plans/'));
       if (detail.isPlanFile && input.content) {
-        detail.planContent = input.content;
+        detail.planContent = input.content as string;
       }
       break;
     case 'Edit':
       detail.description = input.file_path
-        ? `Editing \`${shortenPath(input.file_path)}\``
+        ? `Editing \`${shortenPath(input.file_path as string)}\``
         : 'Editing file';
       break;
     case 'Bash':
       if (input.description) {
-        detail.description = input.description;
+        detail.description = input.description as string;
       } else if (input.command) {
-        const cmd = input.command.length > 60
-          ? input.command.substring(0, 60) + '...'
-          : input.command;
+        const cmd = (input.command as string).length > 60
+          ? (input.command as string).substring(0, 60) + '...'
+          : input.command as string;
         detail.description = `Running: \`${cmd}\``;
       } else {
         detail.description = 'Running command';
@@ -180,8 +169,8 @@ function extractToolDetails(block) {
         : 'Finding files';
       break;
     case 'Agent':
-      detail.description = input.description || 'Running sub-agent';
-      detail.subagentType = input.subagent_type || 'general-purpose';
+      detail.description = (input.description as string) || 'Running sub-agent';
+      detail.subagentType = (input.subagent_type as string) || 'general-purpose';
       detail.isAgent = true;
       break;
     case 'TodoWrite':
@@ -210,7 +199,7 @@ function extractToolDetails(block) {
     case 'AskUserQuestion':
       detail.description = 'Asking a question';
       detail.isQuestion = true;
-      detail.questions = input.questions || [];
+      detail.questions = (input.questions as string[]) || [];
       break;
     default:
       detail.description = `Using ${name}`;
@@ -219,11 +208,7 @@ function extractToolDetails(block) {
   return detail;
 }
 
-/**
- * Extract normalised usage data from a Claude CLI result event.
- * Returns a { type: 'usage', usage: {...} } object, or null if no usage info.
- */
-function extractUsage(event) {
+export function extractUsage(event: { usage?: Record<string, number>; cost_usd?: number }): UsageEvent | null {
   const raw = event.usage;
   const hasCost = typeof event.cost_usd === 'number';
   if (!raw && !hasCost) return null;
@@ -242,13 +227,18 @@ function extractUsage(event) {
 
 // ── Adapter ─────────────────────────────────────────────────────────────────
 
-class ClaudeCodeAdapter extends BaseBackendAdapter {
-  constructor(options = {}) {
+interface StreamState {
+  proc: ChildProcess | null;
+  aborted: boolean;
+}
+
+export class ClaudeCodeAdapter extends BaseBackendAdapter {
+  constructor(options: { workingDir?: string } = {}) {
     super(options);
     this.workingDir = options.workingDir || path.resolve(os.homedir(), '.openclaw', 'workspace');
   }
 
-  get metadata() {
+  get metadata(): BackendMetadata {
     return {
       id: 'claude-code',
       label: 'Claude Code',
@@ -264,8 +254,8 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
     };
   }
 
-  sendMessage(message, options = {}) {
-    const state = { proc: null, aborted: false };
+  sendMessage(message: string, options: SendMessageOptions = {} as SendMessageOptions): SendMessageResult {
+    const state: StreamState = { proc: null, aborted: false };
 
     const stream = this._createStream(message, options, state);
     const abort = () => {
@@ -275,7 +265,7 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
         state.proc = null;
       }
     };
-    const sendInput = (text) => {
+    const sendInput = (text: string) => {
       if (state.proc && state.proc.stdin && !state.proc.stdin.destroyed) {
         state.proc.stdin.write(text + '\n');
       }
@@ -284,7 +274,7 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
     return { stream, abort, sendInput };
   }
 
-  async generateSummary(messages, fallback) {
+  async generateSummary(messages: Pick<Message, 'role' | 'content'>[], fallback: string): Promise<string> {
     if (!messages || messages.length === 0) return fallback || 'Empty session';
     try {
       let sessionText = '';
@@ -296,7 +286,7 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
       }
       const prompt = `Summarize the following chat session in one concise sentence (100-150 characters max). Only output the summary, nothing else:\n\n${sessionText}`;
 
-      return await new Promise((resolve) => {
+      return await new Promise<string>((resolve) => {
         execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
           if (err || !stdout.trim()) {
             resolve(fallback || `Session (${messages.length} messages)`);
@@ -310,7 +300,7 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
     }
   }
 
-  async generateTitle(userMessage, fallback) {
+  async generateTitle(userMessage: string, fallback: string): Promise<string> {
     if (!userMessage || typeof userMessage !== 'string' || !userMessage.trim()) {
       return fallback || 'New Chat';
     }
@@ -318,7 +308,7 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
       const truncated = userMessage.substring(0, 2000);
       const prompt = `Generate a short, descriptive title (max 60 characters) for a conversation that starts with this user message. Only output the title text, nothing else — no quotes, no prefix:\n\n${truncated}`;
 
-      return await new Promise((resolve) => {
+      return await new Promise<string>((resolve) => {
         execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
           if (err || !stdout.trim()) {
             resolve(fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat');
@@ -334,7 +324,11 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
 
   // ── Private ───────────────────────────────────────────────────────────────
 
-  async *_createStream(message, options, state) {
+  async *_createStream(
+    message: string,
+    options: SendMessageOptions,
+    state: StreamState,
+  ): AsyncGenerator<StreamEvent> {
     const { sessionId, isNewSession, workingDir, systemPrompt } = options;
 
     const args = [
@@ -357,7 +351,7 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
     args.push('-p', message);
 
     try {
-      const cwd = workingDir || this.workingDir;
+      const cwd = workingDir || this.workingDir || undefined;
       console.log(`[claudeCode] spawning claude, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} systemPromptLen=${(systemPrompt || '').length} cwd=${cwd}`);
       const proc = spawn('claude', args, {
         cwd,
@@ -368,42 +362,39 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
       state.proc = proc;
 
       let buffer = '';
-      const textQueue = [];
-      let resolveWait = null;
+      const textQueue: StreamEvent[] = [];
+      let resolveWait: (() => void) | null = null;
       let done = false;
       let stderrOutput = '';
-      const toolNameById = {};  // Track tool names by id for outcome extraction
-      let lastProgressAgentId = null;  // tool_use_id from the most recent task_progress — identifies current agent context
+      const toolNameById: Record<string, string> = {};
+      let lastProgressAgentId: string | null = null;
 
-      proc.stdout.on('data', (chunk) => {
+      proc.stdout!.on('data', (chunk: Buffer) => {
         const raw = chunk.toString();
         console.log(`[claudeCode] stdout chunk (${raw.length} bytes)`);
         buffer += raw;
         const lines = buffer.split('\n');
-        buffer = lines.pop();
+        buffer = lines.pop()!;
 
         for (const line of lines) {
           if (!line.trim()) continue;
           try {
-            const event = JSON.parse(line);
-            // Debug: log all event types with key fields
+            const event = JSON.parse(line) as CliEvent;
             if (event.type === 'system') {
               const keys = Object.keys(event).filter(k => k !== 'type').join(',');
               const sub = event.subtype || event.event || event.tool || '';
               console.log(`[claudeCode] parsed event type=system subtype=${sub} keys=[${keys}]`);
             } else if (event.type === 'assistant') {
-              const blocks = (event.message?.content || []).map(b => b.type + (b.name ? ':' + b.name : '')).join(',');
+              const blocks = (event.message?.content || []).map(b => b.type + ('name' in b && b.name ? ':' + b.name : '')).join(',');
               console.log(`[claudeCode] parsed event type=assistant blocks=[${blocks}]`);
             } else {
               console.log(`[claudeCode] parsed event type=${event.type}`, event.type === 'content_block_delta' ? `delta.type=${event.delta?.type}` : '');
             }
-            // Handle system events for agent lifecycle (task_started, task_progress, task_notification)
+
             if (event.type === 'system' && event.subtype) {
               if (event.subtype === 'task_progress' && event.tool_use_id) {
-                // Track which agent context we're in — subsequent inner tools belong to this agent
                 lastProgressAgentId = event.tool_use_id;
               } else if (event.subtype === 'task_notification' && event.tool_use_id) {
-                // Agent task completed — emit tool_outcomes so frontend can mark it done
                 const status = event.status === 'completed' ? 'success' : (event.status || 'success');
                 textQueue.push({
                   type: 'tool_outcomes',
@@ -414,7 +405,6 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
                     status,
                   }],
                 });
-                // Clear context if this was the active agent
                 if (lastProgressAgentId === event.tool_use_id) {
                   lastProgressAgentId = null;
                 }
@@ -423,14 +413,13 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
 
             if (event.type === 'assistant' && event.message) {
               for (const block of (event.message.content || [])) {
-                if (block.type === 'text' && block.text) {
+                if (block.type === 'text' && 'text' in block && block.text) {
                   textQueue.push({ type: 'text', content: block.text });
-                } else if (block.type === 'thinking' && block.thinking) {
+                } else if (block.type === 'thinking' && 'thinking' in block && block.thinking) {
                   textQueue.push({ type: 'thinking', content: block.thinking });
-                } else if (block.type === 'tool_use' && block.name) {
+                } else if (block.type === 'tool_use' && 'name' in block && block.name) {
                   if (block.id) toolNameById[block.id] = block.name;
-                  const detail = extractToolDetails(block);
-                  // Attribute inner tools to the agent identified by the most recent task_progress
+                  const detail = extractToolDetails(block as CliToolUseBlock);
                   if (!detail.isAgent && lastProgressAgentId) {
                     detail.parentAgentId = lastProgressAgentId;
                   }
@@ -444,25 +433,29 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
                 textQueue.push({ type: 'thinking', content: event.delta.thinking, streaming: true });
               }
             } else if (event.type === 'user') {
-              // Extract tool outcomes from tool_result blocks before emitting turn_boundary
               if (event.message && Array.isArray(event.message.content)) {
-                const outcomes = [];
+                const outcomes: Array<{
+                  toolUseId: string;
+                  isError: boolean;
+                  outcome: string | null;
+                  status: string | null;
+                }> = [];
                 for (const block of event.message.content) {
-                  if (block.type === 'tool_result' && block.tool_use_id) {
-                    // content can be string or array of content blocks
+                  if (block.type === 'tool_result' && 'tool_use_id' in block) {
+                    const trBlock = block as CliToolResultBlock;
                     let resultContent = '';
-                    if (typeof block.content === 'string') {
-                      resultContent = block.content;
-                    } else if (Array.isArray(block.content)) {
-                      resultContent = block.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+                    if (typeof trBlock.content === 'string') {
+                      resultContent = trBlock.content;
+                    } else if (Array.isArray(trBlock.content)) {
+                      resultContent = trBlock.content.filter(c => c.type === 'text').map(c => c.text || '').join('\n');
                     }
-                    const toolName = toolNameById[block.tool_use_id];
+                    const toolName = toolNameById[trBlock.tool_use_id];
                     const extracted = extractToolOutcome(toolName, resultContent);
                     outcomes.push({
-                      toolUseId: block.tool_use_id,
-                      isError: block.is_error || false,
-                      outcome: extracted ? extracted.outcome : (block.is_error ? 'error' : null),
-                      status: extracted ? extracted.status : (block.is_error ? 'error' : null),
+                      toolUseId: trBlock.tool_use_id,
+                      isError: trBlock.is_error || false,
+                      outcome: extracted ? extracted.outcome : (trBlock.is_error ? 'error' : null),
+                      status: extracted ? extracted.status : (trBlock.is_error ? 'error' : null),
                     });
                   }
                 }
@@ -477,11 +470,10 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
                 if (isApiError(resultStr)) {
                   textQueue.push({ type: 'error', error: resultStr.trim() });
                 } else {
-                  textQueue.push({ type: 'result', content: event.result });
+                  textQueue.push({ type: 'result', content: typeof event.result === 'string' ? event.result : JSON.stringify(event.result) });
                 }
               }
-              // Extract usage data from result event
-              const usageEvent = extractUsage(event);
+              const usageEvent = extractUsage(event as { usage?: Record<string, number>; cost_usd?: number });
               if (usageEvent) {
                 textQueue.push(usageEvent);
               }
@@ -496,28 +488,28 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
         }
       });
 
-      proc.stderr.on('data', (chunk) => {
+      proc.stderr!.on('data', (chunk: Buffer) => {
         const s = chunk.toString();
         console.log(`[claudeCode] stderr: ${s.substring(0, 300)}`);
         stderrOutput += s;
       });
 
-      proc.on('close', (code, signal) => {
+      proc.on('close', (code: number | null, signal: string | null) => {
         console.log(`[claudeCode] process closed code=${code} signal=${signal} bufferLen=${buffer.length}`);
         done = true;
         state.proc = null;
         if (buffer.trim()) {
           try {
-            const event = JSON.parse(buffer);
+            const event = JSON.parse(buffer) as CliEvent;
             if (event.type === 'content_block_delta' && event.delta?.text) {
               textQueue.push({ type: 'text', content: event.delta.text, streaming: true });
             } else if (event.type === 'content_block_delta' && event.delta?.type === 'thinking_delta' && event.delta?.thinking) {
               textQueue.push({ type: 'thinking', content: event.delta.thinking, streaming: true });
             } else if (event.type === 'result') {
               if (event.result) {
-                textQueue.push({ type: 'result', content: event.result });
+                textQueue.push({ type: 'result', content: typeof event.result === 'string' ? event.result : JSON.stringify(event.result) });
               }
-              const usageEvent = extractUsage(event);
+              const usageEvent = extractUsage(event as { usage?: Record<string, number>; cost_usd?: number });
               if (usageEvent) {
                 textQueue.push(usageEvent);
               }
@@ -538,7 +530,7 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
         }
       });
 
-      proc.on('error', (err) => {
+      proc.on('error', (err: Error) => {
         console.error(`[claudeCode] spawn error:`, err.message);
         done = true;
         state.proc = null;
@@ -552,19 +544,19 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
 
       while (true) {
         if (state.aborted) {
-          yield { type: 'error', error: 'Aborted by user' };
-          yield { type: 'done' };
+          yield { type: 'error' as const, error: 'Aborted by user' };
+          yield { type: 'done' as const };
           break;
         }
 
         if (textQueue.length > 0) {
-          const event = textQueue.shift();
+          const event = textQueue.shift()!;
           yield event;
           if (event.type === 'done') break;
         } else if (done) {
           break;
         } else {
-          await new Promise((resolve) => {
+          await new Promise<void>((resolve) => {
             resolveWait = resolve;
             setTimeout(resolve, 100);
           });
@@ -575,5 +567,3 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
     }
   }
 }
-
-module.exports = { ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError };

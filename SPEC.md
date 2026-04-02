@@ -26,28 +26,31 @@ Install on a machine with Claude Code CLI. Expose via a tunnel (e.g., ngrok). Ac
 
 ```
 agent-cockpit/
-├── server.js                           # Express server entry point
+├── server.ts                           # Express server entry point (TypeScript, run via tsx)
+├── tsconfig.json                       # TypeScript configuration (strict mode, noEmit)
 ├── SPEC.md                             # This file
 ├── src/
-│   ├── config/index.js                 # Loads env vars with defaults
+│   ├── types/
+│   │   └── index.ts                    # Shared type definitions (models, events, adapters)
+│   ├── config/index.ts                 # Loads env vars with defaults
 │   ├── middleware/
-│   │   ├── auth.js                     # Passport strategies, login page, routes
-│   │   ├── csrf.js                     # CSRF token generation and validation
-│   │   └── security.js                 # Helmet CSP configuration
+│   │   ├── auth.ts                     # Passport strategies, login page, routes
+│   │   ├── csrf.ts                     # CSRF token generation and validation
+│   │   └── security.ts                 # Helmet CSP configuration
 │   ├── routes/
-│   │   └── chat.js                     # All chat API routes
+│   │   └── chat.ts                     # All chat API routes
 │   └── services/
 │       ├── backends/
-│       │   ├── base.js                 # BaseBackendAdapter interface
-│       │   ├── claudeCode.js           # Claude Code adapter — CLI spawning, stream parsing
-│       │   └── registry.js             # BackendRegistry — maps IDs to adapter instances
-│       ├── chatService.js              # Conversation CRUD, messages, sessions, settings
-│       └── updateService.js            # Self-update: version checking, git pull, PM2 restart
+│       │   ├── base.ts                 # BaseBackendAdapter interface
+│       │   ├── claudeCode.ts           # Claude Code adapter — CLI spawning, stream parsing
+│       │   └── registry.ts             # BackendRegistry — maps IDs to adapter instances
+│       ├── chatService.ts              # Conversation CRUD, messages, sessions, settings
+│       └── updateService.ts            # Self-update: version checking, git pull, PM2 restart
 ├── public/
 │   ├── index.html                      # HTML shell
-│   ├── app.js                          # All frontend JavaScript
+│   ├── app.js                          # All frontend JavaScript (remains JS — no build step)
 │   └── styles.css                      # All CSS with light/dark theme
-├── test/                               # Jest test suite
+├── test/                               # Jest test suite (TypeScript via ts-jest)
 └── data/                               # Runtime data (gitignored, created at startup)
     ├── chat/
     │   ├── workspaces/{hash}/          # Workspace-based storage (see below)
@@ -374,7 +377,7 @@ Unauthenticated requests redirect to `/auth/login`.
 
 ### 4.1 ChatService
 
-**File:** `src/services/chatService.js`
+**File:** `src/services/chatService.ts`
 
 **Constructor:** `new ChatService(appRoot, options)` — sets `baseDir` to `<appRoot>/data/chat`, creates `workspaces/` and `artifacts/` dirs synchronously at startup, initializes in-memory `Map<convId, workspaceHash>` for fast lookup.
 
@@ -429,7 +432,7 @@ On first startup after upgrade, `initialize()` detects legacy `conversations/` d
 
 The CLI backend layer uses a **pluggable adapter pattern**. New CLI tools can be added without modifying routes, chat service, or frontend.
 
-#### BaseBackendAdapter (`src/services/backends/base.js`)
+#### BaseBackendAdapter (`src/services/backends/base.ts`)
 
 Abstract base class. Every backend must implement:
 - **`get metadata`** — returns `{ id, label, icon, capabilities }` where capabilities: `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans)
@@ -437,14 +440,14 @@ Abstract base class. Every backend must implement:
 - **`generateSummary(messages, fallback)`** — returns a one-line summary string
 - **`generateTitle(userMessage, fallback)`** — returns a short conversation title. Base class provides a default that truncates the user message to 80 chars.
 
-#### BackendRegistry (`src/services/backends/registry.js`)
+#### BackendRegistry (`src/services/backends/registry.ts`)
 
 - `register(adapter)` — stores by `metadata.id`. First registered becomes default. Validates `instanceof BaseBackendAdapter`.
 - `get(id)` — returns adapter or `null`
 - `list()` — returns metadata array
 - `getDefault()` — returns first registered or `null`
 
-#### ClaudeCodeAdapter (`src/services/backends/claudeCode.js`)
+#### ClaudeCodeAdapter (`src/services/backends/claudeCode.ts`)
 
 **Metadata:** `id: 'claude-code'`, all capabilities enabled.
 
@@ -486,7 +489,7 @@ claude --print \
 | `AskUserQuestion` | `Asking a question` | `isQuestion: true`, `questions` array |
 | (unknown) | `Using {name}` | — |
 
-All detail objects include `tool`, `id` (block id or null), and `description`. Long file paths are shortened to `.../{last}/{two}.js` when >3 segments.
+All detail objects include `tool`, `id` (block id or null), and `description`. Long file paths are shortened to `.../{last}/{two}` when >3 segments.
 
 **`extractUsage(event)`** — parses `result` events for usage data. Returns `{ type: 'usage', usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd } }` or `null` if no usage data is present. Field mapping: `input_tokens` → `inputTokens`, `output_tokens` → `outputTokens`, `cache_read_input_tokens` → `cacheReadTokens`, `cache_creation_input_tokens` → `cacheWriteTokens`, `cost_usd` → `costUsd`.
 
@@ -496,13 +499,13 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
 
 #### Adding a New Backend
 
-1. Create `src/services/backends/myBackend.js` extending `BaseBackendAdapter`
+1. Create `src/services/backends/myBackend.ts` extending `BaseBackendAdapter`
 2. Implement `metadata`, `sendMessage()`, `generateSummary()`, and optionally `generateTitle()`
-3. Register in `server.js` — no other changes needed
+3. Register in `server.ts` — no other changes needed
 
 ### 4.3 UpdateService
 
-**File:** `src/services/updateService.js`
+**File:** `src/services/updateService.ts`
 
 - `start()` — runs `_checkRemoteVersion()` immediately, then polls every 15 minutes (unref'd interval)
 - `stop()` — clears polling interval
@@ -511,11 +514,11 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
 - `triggerUpdate({ hasActiveStreams })` — full update sequence with guards:
   1. Concurrent guard (`_updateInProgress` flag)
   2. Active streams guard (refuses if CLI streams active)
-  3. Dirty tree guard (`git status --porcelain`, ignoring `data/`, `.env`, `ecosystem.config.js`, `.DS_Store`, `.claude/`)
+  3. Dirty tree guard (`git status --porcelain`, ignoring `data/`, `.env`, `ecosystem.config.js`, `.DS_Store`, `.claude/`, `coverage/`, `plans/`)
   4. `git checkout main` (30s timeout)
   5. `git pull origin main` (60s timeout)
   6. `npm install --production` (120s timeout)
-  7. `pm2 restart ecosystem.config.js` (30s timeout)
+  7. `pm2 restart ecosystem.config.js` (fire-and-forget, detached spawn)
 
 Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
 
@@ -528,7 +531,7 @@ Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes 
 
 ### 5.1 Configuration
 
-**File:** `src/config/index.js`
+**File:** `src/config/index.ts`
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
@@ -546,7 +549,7 @@ Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes 
 
 ### 5.2 Server Initialization Order
 
-**File:** `server.js`
+**File:** `server.ts`
 
 1. Create Express app, set `trust proxy: 1`
 2. Apply Helmet security headers via `applySecurity(app)`
@@ -575,7 +578,7 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 
 ### 5.3 Authentication
 
-**File:** `src/middleware/auth.js`
+**File:** `src/middleware/auth.ts`
 
 **Strategies:**
 - **Google OAuth 2.0** (always registered): `passport-google-oauth20`, scope `['profile', 'email']`
@@ -601,7 +604,7 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 
 ### 5.4 CSRF Protection
 
-**File:** `src/middleware/csrf.js`
+**File:** `src/middleware/csrf.ts`
 
 - `ensureCsrfToken` (global middleware): generates 32-byte hex token if missing from session
 - `csrfGuard` (route-level, POST/PUT/DELETE): validates `x-csrf-token` header or `req.body._csrf` against session token. Returns `403` on mismatch.
@@ -609,7 +612,7 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 
 ### 5.5 Security Headers
 
-**File:** `src/middleware/security.js`
+**File:** `src/middleware/security.ts`
 
 Helmet with CSP directives:
 ```
@@ -633,7 +636,7 @@ Cross-Origin Embedder Policy: disabled.
 
 **Files:** `public/index.html`, `public/app.js`, `public/styles.css`
 
-Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked (CDN) for Markdown and highlight.js (CDN) for syntax highlighting.
+Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked (CDN) for Markdown and highlight.js (CDN) for syntax highlighting. (Backend is TypeScript; frontend remains vanilla JS.)
 
 ### Layout
 
@@ -799,13 +802,13 @@ Update OAuth callback URLs to include the ngrok URL.
 
 | File | Focus |
 |------|-------|
-| `test/backends.test.js` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage |
-| `test/chat.test.js` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
-| `test/chatService.test.js` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, usage tracking (addUsage, getUsage), workspace storage, migration, markdown export |
-| `test/draftState.test.js` | Draft save/restore, key migration, cleanup, round-trip |
-| `test/graceful-shutdown.test.js` | Server shutdown on SIGINT/SIGTERM |
-| `test/sessionStore.test.js` | Session file-store persistence |
-| `test/updateService.test.js` | Version comparison, status, trigger guards, interval management |
+| `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage |
+| `test/chat.test.ts` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
+| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, usage tracking (addUsage, getUsage), workspace storage, migration, markdown export |
+| `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
+| `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |
+| `test/sessionStore.test.ts` | Session file-store persistence |
+| `test/updateService.test.ts` | Version comparison, status, trigger guards, interval management |
 
 ### CI/CD
 
