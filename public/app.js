@@ -1148,6 +1148,11 @@ function chatRenderMessages() {
   const currentSessionMsgs = chatActiveConv.messages;
 
   let html = '';
+
+  // Session activity overview — aggregate all toolActivity across messages
+  const overviewHtml = chatRenderSessionOverview(currentSessionMsgs);
+  if (overviewHtml) html += overviewHtml;
+
   for (let mi = 0; mi < currentSessionMsgs.length; mi++) {
     const msg = currentSessionMsgs[mi];
 
@@ -1160,6 +1165,7 @@ function chatRenderMessages() {
     const rendered = chatRenderMarkdown(msg.content);
     const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
     const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
+    const toolActivityHtml = !isUser && msg.toolActivity ? chatRenderToolActivityBlock(msg.toolActivity) : '';
 
     // Elapsed time for assistant messages (time since preceding user message)
     let elapsedLabel = '';
@@ -1183,7 +1189,7 @@ function chatRenderMessages() {
           <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
           <div class="chat-msg-body">
             <div class="chat-msg-role">${roleLabel} ${backendLabel}${timeLabel}</div>
-            <div class="chat-msg-content">${thinkingHtml}${rendered}</div>
+            <div class="chat-msg-content">${thinkingHtml}${toolActivityHtml}${rendered}</div>
             <div class="chat-msg-actions">
               <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
             </div>
@@ -1227,6 +1233,228 @@ function chatRenderThinkingBlock(thinking, expanded) {
   return `<details class="chat-thinking-block"${openAttr}>
     <summary class="chat-thinking-toggle">Thinking</summary>
     <div class="chat-thinking-content">${chatRenderMarkdown(thinking)}</div>
+  </details>`;
+}
+
+/** Render an outcome badge for a completed tool, e.g. "exit 0", "4 matches", "not found" */
+function chatRenderOutcomeBadge(item) {
+  if (!item.outcome && !item.status) return '';
+  const statusClass = item.status === 'error' ? 'chat-outcome-error'
+    : item.status === 'warning' ? 'chat-outcome-warning'
+    : 'chat-outcome-success';
+  const text = item.outcome ? esc(item.outcome) : '';
+  return text ? `<span class="chat-outcome-badge ${statusClass}">${text}</span>` : '';
+}
+
+/** Render a status indicator (checkmark color varies by outcome status) */
+function chatRenderStatusCheck(item) {
+  if (item.status === 'error') return '<span class="chat-activity-check chat-status-error">\u2717</span>';
+  if (item.status === 'warning') return '<span class="chat-activity-check chat-status-warning">\u2713</span>';
+  return '<span class="chat-activity-check">\u2713</span>';
+}
+
+/** Build a short summary string from a toolActivity array, e.g. "15 ops · 2 agents · 5 read, 2 edited" */
+function chatBuildActivitySummary(toolActivity) {
+  if (!toolActivity || toolActivity.length === 0) return 'No activity';
+  const agents = toolActivity.filter(t => t.isAgent);
+  const tools = toolActivity.filter(t => !t.isAgent);
+  const parts = [];
+  parts.push(`${toolActivity.length} op${toolActivity.length !== 1 ? 's' : ''}`);
+  if (agents.length > 0) {
+    parts.push(`${agents.length} agent${agents.length !== 1 ? 's' : ''}`);
+  }
+  const counts = {};
+  for (const t of tools) { counts[t.tool] = (counts[t.tool] || 0) + 1; }
+  const labels = { Read: 'read', Write: 'written', Edit: 'edited', Bash: 'command', Grep: 'search', Glob: 'glob', WebSearch: 'web search', WebFetch: 'web fetch', TodoWrite: 'task update' };
+  const breakdown = Object.entries(counts).map(([tool, n]) => `${n} ${labels[tool] || tool.toLowerCase()}`);
+  if (breakdown.length > 0) parts.push(breakdown.join(', '));
+  return parts.join(' \u00b7 ');
+}
+
+/** Render a collapsible <details> block for tool activity on completed messages. */
+/** Render a completed agent card (expandable with details on click) */
+function chatRenderAgentCard(t, checkHtml, outcomeBadge, elapsed) {
+  const agentType = esc(t.subagentType || 'agent');
+  const agentDesc = t.description ? escWithCode(t.description) : '';
+  const fullDesc = t.description && t.description.length > 40 ? escWithCode(t.description) : '';
+  const outcomeDetail = t.outcome ? `<span class="chat-agent-detail-outcome">Result: ${esc(t.outcome)}</span>` : '';
+  const hasDetails = fullDesc || outcomeDetail;
+  if (hasDetails) {
+    return `<details class="chat-agent-card chat-agent-card-done chat-agent-expandable">
+      <summary class="chat-agent-card-summary">
+        ${checkHtml}
+        <div class="chat-agent-card-header">
+          <span class="chat-agent-type">${agentType}</span>
+          ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
+        </div>
+        ${outcomeBadge}${elapsed ? `<span class="chat-activity-elapsed">${elapsed}</span>` : ''}
+      </summary>
+      <div class="chat-agent-card-details">
+        ${outcomeDetail}
+      </div>
+    </details>`;
+  }
+  return `<div class="chat-agent-card chat-agent-card-done">
+    ${checkHtml}
+    <div class="chat-agent-card-header">
+      <span class="chat-agent-type">${agentType}</span>
+      ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
+    </div>
+    ${outcomeBadge}${elapsed ? `<span class="chat-activity-elapsed">${elapsed}</span>` : ''}
+  </div>`;
+}
+
+/** Detect parallel groups among items: consecutive agents with startTimes within threshold */
+const PARALLEL_THRESHOLD_MS = 500;
+function chatGroupParallelItems(items) {
+  const groups = [];
+  let i = 0;
+  while (i < items.length) {
+    // Check if this is the start of a parallel agent group
+    if (items[i].isAgent || items[i]._kind === 'agent') {
+      const groupStart = i;
+      let j = i + 1;
+      while (j < items.length
+        && (items[j].isAgent || items[j]._kind === 'agent')
+        && items[j].startTime && items[groupStart].startTime
+        && Math.abs(items[j].startTime - items[groupStart].startTime) < PARALLEL_THRESHOLD_MS) {
+        j++;
+      }
+      if (j - groupStart > 1) {
+        // Parallel group of agents
+        groups.push({ type: 'parallel', items: items.slice(groupStart, j) });
+        i = j;
+        continue;
+      }
+    }
+    groups.push({ type: 'single', item: items[i] });
+    i++;
+  }
+  return groups;
+}
+
+/** Render a single tool activity item (completed, for persisted display) */
+function chatRenderCompletedItem(t) {
+  const checkHtml = chatRenderStatusCheck(t);
+  const outcomeBadge = chatRenderOutcomeBadge(t);
+  if (t.isAgent || t._kind === 'agent') {
+    const elapsed = t.duration ? chatFormatElapsedShort(t.duration) : '';
+    return chatRenderAgentCard(t, checkHtml, outcomeBadge, elapsed);
+  }
+  const desc = t.description ? escWithCode(t.description) : esc(t.tool || 'Tool');
+  const elapsed = t.duration ? chatFormatElapsedShort(t.duration) : '';
+  return `<div class="chat-activity-history-item">${checkHtml} <span class="chat-activity-history-desc">${desc}</span>${outcomeBadge}${elapsed ? `<span class="chat-activity-elapsed">${elapsed}</span>` : ''}</div>`;
+}
+
+function chatRenderToolActivityBlock(toolActivity) {
+  if (!toolActivity || toolActivity.length === 0) return '';
+  const summary = chatBuildActivitySummary(toolActivity);
+  const groups = chatGroupParallelItems(toolActivity);
+  let itemsHtml = '';
+  for (const group of groups) {
+    if (group.type === 'parallel') {
+      itemsHtml += '<div class="chat-parallel-group">';
+      itemsHtml += '<div class="chat-parallel-label">parallel</div>';
+      for (const t of group.items) {
+        itemsHtml += chatRenderCompletedItem(t);
+      }
+      itemsHtml += '</div>';
+    } else {
+      itemsHtml += chatRenderCompletedItem(group.item);
+    }
+  }
+  return `<details class="chat-activity-block">
+    <summary class="chat-activity-toggle">Activity: ${summary}</summary>
+    <div class="chat-activity-block-content">${itemsHtml}</div>
+  </details>`;
+}
+
+/** Render a session-level activity overview dashboard, aggregating toolActivity from all assistant messages. */
+function chatRenderSessionOverview(messages) {
+  if (!messages || messages.length === 0) return '';
+  const allActivity = [];
+  for (const msg of messages) {
+    if (msg.role === 'assistant' && msg.toolActivity && msg.toolActivity.length > 0) {
+      for (const t of msg.toolActivity) allActivity.push(t);
+    }
+  }
+  if (allActivity.length === 0) return '';
+
+  // Counts
+  const totalOps = allActivity.length;
+  const agents = allActivity.filter(t => t.isAgent);
+  const tools = allActivity.filter(t => !t.isAgent);
+  const totalDuration = allActivity.reduce((sum, t) => sum + (t.duration || 0), 0);
+
+  // Tool type breakdown
+  const toolCounts = {};
+  for (const t of tools) {
+    const name = t.tool || 'Unknown';
+    toolCounts[name] = (toolCounts[name] || 0) + 1;
+  }
+  const sortedTools = Object.entries(toolCounts).sort((a, b) => b[1] - a[1]);
+  const maxCount = sortedTools.length > 0 ? sortedTools[0][1] : 1;
+
+  // Status breakdown
+  let successCount = 0, errorCount = 0, warningCount = 0;
+  for (const t of allActivity) {
+    if (t.status === 'success') successCount++;
+    else if (t.status === 'error') errorCount++;
+    else if (t.status === 'warning') warningCount++;
+  }
+
+  // Build summary line
+  const summaryParts = [`${totalOps} ops`];
+  if (agents.length > 0) summaryParts.push(`${agents.length} agent${agents.length !== 1 ? 's' : ''}`);
+  if (totalDuration > 0) summaryParts.push(chatFormatElapsedShort(totalDuration) + ' total');
+
+  // Build bar chart rows
+  let barsHtml = '';
+  for (const [tool, count] of sortedTools) {
+    const pct = Math.max(4, Math.round((count / maxCount) * 100));
+    barsHtml += `<div class="chat-overview-bar-row">
+      <span class="chat-overview-bar-label">${esc(tool)}</span>
+      <div class="chat-overview-bar-track"><div class="chat-overview-bar-fill" style="width:${pct}%"></div></div>
+      <span class="chat-overview-bar-count">${count}</span>
+    </div>`;
+  }
+
+  // Status pills
+  let statusHtml = '';
+  if (successCount || errorCount || warningCount) {
+    statusHtml = '<div class="chat-overview-status-row">';
+    if (successCount) statusHtml += `<span class="chat-outcome-badge chat-outcome-success">${successCount} success</span>`;
+    if (errorCount) statusHtml += `<span class="chat-outcome-badge chat-outcome-error">${errorCount} error</span>`;
+    if (warningCount) statusHtml += `<span class="chat-outcome-badge chat-outcome-warning">${warningCount} warning</span>`;
+    statusHtml += '</div>';
+  }
+
+  // Agent list
+  let agentsHtml = '';
+  if (agents.length > 0) {
+    agentsHtml = '<div class="chat-overview-agents">';
+    for (const a of agents) {
+      const agentType = esc(a.subagentType || 'agent');
+      const elapsed = a.duration ? chatFormatElapsedShort(a.duration) : '';
+      const desc = a.description ? escWithCode(a.description) : '';
+      const outcomeBadge = chatRenderOutcomeBadge(a);
+      agentsHtml += `<div class="chat-overview-agent-row">
+        <span class="chat-agent-type">${agentType}</span>
+        ${desc ? `<span class="chat-overview-agent-desc">${desc}</span>` : ''}
+        ${outcomeBadge}
+        ${elapsed ? `<span class="chat-activity-elapsed">${elapsed}</span>` : ''}
+      </div>`;
+    }
+    agentsHtml += '</div>';
+  }
+
+  return `<details class="chat-session-overview">
+    <summary class="chat-session-overview-toggle">Session Overview: ${summaryParts.join(' \u00b7 ')}</summary>
+    <div class="chat-session-overview-content">
+      ${statusHtml}
+      ${barsHtml ? `<div class="chat-overview-bars">${barsHtml}</div>` : ''}
+      ${agentsHtml ? `<div class="chat-overview-section"><div class="chat-overview-section-title">Agents</div>${agentsHtml}</div>` : ''}
+    </div>
   </details>`;
 }
 
@@ -1513,9 +1741,20 @@ async function chatSendMessage() {
 
           if (event.type === 'thinking') {
             st.assistantThinking += event.content;
-            // Archive active tools/agents to history so spinners stop but history persists
-            if (st.activeTools.length || st.activeAgents.length) {
-              chatArchiveActiveState(st);
+            // Note: do NOT archive active tools here — turn_complete handles that.
+            // Archiving on thinking prematurely kills agent spinners and timers.
+            if (isStillActive) {
+              chatUpdateStreamingContent(st.streamingMsgEl, st);
+            }
+          } else if (event.type === 'tool_outcomes') {
+            // Merge tool outcomes into active tools by matching toolUseId → id
+            for (const outcome of (event.outcomes || [])) {
+              const match = st.activeTools.find(t => t.id === outcome.toolUseId)
+                || st.activeAgents.find(a => a.id === outcome.toolUseId);
+              if (match) {
+                match.outcome = outcome.outcome;
+                match.status = outcome.status;
+              }
             }
             if (isStillActive) {
               chatUpdateStreamingContent(st.streamingMsgEl, st);
@@ -1532,20 +1771,19 @@ async function chatSendMessage() {
               // Pending interaction (plan approval, user question) — don't overwrite
               // dialog with streaming text. Just accumulate assistantContent silently.
             } else {
-              if (st.activeTools.length || st.activeAgents.length) chatArchiveActiveState(st);
               if (isStillActive) {
                 chatUpdateStreamingContent(st.streamingMsgEl, st);
               }
             }
           } else if (event.type === 'tool_activity') {
             if (event.isAgent) {
-              st.activeAgents.push({ subagentType: event.subagentType || 'agent', description: event.description || '', startTime: event.startTime || Date.now() });
+              st.activeAgents.push({ subagentType: event.subagentType || 'agent', description: event.description || '', startTime: event.startTime || Date.now(), id: event.id, isAgent: true, parentAgentId: event.parentAgentId || null });
             } else if (event.isPlanMode) {
               if (event.planAction === 'enter') st.planModeActive = true;
               else if (event.planAction === 'exit') st.planModeActive = false;
             }
             if (!event.isAgent && !event.isPlanMode) {
-              st.activeTools.push({ tool: event.tool, description: event.description || '', startTime: event.startTime || Date.now() });
+              st.activeTools.push({ tool: event.tool, description: event.description || '', startTime: event.startTime || Date.now(), id: event.id, parentAgentId: event.parentAgentId || null });
             }
             // Track pending interactions for restoration on switch-back
             if (event.isPlanMode && event.planAction === 'exit') {
@@ -1577,6 +1815,8 @@ async function chatSendMessage() {
             st.assistantContent = '';
             st.assistantThinking = '';
             chatArchiveActiveState(st);
+            // Keep toolHistory and agentHistory — they're needed for rendering
+            // sub-tasks under agent cards. They'll be cleared when streaming ends.
             st.planModeActive = false;
             st.pendingInteraction = savedInteraction;
             if (isStillActive && chatActiveConv) {
@@ -1660,6 +1900,74 @@ function chatAppendStreamingMessage() {
   return msgEl;
 }
 
+/** Group sorted items by agent: each agent gets its own group with sub-tools assigned via parentAgentId.
+ *  Agents ALWAYS get their own top-level card — even sub-agents with parentAgentId.
+ *  Only non-agent tools are nested into their parent agent's sub-activities panel. */
+function chatGroupItemsByAgent(items) {
+  const groups = [];
+  const agentGroupMap = new Map(); // agentId → group object
+  let currentStandalone = null;
+
+  for (const item of items) {
+    if (item._kind === 'agent' || item.isAgent) {
+      // Every agent gets its own card — never nest agents inside other agents
+      currentStandalone = null;
+      const group = { type: 'agent', agent: item, items: [] };
+      groups.push(group);
+      if (item.id) agentGroupMap.set(item.id, group);
+    } else if (item.parentAgentId && agentGroupMap.has(item.parentAgentId)) {
+      // Sub-tool with explicit parent — assign to parent agent's sub-activities
+      currentStandalone = null;
+      agentGroupMap.get(item.parentAgentId).items.push(item);
+    } else {
+      // No parentAgentId — fall back to last agent group (chronological)
+      let lastAgentGroup = null;
+      for (let i = groups.length - 1; i >= 0; i--) {
+        if (groups[i].type === 'agent') { lastAgentGroup = groups[i]; break; }
+      }
+      if (lastAgentGroup) {
+        currentStandalone = null;
+        lastAgentGroup.items.push(item);
+      } else {
+        if (!currentStandalone) {
+          currentStandalone = { type: 'standalone', items: [] };
+          groups.push(currentStandalone);
+        }
+        currentStandalone.items.push(item);
+      }
+    }
+  }
+  return groups;
+}
+
+/** Render a single streaming item (tool or agent) — either running (spinner) or completed (check). */
+function chatRenderStreamingItem(item) {
+  if (item.completed) {
+    return chatRenderCompletedItem(item);
+  }
+  // Running item
+  if (item._kind === 'agent' || item.isAgent) {
+    const agentType = esc(item.subagentType || 'agent');
+    const agentDesc = item.description ? escWithCode(item.description) : '';
+    const initialElapsed = item.startTime ? chatFormatElapsed(Date.now() - item.startTime) : '';
+    return `<div class="chat-agent-card">
+      <div class="chat-agent-spinner" style="animation-delay:-${Date.now() % 800}ms"></div>
+      <div class="chat-agent-card-header">
+        <span class="chat-agent-type">${agentType}</span>
+        ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
+      </div>
+      ${initialElapsed ? `<span class="chat-agent-timer-live">${initialElapsed}</span>` : ''}
+    </div>`;
+  }
+  const desc = item.description ? escWithCode(item.description) : esc(item.tool || 'Working');
+  const initialElapsed = item.startTime ? chatFormatElapsed(Date.now() - item.startTime) : '';
+  return `<div class="chat-activity-indicator">
+    <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
+    <span class="chat-activity-label">${desc}</span>
+    ${initialElapsed ? `<span class="chat-activity-timer-live">${initialElapsed}</span>` : ''}
+  </div>`;
+}
+
 /** Unified streaming render — stacks text, thinking, tool history, and active tool in one view. */
 function chatUpdateStreamingContent(msgEl, st) {
   if (!msgEl) return;
@@ -1680,70 +1988,75 @@ function chatUpdateStreamingContent(msgEl, st) {
     html += '<div class="chat-thinking-status">Thinking...</div>';
   }
 
-  // 3. Tool activity (combined history + active, split by completed flag)
-  const tools = chatCombinedTools(st);
-  const agents = chatCombinedAgents(st);
+  // 3. Tool activity — per-agent layout: each agent card followed by its sub-activities
+  const allItems = [
+    ...chatCombinedTools(st).map(t => ({ ...t, _kind: 'tool' })),
+    ...chatCombinedAgents(st).map(a => ({ ...a, _kind: 'agent' })),
+  ].sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
 
-  const completedTools = tools.filter(t => t.completed);
-  const runningTools = tools.filter(t => !t.completed);
-
-  // Completed tools (with checkmarks)
-  if (completedTools.length > 0) {
-    html += '<div class="chat-activity-history">';
-    for (let i = 0; i < completedTools.length; i++) {
-      const t = completedTools[i];
-      const desc = t.description ? escWithCode(t.description) : esc(t.tool || 'Tool');
-      let durationMs = t.duration;
-      if (!durationMs && t.startTime) {
-        const nextStart = (completedTools[i + 1] || runningTools[0])?.startTime || Date.now();
-        durationMs = nextStart - t.startTime;
-      }
-      const elapsed = durationMs ? chatFormatElapsedShort(durationMs) : '';
-      html += `<div class="chat-activity-history-item"><span class="chat-activity-check">✓</span> <span class="chat-activity-history-desc">${desc}</span>${elapsed ? `<span class="chat-activity-elapsed">${elapsed}</span>` : ''}</div>`;
+  // Fill in durations for completed items that don't have one yet
+  for (let i = 0; i < allItems.length; i++) {
+    if (allItems[i].completed && !allItems[i].duration && allItems[i].startTime) {
+      const nextStart = allItems[i + 1]?.startTime || Date.now();
+      allItems[i] = { ...allItems[i], duration: nextStart - allItems[i].startTime };
     }
-    html += '</div>';
   }
 
-  // Active tools (with spinners — all of them, not just the last)
-  for (const tool of runningTools) {
-    const desc = tool.description ? escWithCode(tool.description) : esc(tool.tool || 'Working');
-    const initialElapsed = tool.startTime ? chatFormatElapsed(Date.now() - tool.startTime) : '';
-    html += `<div class="chat-activity-indicator">
-      <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
-      <span class="chat-activity-label">${desc}</span>
-      ${initialElapsed ? `<span class="chat-activity-timer-live">${initialElapsed}</span>` : ''}
+  // Group items: standalone tools (before any agent), then agent + following tools
+  const itemGroups = chatGroupItemsByAgent(allItems);
+
+  // Helper: render a single agent card (spinner or checkmark)
+  function renderAgentCard(agent) {
+    const isRunning = !agent.completed;
+    const agentType = esc(agent.subagentType || 'agent');
+    const agentDesc = agent.description ? escWithCode(agent.description) : '';
+    const elapsed = isRunning
+      ? (agent.startTime ? chatFormatElapsed(Date.now() - agent.startTime) : '')
+      : (agent.duration ? chatFormatElapsedShort(agent.duration) : '');
+    const timerClass = isRunning ? 'chat-agent-timer-live' : 'chat-activity-elapsed';
+    return `<div class="chat-agent-card${isRunning ? '' : ' chat-agent-card-done'}">
+      ${isRunning
+        ? `<div class="chat-agent-spinner" style="animation-delay:-${Date.now() % 800}ms"></div>`
+        : chatRenderStatusCheck(agent)}
+      <div class="chat-agent-card-header">
+        <span class="chat-agent-type">${agentType}</span>
+        ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
+      </div>
+      ${chatRenderOutcomeBadge(agent)}
+      ${elapsed ? `<span class="${timerClass}">${elapsed}</span>` : ''}
     </div>`;
   }
 
-  // Agent cards (completed + active)
-  if (agents.length > 0) {
-    html += '<div class="chat-agent-cards">';
-    for (const agent of agents) {
-      const agentType = esc(agent.subagentType || 'agent');
-      const agentDesc = agent.description ? escWithCode(agent.description) : '';
-      if (agent.completed) {
-        const elapsed = agent.duration ? chatFormatElapsedShort(agent.duration) : '';
-        html += `<div class="chat-agent-card chat-agent-card-done">
-          <span class="chat-activity-check">✓</span>
-          <div class="chat-agent-card-header">
-            <span class="chat-agent-type">${agentType}</span>
-            ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
-          </div>
-          ${elapsed ? `<span class="chat-activity-elapsed">${elapsed}</span>` : ''}
-        </div>`;
-      } else {
-        const initialElapsed = agent.startTime ? chatFormatElapsed(Date.now() - agent.startTime) : '';
-        html += `<div class="chat-agent-card">
-          <div class="chat-agent-spinner"></div>
-          <div class="chat-agent-card-header">
-            <span class="chat-agent-type">${agentType}</span>
-            ${agentDesc ? `<span class="chat-agent-card-desc">${agentDesc}</span>` : ''}
-          </div>
-          ${initialElapsed ? `<span class="chat-agent-timer-live">${initialElapsed}</span>` : ''}
-        </div>`;
+  for (const group of itemGroups) {
+    if (group.type === 'standalone') {
+      for (const item of group.items) {
+        html += chatRenderStreamingItem(item);
+      }
+    } else if (group.type === 'agent') {
+      html += renderAgentCard(group.agent);
+      if (group.items.length > 0) {
+        html += '<div class="chat-agent-subactivities">';
+        for (const item of group.items) {
+          html += chatRenderStreamingItem(item);
+        }
+        html += '</div>';
+      }
+    } else if (group.type === 'parallel-agents') {
+      // Legacy path — should not occur with parentAgentId grouping
+      for (const agent of group.agents) {
+        html += renderAgentCard(agent);
       }
     }
-    html += '</div>';
+  }
+
+  // Post-completion processing indicator: tools/agents finished but model still working
+  const hasCompletedItems = st.toolHistory.length > 0 || st.agentHistory.length > 0;
+  const hasRunningItems = st.activeTools.length > 0 || st.activeAgents.length > 0;
+  if (hasCompletedItems && !hasRunningItems && !st.assistantContent) {
+    html += `<div class="chat-activity-indicator">
+      <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>
+      <span class="chat-activity-label">Processing...</span>
+    </div>`;
   }
 
   // Plan mode banner
@@ -1763,21 +2076,35 @@ function chatUpdateStreamingContent(msgEl, st) {
 
   contentEl.innerHTML = html;
   if (st.assistantContent || st.assistantThinking) chatHighlightCode(contentEl);
+  // Auto-scroll each agent sub-activity panel to show latest item
+  contentEl.querySelectorAll('.chat-agent-subactivities').forEach(el => {
+    el.scrollTop = el.scrollHeight;
+  });
   chatScrollToBottom();
 }
 
-/** Archive active tools/agents to history before clearing, preserving elapsed durations. */
+/** Archive active tools/agents to history before clearing, preserving elapsed durations.
+ *  Agents are only archived once they have received their tool_outcomes (outcome/status set).
+ *  This prevents sub-tool turn_complete events from prematurely archiving a still-running agent. */
 function chatArchiveActiveState(st) {
   const now = Date.now();
   for (const tool of st.activeTools) {
     st.toolHistory.push({ ...tool, completed: true, duration: tool.startTime ? now - tool.startTime : null });
   }
   st.activeTools = [];
+  const stillRunning = [];
   for (const agent of st.activeAgents) {
-    st.agentHistory.push({ ...agent, completed: true, duration: agent.startTime ? now - agent.startTime : null });
+    if (agent.outcome !== undefined || agent.status !== undefined) {
+      st.agentHistory.push({ ...agent, completed: true, duration: agent.startTime ? now - agent.startTime : null });
+    } else {
+      stillRunning.push(agent);
+    }
   }
-  st.activeAgents = [];
-  if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
+  st.activeAgents = stillRunning;
+  // Only clear timer if no active items remain
+  if (st.activeAgents.length === 0 && st.activeTools.length === 0) {
+    if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
+  }
 }
 
 /** Build combined tools array (history + active) for rendering. */
@@ -1817,20 +2144,10 @@ function chatStartActivityTimer(convId) {
       state.activityTimerInterval = null;
       return;
     }
-    // Update all active tool timers
-    const toolTimerEls = st.streamingMsgEl.querySelectorAll('.chat-activity-timer-live');
-    toolTimerEls.forEach((el, idx) => {
-      if (idx < st.activeTools.length && st.activeTools[idx].startTime) {
-        el.textContent = chatFormatElapsed(Date.now() - st.activeTools[idx].startTime);
-      }
-    });
-    // Update agent card timers
-    const agentTimerEls = st.streamingMsgEl.querySelectorAll('.chat-agent-timer-live');
-    agentTimerEls.forEach((el, idx) => {
-      if (idx < st.activeAgents.length && st.activeAgents[idx].startTime) {
-        el.textContent = chatFormatElapsed(Date.now() - st.activeAgents[idx].startTime);
-      }
-    });
+    // Re-render to update all timer values (avoids DOM index mismatch issues)
+    if (st.activeTools.length > 0 || st.activeAgents.length > 0) {
+      chatUpdateStreamingContent(st.streamingMsgEl, st);
+    }
   }, 1000);
 }
 
@@ -2168,13 +2485,14 @@ async function chatViewSession(sessionNumber) {
       const rendered = chatRenderMarkdown(msg.content);
       const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
       const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
+      const toolActivityHtml = !isUser && msg.toolActivity ? chatRenderToolActivityBlock(msg.toolActivity) : '';
       msgsHtml += `
         <div class="chat-msg ${esc(msg.role)}">
           <div class="chat-msg-wrapper">
             <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
             <div class="chat-msg-body">
               <div class="chat-msg-role">${roleLabel} ${backendLabel}</div>
-              <div class="chat-msg-content">${thinkingHtml}${rendered}</div>
+              <div class="chat-msg-content">${thinkingHtml}${toolActivityHtml}${rendered}</div>
             </div>
           </div>
         </div>

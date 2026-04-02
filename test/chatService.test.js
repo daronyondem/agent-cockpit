@@ -283,6 +283,45 @@ describe('addMessage', () => {
     expect(msg.thinking).toBeUndefined();
   });
 
+  test('stores toolActivity when provided', async () => {
+    const conv = await service.createConversation();
+    const activity = [
+      { tool: 'Read', description: 'Reading `app.js`', id: 'tool_1', duration: 300, startTime: Date.now() - 300 },
+      { tool: 'Agent', description: 'Explore code', id: 'tool_2', isAgent: true, subagentType: 'Explore', duration: 5000, startTime: Date.now() - 5000 },
+    ];
+    const msg = await service.addMessage(conv.id, 'assistant', 'Response', 'claude-code', null, activity);
+    expect(msg.toolActivity).toEqual(activity);
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded.messages[0].toolActivity).toEqual(activity);
+  });
+
+  test('omits toolActivity when not provided', async () => {
+    const conv = await service.createConversation();
+    const msg = await service.addMessage(conv.id, 'assistant', 'No tools');
+    expect(msg.toolActivity).toBeUndefined();
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded.messages[0].toolActivity).toBeUndefined();
+  });
+
+  test('omits toolActivity when empty array', async () => {
+    const conv = await service.createConversation();
+    const msg = await service.addMessage(conv.id, 'assistant', 'Empty tools', 'claude-code', null, []);
+    expect(msg.toolActivity).toBeUndefined();
+  });
+
+  test('persists toolActivity to disk', async () => {
+    const conv = await service.createConversation();
+    const activity = [{ tool: 'Bash', description: 'Running tests', id: 'tool_1', duration: 1000, startTime: Date.now() }];
+    await service.addMessage(conv.id, 'assistant', 'Answer', 'claude-code', null, activity);
+
+    const service2 = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+    await service2.initialize();
+    const loaded = await service2.getConversation(conv.id);
+    expect(loaded.messages[0].toolActivity).toEqual(activity);
+  });
+
   test('updates lastActivity and lastMessage in workspace index', async () => {
     const conv = await service.createConversation('Test', '/tmp/idx');
     await service.addMessage(conv.id, 'user', 'Index check message');

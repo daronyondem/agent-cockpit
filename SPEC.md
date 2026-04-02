@@ -119,7 +119,18 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
   content: string,              // Message text
   backend: string,              // Backend that generated the response
   timestamp: string,            // ISO 8601
-  thinking?: string             // Extended thinking (assistant only, omitted if empty)
+  thinking?: string,            // Extended thinking (assistant only, omitted if empty)
+  toolActivity?: [{             // Tool/agent activity log (assistant only, omitted if empty)
+    tool: string,               // Tool name: 'Read', 'Write', 'Bash', 'Agent', etc.
+    description: string,        // Human-readable description
+    id: string|null,            // Block ID from CLI event
+    isAgent?: boolean,          // true for Agent tool invocations
+    subagentType?: string,      // 'Explore', 'general-purpose', etc. (when isAgent)
+    duration: number|null,      // Estimated duration in milliseconds
+    startTime: number,          // Unix timestamp ms when event was received
+    outcome?: string,           // Short outcome summary (e.g. 'exit 0', '4 matches', 'not found')
+    status?: string             // 'success' | 'error' | 'warning' (derived from tool result)
+  }]
 }
 ```
 
@@ -244,8 +255,9 @@ data: {"type":"<type>", ...fields}\n\n
 |------|--------|-------------|
 | `text` | `content`, `streaming` | Text delta from assistant |
 | `thinking` | `content`, `streaming` | Extended thinking delta |
-| `tool_activity` | `tool`, `description`, `id`, + enriched fields | Tool use notification (see enriched fields below) |
-| `turn_boundary` | — | Marks boundary between assistant turns (internal — not forwarded to client) |
+| `tool_activity` | `tool`, `description`, `id`, + enriched fields | Tool use notification (see enriched fields below). Events are accumulated per-turn and persisted as `toolActivity` on the saved assistant message (excluding `isPlanMode` and `isQuestion` meta-events). |
+| `tool_outcomes` | `outcomes` | Array of tool result outcomes extracted from CLI `user` events. Each outcome: `{ toolUseId, isError, outcome, status }`. Merged into `toolActivity` accumulator for persistence and forwarded to frontend for live display. |
+| `turn_boundary` | — | Marks boundary between assistant turns (internal — not forwarded to client). Triggers persistence of accumulated `toolActivity` on the intermediate message. |
 | `turn_complete` | — | Notifies client that tools finished and a new turn is starting |
 | `result` | `content` | Final result text from CLI |
 | `assistant_message` | `message` | Saved assistant message (intermediate or final) |
@@ -377,7 +389,7 @@ Unauthenticated requests redirect to `/auth/login`.
 | `renameConversation(id, newTitle)` | Updates title in workspace index. Returns full conversation or `null`. |
 | `deleteConversation(id)` | Removes from index, deletes session folder + artifacts, removes from lookup map. |
 | `updateConversationBackend(convId, backend)` | Updates backend field in workspace index. |
-| `addMessage(convId, role, content, backend, thinking)` | Appends to active session + updates index metadata. Auto-titles on first user message (session 1 only; post-reset sessions rely on LLM title generation). `thinking` omitted if falsy. |
+| `addMessage(convId, role, content, backend, thinking, toolActivity)` | Appends to active session + updates index metadata. Auto-titles on first user message (session 1 only; post-reset sessions rely on LLM title generation). `thinking` omitted if falsy. `toolActivity` omitted if falsy or empty array. |
 | `updateMessageContent(convId, messageId, newContent)` | Truncates after target message, adds edited content as new message. |
 | `generateAndUpdateTitle(convId, userMessage)` | Generates a new title via the backend adapter's `generateTitle()` and persists it. Returns the new title or `null`. |
 | `resetSession(convId)` | Archives active session (summary, endedAt), creates new session, resets title to "New Chat". Returns `{ conversation, newSessionNumber, archivedSession }`. |
@@ -643,9 +655,16 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API)
 - **Streaming state persistence:** `chatStreamingState` Map stores per-conversation state (accumulated text, thinking, tools, agents, tool/agent history, pending interactions). State survives conversation switches — on return, the streaming bubble is recreated and restored.
 - **Elapsed timer:** live timer in streaming bubble header, self-cleans on DOM disconnect
-- **Unified streaming content:** A single `chatUpdateStreamingContent()` function renders all streaming state (thinking, text, tool history, active tools, agents, plan mode) together in one stacked view. Text content and tool activity accumulate and remain visible simultaneously — new progress updates stack below previous content rather than replacing it. Tools are split by their `completed` flag: completed tools show checkmarks and elapsed durations, ALL active (non-completed) tools show spinners with live timers simultaneously. Agent cards show spinner when running, checkmark when completed.
-- **Turn boundaries:** intermediate assistant messages saved, content reset. `turn_complete` event archives active tools/agents to history so spinners stop but the accumulated history persists.
-- **Thinking events:** archive active tool/agent state to history, ensuring spinners don't persist while the model thinks after tool execution, while preserving the operation log.
+- **Unified streaming content:** A single `chatUpdateStreamingContent()` function renders all streaming state (thinking, text, tool history, active tools, agents, plan mode) together in one stacked view. Text content and tool activity accumulate and remain visible simultaneously — new progress updates stack below previous content rather than replacing it. Items are grouped by agent via `chatGroupItemsByAgent()`: standalone tools render flat, while each agent card is followed by a scrollable sub-activity panel showing its child tools. Completed items show checkmarks and elapsed durations; running agents show animated spinners with live timers that count up in real-time.
+- **Tool activity on completed messages:** When a message has a `toolActivity` array, `chatRenderToolActivityBlock()` renders a collapsible `<details>/<summary>` block (same pattern as thinking blocks) with a summary line (e.g. "15 ops · 2 agents · 5 read, 2 edited") generated by `chatBuildActivitySummary()`. Collapsed by default; expands to show the full chronological tool/agent list. Agent entries render as agent cards, tool entries as history items.
+- **Tool outcome indicators:** Each tool/agent in the activity log shows a colored outcome badge when outcome data is available. `chatRenderStatusCheck()` renders status-colored checkmarks (green ✓ for success, red ✗ for error, amber ✓ for warning). `chatRenderOutcomeBadge()` renders a small colored badge with the outcome text (e.g. "exit 0", "4 matches", "not found"). Outcomes are extracted from CLI `tool_result` blocks by `extractToolOutcome()` in the backend, correlated by `tool_use_id`, and persisted on the `toolActivity` entries.
+- **Sticky active section:** During streaming, when both completed and running tools exist, a `chat-activity-panel` container wraps them: completed items scroll in a bounded area while running items with spinners stay pinned at the bottom, always visible.
+- **Parallel group indicator:** `chatGroupParallelItems()` detects consecutive agent entries whose `startTime` values are within 500ms (`PARALLEL_THRESHOLD_MS`) and wraps them in a `chat-parallel-group` container with a "parallel" label and a left accent border. Works in both persisted activity blocks and streaming display.
+- **Agent detail expansion:** Agent cards with long descriptions or outcome data render as expandable `<details>` elements (`chatRenderAgentCard()`). Summary shows agent type, description, outcome badge, and elapsed time; expanding reveals full outcome details.
+- **Session activity overview:** `chatRenderSessionOverview()` aggregates `toolActivity` from all assistant messages in the current session and renders a collapsible dashboard at the top of the message list. Shows: total ops/agents/duration summary, status breakdown pills (success/error/warning counts), tool type bar chart sorted by frequency, and agent timeline with types and outcomes. Collapsed by default; only rendered when at least one message has `toolActivity`.
+- **Turn boundaries:** intermediate assistant messages saved, content reset. `turn_complete` event archives active tools/agents to history so spinners stop but the accumulated history persists. Agents are only archived when they have received their `tool_outcomes` (outcome/status set) — sub-tool `turn_complete` events within an agent do NOT prematurely archive the parent agent. This ensures agents show spinners and live timers throughout their full execution.
+- **Post-completion processing indicator:** When all tools/agents have completed but the model is still working (no text content yet), a "Processing..." indicator with typing dots is shown below the completed activity log. This fills the gap between agent completion and text output, so users always see ongoing work.
+- **Thinking events:** do NOT archive active tool/agent state — `turn_complete` handles archiving. This prevents premature archiving that would kill agent spinners and timers.
 - **Plan approval:** renders plan as markdown with approve/reject buttons → POSTs to `/input`
 - **User questions:** renders question text + option buttons → POSTs answer to `/input`
 - **Auto title update:** handles `title_updated` SSE event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
@@ -780,9 +799,9 @@ Update OAuth callback URLs to include the ngrok URL.
 
 | File | Focus |
 |------|-------|
-| `test/backends.test.js` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractUsage |
-| `test/chat.test.js` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
-| `test/chatService.test.js` | ChatService CRUD, messages, sessions, generateAndUpdateTitle, usage tracking (addUsage, getUsage), workspace storage, migration, markdown export |
+| `test/backends.test.js` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage |
+| `test/chat.test.js` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
+| `test/chatService.test.js` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, usage tracking (addUsage, getUsage), workspace storage, migration, markdown export |
 | `test/draftState.test.js` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/graceful-shutdown.test.js` | Server shutdown on SIGINT/SIGTERM |
 | `test/sessionStore.test.js` | Session file-store persistence |

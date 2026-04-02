@@ -399,6 +399,23 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
     let pendingPlanContent = '';  // Plan file content from Write tool (Claude Code specific)
     let titleUpdateTriggered = false;
     let titleUpdatePromise = null;
+    let toolActivityAccumulator = [];  // Accumulate tool_activity events for persistence
+
+    // Compute durations from inter-event timing for persisted tool activity
+    function computeToolDurations(activities) {
+      if (!activities.length) return [];
+      const now = Date.now();
+      return activities.map((t, i) => {
+        const nextStart = activities[i + 1]?.startTime || now;
+        const duration = t.startTime ? nextStart - t.startTime : null;
+        const entry = { tool: t.tool, description: t.description, id: t.id, duration, startTime: t.startTime };
+        if (t.isAgent) { entry.isAgent = true; entry.subagentType = t.subagentType; }
+        if (t.parentAgentId) { entry.parentAgentId = t.parentAgentId; }
+        if (t.outcome) { entry.outcome = t.outcome; }
+        if (t.status) { entry.status = t.status; }
+        return entry;
+      });
+    }
 
     // Helper: trigger async title update after first assistant message in a new session
     function maybeUpdateTitle() {
@@ -433,11 +450,23 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
             if (event.streaming) {
               res.write(`data: ${JSON.stringify({ type: 'thinking', content: event.content })}\n\n`);
             }
+          } else if (event.type === 'tool_outcomes') {
+            // Merge tool outcomes into the accumulator by matching tool_use_id
+            for (const outcome of (event.outcomes || [])) {
+              const match = toolActivityAccumulator.find(t => t.id === outcome.toolUseId);
+              if (match) {
+                match.outcome = outcome.outcome;
+                match.status = outcome.status;
+              }
+            }
+            // Forward to frontend for live display
+            res.write(`data: ${JSON.stringify({ type: 'tool_outcomes', outcomes: event.outcomes })}\n\n`);
           } else if (event.type === 'turn_boundary') {
             // Tool use happened — save accumulated text as an intermediate message
+            const turnToolActivity = computeToolDurations(toolActivityAccumulator);
             if (hasStreamingDeltas && fullResponse.trim()) {
-              console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}`);
-              const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null);
+              console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}, tools=${turnToolActivity.length}`);
+              const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, turnToolActivity.length > 0 ? turnToolActivity : undefined);
               res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: intermediateMsg })}\n\n`);
               maybeUpdateTitle();
             }
@@ -446,6 +475,7 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
             fullResponse = '';
             thinkingText = '';
             hasStreamingDeltas = false;
+            toolActivityAccumulator = [];
           } else if (event.type === 'tool_activity') {
             // Track plan file content written by Claude Code's Write tool
             if (event.isPlanFile && event.planContent) {
@@ -456,7 +486,24 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
             if (rest.isPlanMode && rest.planAction === 'exit' && pendingPlanContent) {
               rest.planContent = pendingPlanContent;
             }
+            // parentAgentId is set by claudeCode.js via task_progress events —
+            // no heuristic state machine needed here.
+            if (rest.isAgent && rest.id) {
+              console.log(`[chat] AGENT ${rest.id} parentAgentId=${rest.parentAgentId || 'none'}`);
+            }
             res.write(`data: ${JSON.stringify({ type: 'tool_activity', ...rest })}\n\n`);
+            // Accumulate tool activity for persistence (skip plan mode and question meta-events)
+            if (!event.isPlanMode && !event.isQuestion) {
+              toolActivityAccumulator.push({
+                tool: rest.tool,
+                description: rest.description || '',
+                id: rest.id || null,
+                isAgent: rest.isAgent || undefined,
+                subagentType: rest.subagentType || undefined,
+                parentAgentId: rest.parentAgentId || undefined,
+                startTime: Date.now(),
+              });
+            }
           } else if (event.type === 'result') {
             resultText = event.content;
           } else if (event.type === 'usage') {
@@ -472,24 +519,27 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
             // Save remaining text or result as the final message
             // Check if the accumulated text is actually an API error
             const apiErrPattern = /^API Error:\s*\d{3}\s/;
+            const finalToolActivity = computeToolDurations(toolActivityAccumulator);
+            const finalToolActivityArg = finalToolActivity.length > 0 ? finalToolActivity : undefined;
             if (hasStreamingDeltas && fullResponse.trim()) {
               if (apiErrPattern.test(fullResponse.trim())) {
                 console.log(`[chat] Stream done for conv=${convId}, detected API error in text — not saving as message`);
                 res.write(`data: ${JSON.stringify({ type: 'error', error: fullResponse.trim() })}\n\n`);
               } else {
-                console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}`);
-                const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null);
+                console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}, tools=${finalToolActivity.length}`);
+                const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, finalToolActivityArg);
                 res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
                 maybeUpdateTitle();
               }
             } else if (resultText && resultText.trim()) {
-              console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}`);
-              const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null);
+              console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}, tools=${finalToolActivity.length}`);
+              const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null, finalToolActivityArg);
               res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
               maybeUpdateTitle();
             } else {
               console.log(`[chat] Stream done for conv=${convId}, no content to save`);
             }
+            toolActivityAccumulator = [];
             // Wait for pending title update before closing the stream
             if (titleUpdatePromise) await titleUpdatePromise;
             res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);

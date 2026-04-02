@@ -42,6 +42,96 @@ function shortenPath(filePath) {
   return '.../' + parts.slice(-2).join('/');
 }
 
+/**
+ * Extract a short outcome summary from a tool_result content string.
+ * Returns { outcome: string, status: 'success'|'error'|'warning'|null } or null.
+ */
+function extractToolOutcome(toolName, content) {
+  if (content == null) return null;
+  const text = typeof content === 'string' ? content : JSON.stringify(content);
+  if (!text) return null;
+
+  // Bash: detect exit codes
+  if (toolName === 'Bash') {
+    // Claude Code tool results often include exit code info
+    const exitMatch = text.match(/exit (?:code|status)[:\s]*(\d+)/i) || text.match(/exited with (\d+)/i);
+    if (exitMatch) {
+      const code = parseInt(exitMatch[1], 10);
+      return { outcome: `exit ${code}`, status: code === 0 ? 'success' : 'error' };
+    }
+    // Check for common error patterns
+    if (/error|ENOENT|command not found|permission denied/i.test(text.slice(0, 500))) {
+      return { outcome: 'error', status: 'error' };
+    }
+    return { outcome: 'done', status: 'success' };
+  }
+
+  // Grep: count matches
+  if (toolName === 'Grep') {
+    const lines = text.split('\n').filter(l => l.trim());
+    if (text.includes('No matches found') || lines.length === 0) {
+      return { outcome: '0 matches', status: 'warning' };
+    }
+    // Count non-empty lines as approximate matches
+    return { outcome: `${lines.length} match${lines.length !== 1 ? 'es' : ''}`, status: 'success' };
+  }
+
+  // Glob: count files
+  if (toolName === 'Glob') {
+    const lines = text.split('\n').filter(l => l.trim());
+    if (lines.length === 0 || text.includes('No files found') || text.includes('No matches')) {
+      return { outcome: '0 files', status: 'warning' };
+    }
+    return { outcome: `${lines.length} file${lines.length !== 1 ? 's' : ''}`, status: 'success' };
+  }
+
+  // Read: success or not found
+  if (toolName === 'Read') {
+    if (/not found|does not exist|ENOENT|no such file/i.test(text.slice(0, 200))) {
+      return { outcome: 'not found', status: 'error' };
+    }
+    return { outcome: 'read', status: 'success' };
+  }
+
+  // Write: success
+  if (toolName === 'Write') {
+    if (/error|failed/i.test(text.slice(0, 200))) {
+      return { outcome: 'failed', status: 'error' };
+    }
+    return { outcome: 'written', status: 'success' };
+  }
+
+  // Edit: success or no match
+  if (toolName === 'Edit') {
+    if (/not found|no match|not unique/i.test(text.slice(0, 300))) {
+      return { outcome: 'no match', status: 'error' };
+    }
+    return { outcome: 'edited', status: 'success' };
+  }
+
+  // Agent: success or error
+  if (toolName === 'Agent') {
+    if (/error|failed|exception/i.test(text.slice(0, 300))) {
+      return { outcome: 'error', status: 'error' };
+    }
+    return { outcome: 'done', status: 'success' };
+  }
+
+  // WebSearch/WebFetch
+  if (toolName === 'WebSearch') {
+    const lines = text.split('\n').filter(l => l.trim());
+    return { outcome: `${Math.max(lines.length, 1)} result${lines.length !== 1 ? 's' : ''}`, status: 'success' };
+  }
+  if (toolName === 'WebFetch') {
+    if (/error|failed|404|500|timeout/i.test(text.slice(0, 200))) {
+      return { outcome: 'failed', status: 'error' };
+    }
+    return { outcome: 'fetched', status: 'success' };
+  }
+
+  return null;
+}
+
 function extractToolDetails(block) {
   const name = block.name;
   const input = block.input || {};
@@ -282,6 +372,8 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
       let resolveWait = null;
       let done = false;
       let stderrOutput = '';
+      const toolNameById = {};  // Track tool names by id for outcome extraction
+      let lastProgressAgentId = null;  // tool_use_id from the most recent task_progress — identifies current agent context
 
       proc.stdout.on('data', (chunk) => {
         const raw = chunk.toString();
@@ -294,7 +386,41 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
           if (!line.trim()) continue;
           try {
             const event = JSON.parse(line);
-            console.log(`[claudeCode] parsed event type=${event.type}`, event.type === 'content_block_delta' ? `delta.type=${event.delta?.type}` : '');
+            // Debug: log all event types with key fields
+            if (event.type === 'system') {
+              const keys = Object.keys(event).filter(k => k !== 'type').join(',');
+              const sub = event.subtype || event.event || event.tool || '';
+              console.log(`[claudeCode] parsed event type=system subtype=${sub} keys=[${keys}]`);
+            } else if (event.type === 'assistant') {
+              const blocks = (event.message?.content || []).map(b => b.type + (b.name ? ':' + b.name : '')).join(',');
+              console.log(`[claudeCode] parsed event type=assistant blocks=[${blocks}]`);
+            } else {
+              console.log(`[claudeCode] parsed event type=${event.type}`, event.type === 'content_block_delta' ? `delta.type=${event.delta?.type}` : '');
+            }
+            // Handle system events for agent lifecycle (task_started, task_progress, task_notification)
+            if (event.type === 'system' && event.subtype) {
+              if (event.subtype === 'task_progress' && event.tool_use_id) {
+                // Track which agent context we're in — subsequent inner tools belong to this agent
+                lastProgressAgentId = event.tool_use_id;
+              } else if (event.subtype === 'task_notification' && event.tool_use_id) {
+                // Agent task completed — emit tool_outcomes so frontend can mark it done
+                const status = event.status === 'completed' ? 'success' : (event.status || 'success');
+                textQueue.push({
+                  type: 'tool_outcomes',
+                  outcomes: [{
+                    toolUseId: event.tool_use_id,
+                    isError: status === 'error',
+                    outcome: event.summary || event.status || 'done',
+                    status,
+                  }],
+                });
+                // Clear context if this was the active agent
+                if (lastProgressAgentId === event.tool_use_id) {
+                  lastProgressAgentId = null;
+                }
+              }
+            }
+
             if (event.type === 'assistant' && event.message) {
               for (const block of (event.message.content || [])) {
                 if (block.type === 'text' && block.text) {
@@ -302,7 +428,13 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
                 } else if (block.type === 'thinking' && block.thinking) {
                   textQueue.push({ type: 'thinking', content: block.thinking });
                 } else if (block.type === 'tool_use' && block.name) {
-                  textQueue.push({ type: 'tool_activity', ...extractToolDetails(block) });
+                  if (block.id) toolNameById[block.id] = block.name;
+                  const detail = extractToolDetails(block);
+                  // Attribute inner tools to the agent identified by the most recent task_progress
+                  if (!detail.isAgent && lastProgressAgentId) {
+                    detail.parentAgentId = lastProgressAgentId;
+                  }
+                  textQueue.push({ type: 'tool_activity', ...detail });
                 }
               }
             } else if (event.type === 'content_block_delta') {
@@ -312,6 +444,32 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
                 textQueue.push({ type: 'thinking', content: event.delta.thinking, streaming: true });
               }
             } else if (event.type === 'user') {
+              // Extract tool outcomes from tool_result blocks before emitting turn_boundary
+              if (event.message && Array.isArray(event.message.content)) {
+                const outcomes = [];
+                for (const block of event.message.content) {
+                  if (block.type === 'tool_result' && block.tool_use_id) {
+                    // content can be string or array of content blocks
+                    let resultContent = '';
+                    if (typeof block.content === 'string') {
+                      resultContent = block.content;
+                    } else if (Array.isArray(block.content)) {
+                      resultContent = block.content.filter(c => c.type === 'text').map(c => c.text).join('\n');
+                    }
+                    const toolName = toolNameById[block.tool_use_id];
+                    const extracted = extractToolOutcome(toolName, resultContent);
+                    outcomes.push({
+                      toolUseId: block.tool_use_id,
+                      isError: block.is_error || false,
+                      outcome: extracted ? extracted.outcome : (block.is_error ? 'error' : null),
+                      status: extracted ? extracted.status : (block.is_error ? 'error' : null),
+                    });
+                  }
+                }
+                if (outcomes.length > 0) {
+                  textQueue.push({ type: 'tool_outcomes', outcomes });
+                }
+              }
               textQueue.push({ type: 'turn_boundary' });
             } else if (event.type === 'result') {
               if (event.result) {
@@ -418,4 +576,4 @@ class ClaudeCodeAdapter extends BaseBackendAdapter {
   }
 }
 
-module.exports = { ClaudeCodeAdapter, extractToolDetails, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError };
+module.exports = { ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError };

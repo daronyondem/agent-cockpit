@@ -3,7 +3,7 @@ const { BackendRegistry } = require('../src/services/backends/registry');
 const { ClaudeCodeAdapter } = require('../src/services/backends/claudeCode');
 
 // extractToolDetails / shortenPath are not public on the class, so access via exports
-const { extractToolDetails, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError } = require('../src/services/backends/claudeCode');
+const { extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError } = require('../src/services/backends/claudeCode');
 
 const fs = require('fs');
 const vm = require('vm');
@@ -396,6 +396,92 @@ describe('isApiError', () => {
 
   test('rejects partial match', () => {
     expect(isApiError('API Error without code')).toBe(false);
+  });
+});
+
+// ── extractToolOutcome ────────────────────────────────────────────────────
+
+describe('extractToolOutcome', () => {
+  test('returns null for null content', () => {
+    expect(extractToolOutcome('Bash', null)).toBeNull();
+  });
+
+  test('returns null for empty string', () => {
+    expect(extractToolOutcome('Bash', '')).toBeNull();
+  });
+
+  test('Bash: detects exit code 0 as success', () => {
+    const result = extractToolOutcome('Bash', 'Output\nexit code: 0');
+    expect(result).toEqual({ outcome: 'exit 0', status: 'success' });
+  });
+
+  test('Bash: detects non-zero exit code as error', () => {
+    const result = extractToolOutcome('Bash', 'Error\nexit code: 1');
+    expect(result).toEqual({ outcome: 'exit 1', status: 'error' });
+  });
+
+  test('Bash: detects error patterns', () => {
+    const result = extractToolOutcome('Bash', 'command not found: foobar');
+    expect(result).toEqual({ outcome: 'error', status: 'error' });
+  });
+
+  test('Bash: returns done for normal output', () => {
+    const result = extractToolOutcome('Bash', 'some output here');
+    expect(result).toEqual({ outcome: 'done', status: 'success' });
+  });
+
+  test('Grep: counts matches', () => {
+    const result = extractToolOutcome('Grep', 'file1.js:10:match\nfile2.js:20:match\nfile3.js:30:match');
+    expect(result).toEqual({ outcome: '3 matches', status: 'success' });
+  });
+
+  test('Grep: returns 0 matches for no results', () => {
+    const result = extractToolOutcome('Grep', 'No matches found');
+    expect(result).toEqual({ outcome: '0 matches', status: 'warning' });
+  });
+
+  test('Glob: counts files', () => {
+    const result = extractToolOutcome('Glob', 'src/a.js\nsrc/b.js');
+    expect(result).toEqual({ outcome: '2 files', status: 'success' });
+  });
+
+  test('Glob: returns 0 files when empty', () => {
+    const result = extractToolOutcome('Glob', 'No files found');
+    expect(result).toEqual({ outcome: '0 files', status: 'warning' });
+  });
+
+  test('Read: returns read on success', () => {
+    const result = extractToolOutcome('Read', 'file contents here...');
+    expect(result).toEqual({ outcome: 'read', status: 'success' });
+  });
+
+  test('Read: detects not found', () => {
+    const result = extractToolOutcome('Read', 'Error: file not found at /path/to/file');
+    expect(result).toEqual({ outcome: 'not found', status: 'error' });
+  });
+
+  test('Edit: returns edited on success', () => {
+    const result = extractToolOutcome('Edit', 'The file was updated successfully');
+    expect(result).toEqual({ outcome: 'edited', status: 'success' });
+  });
+
+  test('Edit: detects no match', () => {
+    const result = extractToolOutcome('Edit', 'old_string not found in the file');
+    expect(result).toEqual({ outcome: 'no match', status: 'error' });
+  });
+
+  test('Write: returns written on success', () => {
+    const result = extractToolOutcome('Write', 'File created');
+    expect(result).toEqual({ outcome: 'written', status: 'success' });
+  });
+
+  test('Agent: returns done on success', () => {
+    const result = extractToolOutcome('Agent', 'Task completed');
+    expect(result).toEqual({ outcome: 'done', status: 'success' });
+  });
+
+  test('returns null for unknown tool', () => {
+    expect(extractToolOutcome('SomeUnknownTool', 'output')).toBeNull();
   });
 });
 
