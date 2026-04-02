@@ -517,8 +517,8 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
   3. Dirty tree guard (`git status --porcelain`, ignoring `data/`, `.env`, `ecosystem.config.js`, `.DS_Store`, `.claude/`, `coverage/`, `plans/`)
   4. `git checkout main` (30s timeout)
   5. `git pull origin main` (60s timeout)
-  6. `npm install --production` (120s timeout)
-  7. `pm2 restart ecosystem.config.js` (fire-and-forget, detached spawn)
+  6. `npm install` (120s timeout)
+  7. `pm2 delete ecosystem.config.js` then `pm2 start ecosystem.config.js` (fire-and-forget, detached spawn)
 
 Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
 

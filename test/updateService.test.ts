@@ -211,6 +211,7 @@ describe('UpdateService', () => {
         { stdout: 'Already on \'main\'\n' },
         { stdout: 'Already up to date.\n' },
         { stdout: 'up to date\n' },
+        { stdout: '' },  // pm2 delete
       ]);
 
       const result = await service.triggerUpdate({
@@ -227,6 +228,7 @@ describe('UpdateService', () => {
         { stdout: 'Already on \'main\'\n' },
         { stdout: 'Updating abc..def\n' },
         { stdout: 'added 0 packages\n' },
+        { stdout: '' },  // pm2 delete
       ]);
 
       const result = await service.triggerUpdate({
@@ -239,7 +241,7 @@ describe('UpdateService', () => {
       expect(result.steps[2].name).toBe('npm install');
       expect(result.steps[3].name).toBe('pm2 restart');
       result.steps.forEach(s => expect(s.success).toBe(true));
-      expect(mockSpawnFn).toHaveBeenCalledWith('pm2', expect.arrayContaining(['restart']), expect.objectContaining({ detached: true }));
+      expect(mockSpawnFn).toHaveBeenCalledWith('pm2', expect.arrayContaining(['start']), expect.objectContaining({ detached: true }));
       expect(mockSpawnResult.unref).toHaveBeenCalled();
     });
 

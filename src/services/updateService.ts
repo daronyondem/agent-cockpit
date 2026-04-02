@@ -95,7 +95,7 @@ export class UpdateService {
       }
 
       try {
-        const out = await this._exec('npm', ['install', '--production'], 120000);
+        const out = await this._exec('npm', ['install'], 120000);
         steps.push({ name: 'npm install', success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: 'npm install', success: false, output: (err as Error).message });
@@ -103,7 +103,14 @@ export class UpdateService {
       }
 
       const ecosystemPath = path.join(this._appRoot, 'ecosystem.config.js');
-      const pm2 = spawn('pm2', ['restart', ecosystemPath], {
+      // Use delete + start instead of restart so pm2 picks up config changes
+      // (e.g. new interpreter, script name, env vars)
+      try {
+        await this._exec('pm2', ['delete', ecosystemPath], 15000);
+      } catch {
+        // Ignore delete errors — process may not exist yet
+      }
+      const pm2 = spawn('pm2', ['start', ecosystemPath], {
         cwd: this._appRoot,
         detached: true,
         stdio: 'ignore',
