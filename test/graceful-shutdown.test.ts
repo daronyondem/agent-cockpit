@@ -5,7 +5,8 @@ const ROOT = path.resolve(__dirname, '..');
 const PORT = 3399;
 
 function startServer(): ChildProcess {
-  return spawn('npx', ['tsx', 'server.ts'], {
+  const tsxBin = path.join(ROOT, 'node_modules', '.bin', 'tsx');
+  return spawn(tsxBin, ['server.ts'], {
     cwd: ROOT,
     env: {
       ...process.env,
