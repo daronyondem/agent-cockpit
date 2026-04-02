@@ -327,6 +327,249 @@ describe('SSE tool_activity forwarding', () => {
   });
 });
 
+// ── Tool activity persistence ────────────────────────────────────────────────
+
+describe('Tool activity persistence', () => {
+  test('persists toolActivity on intermediate message at turn_boundary', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'Read', description: 'Reading `app.js`', id: 'tool_1' },
+      { type: 'tool_activity', tool: 'Grep', description: 'Searching for `foo`', id: 'tool_2' },
+      { type: 'text', content: 'First response', streaming: true },
+      { type: 'turn_boundary' },
+      { type: 'text', content: 'Second response', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const loaded = await chatService.getConversation(conv.id);
+    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    // First assistant message (intermediate) should have toolActivity
+    expect(assistantMsgs[0].toolActivity).toBeDefined();
+    expect(assistantMsgs[0].toolActivity).toHaveLength(2);
+    expect(assistantMsgs[0].toolActivity[0].tool).toBe('Read');
+    expect(assistantMsgs[0].toolActivity[1].tool).toBe('Grep');
+  });
+
+  test('persists toolActivity on final message at done', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'Bash', description: 'Running tests', id: 'tool_1' },
+      { type: 'text', content: 'Tests passed', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const loaded = await chatService.getConversation(conv.id);
+    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    expect(assistantMsgs[0].toolActivity).toBeDefined();
+    expect(assistantMsgs[0].toolActivity).toHaveLength(1);
+    expect(assistantMsgs[0].toolActivity[0].tool).toBe('Bash');
+    expect(assistantMsgs[0].toolActivity[0].duration).toBeGreaterThanOrEqual(0);
+    expect(assistantMsgs[0].toolActivity[0].startTime).toBeDefined();
+  });
+
+  test('does not persist isPlanMode or isQuestion events as toolActivity', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'EnterPlanMode', isPlanMode: true, planAction: 'enter', description: 'Entering plan mode' },
+      { type: 'tool_activity', tool: 'ExitPlanMode', isPlanMode: true, planAction: 'exit', description: 'Plan ready' },
+      { type: 'tool_activity', tool: 'AskUserQuestion', isQuestion: true, questions: [], description: 'Asking' },
+      { type: 'tool_activity', tool: 'Read', description: 'Reading `file.js`', id: 'tool_1' },
+      { type: 'text', content: 'Done', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const loaded = await chatService.getConversation(conv.id);
+    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    expect(assistantMsgs[0].toolActivity).toBeDefined();
+    // Only the Read tool should be persisted, not plan mode or question events
+    expect(assistantMsgs[0].toolActivity).toHaveLength(1);
+    expect(assistantMsgs[0].toolActivity[0].tool).toBe('Read');
+  });
+
+  test('toolActivity absent when no tool events occur', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Just text', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const loaded = await chatService.getConversation(conv.id);
+    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    expect(assistantMsgs[0].toolActivity).toBeUndefined();
+  });
+
+  test('persists agent tool activity with isAgent and subagentType', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'Agent', description: 'Explore codebase', isAgent: true, subagentType: 'Explore', id: 'agent_1' },
+      { type: 'text', content: 'Found results', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const loaded = await chatService.getConversation(conv.id);
+    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    expect(assistantMsgs[0].toolActivity).toBeDefined();
+    expect(assistantMsgs[0].toolActivity[0].isAgent).toBe(true);
+    expect(assistantMsgs[0].toolActivity[0].subagentType).toBe('Explore');
+  });
+
+  test('forwards tool_outcomes SSE event to client', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'Grep', description: 'Searching', id: 'tool_1' },
+      { type: 'tool_outcomes', outcomes: [{ toolUseId: 'tool_1', outcome: '5 matches', status: 'success' }] },
+      { type: 'turn_boundary' },
+      { type: 'text', content: 'Found it', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const outcomeEvent = events.find(e => e.type === 'tool_outcomes');
+    expect(outcomeEvent).toBeDefined();
+    expect(outcomeEvent.outcomes[0].outcome).toBe('5 matches');
+    expect(outcomeEvent.outcomes[0].status).toBe('success');
+  });
+
+  test('persists outcome and status on toolActivity entries', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'Bash', description: 'Running tests', id: 'tool_1' },
+      { type: 'tool_outcomes', outcomes: [{ toolUseId: 'tool_1', outcome: 'exit 0', status: 'success' }] },
+      { type: 'text', content: 'Tests pass', streaming: true },
+      { type: 'turn_boundary' },
+      { type: 'text', content: 'Done', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const loaded = await chatService.getConversation(conv.id);
+    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    // First message (intermediate, saved at turn_boundary) should have outcome
+    expect(assistantMsgs[0].toolActivity).toBeDefined();
+    expect(assistantMsgs[0].toolActivity[0].outcome).toBe('exit 0');
+    expect(assistantMsgs[0].toolActivity[0].status).toBe('success');
+  });
+});
+
+// ── Parallel grouping and session overview ────────────────────────────────────
+
+describe('Tool activity Phase 3 features', () => {
+  test('persists multiple agents with close startTimes for parallel grouping', async () => {
+    const conv = await chatService.createConversation('Test');
+    const now = Date.now();
+
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'Agent', description: 'Search code', id: 'a1', isAgent: true, subagentType: 'Explore' },
+      { type: 'tool_activity', tool: 'Agent', description: 'Check tests', id: 'a2', isAgent: true, subagentType: 'Explore' },
+      { type: 'text', content: 'Result', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test', backend: 'claude-code',
+    });
+    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const loaded = await chatService.getConversation(conv.id);
+    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    expect(assistantMsgs[0].toolActivity).toBeDefined();
+    expect(assistantMsgs[0].toolActivity).toHaveLength(2);
+    expect(assistantMsgs[0].toolActivity[0].isAgent).toBe(true);
+    expect(assistantMsgs[0].toolActivity[1].isAgent).toBe(true);
+    // Both should have startTime for frontend parallel grouping
+    expect(assistantMsgs[0].toolActivity[0].startTime).toBeDefined();
+    expect(assistantMsgs[0].toolActivity[1].startTime).toBeDefined();
+  });
+
+  test('persists mix of tool and agent activity for session overview aggregation', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    // First turn: tool activity
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'Read', description: 'Read file.js', id: 't1' },
+      { type: 'tool_activity', tool: 'Grep', description: 'Search pattern', id: 't2' },
+      { type: 'text', content: 'Found it', streaming: true },
+      { type: 'turn_boundary' },
+      // Second turn: agent activity
+      { type: 'tool_activity', tool: 'Agent', description: 'Explore codebase', id: 'a1', isAgent: true, subagentType: 'Explore' },
+      { type: 'text', content: 'Done exploring', streaming: true },
+      { type: 'done' },
+    ]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test', backend: 'claude-code',
+    });
+    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+
+    const loaded = await chatService.getConversation(conv.id);
+    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    // Should have 2 assistant messages (turn_boundary + done)
+    expect(assistantMsgs.length).toBe(2);
+    // First message has Read + Grep
+    expect(assistantMsgs[0].toolActivity).toHaveLength(2);
+    expect(assistantMsgs[0].toolActivity[0].tool).toBe('Read');
+    expect(assistantMsgs[0].toolActivity[1].tool).toBe('Grep');
+    // Second message has Agent
+    expect(assistantMsgs[1].toolActivity).toHaveLength(1);
+    expect(assistantMsgs[1].toolActivity[0].isAgent).toBe(true);
+    expect(assistantMsgs[1].toolActivity[0].subagentType).toBe('Explore');
+  });
+});
+
 // ── Turn boundary intermediate message saving ───────────────────────────────
 
 describe('Turn boundary intermediate messages', () => {

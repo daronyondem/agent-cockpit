@@ -298,7 +298,7 @@ class ChatService {
 
   // ── Messages ───────────────────────────────────────────────────────────────
 
-  async addMessage(convId, role, content, backend, thinking) {
+  async addMessage(convId, role, content, backend, thinking, toolActivity) {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { hash, index, convEntry } = result;
@@ -313,6 +313,10 @@ class ChatService {
 
     if (thinking) {
       msg.thinking = thinking;
+    }
+
+    if (toolActivity && toolActivity.length > 0) {
+      msg.toolActivity = toolActivity;
     }
 
     // Find active session
