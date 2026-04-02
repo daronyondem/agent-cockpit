@@ -1,6 +1,7 @@
-const helmet = require('helmet');
+import helmet from 'helmet';
+import type { Express } from '../types';
 
-function applySecurity(app) {
+export function applySecurity(app: Express): void {
   const helmetMiddleware = helmet({
     contentSecurityPolicy: {
       directives: {
@@ -21,5 +22,3 @@ function applySecurity(app) {
 
   app.use(helmetMiddleware);
 }
-
-module.exports = { applySecurity };

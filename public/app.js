@@ -2033,6 +2033,11 @@ function chatUpdateStreamingContent(msgEl, st) {
         html += chatRenderStreamingItem(item);
       }
     } else if (group.type === 'agent') {
+      // Skip completed agents that had no sub-tools and finished near-instantly
+      // (these are planning/delegation agents the model creates before real work)
+      if (group.agent.completed && group.items.length === 0 && (group.agent.duration || 0) < 2000) {
+        continue;
+      }
       html += renderAgentCard(group.agent);
       if (group.items.length > 0) {
         html += '<div class="chat-agent-subactivities">';

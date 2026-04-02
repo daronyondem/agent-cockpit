@@ -1,15 +1,9 @@
-const { BaseBackendAdapter } = require('../src/services/backends/base');
-const { BackendRegistry } = require('../src/services/backends/registry');
-const { ClaudeCodeAdapter } = require('../src/services/backends/claudeCode');
+import { BaseBackendAdapter } from '../src/services/backends/base';
+import { BackendRegistry } from '../src/services/backends/registry';
+import { ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError } from '../src/services/backends/claudeCode';
+import type { BackendMetadata, SendMessageResult, ToolDetail, ToolOutcomeResult, UsageEvent } from '../src/types';
 
-// extractToolDetails / shortenPath are not public on the class, so access via exports
-const { extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError } = require('../src/services/backends/claudeCode');
-
-const fs = require('fs');
-const vm = require('vm');
-const path = require('path');
-
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
 
 // ── BaseBackendAdapter ─────────────────────────────────────────────────────
 
@@ -38,13 +32,13 @@ describe('BaseBackendAdapter', () => {
   test('generateTitle truncates user message when no fallback', async () => {
     const adapter = new BaseBackendAdapter();
     const longMsg = 'A'.repeat(100);
-    const title = await adapter.generateTitle(longMsg);
+    const title = await adapter.generateTitle(longMsg, '');
     expect(title).toBe('A'.repeat(80));
   });
 
   test('generateTitle returns New Chat for empty message', async () => {
     const adapter = new BaseBackendAdapter();
-    const title = await adapter.generateTitle('', null);
+    const title = await adapter.generateTitle('', null as any);
     expect(title).toBe('New Chat');
   });
 
@@ -57,7 +51,7 @@ describe('BaseBackendAdapter', () => {
 // ── BackendRegistry ────────────────────────────────────────────────────────
 
 describe('BackendRegistry', () => {
-  let registry;
+  let registry: BackendRegistry;
 
   beforeEach(() => {
     registry = new BackendRegistry();
@@ -95,17 +89,16 @@ describe('BackendRegistry', () => {
   });
 
   test('register rejects non-BaseBackendAdapter', () => {
-    expect(() => registry.register({})).toThrow('must extend BaseBackendAdapter');
+    expect(() => registry.register({} as any)).toThrow('must extend BaseBackendAdapter');
   });
 
   test('register multiple adapters', () => {
-    // Create a minimal second adapter for testing
     class FakeAdapter extends BaseBackendAdapter {
-      get metadata() {
-        return { id: 'fake', label: 'Fake', icon: null, capabilities: {} };
+      get metadata(): BackendMetadata {
+        return { id: 'fake', label: 'Fake', icon: null, capabilities: {} as any };
       }
-      sendMessage() { return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} }; }
-      async generateSummary(msgs, fb) { return fb; }
+      sendMessage(): SendMessageResult { return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} }; }
+      async generateSummary(_msgs: any[], fb: string) { return fb; }
     }
 
     const claude = new ClaudeCodeAdapter({ workingDir: '/tmp' });
@@ -116,7 +109,6 @@ describe('BackendRegistry', () => {
     expect(registry.list()).toHaveLength(2);
     expect(registry.get('claude-code')).toBe(claude);
     expect(registry.get('fake')).toBe(fake);
-    // Default is first registered
     expect(registry.getDefault()).toBe(claude);
   });
 });
@@ -155,7 +147,7 @@ describe('ClaudeCodeAdapter', () => {
 
 describe('extractToolDetails', () => {
   test('Read with file_path returns shortened path description', () => {
-    const result = extractToolDetails({ name: 'Read', input: { file_path: '/Users/me/project/src/index.js' } });
+    const result = extractToolDetails({ name: 'Read', input: { file_path: '/Users/me/project/src/index.js' } } as any);
     expect(result.tool).toBe('Read');
     expect(result.description).toContain('Reading');
     expect(result.description).toContain('`');
@@ -163,134 +155,134 @@ describe('extractToolDetails', () => {
   });
 
   test('Read without file_path returns generic description', () => {
-    const result = extractToolDetails({ name: 'Read', input: {} });
+    const result = extractToolDetails({ name: 'Read', input: {} } as any);
     expect(result.description).toBe('Reading file');
   });
 
   test('Write with file_path returns description', () => {
-    const result = extractToolDetails({ name: 'Write', input: { file_path: '/tmp/out.txt' } });
+    const result = extractToolDetails({ name: 'Write', input: { file_path: '/tmp/out.txt' } } as any);
     expect(result.tool).toBe('Write');
     expect(result.description).toContain('Writing');
   });
 
   test('Write with plan file path sets isPlanFile', () => {
-    const result = extractToolDetails({ name: 'Write', input: { file_path: '/home/user/.claude/plans/my-plan.md' } });
+    const result = extractToolDetails({ name: 'Write', input: { file_path: '/home/user/.claude/plans/my-plan.md' } } as any);
     expect(result.isPlanFile).toBe(true);
   });
 
   test('Write without plan path does not set isPlanFile', () => {
-    const result = extractToolDetails({ name: 'Write', input: { file_path: '/tmp/regular.txt' } });
+    const result = extractToolDetails({ name: 'Write', input: { file_path: '/tmp/regular.txt' } } as any);
     expect(result.isPlanFile).toBe(false);
   });
 
   test('Edit with file_path returns description', () => {
-    const result = extractToolDetails({ name: 'Edit', input: { file_path: '/src/app.js' } });
+    const result = extractToolDetails({ name: 'Edit', input: { file_path: '/src/app.js' } } as any);
     expect(result.description).toContain('Editing');
     expect(result.description).toContain('app.js');
   });
 
   test('Edit without file_path returns generic description', () => {
-    const result = extractToolDetails({ name: 'Edit', input: {} });
+    const result = extractToolDetails({ name: 'Edit', input: {} } as any);
     expect(result.description).toBe('Editing file');
   });
 
   test('Bash with description uses description field', () => {
-    const result = extractToolDetails({ name: 'Bash', input: { description: 'Install dependencies', command: 'npm install' } });
+    const result = extractToolDetails({ name: 'Bash', input: { description: 'Install dependencies', command: 'npm install' } } as any);
     expect(result.description).toBe('Install dependencies');
   });
 
   test('Bash without description uses truncated command', () => {
-    const result = extractToolDetails({ name: 'Bash', input: { command: 'npm test' } });
+    const result = extractToolDetails({ name: 'Bash', input: { command: 'npm test' } } as any);
     expect(result.description).toBe('Running: `npm test`');
   });
 
   test('Bash truncates long commands at 60 chars', () => {
     const longCmd = 'a'.repeat(80);
-    const result = extractToolDetails({ name: 'Bash', input: { command: longCmd } });
+    const result = extractToolDetails({ name: 'Bash', input: { command: longCmd } } as any);
     expect(result.description).toContain('...');
     expect(result.description.length).toBeLessThan(80);
   });
 
   test('Bash with no description or command returns generic', () => {
-    const result = extractToolDetails({ name: 'Bash', input: {} });
+    const result = extractToolDetails({ name: 'Bash', input: {} } as any);
     expect(result.description).toBe('Running command');
   });
 
   test('Grep with pattern and glob returns detailed description', () => {
-    const result = extractToolDetails({ name: 'Grep', input: { pattern: 'TODO', glob: '*.js' } });
+    const result = extractToolDetails({ name: 'Grep', input: { pattern: 'TODO', glob: '*.js' } } as any);
     expect(result.description).toContain('`TODO`');
     expect(result.description).toContain('*.js');
   });
 
   test('Grep with pattern only omits glob', () => {
-    const result = extractToolDetails({ name: 'Grep', input: { pattern: 'error' } });
+    const result = extractToolDetails({ name: 'Grep', input: { pattern: 'error' } } as any);
     expect(result.description).toContain('`error`');
     expect(result.description).not.toContain(' in ');
   });
 
   test('Grep without pattern returns generic', () => {
-    const result = extractToolDetails({ name: 'Grep', input: {} });
+    const result = extractToolDetails({ name: 'Grep', input: {} } as any);
     expect(result.description).toBe('Searching files');
   });
 
   test('Glob with pattern returns description', () => {
-    const result = extractToolDetails({ name: 'Glob', input: { pattern: '**/*.ts' } });
+    const result = extractToolDetails({ name: 'Glob', input: { pattern: '**/*.ts' } } as any);
     expect(result.description).toContain('`**/*.ts`');
   });
 
   test('Glob without pattern returns generic', () => {
-    const result = extractToolDetails({ name: 'Glob', input: {} });
+    const result = extractToolDetails({ name: 'Glob', input: {} } as any);
     expect(result.description).toBe('Finding files');
   });
 
   test('Agent sets isAgent, subagentType, and description', () => {
-    const result = extractToolDetails({ name: 'Agent', input: { description: 'Explore tests', subagent_type: 'Explore' } });
+    const result = extractToolDetails({ name: 'Agent', input: { description: 'Explore tests', subagent_type: 'Explore' } } as any);
     expect(result.isAgent).toBe(true);
     expect(result.subagentType).toBe('Explore');
     expect(result.description).toBe('Explore tests');
   });
 
   test('Agent without inputs uses defaults', () => {
-    const result = extractToolDetails({ name: 'Agent', input: {} });
+    const result = extractToolDetails({ name: 'Agent', input: {} } as any);
     expect(result.isAgent).toBe(true);
     expect(result.subagentType).toBe('general-purpose');
     expect(result.description).toBe('Running sub-agent');
   });
 
   test('TodoWrite returns fixed description', () => {
-    const result = extractToolDetails({ name: 'TodoWrite', input: {} });
+    const result = extractToolDetails({ name: 'TodoWrite', input: {} } as any);
     expect(result.description).toBe('Updating task list');
   });
 
   test('WebSearch with query returns description', () => {
-    const result = extractToolDetails({ name: 'WebSearch', input: { query: 'node.js streams' } });
+    const result = extractToolDetails({ name: 'WebSearch', input: { query: 'node.js streams' } } as any);
     expect(result.description).toContain('`node.js streams`');
   });
 
   test('WebSearch without query returns generic', () => {
-    const result = extractToolDetails({ name: 'WebSearch', input: {} });
+    const result = extractToolDetails({ name: 'WebSearch', input: {} } as any);
     expect(result.description).toBe('Searching the web');
   });
 
   test('WebFetch with url returns description', () => {
-    const result = extractToolDetails({ name: 'WebFetch', input: { url: 'https://example.com' } });
+    const result = extractToolDetails({ name: 'WebFetch', input: { url: 'https://example.com' } } as any);
     expect(result.description).toContain('https://example.com');
   });
 
   test('WebFetch without url returns generic', () => {
-    const result = extractToolDetails({ name: 'WebFetch', input: {} });
+    const result = extractToolDetails({ name: 'WebFetch', input: {} } as any);
     expect(result.description).toBe('Fetching web content');
   });
 
   test('EnterPlanMode sets isPlanMode and planAction=enter', () => {
-    const result = extractToolDetails({ name: 'EnterPlanMode', input: {} });
+    const result = extractToolDetails({ name: 'EnterPlanMode', input: {} } as any);
     expect(result.isPlanMode).toBe(true);
     expect(result.planAction).toBe('enter');
     expect(result.description).toBe('Entering plan mode');
   });
 
   test('ExitPlanMode sets isPlanMode and planAction=exit', () => {
-    const result = extractToolDetails({ name: 'ExitPlanMode', input: {} });
+    const result = extractToolDetails({ name: 'ExitPlanMode', input: {} } as any);
     expect(result.isPlanMode).toBe(true);
     expect(result.planAction).toBe('exit');
     expect(result.description).toBe('Plan ready for approval');
@@ -298,30 +290,30 @@ describe('extractToolDetails', () => {
 
   test('AskUserQuestion sets isQuestion and passes questions array', () => {
     const questions = [{ question: 'Pick a color?', options: [{ label: 'Red' }, { label: 'Blue' }] }];
-    const result = extractToolDetails({ name: 'AskUserQuestion', input: { questions } });
+    const result = extractToolDetails({ name: 'AskUserQuestion', input: { questions } } as any);
     expect(result.isQuestion).toBe(true);
     expect(result.questions).toEqual(questions);
     expect(result.description).toBe('Asking a question');
   });
 
   test('AskUserQuestion without questions defaults to empty array', () => {
-    const result = extractToolDetails({ name: 'AskUserQuestion', input: {} });
+    const result = extractToolDetails({ name: 'AskUserQuestion', input: {} } as any);
     expect(result.isQuestion).toBe(true);
     expect(result.questions).toEqual([]);
   });
 
   test('unknown tool returns generic description', () => {
-    const result = extractToolDetails({ name: 'SomeNewTool', input: {} });
+    const result = extractToolDetails({ name: 'SomeNewTool', input: {} } as any);
     expect(result.description).toBe('Using SomeNewTool');
   });
 
   test('preserves block id', () => {
-    const result = extractToolDetails({ name: 'Read', id: 'tool_123', input: { file_path: '/a.txt' } });
+    const result = extractToolDetails({ name: 'Read', id: 'tool_123', input: { file_path: '/a.txt' } } as any);
     expect(result.id).toBe('tool_123');
   });
 
   test('handles missing input gracefully', () => {
-    const result = extractToolDetails({ name: 'Read' });
+    const result = extractToolDetails({ name: 'Read' } as any);
     expect(result.description).toBe('Reading file');
   });
 });
@@ -330,12 +322,12 @@ describe('extractToolDetails', () => {
 
 describe('shortenPath via Read tool', () => {
   test('short paths are not shortened', () => {
-    const result = extractToolDetails({ name: 'Read', input: { file_path: 'a/b' } });
+    const result = extractToolDetails({ name: 'Read', input: { file_path: 'a/b' } } as any);
     expect(result.description).toBe('Reading `a/b`');
   });
 
   test('long paths are shortened to last 2 segments', () => {
-    const result = extractToolDetails({ name: 'Read', input: { file_path: '/a/b/c/d/e.js' } });
+    const result = extractToolDetails({ name: 'Read', input: { file_path: '/a/b/c/d/e.js' } } as any);
     expect(result.description).toContain('.../d/e.js');
   });
 });
@@ -350,8 +342,8 @@ describe('sanitizeSystemPrompt', () => {
   });
 
   test('returns non-string types as empty', () => {
-    expect(sanitizeSystemPrompt(42)).toBe('');
-    expect(sanitizeSystemPrompt({})).toBe('');
+    expect(sanitizeSystemPrompt(42 as any)).toBe('');
+    expect(sanitizeSystemPrompt({} as any)).toBe('');
   });
 
   test('passes through normal text unchanged', () => {
@@ -489,7 +481,7 @@ describe('extractToolOutcome', () => {
 
 describe('extractUsage', () => {
   test('returns null when no usage or cost data', () => {
-    expect(extractUsage({ type: 'result', result: 'done' })).toBeNull();
+    expect(extractUsage({ type: 'result', result: 'done' } as any)).toBeNull();
   });
 
   test('extracts full usage data from result event', () => {
@@ -504,7 +496,7 @@ describe('extractUsage', () => {
         cache_creation_input_tokens: 100,
       },
     };
-    const result = extractUsage(event);
+    const result = extractUsage(event as any);
     expect(result).toEqual({
       type: 'usage',
       usage: {
@@ -518,11 +510,11 @@ describe('extractUsage', () => {
   });
 
   test('extracts cost when usage object is missing', () => {
-    const result = extractUsage({ type: 'result', cost_usd: 0.01 });
+    const result = extractUsage({ type: 'result', cost_usd: 0.01 } as any);
     expect(result).not.toBeNull();
-    expect(result.usage.costUsd).toBe(0.01);
-    expect(result.usage.inputTokens).toBe(0);
-    expect(result.usage.outputTokens).toBe(0);
+    expect(result!.usage.costUsd).toBe(0.01);
+    expect(result!.usage.inputTokens).toBe(0);
+    expect(result!.usage.outputTokens).toBe(0);
   });
 
   test('handles partial usage object', () => {
@@ -530,17 +522,17 @@ describe('extractUsage', () => {
       type: 'result',
       cost_usd: 0.02,
       usage: { input_tokens: 500 },
-    });
-    expect(result.usage.inputTokens).toBe(500);
-    expect(result.usage.outputTokens).toBe(0);
-    expect(result.usage.cacheReadTokens).toBe(0);
-    expect(result.usage.cacheWriteTokens).toBe(0);
-    expect(result.usage.costUsd).toBe(0.02);
+    } as any);
+    expect(result!.usage.inputTokens).toBe(500);
+    expect(result!.usage.outputTokens).toBe(0);
+    expect(result!.usage.cacheReadTokens).toBe(0);
+    expect(result!.usage.cacheWriteTokens).toBe(0);
+    expect(result!.usage.costUsd).toBe(0.02);
   });
 
   test('returns null for event with no usage and no cost_usd', () => {
-    expect(extractUsage({ type: 'result' })).toBeNull();
-    expect(extractUsage({})).toBeNull();
+    expect(extractUsage({ type: 'result' } as any)).toBeNull();
+    expect(extractUsage({} as any)).toBeNull();
   });
 });
 
@@ -553,6 +545,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
       sessionId: 'test-session',
       isNewSession: true,
       workingDir: '/tmp',
+      systemPrompt: '',
     });
 
     expect(stream).toBeDefined();
@@ -568,11 +561,11 @@ describe('ClaudeCodeAdapter sendMessage', () => {
   }, 10000);
 
   test('includes --append-system-prompt for new sessions with systemPrompt', async () => {
-    let capturedArgs;
-    let streamRef;
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
     jest.isolateModules(() => {
       jest.mock('child_process', () => ({
-        spawn: (_cmd, args) => {
+        spawn: (_cmd: string, args: string[]) => {
           capturedArgs = args;
           const { EventEmitter } = require('events');
           const proc = new EventEmitter();
@@ -596,22 +589,22 @@ describe('ClaudeCodeAdapter sendMessage', () => {
       streamRef = stream;
     });
 
-    for await (const event of streamRef) {
+    for await (const event of streamRef!) {
       if (event.type === 'done') break;
     }
 
     expect(capturedArgs).toBeDefined();
-    const idx = capturedArgs.indexOf('--append-system-prompt');
+    const idx = capturedArgs!.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThan(-1);
-    expect(capturedArgs[idx + 1]).toBe('You are a helpful assistant');
+    expect(capturedArgs![idx + 1]).toBe('You are a helpful assistant');
   });
 
   test('sanitizes system prompt with control characters', async () => {
-    let capturedArgs;
-    let streamRef;
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
     jest.isolateModules(() => {
       jest.mock('child_process', () => ({
-        spawn: (_cmd, args) => {
+        spawn: (_cmd: string, args: string[]) => {
           capturedArgs = args;
           const { EventEmitter } = require('events');
           const proc = new EventEmitter();
@@ -635,22 +628,22 @@ describe('ClaudeCodeAdapter sendMessage', () => {
       streamRef = stream;
     });
 
-    for await (const event of streamRef) {
+    for await (const event of streamRef!) {
       if (event.type === 'done') break;
     }
 
     expect(capturedArgs).toBeDefined();
-    const idx = capturedArgs.indexOf('--append-system-prompt');
+    const idx = capturedArgs!.indexOf('--append-system-prompt');
     expect(idx).toBeGreaterThan(-1);
-    expect(capturedArgs[idx + 1]).toBe('Be helpful and safe');
+    expect(capturedArgs![idx + 1]).toBe('Be helpful and safe');
   });
 
   test('omits --append-system-prompt when systemPrompt is only control chars', async () => {
-    let capturedArgs;
-    let streamRef;
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
     jest.isolateModules(() => {
       jest.mock('child_process', () => ({
-        spawn: (_cmd, args) => {
+        spawn: (_cmd: string, args: string[]) => {
           capturedArgs = args;
           const { EventEmitter } = require('events');
           const proc = new EventEmitter();
@@ -674,7 +667,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
       streamRef = stream;
     });
 
-    for await (const event of streamRef) {
+    for await (const event of streamRef!) {
       if (event.type === 'done') break;
     }
 
@@ -683,11 +676,11 @@ describe('ClaudeCodeAdapter sendMessage', () => {
   });
 
   test('omits --append-system-prompt when systemPrompt is empty', async () => {
-    let capturedArgs;
-    let streamRef;
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
     jest.isolateModules(() => {
       jest.mock('child_process', () => ({
-        spawn: (_cmd, args) => {
+        spawn: (_cmd: string, args: string[]) => {
           capturedArgs = args;
           const { EventEmitter } = require('events');
           const proc = new EventEmitter();
@@ -711,7 +704,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
       streamRef = stream;
     });
 
-    for await (const event of streamRef) {
+    for await (const event of streamRef!) {
       if (event.type === 'done') break;
     }
 
@@ -720,11 +713,11 @@ describe('ClaudeCodeAdapter sendMessage', () => {
   });
 
   test('omits --append-system-prompt on resumed sessions', async () => {
-    let capturedArgs;
-    let streamRef;
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
     jest.isolateModules(() => {
       jest.mock('child_process', () => ({
-        spawn: (_cmd, args) => {
+        spawn: (_cmd: string, args: string[]) => {
           capturedArgs = args;
           const { EventEmitter } = require('events');
           const proc = new EventEmitter();
@@ -748,7 +741,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
       streamRef = stream;
     });
 
-    for await (const event of streamRef) {
+    for await (const event of streamRef!) {
       if (event.type === 'done') break;
     }
 
@@ -763,11 +756,12 @@ describe('ClaudeCodeAdapter sendMessage', () => {
       sessionId: 'test-abort',
       isNewSession: true,
       workingDir: '/tmp',
+      systemPrompt: '',
     });
 
     abort();
 
-    const events = [];
+    const events: any[] = [];
     for await (const event of stream) {
       events.push(event);
       if (event.type === 'done') break;
@@ -784,6 +778,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
       sessionId: 'test-input-safe',
       isNewSession: true,
       workingDir: '/tmp',
+      systemPrompt: '',
     });
 
     abort();

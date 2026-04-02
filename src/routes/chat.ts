@@ -1,66 +1,81 @@
-const express = require('express');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const multer = require('multer');
-const { csrfGuard } = require('../middleware/csrf');
+import express from 'express';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
+import multer from 'multer';
+import { csrfGuard } from '../middleware/csrf';
+import type { ChatService } from '../services/chatService';
+import type { BackendRegistry } from '../services/backends/registry';
+import type { UpdateService } from '../services/updateService';
+import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent } from '../types';
 
-function createChatRouter({ chatService, backendRegistry, updateService }) {
+/** Extract a named route param as a string (Express 5 types them as string | string[]). */
+function param(req: Request, name: string): string {
+  const val = req.params[name];
+  return Array.isArray(val) ? val[0] : val;
+}
+
+interface ChatRouterDeps {
+  chatService: ChatService;
+  backendRegistry: BackendRegistry;
+  updateService: UpdateService;
+}
+
+export function createChatRouter({ chatService, backendRegistry, updateService }: ChatRouterDeps) {
   const router = express.Router();
   const packageJson = require('../../package.json');
 
-  // Track active streams so we can abort them
-  const activeStreams = new Map();
+  const activeStreams = new Map<string, ActiveStreamEntry>();
 
   // ── Available backends ──────────────────────────────────────────────────────
-  router.get('/backends', (req, res) => {
+  router.get('/backends', (_req: Request, res: Response) => {
     res.json({ backends: backendRegistry.list() });
   });
 
   // ── Version ─────────────────────────────────────────────────────────────────
-  router.get('/version', (req, res) => {
-    const status = updateService ? updateService.getStatus() : {};
+  router.get('/version', (_req: Request, res: Response) => {
+    const status = updateService ? updateService.getStatus() : {} as Record<string, unknown>;
     res.json({
       version: packageJson.version,
-      remoteVersion: status.remoteVersion || null,
-      updateAvailable: status.updateAvailable || false,
+      remoteVersion: (status as ReturnType<UpdateService['getStatus']>).remoteVersion || null,
+      updateAvailable: (status as ReturnType<UpdateService['getStatus']>).updateAvailable || false,
     });
   });
 
   // ── Update status ──────────────────────────────────────────────────────────
-  router.get('/update-status', (req, res) => {
+  router.get('/update-status', (_req: Request, res: Response) => {
     if (!updateService) return res.json({ updateAvailable: false });
     res.json(updateService.getStatus());
   });
 
   // ── Manual version check ────────────────────────────────────────────────────
-  router.post('/check-version', csrfGuard, async (req, res) => {
+  router.post('/check-version', csrfGuard, async (_req: Request, res: Response) => {
     if (!updateService) return res.status(501).json({ error: 'Update service not available' });
     try {
       const status = await updateService.checkNow();
       res.json(status);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Trigger update ─────────────────────────────────────────────────────────
-  router.post('/update-trigger', csrfGuard, async (req, res) => {
+  router.post('/update-trigger', csrfGuard, async (_req: Request, res: Response) => {
     if (!updateService) return res.status(501).json({ error: 'Update service not available' });
     try {
       const result = await updateService.triggerUpdate({
         hasActiveStreams: () => activeStreams.size > 0,
       });
       res.json(result);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Browse directories ─────────────────────────────────────────────────────
-  router.get('/browse', (req, res) => {
+  router.get('/browse', (req: Request, res: Response) => {
     try {
-      const dirPath = req.query.path || os.homedir();
+      const dirPath = (req.query.path as string) || os.homedir();
       const showHidden = req.query.showHidden === 'true';
 
       const resolved = path.resolve(dirPath);
@@ -72,13 +87,13 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
         return res.status(400).json({ error: 'Path is not a directory' });
       }
 
-      let entries;
+      let entries: fs.Dirent[];
       try {
         entries = fs.readdirSync(resolved, { withFileTypes: true });
-      } catch (readErr) {
+      } catch {
         return res.status(403).json({ error: 'Permission denied: ' + resolved });
       }
-      let dirs = [];
+      let dirs: string[] = [];
       for (const e of entries) {
         try {
           if (e.isDirectory()) dirs.push(e.name);
@@ -96,15 +111,15 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
         parent: parent !== resolved ? parent : null,
         dirs,
       });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Create directory ───────────────────────────────────────────────────────
-  router.post('/mkdir', csrfGuard, (req, res) => {
+  router.post('/mkdir', csrfGuard, (req: Request, res: Response) => {
     try {
-      const { parentPath, name } = req.body;
+      const { parentPath, name } = req.body as { parentPath?: string; name?: string };
       if (!parentPath || !name) {
         return res.status(400).json({ error: 'parentPath and name are required' });
       }
@@ -121,19 +136,19 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
       }
       try {
         fs.mkdirSync(fullPath);
-      } catch (mkdirErr) {
+      } catch {
         return res.status(403).json({ error: 'Permission denied' });
       }
       res.json({ created: fullPath });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Delete directory ────────────────────────────────────────────────────────
-  router.post('/rmdir', csrfGuard, (req, res) => {
+  router.post('/rmdir', csrfGuard, (req: Request, res: Response) => {
     try {
-      const { dirPath } = req.body;
+      const { dirPath } = req.body as { dirPath?: string };
       if (!dirPath) {
         return res.status(400).json({ error: 'dirPath is required' });
       }
@@ -151,152 +166,150 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
       }
       try {
         fs.rmSync(resolved, { recursive: true, force: true });
-      } catch (rmErr) {
+      } catch {
         return res.status(403).json({ error: 'Permission denied' });
       }
       res.json({ deleted: resolved, parent });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── List conversations ─────────────────────────────────────────────────────
-  router.get('/conversations', async (req, res) => {
+  router.get('/conversations', async (req: Request, res: Response) => {
     try {
-      const q = req.query.q || '';
+      const q = (req.query.q as string) || '';
       const convs = q ? await chatService.searchConversations(q) : await chatService.listConversations();
       res.json({ conversations: convs });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Get single conversation ────────────────────────────────────────────────
-  router.get('/conversations/:id', async (req, res) => {
+  router.get('/conversations/:id', async (req: Request, res: Response) => {
     try {
-      const conv = await chatService.getConversation(req.params.id);
+      const conv = await chatService.getConversation(param(req, 'id'));
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
       res.json(conv);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Create conversation ────────────────────────────────────────────────────
-  router.post('/conversations', csrfGuard, async (req, res) => {
+  router.post('/conversations', csrfGuard, async (req: Request, res: Response) => {
     try {
       const conv = await chatService.createConversation(req.body.title, req.body.workingDir);
       res.json(conv);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Rename conversation ────────────────────────────────────────────────────
-  router.put('/conversations/:id', csrfGuard, async (req, res) => {
+  router.put('/conversations/:id', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const conv = await chatService.renameConversation(req.params.id, req.body.title);
+      const conv = await chatService.renameConversation(param(req, 'id'), req.body.title);
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
       res.json(conv);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Delete conversation ────────────────────────────────────────────────────
-  router.delete('/conversations/:id', csrfGuard, async (req, res) => {
+  router.delete('/conversations/:id', csrfGuard, async (req: Request, res: Response) => {
     try {
-      // Abort any active stream
-      const entry = activeStreams.get(req.params.id);
+      const entry = activeStreams.get(param(req, 'id'));
       if (entry) {
         entry.abort();
-        activeStreams.delete(req.params.id);
+        activeStreams.delete(param(req, 'id'));
       }
-      const ok = await chatService.deleteConversation(req.params.id);
+      const ok = await chatService.deleteConversation(param(req, 'id'));
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Download conversation as markdown ──────────────────────────────────────
-  router.get('/conversations/:id/download', async (req, res) => {
+  router.get('/conversations/:id/download', async (req: Request, res: Response) => {
     try {
-      const md = await chatService.conversationToMarkdown(req.params.id);
+      const md = await chatService.conversationToMarkdown(param(req, 'id'));
       if (!md) return res.status(404).json({ error: 'Conversation not found' });
-      const conv = await chatService.getConversation(req.params.id);
-      const filename = (conv.title || 'conversation').replace(/[^a-zA-Z0-9-_ ]/g, '').substring(0, 50).trim() + '.md';
+      const conv = await chatService.getConversation(param(req, 'id'));
+      const filename = (conv!.title || 'conversation').replace(/[^a-zA-Z0-9-_ ]/g, '').substring(0, 50).trim() + '.md';
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.send(md);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Download session as markdown ────────────────────────────────────────────
-  router.get('/conversations/:id/sessions/:num/download', async (req, res) => {
+  router.get('/conversations/:id/sessions/:num/download', async (req: Request, res: Response) => {
     try {
-      const sessionNumber = Number(req.params.num);
-      const md = await chatService.sessionToMarkdown(req.params.id, sessionNumber);
+      const sessionNumber = Number(param(req, 'num'));
+      const md = await chatService.sessionToMarkdown(param(req, 'id'), sessionNumber);
       if (!md) return res.status(404).json({ error: 'Session not found' });
-      const conv = await chatService.getConversation(req.params.id);
-      const title = (conv.title || 'conversation').replace(/[^a-zA-Z0-9-_ ]/g, '').substring(0, 50).trim();
+      const conv = await chatService.getConversation(param(req, 'id'));
+      const title = (conv!.title || 'conversation').replace(/[^a-zA-Z0-9-_ ]/g, '').substring(0, 50).trim();
       const filename = `${title}-session-${sessionNumber}.md`;
       res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
       res.send(md);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Session history ────────────────────────────────────────────────────────
-  router.get('/conversations/:id/sessions', async (req, res) => {
+  router.get('/conversations/:id/sessions', async (req: Request, res: Response) => {
     try {
-      const sessions = await chatService.getSessionHistory(req.params.id);
+      const sessions = await chatService.getSessionHistory(param(req, 'id'));
       if (!sessions) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ sessions });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Get session messages ───────────────────────────────────────────────────
-  router.get('/conversations/:id/sessions/:num/messages', async (req, res) => {
+  router.get('/conversations/:id/sessions/:num/messages', async (req: Request, res: Response) => {
     try {
-      const sessionNumber = Number(req.params.num);
+      const sessionNumber = Number(param(req, 'num'));
       if (!sessionNumber || sessionNumber < 1) {
         return res.status(400).json({ error: 'Invalid session number' });
       }
-      const messages = await chatService.getSessionMessages(req.params.id, sessionNumber);
+      const messages = await chatService.getSessionMessages(param(req, 'id'), sessionNumber);
       if (!messages) return res.status(404).json({ error: 'Session not found' });
       res.json({ messages });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Reset session ──────────────────────────────────────────────────────────
-  router.post('/conversations/:id/reset', csrfGuard, async (req, res) => {
+  router.post('/conversations/:id/reset', csrfGuard, async (req: Request, res: Response) => {
     try {
-      // Block if streaming
-      if (activeStreams.has(req.params.id)) {
+      if (activeStreams.has(param(req, 'id'))) {
         return res.status(409).json({ error: 'Cannot reset session while streaming' });
       }
-      const result = await chatService.resetSession(req.params.id);
+      const result = await chatService.resetSession(param(req, 'id'));
       if (!result) return res.status(404).json({ error: 'Conversation not found' });
       res.json(result);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Send message + stream response (SSE) ──────────────────────────────────
-  router.post('/conversations/:id/message', csrfGuard, async (req, res) => {
-    const convId = req.params.id;
-    const { content, backend } = req.body;
+  router.post('/conversations/:id/message', csrfGuard, async (req: Request, res: Response) => {
+    const convId = param(req, 'id');
+    const { content, backend } = req.body as { content?: string; backend?: string };
 
     if (!content || typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ error: 'Message content required' });
@@ -305,25 +318,20 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
     const conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
 
-    // Update backend if changed
     if (backend && backend !== conv.backend) {
       await chatService.updateConversationBackend(convId, backend);
     }
 
-    // Add user message
     const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backend || conv.backend);
 
-    // Determine if this is the first message in the current Claude Code session
     const isNewSession = conv.messages.length === 0;
 
-    // Build CLI message — inject workspace context on new sessions
     let cliMessage = content.trim();
     if (isNewSession) {
       const ctx = chatService.getWorkspaceContext(convId);
       if (ctx) cliMessage = ctx + '\n\n' + cliMessage;
     }
 
-    // Fetch system prompt + workspace instructions for new sessions
     let systemPrompt = '';
     if (isNewSession) {
       const settings = await chatService.getSettings();
@@ -334,14 +342,12 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
       systemPrompt = parts.join('\n\n');
     }
 
-    // Resolve backend adapter from registry
     const backendId = backend || conv.backend;
     const adapter = backendRegistry.get(backendId);
     if (!adapter) {
       return res.status(400).json({ error: `Unknown backend: ${backendId}` });
     }
 
-    // Start CLI streaming — store stream reference for the GET SSE endpoint
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} backend=${backendId} workingDir=${conv.workingDir || 'default'}`);
     const { stream, abort, sendInput } = adapter.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
@@ -349,17 +355,15 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
       workingDir: conv.workingDir || null,
       systemPrompt,
     });
-    // Flag for auto-title update: new session after a reset (session > 1)
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
     activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });
 
-    // Return the user message — frontend will open GET SSE for streaming
     res.json({ userMessage: userMsg, streamReady: true });
   });
 
-  // ── SSE stream (GET — avoids express-session res.end hook issues with POST SSE) ──
-  router.get('/conversations/:id/stream', (req, res) => {
-    const convId = req.params.id;
+  // ── SSE stream ──────────────────────────────────────────────────────────────
+  router.get('/conversations/:id/stream', (req: Request, res: Response) => {
+    const convId = param(req, 'id');
     const entry = activeStreams.get(convId);
 
     if (!entry) {
@@ -367,10 +371,10 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
       return;
     }
 
-    const { stream, abort, backend } = entry;
+    const streamEntry = entry; // Narrowed: guaranteed non-null after early return
+    const { stream, abort, backend } = streamEntry;
 
-    // Raw SSE response — bypass express response handling
-    res.socket.setTimeout(0);
+    res.socket!.setTimeout(0);
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
@@ -394,41 +398,49 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
 
     let fullResponse = '';
     let thinkingText = '';
-    let resultText = null;
+    let resultText: string | null = null;
     let hasStreamingDeltas = false;
-    let pendingPlanContent = '';  // Plan file content from Write tool (Claude Code specific)
+    let pendingPlanContent = '';
     let titleUpdateTriggered = false;
-    let titleUpdatePromise = null;
-    let toolActivityAccumulator = [];  // Accumulate tool_activity events for persistence
+    let titleUpdatePromise: Promise<void> | null = null;
+    let toolActivityAccumulator: Array<{
+      tool: string;
+      description: string;
+      id: string | null;
+      isAgent?: boolean;
+      subagentType?: string;
+      parentAgentId?: string;
+      outcome?: string;
+      status?: string;
+      startTime: number;
+    }> = [];
 
-    // Compute durations from inter-event timing for persisted tool activity
-    function computeToolDurations(activities) {
+    function computeToolDurations(activities: typeof toolActivityAccumulator): ToolActivity[] {
       if (!activities.length) return [];
       const now = Date.now();
       return activities.map((t, i) => {
         const nextStart = activities[i + 1]?.startTime || now;
         const duration = t.startTime ? nextStart - t.startTime : null;
-        const entry = { tool: t.tool, description: t.description, id: t.id, duration, startTime: t.startTime };
-        if (t.isAgent) { entry.isAgent = true; entry.subagentType = t.subagentType; }
-        if (t.parentAgentId) { entry.parentAgentId = t.parentAgentId; }
-        if (t.outcome) { entry.outcome = t.outcome; }
-        if (t.status) { entry.status = t.status; }
-        return entry;
+        const toolEntry: ToolActivity = { tool: t.tool, description: t.description, id: t.id, duration, startTime: t.startTime };
+        if (t.isAgent) { toolEntry.isAgent = true; toolEntry.subagentType = t.subagentType; }
+        if (t.parentAgentId) { toolEntry.parentAgentId = t.parentAgentId; }
+        if (t.outcome) { toolEntry.outcome = t.outcome; }
+        if (t.status) { toolEntry.status = t.status; }
+        return toolEntry;
       });
     }
 
-    // Helper: trigger async title update after first assistant message in a new session
     function maybeUpdateTitle() {
-      if (titleUpdateTriggered || !entry.needsTitleUpdate || !entry.titleUpdateMessage) return;
+      if (titleUpdateTriggered || !streamEntry.needsTitleUpdate || !streamEntry.titleUpdateMessage) return;
       titleUpdateTriggered = true;
-      titleUpdatePromise = chatService.generateAndUpdateTitle(convId, entry.titleUpdateMessage)
+      titleUpdatePromise = chatService.generateAndUpdateTitle(convId, streamEntry.titleUpdateMessage)
         .then((newTitle) => {
           if (newTitle && !res.writableEnded) {
             console.log(`[chat] Title updated for conv=${convId}: ${newTitle}`);
             res.write(`data: ${JSON.stringify({ type: 'title_updated', title: newTitle })}\n\n`);
           }
         })
-        .catch((err) => {
+        .catch((err: Error) => {
           console.error(`[chat] Failed to update title for conv=${convId}:`, err.message);
         });
     }
@@ -440,7 +452,6 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
 
           if (event.type === 'text') {
             fullResponse += event.content;
-            // Only forward streaming deltas to client (skip replayed history)
             if (event.streaming) {
               hasStreamingDeltas = true;
               res.write(`data: ${JSON.stringify({ type: 'text', content: event.content })}\n\n`);
@@ -451,18 +462,15 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
               res.write(`data: ${JSON.stringify({ type: 'thinking', content: event.content })}\n\n`);
             }
           } else if (event.type === 'tool_outcomes') {
-            // Merge tool outcomes into the accumulator by matching tool_use_id
             for (const outcome of (event.outcomes || [])) {
               const match = toolActivityAccumulator.find(t => t.id === outcome.toolUseId);
               if (match) {
-                match.outcome = outcome.outcome;
-                match.status = outcome.status;
+                match.outcome = outcome.outcome || undefined;
+                match.status = outcome.status || undefined;
               }
             }
-            // Forward to frontend for live display
             res.write(`data: ${JSON.stringify({ type: 'tool_outcomes', outcomes: event.outcomes })}\n\n`);
           } else if (event.type === 'turn_boundary') {
-            // Tool use happened — save accumulated text as an intermediate message
             const turnToolActivity = computeToolDurations(toolActivityAccumulator);
             if (hasStreamingDeltas && fullResponse.trim()) {
               console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}, tools=${turnToolActivity.length}`);
@@ -470,29 +478,24 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
               res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: intermediateMsg })}\n\n`);
               maybeUpdateTitle();
             }
-            // Always notify frontend that tools completed, even when no text to save
             res.write(`data: ${JSON.stringify({ type: 'turn_complete' })}\n\n`);
             fullResponse = '';
             thinkingText = '';
             hasStreamingDeltas = false;
             toolActivityAccumulator = [];
           } else if (event.type === 'tool_activity') {
-            // Track plan file content written by Claude Code's Write tool
             if (event.isPlanFile && event.planContent) {
               pendingPlanContent = event.planContent;
             }
             const { type: _t, planContent: _pc, ...rest } = event;
-            // Attach accumulated plan content when ExitPlanMode fires
-            if (rest.isPlanMode && rest.planAction === 'exit' && pendingPlanContent) {
-              rest.planContent = pendingPlanContent;
+            const restAny = rest as Record<string, unknown>;
+            if (restAny.isPlanMode && restAny.planAction === 'exit' && pendingPlanContent) {
+              restAny.planContent = pendingPlanContent;
             }
-            // parentAgentId is set by claudeCode.js via task_progress events —
-            // no heuristic state machine needed here.
-            if (rest.isAgent && rest.id) {
-              console.log(`[chat] AGENT ${rest.id} parentAgentId=${rest.parentAgentId || 'none'}`);
+            if (restAny.isAgent && restAny.id) {
+              console.log(`[chat] AGENT ${restAny.id} parentAgentId=${restAny.parentAgentId || 'none'}`);
             }
             res.write(`data: ${JSON.stringify({ type: 'tool_activity', ...rest })}\n\n`);
-            // Accumulate tool activity for persistence (skip plan mode and question meta-events)
             if (!event.isPlanMode && !event.isQuestion) {
               toolActivityAccumulator.push({
                 tool: rest.tool,
@@ -507,7 +510,6 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
           } else if (event.type === 'result') {
             resultText = event.content;
           } else if (event.type === 'usage') {
-            // Persist usage and forward to client
             const updated = await chatService.addUsage(convId, event.usage);
             if (!res.writableEnded) {
               res.write(`data: ${JSON.stringify({ type: 'usage', usage: updated || event.usage })}\n\n`);
@@ -516,8 +518,6 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
             console.error(`[chat] Stream error for conv=${convId}:`, event.error);
             res.write(`data: ${JSON.stringify({ type: 'error', error: event.error })}\n\n`);
           } else if (event.type === 'done') {
-            // Save remaining text or result as the final message
-            // Check if the accumulated text is actually an API error
             const apiErrPattern = /^API Error:\s*\d{3}\s/;
             const finalToolActivity = computeToolDurations(toolActivityAccumulator);
             const finalToolActivityArg = finalToolActivity.length > 0 ? finalToolActivity : undefined;
@@ -540,15 +540,14 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
               console.log(`[chat] Stream done for conv=${convId}, no content to save`);
             }
             toolActivityAccumulator = [];
-            // Wait for pending title update before closing the stream
             if (titleUpdatePromise) await titleUpdatePromise;
             res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
           }
         }
-      } catch (err) {
+      } catch (err: unknown) {
         console.error(`[chat] Stream exception for conv=${convId}:`, err);
         if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+          res.write(`data: ${JSON.stringify({ type: 'error', error: (err as Error).message })}\n\n`);
           res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
         }
       } finally {
@@ -560,23 +559,23 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
   });
 
   // ── Abort streaming ────────────────────────────────────────────────────────
-  router.post('/conversations/:id/abort', csrfGuard, (req, res) => {
-    const entry = activeStreams.get(req.params.id);
+  router.post('/conversations/:id/abort', csrfGuard, (req: Request, res: Response) => {
+    const entry = activeStreams.get(param(req, 'id'));
     if (entry) {
       entry.abort();
-      activeStreams.delete(req.params.id);
+      activeStreams.delete(param(req, 'id'));
       res.json({ ok: true });
     } else {
       res.json({ ok: false, message: 'No active stream' });
     }
   });
 
-  // ── Send input to CLI stdin (plan approval, user questions) ─────────────────
-  router.post('/conversations/:id/input', csrfGuard, (req, res) => {
-    const entry = activeStreams.get(req.params.id);
+  // ── Send input to CLI stdin ─────────────────────────────────────────────────
+  router.post('/conversations/:id/input', csrfGuard, (req: Request, res: Response) => {
+    const entry = activeStreams.get(param(req, 'id'));
     if (entry && entry.sendInput) {
       const text = (req.body.text || '').toString();
-      console.log(`[chat] Sending stdin input for conv=${req.params.id}: ${text.substring(0, 100)}`);
+      console.log(`[chat] Sending stdin input for conv=${param(req, 'id')}: ${text.substring(0, 100)}`);
       entry.sendInput(text);
       res.json({ ok: true });
     } else {
@@ -587,21 +586,22 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
   // ── File upload ─────────────────────────────────────────────────────────────
   const upload = multer({
     storage: multer.diskStorage({
-      destination: async (req, file, cb) => {
-        const dir = path.join(chatService.artifactsDir, req.params.id);
+      destination: async (_req, _file, cb) => {
+        const id = (_req as Request).params.id;
+        const dir = path.join(chatService.artifactsDir, Array.isArray(id) ? id[0] : id);
         await fs.promises.mkdir(dir, { recursive: true });
         cb(null, dir);
       },
-      filename: (req, file, cb) => {
+      filename: (_req, file, cb) => {
         const safe = file.originalname.replace(/[\/\\]/g, '_');
         cb(null, safe);
       }
     }),
-    limits: { fileSize: 50 * 1024 * 1024 } // 50MB
+    limits: { fileSize: 50 * 1024 * 1024 }
   });
 
-  router.post('/conversations/:id/upload', csrfGuard, upload.array('files', 10), (req, res) => {
-    const files = (req.files || []).map(f => ({
+  router.post('/conversations/:id/upload', csrfGuard, upload.array('files', 10), (req: Request, res: Response) => {
+    const files = ((req as unknown as { files?: Express.Multer.File[] }).files || []).map((f) => ({
       name: f.originalname,
       path: f.path,
       size: f.size,
@@ -609,10 +609,10 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
     res.json({ files });
   });
 
-  // Serve uploaded files (images, etc.)
-  router.get('/conversations/:id/files/:filename', async (req, res) => {
-    const safe = req.params.filename.replace(/[\/\\]/g, '_');
-    const filePath = path.join(chatService.artifactsDir, req.params.id, safe);
+  // Serve uploaded files
+  router.get('/conversations/:id/files/:filename', async (req: Request, res: Response) => {
+    const safe = param(req, 'filename').replace(/[\/\\]/g, '_');
+    const filePath = path.join(chatService.artifactsDir, param(req, 'id'), safe);
     if (!path.resolve(filePath).startsWith(path.resolve(chatService.artifactsDir))) {
       return res.status(400).json({ error: 'Invalid path' });
     }
@@ -624,66 +624,65 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
     }
   });
 
-  router.delete('/conversations/:id/upload/:filename', csrfGuard, async (req, res) => {
-    const safe = req.params.filename.replace(/[\/\\]/g, '_');
-    const filePath = path.join(chatService.artifactsDir, req.params.id, safe);
-    // Path traversal guard
+  router.delete('/conversations/:id/upload/:filename', csrfGuard, async (req: Request, res: Response) => {
+    const safe = param(req, 'filename').replace(/[\/\\]/g, '_');
+    const filePath = path.join(chatService.artifactsDir, param(req, 'id'), safe);
     if (!path.resolve(filePath).startsWith(path.resolve(chatService.artifactsDir))) {
       return res.status(400).json({ error: 'Invalid path' });
     }
     try {
       await fs.promises.unlink(filePath);
       res.json({ ok: true });
-    } catch (err) {
-      if (err.code === 'ENOENT') return res.status(404).json({ error: 'File not found' });
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return res.status(404).json({ error: 'File not found' });
       res.status(500).json({ error: 'Failed to delete file' });
     }
   });
 
   // ── Workspace instructions ──────────────────────────────────────────────────
-  router.get('/workspaces/:hash/instructions', async (req, res) => {
+  router.get('/workspaces/:hash/instructions', async (req: Request, res: Response) => {
     try {
-      const instructions = await chatService.getWorkspaceInstructions(req.params.hash);
+      const instructions = await chatService.getWorkspaceInstructions(param(req, 'hash'));
       if (instructions === null) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ instructions });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  router.put('/workspaces/:hash/instructions', csrfGuard, async (req, res) => {
+  router.put('/workspaces/:hash/instructions', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const { instructions } = req.body;
+      const { instructions } = req.body as { instructions?: string };
       if (typeof instructions !== 'string') {
         return res.status(400).json({ error: 'instructions must be a string' });
       }
-      const result = await chatService.setWorkspaceInstructions(req.params.hash, instructions);
+      const result = await chatService.setWorkspaceInstructions(param(req, 'hash'), instructions);
       if (result === null) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ instructions: result });
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
   // ── Settings ───────────────────────────────────────────────────────────────
-  router.get('/settings', async (req, res) => {
+  router.get('/settings', async (_req: Request, res: Response) => {
     try {
       res.json(await chatService.getSettings());
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  router.put('/settings', csrfGuard, async (req, res) => {
+  router.put('/settings', csrfGuard, async (req: Request, res: Response) => {
     try {
       const settings = await chatService.saveSettings(req.body);
       res.json(settings);
-    } catch (err) {
-      res.status(500).json({ error: err.message });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 
-  // ── Shutdown helper (abort all active CLI processes) ────────────────────────
+  // ── Shutdown helper ────────────────────────────────────────────────────────
   function shutdown() {
     for (const [convId, entry] of activeStreams) {
       console.log(`[shutdown] Aborting active stream for conv=${convId}`);
@@ -695,5 +694,3 @@ function createChatRouter({ chatService, backendRegistry, updateService }) {
 
   return { router, shutdown };
 }
-
-module.exports = { createChatRouter };

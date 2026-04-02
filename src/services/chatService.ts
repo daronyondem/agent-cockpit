@@ -1,24 +1,71 @@
-const fs = require('fs');
-const fsp = fs.promises;
-const path = require('path');
-const crypto = require('crypto');
+import fs from 'fs';
+import fsp from 'fs/promises';
+import path from 'path';
+import crypto from 'crypto';
+import type { BackendRegistry } from './backends/registry';
+import type {
+  Message,
+  ToolActivity,
+  Usage,
+  SessionEntry,
+  SessionFile,
+  SessionHistoryItem,
+  ConversationEntry,
+  WorkspaceIndex,
+  Conversation,
+  ConversationListItem,
+  Settings,
+} from '../types';
+
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
 
-class ChatService {
-  constructor(appRoot, options = {}) {
+interface ConvLookupResult {
+  hash: string;
+  index: WorkspaceIndex;
+  convEntry: ConversationEntry;
+}
+
+interface ResetSessionResult {
+  conversation: Conversation;
+  newSessionNumber: number;
+  archivedSession: {
+    number: number;
+    sessionId: string | null;
+    startedAt: string;
+    endedAt: string;
+    messageCount: number;
+    summary: string;
+  };
+}
+
+interface EditMessageResult {
+  conversation: Conversation;
+  message: Message;
+}
+
+export class ChatService {
+  baseDir: string;
+  workspacesDir: string;
+  artifactsDir: string;
+  settingsFile: string;
+  private _defaultWorkspace: string;
+  private _backendRegistry: BackendRegistry | null;
+  private _convWorkspaceMap: Map<string, string>;
+  private _legacyConversationsDir: string;
+  private _legacyArchivesDir: string;
+
+  constructor(appRoot: string, options: { defaultWorkspace?: string; backendRegistry?: BackendRegistry } = {}) {
     this.baseDir = path.join(appRoot, 'data', 'chat');
     this.workspacesDir = path.join(this.baseDir, 'workspaces');
     this.artifactsDir = path.join(this.baseDir, 'artifacts');
     this.settingsFile = path.join(this.baseDir, 'settings.json');
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
     this._backendRegistry = options.backendRegistry || null;
-    this._convWorkspaceMap = new Map(); // convId -> workspaceHash
+    this._convWorkspaceMap = new Map();
 
-    // Old dirs — kept as properties for migration detection
     this._legacyConversationsDir = path.join(this.baseDir, 'conversations');
     this._legacyArchivesDir = path.join(this.baseDir, 'archives');
 
-    // Ensure directories exist (sync in constructor only — runs once at startup)
     for (const dir of [this.workspacesDir, this.artifactsDir]) {
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     }
@@ -26,22 +73,20 @@ class ChatService {
 
   // ── Startup ────────────────────────────────────────────────────────────────
 
-  async initialize() {
-    // Run migration if old format exists
+  async initialize(): Promise<void> {
     if (fs.existsSync(this._legacyConversationsDir)) {
       await this._migrateToWorkspaces();
     }
-    // Build convId -> workspaceHash lookup map
     await this._buildLookupMap();
   }
 
-  async _buildLookupMap() {
+  private async _buildLookupMap(): Promise<void> {
     this._convWorkspaceMap.clear();
-    let dirs;
+    let dirs: string[];
     try {
       dirs = await fsp.readdir(this.workspacesDir);
-    } catch (err) {
-      if (err.code === 'ENOENT') return;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw err;
     }
     for (const hash of dirs) {
@@ -56,59 +101,59 @@ class ChatService {
 
   // ── Workspace helpers ──────────────────────────────────────────────────────
 
-  _newId() {
+  private _newId(): string {
     return crypto.randomUUID();
   }
 
-  _workspaceHash(workspacePath) {
+  private _workspaceHash(workspacePath: string): string {
     return crypto.createHash('sha256').update(workspacePath).digest('hex').substring(0, 16);
   }
 
-  _workspaceDir(hash) {
+  private _workspaceDir(hash: string): string {
     return path.join(this.workspacesDir, hash);
   }
 
-  _workspaceIndexPath(hash) {
+  private _workspaceIndexPath(hash: string): string {
     return path.join(this._workspaceDir(hash), 'index.json');
   }
 
-  _sessionFilePath(hash, convId, sessionNumber) {
+  private _sessionFilePath(hash: string, convId: string, sessionNumber: number): string {
     return path.join(this._workspaceDir(hash), convId, `session-${sessionNumber}.json`);
   }
 
-  async _readWorkspaceIndex(hash) {
+  private async _readWorkspaceIndex(hash: string): Promise<WorkspaceIndex | null> {
     try {
       const data = await fsp.readFile(this._workspaceIndexPath(hash), 'utf8');
-      return JSON.parse(data);
-    } catch (err) {
-      if (err.code === 'ENOENT') return null;
+      return JSON.parse(data) as WorkspaceIndex;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
     }
   }
 
-  async _writeWorkspaceIndex(hash, index) {
+  private async _writeWorkspaceIndex(hash: string, index: WorkspaceIndex): Promise<void> {
     const dir = this._workspaceDir(hash);
     await fsp.mkdir(dir, { recursive: true });
     await fsp.writeFile(this._workspaceIndexPath(hash), JSON.stringify(index, null, 2), 'utf8');
   }
 
-  async _readSessionFile(hash, convId, sessionNumber) {
+  private async _readSessionFile(hash: string, convId: string, sessionNumber: number): Promise<SessionFile | null> {
     try {
       const data = await fsp.readFile(this._sessionFilePath(hash, convId, sessionNumber), 'utf8');
-      return JSON.parse(data);
-    } catch (err) {
-      if (err.code === 'ENOENT') return null;
+      return JSON.parse(data) as SessionFile;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
       throw err;
     }
   }
 
-  async _writeSessionFile(hash, convId, sessionNumber, data) {
+  private async _writeSessionFile(hash: string, convId: string, sessionNumber: number, data: SessionFile): Promise<void> {
     const filePath = this._sessionFilePath(hash, convId, sessionNumber);
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
     await fsp.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
   }
 
-  async _getConvFromIndex(convId) {
+  private async _getConvFromIndex(convId: string): Promise<ConvLookupResult | null> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return null;
     const index = await this._readWorkspaceIndex(hash);
@@ -118,7 +163,11 @@ class ChatService {
     return { hash, index, convEntry };
   }
 
-  async _generateSessionSummary(messages, fallback, backendId) {
+  private async _generateSessionSummary(
+    messages: Pick<Message, 'role' | 'content'>[],
+    fallback: string,
+    backendId?: string,
+  ): Promise<string> {
     if (!messages || messages.length === 0) return fallback || 'Empty session';
     const adapter = this._backendRegistry?.get(backendId || 'claude-code');
     if (adapter) {
@@ -129,20 +178,19 @@ class ChatService {
 
   // ── Conversation CRUD ──────────────────────────────────────────────────────
 
-  async createConversation(title, workingDir) {
+  async createConversation(title?: string, workingDir?: string): Promise<Conversation> {
     const id = this._newId();
     const now = new Date().toISOString();
     const sessionId = this._newId();
     const workspacePath = workingDir || this._defaultWorkspace;
     const hash = this._workspaceHash(workspacePath);
 
-    // Read or create workspace index
     let index = await this._readWorkspaceIndex(hash);
     if (!index) {
       index = { workspacePath, conversations: [] };
     }
 
-    const convEntry = {
+    const convEntry: ConversationEntry = {
       id,
       title: title || 'New Chat',
       backend: 'claude-code',
@@ -163,7 +211,6 @@ class ChatService {
     index.conversations.push(convEntry);
     await this._writeWorkspaceIndex(hash, index);
 
-    // Write empty session file
     await this._writeSessionFile(hash, id, 1, {
       sessionNumber: 1,
       sessionId,
@@ -172,10 +219,8 @@ class ChatService {
       messages: [],
     });
 
-    // Update lookup map
     this._convWorkspaceMap.set(id, hash);
 
-    // Return API-compatible shape
     return {
       id,
       title: convEntry.title,
@@ -187,16 +232,14 @@ class ChatService {
     };
   }
 
-  async getConversation(id) {
+  async getConversation(id: string): Promise<Conversation | null> {
     const result = await this._getConvFromIndex(id);
     if (!result) return null;
     const { hash, index, convEntry } = result;
 
-    // Find active session
     const activeSession = convEntry.sessions.find(s => s.active);
     const sessionNumber = activeSession ? activeSession.number : 1;
 
-    // Read active session file
     const sessionFile = await this._readSessionFile(hash, id, sessionNumber);
     const messages = sessionFile ? sessionFile.messages : [];
 
@@ -212,13 +255,13 @@ class ChatService {
     };
   }
 
-  async listConversations() {
-    const convs = [];
-    let dirs;
+  async listConversations(): Promise<ConversationListItem[]> {
+    const convs: ConversationListItem[] = [];
+    let dirs: string[];
     try {
       dirs = await fsp.readdir(this.workspacesDir);
-    } catch (err) {
-      if (err.code === 'ENOENT') return [];
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw err;
     }
 
@@ -242,11 +285,11 @@ class ChatService {
       }
     }
 
-    convs.sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+    convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
     return convs;
   }
 
-  async renameConversation(id, newTitle) {
+  async renameConversation(id: string, newTitle: string): Promise<Conversation | null> {
     const result = await this._getConvFromIndex(id);
     if (!result) return null;
     const { hash, index, convEntry } = result;
@@ -257,16 +300,14 @@ class ChatService {
     return this.getConversation(id);
   }
 
-  async deleteConversation(id) {
+  async deleteConversation(id: string): Promise<boolean> {
     const result = await this._getConvFromIndex(id);
     if (!result) return false;
     const { hash, index } = result;
 
-    // Remove from workspace index
     index.conversations = index.conversations.filter(c => c.id !== id);
     await this._writeWorkspaceIndex(hash, index);
 
-    // Delete conversation folder (session files)
     const convDir = path.join(this._workspaceDir(hash), id);
     try {
       await fsp.rm(convDir, { recursive: true, force: true });
@@ -274,7 +315,6 @@ class ChatService {
       // Ignore cleanup errors
     }
 
-    // Clean up artifacts
     const artifactDir = path.join(this.artifactsDir, id);
     try {
       await fsp.rm(artifactDir, { recursive: true, force: true });
@@ -282,13 +322,11 @@ class ChatService {
       // Ignore cleanup errors
     }
 
-    // Remove from lookup map
     this._convWorkspaceMap.delete(id);
-
     return true;
   }
 
-  async updateConversationBackend(convId, backend) {
+  async updateConversationBackend(convId: string, backend: string): Promise<void> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return;
     const { hash, index, convEntry } = result;
@@ -298,12 +336,19 @@ class ChatService {
 
   // ── Messages ───────────────────────────────────────────────────────────────
 
-  async addMessage(convId, role, content, backend, thinking, toolActivity) {
+  async addMessage(
+    convId: string,
+    role: Message['role'],
+    content: string,
+    backend: string,
+    thinking?: string | null,
+    toolActivity?: ToolActivity[],
+  ): Promise<Message | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { hash, index, convEntry } = result;
 
-    const msg = {
+    const msg: Message = {
       id: this._newId(),
       role,
       content,
@@ -319,17 +364,13 @@ class ChatService {
       msg.toolActivity = toolActivity;
     }
 
-    // Find active session
     const activeSession = convEntry.sessions.find(s => s.active);
     const sessionNumber = activeSession ? activeSession.number : 1;
 
-    // Auto-title from first user message (only if still default title).
-    // Skip for post-reset sessions (sessionNumber > 1) — LLM generates a proper title.
     if (role === 'user' && convEntry.title === 'New Chat' && sessionNumber <= 1) {
       convEntry.title = content.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
     }
 
-    // Read session file, add message, write back
     let sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
     if (!sessionFile) {
       sessionFile = {
@@ -343,7 +384,6 @@ class ChatService {
     sessionFile.messages.push(msg);
     await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
 
-    // Update workspace index
     convEntry.lastActivity = msg.timestamp;
     convEntry.lastMessage = content.substring(0, 100);
     if (activeSession) {
@@ -354,7 +394,7 @@ class ChatService {
     return msg;
   }
 
-  async updateMessageContent(convId, messageId, newContent) {
+  async updateMessageContent(convId: string, messageId: string, newContent: string): Promise<EditMessageResult | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { hash, index, convEntry } = result;
@@ -368,11 +408,9 @@ class ChatService {
     const msgIndex = sessionFile.messages.findIndex(m => m.id === messageId);
     if (msgIndex === -1) return null;
 
-    // Truncate messages after this one (fork conversation)
     sessionFile.messages = sessionFile.messages.slice(0, msgIndex);
 
-    // Add the edited message as a new one
-    const msg = {
+    const msg: Message = {
       id: this._newId(),
       role: 'user',
       content: newContent,
@@ -382,7 +420,6 @@ class ChatService {
     sessionFile.messages.push(msg);
     await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
 
-    // Update index
     if (activeSession) {
       activeSession.messageCount = sessionFile.messages.length;
     }
@@ -391,17 +428,17 @@ class ChatService {
     await this._writeWorkspaceIndex(hash, index);
 
     const conversation = await this.getConversation(convId);
-    return { conversation, message: msg };
+    return { conversation: conversation!, message: msg };
   }
 
-  async generateAndUpdateTitle(convId, userMessage) {
+  async generateAndUpdateTitle(convId: string, userMessage: string): Promise<string | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { hash, index, convEntry } = result;
 
     const adapter = this._backendRegistry?.get(convEntry.backend || 'claude-code');
     const fallback = userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
-    let newTitle;
+    let newTitle: string;
     if (adapter && typeof adapter.generateTitle === 'function') {
       newTitle = await adapter.generateTitle(userMessage, fallback);
     } else {
@@ -416,7 +453,7 @@ class ChatService {
 
   // ── Session Management ─────────────────────────────────────────────────────
 
-  async resetSession(convId) {
+  async resetSession(convId: string): Promise<ResetSessionResult | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { hash, index, convEntry } = result;
@@ -427,27 +464,22 @@ class ChatService {
 
     const currentSessionNumber = activeSession.number;
 
-    // Read current session file
     const sessionFile = await this._readSessionFile(hash, convId, currentSessionNumber);
     const currentMessages = sessionFile ? sessionFile.messages : [];
 
-    // Generate summary via backend adapter
     const fallback = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
     const summary = await this._generateSessionSummary(currentMessages, fallback, convEntry.backend);
 
-    // Mark current session as inactive in index
     activeSession.active = false;
     activeSession.summary = summary;
     activeSession.endedAt = now.toISOString();
     activeSession.messageCount = currentMessages.length;
 
-    // Update session file with endedAt
     if (sessionFile) {
       sessionFile.endedAt = now.toISOString();
       await this._writeSessionFile(hash, convId, currentSessionNumber, sessionFile);
     }
 
-    // Create new session
     const newSessionNumber = currentSessionNumber + 1;
     const newSessionId = this._newId();
 
@@ -473,10 +505,9 @@ class ChatService {
 
     await this._writeWorkspaceIndex(hash, index);
 
-    // Return compatible shape
     const conversation = await this.getConversation(convId);
     return {
-      conversation,
+      conversation: conversation!,
       newSessionNumber,
       archivedSession: {
         number: currentSessionNumber,
@@ -489,7 +520,7 @@ class ChatService {
     };
   }
 
-  async getSessionHistory(convId) {
+  async getSessionHistory(convId: string): Promise<SessionHistoryItem[] | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { convEntry } = result;
@@ -505,7 +536,7 @@ class ChatService {
     }));
   }
 
-  async getSessionMessages(convId, sessionNumber) {
+  async getSessionMessages(convId: string, sessionNumber: number): Promise<Message[] | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { hash } = result;
@@ -516,7 +547,7 @@ class ChatService {
 
   // ── Markdown Export ────────────────────────────────────────────────────────
 
-  async sessionToMarkdown(convId, sessionNumber) {
+  async sessionToMarkdown(convId: string, sessionNumber: number): Promise<string | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { hash, convEntry } = result;
@@ -528,7 +559,12 @@ class ChatService {
     return this._messagesToMarkdown(convEntry.title, convId, sessionMeta, sessionFile.messages);
   }
 
-  _messagesToMarkdown(title, convId, sessionMeta, messages) {
+  private _messagesToMarkdown(
+    title: string,
+    convId: string,
+    sessionMeta: { number: number; startedAt: string },
+    messages: Message[],
+  ): string {
     const lines = [
       `# ${title}`,
       ``,
@@ -554,7 +590,7 @@ class ChatService {
     return lines.join('\n');
   }
 
-  async conversationToMarkdown(convId) {
+  async conversationToMarkdown(convId: string): Promise<string | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { hash, convEntry } = result;
@@ -588,7 +624,7 @@ class ChatService {
 
       if (!session.active) {
         lines.push(`---`);
-        lines.push(`*Session reset — ${new Date(session.endedAt).toLocaleString()}*`);
+        lines.push(`*Session reset — ${new Date(session.endedAt!).toLocaleString()}*`);
         lines.push(`---`);
         lines.push(``);
       }
@@ -599,13 +635,13 @@ class ChatService {
 
   // ── Workspace Instructions ──────────────────────────────────────────────────
 
-  async getWorkspaceInstructions(hash) {
+  async getWorkspaceInstructions(hash: string): Promise<string | null> {
     const index = await this._readWorkspaceIndex(hash);
     if (!index) return null;
     return index.instructions || '';
   }
 
-  async setWorkspaceInstructions(hash, instructions) {
+  async setWorkspaceInstructions(hash: string, instructions: string): Promise<string | null> {
     const index = await this._readWorkspaceIndex(hash);
     if (!index) return null;
     index.instructions = instructions || '';
@@ -613,13 +649,13 @@ class ChatService {
     return index.instructions;
   }
 
-  getWorkspaceHashForConv(convId) {
+  getWorkspaceHashForConv(convId: string): string | null {
     return this._convWorkspaceMap.get(convId) || null;
   }
 
   // ── Workspace Context ──────────────────────────────────────────────────────
 
-  getWorkspaceContext(convId) {
+  getWorkspaceContext(convId: string): string | null {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return null;
     const absPath = path.resolve(this._workspaceDir(hash));
@@ -633,16 +669,15 @@ class ChatService {
 
   // ── Search ─────────────────────────────────────────────────────────────────
 
-  async searchConversations(query) {
+  async searchConversations(query: string): Promise<ConversationListItem[]> {
     if (!query) return this.listConversations();
     const q = query.toLowerCase();
     const all = await this.listConversations();
-    const results = [];
+    const results: ConversationListItem[] = [];
 
     for (const c of all) {
       if (c.title.toLowerCase().includes(q)) { results.push(c); continue; }
       if (c.lastMessage && c.lastMessage.toLowerCase().includes(q)) { results.push(c); continue; }
-      // Deep search: load all session files
       const result = await this._getConvFromIndex(c.id);
       if (!result) continue;
       const { hash, convEntry } = result;
@@ -663,12 +698,12 @@ class ChatService {
 
   // ── Migration ──────────────────────────────────────────────────────────────
 
-  async _migrateToWorkspaces() {
-    let files;
+  private async _migrateToWorkspaces(): Promise<void> {
+    let files: string[];
     try {
       files = await fsp.readdir(this._legacyConversationsDir);
-    } catch (err) {
-      if (err.code === 'ENOENT') return;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw err;
     }
     files = files.filter(f => f.endsWith('.json'));
@@ -677,54 +712,50 @@ class ChatService {
       return;
     }
 
-    // Group conversations by workspace
-    const workspaceGroups = new Map(); // hash -> { workspacePath, convs: [] }
+    const workspaceGroups = new Map<string, { workspacePath: string; convs: LegacyConversation[] }>();
 
     for (const f of files) {
       const convId = f.replace('.json', '');
       try {
         const data = await fsp.readFile(path.join(this._legacyConversationsDir, f), 'utf8');
-        const conv = JSON.parse(data);
+        const conv = JSON.parse(data) as LegacyConversation;
         const workspacePath = conv.workingDir || this._defaultWorkspace;
         const hash = this._workspaceHash(workspacePath);
 
         if (!workspaceGroups.has(hash)) {
           workspaceGroups.set(hash, { workspacePath, convs: [] });
         }
-        workspaceGroups.get(hash).convs.push(conv);
-      } catch (err) {
-        console.error(`[migration] Failed to read conversation ${convId}:`, err.message);
+        workspaceGroups.get(hash)!.convs.push(conv);
+      } catch (err: unknown) {
+        console.error(`[migration] Failed to read conversation ${convId}:`, (err as Error).message);
       }
     }
 
-    // Process each workspace group
     for (const [hash, group] of workspaceGroups) {
-      const index = {
+      const index: WorkspaceIndex = {
         workspacePath: group.workspacePath,
         conversations: [],
       };
 
       for (const conv of group.convs) {
         const convId = conv.id;
-        const sessions = [];
+        const sessions: SessionEntry[] = [];
 
-        // Read old archive index if exists
-        let oldArchiveIndex = { sessions: [] };
+        let oldArchiveIndex: { sessions: LegacyArchiveSession[] } = { sessions: [] };
         try {
           const archiveIndexPath = path.join(this._legacyArchivesDir, convId, 'index.json');
           const data = await fsp.readFile(archiveIndexPath, 'utf8');
           oldArchiveIndex = JSON.parse(data);
         } catch {
-          // No archive — that's fine
+          // No archive
         }
 
-        // Copy archived sessions
         for (const oldSession of oldArchiveIndex.sessions) {
-          let sessionData;
+          let sessionData: SessionFile;
           try {
             const oldPath = path.join(this._legacyArchivesDir, convId, `session-${oldSession.number}.json`);
             const data = await fsp.readFile(oldPath, 'utf8');
-            sessionData = JSON.parse(data);
+            sessionData = JSON.parse(data) as SessionFile;
           } catch {
             continue;
           }
@@ -733,7 +764,7 @@ class ChatService {
 
           sessions.push({
             number: oldSession.number,
-            sessionId: oldSession.sessionId || sessionData.sessionId || null,
+            sessionId: oldSession.sessionId || sessionData.sessionId || '',
             summary: oldSession.summary || '(Migrated session)',
             active: false,
             messageCount: oldSession.messageCount || (sessionData.messages ? sessionData.messages.length : 0),
@@ -742,11 +773,10 @@ class ChatService {
           });
         }
 
-        // Handle legacy sessions array with dividers (pre-archive migration)
         if (conv.sessions && conv.sessions.length > 0) {
           const hasDividers = conv.messages.some(m => m.isSessionDivider);
           if (hasDividers) {
-            const dividerIndices = [];
+            const dividerIndices: number[] = [];
             for (let i = 0; i < conv.messages.length; i++) {
               if (conv.messages[i].isSessionDivider) dividerIndices.push(i);
             }
@@ -755,7 +785,7 @@ class ChatService {
               if (!session.endedAt) continue;
               if (sessions.some(s => s.number === session.number)) continue;
 
-              let start, end;
+              let start: number, end: number;
               if (session.number === 1) {
                 start = 0;
                 end = dividerIndices.length > 0 ? dividerIndices[0] : conv.messages.length;
@@ -767,8 +797,8 @@ class ChatService {
                 end = nextDiv !== undefined ? nextDiv : conv.messages.length;
               }
 
-              const sessionMessages = conv.messages.slice(start, end).filter(m => !m.isSessionDivider);
-              const sessionData = {
+              const sessionMessages = conv.messages.slice(start, end).filter(m => !m.isSessionDivider) as Message[];
+              const sessionData: SessionFile = {
                 sessionNumber: session.number,
                 sessionId: session.sessionId,
                 startedAt: session.startedAt,
@@ -779,7 +809,7 @@ class ChatService {
 
               sessions.push({
                 number: session.number,
-                sessionId: session.sessionId || null,
+                sessionId: session.sessionId || '',
                 summary: '(Migrated session)',
                 active: false,
                 messageCount: sessionMessages.length,
@@ -790,21 +820,19 @@ class ChatService {
           }
         }
 
-        // Current session messages
-        let currentMessages;
+        let currentMessages: Message[];
         if (conv.sessions && conv.sessions.length > 0) {
-          const lastDividerIdx = conv.messages.reduce((acc, m, i) => m.isSessionDivider ? i : acc, -1);
+          const lastDividerIdx = conv.messages.reduce((acc: number, m: LegacyMessage, i: number) => m.isSessionDivider ? i : acc, -1);
           currentMessages = lastDividerIdx >= 0
-            ? conv.messages.slice(lastDividerIdx + 1).filter(m => !m.isSessionDivider)
-            : conv.messages.filter(m => !m.isSessionDivider);
+            ? conv.messages.slice(lastDividerIdx + 1).filter(m => !m.isSessionDivider) as Message[]
+            : conv.messages.filter(m => !m.isSessionDivider) as Message[];
         } else {
-          currentMessages = (conv.messages || []).filter(m => !m.isSessionDivider);
+          currentMessages = (conv.messages || []).filter(m => !m.isSessionDivider) as Message[];
         }
 
         const sessionNumber = conv.sessionNumber || 1;
         const currentSessionId = conv.currentSessionId || this._newId();
 
-        // Write current session file
         const currentStartedAt = currentMessages.length > 0
           ? currentMessages[0].timestamp
           : (conv.updatedAt || new Date().toISOString());
@@ -826,10 +854,8 @@ class ChatService {
           endedAt: null,
         });
 
-        // Sort sessions by number
         sessions.sort((a, b) => a.number - b.number);
 
-        // Compute lastMessage
         const lastMsg = currentMessages.length > 0
           ? currentMessages[currentMessages.length - 1].content.substring(0, 100)
           : null;
@@ -852,28 +878,28 @@ class ChatService {
     console.log(`[migration] Migrated ${files.length} conversation(s) to workspace format`);
   }
 
-  async _renameLegacyDirs() {
+  private async _renameLegacyDirs(): Promise<void> {
     for (const [oldName, backupName] of [
       [this._legacyConversationsDir, this._legacyConversationsDir + '_backup'],
       [this._legacyArchivesDir, this._legacyArchivesDir + '_backup'],
-    ]) {
+    ] as const) {
       try {
         if (fs.existsSync(oldName)) {
           await fsp.rename(oldName, backupName);
         }
-      } catch (err) {
-        console.error(`[migration] Failed to rename ${oldName}:`, err.message);
+      } catch (err: unknown) {
+        console.error(`[migration] Failed to rename ${oldName}:`, (err as Error).message);
       }
     }
   }
 
   // ── Usage Tracking ─────────────────────────────────────────────────────────
 
-  _emptyUsage() {
+  private _emptyUsage(): Usage {
     return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
   }
 
-  async addUsage(convId, usage) {
+  async addUsage(convId: string, usage: Usage): Promise<Usage | null> {
     if (!usage) return null;
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
@@ -886,7 +912,6 @@ class ChatService {
     convEntry.usage.cacheWriteTokens += usage.cacheWriteTokens || 0;
     convEntry.usage.costUsd += usage.costUsd || 0;
 
-    // Also track on active session
     const activeSession = convEntry.sessions.find(s => s.active);
     if (activeSession) {
       if (!activeSession.usage) activeSession.usage = this._emptyUsage();
@@ -901,7 +926,7 @@ class ChatService {
     return convEntry.usage;
   }
 
-  async getUsage(convId) {
+  async getUsage(convId: string): Promise<Usage | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { convEntry } = result;
@@ -910,14 +935,13 @@ class ChatService {
 
   // ── Settings ───────────────────────────────────────────────────────────────
 
-  async getSettings() {
+  async getSettings(): Promise<Settings> {
     try {
       const data = await fsp.readFile(this.settingsFile, 'utf8');
-      const settings = JSON.parse(data);
+      const settings = JSON.parse(data) as Settings;
 
-      // Migrate legacy customInstructions to systemPrompt
       if (settings.customInstructions && settings.systemPrompt === undefined) {
-        const parts = [];
+        const parts: string[] = [];
         if (settings.customInstructions.aboutUser) {
           parts.push(settings.customInstructions.aboutUser.trim());
         }
@@ -930,8 +954,8 @@ class ChatService {
       }
 
       return settings;
-    } catch (err) {
-      if (err.code === 'ENOENT') {
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return {
           theme: 'system',
           sendBehavior: 'enter',
@@ -944,10 +968,42 @@ class ChatService {
     }
   }
 
-  async saveSettings(settings) {
+  async saveSettings(settings: Settings): Promise<Settings> {
     await fsp.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8');
     return settings;
   }
 }
 
-module.exports = { ChatService };
+// ── Legacy types for migration ───────────────────────────────────────────────
+
+interface LegacyMessage extends Message {
+  isSessionDivider?: boolean;
+}
+
+interface LegacySession {
+  number: number;
+  sessionId: string;
+  startedAt: string;
+  endedAt: string | null;
+}
+
+interface LegacyConversation {
+  id: string;
+  title: string;
+  backend: string;
+  workingDir?: string;
+  currentSessionId?: string;
+  sessionNumber?: number;
+  updatedAt?: string;
+  messages: LegacyMessage[];
+  sessions: LegacySession[];
+}
+
+interface LegacyArchiveSession {
+  number: number;
+  sessionId?: string;
+  summary?: string;
+  messageCount?: number;
+  startedAt: string;
+  endedAt: string | null;
+}

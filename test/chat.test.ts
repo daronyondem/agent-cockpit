@@ -1,20 +1,31 @@
-const express = require('express');
-const http = require('http');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { ChatService } = require('../src/services/chatService');
-const { createChatRouter } = require('../src/routes/chat');
-const { BaseBackendAdapter } = require('../src/services/backends/base');
-const { BackendRegistry } = require('../src/services/backends/registry');
+import express from 'express';
+import http from 'http';
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import { ChatService } from '../src/services/chatService';
+import { createChatRouter } from '../src/routes/chat';
+import { BaseBackendAdapter } from '../src/services/backends/base';
+import { BackendRegistry } from '../src/services/backends/registry';
+import type { BackendMetadata, SendMessageOptions, SendMessageResult, StreamEvent, Message } from '../src/types';
 
 // ── Test helpers ────────────────────────────────────────────────────────────
 
 const DEFAULT_WORKSPACE = '/tmp/test-workspace';
-let tmpDir, chatService, app, server, baseUrl;
+let tmpDir: string;
+let chatService: ChatService;
+let app: express.Express;
+let server: http.Server;
+let baseUrl: string;
 const CSRF_TOKEN = 'test-csrf-token';
 
 class MockBackendAdapter extends BaseBackendAdapter {
+  _lastMessage: string | null;
+  _lastOptions: SendMessageOptions | null;
+  _mockEvents: StreamEvent[];
+  _sendInputCalls: string[];
+  _mockTitle?: string;
+
   constructor() {
     super({ workingDir: '/tmp' });
     this._lastMessage = null;
@@ -23,7 +34,7 @@ class MockBackendAdapter extends BaseBackendAdapter {
     this._sendInputCalls = [];
   }
 
-  get metadata() {
+  get metadata(): BackendMetadata {
     return {
       id: 'claude-code',
       label: 'Claude Code',
@@ -32,13 +43,13 @@ class MockBackendAdapter extends BaseBackendAdapter {
     };
   }
 
-  setMockEvents(events) {
+  setMockEvents(events: StreamEvent[]) {
     this._mockEvents = events;
   }
 
-  sendMessage(message, options) {
+  sendMessage(message: string, options?: SendMessageOptions): SendMessageResult {
     this._lastMessage = message;
-    this._lastOptions = options;
+    this._lastOptions = options || null;
     const events = this._mockEvents.slice();
     const self = this;
 
@@ -51,23 +62,23 @@ class MockBackendAdapter extends BaseBackendAdapter {
     return {
       stream: createStream(),
       abort: () => {},
-      sendInput: (text) => { self._sendInputCalls.push(text); },
+      sendInput: (text: string) => { self._sendInputCalls.push(text); },
     };
   }
 
-  async generateSummary(messages, fallback) {
+  async generateSummary(messages: Pick<Message, 'role' | 'content'>[], fallback: string) {
     return fallback || `Session (${messages.length} messages)`;
   }
 
-  async generateTitle(userMessage, fallback) {
+  async generateTitle(userMessage: string, fallback: string) {
     return this._mockTitle || fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
   }
 }
 
-function makeRequest(method, urlPath, body) {
+function makeRequest(method: string, urlPath: string, body?: any): Promise<{ status: number; body: any; headers: http.IncomingHttpHeaders }> {
   return new Promise((resolve, reject) => {
     const url = new URL(urlPath, baseUrl);
-    const options = {
+    const options: http.RequestOptions = {
       method,
       hostname: url.hostname,
       port: url.port,
@@ -80,12 +91,12 @@ function makeRequest(method, urlPath, body) {
 
     const req = http.request(options, (res) => {
       let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+      res.on('data', (chunk: Buffer) => { data += chunk; });
       res.on('end', () => {
         try {
-          resolve({ status: res.statusCode, body: JSON.parse(data), headers: res.headers });
+          resolve({ status: res.statusCode!, body: JSON.parse(data), headers: res.headers });
         } catch {
-          resolve({ status: res.statusCode, body: data, headers: res.headers });
+          resolve({ status: res.statusCode!, body: data, headers: res.headers });
         }
       });
     });
@@ -95,12 +106,12 @@ function makeRequest(method, urlPath, body) {
   });
 }
 
-function readSSE(urlPath) {
+function readSSE(urlPath: string): Promise<any[]> {
   return new Promise((resolve, reject) => {
     const url = new URL(urlPath, baseUrl);
     http.get({ hostname: url.hostname, port: url.port, path: url.pathname }, (res) => {
       let data = '';
-      res.on('data', (chunk) => { data += chunk; });
+      res.on('data', (chunk: Buffer) => { data += chunk; });
       res.on('end', () => {
         const events = data.split('\n')
           .filter(line => line.startsWith('data: '))
@@ -116,7 +127,8 @@ function readSSE(urlPath) {
 
 // ── Setup / Teardown ────────────────────────────────────────────────────────
 
-let mockBackend, backendRegistry;
+let mockBackend: MockBackendAdapter;
+let backendRegistry: BackendRegistry;
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatroute-'));
@@ -130,17 +142,17 @@ beforeEach(async () => {
   app.use(express.json());
 
   // Mock session middleware
-  app.use((req, _res, next) => {
+  app.use((req: any, _res: any, next: any) => {
     req.session = { csrfToken: CSRF_TOKEN };
     next();
   });
 
-  const { router } = createChatRouter({ chatService, backendRegistry });
+  const { router } = createChatRouter({ chatService, backendRegistry, updateService: null as any });
   app.use('/api/chat', router);
 
-  await new Promise((resolve) => {
+  await new Promise<void>((resolve) => {
     server = app.listen(0, () => {
-      const port = server.address().port;
+      const port = (server.address() as any).port;
       baseUrl = `http://127.0.0.1:${port}`;
       resolve();
     });
@@ -172,7 +184,7 @@ describe('POST /conversations/:id/input', () => {
     mockBackend.setMockEvents([
       { type: 'text', content: 'hello', streaming: true },
       // Don't include 'done' — keep stream "alive" so activeStreams entry persists
-    ]);
+    ] as StreamEvent[]);
 
     // Send message to populate activeStreams
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
@@ -194,7 +206,7 @@ describe('POST /conversations/:id/input', () => {
 
     mockBackend.setMockEvents([
       { type: 'text', content: 'hi', streaming: true },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'hello',
@@ -211,7 +223,7 @@ describe('POST /conversations/:id/input', () => {
     const conv = await chatService.createConversation('Test');
 
     const url = new URL(`/api/chat/conversations/${conv.id}/input`, baseUrl);
-    const res = await new Promise((resolve, reject) => {
+    const res = await new Promise<{ status: number; body: any }>((resolve, reject) => {
       const req = http.request({
         method: 'POST',
         hostname: url.hostname,
@@ -220,8 +232,8 @@ describe('POST /conversations/:id/input', () => {
         headers: { 'Content-Type': 'application/json' }, // No CSRF token
       }, (r) => {
         let data = '';
-        r.on('data', (chunk) => { data += chunk; });
-        r.on('end', () => resolve({ status: r.statusCode, body: JSON.parse(data) }));
+        r.on('data', (chunk: Buffer) => { data += chunk; });
+        r.on('end', () => resolve({ status: r.statusCode!, body: JSON.parse(data) }));
       });
       req.on('error', reject);
       req.write(JSON.stringify({ text: 'yes' }));
@@ -243,7 +255,7 @@ describe('SSE tool_activity forwarding', () => {
       { type: 'tool_activity', tool: 'Read', description: 'Reading `app.js`', id: 'tool_1' },
       { type: 'text', content: 'Result', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -252,7 +264,7 @@ describe('SSE tool_activity forwarding', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const toolEvent = events.find(e => e.type === 'tool_activity');
+    const toolEvent = events.find((e: any) => e.type === 'tool_activity');
     expect(toolEvent).toBeDefined();
     expect(toolEvent.tool).toBe('Read');
     expect(toolEvent.description).toBe('Reading `app.js`');
@@ -266,7 +278,7 @@ describe('SSE tool_activity forwarding', () => {
       { type: 'tool_activity', tool: 'Agent', description: 'Explore code', isAgent: true, subagentType: 'Explore' },
       { type: 'text', content: 'Done', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'explore',
@@ -275,7 +287,7 @@ describe('SSE tool_activity forwarding', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const agentEvent = events.find(e => e.type === 'tool_activity');
+    const agentEvent = events.find((e: any) => e.type === 'tool_activity');
     expect(agentEvent).toBeDefined();
     expect(agentEvent.isAgent).toBe(true);
     expect(agentEvent.subagentType).toBe('Explore');
@@ -289,7 +301,7 @@ describe('SSE tool_activity forwarding', () => {
       { type: 'tool_activity', tool: 'ExitPlanMode', isPlanMode: true, planAction: 'exit', description: 'Plan ready for approval' },
       { type: 'text', content: 'Plan done', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'plan',
@@ -298,7 +310,7 @@ describe('SSE tool_activity forwarding', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const planEvents = events.filter(e => e.type === 'tool_activity' && e.isPlanMode);
+    const planEvents = events.filter((e: any) => e.type === 'tool_activity' && e.isPlanMode);
     expect(planEvents).toHaveLength(2);
     expect(planEvents[0].planAction).toBe('enter');
     expect(planEvents[1].planAction).toBe('exit');
@@ -312,7 +324,7 @@ describe('SSE tool_activity forwarding', () => {
       { type: 'tool_activity', tool: 'AskUserQuestion', isQuestion: true, questions, description: 'Asking a question' },
       { type: 'text', content: 'Ok', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'question',
@@ -321,7 +333,7 @@ describe('SSE tool_activity forwarding', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const questionEvent = events.find(e => e.type === 'tool_activity' && e.isQuestion);
+    const questionEvent = events.find((e: any) => e.type === 'tool_activity' && e.isQuestion);
     expect(questionEvent).toBeDefined();
     expect(questionEvent.questions).toEqual(questions);
   });
@@ -340,7 +352,7 @@ describe('Tool activity persistence', () => {
       { type: 'turn_boundary' },
       { type: 'text', content: 'Second response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -349,13 +361,13 @@ describe('Tool activity persistence', () => {
 
     await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const loaded = await chatService.getConversation(conv.id);
-    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     // First assistant message (intermediate) should have toolActivity
     expect(assistantMsgs[0].toolActivity).toBeDefined();
     expect(assistantMsgs[0].toolActivity).toHaveLength(2);
-    expect(assistantMsgs[0].toolActivity[0].tool).toBe('Read');
-    expect(assistantMsgs[0].toolActivity[1].tool).toBe('Grep');
+    expect(assistantMsgs[0].toolActivity![0].tool).toBe('Read');
+    expect(assistantMsgs[0].toolActivity![1].tool).toBe('Grep');
   });
 
   test('persists toolActivity on final message at done', async () => {
@@ -365,7 +377,7 @@ describe('Tool activity persistence', () => {
       { type: 'tool_activity', tool: 'Bash', description: 'Running tests', id: 'tool_1' },
       { type: 'text', content: 'Tests passed', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -374,13 +386,13 @@ describe('Tool activity persistence', () => {
 
     await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const loaded = await chatService.getConversation(conv.id);
-    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     expect(assistantMsgs[0].toolActivity).toBeDefined();
     expect(assistantMsgs[0].toolActivity).toHaveLength(1);
-    expect(assistantMsgs[0].toolActivity[0].tool).toBe('Bash');
-    expect(assistantMsgs[0].toolActivity[0].duration).toBeGreaterThanOrEqual(0);
-    expect(assistantMsgs[0].toolActivity[0].startTime).toBeDefined();
+    expect(assistantMsgs[0].toolActivity![0].tool).toBe('Bash');
+    expect(assistantMsgs[0].toolActivity![0].duration).toBeGreaterThanOrEqual(0);
+    expect(assistantMsgs[0].toolActivity![0].startTime).toBeDefined();
   });
 
   test('does not persist isPlanMode or isQuestion events as toolActivity', async () => {
@@ -393,7 +405,7 @@ describe('Tool activity persistence', () => {
       { type: 'tool_activity', tool: 'Read', description: 'Reading `file.js`', id: 'tool_1' },
       { type: 'text', content: 'Done', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -402,12 +414,12 @@ describe('Tool activity persistence', () => {
 
     await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const loaded = await chatService.getConversation(conv.id);
-    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     expect(assistantMsgs[0].toolActivity).toBeDefined();
     // Only the Read tool should be persisted, not plan mode or question events
     expect(assistantMsgs[0].toolActivity).toHaveLength(1);
-    expect(assistantMsgs[0].toolActivity[0].tool).toBe('Read');
+    expect(assistantMsgs[0].toolActivity![0].tool).toBe('Read');
   });
 
   test('toolActivity absent when no tool events occur', async () => {
@@ -416,7 +428,7 @@ describe('Tool activity persistence', () => {
     mockBackend.setMockEvents([
       { type: 'text', content: 'Just text', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -425,8 +437,8 @@ describe('Tool activity persistence', () => {
 
     await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const loaded = await chatService.getConversation(conv.id);
-    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     expect(assistantMsgs[0].toolActivity).toBeUndefined();
   });
 
@@ -437,7 +449,7 @@ describe('Tool activity persistence', () => {
       { type: 'tool_activity', tool: 'Agent', description: 'Explore codebase', isAgent: true, subagentType: 'Explore', id: 'agent_1' },
       { type: 'text', content: 'Found results', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -446,11 +458,11 @@ describe('Tool activity persistence', () => {
 
     await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const loaded = await chatService.getConversation(conv.id);
-    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     expect(assistantMsgs[0].toolActivity).toBeDefined();
-    expect(assistantMsgs[0].toolActivity[0].isAgent).toBe(true);
-    expect(assistantMsgs[0].toolActivity[0].subagentType).toBe('Explore');
+    expect(assistantMsgs[0].toolActivity![0].isAgent).toBe(true);
+    expect(assistantMsgs[0].toolActivity![0].subagentType).toBe('Explore');
   });
 
   test('forwards tool_outcomes SSE event to client', async () => {
@@ -462,7 +474,7 @@ describe('Tool activity persistence', () => {
       { type: 'turn_boundary' },
       { type: 'text', content: 'Found it', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -471,7 +483,7 @@ describe('Tool activity persistence', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const outcomeEvent = events.find(e => e.type === 'tool_outcomes');
+    const outcomeEvent = events.find((e: any) => e.type === 'tool_outcomes');
     expect(outcomeEvent).toBeDefined();
     expect(outcomeEvent.outcomes[0].outcome).toBe('5 matches');
     expect(outcomeEvent.outcomes[0].status).toBe('success');
@@ -487,7 +499,7 @@ describe('Tool activity persistence', () => {
       { type: 'turn_boundary' },
       { type: 'text', content: 'Done', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -496,12 +508,12 @@ describe('Tool activity persistence', () => {
 
     await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const loaded = await chatService.getConversation(conv.id);
-    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     // First message (intermediate, saved at turn_boundary) should have outcome
     expect(assistantMsgs[0].toolActivity).toBeDefined();
-    expect(assistantMsgs[0].toolActivity[0].outcome).toBe('exit 0');
-    expect(assistantMsgs[0].toolActivity[0].status).toBe('success');
+    expect(assistantMsgs[0].toolActivity![0].outcome).toBe('exit 0');
+    expect(assistantMsgs[0].toolActivity![0].status).toBe('success');
   });
 });
 
@@ -510,29 +522,28 @@ describe('Tool activity persistence', () => {
 describe('Tool activity Phase 3 features', () => {
   test('persists multiple agents with close startTimes for parallel grouping', async () => {
     const conv = await chatService.createConversation('Test');
-    const now = Date.now();
 
     mockBackend.setMockEvents([
       { type: 'tool_activity', tool: 'Agent', description: 'Search code', id: 'a1', isAgent: true, subagentType: 'Explore' },
       { type: 'tool_activity', tool: 'Agent', description: 'Check tests', id: 'a2', isAgent: true, subagentType: 'Explore' },
       { type: 'text', content: 'Result', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test', backend: 'claude-code',
     });
     await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const loaded = await chatService.getConversation(conv.id);
-    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     expect(assistantMsgs[0].toolActivity).toBeDefined();
     expect(assistantMsgs[0].toolActivity).toHaveLength(2);
-    expect(assistantMsgs[0].toolActivity[0].isAgent).toBe(true);
-    expect(assistantMsgs[0].toolActivity[1].isAgent).toBe(true);
+    expect(assistantMsgs[0].toolActivity![0].isAgent).toBe(true);
+    expect(assistantMsgs[0].toolActivity![1].isAgent).toBe(true);
     // Both should have startTime for frontend parallel grouping
-    expect(assistantMsgs[0].toolActivity[0].startTime).toBeDefined();
-    expect(assistantMsgs[0].toolActivity[1].startTime).toBeDefined();
+    expect(assistantMsgs[0].toolActivity![0].startTime).toBeDefined();
+    expect(assistantMsgs[0].toolActivity![1].startTime).toBeDefined();
   });
 
   test('persists mix of tool and agent activity for session overview aggregation', async () => {
@@ -548,25 +559,25 @@ describe('Tool activity Phase 3 features', () => {
       { type: 'tool_activity', tool: 'Agent', description: 'Explore codebase', id: 'a1', isAgent: true, subagentType: 'Explore' },
       { type: 'text', content: 'Done exploring', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test', backend: 'claude-code',
     });
     await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const loaded = await chatService.getConversation(conv.id);
-    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     // Should have 2 assistant messages (turn_boundary + done)
     expect(assistantMsgs.length).toBe(2);
     // First message has Read + Grep
     expect(assistantMsgs[0].toolActivity).toHaveLength(2);
-    expect(assistantMsgs[0].toolActivity[0].tool).toBe('Read');
-    expect(assistantMsgs[0].toolActivity[1].tool).toBe('Grep');
+    expect(assistantMsgs[0].toolActivity![0].tool).toBe('Read');
+    expect(assistantMsgs[0].toolActivity![1].tool).toBe('Grep');
     // Second message has Agent
     expect(assistantMsgs[1].toolActivity).toHaveLength(1);
-    expect(assistantMsgs[1].toolActivity[0].isAgent).toBe(true);
-    expect(assistantMsgs[1].toolActivity[0].subagentType).toBe('Explore');
+    expect(assistantMsgs[1].toolActivity![0].isAgent).toBe(true);
+    expect(assistantMsgs[1].toolActivity![0].subagentType).toBe('Explore');
   });
 });
 
@@ -581,7 +592,7 @@ describe('Turn boundary intermediate messages', () => {
       { type: 'turn_boundary' },
       { type: 'text', content: 'Second response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -591,14 +602,14 @@ describe('Turn boundary intermediate messages', () => {
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
     // Should have two assistant_message events (one intermediate, one final)
-    const assistantMessages = events.filter(e => e.type === 'assistant_message');
+    const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     expect(assistantMessages).toHaveLength(2);
     expect(assistantMessages[0].message.content).toBe('First response');
     expect(assistantMessages[1].message.content).toBe('Second response');
 
     // Verify persisted to disk
-    const loaded = await chatService.getConversation(conv.id);
-    const assistantMsgs = loaded.messages.filter(m => m.role === 'assistant');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     expect(assistantMsgs).toHaveLength(2);
   });
 
@@ -611,7 +622,7 @@ describe('Turn boundary intermediate messages', () => {
       { type: 'turn_boundary' },
       { type: 'text', content: 'After tool use', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -620,7 +631,7 @@ describe('Turn boundary intermediate messages', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const assistantMessages = events.filter(e => e.type === 'assistant_message');
+    const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     expect(assistantMessages).toHaveLength(2);
 
     // First message should have thinking
@@ -628,9 +639,9 @@ describe('Turn boundary intermediate messages', () => {
     expect(assistantMessages[0].message.content).toBe('Response with thinking');
 
     // Verify persisted
-    const loaded = await chatService.getConversation(conv.id);
-    const firstAssistant = loaded.messages.find(m => m.role === 'assistant');
-    expect(firstAssistant.thinking).toBe('Let me think...');
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const firstAssistant = loaded.messages.find((m: any) => m.role === 'assistant');
+    expect(firstAssistant!.thinking).toBe('Let me think...');
   });
 
   test('does not save intermediate message when no streaming content', async () => {
@@ -640,7 +651,7 @@ describe('Turn boundary intermediate messages', () => {
       { type: 'turn_boundary' }, // boundary with no preceding text
       { type: 'text', content: 'Final', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -649,7 +660,7 @@ describe('Turn boundary intermediate messages', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const assistantMessages = events.filter(e => e.type === 'assistant_message');
+    const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     expect(assistantMessages).toHaveLength(1); // Only the final message
     expect(assistantMessages[0].message.content).toBe('Final');
   });
@@ -662,7 +673,7 @@ describe('Turn boundary intermediate messages', () => {
       { type: 'turn_boundary' },
       { type: 'text', content: 'New content', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -671,7 +682,7 @@ describe('Turn boundary intermediate messages', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const assistantMessages = events.filter(e => e.type === 'assistant_message');
+    const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     // Only the final "New content" should be saved (replayed text is not streaming)
     expect(assistantMessages).toHaveLength(1);
     expect(assistantMessages[0].message.content).toBe('New content');
@@ -683,7 +694,7 @@ describe('Turn boundary intermediate messages', () => {
     mockBackend.setMockEvents([
       { type: 'result', content: 'The final result' },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -692,7 +703,7 @@ describe('Turn boundary intermediate messages', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const assistantMessages = events.filter(e => e.type === 'assistant_message');
+    const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     expect(assistantMessages).toHaveLength(1);
     expect(assistantMessages[0].message.content).toBe('The final result');
   });
@@ -708,7 +719,7 @@ describe('Turn complete event forwarding', () => {
       { type: 'turn_boundary' }, // boundary with no preceding text
       { type: 'text', content: 'Final', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -718,7 +729,7 @@ describe('Turn complete event forwarding', () => {
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
     // Should have turn_complete event even though no text was saved
-    const turnCompletes = events.filter(e => e.type === 'turn_complete');
+    const turnCompletes = events.filter((e: any) => e.type === 'turn_complete');
     expect(turnCompletes).toHaveLength(1);
   });
 
@@ -730,7 +741,7 @@ describe('Turn complete event forwarding', () => {
       { type: 'turn_boundary' },
       { type: 'text', content: 'Second response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -740,14 +751,14 @@ describe('Turn complete event forwarding', () => {
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
     // Should have both assistant_message and turn_complete
-    const assistantMessages = events.filter(e => e.type === 'assistant_message');
-    const turnCompletes = events.filter(e => e.type === 'turn_complete');
+    const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
+    const turnCompletes = events.filter((e: any) => e.type === 'turn_complete');
     expect(assistantMessages).toHaveLength(2);
     expect(turnCompletes).toHaveLength(1);
 
     // turn_complete should come after the intermediate assistant_message
-    const assistantIdx = events.findIndex(e => e.type === 'assistant_message');
-    const turnCompleteIdx = events.findIndex(e => e.type === 'turn_complete');
+    const assistantIdx = events.findIndex((e: any) => e.type === 'assistant_message');
+    const turnCompleteIdx = events.findIndex((e: any) => e.type === 'turn_complete');
     expect(turnCompleteIdx).toBeGreaterThan(assistantIdx);
   });
 
@@ -761,7 +772,7 @@ describe('Turn complete event forwarding', () => {
       { type: 'turn_boundary' },
       { type: 'text', content: 'Third', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
@@ -770,7 +781,7 @@ describe('Turn complete event forwarding', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const turnCompletes = events.filter(e => e.type === 'turn_complete');
+    const turnCompletes = events.filter((e: any) => e.type === 'turn_complete');
     expect(turnCompletes).toHaveLength(2);
   });
 });
@@ -780,15 +791,15 @@ describe('Turn complete event forwarding', () => {
 describe('Auto title update on new session', () => {
   test('sends title_updated event after first assistant message in reset session', async () => {
     const conv = await chatService.createConversation('Original Title');
-    await chatService.addMessage(conv.id, 'user', 'Old topic');
-    await chatService.addMessage(conv.id, 'assistant', 'Old response');
+    await chatService.addMessage(conv.id, 'user', 'Old topic', 'claude-code');
+    await chatService.addMessage(conv.id, 'assistant', 'Old response', 'claude-code');
     await chatService.resetSession(conv.id);
 
     mockBackend._mockTitle = 'New Topic Title';
     mockBackend.setMockEvents([
       { type: 'text', content: 'New response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'New topic question',
@@ -797,12 +808,12 @@ describe('Auto title update on new session', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const titleEvents = events.filter(e => e.type === 'title_updated');
+    const titleEvents = events.filter((e: any) => e.type === 'title_updated');
     expect(titleEvents).toHaveLength(1);
     expect(titleEvents[0].title).toBe('New Topic Title');
 
     // Verify title was persisted
-    const loaded = await chatService.getConversation(conv.id);
+    const loaded = (await chatService.getConversation(conv.id))!;
     expect(loaded.title).toBe('New Topic Title');
   });
 
@@ -812,7 +823,7 @@ describe('Auto title update on new session', () => {
     mockBackend.setMockEvents([
       { type: 'text', content: 'First response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Hello world',
@@ -821,13 +832,13 @@ describe('Auto title update on new session', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const titleEvents = events.filter(e => e.type === 'title_updated');
+    const titleEvents = events.filter((e: any) => e.type === 'title_updated');
     expect(titleEvents).toHaveLength(0);
   });
 
   test('sends title_updated only once even with multiple assistant messages', async () => {
     const conv = await chatService.createConversation('Original');
-    await chatService.addMessage(conv.id, 'user', 'Old msg');
+    await chatService.addMessage(conv.id, 'user', 'Old msg', 'claude-code');
     await chatService.resetSession(conv.id);
 
     mockBackend._mockTitle = 'Updated Title';
@@ -836,7 +847,7 @@ describe('Auto title update on new session', () => {
       { type: 'turn_boundary' },
       { type: 'text', content: 'Second part', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'New session question',
@@ -845,7 +856,7 @@ describe('Auto title update on new session', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const titleEvents = events.filter(e => e.type === 'title_updated');
+    const titleEvents = events.filter((e: any) => e.type === 'title_updated');
     expect(titleEvents).toHaveLength(1);
   });
 });
@@ -859,7 +870,7 @@ describe('Workspace context injection', () => {
     mockBackend.setMockEvents([
       { type: 'text', content: 'Response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Hello',
@@ -874,12 +885,12 @@ describe('Workspace context injection', () => {
   test('does not inject context on subsequent messages', async () => {
     const conv = await chatService.createConversation('Test', '/tmp/inject-test');
     // Add a message first so it's not a new session
-    await chatService.addMessage(conv.id, 'user', 'First msg');
+    await chatService.addMessage(conv.id, 'user', 'First msg', 'claude-code');
 
     mockBackend.setMockEvents([
       { type: 'text', content: 'Response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Second msg',
@@ -897,7 +908,7 @@ describe('Workspace context injection', () => {
     mockBackend.setMockEvents([
       { type: 'text', content: 'Response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     const res = await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Hello',
@@ -914,20 +925,20 @@ describe('Workspace context injection', () => {
 describe('System prompt passthrough', () => {
   test('passes systemPrompt to backend on new session', async () => {
     // Save a system prompt to settings
-    await chatService.saveSettings({ theme: 'system', systemPrompt: 'You are a pirate' });
+    await chatService.saveSettings({ theme: 'system', systemPrompt: 'You are a pirate' } as any);
 
     const conv = await chatService.createConversation('Test');
     mockBackend.setMockEvents([
       { type: 'text', content: 'Ahoy', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Hello',
       backend: 'claude-code',
     });
 
-    expect(mockBackend._lastOptions.systemPrompt).toBe('You are a pirate');
+    expect(mockBackend._lastOptions!.systemPrompt).toBe('You are a pirate');
   });
 
   test('passes empty systemPrompt when none configured', async () => {
@@ -935,26 +946,26 @@ describe('System prompt passthrough', () => {
     mockBackend.setMockEvents([
       { type: 'text', content: 'Hi', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Hello',
       backend: 'claude-code',
     });
 
-    expect(mockBackend._lastOptions.systemPrompt).toBe('');
+    expect(mockBackend._lastOptions!.systemPrompt).toBe('');
   });
 
   test('does not pass systemPrompt on subsequent messages', async () => {
-    await chatService.saveSettings({ theme: 'system', systemPrompt: 'You are a pirate' });
+    await chatService.saveSettings({ theme: 'system', systemPrompt: 'You are a pirate' } as any);
 
     const conv = await chatService.createConversation('Test');
-    await chatService.addMessage(conv.id, 'user', 'First msg');
+    await chatService.addMessage(conv.id, 'user', 'First msg', 'claude-code');
 
     mockBackend.setMockEvents([
       { type: 'text', content: 'Response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Second msg',
@@ -962,7 +973,7 @@ describe('System prompt passthrough', () => {
     });
 
     // On resumed sessions, systemPrompt should be empty (not fetched)
-    expect(mockBackend._lastOptions.systemPrompt).toBe('');
+    expect(mockBackend._lastOptions!.systemPrompt).toBe('');
   });
 });
 
@@ -1110,10 +1121,10 @@ describe('POST /mkdir', () => {
 describe('GET /conversations/:id/sessions/:num/messages', () => {
   test('returns current session messages', async () => {
     const conv = await chatService.createConversation('Test');
-    await chatService.addMessage(conv.id, 'user', 'Hello');
-    await chatService.addMessage(conv.id, 'assistant', 'Hi');
+    await chatService.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    await chatService.addMessage(conv.id, 'assistant', 'Hi', 'claude-code');
 
-    const loaded = await chatService.getConversation(conv.id);
+    const loaded = (await chatService.getConversation(conv.id))!;
     const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/sessions/${loaded.sessionNumber}/messages`);
     expect(res.status).toBe(200);
     expect(res.body.messages).toHaveLength(2);
@@ -1122,10 +1133,10 @@ describe('GET /conversations/:id/sessions/:num/messages', () => {
 
   test('returns archived session messages', async () => {
     const conv = await chatService.createConversation('Test');
-    await chatService.addMessage(conv.id, 'user', 'Old msg');
+    await chatService.addMessage(conv.id, 'user', 'Old msg', 'claude-code');
 
     // Mock summary generation to avoid CLI calls
-    chatService._generateSessionSummary = async (msgs, fallback) => fallback;
+    (chatService as any)._generateSessionSummary = async (msgs: any, fallback: any) => fallback;
     await chatService.resetSession(conv.id);
 
     const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/sessions/1/messages`);
@@ -1202,7 +1213,7 @@ describe('POST /rmdir', () => {
 describe('GET /workspaces/:hash/instructions', () => {
   test('returns empty instructions for workspace with no instructions', async () => {
     const conv = await chatService.createConversation('Test', '/tmp/ws-api');
-    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
     const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/instructions`);
     expect(res.status).toBe(200);
     expect(res.body.instructions).toBe('');
@@ -1217,7 +1228,7 @@ describe('GET /workspaces/:hash/instructions', () => {
 describe('PUT /workspaces/:hash/instructions', () => {
   test('saves and returns instructions', async () => {
     const conv = await chatService.createConversation('Test', '/tmp/ws-put');
-    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
 
     const res = await makeRequest('PUT', `/api/chat/workspaces/${hash}/instructions`, {
       instructions: 'Always use TypeScript',
@@ -1232,7 +1243,7 @@ describe('PUT /workspaces/:hash/instructions', () => {
 
   test('returns 400 when instructions is not a string', async () => {
     const conv = await chatService.createConversation('Test', '/tmp/ws-bad');
-    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
 
     const res = await makeRequest('PUT', `/api/chat/workspaces/${hash}/instructions`, {
       instructions: 123,
@@ -1251,61 +1262,61 @@ describe('PUT /workspaces/:hash/instructions', () => {
 
 describe('Workspace instructions in system prompt', () => {
   test('combines global system prompt with workspace instructions on new session', async () => {
-    await chatService.saveSettings({ theme: 'system', systemPrompt: 'Global prompt' });
+    await chatService.saveSettings({ theme: 'system', systemPrompt: 'Global prompt' } as any);
 
     const conv = await chatService.createConversation('Test', '/tmp/ws-combo');
-    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
     await chatService.setWorkspaceInstructions(hash, 'Workspace instructions');
 
     mockBackend.setMockEvents([
       { type: 'text', content: 'Response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Hello',
       backend: 'claude-code',
     });
 
-    expect(mockBackend._lastOptions.systemPrompt).toContain('Global prompt');
-    expect(mockBackend._lastOptions.systemPrompt).toContain('Workspace instructions');
+    expect(mockBackend._lastOptions!.systemPrompt).toContain('Global prompt');
+    expect(mockBackend._lastOptions!.systemPrompt).toContain('Workspace instructions');
   });
 
   test('sends only workspace instructions when no global prompt', async () => {
     const conv = await chatService.createConversation('Test', '/tmp/ws-only');
-    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
     await chatService.setWorkspaceInstructions(hash, 'Only workspace');
 
     mockBackend.setMockEvents([
       { type: 'text', content: 'Response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Hello',
       backend: 'claude-code',
     });
 
-    expect(mockBackend._lastOptions.systemPrompt).toBe('Only workspace');
+    expect(mockBackend._lastOptions!.systemPrompt).toBe('Only workspace');
   });
 
   test('does not include workspace instructions on subsequent messages', async () => {
     const conv = await chatService.createConversation('Test', '/tmp/ws-resume');
-    const hash = chatService.getWorkspaceHashForConv(conv.id);
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
     await chatService.setWorkspaceInstructions(hash, 'Workspace instructions');
-    await chatService.addMessage(conv.id, 'user', 'First msg');
+    await chatService.addMessage(conv.id, 'user', 'First msg', 'claude-code');
 
     mockBackend.setMockEvents([
       { type: 'text', content: 'Response', streaming: true },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Second msg',
       backend: 'claude-code',
     });
 
-    expect(mockBackend._lastOptions.systemPrompt).toBe('');
+    expect(mockBackend._lastOptions!.systemPrompt).toBe('');
   });
 });
 
@@ -1332,7 +1343,7 @@ describe('SSE usage event forwarding', () => {
       { type: 'text', content: 'Hello', streaming: true },
       { type: 'usage', usage: { inputTokens: 1000, outputTokens: 500, cacheReadTokens: 100, cacheWriteTokens: 50, costUsd: 0.05 } },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test usage',
@@ -1342,17 +1353,17 @@ describe('SSE usage event forwarding', () => {
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
     // Verify usage event was forwarded
-    const usageEvent = events.find(e => e.type === 'usage');
+    const usageEvent = events.find((e: any) => e.type === 'usage');
     expect(usageEvent).toBeDefined();
     expect(usageEvent.usage.inputTokens).toBe(1000);
     expect(usageEvent.usage.outputTokens).toBe(500);
     expect(usageEvent.usage.costUsd).toBe(0.05);
 
     // Verify usage was persisted
-    const loaded = await chatService.getConversation(conv.id);
-    expect(loaded.usage.inputTokens).toBe(1000);
-    expect(loaded.usage.outputTokens).toBe(500);
-    expect(loaded.usage.costUsd).toBe(0.05);
+    const loaded = (await chatService.getConversation(conv.id))!;
+    expect(loaded.usage!.inputTokens).toBe(1000);
+    expect(loaded.usage!.outputTokens).toBe(500);
+    expect(loaded.usage!.costUsd).toBe(0.05);
   });
 
   test('accumulates usage across multiple usage events', async () => {
@@ -1365,7 +1376,7 @@ describe('SSE usage event forwarding', () => {
       { type: 'text', content: 'Second turn', streaming: true },
       { type: 'usage', usage: { inputTokens: 300, outputTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 } },
       { type: 'done' },
-    ]);
+    ] as StreamEvent[]);
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'multi turn',
@@ -1374,7 +1385,7 @@ describe('SSE usage event forwarding', () => {
 
     const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
 
-    const usageEvents = events.filter(e => e.type === 'usage');
+    const usageEvents = events.filter((e: any) => e.type === 'usage');
     expect(usageEvents).toHaveLength(2);
 
     // Second event should show cumulative totals

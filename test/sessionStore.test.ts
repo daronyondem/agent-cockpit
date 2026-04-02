@@ -1,10 +1,12 @@
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const session = require('express-session');
-const FileStore = require('session-file-store')(session);
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import session from 'express-session';
+import FileStoreFactory from 'session-file-store';
 
-let tmpDir;
+const FileStore = FileStoreFactory(session);
+
+let tmpDir: string;
 
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'session-store-'));
@@ -27,7 +29,7 @@ describe('file session store', () => {
     const store = createStore();
     const sessionData = { cookie: { maxAge: 60000 }, user: 'test@test.com', csrfToken: 'abc123' };
 
-    store.set('test-session-1', sessionData, (err) => {
+    store.set('test-session-1', sessionData as any, (err: any) => {
       expect(err).toBeFalsy();
 
       const files = fs.readdirSync(tmpDir).filter(f => f.endsWith('.json'));
@@ -40,10 +42,10 @@ describe('file session store', () => {
     const store = createStore();
     const sessionData = { cookie: { maxAge: 60000 }, user: 'test@test.com', csrfToken: 'abc123' };
 
-    store.set('test-session-2', sessionData, (err) => {
+    store.set('test-session-2', sessionData as any, (err: any) => {
       expect(err).toBeFalsy();
 
-      store.get('test-session-2', (err, data) => {
+      store.get('test-session-2', (err: any, data: any) => {
         expect(err).toBeFalsy();
         expect(data.user).toBe('test@test.com');
         expect(data.csrfToken).toBe('abc123');
@@ -56,12 +58,11 @@ describe('file session store', () => {
     const store1 = createStore();
     const sessionData = { cookie: { maxAge: 60000 }, user: 'test@test.com' };
 
-    store1.set('test-session-3', sessionData, (err) => {
+    store1.set('test-session-3', sessionData as any, (err: any) => {
       expect(err).toBeFalsy();
 
-      // Create a new store pointing to the same directory (simulates server restart)
       const store2 = createStore();
-      store2.get('test-session-3', (err, data) => {
+      store2.get('test-session-3', (err: any, data: any) => {
         expect(err).toBeFalsy();
         expect(data.user).toBe('test@test.com');
         done();
@@ -73,13 +74,13 @@ describe('file session store', () => {
     const store = createStore();
     const sessionData = { cookie: { maxAge: 60000 }, user: 'test@test.com' };
 
-    store.set('test-session-4', sessionData, (err) => {
+    store.set('test-session-4', sessionData as any, (err: any) => {
       expect(err).toBeFalsy();
 
-      store.destroy('test-session-4', (err) => {
+      store.destroy('test-session-4', (err: any) => {
         expect(err).toBeFalsy();
 
-        store.get('test-session-4', (err, data) => {
+        store.get('test-session-4', (err: any, data: any) => {
           expect(data).toBeFalsy();
           done();
         });

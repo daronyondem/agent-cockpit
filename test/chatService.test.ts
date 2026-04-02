@@ -1,15 +1,20 @@
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const crypto = require('crypto');
-const { ChatService } = require('../src/services/chatService');
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import fs from 'fs';
+import path from 'path';
+import os from 'os';
+import crypto from 'crypto';
+import { ChatService } from '../src/services/chatService';
+import { BackendRegistry } from '../src/services/backends/registry';
+import { BaseBackendAdapter } from '../src/services/backends/base';
+import type { BackendMetadata, SendMessageOptions, SendMessageResult, Message } from '../src/types';
 
 const DEFAULT_WORKSPACE = '/tmp/test-workspace';
 
-let tmpDir;
-let service;
+let tmpDir: string;
+let service: ChatService;
 
-function workspaceHash(p) {
+function workspaceHash(p: string): string {
   return crypto.createHash('sha256').update(p).digest('hex').substring(0, 16);
 }
 
@@ -68,7 +73,7 @@ describe('createConversation', () => {
       path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json'), 'utf8'
     ));
     expect(index.conversations).toHaveLength(2);
-    expect(index.conversations.map(c => c.id).sort()).toEqual([c1.id, c2.id].sort());
+    expect(index.conversations.map((c: any) => c.id).sort()).toEqual([c1.id, c2.id].sort());
   });
 });
 
@@ -80,9 +85,9 @@ describe('getConversation', () => {
   test('returns the saved conversation with messages', async () => {
     const conv = await service.createConversation('Get Test');
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.id).toBe(conv.id);
-    expect(loaded.title).toBe('Get Test');
-    expect(loaded.messages).toEqual([]);
+    expect(loaded!.id).toBe(conv.id);
+    expect(loaded!.title).toBe('Get Test');
+    expect(loaded!.messages).toEqual([]);
   });
 });
 
@@ -95,7 +100,7 @@ describe('listConversations', () => {
     const c1 = await service.createConversation('First');
     const c2 = await service.createConversation('Second');
 
-    await service.addMessage(c2.id, 'user', 'hello');
+    await service.addMessage(c2.id, 'user', 'hello', 'claude-code');
 
     const list = await service.listConversations();
     expect(list).toHaveLength(2);
@@ -116,10 +121,10 @@ describe('renameConversation', () => {
   test('renames and persists', async () => {
     const conv = await service.createConversation('Old Name');
     const updated = await service.renameConversation(conv.id, 'New Name');
-    expect(updated.title).toBe('New Name');
+    expect(updated!.title).toBe('New Name');
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.title).toBe('New Name');
+    expect(loaded!.title).toBe('New Name');
   });
 
   test('returns null for non-existent id', async () => {
@@ -150,9 +155,9 @@ describe('deleteConversation', () => {
 
   test('cleans up session files on delete', async () => {
     const conv = await service.createConversation('Session Cleanup', '/tmp/work');
-    await service.addMessage(conv.id, 'user', 'Hello');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
 
-    service._generateSessionSummary = async (msgs, fallback) => fallback;
+    (service as any)._generateSessionSummary = async (msgs: any, fallback: string) => fallback;
     await service.resetSession(conv.id);
 
     const hash = workspaceHash('/tmp/work');
@@ -184,7 +189,7 @@ describe('updateConversationBackend', () => {
     await service.updateConversationBackend(conv.id, 'openai');
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.backend).toBe('openai');
+    expect(loaded!.backend).toBe('openai');
   });
 });
 
@@ -193,94 +198,92 @@ describe('updateConversationBackend', () => {
 describe('addMessage', () => {
   test('appends message to conversation', async () => {
     const conv = await service.createConversation();
-    const msg = await service.addMessage(conv.id, 'user', 'Hello');
-    expect(msg.role).toBe('user');
-    expect(msg.content).toBe('Hello');
-    expect(msg.id).toBeDefined();
+    const msg = await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    expect(msg!.role).toBe('user');
+    expect(msg!.content).toBe('Hello');
+    expect(msg!.id).toBeDefined();
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.messages).toHaveLength(1);
+    expect(loaded!.messages).toHaveLength(1);
   });
 
   test('auto-titles from first user message', async () => {
     const conv = await service.createConversation();
-    await service.addMessage(conv.id, 'user', 'What is the meaning of life?');
+    await service.addMessage(conv.id, 'user', 'What is the meaning of life?', 'claude-code');
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.title).toBe('What is the meaning of life?');
+    expect(loaded!.title).toBe('What is the meaning of life?');
   });
 
   test('does not re-title on second user message', async () => {
     const conv = await service.createConversation();
-    await service.addMessage(conv.id, 'user', 'First question');
-    await service.addMessage(conv.id, 'assistant', 'Answer');
-    await service.addMessage(conv.id, 'user', 'Second question');
+    await service.addMessage(conv.id, 'user', 'First question', 'claude-code');
+    await service.addMessage(conv.id, 'assistant', 'Answer', 'claude-code');
+    await service.addMessage(conv.id, 'user', 'Second question', 'claude-code');
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.title).toBe('First question');
+    expect(loaded!.title).toBe('First question');
   });
 
   test('does not fallback auto-title in post-reset sessions', async () => {
     const conv = await service.createConversation();
-    await service.addMessage(conv.id, 'user', 'First question');
+    await service.addMessage(conv.id, 'user', 'First question', 'claude-code');
     await service.resetSession(conv.id);
-    // After reset, title is "New Chat"; first message in session 2 should NOT auto-title
-    await service.addMessage(conv.id, 'user', 'New topic after reset');
+    await service.addMessage(conv.id, 'user', 'New topic after reset', 'claude-code');
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.title).toBe('New Chat');
+    expect(loaded!.title).toBe('New Chat');
   });
 
   test('re-titles after session reset when title reverts to New Chat', async () => {
     const conv = await service.createConversation();
-    await service.addMessage(conv.id, 'user', 'First question');
+    await service.addMessage(conv.id, 'user', 'First question', 'claude-code');
 
     await service.renameConversation(conv.id, 'Custom Title');
-    await service.addMessage(conv.id, 'user', 'Another question');
+    await service.addMessage(conv.id, 'user', 'Another question', 'claude-code');
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.title).toBe('Custom Title');
+    expect(loaded!.title).toBe('Custom Title');
   });
 
   test('returns null for non-existent conversation', async () => {
-    expect(await service.addMessage('nope', 'user', 'hi')).toBeNull();
+    expect(await service.addMessage('nope', 'user', 'hi', 'claude-code')).toBeNull();
   });
 
   test('stores thinking field when provided', async () => {
     const conv = await service.createConversation();
     const msg = await service.addMessage(conv.id, 'assistant', 'Response text', 'claude-code', 'I need to think about this...');
-    expect(msg.thinking).toBe('I need to think about this...');
+    expect(msg!.thinking).toBe('I need to think about this...');
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.messages[0].thinking).toBe('I need to think about this...');
+    expect(loaded!.messages[0].thinking).toBe('I need to think about this...');
   });
 
   test('persists thinking field to disk', async () => {
     const conv = await service.createConversation();
     await service.addMessage(conv.id, 'assistant', 'Answer', 'claude-code', 'Thinking deeply');
 
-    // Re-read from disk via a fresh service instance
     const service2 = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
     await service2.initialize();
     const loaded = await service2.getConversation(conv.id);
-    expect(loaded.messages[0].thinking).toBe('Thinking deeply');
+    expect(loaded!.messages[0].thinking).toBe('Thinking deeply');
   });
 
   test('omits thinking field when not provided', async () => {
     const conv = await service.createConversation();
-    const msg = await service.addMessage(conv.id, 'assistant', 'No thinking');
-    expect(msg.thinking).toBeUndefined();
+    const msg = await service.addMessage(conv.id, 'assistant', 'No thinking', 'claude-code');
+    expect(msg!.thinking).toBeUndefined();
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.messages[0].thinking).toBeUndefined();
+    expect(loaded!.messages[0].thinking).toBeUndefined();
   });
 
   test('omits thinking field when null', async () => {
     const conv = await service.createConversation();
     const msg = await service.addMessage(conv.id, 'assistant', 'Null thinking', 'claude-code', null);
-    expect(msg.thinking).toBeUndefined();
+    expect(msg!.thinking).toBeUndefined();
   });
 
   test('omits thinking field when empty string', async () => {
     const conv = await service.createConversation();
     const msg = await service.addMessage(conv.id, 'assistant', 'Empty thinking', 'claude-code', '');
-    expect(msg.thinking).toBeUndefined();
+    expect(msg!.thinking).toBeUndefined();
   });
 
   test('stores toolActivity when provided', async () => {
@@ -290,25 +293,25 @@ describe('addMessage', () => {
       { tool: 'Agent', description: 'Explore code', id: 'tool_2', isAgent: true, subagentType: 'Explore', duration: 5000, startTime: Date.now() - 5000 },
     ];
     const msg = await service.addMessage(conv.id, 'assistant', 'Response', 'claude-code', null, activity);
-    expect(msg.toolActivity).toEqual(activity);
+    expect(msg!.toolActivity).toEqual(activity);
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.messages[0].toolActivity).toEqual(activity);
+    expect(loaded!.messages[0].toolActivity).toEqual(activity);
   });
 
   test('omits toolActivity when not provided', async () => {
     const conv = await service.createConversation();
-    const msg = await service.addMessage(conv.id, 'assistant', 'No tools');
-    expect(msg.toolActivity).toBeUndefined();
+    const msg = await service.addMessage(conv.id, 'assistant', 'No tools', 'claude-code');
+    expect(msg!.toolActivity).toBeUndefined();
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.messages[0].toolActivity).toBeUndefined();
+    expect(loaded!.messages[0].toolActivity).toBeUndefined();
   });
 
   test('omits toolActivity when empty array', async () => {
     const conv = await service.createConversation();
     const msg = await service.addMessage(conv.id, 'assistant', 'Empty tools', 'claude-code', null, []);
-    expect(msg.toolActivity).toBeUndefined();
+    expect(msg!.toolActivity).toBeUndefined();
   });
 
   test('persists toolActivity to disk', async () => {
@@ -319,12 +322,12 @@ describe('addMessage', () => {
     const service2 = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
     await service2.initialize();
     const loaded = await service2.getConversation(conv.id);
-    expect(loaded.messages[0].toolActivity).toEqual(activity);
+    expect(loaded!.messages[0].toolActivity).toEqual(activity);
   });
 
   test('updates lastActivity and lastMessage in workspace index', async () => {
     const conv = await service.createConversation('Test', '/tmp/idx');
-    await service.addMessage(conv.id, 'user', 'Index check message');
+    await service.addMessage(conv.id, 'user', 'Index check message', 'claude-code');
 
     const hash = workspaceHash('/tmp/idx');
     const index = JSON.parse(fs.readFileSync(
@@ -338,14 +341,14 @@ describe('addMessage', () => {
 describe('updateMessageContent', () => {
   test('forks conversation at edited message', async () => {
     const conv = await service.createConversation();
-    const m1 = await service.addMessage(conv.id, 'user', 'Original');
-    await service.addMessage(conv.id, 'assistant', 'Response');
-    await service.addMessage(conv.id, 'user', 'Follow-up');
+    const m1 = await service.addMessage(conv.id, 'user', 'Original', 'claude-code');
+    await service.addMessage(conv.id, 'assistant', 'Response', 'claude-code');
+    await service.addMessage(conv.id, 'user', 'Follow-up', 'claude-code');
 
-    const result = await service.updateMessageContent(conv.id, m1.id, 'Edited');
-    expect(result.message.content).toBe('Edited');
-    expect(result.conversation.messages).toHaveLength(1);
-    expect(result.conversation.messages[0].content).toBe('Edited');
+    const result = await service.updateMessageContent(conv.id, m1!.id, 'Edited');
+    expect(result!.message.content).toBe('Edited');
+    expect(result!.conversation.messages).toHaveLength(1);
+    expect(result!.conversation.messages[0].content).toBe('Edited');
   });
 
   test('returns null for non-existent conversation', async () => {
@@ -366,7 +369,7 @@ describe('generateAndUpdateTitle', () => {
     const newTitle = await service.generateAndUpdateTitle(conv.id, 'How do I deploy to production?');
     expect(newTitle).toBe('How do I deploy to production?');
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.title).toBe('How do I deploy to production?');
+    expect(loaded!.title).toBe('How do I deploy to production?');
   });
 
   test('truncates long messages in fallback title', async () => {
@@ -377,14 +380,15 @@ describe('generateAndUpdateTitle', () => {
   });
 
   test('uses adapter generateTitle when available', async () => {
-    const { BackendRegistry } = require('../src/services/backends/registry');
-    const { BaseBackendAdapter } = require('../src/services/backends/base');
-
     class TitleAdapter extends BaseBackendAdapter {
-      get metadata() { return { id: 'claude-code', label: 'Test', icon: null, capabilities: {} }; }
-      sendMessage() { return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} }; }
-      async generateSummary(msgs, fb) { return fb; }
-      async generateTitle(msg) { return 'LLM Generated Title'; }
+      get metadata(): BackendMetadata {
+        return { id: 'claude-code', label: 'Test', icon: null, capabilities: {} as any };
+      }
+      sendMessage(_message: string, _options?: SendMessageOptions): SendMessageResult {
+        return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} };
+      }
+      async generateSummary(_msgs: Pick<Message, 'role' | 'content'>[], _fb: string): Promise<string> { return _fb; }
+      async generateTitle(_msg: string): Promise<string> { return 'LLM Generated Title'; }
     }
 
     const registry = new BackendRegistry();
@@ -396,7 +400,7 @@ describe('generateAndUpdateTitle', () => {
     const newTitle = await svc.generateAndUpdateTitle(conv.id, 'some message');
     expect(newTitle).toBe('LLM Generated Title');
     const loaded = await svc.getConversation(conv.id);
-    expect(loaded.title).toBe('LLM Generated Title');
+    expect(loaded!.title).toBe('LLM Generated Title');
   });
 
   test('returns null for non-existent conversation', async () => {
@@ -408,58 +412,55 @@ describe('generateAndUpdateTitle', () => {
 
 describe('resetSession', () => {
   beforeEach(() => {
-    service._generateSessionSummary = async (msgs, fallback) => 'Test summary for session';
+    (service as any)._generateSessionSummary = async (_msgs: any, _fallback: string) => 'Test summary for session';
   });
 
   test('archives current session and starts new one', async () => {
     const conv = await service.createConversation();
-    await service.addMessage(conv.id, 'user', 'Hello');
-    await service.addMessage(conv.id, 'assistant', 'Hi');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    await service.addMessage(conv.id, 'assistant', 'Hi', 'claude-code');
 
     const result = await service.resetSession(conv.id);
-    expect(result.newSessionNumber).toBe(2);
-    expect(result.archivedSession).toBeDefined();
-    expect(result.archivedSession.summary).toBe('Test summary for session');
-    expect(result.archivedSession.messageCount).toBe(2);
+    expect(result!.newSessionNumber).toBe(2);
+    expect(result!.archivedSession).toBeDefined();
+    expect(result!.archivedSession.summary).toBe('Test summary for session');
+    expect(result!.archivedSession.messageCount).toBe(2);
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.sessionNumber).toBe(2);
-    expect(loaded.messages).toHaveLength(0);
-    expect(loaded.title).toBe('New Chat');
+    expect(loaded!.sessionNumber).toBe(2);
+    expect(loaded!.messages).toHaveLength(0);
+    expect(loaded!.title).toBe('New Chat');
   });
 
   test('resets conversation title to New Chat', async () => {
     const conv = await service.createConversation('My Custom Title');
-    await service.addMessage(conv.id, 'user', 'Hello');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
 
     const result = await service.resetSession(conv.id);
-    expect(result.conversation.title).toBe('New Chat');
+    expect(result!.conversation.title).toBe('New Chat');
   });
 
   test('creates session files on disk', async () => {
     const conv = await service.createConversation('Test', '/tmp/reset-test');
-    await service.addMessage(conv.id, 'user', 'Hello');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
 
     await service.resetSession(conv.id);
 
     const hash = workspaceHash('/tmp/reset-test');
     const convDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, conv.id);
 
-    // Check session-1.json (archived)
     const session1 = JSON.parse(fs.readFileSync(path.join(convDir, 'session-1.json'), 'utf8'));
     expect(session1.messages).toHaveLength(1);
     expect(session1.messages[0].content).toBe('Hello');
     expect(session1.endedAt).toBeDefined();
 
-    // Check session-2.json (new active)
     const session2 = JSON.parse(fs.readFileSync(path.join(convDir, 'session-2.json'), 'utf8'));
     expect(session2.messages).toHaveLength(0);
 
-    // Check workspace index
     const index = JSON.parse(fs.readFileSync(
       path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json'), 'utf8'
     ));
-    const convEntry = index.conversations.find(c => c.id === conv.id);
+    const convEntry = index.conversations.find((c: any) => c.id === conv.id);
     expect(convEntry.sessions).toHaveLength(2);
     expect(convEntry.sessions[0].active).toBe(false);
     expect(convEntry.sessions[0].summary).toBe('Test summary for session');
@@ -468,15 +469,15 @@ describe('resetSession', () => {
 
   test('multiple resets create sequential sessions', async () => {
     const conv = await service.createConversation();
-    await service.addMessage(conv.id, 'user', 'Session 1 msg');
+    await service.addMessage(conv.id, 'user', 'Session 1 msg', 'claude-code');
     await service.resetSession(conv.id);
 
-    await service.addMessage(conv.id, 'user', 'Session 2 msg');
+    await service.addMessage(conv.id, 'user', 'Session 2 msg', 'claude-code');
     await service.resetSession(conv.id);
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.sessionNumber).toBe(3);
-    expect(loaded.messages).toHaveLength(0);
+    expect(loaded!.sessionNumber).toBe(3);
+    expect(loaded!.messages).toHaveLength(0);
   });
 
   test('returns null for non-existent conversation', async () => {
@@ -486,28 +487,28 @@ describe('resetSession', () => {
 
 describe('getSessionHistory', () => {
   beforeEach(() => {
-    service._generateSessionSummary = async (msgs, fallback) => 'Test summary';
+    (service as any)._generateSessionSummary = async (_msgs: any, _fallback: string) => 'Test summary';
   });
 
   test('returns current session when no archives', async () => {
     const conv = await service.createConversation();
     const sessions = await service.getSessionHistory(conv.id);
     expect(sessions).toHaveLength(1);
-    expect(sessions[0].isCurrent).toBe(true);
-    expect(sessions[0].number).toBe(1);
+    expect(sessions![0].isCurrent).toBe(true);
+    expect(sessions![0].number).toBe(1);
   });
 
   test('returns archived sessions plus current', async () => {
     const conv = await service.createConversation();
-    await service.addMessage(conv.id, 'user', 'Hello');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
     await service.resetSession(conv.id);
 
     const sessions = await service.getSessionHistory(conv.id);
     expect(sessions).toHaveLength(2);
-    expect(sessions[0].isCurrent).toBe(false);
-    expect(sessions[0].summary).toBe('Test summary');
-    expect(sessions[1].isCurrent).toBe(true);
-    expect(sessions[1].number).toBe(2);
+    expect(sessions![0].isCurrent).toBe(false);
+    expect(sessions![0].summary).toBe('Test summary');
+    expect(sessions![1].isCurrent).toBe(true);
+    expect(sessions![1].number).toBe(2);
   });
 
   test('returns null for non-existent conversation', async () => {
@@ -517,27 +518,27 @@ describe('getSessionHistory', () => {
 
 describe('getSessionMessages', () => {
   beforeEach(() => {
-    service._generateSessionSummary = async (msgs, fallback) => 'Test summary';
+    (service as any)._generateSessionSummary = async (_msgs: any, _fallback: string) => 'Test summary';
   });
 
   test('returns current session messages', async () => {
     const conv = await service.createConversation();
-    await service.addMessage(conv.id, 'user', 'Hello');
-    await service.addMessage(conv.id, 'assistant', 'Hi');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    await service.addMessage(conv.id, 'assistant', 'Hi', 'claude-code');
 
     const messages = await service.getSessionMessages(conv.id, conv.sessionNumber);
     expect(messages).toHaveLength(2);
-    expect(messages[0].content).toBe('Hello');
+    expect(messages![0].content).toBe('Hello');
   });
 
   test('returns archived session messages', async () => {
     const conv = await service.createConversation();
-    await service.addMessage(conv.id, 'user', 'Old msg');
+    await service.addMessage(conv.id, 'user', 'Old msg', 'claude-code');
     await service.resetSession(conv.id);
 
     const messages = await service.getSessionMessages(conv.id, 1);
     expect(messages).toHaveLength(1);
-    expect(messages[0].content).toBe('Old msg');
+    expect(messages![0].content).toBe('Old msg');
   });
 
   test('returns null for non-existent session', async () => {
@@ -555,13 +556,13 @@ describe('getSessionMessages', () => {
 
 describe('conversationToMarkdown', () => {
   beforeEach(() => {
-    service._generateSessionSummary = async (msgs, fallback) => 'Test summary';
+    (service as any)._generateSessionSummary = async (_msgs: any, _fallback: string) => 'Test summary';
   });
 
   test('exports conversation as markdown', async () => {
     const conv = await service.createConversation('Export Test');
-    await service.addMessage(conv.id, 'user', 'Hello');
-    await service.addMessage(conv.id, 'assistant', 'Hi there');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    await service.addMessage(conv.id, 'assistant', 'Hi there', 'claude-code');
 
     const md = await service.conversationToMarkdown(conv.id);
     expect(md).toContain('# Export Test');
@@ -573,9 +574,9 @@ describe('conversationToMarkdown', () => {
 
   test('includes archived sessions', async () => {
     const conv = await service.createConversation('Session Test');
-    await service.addMessage(conv.id, 'user', 'Before reset');
+    await service.addMessage(conv.id, 'user', 'Before reset', 'claude-code');
     await service.resetSession(conv.id);
-    await service.addMessage(conv.id, 'user', 'After reset');
+    await service.addMessage(conv.id, 'user', 'After reset', 'claude-code');
 
     const md = await service.conversationToMarkdown(conv.id);
     expect(md).toContain('Before reset');
@@ -591,13 +592,13 @@ describe('conversationToMarkdown', () => {
 
 describe('sessionToMarkdown', () => {
   beforeEach(() => {
-    service._generateSessionSummary = async (msgs, fallback) => 'Test summary';
+    (service as any)._generateSessionSummary = async (_msgs: any, _fallback: string) => 'Test summary';
   });
 
   test('exports current session as markdown', async () => {
     const conv = await service.createConversation('MD Test');
-    await service.addMessage(conv.id, 'user', 'Hello');
-    await service.addMessage(conv.id, 'assistant', 'Hi there');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    await service.addMessage(conv.id, 'assistant', 'Hi there', 'claude-code');
 
     const md = await service.sessionToMarkdown(conv.id, conv.sessionNumber);
     expect(md).toContain('User');
@@ -607,7 +608,7 @@ describe('sessionToMarkdown', () => {
 
   test('exports archived session as markdown', async () => {
     const conv = await service.createConversation('MD Test');
-    await service.addMessage(conv.id, 'user', 'Old msg');
+    await service.addMessage(conv.id, 'user', 'Old msg', 'claude-code');
     await service.resetSession(conv.id);
 
     const md = await service.sessionToMarkdown(conv.id, 1);
@@ -712,7 +713,6 @@ describe('listConversations includes workspaceHash', () => {
 
 describe('migration from legacy format', () => {
   test('migrates conversations to workspace format', async () => {
-    // Set up legacy directory structure
     const convDir = path.join(tmpDir, 'data', 'chat', 'conversations');
     fs.mkdirSync(convDir, { recursive: true });
 
@@ -732,21 +732,17 @@ describe('migration from legacy format', () => {
     };
     fs.writeFileSync(path.join(convDir, `${convId}.json`), JSON.stringify(conv, null, 2));
 
-    // Create fresh service and initialize (triggers migration)
     const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
     await svc.initialize();
 
-    // Old dir should be renamed to backup
     expect(fs.existsSync(convDir)).toBe(false);
     expect(fs.existsSync(convDir + '_backup')).toBe(true);
 
-    // Should be able to load the conversation
     const loaded = await svc.getConversation(convId);
     expect(loaded).not.toBeNull();
-    expect(loaded.title).toBe('Legacy Conv');
-    expect(loaded.messages).toHaveLength(2);
+    expect(loaded!.title).toBe('Legacy Conv');
+    expect(loaded!.messages).toHaveLength(2);
 
-    // Workspace index should exist
     const hash = workspaceHash('/tmp/legacy-project');
     const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
     expect(fs.existsSync(indexPath)).toBe(true);
@@ -759,7 +755,6 @@ describe('migration from legacy format', () => {
 
     const convId = crypto.randomUUID();
 
-    // Conversation file (current session 2)
     const conv = {
       id: convId,
       title: 'Archived Conv',
@@ -774,7 +769,6 @@ describe('migration from legacy format', () => {
     };
     fs.writeFileSync(path.join(convDir, `${convId}.json`), JSON.stringify(conv, null, 2));
 
-    // Archive files
     const archiveConvDir = path.join(archivesDir, convId);
     fs.mkdirSync(archiveConvDir, { recursive: true });
 
@@ -805,30 +799,26 @@ describe('migration from legacy format', () => {
     };
     fs.writeFileSync(path.join(archiveConvDir, 'session-1.json'), JSON.stringify(session1, null, 2));
 
-    // Initialize
     const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
     await svc.initialize();
 
-    // Verify migration
     expect(fs.existsSync(convDir)).toBe(false);
     expect(fs.existsSync(archivesDir)).toBe(false);
 
     const loaded = await svc.getConversation(convId);
-    expect(loaded.title).toBe('Archived Conv');
-    expect(loaded.messages).toHaveLength(1);
-    expect(loaded.sessionNumber).toBe(2);
+    expect(loaded!.title).toBe('Archived Conv');
+    expect(loaded!.messages).toHaveLength(1);
+    expect(loaded!.sessionNumber).toBe(2);
 
-    // Verify archived session is accessible
     const sessions = await svc.getSessionHistory(convId);
     expect(sessions).toHaveLength(2);
-    expect(sessions[0].summary).toBe('Discussed the project setup');
-    expect(sessions[0].isCurrent).toBe(false);
-    expect(sessions[1].isCurrent).toBe(true);
+    expect(sessions![0].summary).toBe('Discussed the project setup');
+    expect(sessions![0].isCurrent).toBe(false);
+    expect(sessions![1].isCurrent).toBe(true);
 
-    // Verify archived messages are accessible
     const archivedMsgs = await svc.getSessionMessages(convId, 1);
     expect(archivedMsgs).toHaveLength(2);
-    expect(archivedMsgs[0].content).toBe('Old msg 1');
+    expect(archivedMsgs![0].content).toBe('Old msg 1');
   });
 
   test('migrates legacy sessions with dividers', async () => {
@@ -861,13 +851,13 @@ describe('migration from legacy format', () => {
     await svc.initialize();
 
     const loaded = await svc.getConversation(convId);
-    expect(loaded.messages).toHaveLength(1);
-    expect(loaded.messages[0].content).toBe('Session 2 msg');
-    expect(loaded.sessionNumber).toBe(2);
+    expect(loaded!.messages).toHaveLength(1);
+    expect(loaded!.messages[0].content).toBe('Session 2 msg');
+    expect(loaded!.sessionNumber).toBe(2);
 
     const archivedMsgs = await svc.getSessionMessages(convId, 1);
     expect(archivedMsgs).toHaveLength(2);
-    expect(archivedMsgs[0].content).toBe('Session 1 msg');
+    expect(archivedMsgs![0].content).toBe('Session 1 msg');
   });
 
   test('groups conversations by workspace during migration', async () => {
@@ -913,7 +903,7 @@ describe('migration from legacy format', () => {
 
     const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
     await expect(svc.initialize()).resolves.not.toThrow();
-    expect(fs.existsSync(convDir)).toBe(false); // renamed to _backup
+    expect(fs.existsSync(convDir)).toBe(false);
   });
 });
 
@@ -931,7 +921,7 @@ describe('searchConversations', () => {
 
   test('finds by message content', async () => {
     const conv = await service.createConversation('Chat');
-    await service.addMessage(conv.id, 'user', 'The zebra crossed the road');
+    await service.addMessage(conv.id, 'user', 'The zebra crossed the road', 'claude-code');
 
     const results = await service.searchConversations('zebra');
     expect(results).toHaveLength(1);
@@ -960,7 +950,7 @@ describe('settings', () => {
 
   test('saves and retrieves settings', async () => {
     const input = { theme: 'dark', sendBehavior: 'ctrl-enter', systemPrompt: 'Be helpful' };
-    await service.saveSettings(input);
+    await service.saveSettings(input as any);
 
     const loaded = await service.getSettings();
     expect(loaded.theme).toBe('dark');
@@ -975,13 +965,12 @@ describe('settings', () => {
       customInstructions: { aboutUser: 'I am a developer', responseStyle: 'Be concise' },
       defaultBackend: 'claude-code',
     };
-    await service.saveSettings(legacy);
+    await service.saveSettings(legacy as any);
 
     const loaded = await service.getSettings();
     expect(loaded.systemPrompt).toBe('I am a developer\n\nBe concise');
     expect(loaded.customInstructions).toBeUndefined();
 
-    // Verify migration was persisted
     const reloaded = await service.getSettings();
     expect(reloaded.systemPrompt).toBe('I am a developer\n\nBe concise');
   });
@@ -991,7 +980,7 @@ describe('settings', () => {
       theme: 'system',
       customInstructions: { aboutUser: '', responseStyle: 'Use bullet points' },
     };
-    await service.saveSettings(legacy);
+    await service.saveSettings(legacy as any);
 
     const loaded = await service.getSettings();
     expect(loaded.systemPrompt).toBe('Use bullet points');
@@ -1013,11 +1002,11 @@ describe('addUsage', () => {
       costUsd: 0.05,
     });
 
-    expect(updated.inputTokens).toBe(1000);
-    expect(updated.outputTokens).toBe(500);
-    expect(updated.cacheReadTokens).toBe(200);
-    expect(updated.cacheWriteTokens).toBe(100);
-    expect(updated.costUsd).toBe(0.05);
+    expect(updated!.inputTokens).toBe(1000);
+    expect(updated!.outputTokens).toBe(500);
+    expect(updated!.cacheReadTokens).toBe(200);
+    expect(updated!.cacheWriteTokens).toBe(100);
+    expect(updated!.costUsd).toBe(0.05);
   });
 
   test('accumulates across multiple calls', async () => {
@@ -1026,21 +1015,21 @@ describe('addUsage', () => {
     await service.addUsage(conv.id, { inputTokens: 100, outputTokens: 50, cacheReadTokens: 10, cacheWriteTokens: 5, costUsd: 0.01 });
     const updated = await service.addUsage(conv.id, { inputTokens: 200, outputTokens: 100, cacheReadTokens: 20, cacheWriteTokens: 10, costUsd: 0.02 });
 
-    expect(updated.inputTokens).toBe(300);
-    expect(updated.outputTokens).toBe(150);
-    expect(updated.cacheReadTokens).toBe(30);
-    expect(updated.cacheWriteTokens).toBe(15);
-    expect(updated.costUsd).toBe(0.03);
+    expect(updated!.inputTokens).toBe(300);
+    expect(updated!.outputTokens).toBe(150);
+    expect(updated!.cacheReadTokens).toBe(30);
+    expect(updated!.cacheWriteTokens).toBe(15);
+    expect(updated!.costUsd).toBe(0.03);
   });
 
   test('returns null for unknown conversation', async () => {
-    const result = await service.addUsage('nonexistent', { inputTokens: 100, outputTokens: 50 });
+    const result = await service.addUsage('nonexistent', { inputTokens: 100, outputTokens: 50 } as any);
     expect(result).toBeNull();
   });
 
   test('returns null when usage is null', async () => {
     const conv = await service.createConversation('Null Usage');
-    const result = await service.addUsage(conv.id, null);
+    const result = await service.addUsage(conv.id, null as any);
     expect(result).toBeNull();
   });
 
@@ -1048,12 +1037,11 @@ describe('addUsage', () => {
     const conv = await service.createConversation('Session Usage');
     await service.addUsage(conv.id, { inputTokens: 500, outputTokens: 250, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.03 });
 
-    // Read index directly to verify session-level usage
     const hash = workspaceHash(DEFAULT_WORKSPACE);
     const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
     const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
-    const convEntry = index.conversations.find(c => c.id === conv.id);
-    const activeSession = convEntry.sessions.find(s => s.active);
+    const convEntry = index.conversations.find((c: any) => c.id === conv.id);
+    const activeSession = convEntry.sessions.find((s: any) => s.active);
 
     expect(activeSession.usage.inputTokens).toBe(500);
     expect(activeSession.usage.outputTokens).toBe(250);
@@ -1065,11 +1053,11 @@ describe('getUsage', () => {
   test('returns empty usage for new conversation', async () => {
     const conv = await service.createConversation('Empty Usage');
     const usage = await service.getUsage(conv.id);
-    expect(usage.inputTokens).toBe(0);
-    expect(usage.outputTokens).toBe(0);
-    expect(usage.cacheReadTokens).toBe(0);
-    expect(usage.cacheWriteTokens).toBe(0);
-    expect(usage.costUsd).toBe(0);
+    expect(usage!.inputTokens).toBe(0);
+    expect(usage!.outputTokens).toBe(0);
+    expect(usage!.cacheReadTokens).toBe(0);
+    expect(usage!.cacheWriteTokens).toBe(0);
+    expect(usage!.costUsd).toBe(0);
   });
 
   test('returns accumulated usage', async () => {
@@ -1077,9 +1065,9 @@ describe('getUsage', () => {
     await service.addUsage(conv.id, { inputTokens: 1000, outputTokens: 500, cacheReadTokens: 100, cacheWriteTokens: 50, costUsd: 0.05 });
 
     const usage = await service.getUsage(conv.id);
-    expect(usage.inputTokens).toBe(1000);
-    expect(usage.outputTokens).toBe(500);
-    expect(usage.costUsd).toBe(0.05);
+    expect(usage!.inputTokens).toBe(1000);
+    expect(usage!.outputTokens).toBe(500);
+    expect(usage!.costUsd).toBe(0.05);
   });
 
   test('returns null for unknown conversation', async () => {
@@ -1092,8 +1080,8 @@ describe('getConversation includes usage', () => {
   test('returns empty usage for new conversation', async () => {
     const conv = await service.createConversation('With Usage');
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.usage).toBeDefined();
-    expect(loaded.usage.inputTokens).toBe(0);
+    expect(loaded!.usage).toBeDefined();
+    expect(loaded!.usage!.inputTokens).toBe(0);
   });
 
   test('returns accumulated usage', async () => {
@@ -1101,9 +1089,9 @@ describe('getConversation includes usage', () => {
     await service.addUsage(conv.id, { inputTokens: 500, outputTokens: 250, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.02 });
 
     const loaded = await service.getConversation(conv.id);
-    expect(loaded.usage.inputTokens).toBe(500);
-    expect(loaded.usage.outputTokens).toBe(250);
-    expect(loaded.usage.costUsd).toBe(0.02);
+    expect(loaded!.usage!.inputTokens).toBe(500);
+    expect(loaded!.usage!.outputTokens).toBe(250);
+    expect(loaded!.usage!.costUsd).toBe(0.02);
   });
 });
 
@@ -1113,10 +1101,10 @@ describe('listConversations includes usage', () => {
     await service.addUsage(conv.id, { inputTokens: 300, outputTokens: 150, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 });
 
     const list = await service.listConversations();
-    const found = list.find(c => c.id === conv.id);
-    expect(found.usage).toBeDefined();
-    expect(found.usage.inputTokens).toBe(300);
-    expect(found.usage.costUsd).toBe(0.01);
+    const found = list.find((c: any) => c.id === conv.id);
+    expect(found!.usage).toBeDefined();
+    expect(found!.usage!.inputTokens).toBe(300);
+    expect(found!.usage!.costUsd).toBe(0.01);
   });
 
   test('returns null usage for conversation without usage', async () => {
