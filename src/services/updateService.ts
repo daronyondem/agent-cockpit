@@ -103,14 +103,10 @@ export class UpdateService {
       }
 
       const ecosystemPath = path.join(this._appRoot, 'ecosystem.config.js');
-      // Use delete + start instead of restart so pm2 picks up config changes
-      // (e.g. new interpreter, script name, env vars)
-      try {
-        await this._exec('pm2', ['delete', ecosystemPath], 15000);
-      } catch {
-        // Ignore delete errors — process may not exist yet
-      }
-      const pm2 = spawn('pm2', ['start', ecosystemPath], {
+      // Delete + start in a single detached shell so pm2 picks up config
+      // changes (interpreter, script name, env vars). Must be one detached
+      // command because pm2 delete kills the current process.
+      const pm2 = spawn('sh', ['-c', `pm2 delete "${ecosystemPath}" 2>/dev/null; pm2 start "${ecosystemPath}"`], {
         cwd: this._appRoot,
         detached: true,
         stdio: 'ignore',
