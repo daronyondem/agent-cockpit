@@ -10,6 +10,28 @@ interface AttachWebSocketOpts {
   activeStreams: Map<string, ActiveStreamEntry>;
 }
 
+export interface WsFunctions {
+  shutdown: () => void;
+  send: (convId: string, frame: WsServerFrame) => boolean;
+  isConnected: (convId: string) => boolean;
+  isStreamAlive: (convId: string) => boolean;
+  clearBuffer: (convId: string) => void;
+}
+
+// ── Event buffer for reconnection ──────────────────────────────────────────
+
+const GRACE_PERIOD_MS = 60_000;
+const BUFFER_CLEANUP_MS = 60_000;
+const MAX_BUFFER_SIZE = 1000;
+
+interface ConvBuffer {
+  events: WsServerFrame[];
+  graceTimer: ReturnType<typeof setTimeout> | null;
+  cleanupTimer: ReturnType<typeof setTimeout> | null;
+}
+
+// ── Helpers ────────────────────────────────────────────────────────────────
+
 function unsignCookie(val: string, secret: string): string | false {
   // express-session prefixes signed cookies with "s:"
   if (val.startsWith('s:')) val = val.slice(2);
@@ -40,14 +62,17 @@ function extractConvId(url: string | undefined): string | null {
   return match ? match[1] : null;
 }
 
+// ── Main ───────────────────────────────────────────────────────────────────
+
 export function attachWebSocket(
   server: http.Server,
   opts: AttachWebSocketOpts,
-): { shutdown: () => void; send: (convId: string, frame: WsServerFrame) => boolean; isConnected: (convId: string) => boolean } {
+): WsFunctions {
   const { sessionStore, sessionSecret, activeStreams } = opts;
 
   const wss = new WebSocketServer({ noServer: true });
   const activeWebSockets = new Map<string, WebSocket>();
+  const convBuffers = new Map<string, ConvBuffer>();
 
   // ── Keepalive: 30s ping/pong (well under Cloudflare's 100s idle timeout) ──
   const PING_INTERVAL = 30_000;
@@ -63,6 +88,49 @@ export function attachWebSocket(
       ws.ping();
     }
   }, PING_INTERVAL);
+
+  // ── Buffer helpers ───────────────────────────────────────────────────────
+
+  function getOrCreateBuffer(convId: string): ConvBuffer {
+    let buf = convBuffers.get(convId);
+    if (!buf) {
+      buf = { events: [], graceTimer: null, cleanupTimer: null };
+      convBuffers.set(convId, buf);
+    }
+    return buf;
+  }
+
+  function clearBufferTimers(buf: ConvBuffer) {
+    if (buf.graceTimer) { clearTimeout(buf.graceTimer); buf.graceTimer = null; }
+    if (buf.cleanupTimer) { clearTimeout(buf.cleanupTimer); buf.cleanupTimer = null; }
+  }
+
+  function deleteBuffer(convId: string) {
+    const buf = convBuffers.get(convId);
+    if (buf) {
+      clearBufferTimers(buf);
+      convBuffers.delete(convId);
+    }
+  }
+
+  function replayBuffer(ws: WebSocket, convId: string) {
+    const buf = convBuffers.get(convId);
+    if (!buf || buf.events.length === 0) return;
+
+    console.log(`[ws] Replaying ${buf.events.length} buffered events for conv=${convId}`);
+    ws.send(JSON.stringify({ type: 'replay_start', bufferedEvents: buf.events.length }));
+    for (const event of buf.events) {
+      ws.send(JSON.stringify(event));
+    }
+    ws.send(JSON.stringify({ type: 'replay_end' }));
+
+    // If stream already finished, start cleanup timer (buffer served its purpose)
+    const streamDone = buf.events.some(e => 'type' in e && e.type === 'done');
+    if (streamDone) {
+      clearBufferTimers(buf);
+      buf.cleanupTimer = setTimeout(() => { deleteBuffer(convId); }, BUFFER_CLEANUP_MS);
+    }
+  }
 
   // ── Upgrade handler: auth + origin validation ─────────────────────────────
   server.on('upgrade', (req: http.IncomingMessage, socket, head) => {
@@ -154,7 +222,20 @@ export function attachWebSocket(
     activeWebSockets.set(convId, ws);
     aliveMap.set(ws, true);
 
-    console.log(`[ws] Connected for conv=${convId}`);
+    // Cancel grace timer — client reconnected
+    const buf = convBuffers.get(convId);
+    if (buf) {
+      if (buf.graceTimer) { clearTimeout(buf.graceTimer); buf.graceTimer = null; }
+      if (buf.cleanupTimer) { clearTimeout(buf.cleanupTimer); buf.cleanupTimer = null; }
+    }
+
+    // If there's a buffer with events, this is a reconnection — replay immediately
+    if (buf && buf.events.length > 0) {
+      console.log(`[ws] Reconnection detected for conv=${convId}`);
+      replayBuffer(ws, convId);
+    } else {
+      console.log(`[ws] Connected for conv=${convId}`);
+    }
 
     ws.on('pong', () => {
       aliveMap.set(ws, true);
@@ -176,6 +257,12 @@ export function attachWebSocket(
             entry.abort();
             activeStreams.delete(convId);
           }
+          deleteBuffer(convId);
+        } else if (frame.type === 'reconnect') {
+          // Client explicitly requests replay (e.g. after page load while stream is active)
+          if (buf && buf.events.length > 0) {
+            replayBuffer(ws, convId);
+          }
         }
       } catch (err) {
         console.warn(`[ws] Failed to parse client frame for conv=${convId}:`, err);
@@ -187,11 +274,22 @@ export function attachWebSocket(
       if (activeWebSockets.get(convId) === ws) {
         activeWebSockets.delete(convId);
       }
-      // Abort CLI process if still running
+
+      // If a stream is active, start grace period instead of aborting
       const entry = activeStreams.get(convId);
       if (entry) {
-        entry.abort();
-        activeStreams.delete(convId);
+        const graceBuf = getOrCreateBuffer(convId);
+        console.log(`[ws] Starting ${GRACE_PERIOD_MS / 1000}s grace period for conv=${convId}`);
+        graceBuf.graceTimer = setTimeout(() => {
+          console.log(`[ws] Grace period expired for conv=${convId}, aborting CLI`);
+          graceBuf.graceTimer = null;
+          const staleEntry = activeStreams.get(convId);
+          if (staleEntry) {
+            staleEntry.abort();
+            activeStreams.delete(convId);
+          }
+          deleteBuffer(convId);
+        }, GRACE_PERIOD_MS);
       }
     });
 
@@ -202,16 +300,54 @@ export function attachWebSocket(
 
   // ── Public API ────────────────────────────────────────────────────────────
 
+  /** Buffer the event and send to WS if connected. Returns true if buffered. */
   function send(convId: string, frame: WsServerFrame): boolean {
+    const buf = getOrCreateBuffer(convId);
+
+    // Append to buffer (ring buffer: drop oldest if at cap)
+    buf.events.push(frame);
+    if (buf.events.length > MAX_BUFFER_SIZE) {
+      buf.events.shift();
+    }
+
+    // If stream just finished (done event) and no WS is connected, start cleanup timer
+    if (frame.type === 'done' && !isConnected(convId)) {
+      if (!buf.cleanupTimer) {
+        buf.cleanupTimer = setTimeout(() => { deleteBuffer(convId); }, BUFFER_CLEANUP_MS);
+      }
+    }
+
+    // Send to WS if open
     const ws = activeWebSockets.get(convId);
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
-    ws.send(JSON.stringify(frame));
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(frame));
+      return true;
+    }
+
+    // Buffered but no WS to send to — that's fine during grace period
     return true;
   }
 
+  /** True if a WebSocket is currently open for this conversation. */
   function isConnected(convId: string): boolean {
     const ws = activeWebSockets.get(convId);
     return !!ws && ws.readyState === WebSocket.OPEN;
+  }
+
+  /**
+   * True if the stream should keep running: WS is open OR we're in a grace
+   * period (buffer exists with an active grace timer). Used by processStream's
+   * isClosed callback.
+   */
+  function isStreamAlive(convId: string): boolean {
+    if (isConnected(convId)) return true;
+    const buf = convBuffers.get(convId);
+    return !!buf && buf.graceTimer !== null;
+  }
+
+  /** Clear the event buffer for a conversation (called before starting a new stream). */
+  function clearBuffer(convId: string) {
+    deleteBuffer(convId);
   }
 
   function shutdown() {
@@ -221,8 +357,12 @@ export function attachWebSocket(
       ws.close(1001, 'Server shutting down');
     }
     activeWebSockets.clear();
+    for (const [convId] of convBuffers) {
+      deleteBuffer(convId);
+    }
+    convBuffers.clear();
     wss.close();
   }
 
-  return { shutdown, send, isConnected };
+  return { shutdown, send, isConnected, isStreamAlive, clearBuffer };
 }

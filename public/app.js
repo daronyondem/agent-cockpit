@@ -148,6 +148,9 @@ let chatMessageQueue = new Map(); // convId -> [{ id, content, inFlight }]
 let chatQueuePaused = new Set(); // convIds where queue is paused due to error
 let chatQueueIdCounter = 0;
 let chatWebSockets = new Map(); // convId -> WebSocket
+let chatReconnectAttempts = new Map(); // convId -> attempt count
+const CHAT_MAX_RECONNECT_ATTEMPTS = 5;
+const CHAT_RECONNECT_BASE_DELAY = 1000; // 1s, doubles each attempt
 
 // ── WebSocket helpers ───────────────────────────────────────────────────────
 
@@ -182,6 +185,10 @@ function chatConnectWs(convId) {
     if (chatWebSockets.get(convId) === ws) {
       chatWebSockets.delete(convId);
     }
+    // Auto-reconnect if stream is still active (unexpected disconnect)
+    if (chatStreamingConvs.has(convId)) {
+      chatAutoReconnectWs(convId);
+    }
   };
 
   ws.onerror = (err) => {
@@ -191,7 +198,31 @@ function chatConnectWs(convId) {
   return ws;
 }
 
+function chatAutoReconnectWs(convId) {
+  const attempts = chatReconnectAttempts.get(convId) || 0;
+  if (attempts >= CHAT_MAX_RECONNECT_ATTEMPTS) {
+    console.warn(`[ws] Reconnect attempts exhausted for conv=${convId}`);
+    chatReconnectAttempts.delete(convId);
+    // Give up — resolve done so the stream cleans up
+    const st = chatStreamingState.get(convId);
+    if (st && st._doneResolve) { st._doneResolve(); delete st._doneResolve; }
+    return;
+  }
+  const delay = CHAT_RECONNECT_BASE_DELAY * Math.pow(2, attempts);
+  chatReconnectAttempts.set(convId, attempts + 1);
+  console.log(`[ws] Reconnecting conv=${convId} in ${delay}ms (attempt ${attempts + 1}/${CHAT_MAX_RECONNECT_ATTEMPTS})`);
+  setTimeout(() => {
+    // Stream may have ended while we waited
+    if (!chatStreamingConvs.has(convId)) {
+      chatReconnectAttempts.delete(convId);
+      return;
+    }
+    chatConnectWs(convId);
+  }, delay);
+}
+
 function chatDisconnectWs(convId) {
+  chatReconnectAttempts.delete(convId); // Prevent auto-reconnect on deliberate close
   const ws = chatWebSockets.get(convId);
   if (ws) {
     ws.close();
@@ -1998,25 +2029,13 @@ async function chatSendMessage() {
       chatStartElapsedTimer(targetConvId);
     }
 
-    // Connect WebSocket and wait for the stream to complete.
-    // The server starts piping CLI events to the WS as soon as the POST handler
-    // detects an open WS connection (which we opened before the POST).
+    // Wait for the stream to complete. _doneResolve is called by:
+    // - 'done' event in chatHandleStreamEvent (normal completion)
+    // - chatAutoReconnectWs giving up after max attempts (reconnect exhaustion)
+    // Auto-reconnect on unexpected WS close is handled in chatConnectWs's onclose.
     await new Promise((resolve) => {
       const st = chatStreamingState.get(targetConvId);
       if (st) st._doneResolve = resolve;
-      // If WS closes unexpectedly before 'done', also resolve
-      const ws = chatWebSockets.get(targetConvId);
-      if (ws) {
-        const origOnClose = ws.onclose;
-        ws.onclose = (evt) => {
-          if (origOnClose) origOnClose.call(ws, evt);
-          const pendingSt = chatStreamingState.get(targetConvId);
-          if (pendingSt && pendingSt._doneResolve) {
-            pendingSt._doneResolve();
-            delete pendingSt._doneResolve;
-          }
-        };
-      }
     });
   } catch (err) {
     if (err.name !== 'AbortError') {
@@ -2059,7 +2078,33 @@ function chatHandleStreamEvent(targetConvId, event) {
     st.streamingMsgEl = chatAppendStreamingMessage();
   }
 
-  if (event.type === 'thinking') {
+  if (event.type === 'replay_start') {
+    // Server is replaying buffered events after reconnection — reset streaming state
+    console.log(`[ws] Replay starting: ${event.bufferedEvents} events for conv=${targetConvId}`);
+    st.assistantContent = '';
+    st.assistantThinking = '';
+    st.activeTools = [];
+    st.activeAgents = [];
+    st.toolHistory = [];
+    st.agentHistory = [];
+    st.planModeActive = false;
+    st.pendingInteraction = null;
+    st._replaying = true;
+    // Remove persisted messages that were added during the disconnected stream
+    // (they'll be re-added from replay's assistant_message events)
+    if (isStillActive && chatActiveConv) {
+      chatRenderMessages();
+    }
+    return;
+  } else if (event.type === 'replay_end') {
+    st._replaying = false;
+    chatReconnectAttempts.delete(targetConvId);
+    console.log(`[ws] Replay complete for conv=${targetConvId}`);
+    if (isStillActive) {
+      chatUpdateStreamingContent(st.streamingMsgEl, st);
+    }
+    return;
+  } else if (event.type === 'thinking') {
     st.assistantThinking += event.content;
     // Note: do NOT archive active tools here — turn_complete handles that.
     // Archiving on thinking prematurely kills agent spinners and timers.
@@ -2140,7 +2185,10 @@ function chatHandleStreamEvent(targetConvId, event) {
     st.planModeActive = false;
     st.pendingInteraction = savedInteraction;
     if (isStillActive && chatActiveConv) {
-      chatActiveConv.messages.push(event.message);
+      // Avoid duplicate messages during replay
+      if (!chatActiveConv.messages.some(m => m.id === event.message.id)) {
+        chatActiveConv.messages.push(event.message);
+      }
       chatRenderMessages();
       chatUpdateHeader();
     }

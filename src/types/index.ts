@@ -289,7 +289,11 @@ export interface WsAbortFrame {
   type: 'abort';
 }
 
-export type WsClientFrame = WsInputFrame | WsAbortFrame;
+export interface WsReconnectFrame {
+  type: 'reconnect';
+}
+
+export type WsClientFrame = WsInputFrame | WsAbortFrame | WsReconnectFrame;
 
 export interface WsTitleUpdatedFrame {
   type: 'title_updated';
@@ -305,11 +309,22 @@ export interface WsTurnCompleteFrame {
   type: 'turn_complete';
 }
 
+export interface WsReplayStartFrame {
+  type: 'replay_start';
+  bufferedEvents: number;
+}
+
+export interface WsReplayEndFrame {
+  type: 'replay_end';
+}
+
 export type WsServerFrame =
   | StreamEvent
   | WsTitleUpdatedFrame
   | WsAssistantMessageFrame
-  | WsTurnCompleteFrame;
+  | WsTurnCompleteFrame
+  | WsReplayStartFrame
+  | WsReplayEndFrame;
 
 // ── Active Stream ────────────────────────────────────────────────────────────
 

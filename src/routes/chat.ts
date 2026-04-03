@@ -8,6 +8,7 @@ import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
 import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame } from '../types';
+import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
 function param(req: Request, name: string): string {
@@ -208,8 +209,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   const packageJson = require('../../package.json');
 
   const activeStreams = new Map<string, ActiveStreamEntry>();
-  let wsSend: ((convId: string, frame: WsServerFrame) => boolean) | null = null;
-  let wsIsConnected: ((convId: string) => boolean) | null = null;
+  let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer'> | null = null;
 
   // ── Available backends ──────────────────────────────────────────────────────
   router.get('/backends', (_req: Request, res: Response) => {
@@ -543,19 +543,20 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });
 
     // If a WebSocket is connected for this conversation, pipe the stream to it
-    if (wsSend && wsIsConnected && wsIsConnected(convId)) {
+    if (wsFns && wsFns.isConnected(convId)) {
+      wsFns.clearBuffer(convId); // Fresh buffer for the new stream
       processStream(
         convId,
         activeStreams.get(convId)!,
-        (frame) => { wsSend!(convId, frame); },
-        () => !(wsIsConnected && wsIsConnected(convId)),
+        (frame) => { wsFns!.send(convId, frame); },
+        () => !wsFns!.isStreamAlive(convId),
         () => { activeStreams.delete(convId); },
         { chatService },
       ).catch((err) => {
         console.error(`[chat] WS stream error for conv=${convId}:`, err);
-        if (wsSend) {
-          wsSend(convId, { type: 'error', error: (err as Error).message });
-          wsSend(convId, { type: 'done' });
+        if (wsFns) {
+          wsFns.send(convId, { type: 'error', error: (err as Error).message });
+          wsFns.send(convId, { type: 'done' });
         }
         activeStreams.delete(convId);
       });
@@ -746,12 +747,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     if (updateService) updateService.stop();
   }
 
-  function setWsFunctions(
-    sendFn: (convId: string, frame: WsServerFrame) => boolean,
-    isConnectedFn: (convId: string) => boolean,
-  ) {
-    wsSend = sendFn;
-    wsIsConnected = isConnectedFn;
+  function setWsFunctions(fns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer'>) {
+    wsFns = fns;
   }
 
   return { router, shutdown, activeStreams, setWsFunctions };

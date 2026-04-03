@@ -175,7 +175,7 @@ beforeEach(async () => {
     activeStreams,
   });
   wsShutdown = wsResult.shutdown;
-  chatResult.setWsFunctions(wsResult.send, wsResult.isConnected);
+  chatResult.setWsFunctions(wsResult);
 });
 
 afterEach((done) => {
@@ -1640,5 +1640,244 @@ describe('WebSocket streaming', () => {
     expect(msgEvent).toBeDefined();
     expect(msgEvent.message.content).toBe('Saved response');
     expect(msgEvent.message.role).toBe('assistant');
+  });
+});
+
+// ── WebSocket reconnection ─────────────────────────────────────────────────
+
+describe('WebSocket reconnection', () => {
+  test('replays buffered events on reconnect', async () => {
+    const conv = await chatService.createConversation('WS Reconnect');
+
+    // Use a blocking generator so stream stays alive across disconnect/reconnect
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      async function* createStream() {
+        yield { type: 'text', content: 'chunk1', streaming: true } as StreamEvent;
+        yield { type: 'text', content: 'chunk2', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'text', content: 'chunk3', streaming: true } as StreamEvent;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { unblock!(); },
+        sendInput: () => {},
+      };
+    };
+
+    // Connect WS, start stream, receive first two chunks
+    const ws1 = await connectWs(conv.id);
+    const events1: any[] = [];
+    const gotChunk2 = new Promise<void>((resolve) => {
+      ws1.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        events1.push(event);
+        if (event.type === 'text' && event.content === 'chunk2') resolve();
+      });
+    });
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test reconnect',
+      backend: 'claude-code',
+    });
+
+    await gotChunk2;
+    expect(events1.filter(e => e.type === 'text')).toHaveLength(2);
+
+    // Disconnect WS (simulate network drop)
+    ws1.close();
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // CLI should still be alive (grace period)
+    expect(activeStreams.has(conv.id)).toBe(true);
+
+    // Reconnect — set up message listener BEFORE open so we don't miss replay
+    const port = (server.address() as any).port;
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${conv.id}/ws`);
+    const allEvents: any[] = [];
+    const gotDone = new Promise<void>((resolve) => {
+      ws2.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        allEvents.push(event);
+        if (event.type === 'done') resolve();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws2.on('open', () => resolve());
+      ws2.on('error', reject);
+    });
+
+    // Unblock stream so it can finish
+    unblock!();
+    await gotDone;
+
+    // Should have: replay_start, chunk1, chunk2, replay_end, chunk3, assistant_message, done
+    expect(allEvents[0].type).toBe('replay_start');
+    expect(allEvents[0].bufferedEvents).toBe(2);
+    const replayEnd = allEvents.find(e => e.type === 'replay_end');
+    expect(replayEnd).toBeDefined();
+    const replayEndIdx = allEvents.indexOf(replayEnd);
+    // Replayed texts come between replay_start and replay_end
+    const replayedTexts = allEvents.slice(1, replayEndIdx).filter(e => e.type === 'text');
+    expect(replayedTexts).toHaveLength(2);
+    expect(replayedTexts[0].content).toBe('chunk1');
+    expect(replayedTexts[1].content).toBe('chunk2');
+    // Live events come after replay_end
+    const liveEvents = allEvents.slice(replayEndIdx + 1);
+    const liveText = liveEvents.find(e => e.type === 'text' && e.content === 'chunk3');
+    expect(liveText).toBeDefined();
+    const doneEvent = liveEvents.find(e => e.type === 'done');
+    expect(doneEvent).toBeDefined();
+
+    ws2.close();
+  });
+
+  test('CLI survives WS disconnect during grace period', async () => {
+    const conv = await chatService.createConversation('WS Grace');
+
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      async function* createStream() {
+        yield { type: 'text', content: 'alive', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { unblock!(); },
+        sendInput: () => {},
+      };
+    };
+
+    const ws = await connectWs(conv.id);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test grace',
+      backend: 'claude-code',
+    });
+
+    // Wait for stream to start
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(activeStreams.has(conv.id)).toBe(true);
+
+    // Disconnect — stream should survive
+    ws.close();
+    await new Promise(resolve => setTimeout(resolve, 200));
+    expect(activeStreams.has(conv.id)).toBe(true);
+
+    // Cleanup
+    unblock!();
+    await new Promise(resolve => setTimeout(resolve, 100));
+  });
+
+  test('CLI crash during disconnect buffers error for replay', async () => {
+    const conv = await chatService.createConversation('WS Crash');
+
+    let triggerError: () => void;
+    const errorPromise = new Promise<void>(r => { triggerError = r; });
+    mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      async function* createStream() {
+        yield { type: 'text', content: 'partial', streaming: true } as StreamEvent;
+        await errorPromise;
+        throw new Error('CLI crashed');
+      }
+      return {
+        stream: createStream(),
+        abort: () => { triggerError!(); },
+        sendInput: () => {},
+      };
+    };
+
+    const ws1 = await connectWs(conv.id);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test crash',
+      backend: 'claude-code',
+    });
+
+    // Wait for first event
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Disconnect
+    ws1.close();
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Trigger CLI crash while disconnected
+    triggerError!();
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Reconnect — set up listener before open to catch replay
+    const port = (server.address() as any).port;
+    const ws2 = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${conv.id}/ws`);
+    const events: any[] = [];
+    const gotReplayEnd = new Promise<void>((resolve) => {
+      ws2.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        events.push(event);
+        if (event.type === 'replay_end') resolve();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws2.on('open', () => resolve());
+      ws2.on('error', reject);
+    });
+    await gotReplayEnd;
+
+    expect(events[0].type).toBe('replay_start');
+    const errorEvent = events.find(e => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent.error).toBe('CLI crashed');
+    const doneEvent = events.find(e => e.type === 'done');
+    expect(doneEvent).toBeDefined();
+
+    ws2.close();
+  });
+
+  test('abort via WS clears buffer', async () => {
+    const conv = await chatService.createConversation('WS Abort Buffer');
+
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    let aborted = false;
+    mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      async function* createStream() {
+        yield { type: 'text', content: 'work', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { aborted = true; unblock!(); },
+        sendInput: () => {},
+      };
+    };
+
+    const ws = await connectWs(conv.id);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test abort buffer',
+      backend: 'claude-code',
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Abort via WS — should clear buffer and stream
+    ws.send(JSON.stringify({ type: 'abort' }));
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(aborted).toBe(true);
+    expect(activeStreams.has(conv.id)).toBe(false);
+
+    ws.close();
   });
 });

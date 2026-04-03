@@ -104,18 +104,18 @@ chatService.initialize().then(async () => {
   });
 
   // Attach WebSocket server for bidirectional streaming
-  const { shutdown: wsShutdown, send: wsSend, isConnected: wsIsConnected } = attachWebSocket(server, {
+  const wsFns = attachWebSocket(server, {
     sessionStore,
     sessionSecret: config.SESSION_SECRET,
     activeStreams,
   });
-  setWsFunctions(wsSend, wsIsConnected);
+  setWsFunctions(wsFns);
 
   function shutdown(signal: string) {
     console.log(`\n[shutdown] Received ${signal}, shutting down gracefully...`);
 
     chatShutdown();
-    wsShutdown();
+    wsFns.shutdown();
 
     server.close(() => {
       console.log('[shutdown] HTTP server closed');

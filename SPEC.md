@@ -247,9 +247,9 @@ ws(s)://host/api/chat/conversations/:id/ws
 - Server authenticates on HTTP upgrade: session cookie parsed and verified against the file-based session store; local requests bypass auth
 - Origin validation replaces CSRF for WebSocket connections
 - Keepalive: server pings every 30s (under Cloudflare Tunnel's 100s idle timeout)
-- On client disconnect: aborts CLI process, removes from activeStreams
-- Client-to-server frames (JSON): `{ type: 'input', text }` (stdin), `{ type: 'abort' }` (kill process)
-- Server-to-client frames (JSON): same event types listed below
+- **Reconnection with state recovery:** On client disconnect, the CLI process is NOT killed. Instead, a 60-second grace period starts. Events continue to be buffered server-side (ring buffer, max 1000 events). If the client reconnects within the grace period, the server replays all buffered events wrapped in `replay_start`/`replay_end` frames, then resumes live streaming. If the grace period expires without reconnection, the CLI is aborted and the buffer is discarded. If the CLI completes during the disconnect, events (including `done`) are buffered and replayed on reconnect; a cleanup timer (60s) eventually discards the buffer if no reconnect occurs.
+- Client-to-server frames (JSON): `{ type: 'input', text }` (stdin), `{ type: 'abort' }` (kill process), `{ type: 'reconnect' }` (explicit replay request)
+- Server-to-client frames (JSON): same event types listed below, plus `{ type: 'replay_start', bufferedEvents }` and `{ type: 'replay_end' }` for reconnection replay
 
 **Stream response (SSE — fallback):**
 ```
@@ -282,6 +282,8 @@ SSE:       data: {"type":"<type>", ...fields}\n\n
 | `usage` | `usage` | Cumulative token/cost totals for the conversation (sent after each CLI result event) |
 | `error` | `error` | Error message string |
 | `done` | — | Stream complete |
+| `replay_start` | `bufferedEvents` | Reconnection: replay of buffered events is starting |
+| `replay_end` | — | Reconnection: replay complete, live events resume |
 
 **Enriched `tool_activity` fields** (set by `extractToolDetails()` — see Section 4 for per-tool mapping):
 
@@ -309,7 +311,7 @@ SSE:       data: {"type":"<type>", ...fields}\n\n
 - WebSocket: client sends `{ type: 'input', text: string }` frame
 - HTTP fallback: `POST /conversations/:id/input  [CSRF]` with body `{ text: string }` — returns `{ ok: true }` or `{ ok: false }`
 
-**Active streams management:** The router maintains an in-memory `Map<conversationId, { stream, abort, sendInput, backend }>`. Only one active CLI process per conversation. Streaming blocks session reset (`409`) and self-update. The WebSocket module (`src/ws.ts`) maintains a parallel `Map<conversationId, WebSocket>` for active connections.
+**Active streams management:** The router maintains an in-memory `Map<conversationId, { stream, abort, sendInput, backend }>`. Only one active CLI process per conversation. Streaming blocks session reset (`409`) and self-update. The WebSocket module (`src/ws.ts`) maintains a parallel `Map<conversationId, WebSocket>` for active connections and a `Map<conversationId, ConvBuffer>` for reconnection event buffers. The buffer is cleared before each new stream starts (via `clearBuffer()`). The `isStreamAlive()` function returns `true` if a WS is connected OR the grace period is active, ensuring `processStream` keeps running through brief disconnects.
 
 **CLI session lifecycle:**
 1. New conversation → session initialized with UUID
@@ -578,8 +580,8 @@ Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes 
 15. Call `chatService.initialize()` (migration + lookup map)
 16. Start UpdateService (version polling)
 17. Listen on configured PORT
-18. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams })` — handles `upgrade` events on the HTTP server
-19. Wire WebSocket `send`/`isConnected` functions into the chat router via `setWsFunctions()`
+18. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`
+19. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
 
 ### Graceful Shutdown
 
@@ -670,6 +672,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 - `chatSendMessage()` gathers completed file paths from pending uploads, appends `[Uploaded files: ...]` to content, opens WebSocket, POSTs message, receives stream events via WS
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API)
 - **Streaming state persistence:** `chatStreamingState` Map stores per-conversation state (accumulated text, thinking, tools, agents, tool/agent history, pending interactions). State survives conversation switches — on return, the streaming bubble is recreated and restored.
+- **WebSocket auto-reconnect:** On unexpected WS close during streaming, the client automatically attempts reconnection with exponential backoff (1s base, up to 5 attempts). On reconnect, the server replays buffered events wrapped in `replay_start`/`replay_end`. The client resets streaming state on `replay_start` (clears accumulated text/thinking/tools) and reprocesses replayed events from scratch. `assistant_message` events are deduplicated by message ID. After max attempts exhausted, `_doneResolve` is called to clean up. `chatDisconnectWs()` clears reconnect attempts to prevent auto-reconnect on deliberate close.
 - **Elapsed timer:** live timer in streaming bubble header, self-cleans on DOM disconnect
 - **Unified streaming content:** A single `chatUpdateStreamingContent()` function renders all streaming state (thinking, text, tool history, active tools, agents, plan mode) together in one stacked view. Text content and tool activity accumulate and remain visible simultaneously — new progress updates stack below previous content rather than replacing it. Items are grouped by agent via `chatGroupItemsByAgent()`: standalone tools render flat, while each agent card is followed by a scrollable sub-activity panel showing its child tools. Completed items show checkmarks and elapsed durations; running agents show animated spinners with live timers that count up in real-time.
 - **Tool activity on completed messages:** When a message has a `toolActivity` array, `chatRenderToolActivityBlock()` renders a collapsible `<details>/<summary>` block (same pattern as thinking blocks) with a summary line (e.g. "15 ops · 2 agents · 5 read, 2 edited") generated by `chatBuildActivitySummary()`. Collapsed by default; expands to show the full chronological tool/agent list. Agent entries render as agent cards, tool entries as history items.
@@ -817,7 +820,7 @@ Update OAuth callback URLs to include the ngrok URL.
 | File | Focus |
 |------|-------|
 | `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage |
-| `test/chat.test.ts` | Chat routes: /input, SSE forwarding, WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
+| `test/chat.test.ts` | Chat routes: /input, SSE forwarding, WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
 | `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, usage tracking (addUsage, getUsage), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state |
