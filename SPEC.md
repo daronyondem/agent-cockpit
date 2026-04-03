@@ -673,7 +673,8 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 - **Auto title update:** handles `title_updated` SSE event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
 - **Usage display:** a small indicator in the conversation header shows cumulative token count and USD cost. Updated in real-time when `usage` SSE events arrive during streaming. Displays on hover a tooltip with input/output/cache token breakdown and cost. Hidden when no usage data exists (e.g. new conversation).
 - **Stream cleanup:** `chatCleanupStreamState()` accepts `{ force }` option. The `finally` block uses `force: true` to ensure cleanup even when a pending interaction was never resolved. Interaction response handlers also use forced cleanup when the stream has already ended.
-- **Send button state:** shows stop (■) when streaming, send (↑) when idle. Disabled during uploads or session resets.
+- **Send button state:** shows stop (■) when streaming with no text input, send (↑) when idle or when streaming with text input (to queue). Disabled during uploads or session resets.
+- **Message queue:** Users can compose and submit messages while the CLI is actively responding. Queued messages are stored client-side in `chatMessageQueue` (Map of convId → array of `{ id, content, inFlight }`). They appear inline in the chat after the streaming bubble, styled as user messages with reduced opacity and an accent left border. Each queued message shows a "Queued" badge and has Edit and Delete buttons. Editing is inline via a textarea replacing the message content. In-flight messages (being dispatched to the CLI) show "Sending..." and cannot be edited or deleted. When a response completes successfully, the next queued message is automatically sent (FIFO). On error, the queue pauses and a banner appears with Resume and Clear buttons. The `chatQueuePaused` Set tracks paused conversations. Queuing a new message while paused un-pauses the queue. Queue state is per-conversation and purely client-side (not persisted to disk).
 
 ### File Handling
 
@@ -806,6 +807,7 @@ Update OAuth callback URLs to include the ngrok URL.
 | `test/chat.test.ts` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
 | `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, usage tracking (addUsage, getUsage), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
+| `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |
 | `test/sessionStore.test.ts` | Session file-store persistence |
 | `test/updateService.test.ts` | Version comparison, status, trigger guards, interval management |
