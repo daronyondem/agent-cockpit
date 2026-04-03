@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-**Agent Cockpit** is a web-based chat interface for interacting with the Claude Code CLI. It runs on the same machine as the CLI tools. The server spawns local `claude` CLI processes, streams responses back to the browser via WebSocket (with SSE as fallback), and stores conversations in workspace-scoped JSON files on disk.
+**Agent Cockpit** is a web-based chat interface for interacting with the Claude Code CLI. It runs on the same machine as the CLI tools. The server spawns local `claude` CLI processes, streams responses back to the browser via WebSocket, and stores conversations in workspace-scoped JSON files on disk.
 
 ### Core Use Case
 
@@ -59,7 +59,8 @@ agent-cockpit/
     │   │       ├── session-1.json      # Archived session
     │   │       └── session-N.json      # Active session (updated every message)
     │   ├── artifacts/{convId}/         # Per-conversation uploaded files
-    │   └── settings.json               # User settings
+    │   ├── settings.json               # User settings
+    │   └── usage-ledger.json           # Daily per-backend token usage ledger
     └── sessions/                       # Express session JSON files (24h TTL)
 ```
 
@@ -87,6 +88,9 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
       cacheWriteTokens: number,
       costUsd: number
     }|null,
+    usageByBackend: {            // Per-backend usage breakdown (keyed by backend id)
+      [backendId]: Usage
+    }|null,
     sessions: [{
       number: number,           // 1-based session number
       sessionId: string,        // UUID passed to CLI
@@ -95,7 +99,8 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
       messageCount: number,
       startedAt: string,        // ISO 8601
       endedAt: string|null,     // ISO 8601 (null for active session)
-      usage: Usage|null         // Per-session token/cost totals (same shape as conversation usage)
+      usage: Usage|null,        // Per-session token/cost totals (same shape as conversation usage)
+      usageByBackend: { [backendId]: Usage }|null  // Per-backend usage for this session
     }]
   }]
 }
@@ -150,7 +155,25 @@ Flat object assembled from workspace index + active session file:
   currentSessionId: string,
   sessionNumber: number,        // Active session number
   messages: Message[],          // Active session messages
-  usage: Usage                  // Cumulative token/cost totals (zeroed if no usage yet)
+  usage: Usage,                 // Cumulative token/cost totals (zeroed if no usage yet)
+  sessionUsage: Usage           // Active session token/cost totals (zeroed if no usage yet)
+}
+```
+
+### Usage Ledger (`data/chat/usage-ledger.json`)
+
+Daily per-backend/model token usage records for global statistics:
+
+```javascript
+{
+  days: [{
+    date: string,               // YYYY-MM-DD
+    records: [{
+      backend: string,          // Backend ID (e.g. 'claude-code')
+      model: string,            // Model ID (e.g. 'claude-sonnet-4-20250514') or 'unknown'
+      usage: Usage              // Accumulated usage for this backend+model on this day
+    }]
+  }]
 }
 ```
 
@@ -251,19 +274,9 @@ ws(s)://host/api/chat/conversations/:id/ws
 - Client-to-server frames (JSON): `{ type: 'input', text }` (stdin), `{ type: 'abort' }` (kill process), `{ type: 'reconnect' }` (explicit replay request)
 - Server-to-client frames (JSON): same event types listed below, plus `{ type: 'replay_start', bufferedEvents }` and `{ type: 'replay_end' }` for reconnection replay
 
-**Stream response (SSE — fallback):**
+**Stream event format (WebSocket):**
 ```
-GET /conversations/:id/stream
-```
-- SSE headers, no socket timeout, keepalive every 5s
-- On client disconnect: aborts CLI process, removes from activeStreams
-- `404` if no active stream
-- Used when WebSocket is unavailable
-
-**Stream event format (both WebSocket and SSE):**
-```
-WebSocket: {"type":"<type>", ...fields}
-SSE:       data: {"type":"<type>", ...fields}\n\n
+{"type":"<type>", ...fields}
 ```
 
 **Stream event types:**
@@ -279,7 +292,7 @@ SSE:       data: {"type":"<type>", ...fields}\n\n
 | `result` | `content` | Final result text from CLI |
 | `assistant_message` | `message` | Saved assistant message (intermediate or final) |
 | `title_updated` | `title` | Conversation title was auto-updated (sent after first assistant message in a reset session) |
-| `usage` | `usage` | Cumulative token/cost totals for the conversation (sent after each CLI result event) |
+| `usage` | `usage`, `sessionUsage` | Cumulative token/cost totals for conversation (`usage`) and active session (`sessionUsage`), sent after each CLI result event |
 | `error` | `error` | Error message string |
 | `done` | — | Stream complete |
 | `replay_start` | `bufferedEvents` | Reconnection: replay of buffered events is starting |
@@ -301,15 +314,13 @@ SSE:       data: {"type":"<type>", ...fields}\n\n
 
 **Auto title update:** When a new session starts after a reset (session number > 1) and the first assistant message is saved, the server asynchronously generates a new conversation title via `generateTitle()` on the backend adapter. A `title_updated` event is sent with the new title. The title update fires only once per session (on the first assistant message) and does not block the stream.
 
-**Usage tracking:** Backend adapters can yield `{ type: 'usage', usage: {...} }` events. The Claude Code adapter extracts usage data (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `cost_usd`) from CLI `result` events and normalises the field names to camelCase. The server accumulates usage on both the conversation and active session in the workspace index via `chatService.addUsage()`, then forwards a `usage` event containing the updated cumulative totals. The frontend displays total tokens and cost in the conversation header. Backends that do not emit usage events simply leave the counters at zero.
+**Usage tracking:** Backend adapters can yield `{ type: 'usage', usage: {...}, model?: string }` events. The Claude Code adapter extracts usage data (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `cost_usd`) from CLI `result` events and normalises the field names to camelCase. The model is captured from the CLI's `system/init` event (`model` field) and attached to usage events. The server accumulates usage on both the conversation and active session in the workspace index via `chatService.addUsage()`, tracks per-backend breakdowns in `usageByBackend`, and records daily per-backend/model totals to `usage-ledger.json`. The forwarded `usage` event contains both conversation-level `usage` and `sessionUsage` for the active session. The frontend displays session tokens and cost in the header badge, with conversation totals in the tooltip. A Usage Stats tab in Settings shows per-backend/model historical data with day/week/month/all-time filtering, including separate Backend and Model columns. Backends that do not emit usage events simply leave the counters at zero.
 
 **Abort streaming:**
 - WebSocket: client sends `{ type: 'abort' }` frame
-- HTTP fallback: `POST /conversations/:id/abort  [CSRF]` — returns `{ ok: true }` or `{ ok: false, message: 'No active stream' }`
 
 **Send interactive input:**
 - WebSocket: client sends `{ type: 'input', text: string }` frame
-- HTTP fallback: `POST /conversations/:id/input  [CSRF]` with body `{ text: string }` — returns `{ ok: true }` or `{ ok: false }`
 
 **Active streams management:** The router maintains an in-memory `Map<conversationId, { stream, abort, sendInput, backend }>`. Only one active CLI process per conversation. Streaming blocks session reset (`409`) and self-update. The WebSocket module (`src/ws.ts`) maintains a parallel `Map<conversationId, WebSocket>` for active connections and a `Map<conversationId, ConvBuffer>` for reconnection event buffers. The buffer is cleared before each new stream starts (via `clearBuffer()`). The `isStreamAlive()` function returns `true` if a WS is connected OR the grace period is active, ensuring `processStream` keeps running through brief disconnects.
 
@@ -346,7 +357,14 @@ Serves file via `res.sendFile()`. Path traversal guard. No CSRF (used by `<img>`
 | GET | `/settings` | — | Returns settings (defaults if file missing). |
 | PUT | `/settings` | Yes | Writes full body to `settings.json`. |
 
-### 3.9 Workspace Instructions
+### 3.9 Usage Statistics
+
+| Method | Path | CSRF | Description |
+|--------|------|------|-------------|
+| GET | `/usage-stats` | — | Returns the usage ledger (`{ days: [...] }`). |
+| DELETE | `/usage-stats` | Yes | Clears all usage statistics (resets ledger to empty). |
+
+### 3.10 Workspace Instructions
 
 Per-workspace instructions appended to the global system prompt on new sessions. Stored in workspace `index.json` under `instructions`.
 
@@ -684,10 +702,10 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 - **Turn boundaries:** intermediate assistant messages saved, content reset. `turn_complete` event archives active tools/agents to history so spinners stop. On `assistant_message`, tool/agent history is cleared after archiving — the saved message's `toolActivity` now owns those entries, preventing duplicates when the next turn adds new agents to the streaming bubble. Agents are only archived when they have received their `tool_outcomes` (outcome/status set) — sub-tool `turn_complete` events within an agent do NOT prematurely archive the parent agent. This ensures agents show spinners and live timers throughout their full execution.
 - **Post-completion processing indicator:** When all tools/agents have completed but the model is still working (no text content yet), a "Processing..." indicator with typing dots is shown below the completed activity log. This fills the gap between agent completion and text output, so users always see ongoing work.
 - **Thinking events:** do NOT archive active tool/agent state — `turn_complete` handles archiving. This prevents premature archiving that would kill agent spinners and timers.
-- **Plan approval:** renders plan as markdown with approve/reject buttons → sends `{ type: 'input', text: 'yes'|'no' }` via WebSocket (HTTP fallback to `/input`)
-- **User questions:** renders question text + option buttons → sends answer via WebSocket `input` frame (HTTP fallback to `/input`)
+- **Plan approval:** renders plan as markdown with approve/reject buttons → sends `{ type: 'input', text: 'yes'|'no' }` via WebSocket
+- **User questions:** renders question text + option buttons → sends answer via WebSocket `input` frame
 - **Auto title update:** handles `title_updated` event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
-- **Usage display:** a small indicator in the conversation header shows cumulative token count and USD cost. Updated in real-time when `usage` events arrive during streaming. Displays on hover a tooltip with input/output/cache token breakdown and cost. Hidden when no usage data exists (e.g. new conversation).
+- **Usage display:** a small indicator in the conversation header shows **session-level** token count and USD cost. Updated in real-time when `usage` events arrive during streaming. Displays on hover a tooltip with session input/output/cache token breakdown and cost, plus conversation-level totals. Hidden when no usage data exists (e.g. new conversation).
 - **Stream cleanup:** `chatCleanupStreamState()` accepts `{ force }` option. The `finally` block uses `force: true` to ensure cleanup even when a pending interaction was never resolved. Interaction response handlers also use forced cleanup when the stream has already ended.
 - **Send button state:** shows stop (■) when streaming with no text input, send (↑) when idle or when streaming with text input (to queue). Disabled during uploads or session resets.
 - **Message queue:** Users can compose and submit messages while the CLI is actively responding. Queued messages are stored client-side in `chatMessageQueue` (Map of convId → array of `{ id, content, inFlight }`). They appear inline in the chat after the streaming bubble, styled as user messages with reduced opacity and an accent left border. Each queued message shows a "Queued" badge and has Edit and Delete buttons. Editing is inline via a textarea replacing the message content. In-flight messages (being dispatched to the CLI) show "Sending..." and cannot be edited or deleted. When a response completes successfully, the next queued message is automatically sent (FIFO). On error, the queue pauses and a banner appears with Resume and Clear buttons. The `chatQueuePaused` Set tracks paused conversations. Queuing a new message while paused un-pauses the queue. Queue state is per-conversation and purely client-side (not persisted to disk).
@@ -718,11 +736,21 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 
 ### Settings Modal
 
+Tabbed layout with two tabs:
+
+**General tab:**
 - Theme: System / Light / Dark
 - Send behavior: Enter or Shift+Enter
 - System prompt textarea (global)
 - Default backend selector
 - Working directory
+
+**Usage Stats tab:**
+- Time range filter: Today / This Week / This Month / All Time
+- Per-backend usage table: input, output, cache read, cache write, total tokens, and cost
+- Daily breakdown table (when multiple days selected): date, backend, tokens, cost
+- "Clear All Data" button: clears the usage ledger (requires confirmation)
+- Data loaded from `GET /usage-stats` endpoint
 
 ### Workspace Instructions Modal
 
@@ -820,8 +848,8 @@ Update OAuth callback URLs to include the ngrok URL.
 | File | Focus |
 |------|-------|
 | `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage |
-| `test/chat.test.ts` | Chat routes: /input, SSE forwarding, WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
-| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, usage tracking (addUsage, getUsage), workspace storage, migration, markdown export |
+| `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions |
+| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |

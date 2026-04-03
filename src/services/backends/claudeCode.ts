@@ -368,6 +368,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       let stderrOutput = '';
       const toolNameById: Record<string, string> = {};
       let lastProgressAgentId: string | null = null;
+      let detectedModel: string | null = null;
 
       proc.stdout!.on('data', (chunk: Buffer) => {
         const raw = chunk.toString();
@@ -389,6 +390,10 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
               console.log(`[claudeCode] parsed event type=assistant blocks=[${blocks}]`);
             } else {
               console.log(`[claudeCode] parsed event type=${event.type}`, event.type === 'content_block_delta' ? `delta.type=${event.delta?.type}` : '');
+            }
+
+            if (event.type === 'system' && event.subtype === 'init' && event.model) {
+              detectedModel = event.model;
             }
 
             if (event.type === 'system' && event.subtype) {
@@ -475,6 +480,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
               }
               const usageEvent = extractUsage(event as { usage?: Record<string, number>; cost_usd?: number });
               if (usageEvent) {
+                if (detectedModel) usageEvent.model = detectedModel;
                 textQueue.push(usageEvent);
               }
             }
@@ -511,6 +517,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
               }
               const usageEvent = extractUsage(event as { usage?: Record<string, number>; cost_usd?: number });
               if (usageEvent) {
+                if (detectedModel) usageEvent.model = detectedModel;
                 textQueue.push(usageEvent);
               }
             }

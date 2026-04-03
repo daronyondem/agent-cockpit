@@ -151,9 +151,9 @@ export async function processStream(
       } else if (event.type === 'result') {
         resultText = event.content;
       } else if (event.type === 'usage') {
-        const updated = await chatService.addUsage(convId, event.usage);
+        const updated = await chatService.addUsage(convId, event.usage, backend, event.model);
         if (!isClosed()) {
-          emit({ type: 'usage', usage: updated || event.usage });
+          emit({ type: 'usage', usage: updated?.conversationUsage || event.usage, sessionUsage: updated?.sessionUsage });
         }
       } else if (event.type === 'error') {
         console.error(`[chat] Stream error for conv=${convId}:`, event.error);
@@ -569,79 +569,6 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     res.json({ userMessage: userMsg, streamReady: true });
   });
 
-  // ── SSE stream (fallback) ───────────────────────────────────────────────────
-  router.get('/conversations/:id/stream', (req: Request, res: Response) => {
-    const convId = param(req, 'id');
-    const entry = activeStreams.get(convId);
-
-    if (!entry) {
-      res.status(404).json({ error: 'No active stream' });
-      return;
-    }
-
-    res.socket!.setTimeout(0);
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-
-    const keepalive = setInterval(() => {
-      if (!res.writableEnded) res.write(': keepalive\n\n');
-    }, 5000);
-
-    req.on('close', () => {
-      console.log(`[chat] SSE client disconnected for conv=${convId}`);
-      clearInterval(keepalive);
-      const e = activeStreams.get(convId);
-      if (e) {
-        e.abort();
-        activeStreams.delete(convId);
-      }
-    });
-
-    processStream(
-      convId,
-      entry,
-      (frame) => {
-        if (!res.writableEnded) res.write(`data: ${JSON.stringify(frame)}\n\n`);
-      },
-      () => res.writableEnded,
-      () => { /* cleanup handled in finally below */ },
-      { chatService },
-    ).finally(() => {
-      clearInterval(keepalive);
-      activeStreams.delete(convId);
-      if (!res.writableEnded) res.end();
-    });
-  });
-
-  // ── Abort streaming ────────────────────────────────────────────────────────
-  router.post('/conversations/:id/abort', csrfGuard, (req: Request, res: Response) => {
-    const entry = activeStreams.get(param(req, 'id'));
-    if (entry) {
-      entry.abort();
-      activeStreams.delete(param(req, 'id'));
-      res.json({ ok: true });
-    } else {
-      res.json({ ok: false, message: 'No active stream' });
-    }
-  });
-
-  // ── Send input to CLI stdin ─────────────────────────────────────────────────
-  router.post('/conversations/:id/input', csrfGuard, (req: Request, res: Response) => {
-    const entry = activeStreams.get(param(req, 'id'));
-    if (entry && entry.sendInput) {
-      const text = (req.body.text || '').toString();
-      console.log(`[chat] Sending stdin input for conv=${param(req, 'id')}: ${text.substring(0, 100)}`);
-      entry.sendInput(text);
-      res.json({ ok: true });
-    } else {
-      res.json({ ok: false, message: 'No active stream' });
-    }
-  });
-
   // ── File upload ─────────────────────────────────────────────────────────────
   const upload = multer({
     storage: multer.diskStorage({
@@ -718,6 +645,25 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       const result = await chatService.setWorkspaceInstructions(param(req, 'hash'), instructions);
       if (result === null) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ instructions: result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Usage Stats ────────────────────────────────────────────────────────────
+  router.get('/usage-stats', async (_req: Request, res: Response) => {
+    try {
+      const ledger = await chatService.getUsageStats();
+      res.json(ledger);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.delete('/usage-stats', csrfGuard, async (_req: Request, res: Response) => {
+    try {
+      await chatService.clearUsageStats();
+      res.json({ ok: true });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

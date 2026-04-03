@@ -1143,8 +1143,12 @@ function chatFormatCost(usd) {
 
 function chatUpdateUsageDisplay() {
   let el = document.getElementById('chat-header-usage');
-  const usage = chatActiveConv?.usage;
-  const hasUsage = usage && (usage.inputTokens > 0 || usage.outputTokens > 0 || usage.costUsd > 0);
+  const convUsage = chatActiveConv?.usage;
+  const sessUsage = chatActiveConv?.sessionUsage;
+
+  // Show badge if either session or conversation has usage
+  const hasUsage = (sessUsage && (sessUsage.inputTokens > 0 || sessUsage.outputTokens > 0 || sessUsage.costUsd > 0))
+    || (convUsage && (convUsage.inputTokens > 0 || convUsage.outputTokens > 0 || convUsage.costUsd > 0));
 
   if (!hasUsage) {
     if (el) el.style.display = 'none';
@@ -1160,24 +1164,38 @@ function chatUpdateUsageDisplay() {
     actions.parentElement.insertBefore(el, actions);
   }
 
-  const totalTokens = (usage.inputTokens || 0) + (usage.outputTokens || 0);
-  const cacheTokens = (usage.cacheReadTokens || 0) + (usage.cacheWriteTokens || 0);
+  // Badge shows session usage (current work)
+  const displayUsage = sessUsage || convUsage;
+  const sessionTokens = (displayUsage.inputTokens || 0) + (displayUsage.outputTokens || 0);
 
-  let tooltipLines = [
-    `Input: ${chatFormatTokenCount(usage.inputTokens)} tokens`,
-    `Output: ${chatFormatTokenCount(usage.outputTokens)} tokens`,
-  ];
-  if (cacheTokens > 0) {
-    tooltipLines.push(`Cache read: ${chatFormatTokenCount(usage.cacheReadTokens)}`);
-    tooltipLines.push(`Cache write: ${chatFormatTokenCount(usage.cacheWriteTokens)}`);
+  // Tooltip shows session breakdown + conversation totals
+  let tooltipLines = ['── Session ──'];
+  tooltipLines.push(`Input: ${chatFormatTokenCount(displayUsage.inputTokens)} tokens`);
+  tooltipLines.push(`Output: ${chatFormatTokenCount(displayUsage.outputTokens)} tokens`);
+  const sessCacheTokens = (displayUsage.cacheReadTokens || 0) + (displayUsage.cacheWriteTokens || 0);
+  if (sessCacheTokens > 0) {
+    tooltipLines.push(`Cache read: ${chatFormatTokenCount(displayUsage.cacheReadTokens)}`);
+    tooltipLines.push(`Cache write: ${chatFormatTokenCount(displayUsage.cacheWriteTokens)}`);
   }
-  if (usage.costUsd > 0) {
-    tooltipLines.push(`Cost: ${chatFormatCost(usage.costUsd)}`);
+  if (displayUsage.costUsd > 0) {
+    tooltipLines.push(`Cost: ${chatFormatCost(displayUsage.costUsd)}`);
+  }
+
+  if (convUsage && convUsage !== displayUsage) {
+    const convTotal = (convUsage.inputTokens || 0) + (convUsage.outputTokens || 0);
+    if (convTotal > 0) {
+      tooltipLines.push('');
+      tooltipLines.push('── Conversation ──');
+      tooltipLines.push(`Total: ${chatFormatTokenCount(convTotal)} tokens`);
+      if (convUsage.costUsd > 0) {
+        tooltipLines.push(`Cost: ${chatFormatCost(convUsage.costUsd)}`);
+      }
+    }
   }
 
   el.title = tooltipLines.join('\n');
-  el.innerHTML = `<span class="chat-usage-tokens">${chatFormatTokenCount(totalTokens)} tokens</span>`
-    + (usage.costUsd > 0 ? `<span class="chat-usage-cost">${chatFormatCost(usage.costUsd)}</span>` : '');
+  el.innerHTML = `<span class="chat-usage-tokens">${chatFormatTokenCount(sessionTokens)} tokens</span>`
+    + (displayUsage.costUsd > 0 ? `<span class="chat-usage-cost">${chatFormatCost(displayUsage.costUsd)}</span>` : '');
   el.style.display = '';
 }
 
@@ -2211,6 +2229,7 @@ function chatHandleStreamEvent(targetConvId, event) {
     // Update usage on active conversation
     if (isStillActive && chatActiveConv) {
       chatActiveConv.usage = event.usage;
+      if (event.sessionUsage) chatActiveConv.sessionUsage = event.sessionUsage;
       chatUpdateUsageDisplay();
     }
   } else if (event.type === 'error') {
@@ -2533,15 +2552,7 @@ function chatShowPlanApproval(msgEl, convId, planContent) {
       const action = btn.dataset.action;
       const text = action === 'approve' ? 'yes' : 'no';
       try {
-        if (!chatWsSend(convId, { type: 'input', text })) {
-          // Fallback to HTTP if WS not available
-          await fetch(chatApiUrl(`conversations/${convId}/input`), {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken || '' },
-            credentials: 'same-origin',
-            body: JSON.stringify({ text }),
-          });
-        }
+        chatWsSend(convId, { type: 'input', text });
         const approvalState = chatStreamingState.get(convId);
         if (approvalState) {
           approvalState.pendingInteraction = null;
@@ -2610,15 +2621,7 @@ function chatShowUserQuestion(msgEl, convId, event) {
     if (!text) return;
     submitBtn.disabled = true;
     try {
-      if (!chatWsSend(convId, { type: 'input', text })) {
-        // Fallback to HTTP if WS not available
-        await fetch(chatApiUrl(`conversations/${convId}/input`), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken || '' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ text }),
-        });
-      }
+      chatWsSend(convId, { type: 'input', text });
       const questionState = chatStreamingState.get(convId);
       if (questionState) {
         questionState.pendingInteraction = null;
@@ -2682,12 +2685,7 @@ function chatAppendError(errorMsg) {
 
 async function chatStopStreaming() {
   if (!chatActiveConvId) return;
-  // Try WebSocket first, fall back to HTTP
-  if (!chatWsSend(chatActiveConvId, { type: 'abort' })) {
-    try {
-      await chatFetch(`conversations/${chatActiveConvId}/abort`, { method: 'POST', body: {} });
-    } catch {}
-  }
+  chatWsSend(chatActiveConvId, { type: 'abort' });
 }
 
 
@@ -2914,7 +2912,7 @@ async function chatDownloadConversation() {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
-async function chatShowSettings() {
+async function chatShowSettings(initialTab) {
   try {
     const res = await chatFetch('settings');
     chatSettingsData = await res.json();
@@ -2924,38 +2922,79 @@ async function chatShowSettings() {
 
   const s = chatSettingsData;
   const html = `
+    <div class="chat-settings-tabs">
+      <button class="chat-settings-tab active" data-tab="general">General</button>
+      <button class="chat-settings-tab" data-tab="usage">Usage Stats</button>
+    </div>
     <div class="chat-modal-body">
-      <div class="chat-settings-group">
-        <div class="chat-settings-label">Theme</div>
-        <select class="chat-settings-select" id="chat-settings-theme">
-          <option value="light"${s.theme === 'light' ? ' selected' : ''}>Light</option>
-          <option value="dark"${s.theme === 'dark' ? ' selected' : ''}>Dark</option>
-          <option value="system"${s.theme === 'system' ? ' selected' : ''}>System</option>
-        </select>
+      <div class="chat-settings-tab-content" id="chat-tab-general">
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">Theme</div>
+          <select class="chat-settings-select" id="chat-settings-theme">
+            <option value="light"${s.theme === 'light' ? ' selected' : ''}>Light</option>
+            <option value="dark"${s.theme === 'dark' ? ' selected' : ''}>Dark</option>
+            <option value="system"${s.theme === 'system' ? ' selected' : ''}>System</option>
+          </select>
+        </div>
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">Send Behavior</div>
+          <select class="chat-settings-select" id="chat-settings-send">
+            <option value="enter"${s.sendBehavior === 'enter' ? ' selected' : ''}>Enter to send</option>
+            <option value="ctrl-enter"${s.sendBehavior === 'ctrl-enter' ? ' selected' : ''}>Ctrl+Enter to send</option>
+          </select>
+        </div>
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">Default Backend</div>
+          <select class="chat-settings-select" id="chat-settings-backend">
+            ${CHAT_BACKENDS.map(b => `<option value="${b.id}"${s.defaultBackend === b.id ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">System Prompt</div>
+          <div class="chat-settings-desc">Prepended to every new CLI session.</div>
+          <textarea class="chat-settings-textarea" id="chat-settings-system-prompt" style="min-height:120px">${esc(s.systemPrompt || '')}</textarea>
+        </div>
+        <button class="chat-settings-save" onclick="chatSaveSettings()">Save Settings</button>
       </div>
-      <div class="chat-settings-group">
-        <div class="chat-settings-label">Send Behavior</div>
-        <select class="chat-settings-select" id="chat-settings-send">
-          <option value="enter"${s.sendBehavior === 'enter' ? ' selected' : ''}>Enter to send</option>
-          <option value="ctrl-enter"${s.sendBehavior === 'ctrl-enter' ? ' selected' : ''}>Ctrl+Enter to send</option>
-        </select>
+      <div class="chat-settings-tab-content" id="chat-tab-usage" style="display:none;">
+        <div class="chat-usage-stats-controls">
+          <div class="chat-settings-group" style="flex:1;">
+            <div class="chat-settings-label">Time Range</div>
+            <select class="chat-settings-select" id="chat-usage-range" onchange="chatUpdateUsageStats()">
+              <option value="today">Today</option>
+              <option value="week" selected>This Week</option>
+              <option value="month">This Month</option>
+              <option value="all">All Time</option>
+            </select>
+          </div>
+          <button class="chat-settings-save chat-usage-clear-btn" onclick="chatClearUsageStats()">Clear All Data</button>
+        </div>
+        <div id="chat-usage-stats-body">
+          <div class="chat-usage-loading">Loading...</div>
+        </div>
       </div>
-      <div class="chat-settings-group">
-        <div class="chat-settings-label">Default Backend</div>
-        <select class="chat-settings-select" id="chat-settings-backend">
-          ${CHAT_BACKENDS.map(b => `<option value="${b.id}"${s.defaultBackend === b.id ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
-        </select>
-      </div>
-      <div class="chat-settings-group">
-        <div class="chat-settings-label">System Prompt</div>
-        <div class="chat-settings-desc">Prepended to every new CLI session.</div>
-        <textarea class="chat-settings-textarea" id="chat-settings-system-prompt" style="min-height:120px">${esc(s.systemPrompt || '')}</textarea>
-      </div>
-      <button class="chat-settings-save" onclick="chatSaveSettings()">Save Settings</button>
     </div>
   `;
 
   chatShowModal('Settings', html);
+
+  // Wire up tabs
+  document.querySelectorAll('.chat-settings-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.chat-settings-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      document.querySelectorAll('.chat-settings-tab-content').forEach(c => c.style.display = 'none');
+      const target = tab.getAttribute('data-tab');
+      const panel = document.getElementById('chat-tab-' + target);
+      if (panel) panel.style.display = '';
+      if (target === 'usage') chatLoadUsageStats();
+    });
+  });
+
+  // If opening to usage tab
+  if (initialTab === 'usage') {
+    document.querySelector('.chat-settings-tab[data-tab="usage"]')?.click();
+  }
 }
 
 async function chatSaveSettings() {
@@ -2975,6 +3014,143 @@ async function chatSaveSettings() {
   }
 }
 window.chatSaveSettings = chatSaveSettings;
+
+// ── Usage Stats ──────────────────────────────────────────────────────────────
+
+let _usageStatsCache = null;
+
+async function chatLoadUsageStats() {
+  try {
+    const res = await chatFetch('usage-stats');
+    _usageStatsCache = await res.json();
+    chatUpdateUsageStats();
+  } catch (err) {
+    const body = document.getElementById('chat-usage-stats-body');
+    if (body) body.innerHTML = '<div class="chat-usage-loading">Failed to load usage stats.</div>';
+  }
+}
+
+function chatUpdateUsageStats() {
+  const body = document.getElementById('chat-usage-stats-body');
+  if (!body || !_usageStatsCache) return;
+
+  const range = document.getElementById('chat-usage-range')?.value || 'week';
+  const days = _usageStatsCache.days || [];
+
+  // Filter days by range
+  const now = new Date();
+  const todayStr = now.toISOString().slice(0, 10);
+  let filteredDays;
+  if (range === 'today') {
+    filteredDays = days.filter(d => d.date === todayStr);
+  } else if (range === 'week') {
+    const weekAgo = new Date(now);
+    weekAgo.setDate(weekAgo.getDate() - 7);
+    const weekStr = weekAgo.toISOString().slice(0, 10);
+    filteredDays = days.filter(d => d.date >= weekStr);
+  } else if (range === 'month') {
+    const monthAgo = new Date(now);
+    monthAgo.setDate(monthAgo.getDate() - 30);
+    const monthStr = monthAgo.toISOString().slice(0, 10);
+    filteredDays = days.filter(d => d.date >= monthStr);
+  } else {
+    filteredDays = days;
+  }
+
+  // Normalize: support both old format (backends map) and new format (records array)
+  function getDayRecords(day) {
+    if (day.records) return day.records;
+    // Migrate old format
+    if (day.backends) {
+      return Object.entries(day.backends).map(([bid, u]) => ({ backend: bid, model: 'unknown', usage: u }));
+    }
+    return [];
+  }
+
+  // Aggregate per backend+model
+  const aggregateKey = (r) => `${r.backend}\0${r.model}`;
+  const totals = {};
+  for (const day of filteredDays) {
+    for (const rec of getDayRecords(day)) {
+      const key = aggregateKey(rec);
+      if (!totals[key]) totals[key] = { backend: rec.backend, model: rec.model, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 } };
+      totals[key].usage.inputTokens += rec.usage.inputTokens || 0;
+      totals[key].usage.outputTokens += rec.usage.outputTokens || 0;
+      totals[key].usage.cacheReadTokens += rec.usage.cacheReadTokens || 0;
+      totals[key].usage.cacheWriteTokens += rec.usage.cacheWriteTokens || 0;
+      totals[key].usage.costUsd += rec.usage.costUsd || 0;
+    }
+  }
+
+  const keys = Object.keys(totals);
+  if (keys.length === 0) {
+    body.innerHTML = '<div class="chat-usage-loading">No usage data for this period.</div>';
+    return;
+  }
+
+  function backendLabel(id) {
+    const b = CHAT_BACKENDS.find(x => x.id === id);
+    return b ? b.label : id;
+  }
+
+  function modelLabel(m) {
+    if (!m || m === 'unknown') return '-';
+    return m;
+  }
+
+  let html = '<table class="chat-usage-table"><thead><tr><th>Backend</th><th>Model</th><th>Input</th><th>Output</th><th>Cache R</th><th>Cache W</th><th>Total</th><th>Cost</th></tr></thead><tbody>';
+  for (const key of keys) {
+    const t = totals[key];
+    const u = t.usage;
+    const total = u.inputTokens + u.outputTokens;
+    html += `<tr>
+      <td>${esc(backendLabel(t.backend))}</td>
+      <td>${esc(modelLabel(t.model))}</td>
+      <td>${chatFormatTokenCount(u.inputTokens)}</td>
+      <td>${chatFormatTokenCount(u.outputTokens)}</td>
+      <td>${chatFormatTokenCount(u.cacheReadTokens)}</td>
+      <td>${chatFormatTokenCount(u.cacheWriteTokens)}</td>
+      <td>${chatFormatTokenCount(total)}</td>
+      <td>${u.costUsd > 0 ? chatFormatCost(u.costUsd) : '-'}</td>
+    </tr>`;
+  }
+  html += '</tbody></table>';
+
+  // Daily breakdown
+  if (filteredDays.length > 1) {
+    html += '<div class="chat-usage-daily-title">Daily Breakdown</div>';
+    html += '<table class="chat-usage-table chat-usage-daily"><thead><tr><th>Date</th><th>Backend</th><th>Model</th><th>Tokens</th><th>Cost</th></tr></thead><tbody>';
+    const sortedDays = [...filteredDays].sort((a, b) => b.date.localeCompare(a.date));
+    for (const day of sortedDays) {
+      for (const rec of getDayRecords(day)) {
+        const total = (rec.usage.inputTokens || 0) + (rec.usage.outputTokens || 0);
+        html += `<tr>
+          <td>${day.date}</td>
+          <td>${esc(backendLabel(rec.backend))}</td>
+          <td>${esc(modelLabel(rec.model))}</td>
+          <td>${chatFormatTokenCount(total)}</td>
+          <td>${rec.usage.costUsd > 0 ? chatFormatCost(rec.usage.costUsd) : '-'}</td>
+        </tr>`;
+      }
+    }
+    html += '</tbody></table>';
+  }
+
+  body.innerHTML = html;
+}
+window.chatUpdateUsageStats = chatUpdateUsageStats;
+
+async function chatClearUsageStats() {
+  if (!confirm('Clear all usage statistics? This cannot be undone.')) return;
+  try {
+    await chatFetch('usage-stats', { method: 'DELETE' });
+    _usageStatsCache = { days: [] };
+    chatUpdateUsageStats();
+  } catch (err) {
+    alert('Failed to clear usage stats: ' + err.message);
+  }
+}
+window.chatClearUsageStats = chatClearUsageStats;
 
 // ── Workspace Instructions modal ─────────────────────────────────────────────
 

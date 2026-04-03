@@ -108,22 +108,37 @@ function makeRequest(method: string, urlPath: string, body?: any): Promise<{ sta
   });
 }
 
-function readSSE(urlPath: string): Promise<any[]> {
+function connectWs(convId: string): Promise<WebSocket> {
   return new Promise((resolve, reject) => {
-    const url = new URL(urlPath, baseUrl);
-    http.get({ hostname: url.hostname, port: url.port, path: url.pathname }, (res) => {
-      let data = '';
-      res.on('data', (chunk: Buffer) => { data += chunk; });
-      res.on('end', () => {
-        const events = data.split('\n')
-          .filter(line => line.startsWith('data: '))
-          .map(line => {
-            try { return JSON.parse(line.slice(6)); } catch { return null; }
-          })
-          .filter(Boolean);
-        resolve(events);
-      });
-    }).on('error', reject);
+    const port = (server.address() as any).port;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${convId}/ws`);
+    ws.on('open', () => resolve(ws));
+    ws.on('error', reject);
+  });
+}
+
+function readWsEvents(ws: WebSocket, timeout = 3000): Promise<any[]> {
+  return new Promise((resolve) => {
+    const events: any[] = [];
+    const timer = setTimeout(() => {
+      ws.close();
+      resolve(events);
+    }, timeout);
+    ws.on('message', (data) => {
+      try {
+        const event = JSON.parse(data.toString());
+        events.push(event);
+        if (event.type === 'done') {
+          clearTimeout(timer);
+          ws.close();
+          resolve(events);
+        }
+      } catch {}
+    });
+    ws.on('close', () => {
+      clearTimeout(timer);
+      resolve(events);
+    });
   });
 }
 
@@ -186,89 +201,10 @@ afterEach((done) => {
   });
 });
 
-// ── POST /conversations/:id/input ───────────────────────────────────────────
+// ── Tool activity forwarding ────────────────────────────────────────────────
 
-describe('POST /conversations/:id/input', () => {
-  test('returns ok:false when no active stream', async () => {
-    const conv = await chatService.createConversation('Test');
-    const res = await makeRequest('POST', `/api/chat/conversations/${conv.id}/input`, { text: 'yes' });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(false);
-    expect(res.body.message).toBe('No active stream');
-  });
-
-  test('forwards text to sendInput and returns ok:true', async () => {
-    const conv = await chatService.createConversation('Test');
-
-    // Start a stream by sending a message
-    mockBackend.setMockEvents([
-      { type: 'text', content: 'hello', streaming: true },
-      // Don't include 'done' — keep stream "alive" so activeStreams entry persists
-    ] as StreamEvent[]);
-
-    // Send message to populate activeStreams
-    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
-      content: 'test message',
-      backend: 'claude-code',
-    });
-
-    // Now send input
-    const res = await makeRequest('POST', `/api/chat/conversations/${conv.id}/input`, { text: 'approved' });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-
-    // Verify sendInput was called
-    expect(mockBackend._sendInputCalls).toContain('approved');
-  });
-
-  test('handles empty text gracefully', async () => {
-    const conv = await chatService.createConversation('Test');
-
-    mockBackend.setMockEvents([
-      { type: 'text', content: 'hi', streaming: true },
-    ] as StreamEvent[]);
-
-    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
-      content: 'hello',
-      backend: 'claude-code',
-    });
-
-    const res = await makeRequest('POST', `/api/chat/conversations/${conv.id}/input`, { text: '' });
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(true);
-    expect(mockBackend._sendInputCalls).toContain('');
-  });
-
-  test('requires CSRF token', async () => {
-    const conv = await chatService.createConversation('Test');
-
-    const url = new URL(`/api/chat/conversations/${conv.id}/input`, baseUrl);
-    const res = await new Promise<{ status: number; body: any }>((resolve, reject) => {
-      const req = http.request({
-        method: 'POST',
-        hostname: url.hostname,
-        port: url.port,
-        path: url.pathname,
-        headers: { 'Content-Type': 'application/json' }, // No CSRF token
-      }, (r) => {
-        let data = '';
-        r.on('data', (chunk: Buffer) => { data += chunk; });
-        r.on('end', () => resolve({ status: r.statusCode!, body: JSON.parse(data) }));
-      });
-      req.on('error', reject);
-      req.write(JSON.stringify({ text: 'yes' }));
-      req.end();
-    });
-
-    expect(res.status).toBe(403);
-    expect(res.body.error).toBe('Invalid CSRF token');
-  });
-});
-
-// ── SSE tool_activity forwarding ────────────────────────────────────────────
-
-describe('SSE tool_activity forwarding', () => {
-  test('forwards enriched tool_activity fields via SSE', async () => {
+describe('Tool activity forwarding', () => {
+  test('forwards enriched tool_activity fields via WebSocket', async () => {
     const conv = await chatService.createConversation('Test');
 
     mockBackend.setMockEvents([
@@ -277,12 +213,15 @@ describe('SSE tool_activity forwarding', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const toolEvent = events.find((e: any) => e.type === 'tool_activity');
     expect(toolEvent).toBeDefined();
@@ -291,7 +230,7 @@ describe('SSE tool_activity forwarding', () => {
     expect(toolEvent.id).toBe('tool_1');
   });
 
-  test('forwards isAgent flag via SSE', async () => {
+  test('forwards isAgent flag via WebSocket', async () => {
     const conv = await chatService.createConversation('Test');
 
     mockBackend.setMockEvents([
@@ -300,12 +239,15 @@ describe('SSE tool_activity forwarding', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'explore',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const agentEvent = events.find((e: any) => e.type === 'tool_activity');
     expect(agentEvent).toBeDefined();
@@ -313,7 +255,7 @@ describe('SSE tool_activity forwarding', () => {
     expect(agentEvent.subagentType).toBe('Explore');
   });
 
-  test('forwards isPlanMode and planAction via SSE', async () => {
+  test('forwards isPlanMode and planAction via WebSocket', async () => {
     const conv = await chatService.createConversation('Test');
 
     mockBackend.setMockEvents([
@@ -323,12 +265,15 @@ describe('SSE tool_activity forwarding', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'plan',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const planEvents = events.filter((e: any) => e.type === 'tool_activity' && e.isPlanMode);
     expect(planEvents).toHaveLength(2);
@@ -336,7 +281,7 @@ describe('SSE tool_activity forwarding', () => {
     expect(planEvents[1].planAction).toBe('exit');
   });
 
-  test('forwards isQuestion flag and questions via SSE', async () => {
+  test('forwards isQuestion flag and questions via WebSocket', async () => {
     const conv = await chatService.createConversation('Test');
     const questions = [{ question: 'Which approach?', options: [{ label: 'A' }] }];
 
@@ -346,12 +291,15 @@ describe('SSE tool_activity forwarding', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'question',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const questionEvent = events.find((e: any) => e.type === 'tool_activity' && e.isQuestion);
     expect(questionEvent).toBeDefined();
@@ -374,12 +322,15 @@ describe('Tool activity persistence', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    await eventsPromise;
 
     const loaded = (await chatService.getConversation(conv.id))!;
     const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
@@ -399,12 +350,15 @@ describe('Tool activity persistence', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    await eventsPromise;
 
     const loaded = (await chatService.getConversation(conv.id))!;
     const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
@@ -427,12 +381,15 @@ describe('Tool activity persistence', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    await eventsPromise;
 
     const loaded = (await chatService.getConversation(conv.id))!;
     const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
@@ -450,12 +407,15 @@ describe('Tool activity persistence', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    await eventsPromise;
 
     const loaded = (await chatService.getConversation(conv.id))!;
     const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
@@ -471,12 +431,15 @@ describe('Tool activity persistence', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    await eventsPromise;
 
     const loaded = (await chatService.getConversation(conv.id))!;
     const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
@@ -485,7 +448,7 @@ describe('Tool activity persistence', () => {
     expect(assistantMsgs[0].toolActivity![0].subagentType).toBe('Explore');
   });
 
-  test('forwards tool_outcomes SSE event to client', async () => {
+  test('forwards tool_outcomes event to client', async () => {
     const conv = await chatService.createConversation('Test');
 
     mockBackend.setMockEvents([
@@ -496,12 +459,15 @@ describe('Tool activity persistence', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const outcomeEvent = events.find((e: any) => e.type === 'tool_outcomes');
     expect(outcomeEvent).toBeDefined();
@@ -521,12 +487,15 @@ describe('Tool activity persistence', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    await eventsPromise;
 
     const loaded = (await chatService.getConversation(conv.id))!;
     const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
@@ -550,10 +519,12 @@ describe('Tool activity Phase 3 features', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test', backend: 'claude-code',
     });
-    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    await eventsPromise;
 
     const loaded = (await chatService.getConversation(conv.id))!;
     const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
@@ -581,10 +552,12 @@ describe('Tool activity Phase 3 features', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test', backend: 'claude-code',
     });
-    await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    await eventsPromise;
 
     const loaded = (await chatService.getConversation(conv.id))!;
     const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
@@ -614,12 +587,15 @@ describe('Turn boundary intermediate messages', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     // Should have two assistant_message events (one intermediate, one final)
     const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
@@ -644,12 +620,15 @@ describe('Turn boundary intermediate messages', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     expect(assistantMessages).toHaveLength(2);
@@ -673,12 +652,15 @@ describe('Turn boundary intermediate messages', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     expect(assistantMessages).toHaveLength(1); // Only the final message
@@ -695,12 +677,15 @@ describe('Turn boundary intermediate messages', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     // Only the final "New content" should be saved (replayed text is not streaming)
@@ -716,12 +701,15 @@ describe('Turn boundary intermediate messages', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     expect(assistantMessages).toHaveLength(1);
@@ -741,12 +729,15 @@ describe('Turn complete event forwarding', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     // Should have turn_complete event even though no text was saved
     const turnCompletes = events.filter((e: any) => e.type === 'turn_complete');
@@ -763,12 +754,15 @@ describe('Turn complete event forwarding', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     // Should have both assistant_message and turn_complete
     const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
@@ -794,12 +788,15 @@ describe('Turn complete event forwarding', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const turnCompletes = events.filter((e: any) => e.type === 'turn_complete');
     expect(turnCompletes).toHaveLength(2);
@@ -821,12 +818,15 @@ describe('Auto title update on new session', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'New topic question',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const titleEvents = events.filter((e: any) => e.type === 'title_updated');
     expect(titleEvents).toHaveLength(1);
@@ -845,12 +845,15 @@ describe('Auto title update on new session', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Hello world',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const titleEvents = events.filter((e: any) => e.type === 'title_updated');
     expect(titleEvents).toHaveLength(0);
@@ -869,12 +872,15 @@ describe('Auto title update on new session', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'New session question',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const titleEvents = events.filter((e: any) => e.type === 'title_updated');
     expect(titleEvents).toHaveLength(1);
@@ -1059,17 +1065,6 @@ describe('GET /conversations/:id/files/:filename', () => {
 
     const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/files/a%2Fb.png`);
     expect(res.status).toBe(200);
-  });
-});
-
-// ── POST /conversations/:id/abort ───────────────────────────────────────────
-
-describe('POST /conversations/:id/abort', () => {
-  test('returns ok:false when no active stream', async () => {
-    const conv = await chatService.createConversation('Test');
-    const res = await makeRequest('POST', `/api/chat/conversations/${conv.id}/abort`, {});
-    expect(res.status).toBe(200);
-    expect(res.body.ok).toBe(false);
   });
 });
 
@@ -1355,8 +1350,8 @@ describe('GET /api/chat/version', () => {
 
 // ── Usage event forwarding ───────────────────────────────────────────────────
 
-describe('SSE usage event forwarding', () => {
-  test('forwards usage events via SSE and persists to conversation', async () => {
+describe('Usage event forwarding', () => {
+  test('forwards usage events via WebSocket and persists to conversation', async () => {
     const conv = await chatService.createConversation('Usage Test');
 
     mockBackend.setMockEvents([
@@ -1365,25 +1360,32 @@ describe('SSE usage event forwarding', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'test usage',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
-    // Verify usage event was forwarded
+    // Verify usage event was forwarded with both conversation and session usage
     const usageEvent = events.find((e: any) => e.type === 'usage');
     expect(usageEvent).toBeDefined();
     expect(usageEvent.usage.inputTokens).toBe(1000);
     expect(usageEvent.usage.outputTokens).toBe(500);
     expect(usageEvent.usage.costUsd).toBe(0.05);
+    expect(usageEvent.sessionUsage).toBeDefined();
+    expect(usageEvent.sessionUsage.inputTokens).toBe(1000);
+    expect(usageEvent.sessionUsage.outputTokens).toBe(500);
 
     // Verify usage was persisted
     const loaded = (await chatService.getConversation(conv.id))!;
     expect(loaded.usage!.inputTokens).toBe(1000);
     expect(loaded.usage!.outputTokens).toBe(500);
     expect(loaded.usage!.costUsd).toBe(0.05);
+    expect(loaded.sessionUsage!.inputTokens).toBe(1000);
   });
 
   test('accumulates usage across multiple usage events', async () => {
@@ -1398,12 +1400,15 @@ describe('SSE usage event forwarding', () => {
       { type: 'done' },
     ] as StreamEvent[]);
 
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'multi turn',
       backend: 'claude-code',
     });
 
-    const events = await readSSE(`/api/chat/conversations/${conv.id}/stream`);
+    const events = await eventsPromise;
 
     const usageEvents = events.filter((e: any) => e.type === 'usage');
     expect(usageEvents).toHaveLength(2);
@@ -1414,7 +1419,7 @@ describe('SSE usage event forwarding', () => {
     expect(usageEvents[1].usage.costUsd).toBeCloseTo(0.03);
   });
 
-  test('getConversation includes usage in response', async () => {
+  test('getConversation includes usage and sessionUsage in response', async () => {
     const conv = await chatService.createConversation('API Usage');
     await chatService.addUsage(conv.id, { inputTokens: 2000, outputTokens: 1000, cacheReadTokens: 500, cacheWriteTokens: 200, costUsd: 0.10 });
 
@@ -1424,44 +1429,53 @@ describe('SSE usage event forwarding', () => {
     expect(res.body.usage.inputTokens).toBe(2000);
     expect(res.body.usage.outputTokens).toBe(1000);
     expect(res.body.usage.costUsd).toBe(0.10);
+    expect(res.body.sessionUsage).toBeDefined();
+    expect(res.body.sessionUsage.inputTokens).toBe(2000);
+  });
+});
+
+// ── Usage stats endpoints ───────────────────────────────────────────────────
+
+describe('Usage stats endpoints', () => {
+  test('GET /usage-stats returns empty ledger initially', async () => {
+    const res = await makeRequest('GET', '/api/chat/usage-stats');
+    expect(res.status).toBe(200);
+    expect(res.body.days).toEqual([]);
+  });
+
+  test('GET /usage-stats returns ledger data after usage', async () => {
+    const conv = await chatService.createConversation('Stats Test');
+    await chatService.addUsage(conv.id, { inputTokens: 1000, outputTokens: 500, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.05 }, 'claude-code', 'claude-sonnet-4');
+    // Wait for fire-and-forget ledger write
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const res = await makeRequest('GET', '/api/chat/usage-stats');
+    expect(res.status).toBe(200);
+    expect(res.body.days.length).toBeGreaterThan(0);
+    const today = new Date().toISOString().slice(0, 10);
+    const day = res.body.days.find((d: any) => d.date === today);
+    expect(day).toBeDefined();
+    const record = day.records.find((r: any) => r.backend === 'claude-code');
+    expect(record).toBeDefined();
+    expect(record.usage.inputTokens).toBe(1000);
+    expect(record.model).toBe('claude-sonnet-4');
+  });
+
+  test('DELETE /usage-stats clears all stats', async () => {
+    const conv = await chatService.createConversation('Clear Stats');
+    await chatService.addUsage(conv.id, { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 }, 'claude-code');
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const delRes = await makeRequest('DELETE', '/api/chat/usage-stats');
+    expect(delRes.status).toBe(200);
+    expect(delRes.body.ok).toBe(true);
+
+    const res = await makeRequest('GET', '/api/chat/usage-stats');
+    expect(res.body.days).toEqual([]);
   });
 });
 
 // ── WebSocket streaming ─────────────────────────────────────────────────────
-
-function connectWs(convId: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const port = (server.address() as any).port;
-    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${convId}/ws`);
-    ws.on('open', () => resolve(ws));
-    ws.on('error', reject);
-  });
-}
-
-function readWsEvents(ws: WebSocket, timeout = 3000): Promise<any[]> {
-  return new Promise((resolve) => {
-    const events: any[] = [];
-    const timer = setTimeout(() => {
-      ws.close();
-      resolve(events);
-    }, timeout);
-    ws.on('message', (data) => {
-      try {
-        const event = JSON.parse(data.toString());
-        events.push(event);
-        if (event.type === 'done') {
-          clearTimeout(timer);
-          ws.close();
-          resolve(events);
-        }
-      } catch {}
-    });
-    ws.on('close', () => {
-      clearTimeout(timer);
-      resolve(events);
-    });
-  });
-}
 
 describe('WebSocket streaming', () => {
   test('receives text and done events via WebSocket', async () => {

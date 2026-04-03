@@ -10,6 +10,23 @@ export interface Usage {
   costUsd: number;
 }
 
+// ── Usage Ledger (daily per-backend/model records) ──────────────────────────
+
+export interface UsageLedgerRecord {
+  backend: string;
+  model: string;
+  usage: Usage;
+}
+
+export interface UsageLedgerDay {
+  date: string;           // YYYY-MM-DD
+  records: UsageLedgerRecord[];
+}
+
+export interface UsageLedger {
+  days: UsageLedgerDay[];
+}
+
 // ── Tool Activity ────────────────────────────────────────────────────────────
 
 export interface ToolActivity {
@@ -48,6 +65,7 @@ export interface SessionEntry {
   startedAt: string;
   endedAt: string | null;
   usage?: Usage | null;
+  usageByBackend?: Record<string, Usage> | null;
 }
 
 export interface SessionFile {
@@ -78,6 +96,7 @@ export interface ConversationEntry {
   lastActivity: string;
   lastMessage: string | null;
   usage?: Usage;
+  usageByBackend?: Record<string, Usage>;
   sessions: SessionEntry[];
 }
 
@@ -96,6 +115,7 @@ export interface Conversation {
   sessionNumber: number;
   messages: Message[];
   usage?: Usage;
+  sessionUsage?: Usage;
 }
 
 export interface ConversationListItem {
@@ -178,6 +198,8 @@ export interface ResultEvent {
 export interface UsageEvent {
   type: 'usage';
   usage: Usage;
+  sessionUsage?: Usage;
+  model?: string;
 }
 
 export interface ErrorEvent {
@@ -425,6 +447,7 @@ export interface CliResultEvent {
 export interface CliSystemEvent {
   type: 'system';
   subtype?: string;
+  model?: string;
   tool_use_id?: string;
   status?: string;
   summary?: string;
