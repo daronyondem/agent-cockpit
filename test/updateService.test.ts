@@ -21,7 +21,13 @@ jest.spyOn(fs, 'existsSync').mockImplementation((p: fs.PathLike) => {
   return originalExistsSync(p);
 });
 
-const mockWriteFileSync = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+const originalWriteFileSync = fs.writeFileSync.bind(fs);
+const mockWriteFileSync = jest.spyOn(fs, 'writeFileSync').mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+  // Allow writing the temp ecosystem config for CI, mock everything else
+  if (String(args[0]).endsWith('ecosystem.config.js')) {
+    return originalWriteFileSync(...args);
+  }
+});
 
 import { UpdateService } from '../src/services/updateService';
 
