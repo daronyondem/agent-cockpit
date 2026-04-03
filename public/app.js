@@ -147,6 +147,97 @@ let chatConvLoadGen = 0; // generation counter for chatLoadConversations to disc
 let chatMessageQueue = new Map(); // convId -> [{ id, content, inFlight }]
 let chatQueuePaused = new Set(); // convIds where queue is paused due to error
 let chatQueueIdCounter = 0;
+let chatWebSockets = new Map(); // convId -> WebSocket
+let chatReconnectAttempts = new Map(); // convId -> attempt count
+const CHAT_MAX_RECONNECT_ATTEMPTS = 5;
+const CHAT_RECONNECT_BASE_DELAY = 1000; // 1s, doubles each attempt
+
+// ── WebSocket helpers ───────────────────────────────────────────────────────
+
+function chatWsUrl(convId) {
+  const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${protocol}//${location.host}/api/chat/conversations/${convId}/ws`;
+}
+
+function chatConnectWs(convId) {
+  const existing = chatWebSockets.get(convId);
+  if (existing && (existing.readyState === WebSocket.OPEN || existing.readyState === WebSocket.CONNECTING)) {
+    return existing;
+  }
+  const ws = new WebSocket(chatWsUrl(convId));
+  chatWebSockets.set(convId, ws);
+
+  ws.onopen = () => {
+    console.log(`[ws] Connected for conv=${convId}`);
+  };
+
+  ws.onmessage = (evt) => {
+    try {
+      const event = JSON.parse(evt.data);
+      chatHandleStreamEvent(convId, event);
+    } catch (err) {
+      console.warn('[ws] Parse error:', err);
+    }
+  };
+
+  ws.onclose = (evt) => {
+    console.log(`[ws] Closed for conv=${convId}: code=${evt.code}`);
+    if (chatWebSockets.get(convId) === ws) {
+      chatWebSockets.delete(convId);
+    }
+    // Auto-reconnect if stream is still active (unexpected disconnect)
+    if (chatStreamingConvs.has(convId)) {
+      chatAutoReconnectWs(convId);
+    }
+  };
+
+  ws.onerror = (err) => {
+    console.error(`[ws] Error for conv=${convId}:`, err);
+  };
+
+  return ws;
+}
+
+function chatAutoReconnectWs(convId) {
+  const attempts = chatReconnectAttempts.get(convId) || 0;
+  if (attempts >= CHAT_MAX_RECONNECT_ATTEMPTS) {
+    console.warn(`[ws] Reconnect attempts exhausted for conv=${convId}`);
+    chatReconnectAttempts.delete(convId);
+    // Give up — resolve done so the stream cleans up
+    const st = chatStreamingState.get(convId);
+    if (st && st._doneResolve) { st._doneResolve(); delete st._doneResolve; }
+    return;
+  }
+  const delay = CHAT_RECONNECT_BASE_DELAY * Math.pow(2, attempts);
+  chatReconnectAttempts.set(convId, attempts + 1);
+  console.log(`[ws] Reconnecting conv=${convId} in ${delay}ms (attempt ${attempts + 1}/${CHAT_MAX_RECONNECT_ATTEMPTS})`);
+  setTimeout(() => {
+    // Stream may have ended while we waited
+    if (!chatStreamingConvs.has(convId)) {
+      chatReconnectAttempts.delete(convId);
+      return;
+    }
+    chatConnectWs(convId);
+  }, delay);
+}
+
+function chatDisconnectWs(convId) {
+  chatReconnectAttempts.delete(convId); // Prevent auto-reconnect on deliberate close
+  const ws = chatWebSockets.get(convId);
+  if (ws) {
+    ws.close();
+    chatWebSockets.delete(convId);
+  }
+}
+
+function chatWsSend(convId, frame) {
+  const ws = chatWebSockets.get(convId);
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(frame));
+    return true;
+  }
+  return false;
+}
 
 function chatApiUrl(path) {
   return apiUrl('chat/' + path);
@@ -1899,6 +1990,15 @@ async function chatSendMessage() {
   chatUpdateSendButtonState();
 
   try {
+    // Connect WebSocket before POST so it's ready when the server starts piping events
+    const ws = chatConnectWs(targetConvId);
+    if (ws.readyState !== WebSocket.OPEN) {
+      await new Promise((resolve, reject) => {
+        ws.addEventListener('open', resolve, { once: true });
+        ws.addEventListener('error', reject, { once: true });
+      });
+    }
+
     const response = await fetch(chatApiUrl(`conversations/${targetConvId}/message`), {
       method: 'POST',
       headers: {
@@ -1929,156 +2029,14 @@ async function chatSendMessage() {
       chatStartElapsedTimer(targetConvId);
     }
 
-    const sseResponse = await fetch(chatApiUrl(`conversations/${targetConvId}/stream`), {
-      credentials: 'same-origin',
+    // Wait for the stream to complete. _doneResolve is called by:
+    // - 'done' event in chatHandleStreamEvent (normal completion)
+    // - chatAutoReconnectWs giving up after max attempts (reconnect exhaustion)
+    // Auto-reconnect on unexpected WS close is handled in chatConnectWs's onclose.
+    await new Promise((resolve) => {
+      const st = chatStreamingState.get(targetConvId);
+      if (st) st._doneResolve = resolve;
     });
-
-    const reader = sseResponse.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue;
-        const jsonStr = line.slice(6);
-        if (!jsonStr.trim()) continue;
-
-        try {
-          const event = JSON.parse(jsonStr);
-          const st = chatStreamingState.get(targetConvId);
-          if (!st) break; // state was cleaned up
-          const isStillActive = (chatActiveConvId === targetConvId);
-
-          // Ensure DOM element exists when active, detect orphaned nodes
-          if (isStillActive && (!st.streamingMsgEl || !st.streamingMsgEl.isConnected)) {
-            st.streamingMsgEl = chatAppendStreamingMessage();
-          }
-
-          if (event.type === 'thinking') {
-            st.assistantThinking += event.content;
-            // Note: do NOT archive active tools here — turn_complete handles that.
-            // Archiving on thinking prematurely kills agent spinners and timers.
-            if (isStillActive) {
-              chatUpdateStreamingContent(st.streamingMsgEl, st);
-            }
-          } else if (event.type === 'tool_outcomes') {
-            // Merge tool outcomes into active tools by matching toolUseId → id
-            for (const outcome of (event.outcomes || [])) {
-              const match = st.activeTools.find(t => t.id === outcome.toolUseId)
-                || st.activeAgents.find(a => a.id === outcome.toolUseId);
-              if (match) {
-                match.outcome = outcome.outcome;
-                match.status = outcome.status;
-              }
-            }
-            if (isStillActive) {
-              chatUpdateStreamingContent(st.streamingMsgEl, st);
-            }
-          } else if (event.type === 'turn_complete') {
-            // Tools finished executing — archive to history so spinners stop but history persists
-            chatArchiveActiveState(st);
-            if (isStillActive && !st.pendingInteraction) {
-              chatUpdateStreamingContent(st.streamingMsgEl, st);
-            }
-          } else if (event.type === 'text') {
-            st.assistantContent += event.content;
-            if (st.pendingInteraction) {
-              // Pending interaction (plan approval, user question) — don't overwrite
-              // dialog with streaming text. Just accumulate assistantContent silently.
-            } else {
-              if (isStillActive) {
-                chatUpdateStreamingContent(st.streamingMsgEl, st);
-              }
-            }
-          } else if (event.type === 'tool_activity') {
-            if (event.isAgent) {
-              st.activeAgents.push({ subagentType: event.subagentType || 'agent', description: event.description || '', startTime: event.startTime || Date.now(), id: event.id, isAgent: true, parentAgentId: event.parentAgentId || null });
-            } else if (event.isPlanMode) {
-              if (event.planAction === 'enter') st.planModeActive = true;
-              else if (event.planAction === 'exit') st.planModeActive = false;
-            }
-            if (!event.isAgent && !event.isPlanMode) {
-              st.activeTools.push({ tool: event.tool, description: event.description || '', startTime: event.startTime || Date.now(), id: event.id, parentAgentId: event.parentAgentId || null });
-            }
-            // Track pending interactions for restoration on switch-back
-            if (event.isPlanMode && event.planAction === 'exit') {
-              // Prefer plan file content (from Write tool) over streamed text summary
-              const planContent = event.planContent || st.assistantContent;
-              st.pendingInteraction = { type: 'planApproval', planContent };
-            } else if (event.isQuestion) {
-              st.pendingInteraction = { type: 'userQuestion', event };
-            }
-            if (isStillActive) {
-              if (event.isPlanMode && event.planAction === 'exit') {
-                chatShowPlanApproval(st.streamingMsgEl, targetConvId, st.pendingInteraction.planContent);
-              } else if (event.isQuestion) {
-                chatShowUserQuestion(st.streamingMsgEl, targetConvId, event);
-              } else if (!st.pendingInteraction) {
-                // Only render tool activity if no pending interaction (plan approval, user question)
-                chatUpdateStreamingContent(st.streamingMsgEl, st);
-                chatStartActivityTimer(targetConvId);
-              }
-            }
-          } else if (event.type === 'assistant_message') {
-            // Reset streaming state before re-render so the restored bubble
-            // shows typing dots instead of stale content duplicating the
-            // completed message that chatRenderMessages is about to display.
-            // Preserve pending interactions (plan approval, user questions)
-            // so they survive intermediate message saves — chatRenderMessages()
-            // will restore the UI from pendingInteraction.
-            const savedInteraction = st.pendingInteraction;
-            st.assistantContent = '';
-            st.assistantThinking = '';
-            chatArchiveActiveState(st);
-            // Keep toolHistory and agentHistory — they're needed for rendering
-            // sub-tasks under agent cards. They'll be cleared when streaming ends.
-            st.planModeActive = false;
-            st.pendingInteraction = savedInteraction;
-            if (isStillActive && chatActiveConv) {
-              chatActiveConv.messages.push(event.message);
-              chatRenderMessages();
-              chatUpdateHeader();
-            }
-            chatLoadConversations();
-          } else if (event.type === 'title_updated') {
-            // Server generated a new title after a session reset
-            if (isStillActive && chatActiveConv) {
-              chatActiveConv.title = event.title;
-              chatUpdateHeader();
-            }
-            // Update sidebar conversation list
-            const sidebarConv = chatConversations.find(c => c.id === targetConvId);
-            if (sidebarConv) {
-              sidebarConv.title = event.title;
-              chatRenderConvList();
-            }
-          } else if (event.type === 'usage') {
-            // Update usage on active conversation
-            if (isStillActive && chatActiveConv) {
-              chatActiveConv.usage = event.usage;
-              chatUpdateUsageDisplay();
-            }
-          } else if (event.type === 'error') {
-            st.pendingInteraction = null;
-            chatArchiveActiveState(st);
-            st.planModeActive = false;
-            st._hadError = true;
-            if (isStillActive) chatAppendError(event.error);
-          } else if (event.type === 'done') {
-            chatCleanupStreamState(targetConvId);
-          }
-        } catch (parseErr) {
-          console.warn('SSE event parse/handling error:', parseErr);
-        }
-      }
-    }
   } catch (err) {
     if (err.name !== 'AbortError') {
       if (chatActiveConvId === targetConvId) chatAppendError(err.message);
@@ -2092,6 +2050,7 @@ async function chatSendMessage() {
     chatStreamingConvs.delete(targetConvId);
     // Force cleanup — stream has ended, no more events will arrive
     chatCleanupStreamState(targetConvId, { force: true });
+    chatDisconnectWs(targetConvId);
     chatUpdateSendButtonState();
     chatRenderConvList();
     // Refresh conversation list from server to pick up title changes and message counts.
@@ -2105,6 +2064,162 @@ async function chatSendMessage() {
     } else {
       chatProcessNextQueuedMessage(targetConvId);
     }
+  }
+}
+
+/** Handle a single stream event from the WebSocket (or SSE fallback). */
+function chatHandleStreamEvent(targetConvId, event) {
+  const st = chatStreamingState.get(targetConvId);
+  if (!st) return;
+  const isStillActive = (chatActiveConvId === targetConvId);
+
+  // Ensure DOM element exists when active, detect orphaned nodes
+  if (isStillActive && (!st.streamingMsgEl || !st.streamingMsgEl.isConnected)) {
+    st.streamingMsgEl = chatAppendStreamingMessage();
+  }
+
+  if (event.type === 'replay_start') {
+    // Server is replaying buffered events after reconnection — reset streaming state
+    console.log(`[ws] Replay starting: ${event.bufferedEvents} events for conv=${targetConvId}`);
+    st.assistantContent = '';
+    st.assistantThinking = '';
+    st.activeTools = [];
+    st.activeAgents = [];
+    st.toolHistory = [];
+    st.agentHistory = [];
+    st.planModeActive = false;
+    st.pendingInteraction = null;
+    st._replaying = true;
+    // Remove persisted messages that were added during the disconnected stream
+    // (they'll be re-added from replay's assistant_message events)
+    if (isStillActive && chatActiveConv) {
+      chatRenderMessages();
+    }
+    return;
+  } else if (event.type === 'replay_end') {
+    st._replaying = false;
+    chatReconnectAttempts.delete(targetConvId);
+    console.log(`[ws] Replay complete for conv=${targetConvId}`);
+    if (isStillActive) {
+      chatUpdateStreamingContent(st.streamingMsgEl, st);
+    }
+    return;
+  } else if (event.type === 'thinking') {
+    st.assistantThinking += event.content;
+    // Note: do NOT archive active tools here — turn_complete handles that.
+    // Archiving on thinking prematurely kills agent spinners and timers.
+    if (isStillActive) {
+      chatUpdateStreamingContent(st.streamingMsgEl, st);
+    }
+  } else if (event.type === 'tool_outcomes') {
+    // Merge tool outcomes into active tools by matching toolUseId → id
+    for (const outcome of (event.outcomes || [])) {
+      const match = st.activeTools.find(t => t.id === outcome.toolUseId)
+        || st.activeAgents.find(a => a.id === outcome.toolUseId);
+      if (match) {
+        match.outcome = outcome.outcome;
+        match.status = outcome.status;
+      }
+    }
+    if (isStillActive) {
+      chatUpdateStreamingContent(st.streamingMsgEl, st);
+    }
+  } else if (event.type === 'turn_complete') {
+    // Tools finished executing — archive to history so spinners stop but history persists
+    chatArchiveActiveState(st);
+    if (isStillActive && !st.pendingInteraction) {
+      chatUpdateStreamingContent(st.streamingMsgEl, st);
+    }
+  } else if (event.type === 'text') {
+    st.assistantContent += event.content;
+    if (st.pendingInteraction) {
+      // Pending interaction (plan approval, user question) — don't overwrite
+      // dialog with streaming text. Just accumulate assistantContent silently.
+    } else {
+      if (isStillActive) {
+        chatUpdateStreamingContent(st.streamingMsgEl, st);
+      }
+    }
+  } else if (event.type === 'tool_activity') {
+    if (event.isAgent) {
+      st.activeAgents.push({ subagentType: event.subagentType || 'agent', description: event.description || '', startTime: event.startTime || Date.now(), id: event.id, isAgent: true, parentAgentId: event.parentAgentId || null });
+    } else if (event.isPlanMode) {
+      if (event.planAction === 'enter') st.planModeActive = true;
+      else if (event.planAction === 'exit') st.planModeActive = false;
+    }
+    if (!event.isAgent && !event.isPlanMode) {
+      st.activeTools.push({ tool: event.tool, description: event.description || '', startTime: event.startTime || Date.now(), id: event.id, parentAgentId: event.parentAgentId || null });
+    }
+    // Track pending interactions for restoration on switch-back
+    if (event.isPlanMode && event.planAction === 'exit') {
+      // Prefer plan file content (from Write tool) over streamed text summary
+      const planContent = event.planContent || st.assistantContent;
+      st.pendingInteraction = { type: 'planApproval', planContent };
+    } else if (event.isQuestion) {
+      st.pendingInteraction = { type: 'userQuestion', event };
+    }
+    if (isStillActive) {
+      if (event.isPlanMode && event.planAction === 'exit') {
+        chatShowPlanApproval(st.streamingMsgEl, targetConvId, st.pendingInteraction.planContent);
+      } else if (event.isQuestion) {
+        chatShowUserQuestion(st.streamingMsgEl, targetConvId, event);
+      } else if (!st.pendingInteraction) {
+        // Only render tool activity if no pending interaction (plan approval, user question)
+        chatUpdateStreamingContent(st.streamingMsgEl, st);
+        chatStartActivityTimer(targetConvId);
+      }
+    }
+  } else if (event.type === 'assistant_message') {
+    // Reset streaming state before re-render so the restored bubble
+    // shows typing dots instead of stale content duplicating the
+    // completed message that chatRenderMessages is about to display.
+    // Preserve pending interactions (plan approval, user questions)
+    // so they survive intermediate message saves — chatRenderMessages()
+    // will restore the UI from pendingInteraction.
+    const savedInteraction = st.pendingInteraction;
+    st.assistantContent = '';
+    st.assistantThinking = '';
+    chatArchiveActiveState(st);
+    // Keep toolHistory and agentHistory — they're needed for rendering
+    // sub-tasks under agent cards. They'll be cleared when streaming ends.
+    st.planModeActive = false;
+    st.pendingInteraction = savedInteraction;
+    if (isStillActive && chatActiveConv) {
+      // Avoid duplicate messages during replay
+      if (!chatActiveConv.messages.some(m => m.id === event.message.id)) {
+        chatActiveConv.messages.push(event.message);
+      }
+      chatRenderMessages();
+      chatUpdateHeader();
+    }
+    chatLoadConversations();
+  } else if (event.type === 'title_updated') {
+    // Server generated a new title after a session reset
+    if (isStillActive && chatActiveConv) {
+      chatActiveConv.title = event.title;
+      chatUpdateHeader();
+    }
+    // Update sidebar conversation list
+    const sidebarConv = chatConversations.find(c => c.id === targetConvId);
+    if (sidebarConv) {
+      sidebarConv.title = event.title;
+      chatRenderConvList();
+    }
+  } else if (event.type === 'usage') {
+    // Update usage on active conversation
+    if (isStillActive && chatActiveConv) {
+      chatActiveConv.usage = event.usage;
+      chatUpdateUsageDisplay();
+    }
+  } else if (event.type === 'error') {
+    st.pendingInteraction = null;
+    chatArchiveActiveState(st);
+    st.planModeActive = false;
+    st._hadError = true;
+    if (isStillActive) chatAppendError(event.error);
+  } else if (event.type === 'done') {
+    if (st._doneResolve) { st._doneResolve(); delete st._doneResolve; }
+    chatCleanupStreamState(targetConvId);
   }
 }
 
@@ -2413,12 +2528,15 @@ function chatShowPlanApproval(msgEl, convId, planContent) {
       const action = btn.dataset.action;
       const text = action === 'approve' ? 'yes' : 'no';
       try {
-        await fetch(chatApiUrl(`conversations/${convId}/input`), {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken || '' },
-          credentials: 'same-origin',
-          body: JSON.stringify({ text }),
-        });
+        if (!chatWsSend(convId, { type: 'input', text })) {
+          // Fallback to HTTP if WS not available
+          await fetch(chatApiUrl(`conversations/${convId}/input`), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken || '' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ text }),
+          });
+        }
         const approvalState = chatStreamingState.get(convId);
         if (approvalState) {
           approvalState.pendingInteraction = null;
@@ -2487,12 +2605,15 @@ function chatShowUserQuestion(msgEl, convId, event) {
     if (!text) return;
     submitBtn.disabled = true;
     try {
-      await fetch(chatApiUrl(`conversations/${convId}/input`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken || '' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ text }),
-      });
+      if (!chatWsSend(convId, { type: 'input', text })) {
+        // Fallback to HTTP if WS not available
+        await fetch(chatApiUrl(`conversations/${convId}/input`), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-csrf-token': csrfToken || '' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ text }),
+        });
+      }
       const questionState = chatStreamingState.get(convId);
       if (questionState) {
         questionState.pendingInteraction = null;
@@ -2556,9 +2677,12 @@ function chatAppendError(errorMsg) {
 
 async function chatStopStreaming() {
   if (!chatActiveConvId) return;
-  try {
-    await chatFetch(`conversations/${chatActiveConvId}/abort`, { method: 'POST', body: {} });
-  } catch {}
+  // Try WebSocket first, fall back to HTTP
+  if (!chatWsSend(chatActiveConvId, { type: 'abort' })) {
+    try {
+      await chatFetch(`conversations/${chatActiveConvId}/abort`, { method: 'POST', body: {} });
+    } catch {}
+  }
 }
 
 

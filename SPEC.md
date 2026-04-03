@@ -6,7 +6,7 @@
 
 ## 1. Overview
 
-**Agent Cockpit** is a web-based chat interface for interacting with the Claude Code CLI. It runs on the same machine as the CLI tools. The server spawns local `claude` CLI processes, streams responses back to the browser via Server-Sent Events (SSE), and stores conversations in workspace-scoped JSON files on disk.
+**Agent Cockpit** is a web-based chat interface for interacting with the Claude Code CLI. It runs on the same machine as the CLI tools. The server spawns local `claude` CLI processes, streams responses back to the browser via WebSocket (with SSE as fallback), and stores conversations in workspace-scoped JSON files on disk.
 
 ### Core Use Case
 
@@ -239,20 +239,34 @@ Body: { content: string, backend?: string }
 - Spawns CLI process, stores in `activeStreams` map
 - Returns `{ userMessage: Message, streamReady: true }`
 
-**Stream response (SSE):**
+**Stream response (WebSocket — primary):**
+```
+ws(s)://host/api/chat/conversations/:id/ws
+```
+- Client opens WebSocket before POSTing the message
+- Server authenticates on HTTP upgrade: session cookie parsed and verified against the file-based session store; local requests bypass auth
+- Origin validation replaces CSRF for WebSocket connections
+- Keepalive: server pings every 30s (under Cloudflare Tunnel's 100s idle timeout)
+- **Reconnection with state recovery:** On client disconnect, the CLI process is NOT killed. Instead, a 60-second grace period starts. Events continue to be buffered server-side (ring buffer, max 1000 events). If the client reconnects within the grace period, the server replays all buffered events wrapped in `replay_start`/`replay_end` frames, then resumes live streaming. If the grace period expires without reconnection, the CLI is aborted and the buffer is discarded. If the CLI completes during the disconnect, events (including `done`) are buffered and replayed on reconnect; a cleanup timer (60s) eventually discards the buffer if no reconnect occurs.
+- Client-to-server frames (JSON): `{ type: 'input', text }` (stdin), `{ type: 'abort' }` (kill process), `{ type: 'reconnect' }` (explicit replay request)
+- Server-to-client frames (JSON): same event types listed below, plus `{ type: 'replay_start', bufferedEvents }` and `{ type: 'replay_end' }` for reconnection replay
+
+**Stream response (SSE — fallback):**
 ```
 GET /conversations/:id/stream
 ```
 - SSE headers, no socket timeout, keepalive every 5s
 - On client disconnect: aborts CLI process, removes from activeStreams
 - `404` if no active stream
+- Used when WebSocket is unavailable
 
-**SSE event format:**
+**Stream event format (both WebSocket and SSE):**
 ```
-data: {"type":"<type>", ...fields}\n\n
+WebSocket: {"type":"<type>", ...fields}
+SSE:       data: {"type":"<type>", ...fields}\n\n
 ```
 
-**SSE event types:**
+**Stream event types:**
 
 | Type | Fields | Description |
 |------|--------|-------------|
@@ -268,6 +282,8 @@ data: {"type":"<type>", ...fields}\n\n
 | `usage` | `usage` | Cumulative token/cost totals for the conversation (sent after each CLI result event) |
 | `error` | `error` | Error message string |
 | `done` | — | Stream complete |
+| `replay_start` | `bufferedEvents` | Reconnection: replay of buffered events is starting |
+| `replay_end` | — | Reconnection: replay complete, live events resume |
 
 **Enriched `tool_activity` fields** (set by `extractToolDetails()` — see Section 4 for per-tool mapping):
 
@@ -283,24 +299,19 @@ data: {"type":"<type>", ...fields}\n\n
 
 **Turn boundary behavior:** On `turn_boundary`, accumulated streaming content (text + thinking) is saved as an intermediate assistant message, and a `turn_complete` event is always sent to the client (even when there is no text to save). This allows the frontend to clear stale tool activity spinners when tools finish executing. On stream completion, final content is saved and `assistant_message` + `done` events are sent.
 
-**Auto title update:** When a new session starts after a reset (session number > 1) and the first assistant message is saved, the server asynchronously generates a new conversation title via `generateTitle()` on the backend adapter. A `title_updated` SSE event is sent with the new title. The title update fires only once per session (on the first assistant message) and does not block the stream.
+**Auto title update:** When a new session starts after a reset (session number > 1) and the first assistant message is saved, the server asynchronously generates a new conversation title via `generateTitle()` on the backend adapter. A `title_updated` event is sent with the new title. The title update fires only once per session (on the first assistant message) and does not block the stream.
 
-**Usage tracking:** Backend adapters can yield `{ type: 'usage', usage: {...} }` events. The Claude Code adapter extracts usage data (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `cost_usd`) from CLI `result` events and normalises the field names to camelCase. The server accumulates usage on both the conversation and active session in the workspace index via `chatService.addUsage()`, then forwards a `usage` SSE event containing the updated cumulative totals. The frontend displays total tokens and cost in the conversation header. Backends that do not emit usage events simply leave the counters at zero.
+**Usage tracking:** Backend adapters can yield `{ type: 'usage', usage: {...} }` events. The Claude Code adapter extracts usage data (`input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`, `cost_usd`) from CLI `result` events and normalises the field names to camelCase. The server accumulates usage on both the conversation and active session in the workspace index via `chatService.addUsage()`, then forwards a `usage` event containing the updated cumulative totals. The frontend displays total tokens and cost in the conversation header. Backends that do not emit usage events simply leave the counters at zero.
 
 **Abort streaming:**
-```
-POST /conversations/:id/abort  [CSRF]
-```
-Kills CLI process (SIGTERM). Returns `{ ok: true }` or `{ ok: false, message: 'No active stream' }`.
+- WebSocket: client sends `{ type: 'abort' }` frame
+- HTTP fallback: `POST /conversations/:id/abort  [CSRF]` — returns `{ ok: true }` or `{ ok: false, message: 'No active stream' }`
 
 **Send interactive input:**
-```
-POST /conversations/:id/input  [CSRF]
-Body: { text: string }
-```
-Writes to CLI stdin for plan approval / user questions. Returns `{ ok: true }` or `{ ok: false }`.
+- WebSocket: client sends `{ type: 'input', text: string }` frame
+- HTTP fallback: `POST /conversations/:id/input  [CSRF]` with body `{ text: string }` — returns `{ ok: true }` or `{ ok: false }`
 
-**Active streams management:** The router maintains an in-memory `Map<conversationId, { stream, abort, sendInput, backend }>`. Only one active CLI process per conversation. Streaming blocks session reset (`409`) and self-update.
+**Active streams management:** The router maintains an in-memory `Map<conversationId, { stream, abort, sendInput, backend }>`. Only one active CLI process per conversation. Streaming blocks session reset (`409`) and self-update. The WebSocket module (`src/ws.ts`) maintains a parallel `Map<conversationId, WebSocket>` for active connections and a `Map<conversationId, ConvBuffer>` for reconnection event buffers. The buffer is cleared before each new stream starts (via `clearBuffer()`). The `isStreamAlive()` function returns `true` if a WS is connected OR the grace period is active, ensuring `processStream` keeps running through brief disconnects.
 
 **CLI session lifecycle:**
 1. New conversation → session initialized with UUID
@@ -436,7 +447,7 @@ The CLI backend layer uses a **pluggable adapter pattern**. New CLI tools can be
 
 Abstract base class. Every backend must implement:
 - **`get metadata`** — returns `{ id, label, icon, capabilities }` where capabilities: `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans)
-- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the SSE event contract in Section 3
+- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the stream event contract in Section 3
 - **`generateSummary(messages, fallback)`** — returns a one-line summary string
 - **`generateTitle(userMessage, fallback)`** — returns a short conversation title. Base class provides a default that truncates the user message to 80 chars.
 
@@ -569,13 +580,16 @@ Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes 
 15. Call `chatService.initialize()` (migration + lookup map)
 16. Start UpdateService (version polling)
 17. Listen on configured PORT
+18. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`
+19. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
 
 ### Graceful Shutdown
 
 Signal handlers for `SIGTERM`/`SIGINT`:
 1. Call `chatShutdown()` — aborts all active CLI streams
-2. Call `server.close()` — stop accepting connections
-3. 10-second forced exit timeout (`.unref()` as safety net)
+2. Call `wsShutdown()` — closes all WebSocket connections and the WS server
+3. Call `server.close()` — stop accepting connections
+4. 10-second forced exit timeout (`.unref()` as safety net)
 
 ### 5.3 Authentication
 
@@ -655,9 +669,10 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 
 ### Messaging & Streaming
 
-- `chatSendMessage()` gathers completed file paths from pending uploads, appends `[Uploaded files: ...]` to content, POSTs message, opens SSE stream
+- `chatSendMessage()` gathers completed file paths from pending uploads, appends `[Uploaded files: ...]` to content, opens WebSocket, POSTs message, receives stream events via WS
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API)
 - **Streaming state persistence:** `chatStreamingState` Map stores per-conversation state (accumulated text, thinking, tools, agents, tool/agent history, pending interactions). State survives conversation switches — on return, the streaming bubble is recreated and restored.
+- **WebSocket auto-reconnect:** On unexpected WS close during streaming, the client automatically attempts reconnection with exponential backoff (1s base, up to 5 attempts). On reconnect, the server replays buffered events wrapped in `replay_start`/`replay_end`. The client resets streaming state on `replay_start` (clears accumulated text/thinking/tools) and reprocesses replayed events from scratch. `assistant_message` events are deduplicated by message ID. After max attempts exhausted, `_doneResolve` is called to clean up. `chatDisconnectWs()` clears reconnect attempts to prevent auto-reconnect on deliberate close.
 - **Elapsed timer:** live timer in streaming bubble header, self-cleans on DOM disconnect
 - **Unified streaming content:** A single `chatUpdateStreamingContent()` function renders all streaming state (thinking, text, tool history, active tools, agents, plan mode) together in one stacked view. Text content and tool activity accumulate and remain visible simultaneously — new progress updates stack below previous content rather than replacing it. Items are grouped by agent via `chatGroupItemsByAgent()`: standalone tools render flat, while each agent card is followed by a scrollable sub-activity panel showing its child tools. Completed items show checkmarks and elapsed durations; running agents show animated spinners with live timers that count up in real-time.
 - **Tool activity on completed messages:** When a message has a `toolActivity` array, `chatRenderToolActivityBlock()` renders a collapsible `<details>/<summary>` block (same pattern as thinking blocks) with a summary line (e.g. "15 ops · 2 agents · 5 read, 2 edited") generated by `chatBuildActivitySummary()`. Collapsed by default; expands to show the full chronological tool/agent list. Agent entries render as agent cards, tool entries as history items.
@@ -669,10 +684,10 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 - **Turn boundaries:** intermediate assistant messages saved, content reset. `turn_complete` event archives active tools/agents to history so spinners stop but the accumulated history persists. Agents are only archived when they have received their `tool_outcomes` (outcome/status set) — sub-tool `turn_complete` events within an agent do NOT prematurely archive the parent agent. This ensures agents show spinners and live timers throughout their full execution.
 - **Post-completion processing indicator:** When all tools/agents have completed but the model is still working (no text content yet), a "Processing..." indicator with typing dots is shown below the completed activity log. This fills the gap between agent completion and text output, so users always see ongoing work.
 - **Thinking events:** do NOT archive active tool/agent state — `turn_complete` handles archiving. This prevents premature archiving that would kill agent spinners and timers.
-- **Plan approval:** renders plan as markdown with approve/reject buttons → POSTs to `/input`
-- **User questions:** renders question text + option buttons → POSTs answer to `/input`
-- **Auto title update:** handles `title_updated` SSE event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
-- **Usage display:** a small indicator in the conversation header shows cumulative token count and USD cost. Updated in real-time when `usage` SSE events arrive during streaming. Displays on hover a tooltip with input/output/cache token breakdown and cost. Hidden when no usage data exists (e.g. new conversation).
+- **Plan approval:** renders plan as markdown with approve/reject buttons → sends `{ type: 'input', text: 'yes'|'no' }` via WebSocket (HTTP fallback to `/input`)
+- **User questions:** renders question text + option buttons → sends answer via WebSocket `input` frame (HTTP fallback to `/input`)
+- **Auto title update:** handles `title_updated` event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
+- **Usage display:** a small indicator in the conversation header shows cumulative token count and USD cost. Updated in real-time when `usage` events arrive during streaming. Displays on hover a tooltip with input/output/cache token breakdown and cost. Hidden when no usage data exists (e.g. new conversation).
 - **Stream cleanup:** `chatCleanupStreamState()` accepts `{ force }` option. The `finally` block uses `force: true` to ensure cleanup even when a pending interaction was never resolved. Interaction response handlers also use forced cleanup when the stream has already ended.
 - **Send button state:** shows stop (■) when streaming with no text input, send (↑) when idle or when streaming with text input (to queue). Disabled during uploads or session resets.
 - **Message queue:** Users can compose and submit messages while the CLI is actively responding. Queued messages are stored client-side in `chatMessageQueue` (Map of convId → array of `{ id, content, inFlight }`). They appear inline in the chat after the streaming bubble, styled as user messages with reduced opacity and an accent left border. Each queued message shows a "Queued" badge and has Edit and Delete buttons. Editing is inline via a textarea replacing the message content. In-flight messages (being dispatched to the CLI) show "Sending..." and cannot be edited or deleted. When a response completes successfully, the next queued message is automatically sent (FIFO). On error, the queue pauses and a banner appears with Resume and Clear buttons. The `chatQueuePaused` Set tracks paused conversations. Queuing a new message while paused un-pauses the queue. Queue state is per-conversation and purely client-side (not persisted to disk).
@@ -697,7 +712,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked 
 
 ### Session Management
 
-- **Reset:** archives active session with LLM summary, creates new session, resets conversation title to "New Chat" in both header and sidebar. Shows "Archiving session..." indicator. Blocked during streaming. Double-click prevented via `chatResettingConvs` set. Header title is also synced from server data whenever the conversation list reloads (via `chatLoadConversations`), ensuring the header stays consistent even if the inline update is missed. `chatLoadConversations` uses a generation counter to discard stale responses, preventing race conditions where an older response overwrites a title that was already updated by an SSE `title_updated` event. A final `chatLoadConversations()` call in the streaming `finally` block ensures the sidebar and header reflect the latest server state after streaming ends.
+- **Reset:** archives active session with LLM summary, creates new session, resets conversation title to "New Chat" in both header and sidebar. Shows "Archiving session..." indicator. Blocked during streaming. Double-click prevented via `chatResettingConvs` set. Header title is also synced from server data whenever the conversation list reloads (via `chatLoadConversations`), ensuring the header stays consistent even if the inline update is missed. `chatLoadConversations` uses a generation counter to discard stale responses, preventing race conditions where an older response overwrites a title that was already updated by a `title_updated` event. A final `chatLoadConversations()` call in the streaming `finally` block ensures the sidebar and header reflect the latest server state after streaming ends.
 - **History modal:** lists sessions with summaries, view and download buttons
 - **View session:** fetches archived messages from API
 
@@ -805,7 +820,7 @@ Update OAuth callback URLs to include the ngrok URL.
 | File | Focus |
 |------|-------|
 | `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage |
-| `test/chat.test.ts` | Chat routes: /input, SSE forwarding, turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
+| `test/chat.test.ts` | Chat routes: /input, SSE forwarding, WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence, file upload/serve, workspace instructions |
 | `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, usage tracking (addUsage, getUsage), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state |
