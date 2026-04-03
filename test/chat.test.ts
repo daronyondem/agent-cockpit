@@ -3,11 +3,13 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import WebSocket from 'ws';
 import { ChatService } from '../src/services/chatService';
 import { createChatRouter } from '../src/routes/chat';
+import { attachWebSocket } from '../src/ws';
 import { BaseBackendAdapter } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
-import type { BackendMetadata, SendMessageOptions, SendMessageResult, StreamEvent, Message } from '../src/types';
+import type { BackendMetadata, SendMessageOptions, SendMessageResult, StreamEvent, Message, ActiveStreamEntry } from '../src/types';
 
 // ── Test helpers ────────────────────────────────────────────────────────────
 
@@ -129,6 +131,8 @@ function readSSE(urlPath: string): Promise<any[]> {
 
 let mockBackend: MockBackendAdapter;
 let backendRegistry: BackendRegistry;
+let activeStreams: Map<string, ActiveStreamEntry>;
+let wsShutdown: () => void;
 
 beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatroute-'));
@@ -147,8 +151,9 @@ beforeEach(async () => {
     next();
   });
 
-  const { router } = createChatRouter({ chatService, backendRegistry, updateService: null as any });
-  app.use('/api/chat', router);
+  const chatResult = createChatRouter({ chatService, backendRegistry, updateService: null as any });
+  activeStreams = chatResult.activeStreams;
+  app.use('/api/chat', chatResult.router);
 
   await new Promise<void>((resolve) => {
     server = app.listen(0, () => {
@@ -157,9 +162,24 @@ beforeEach(async () => {
       resolve();
     });
   });
+
+  // Attach WebSocket server (local requests bypass auth)
+  const mockStore = {
+    get: (_sid: string, cb: (err: any, session: any) => void) => cb(null, null),
+    set: (_sid: string, _session: any, cb?: (err?: any) => void) => cb?.(),
+    destroy: (_sid: string, cb?: (err?: any) => void) => cb?.(),
+  } as any;
+  const wsResult = attachWebSocket(server, {
+    sessionStore: mockStore,
+    sessionSecret: 'test-secret',
+    activeStreams,
+  });
+  wsShutdown = wsResult.shutdown;
+  chatResult.setWsFunctions(wsResult.send, wsResult.isConnected);
 });
 
 afterEach((done) => {
+  wsShutdown();
   server.close(() => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
     done();
@@ -1404,5 +1424,221 @@ describe('SSE usage event forwarding', () => {
     expect(res.body.usage.inputTokens).toBe(2000);
     expect(res.body.usage.outputTokens).toBe(1000);
     expect(res.body.usage.costUsd).toBe(0.10);
+  });
+});
+
+// ── WebSocket streaming ─────────────────────────────────────────────────────
+
+function connectWs(convId: string): Promise<WebSocket> {
+  return new Promise((resolve, reject) => {
+    const port = (server.address() as any).port;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${convId}/ws`);
+    ws.on('open', () => resolve(ws));
+    ws.on('error', reject);
+  });
+}
+
+function readWsEvents(ws: WebSocket, timeout = 3000): Promise<any[]> {
+  return new Promise((resolve) => {
+    const events: any[] = [];
+    const timer = setTimeout(() => {
+      ws.close();
+      resolve(events);
+    }, timeout);
+    ws.on('message', (data) => {
+      try {
+        const event = JSON.parse(data.toString());
+        events.push(event);
+        if (event.type === 'done') {
+          clearTimeout(timer);
+          ws.close();
+          resolve(events);
+        }
+      } catch {}
+    });
+    ws.on('close', () => {
+      clearTimeout(timer);
+      resolve(events);
+    });
+  });
+}
+
+describe('WebSocket streaming', () => {
+  test('receives text and done events via WebSocket', async () => {
+    const conv = await chatService.createConversation('WS Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hello from WS', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    // Connect WS first, then POST message
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test ws',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    const textEvent = events.find((e: any) => e.type === 'text');
+    expect(textEvent).toBeDefined();
+    expect(textEvent.content).toBe('Hello from WS');
+
+    const doneEvent = events.find((e: any) => e.type === 'done');
+    expect(doneEvent).toBeDefined();
+  });
+
+  test('receives tool_activity and tool_outcomes via WebSocket', async () => {
+    const conv = await chatService.createConversation('WS Tools');
+
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'Read', description: 'Reading file', id: 'tool_ws_1' },
+      { type: 'tool_outcomes', outcomes: [{ toolUseId: 'tool_ws_1', isError: false, outcome: 'read', status: 'success' }] },
+      { type: 'text', content: 'Done', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test tools',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    const toolEvent = events.find((e: any) => e.type === 'tool_activity');
+    expect(toolEvent).toBeDefined();
+    expect(toolEvent.tool).toBe('Read');
+
+    const outcomeEvent = events.find((e: any) => e.type === 'tool_outcomes');
+    expect(outcomeEvent).toBeDefined();
+    expect(outcomeEvent.outcomes[0].status).toBe('success');
+  });
+
+  test('sends stdin input via WebSocket', async () => {
+    const conv = await chatService.createConversation('WS Input');
+
+    // Use a blocking generator so the stream stays alive until we signal
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    const origSendMessage = mockBackend.sendMessage.bind(mockBackend);
+    mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      const self = this;
+      async function* createStream() {
+        yield { type: 'text', content: 'waiting', streaming: true } as StreamEvent;
+        await blockPromise; // Block until unblock() is called
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => {},
+        sendInput: (text: string) => { (self as any)._sendInputCalls.push(text); },
+      };
+    };
+
+    const ws = await connectWs(conv.id);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test input',
+      backend: 'claude-code',
+    });
+
+    // Wait for stream to start processing
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Send input via WS
+    ws.send(JSON.stringify({ type: 'input', text: 'yes' }));
+
+    // Wait for the input to be processed
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    expect(mockBackend._sendInputCalls).toContain('yes');
+
+    // Unblock to clean up
+    unblock!();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    ws.close();
+  });
+
+  test('sends abort via WebSocket', async () => {
+    const conv = await chatService.createConversation('WS Abort');
+
+    // Use a blocking generator so the stream stays alive
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    let aborted = false;
+    mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      async function* createStream() {
+        yield { type: 'text', content: 'working', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { aborted = true; unblock!(); },
+        sendInput: () => {},
+      };
+    };
+
+    const ws = await connectWs(conv.id);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test abort',
+      backend: 'claude-code',
+    });
+
+    // Wait for stream to start
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Abort via WS
+    ws.send(JSON.stringify({ type: 'abort' }));
+
+    // Wait for abort to be processed
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // activeStreams should be cleared after abort
+    expect(activeStreams.has(conv.id)).toBe(false);
+    expect(aborted).toBe(true);
+    ws.close();
+  });
+
+  test('rejects WebSocket for invalid conversation path', async () => {
+    const port = (server.address() as any).port;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat/invalid-path`);
+    await new Promise<void>((resolve) => {
+      ws.on('error', () => resolve());
+      ws.on('close', () => resolve());
+    });
+    expect(ws.readyState).not.toBe(WebSocket.OPEN);
+  });
+
+  test('receives assistant_message via WebSocket', async () => {
+    const conv = await chatService.createConversation('WS Msg Save');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Saved response', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test save',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    const msgEvent = events.find((e: any) => e.type === 'assistant_message');
+    expect(msgEvent).toBeDefined();
+    expect(msgEvent.message.content).toBe('Saved response');
+    expect(msgEvent.message.role).toBe('assistant');
   });
 });

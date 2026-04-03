@@ -8,6 +8,7 @@ import { setupAuth, requireAuth } from './src/middleware/auth';
 import { ensureCsrfToken } from './src/middleware/csrf';
 import { applySecurity } from './src/middleware/security';
 import { createChatRouter } from './src/routes/chat';
+import { attachWebSocket } from './src/ws';
 import { ChatService } from './src/services/chatService';
 import { BackendRegistry } from './src/services/backends/registry';
 import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
@@ -22,12 +23,14 @@ app.set('trust proxy', 1);
 
 applySecurity(app);
 
+const sessionStore = new FileStore({
+  path: path.join(__dirname, 'data', 'sessions'),
+  ttl: 24 * 60 * 60,
+  retries: 0,
+});
+
 app.use(session({
-  store: new FileStore({
-    path: path.join(__dirname, 'data', 'sessions'),
-    ttl: 24 * 60 * 60,
-    retries: 0,
-  }),
+  store: sessionStore,
   secret: config.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
@@ -68,7 +71,7 @@ backendRegistry.register(new ClaudeCodeAdapter({ workingDir: config.DEFAULT_WORK
 
 const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
 const updateService = new UpdateService(__dirname);
-const { router: chatRouter, shutdown: chatShutdown } = createChatRouter({ chatService, backendRegistry, updateService });
+const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = createChatRouter({ chatService, backendRegistry, updateService });
 app.use('/api/chat', chatRouter);
 
 app.use(express.static(path.join(__dirname, 'public')));
@@ -100,10 +103,19 @@ chatService.initialize().then(async () => {
     console.log(`Agent Cockpit running on port ${config.PORT}`);
   });
 
+  // Attach WebSocket server for bidirectional streaming
+  const { shutdown: wsShutdown, send: wsSend, isConnected: wsIsConnected } = attachWebSocket(server, {
+    sessionStore,
+    sessionSecret: config.SESSION_SECRET,
+    activeStreams,
+  });
+  setWsFunctions(wsSend, wsIsConnected);
+
   function shutdown(signal: string) {
     console.log(`\n[shutdown] Received ${signal}, shutting down gracefully...`);
 
     chatShutdown();
+    wsShutdown();
 
     server.close(() => {
       console.log('[shutdown] HTTP server closed');

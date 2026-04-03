@@ -7,13 +7,195 @@ import { csrfGuard } from '../middleware/csrf';
 import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
-import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent } from '../types';
+import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame } from '../types';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
 function param(req: Request, name: string): string {
   const val = req.params[name];
   return Array.isArray(val) ? val[0] : val;
 }
+
+// ── Stream processing (shared by SSE and WebSocket) ─────────────────────────
+
+interface ProcessStreamDeps {
+  chatService: ChatService;
+}
+
+/**
+ * Processes a CLI stream, accumulating state and emitting typed frames.
+ * Transport-agnostic: the caller provides `emit` (SSE res.write or WS send)
+ * and `isClosed` (checks if the connection is gone).
+ */
+export async function processStream(
+  convId: string,
+  entry: ActiveStreamEntry,
+  emit: (frame: WsServerFrame) => void,
+  isClosed: () => boolean,
+  onDone: () => void,
+  deps: ProcessStreamDeps,
+): Promise<void> {
+  const { chatService } = deps;
+  const { stream, backend } = entry;
+
+  let fullResponse = '';
+  let thinkingText = '';
+  let resultText: string | null = null;
+  let hasStreamingDeltas = false;
+  let pendingPlanContent = '';
+  let titleUpdateTriggered = false;
+  let titleUpdatePromise: Promise<void> | null = null;
+  let toolActivityAccumulator: Array<{
+    tool: string;
+    description: string;
+    id: string | null;
+    isAgent?: boolean;
+    subagentType?: string;
+    parentAgentId?: string;
+    outcome?: string;
+    status?: string;
+    startTime: number;
+  }> = [];
+
+  function computeToolDurations(activities: typeof toolActivityAccumulator): ToolActivity[] {
+    if (!activities.length) return [];
+    const now = Date.now();
+    return activities.map((t, i) => {
+      const nextStart = activities[i + 1]?.startTime || now;
+      const duration = t.startTime ? nextStart - t.startTime : null;
+      const toolEntry: ToolActivity = { tool: t.tool, description: t.description, id: t.id, duration, startTime: t.startTime };
+      if (t.isAgent) { toolEntry.isAgent = true; toolEntry.subagentType = t.subagentType; }
+      if (t.parentAgentId) { toolEntry.parentAgentId = t.parentAgentId; }
+      if (t.outcome) { toolEntry.outcome = t.outcome; }
+      if (t.status) { toolEntry.status = t.status; }
+      return toolEntry;
+    });
+  }
+
+  function maybeUpdateTitle() {
+    if (titleUpdateTriggered || !entry.needsTitleUpdate || !entry.titleUpdateMessage) return;
+    titleUpdateTriggered = true;
+    titleUpdatePromise = chatService.generateAndUpdateTitle(convId, entry.titleUpdateMessage)
+      .then((newTitle) => {
+        if (newTitle && !isClosed()) {
+          console.log(`[chat] Title updated for conv=${convId}: ${newTitle}`);
+          emit({ type: 'title_updated', title: newTitle });
+        }
+      })
+      .catch((err: Error) => {
+        console.error(`[chat] Failed to update title for conv=${convId}:`, err.message);
+      });
+  }
+
+  try {
+    for await (const event of stream) {
+      if (isClosed()) break;
+
+      if (event.type === 'text') {
+        fullResponse += event.content;
+        if (event.streaming) {
+          hasStreamingDeltas = true;
+          emit({ type: 'text', content: event.content });
+        }
+      } else if (event.type === 'thinking') {
+        thinkingText += event.content;
+        if (event.streaming) {
+          emit({ type: 'thinking', content: event.content });
+        }
+      } else if (event.type === 'tool_outcomes') {
+        for (const outcome of (event.outcomes || [])) {
+          const match = toolActivityAccumulator.find(t => t.id === outcome.toolUseId);
+          if (match) {
+            match.outcome = outcome.outcome || undefined;
+            match.status = outcome.status || undefined;
+          }
+        }
+        emit({ type: 'tool_outcomes', outcomes: event.outcomes });
+      } else if (event.type === 'turn_boundary') {
+        const turnToolActivity = computeToolDurations(toolActivityAccumulator);
+        if (hasStreamingDeltas && fullResponse.trim()) {
+          console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}, tools=${turnToolActivity.length}`);
+          const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, turnToolActivity.length > 0 ? turnToolActivity : undefined);
+          if (intermediateMsg) emit({ type: 'assistant_message', message: intermediateMsg });
+          maybeUpdateTitle();
+        }
+        emit({ type: 'turn_complete' });
+        fullResponse = '';
+        thinkingText = '';
+        hasStreamingDeltas = false;
+        toolActivityAccumulator = [];
+      } else if (event.type === 'tool_activity') {
+        if (event.isPlanFile && event.planContent) {
+          pendingPlanContent = event.planContent;
+        }
+        const { type: _t, planContent: _pc, ...rest } = event;
+        const restAny = rest as Record<string, unknown>;
+        if (restAny.isPlanMode && restAny.planAction === 'exit' && pendingPlanContent) {
+          restAny.planContent = pendingPlanContent;
+        }
+        if (restAny.isAgent && restAny.id) {
+          console.log(`[chat] AGENT ${restAny.id} parentAgentId=${restAny.parentAgentId || 'none'}`);
+        }
+        emit({ type: 'tool_activity', ...rest } as WsServerFrame);
+        if (!event.isPlanMode && !event.isQuestion) {
+          toolActivityAccumulator.push({
+            tool: rest.tool,
+            description: rest.description || '',
+            id: rest.id || null,
+            isAgent: rest.isAgent || undefined,
+            subagentType: rest.subagentType || undefined,
+            parentAgentId: rest.parentAgentId || undefined,
+            startTime: Date.now(),
+          });
+        }
+      } else if (event.type === 'result') {
+        resultText = event.content;
+      } else if (event.type === 'usage') {
+        const updated = await chatService.addUsage(convId, event.usage);
+        if (!isClosed()) {
+          emit({ type: 'usage', usage: updated || event.usage });
+        }
+      } else if (event.type === 'error') {
+        console.error(`[chat] Stream error for conv=${convId}:`, event.error);
+        emit({ type: 'error', error: event.error });
+      } else if (event.type === 'done') {
+        const apiErrPattern = /^API Error:\s*\d{3}\s/;
+        const finalToolActivity = computeToolDurations(toolActivityAccumulator);
+        const finalToolActivityArg = finalToolActivity.length > 0 ? finalToolActivity : undefined;
+        if (hasStreamingDeltas && fullResponse.trim()) {
+          if (apiErrPattern.test(fullResponse.trim())) {
+            console.log(`[chat] Stream done for conv=${convId}, detected API error in text — not saving as message`);
+            emit({ type: 'error', error: fullResponse.trim() });
+          } else {
+            console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}, tools=${finalToolActivity.length}`);
+            const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, finalToolActivityArg);
+            if (assistantMsg) emit({ type: 'assistant_message', message: assistantMsg });
+            maybeUpdateTitle();
+          }
+        } else if (resultText && resultText.trim()) {
+          console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}, tools=${finalToolActivity.length}`);
+          const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null, finalToolActivityArg);
+          if (assistantMsg) emit({ type: 'assistant_message', message: assistantMsg });
+          maybeUpdateTitle();
+        } else {
+          console.log(`[chat] Stream done for conv=${convId}, no content to save`);
+        }
+        toolActivityAccumulator = [];
+        if (titleUpdatePromise) await titleUpdatePromise;
+        emit({ type: 'done' });
+      }
+    }
+  } catch (err: unknown) {
+    console.error(`[chat] Stream exception for conv=${convId}:`, err);
+    if (!isClosed()) {
+      emit({ type: 'error', error: (err as Error).message });
+      emit({ type: 'done' });
+    }
+  } finally {
+    onDone();
+  }
+}
+
+// ── Router ──────────────────────────────────────────────────────────────────
 
 interface ChatRouterDeps {
   chatService: ChatService;
@@ -26,6 +208,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   const packageJson = require('../../package.json');
 
   const activeStreams = new Map<string, ActiveStreamEntry>();
+  let wsSend: ((convId: string, frame: WsServerFrame) => boolean) | null = null;
+  let wsIsConnected: ((convId: string) => boolean) | null = null;
 
   // ── Available backends ──────────────────────────────────────────────────────
   router.get('/backends', (_req: Request, res: Response) => {
@@ -358,10 +542,29 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
     activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });
 
+    // If a WebSocket is connected for this conversation, pipe the stream to it
+    if (wsSend && wsIsConnected && wsIsConnected(convId)) {
+      processStream(
+        convId,
+        activeStreams.get(convId)!,
+        (frame) => { wsSend!(convId, frame); },
+        () => !(wsIsConnected && wsIsConnected(convId)),
+        () => { activeStreams.delete(convId); },
+        { chatService },
+      ).catch((err) => {
+        console.error(`[chat] WS stream error for conv=${convId}:`, err);
+        if (wsSend) {
+          wsSend(convId, { type: 'error', error: (err as Error).message });
+          wsSend(convId, { type: 'done' });
+        }
+        activeStreams.delete(convId);
+      });
+    }
+
     res.json({ userMessage: userMsg, streamReady: true });
   });
 
-  // ── SSE stream ──────────────────────────────────────────────────────────────
+  // ── SSE stream (fallback) ───────────────────────────────────────────────────
   router.get('/conversations/:id/stream', (req: Request, res: Response) => {
     const convId = param(req, 'id');
     const entry = activeStreams.get(convId);
@@ -370,9 +573,6 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       res.status(404).json({ error: 'No active stream' });
       return;
     }
-
-    const streamEntry = entry; // Narrowed: guaranteed non-null after early return
-    const { stream, abort, backend } = streamEntry;
 
     res.socket!.setTimeout(0);
     res.writeHead(200, {
@@ -396,166 +596,20 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       }
     });
 
-    let fullResponse = '';
-    let thinkingText = '';
-    let resultText: string | null = null;
-    let hasStreamingDeltas = false;
-    let pendingPlanContent = '';
-    let titleUpdateTriggered = false;
-    let titleUpdatePromise: Promise<void> | null = null;
-    let toolActivityAccumulator: Array<{
-      tool: string;
-      description: string;
-      id: string | null;
-      isAgent?: boolean;
-      subagentType?: string;
-      parentAgentId?: string;
-      outcome?: string;
-      status?: string;
-      startTime: number;
-    }> = [];
-
-    function computeToolDurations(activities: typeof toolActivityAccumulator): ToolActivity[] {
-      if (!activities.length) return [];
-      const now = Date.now();
-      return activities.map((t, i) => {
-        const nextStart = activities[i + 1]?.startTime || now;
-        const duration = t.startTime ? nextStart - t.startTime : null;
-        const toolEntry: ToolActivity = { tool: t.tool, description: t.description, id: t.id, duration, startTime: t.startTime };
-        if (t.isAgent) { toolEntry.isAgent = true; toolEntry.subagentType = t.subagentType; }
-        if (t.parentAgentId) { toolEntry.parentAgentId = t.parentAgentId; }
-        if (t.outcome) { toolEntry.outcome = t.outcome; }
-        if (t.status) { toolEntry.status = t.status; }
-        return toolEntry;
-      });
-    }
-
-    function maybeUpdateTitle() {
-      if (titleUpdateTriggered || !streamEntry.needsTitleUpdate || !streamEntry.titleUpdateMessage) return;
-      titleUpdateTriggered = true;
-      titleUpdatePromise = chatService.generateAndUpdateTitle(convId, streamEntry.titleUpdateMessage)
-        .then((newTitle) => {
-          if (newTitle && !res.writableEnded) {
-            console.log(`[chat] Title updated for conv=${convId}: ${newTitle}`);
-            res.write(`data: ${JSON.stringify({ type: 'title_updated', title: newTitle })}\n\n`);
-          }
-        })
-        .catch((err: Error) => {
-          console.error(`[chat] Failed to update title for conv=${convId}:`, err.message);
-        });
-    }
-
-    (async () => {
-      try {
-        for await (const event of stream) {
-          if (res.writableEnded) break;
-
-          if (event.type === 'text') {
-            fullResponse += event.content;
-            if (event.streaming) {
-              hasStreamingDeltas = true;
-              res.write(`data: ${JSON.stringify({ type: 'text', content: event.content })}\n\n`);
-            }
-          } else if (event.type === 'thinking') {
-            thinkingText += event.content;
-            if (event.streaming) {
-              res.write(`data: ${JSON.stringify({ type: 'thinking', content: event.content })}\n\n`);
-            }
-          } else if (event.type === 'tool_outcomes') {
-            for (const outcome of (event.outcomes || [])) {
-              const match = toolActivityAccumulator.find(t => t.id === outcome.toolUseId);
-              if (match) {
-                match.outcome = outcome.outcome || undefined;
-                match.status = outcome.status || undefined;
-              }
-            }
-            res.write(`data: ${JSON.stringify({ type: 'tool_outcomes', outcomes: event.outcomes })}\n\n`);
-          } else if (event.type === 'turn_boundary') {
-            const turnToolActivity = computeToolDurations(toolActivityAccumulator);
-            if (hasStreamingDeltas && fullResponse.trim()) {
-              console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}, tools=${turnToolActivity.length}`);
-              const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, turnToolActivity.length > 0 ? turnToolActivity : undefined);
-              res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: intermediateMsg })}\n\n`);
-              maybeUpdateTitle();
-            }
-            res.write(`data: ${JSON.stringify({ type: 'turn_complete' })}\n\n`);
-            fullResponse = '';
-            thinkingText = '';
-            hasStreamingDeltas = false;
-            toolActivityAccumulator = [];
-          } else if (event.type === 'tool_activity') {
-            if (event.isPlanFile && event.planContent) {
-              pendingPlanContent = event.planContent;
-            }
-            const { type: _t, planContent: _pc, ...rest } = event;
-            const restAny = rest as Record<string, unknown>;
-            if (restAny.isPlanMode && restAny.planAction === 'exit' && pendingPlanContent) {
-              restAny.planContent = pendingPlanContent;
-            }
-            if (restAny.isAgent && restAny.id) {
-              console.log(`[chat] AGENT ${restAny.id} parentAgentId=${restAny.parentAgentId || 'none'}`);
-            }
-            res.write(`data: ${JSON.stringify({ type: 'tool_activity', ...rest })}\n\n`);
-            if (!event.isPlanMode && !event.isQuestion) {
-              toolActivityAccumulator.push({
-                tool: rest.tool,
-                description: rest.description || '',
-                id: rest.id || null,
-                isAgent: rest.isAgent || undefined,
-                subagentType: rest.subagentType || undefined,
-                parentAgentId: rest.parentAgentId || undefined,
-                startTime: Date.now(),
-              });
-            }
-          } else if (event.type === 'result') {
-            resultText = event.content;
-          } else if (event.type === 'usage') {
-            const updated = await chatService.addUsage(convId, event.usage);
-            if (!res.writableEnded) {
-              res.write(`data: ${JSON.stringify({ type: 'usage', usage: updated || event.usage })}\n\n`);
-            }
-          } else if (event.type === 'error') {
-            console.error(`[chat] Stream error for conv=${convId}:`, event.error);
-            res.write(`data: ${JSON.stringify({ type: 'error', error: event.error })}\n\n`);
-          } else if (event.type === 'done') {
-            const apiErrPattern = /^API Error:\s*\d{3}\s/;
-            const finalToolActivity = computeToolDurations(toolActivityAccumulator);
-            const finalToolActivityArg = finalToolActivity.length > 0 ? finalToolActivity : undefined;
-            if (hasStreamingDeltas && fullResponse.trim()) {
-              if (apiErrPattern.test(fullResponse.trim())) {
-                console.log(`[chat] Stream done for conv=${convId}, detected API error in text — not saving as message`);
-                res.write(`data: ${JSON.stringify({ type: 'error', error: fullResponse.trim() })}\n\n`);
-              } else {
-                console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}, tools=${finalToolActivity.length}`);
-                const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, finalToolActivityArg);
-                res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
-                maybeUpdateTitle();
-              }
-            } else if (resultText && resultText.trim()) {
-              console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}, tools=${finalToolActivity.length}`);
-              const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null, finalToolActivityArg);
-              res.write(`data: ${JSON.stringify({ type: 'assistant_message', message: assistantMsg })}\n\n`);
-              maybeUpdateTitle();
-            } else {
-              console.log(`[chat] Stream done for conv=${convId}, no content to save`);
-            }
-            toolActivityAccumulator = [];
-            if (titleUpdatePromise) await titleUpdatePromise;
-            res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-          }
-        }
-      } catch (err: unknown) {
-        console.error(`[chat] Stream exception for conv=${convId}:`, err);
-        if (!res.writableEnded) {
-          res.write(`data: ${JSON.stringify({ type: 'error', error: (err as Error).message })}\n\n`);
-          res.write(`data: ${JSON.stringify({ type: 'done' })}\n\n`);
-        }
-      } finally {
-        clearInterval(keepalive);
-        activeStreams.delete(convId);
-        if (!res.writableEnded) res.end();
-      }
-    })();
+    processStream(
+      convId,
+      entry,
+      (frame) => {
+        if (!res.writableEnded) res.write(`data: ${JSON.stringify(frame)}\n\n`);
+      },
+      () => res.writableEnded,
+      () => { /* cleanup handled in finally below */ },
+      { chatService },
+    ).finally(() => {
+      clearInterval(keepalive);
+      activeStreams.delete(convId);
+      if (!res.writableEnded) res.end();
+    });
   });
 
   // ── Abort streaming ────────────────────────────────────────────────────────
@@ -692,5 +746,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     if (updateService) updateService.stop();
   }
 
-  return { router, shutdown };
+  function setWsFunctions(
+    sendFn: (convId: string, frame: WsServerFrame) => boolean,
+    isConnectedFn: (convId: string) => boolean,
+  ) {
+    wsSend = sendFn;
+    wsIsConnected = isConnectedFn;
+  }
+
+  return { router, shutdown, activeStreams, setWsFunctions };
 }
