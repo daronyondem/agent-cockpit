@@ -21,6 +21,14 @@ jest.spyOn(fs, 'existsSync').mockImplementation((p: fs.PathLike) => {
   return originalExistsSync(p);
 });
 
+const originalReadFileSync = fs.readFileSync.bind(fs);
+let mockReadFileSyncOverrides: Record<string, string> = {};
+jest.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs.readFileSync>) => {
+  const pStr = String(args[0]);
+  if (pStr in mockReadFileSyncOverrides) return mockReadFileSyncOverrides[pStr];
+  return originalReadFileSync(...args);
+});
+
 const originalWriteFileSync = fs.writeFileSync.bind(fs);
 const mockWriteFileSync = jest.spyOn(fs, 'writeFileSync').mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
   // Allow writing the temp ecosystem config for CI, mock everything else
@@ -69,10 +77,9 @@ describe('UpdateService', () => {
     mockSpawnFn.mockClear();
     mockWriteFileSync.mockClear();
     mockExistsSyncOverrides = {};
+    mockReadFileSyncOverrides = {};
     // Default: interpreter exists
     mockExistsSyncOverrides[interpreterPath] = true;
-    // Clear require cache so each test gets a fresh load
-    delete require.cache[require.resolve(ecosystemPath)];
   });
 
   afterEach(() => {
@@ -330,6 +337,44 @@ describe('UpdateService', () => {
       const result = await service.triggerUpdate({ hasActiveStreams: () => false });
       expect(result.success).toBe(false);
       expect(result.error).toMatch(/Interpreter not found/);
+      expect(result.steps.find(s => s.name === 'verify interpreter')?.success).toBe(false);
+      expect(mockSpawnFn).not.toHaveBeenCalled();
+    });
+
+    test('succeeds when interpreter is a bare command found on PATH', async () => {
+      // Override readFileSync to return a config with a bare command interpreter
+      mockReadFileSyncOverrides[ecosystemPath] = `module.exports = { apps: [{ script: 'server.ts', interpreter: 'node' }] };`;
+
+      mockExecFile([
+        { stdout: '' },                          // git status
+        { stdout: 'ok' },                        // git checkout
+        { stdout: 'ok' },                        // git pull
+        { stdout: 'ok' },                        // npm install
+        { stdout: '/usr/local/bin/node\n' },     // which node
+      ]);
+
+      const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+      expect(result.success).toBe(true);
+      const verifyStep = result.steps.find(s => s.name === 'verify interpreter');
+      expect(verifyStep?.success).toBe(true);
+      expect(verifyStep?.output).toMatch(/Found on PATH/);
+    });
+
+    test('fails when bare command interpreter is not found on PATH', async () => {
+      // Override readFileSync to return a config with a bare command that won't be found
+      mockReadFileSyncOverrides[ecosystemPath] = `module.exports = { apps: [{ script: 'server.ts', interpreter: 'nonexistent-cmd' }] };`;
+
+      mockExecFile([
+        { stdout: '' },                          // git status
+        { stdout: 'ok' },                        // git checkout
+        { stdout: 'ok' },                        // git pull
+        { stdout: 'ok' },                        // npm install
+        { error: 'not found' },                  // which nonexistent-cmd
+      ]);
+
+      const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/not found on PATH/);
       expect(result.steps.find(s => s.name === 'verify interpreter')?.success).toBe(false);
       expect(mockSpawnFn).not.toHaveBeenCalled();
     });
