@@ -48,8 +48,18 @@ agent-cockpit/
 │       └── updateService.ts            # Self-update: version checking, git pull, PM2 restart
 ├── public/
 │   ├── index.html                      # HTML shell
-│   ├── app.js                          # All frontend JavaScript (remains JS — no build step)
-│   └── styles.css                      # All CSS with light/dark theme
+│   ├── styles.css                      # All CSS with light/dark theme
+│   └── js/                             # Frontend ES modules (no build step)
+│       ├── main.js                     # Entry point: init, event wiring, settings, sessions, update, shortcuts
+│       ├── state.js                    # Shared mutable state object, API helpers, constants
+│       ├── utils.js                    # Pure utilities: HTML escape, formatting
+│       ├── theme.js                    # Theme detection, toggle, persistence
+│       ├── modal.js                    # Generic modal show/close
+│       ├── backends.js                 # Backend loading, selection, icons, capabilities
+│       ├── websocket.js                # WebSocket connect, reconnect, send, disconnect
+│       ├── rendering.js                # Message/content rendering, markdown, lightbox, code, streaming UI, timers
+│       ├── conversations.js            # Sidebar, conversation CRUD, file uploads, drafts, queue UI, context menu
+│       └── streaming.js                # Message sending, stream event handling, plan approval, user questions, queue processing
 ├── test/                               # Jest test suite (TypeScript via ts-jest)
 └── data/                               # Runtime data (gitignored, created at startup)
     ├── chat/
@@ -667,9 +677,9 @@ Cross-Origin Embedder Policy: disabled.
 
 ## 6. Frontend Behavior
 
-**Files:** `public/index.html`, `public/app.js`, `public/styles.css`
+**Files:** `public/index.html`, `public/js/*.js` (10 ES modules), `public/styles.css`
 
-Vanilla JavaScript SPA — no framework, no bundler, no build step. Uses marked (CDN) for Markdown and highlight.js (CDN) for syntax highlighting. (Backend is TypeScript; frontend remains vanilla JS.)
+Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is split into native ES modules (`<script type="module">`) loaded from `public/js/main.js`. Uses marked (CDN) for Markdown and highlight.js (CDN) for syntax highlighting. Shared mutable state lives in a single `state` object exported from `state.js`. Circular dependencies between modules are avoided via late-binding callback patterns (e.g. `setStreamEventHandler()` in `websocket.js`). Functions called from inline `onclick` in dynamically generated HTML are assigned to `window` in `main.js`. (Backend is TypeScript; frontend remains vanilla JS.)
 
 ### Layout
 
