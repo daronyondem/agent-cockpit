@@ -2142,6 +2142,102 @@
 
   .chat-settings-save:hover { background: var(--accent-chat-hover); }
 
+  /* ── Settings Tabs ───────────────────────────────────────── */
+  /* Hide modal header bottom border when tabs are present */
+  .chat-modal-header:has(+ .chat-settings-tabs) {
+    border-bottom: none;
+  }
+
+  .chat-settings-tabs {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 20px;
+  }
+
+  .chat-settings-tab {
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    transition: all 0.12s;
+  }
+
+  .chat-settings-tab:hover { color: var(--text); }
+  .chat-settings-tab.active {
+    color: var(--accent-chat);
+    border-bottom-color: var(--accent-chat);
+    font-weight: 600;
+  }
+
+  .chat-settings-tab-content { padding-top: 16px; }
+
+  /* ── Usage Stats ─────────────────────────────────────────── */
+  .chat-usage-stats-controls {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .chat-usage-clear-btn {
+    background: var(--surface) !important;
+    color: var(--danger, #e53935) !important;
+    border: 1px solid var(--border) !important;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .chat-usage-clear-btn:hover {
+    background: var(--danger, #e53935) !important;
+    color: white !important;
+    border-color: var(--danger, #e53935) !important;
+  }
+
+  .chat-usage-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    margin-bottom: 16px;
+  }
+
+  .chat-usage-table th,
+  .chat-usage-table td {
+    text-align: left;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .chat-usage-table th {
+    font-weight: 600;
+    color: var(--muted);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  .chat-usage-table td { color: var(--text); }
+
+  .chat-usage-daily-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    margin: 16px 0 8px;
+  }
+
+  .chat-usage-daily { font-size: 11px; }
+
+  .chat-usage-loading {
+    text-align: center;
+    padding: 24px 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
   /* ── Responsive ───────────────────────────────────────────── */
   @media (max-width: 1024px) {
     .chat-sidebar { position: absolute; z-index: 300; height: 100%; }

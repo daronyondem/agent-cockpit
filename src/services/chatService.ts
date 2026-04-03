@@ -7,6 +7,7 @@ import type {
   Message,
   ToolActivity,
   Usage,
+  UsageLedger,
   SessionEntry,
   SessionFile,
   SessionHistoryItem,
@@ -48,6 +49,7 @@ export class ChatService {
   workspacesDir: string;
   artifactsDir: string;
   settingsFile: string;
+  usageLedgerFile: string;
   private _defaultWorkspace: string;
   private _backendRegistry: BackendRegistry | null;
   private _convWorkspaceMap: Map<string, string>;
@@ -59,6 +61,7 @@ export class ChatService {
     this.workspacesDir = path.join(this.baseDir, 'workspaces');
     this.artifactsDir = path.join(this.baseDir, 'artifacts');
     this.settingsFile = path.join(this.baseDir, 'settings.json');
+    this.usageLedgerFile = path.join(this.baseDir, 'usage-ledger.json');
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
     this._backendRegistry = options.backendRegistry || null;
     this._convWorkspaceMap = new Map();
@@ -252,6 +255,7 @@ export class ChatService {
       sessionNumber,
       messages,
       usage: convEntry.usage || this._emptyUsage(),
+      sessionUsage: activeSession?.usage || this._emptyUsage(),
     };
   }
 
@@ -899,31 +903,51 @@ export class ChatService {
     return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
   }
 
-  async addUsage(convId: string, usage: Usage): Promise<Usage | null> {
+  private _addToUsage(target: Usage, source: Usage): void {
+    target.inputTokens += source.inputTokens || 0;
+    target.outputTokens += source.outputTokens || 0;
+    target.cacheReadTokens += source.cacheReadTokens || 0;
+    target.cacheWriteTokens += source.cacheWriteTokens || 0;
+    target.costUsd += source.costUsd || 0;
+  }
+
+  async addUsage(convId: string, usage: Usage, backend?: string, model?: string): Promise<{ conversationUsage: Usage; sessionUsage: Usage } | null> {
     if (!usage) return null;
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { hash, index, convEntry } = result;
 
+    // Conversation-level totals
     if (!convEntry.usage) convEntry.usage = this._emptyUsage();
-    convEntry.usage.inputTokens += usage.inputTokens || 0;
-    convEntry.usage.outputTokens += usage.outputTokens || 0;
-    convEntry.usage.cacheReadTokens += usage.cacheReadTokens || 0;
-    convEntry.usage.cacheWriteTokens += usage.cacheWriteTokens || 0;
-    convEntry.usage.costUsd += usage.costUsd || 0;
+    this._addToUsage(convEntry.usage, usage);
 
+    // Per-backend on conversation
+    const backendId = backend || convEntry.backend;
+    if (!convEntry.usageByBackend) convEntry.usageByBackend = {};
+    if (!convEntry.usageByBackend[backendId]) convEntry.usageByBackend[backendId] = this._emptyUsage();
+    this._addToUsage(convEntry.usageByBackend[backendId], usage);
+
+    // Session-level totals + per-backend
+    let sessionUsage = this._emptyUsage();
     const activeSession = convEntry.sessions.find(s => s.active);
     if (activeSession) {
       if (!activeSession.usage) activeSession.usage = this._emptyUsage();
-      activeSession.usage.inputTokens += usage.inputTokens || 0;
-      activeSession.usage.outputTokens += usage.outputTokens || 0;
-      activeSession.usage.cacheReadTokens += usage.cacheReadTokens || 0;
-      activeSession.usage.cacheWriteTokens += usage.cacheWriteTokens || 0;
-      activeSession.usage.costUsd += usage.costUsd || 0;
+      this._addToUsage(activeSession.usage, usage);
+      sessionUsage = activeSession.usage;
+
+      if (!activeSession.usageByBackend) activeSession.usageByBackend = {};
+      if (!activeSession.usageByBackend[backendId]) activeSession.usageByBackend[backendId] = this._emptyUsage();
+      this._addToUsage(activeSession.usageByBackend[backendId], usage);
     }
 
     await this._writeWorkspaceIndex(hash, index);
-    return convEntry.usage;
+
+    // Record to daily ledger (fire-and-forget, don't block the response)
+    this._recordToLedger(backendId, model || 'unknown', usage).catch(err => {
+      console.error('[usage] Failed to write ledger:', (err as Error).message);
+    });
+
+    return { conversationUsage: convEntry.usage, sessionUsage };
   }
 
   async getUsage(convId: string): Promise<Usage | null> {
@@ -931,6 +955,59 @@ export class ChatService {
     if (!result) return null;
     const { convEntry } = result;
     return convEntry.usage || this._emptyUsage();
+  }
+
+  // ── Usage Ledger ──────────────────────────────────────────────────────────
+
+  private async _readLedger(): Promise<UsageLedger> {
+    try {
+      const data = await fsp.readFile(this.usageLedgerFile, 'utf8');
+      return JSON.parse(data) as UsageLedger;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { days: [] };
+      throw err;
+    }
+  }
+
+  private async _writeLedger(ledger: UsageLedger): Promise<void> {
+    await fsp.writeFile(this.usageLedgerFile, JSON.stringify(ledger, null, 2), 'utf8');
+  }
+
+  private async _recordToLedger(backendId: string, model: string, usage: Usage): Promise<void> {
+    const ledger = await this._readLedger();
+    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+
+    let dayEntry = ledger.days.find(d => d.date === today);
+    if (!dayEntry) {
+      dayEntry = { date: today, records: [] };
+      ledger.days.push(dayEntry);
+    }
+
+    // Migrate old format: if day has 'backends' but no 'records', convert
+    if ((dayEntry as any).backends && !dayEntry.records) {
+      dayEntry.records = [];
+      for (const [bid, u] of Object.entries((dayEntry as any).backends)) {
+        dayEntry.records.push({ backend: bid, model: 'unknown', usage: u as Usage });
+      }
+      delete (dayEntry as any).backends;
+    }
+
+    let record = dayEntry.records.find(r => r.backend === backendId && r.model === model);
+    if (!record) {
+      record = { backend: backendId, model, usage: this._emptyUsage() };
+      dayEntry.records.push(record);
+    }
+    this._addToUsage(record.usage, usage);
+
+    await this._writeLedger(ledger);
+  }
+
+  async getUsageStats(): Promise<UsageLedger> {
+    return this._readLedger();
+  }
+
+  async clearUsageStats(): Promise<void> {
+    await this._writeLedger({ days: [] });
   }
 
   // ── Settings ───────────────────────────────────────────────────────────────
