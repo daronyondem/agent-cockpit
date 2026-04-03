@@ -1,4 +1,5 @@
 import path from 'path';
+import fs from 'fs';
 
 // ── Mock child_process.execFile ─────────────────────────────────────────────
 
@@ -9,6 +10,16 @@ jest.mock('child_process', () => ({
   execFile: function () { return mockExecFileFn.apply(null, arguments); },
   spawn: function () { return mockSpawnFn.apply(null, arguments); },
 }));
+
+// ── Mock fs.existsSync for interpreter/pm2 checks ──────────────────────────
+
+const originalExistsSync = fs.existsSync;
+let mockExistsSyncOverrides: Record<string, boolean> = {};
+jest.spyOn(fs, 'existsSync').mockImplementation((p: fs.PathLike) => {
+  const pStr = p.toString();
+  if (pStr in mockExistsSyncOverrides) return mockExistsSyncOverrides[pStr];
+  return originalExistsSync(p);
+});
 
 import { UpdateService } from '../src/services/updateService';
 
@@ -36,11 +47,16 @@ describe('UpdateService', () => {
   let service: UpdateService;
   const appRoot = path.join(__dirname, '..');
 
+  const interpreterPath = path.join(appRoot, 'node_modules', '.bin', 'tsx');
+
   beforeEach(() => {
     service = new UpdateService(appRoot);
     mockExecFileFn.mockReset();
     mockSpawnFn.mockClear();
     mockSpawnResult.unref.mockClear();
+    mockExistsSyncOverrides = {};
+    // Default: interpreter exists
+    mockExistsSyncOverrides[interpreterPath] = true;
   });
 
   afterEach(() => {
@@ -211,33 +227,37 @@ describe('UpdateService', () => {
         { stdout: 'Already on \'main\'\n' },
         { stdout: 'Already up to date.\n' },
         { stdout: 'up to date\n' },
+        { stdout: '/usr/local/bin/pm2\n' }, // which pm2
       ]);
 
       const result = await service.triggerUpdate({
         hasActiveStreams: () => false,
       });
       expect(result.success).toBe(true);
-      expect(result.steps).toHaveLength(4);
+      expect(result.steps).toHaveLength(6);
       expect(mockSpawnFn).toHaveBeenCalled();
     });
 
     test('executes all steps on success', async () => {
       mockExecFile([
-        { stdout: '' },
-        { stdout: 'Already on \'main\'\n' },
-        { stdout: 'Updating abc..def\n' },
-        { stdout: 'added 0 packages\n' },
+        { stdout: '' },                          // git status
+        { stdout: 'Already on \'main\'\n' },     // git checkout
+        { stdout: 'Updating abc..def\n' },        // git pull
+        { stdout: 'added 0 packages\n' },         // npm install
+        { stdout: '/usr/local/bin/pm2\n' },        // which pm2
       ]);
 
       const result = await service.triggerUpdate({
         hasActiveStreams: () => false,
       });
       expect(result.success).toBe(true);
-      expect(result.steps).toHaveLength(4);
+      expect(result.steps).toHaveLength(6);
       expect(result.steps[0].name).toBe('git checkout main');
       expect(result.steps[1].name).toBe('git pull origin main');
       expect(result.steps[2].name).toBe('npm install');
-      expect(result.steps[3].name).toBe('pm2 restart');
+      expect(result.steps[3].name).toBe('verify interpreter');
+      expect(result.steps[4].name).toBe('resolve pm2');
+      expect(result.steps[5].name).toBe('pm2 restart');
       result.steps.forEach(s => expect(s.success).toBe(true));
       expect(mockSpawnFn).toHaveBeenCalledWith('sh', expect.arrayContaining(['-c']), expect.objectContaining({ detached: true }));
       expect(mockSpawnResult.unref).toHaveBeenCalled();
@@ -276,10 +296,93 @@ describe('UpdateService', () => {
         { stdout: 'ok' },
         { stdout: 'ok' },
         { stdout: 'ok' },
+        { stdout: '/usr/local/bin/pm2\n' },
       ]);
 
       await service.triggerUpdate({ hasActiveStreams: () => false });
       expect((service as any)._updateInProgress).toBe(false);
+    });
+
+    test('fails when interpreter is missing after npm install', async () => {
+      mockExistsSyncOverrides[interpreterPath] = false;
+      mockExecFile([
+        { stdout: '' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+      ]);
+
+      const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Interpreter not found/);
+      expect(result.steps.find(s => s.name === 'verify interpreter')?.success).toBe(false);
+      expect(mockSpawnFn).not.toHaveBeenCalled();
+    });
+
+    test('fails when pm2 binary cannot be found', async () => {
+      const localPm2 = path.join(appRoot, 'node_modules', '.bin', 'pm2');
+      mockExistsSyncOverrides[localPm2] = false;
+      mockExecFile([
+        { stdout: '' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { error: 'not found' }, // which pm2 fails
+      ]);
+
+      const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Cannot find pm2/);
+      expect(result.steps.find(s => s.name === 'resolve pm2')?.success).toBe(false);
+      expect(mockSpawnFn).not.toHaveBeenCalled();
+    });
+
+    test('falls back to local pm2 when which fails', async () => {
+      const localPm2 = path.join(appRoot, 'node_modules', '.bin', 'pm2');
+      mockExistsSyncOverrides[localPm2] = true;
+      mockExecFile([
+        { stdout: '' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { error: 'not found' }, // which pm2 fails
+      ]);
+
+      const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+      expect(result.success).toBe(true);
+      const resolveStep = result.steps.find(s => s.name === 'resolve pm2');
+      expect(resolveStep?.success).toBe(true);
+      expect(resolveStep?.output).toContain('fallback');
+      expect(mockSpawnFn).toHaveBeenCalled();
+    });
+
+    test('uses resolved pm2 path in spawn command', async () => {
+      mockExecFile([
+        { stdout: '' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: '/opt/homebrew/bin/pm2\n' },
+      ]);
+
+      await service.triggerUpdate({ hasActiveStreams: () => false });
+      const spawnArgs = mockSpawnFn.mock.calls[0];
+      expect(spawnArgs[1][1]).toContain('/opt/homebrew/bin/pm2');
+    });
+
+    test('logs restart output to data/update-restart.log', async () => {
+      mockExecFile([
+        { stdout: '' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: '/usr/local/bin/pm2\n' },
+      ]);
+
+      await service.triggerUpdate({ hasActiveStreams: () => false });
+      const spawnArgs = mockSpawnFn.mock.calls[0];
+      const shellCmd = spawnArgs[1][1];
+      expect(shellCmd).toContain('update-restart.log');
     });
   });
 });

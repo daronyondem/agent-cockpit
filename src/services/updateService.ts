@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'child_process';
+import fs from 'fs';
 import path from 'path';
 import type { UpdateStatus, UpdateResult, UpdateStep } from '../types';
 
@@ -102,11 +103,48 @@ export class UpdateService {
         return { success: false, steps, error: 'Failed to install dependencies: ' + (err as Error).message };
       }
 
+      // Verify the interpreter from ecosystem config exists after npm install
       const ecosystemPath = path.join(this._appRoot, 'ecosystem.config.js');
+      try {
+        const ecoConfig = require(ecosystemPath);
+        const app = ecoConfig.apps?.[0];
+        if (app?.interpreter) {
+          const interpreterPath = path.resolve(this._appRoot, app.interpreter);
+          if (!fs.existsSync(interpreterPath)) {
+            steps.push({ name: 'verify interpreter', success: false, output: `Interpreter not found: ${interpreterPath}` });
+            return { success: false, steps, error: `Interpreter not found after npm install: ${app.interpreter}. Dependencies may not have installed correctly.` };
+          }
+          steps.push({ name: 'verify interpreter', success: true, output: `Found: ${interpreterPath}` });
+        }
+      } catch (err: unknown) {
+        steps.push({ name: 'verify interpreter', success: false, output: (err as Error).message });
+        return { success: false, steps, error: 'Failed to read ecosystem config: ' + (err as Error).message };
+      }
+
+      // Resolve pm2 binary path so the detached shell can find it
+      let pm2Bin: string;
+      try {
+        pm2Bin = (await this._exec('which', ['pm2'])).trim();
+        if (!pm2Bin) throw new Error('pm2 not found in PATH');
+        steps.push({ name: 'resolve pm2', success: true, output: pm2Bin });
+      } catch {
+        // Fallback: look for pm2 in node_modules
+        const localPm2 = path.join(this._appRoot, 'node_modules', '.bin', 'pm2');
+        if (fs.existsSync(localPm2)) {
+          pm2Bin = localPm2;
+          steps.push({ name: 'resolve pm2', success: true, output: `fallback: ${pm2Bin}` });
+        } else {
+          steps.push({ name: 'resolve pm2', success: false, output: 'pm2 not found in PATH or node_modules' });
+          return { success: false, steps, error: 'Cannot find pm2 binary to restart the server.' };
+        }
+      }
+
       // Delete + start in a single detached shell so pm2 picks up config
       // changes (interpreter, script name, env vars). Must be one detached
       // command because pm2 delete kills the current process.
-      const pm2 = spawn('sh', ['-c', `pm2 delete "${ecosystemPath}" 2>/dev/null; pm2 start "${ecosystemPath}"`], {
+      // Log output to a file so restart failures leave a trace.
+      const logFile = path.join(this._appRoot, 'data', 'update-restart.log');
+      const pm2 = spawn('sh', ['-c', `("${pm2Bin}" delete "${ecosystemPath}" 2>/dev/null; "${pm2Bin}" start "${ecosystemPath}") >> "${logFile}" 2>&1`], {
         cwd: this._appRoot,
         detached: true,
         stdio: 'ignore',
