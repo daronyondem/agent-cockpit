@@ -2180,8 +2180,10 @@ function chatHandleStreamEvent(targetConvId, event) {
     st.assistantContent = '';
     st.assistantThinking = '';
     chatArchiveActiveState(st);
-    // Keep toolHistory and agentHistory — they're needed for rendering
-    // sub-tasks under agent cards. They'll be cleared when streaming ends.
+    // Clear history — these are now persisted in the saved message's toolActivity.
+    // Keeping them causes duplicates when the next turn adds new agents.
+    st.toolHistory = [];
+    st.agentHistory = [];
     st.planModeActive = false;
     st.pendingInteraction = savedInteraction;
     if (isStillActive && chatActiveConv) {
@@ -2218,6 +2220,8 @@ function chatHandleStreamEvent(targetConvId, event) {
     st._hadError = true;
     if (isStillActive) chatAppendError(event.error);
   } else if (event.type === 'done') {
+    // Ignore stale 'done' during replay — it's from the old stream, not the current one
+    if (st._replaying) return;
     if (st._doneResolve) { st._doneResolve(); delete st._doneResolve; }
     chatCleanupStreamState(targetConvId);
   }

@@ -1880,4 +1880,56 @@ describe('WebSocket reconnection', () => {
 
     ws.close();
   });
+
+  test('session reset clears stale event buffer', async () => {
+    const conv = await chatService.createConversation('WS Reset Buffer');
+
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      async function* createStream() {
+        yield { type: 'text', content: 'old-session', streaming: true } as StreamEvent;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { unblock!(); },
+        sendInput: () => {},
+      };
+    };
+
+    // Start a stream and let it complete — events get buffered
+    const ws1 = await connectWs(conv.id);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'old session message',
+      backend: 'claude-code',
+    });
+    const events1 = await readWsEvents(ws1);
+    expect(events1.some(e => e.type === 'done')).toBe(true);
+
+    // Disconnect — buffer still exists on server
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Reset session — should clear the buffer
+    const resetRes = await makeRequest('POST', `/api/chat/conversations/${conv.id}/reset`);
+    expect(resetRes.status).toBe(200);
+
+    // Reconnect after reset — should NOT replay old events
+    const ws2 = await connectWs(conv.id);
+    const reconnectEvents: any[] = [];
+    await new Promise<void>(resolve => {
+      const timer = setTimeout(() => resolve(), 500);
+      ws2.on('message', (data) => {
+        try { reconnectEvents.push(JSON.parse(data.toString())); } catch {}
+      });
+    });
+
+    // No replay_start means the buffer was cleared
+    expect(reconnectEvents.some(e => e.type === 'replay_start')).toBe(false);
+    expect(reconnectEvents.some(e => e.type === 'text')).toBe(false);
+
+    ws2.close();
+  });
 });
