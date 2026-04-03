@@ -144,6 +144,9 @@ let chatPendingFiles = []; // Each: { file, status: 'uploading'|'done'|'error', 
 let chatDraftState = new Map(); // convId|'__new__' -> { text, pendingFiles }
 let _ensureConvPromise = null;
 let chatConvLoadGen = 0; // generation counter for chatLoadConversations to discard stale responses
+let chatMessageQueue = new Map(); // convId -> [{ id, content, inFlight }]
+let chatQueuePaused = new Set(); // convIds where queue is paused due to error
+let chatQueueIdCounter = 0;
 
 function chatApiUrl(path) {
   return apiUrl('chat/' + path);
@@ -256,7 +259,9 @@ function chatWireEvents() {
 
   const sendBtn = document.getElementById('chat-send-btn');
   if (sendBtn) sendBtn.onclick = () => {
-    if (chatStreamingConvs.has(chatActiveConvId)) chatStopStreaming();
+    const ta = document.getElementById('chat-textarea');
+    const hasInput = ta && ta.value.trim();
+    if (chatStreamingConvs.has(chatActiveConvId) && !hasInput) chatStopStreaming();
     else chatSendMessage();
   };
 
@@ -875,15 +880,26 @@ function chatUpdateSendButtonState() {
   if (!sendBtn) return;
   const isStreaming = chatStreamingConvs.has(chatActiveConvId);
   const isResetting = chatResettingConvs.has(chatActiveConvId);
+  const ta = document.getElementById('chat-textarea');
+  const hasText = ta && ta.value.trim();
   if (isStreaming) {
-    sendBtn.disabled = false;
-    sendBtn.textContent = '■';
-    sendBtn.classList.add('stop');
+    if (hasText) {
+      // Show send arrow to queue the message
+      sendBtn.disabled = false;
+      sendBtn.textContent = '↑';
+      sendBtn.classList.remove('stop');
+      sendBtn.title = 'Queue message (Enter)';
+    } else {
+      // Show stop button
+      sendBtn.disabled = false;
+      sendBtn.textContent = '■';
+      sendBtn.classList.add('stop');
+      sendBtn.title = 'Stop streaming';
+    }
   } else {
     sendBtn.textContent = '↑';
     sendBtn.classList.remove('stop');
-    const ta = document.getElementById('chat-textarea');
-    const hasText = ta && ta.value.trim();
+    sendBtn.title = 'Send message (Enter)';
     const hasCompletedFiles = chatPendingFiles.some(e => e.status === 'done');
     const hasUploading = chatPendingFiles.some(e => e.status === 'uploading');
     sendBtn.disabled = isResetting || hasUploading || (!hasText && !hasCompletedFiles);
@@ -1224,6 +1240,9 @@ function chatRenderMessages() {
     }
     // else: default typing dots shown by chatAppendStreamingMessage
   }
+
+  // Render queued messages after all real messages and streaming bubble
+  chatRenderQueuedMessages();
 
   chatScrollToBottom();
 }
@@ -1585,6 +1604,196 @@ function chatWireMessageActions(container) {
   });
 }
 
+// ── Message Queue UI ─────────────────────────────────────────────────────────
+
+function chatRenderQueuedMessages() {
+  const container = document.getElementById('chat-messages');
+  if (!container) return;
+
+  // Remove any existing queued message elements
+  container.querySelectorAll('.chat-msg-queued').forEach(el => el.remove());
+  container.querySelectorAll('.chat-queue-paused-banner').forEach(el => el.remove());
+
+  const convId = chatActiveConvId;
+  if (!convId) return;
+  const queue = chatMessageQueue.get(convId);
+  if (!queue || queue.length === 0) return;
+
+  // If paused, show a banner before the queued messages
+  if (chatQueuePaused.has(convId)) {
+    const bannerEl = document.createElement('div');
+    bannerEl.className = 'chat-queue-paused-banner';
+    bannerEl.innerHTML = `
+      <span>Queue paused due to error.</span>
+      <button class="chat-queue-resume-btn" onclick="chatResumeQueue()">Resume queue</button>
+      <button class="chat-queue-clear-btn" onclick="chatClearQueue()">Clear queue</button>
+    `;
+    container.appendChild(bannerEl);
+  }
+
+  for (const item of queue) {
+    const el = document.createElement('div');
+    el.className = 'chat-msg user chat-msg-queued' + (item.inFlight ? ' chat-msg-in-flight' : '');
+    el.dataset.queueId = item.id;
+    const rendered = chatRenderMarkdown(item.content);
+    el.innerHTML = `
+      <div class="chat-msg-wrapper">
+        <div class="chat-msg-avatar">👤</div>
+        <div class="chat-msg-body">
+          <div class="chat-msg-role">You <span class="chat-queue-badge">${item.inFlight ? 'Sending...' : 'Queued'}</span></div>
+          <div class="chat-msg-content chat-queued-content">${rendered}</div>
+          ${!item.inFlight ? `<div class="chat-msg-actions chat-queue-actions" style="opacity:1;">
+            <button class="chat-msg-action" data-action="edit-queued" data-queue-id="${item.id}" title="Edit">Edit</button>
+            <button class="chat-msg-action" data-action="delete-queued" data-queue-id="${item.id}" title="Delete">Delete</button>
+          </div>` : ''}
+        </div>
+      </div>
+    `;
+    container.appendChild(el);
+  }
+
+  // Wire queue action buttons
+  container.querySelectorAll('[data-action="delete-queued"]').forEach(btn => {
+    btn.onclick = () => chatDeleteQueuedMessage(Number(btn.dataset.queueId));
+  });
+  container.querySelectorAll('[data-action="edit-queued"]').forEach(btn => {
+    btn.onclick = () => chatEditQueuedMessage(Number(btn.dataset.queueId));
+  });
+}
+
+function chatDeleteQueuedMessage(queueId) {
+  const convId = chatActiveConvId;
+  if (!convId) return;
+  const queue = chatMessageQueue.get(convId);
+  if (!queue) return;
+  const idx = queue.findIndex(item => item.id === queueId);
+  if (idx === -1 || queue[idx].inFlight) return;
+  queue.splice(idx, 1);
+  if (queue.length === 0) {
+    chatMessageQueue.delete(convId);
+    chatQueuePaused.delete(convId);
+  }
+  chatRenderQueuedMessages();
+  chatUpdateSendButtonState();
+}
+
+function chatEditQueuedMessage(queueId) {
+  const convId = chatActiveConvId;
+  if (!convId) return;
+  const queue = chatMessageQueue.get(convId);
+  if (!queue) return;
+  const item = queue.find(i => i.id === queueId);
+  if (!item || item.inFlight) return;
+
+  const container = document.getElementById('chat-messages');
+  if (!container) return;
+  const msgEl = container.querySelector(`.chat-msg-queued[data-queue-id="${queueId}"]`);
+  if (!msgEl) return;
+
+  const contentEl = msgEl.querySelector('.chat-queued-content');
+  const actionsEl = msgEl.querySelector('.chat-queue-actions');
+  if (!contentEl) return;
+
+  // Replace content with textarea for inline editing
+  const editArea = document.createElement('textarea');
+  editArea.className = 'chat-queue-edit-textarea';
+  editArea.value = item.content;
+  editArea.rows = Math.max(2, item.content.split('\n').length);
+
+  const editActions = document.createElement('div');
+  editActions.className = 'chat-queue-edit-actions';
+  editActions.innerHTML = `
+    <button class="chat-queue-edit-save">Save</button>
+    <button class="chat-queue-edit-cancel">Cancel</button>
+  `;
+
+  contentEl.replaceWith(editArea);
+  if (actionsEl) actionsEl.style.display = 'none';
+  editArea.parentElement.appendChild(editActions);
+  editArea.focus();
+  editArea.setSelectionRange(editArea.value.length, editArea.value.length);
+
+  editActions.querySelector('.chat-queue-edit-save').onclick = () => {
+    const newContent = editArea.value.trim();
+    if (newContent) {
+      item.content = newContent;
+    }
+    chatRenderQueuedMessages();
+  };
+
+  editActions.querySelector('.chat-queue-edit-cancel').onclick = () => {
+    chatRenderQueuedMessages();
+  };
+
+  editArea.onkeydown = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      editActions.querySelector('.chat-queue-edit-save').click();
+    } else if (e.key === 'Escape') {
+      editActions.querySelector('.chat-queue-edit-cancel').click();
+    }
+  };
+}
+
+function chatResumeQueue() {
+  const convId = chatActiveConvId;
+  if (!convId) return;
+  chatQueuePaused.delete(convId);
+  chatRenderQueuedMessages();
+  // If not currently streaming, process the next message
+  if (!chatStreamingConvs.has(convId)) {
+    chatProcessNextQueuedMessage(convId);
+  }
+}
+window.chatResumeQueue = chatResumeQueue;
+
+function chatClearQueue() {
+  const convId = chatActiveConvId;
+  if (!convId) return;
+  const queue = chatMessageQueue.get(convId);
+  if (!queue) return;
+  // Keep in-flight messages, remove the rest
+  const inFlight = queue.filter(i => i.inFlight);
+  if (inFlight.length > 0) {
+    chatMessageQueue.set(convId, inFlight);
+  } else {
+    chatMessageQueue.delete(convId);
+  }
+  chatQueuePaused.delete(convId);
+  chatRenderQueuedMessages();
+  chatUpdateSendButtonState();
+}
+window.chatClearQueue = chatClearQueue;
+
+async function chatProcessNextQueuedMessage(convId) {
+  if (chatQueuePaused.has(convId)) return;
+  if (chatStreamingConvs.has(convId)) return;
+  const queue = chatMessageQueue.get(convId);
+  if (!queue || queue.length === 0) return;
+
+  const nextItem = queue[0];
+  nextItem.inFlight = true;
+  chatRenderQueuedMessages();
+
+  // Populate textarea with the queued content and send
+  const textarea = document.getElementById('chat-textarea');
+  if (textarea) {
+    textarea.value = nextItem.content;
+    chatAutoResize(textarea);
+  }
+
+  // Remove the item from queue before sending (it will become a real message)
+  queue.shift();
+  if (queue.length === 0) chatMessageQueue.delete(convId);
+  chatRenderQueuedMessages();
+
+  // Send the message — chatSendMessage will handle the rest
+  // We need to make sure we're on the right conversation
+  if (chatActiveConvId === convId) {
+    await chatSendMessage();
+  }
+}
+
 function chatScrollToBottom() {
   const container = document.getElementById('chat-messages');
   if (container) {
@@ -1617,7 +1826,7 @@ async function chatSendMessage() {
   const hasText = textarea && textarea.value.trim();
   const completedFiles = chatPendingFiles.filter(e => e.status === 'done');
   const hasFiles = completedFiles.length > 0;
-  if ((!hasText && !hasFiles) || chatStreamingConvs.has(chatActiveConvId) || chatResettingConvs.has(chatActiveConvId)) return;
+  if ((!hasText && !hasFiles) || chatResettingConvs.has(chatActiveConvId)) return;
   if (chatPendingFiles.some(e => e.status === 'uploading')) return;
 
   let content = textarea ? textarea.value.trim() : '';
@@ -1651,6 +1860,19 @@ async function chatSendMessage() {
       alert('Failed to create conversation: ' + err.message);
       return;
     }
+  }
+
+  // If currently streaming, queue the message instead of sending immediately
+  if (chatStreamingConvs.has(chatActiveConvId)) {
+    const queue = chatMessageQueue.get(chatActiveConvId) || [];
+    queue.push({ id: ++chatQueueIdCounter, content, inFlight: false });
+    chatMessageQueue.set(chatActiveConvId, queue);
+    // Un-pause queue if user queues a new message (they've seen the error)
+    chatQueuePaused.delete(chatActiveConvId);
+    chatRenderQueuedMessages();
+    chatUpdateSendButtonState();
+    chatScrollToBottom();
+    return;
   }
 
   chatDraftState.delete(chatActiveConvId);
@@ -1847,6 +2069,7 @@ async function chatSendMessage() {
             st.pendingInteraction = null;
             chatArchiveActiveState(st);
             st.planModeActive = false;
+            st._hadError = true;
             if (isStillActive) chatAppendError(event.error);
           } else if (event.type === 'done') {
             chatCleanupStreamState(targetConvId);
@@ -1860,7 +2083,12 @@ async function chatSendMessage() {
     if (err.name !== 'AbortError') {
       if (chatActiveConvId === targetConvId) chatAppendError(err.message);
     }
+    // Mark error for queue pause logic
+    const errSt = chatStreamingState.get(targetConvId);
+    if (errSt) errSt._hadError = true;
   } finally {
+    const finalSt = chatStreamingState.get(targetConvId);
+    const hadError = finalSt?._hadError;
     chatStreamingConvs.delete(targetConvId);
     // Force cleanup — stream has ended, no more events will arrive
     chatCleanupStreamState(targetConvId, { force: true });
@@ -1869,6 +2097,14 @@ async function chatSendMessage() {
     // Refresh conversation list from server to pick up title changes and message counts.
     // The generation counter in chatLoadConversations discards any stale in-flight responses.
     chatLoadConversations();
+
+    // Process message queue: pause on error, otherwise send next
+    if (hadError && chatMessageQueue.has(targetConvId)) {
+      chatQueuePaused.add(targetConvId);
+      chatRenderQueuedMessages();
+    } else {
+      chatProcessNextQueuedMessage(targetConvId);
+    }
   }
 }
 
