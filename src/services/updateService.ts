@@ -121,22 +121,30 @@ export class UpdateService {
         return { success: false, steps, error: 'Failed to read ecosystem config: ' + (err as Error).message };
       }
 
-      // Delete + start in a single detached shell so pm2 picks up config
-      // changes (interpreter, script name, env vars). Must be one detached
-      // command because pm2 delete kills the current process.
-      //
-      // Prepend node_modules/.bin to PATH so the detached shell can always
-      // find pm2 (a project dependency) without relying on global installs
-      // or npx. Log output so restart failures leave a trace.
+      // Write a restart script to disk, then execute it via a double-fork
+      // so it survives PM2's treekill. PM2 kills the server process AND
+      // all descendants when `pm2 delete` runs. A simple `detached: true`
+      // spawn is still a child (by PPID) and gets killed before reaching
+      // `pm2 start`. The double-fork (nohup ... &) in a subshell ensures
+      // the restart process is reparented to init before treekill runs.
       const binDir = path.join(this._appRoot, 'node_modules', '.bin');
       const logFile = path.join(this._appRoot, 'data', 'update-restart.log');
-      const pm2 = spawn('sh', ['-c', `export PATH="${binDir}:$PATH"; (pm2 delete "${ecosystemPath}" 2>/dev/null; pm2 start "${ecosystemPath}") >> "${logFile}" 2>&1`], {
+      const scriptFile = path.join(this._appRoot, 'data', 'restart.sh');
+      const scriptContent = [
+        '#!/bin/sh',
+        `export PATH="${binDir}:$PATH"`,
+        'sleep 2',
+        `pm2 delete "${ecosystemPath}" 2>/dev/null`,
+        `pm2 start "${ecosystemPath}"`,
+      ].join('\n');
+      fs.writeFileSync(scriptFile, scriptContent, { mode: 0o755 });
+      // Double-fork: subshell backgrounds nohup, then exits immediately.
+      // The nohup process gets reparented to init, surviving treekill.
+      spawn('sh', ['-c', `(nohup "${scriptFile}" >> "${logFile}" 2>&1 &)`], {
         cwd: this._appRoot,
-        detached: true,
         stdio: 'ignore',
       });
-      pm2.unref();
-      steps.push({ name: 'pm2 restart', success: true, output: 'Restart signal sent' });
+      steps.push({ name: 'pm2 restart', success: true, output: 'Restart script written and launched' });
 
       return { success: true, steps };
     } finally {

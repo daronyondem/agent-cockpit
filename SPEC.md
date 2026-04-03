@@ -519,7 +519,7 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
   5. `git pull origin main` (60s timeout)
   6. `npm install` (120s timeout)
   7. Verify interpreter — reads `ecosystem.config.js`, checks the configured interpreter binary exists on disk (prevents restart with missing dependencies)
-  8. `pm2 delete` + `pm2 start` (fire-and-forget, detached spawn with `node_modules/.bin` prepended to PATH, output logged to `data/update-restart.log`)
+  8. Write restart script to `data/restart.sh` (sets PATH, sleeps 2s, `pm2 delete` + `pm2 start`), launch via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. Output logged to `data/update-restart.log`
 
 Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
 

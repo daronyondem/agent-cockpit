@@ -21,6 +21,8 @@ jest.spyOn(fs, 'existsSync').mockImplementation((p: fs.PathLike) => {
   return originalExistsSync(p);
 });
 
+const mockWriteFileSync = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => {});
+
 import { UpdateService } from '../src/services/updateService';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -59,7 +61,7 @@ describe('UpdateService', () => {
     service = new UpdateService(appRoot);
     mockExecFileFn.mockReset();
     mockSpawnFn.mockClear();
-    mockSpawnResult.unref.mockClear();
+    mockWriteFileSync.mockClear();
     mockExistsSyncOverrides = {};
     // Default: interpreter exists
     mockExistsSyncOverrides[interpreterPath] = true;
@@ -267,8 +269,8 @@ describe('UpdateService', () => {
       expect(result.steps[3].name).toBe('verify interpreter');
       expect(result.steps[4].name).toBe('pm2 restart');
       result.steps.forEach(s => expect(s.success).toBe(true));
-      expect(mockSpawnFn).toHaveBeenCalledWith('sh', expect.arrayContaining(['-c']), expect.objectContaining({ detached: true }));
-      expect(mockSpawnResult.unref).toHaveBeenCalled();
+      expect(mockWriteFileSync).toHaveBeenCalled();
+      expect(mockSpawnFn).toHaveBeenCalledWith('sh', expect.arrayContaining(['-c']), expect.objectContaining({ stdio: 'ignore' }));
     });
 
     test('stops at first failed step and reports error', async () => {
@@ -326,7 +328,7 @@ describe('UpdateService', () => {
       expect(mockSpawnFn).not.toHaveBeenCalled();
     });
 
-    test('prepends node_modules/.bin to PATH in spawn command', async () => {
+    test('writes restart script with PATH and pm2 commands', async () => {
       mockExecFile([
         { stdout: '' },
         { stdout: 'ok' },
@@ -335,13 +337,19 @@ describe('UpdateService', () => {
       ]);
 
       await service.triggerUpdate({ hasActiveStreams: () => false });
-      const spawnArgs = mockSpawnFn.mock.calls[0] as unknown[];
-      const shellCmd = (spawnArgs[1] as string[])[1];
-      expect(shellCmd).toContain('node_modules/.bin');
-      expect(shellCmd).toMatch(/export PATH=.*node_modules\/\.bin/);
+      const writeCall = mockWriteFileSync.mock.calls.find(
+        (c) => String(c[0]).includes('restart.sh')
+      );
+      expect(writeCall).toBeDefined();
+      const script = String(writeCall![1]);
+      expect(script).toContain('node_modules/.bin');
+      expect(script).toMatch(/export PATH=.*node_modules\/\.bin/);
+      expect(script).toContain('pm2 delete');
+      expect(script).toContain('pm2 start');
+      expect(script).toContain('sleep 2');
     });
 
-    test('logs restart output to data/update-restart.log', async () => {
+    test('launches restart script via double-fork with nohup', async () => {
       mockExecFile([
         { stdout: '' },
         { stdout: 'ok' },
@@ -352,6 +360,8 @@ describe('UpdateService', () => {
       await service.triggerUpdate({ hasActiveStreams: () => false });
       const spawnArgs = mockSpawnFn.mock.calls[0] as unknown[];
       const shellCmd = (spawnArgs[1] as string[])[1];
+      expect(shellCmd).toContain('nohup');
+      expect(shellCmd).toContain('restart.sh');
       expect(shellCmd).toContain('update-restart.log');
     });
   });
