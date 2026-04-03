@@ -479,10 +479,14 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // ── Reset session ──────────────────────────────────────────────────────────
   router.post('/conversations/:id/reset', csrfGuard, async (req: Request, res: Response) => {
     try {
-      if (activeStreams.has(param(req, 'id'))) {
+      const convId = param(req, 'id');
+      if (activeStreams.has(convId)) {
         return res.status(409).json({ error: 'Cannot reset session while streaming' });
       }
-      const result = await chatService.resetSession(param(req, 'id'));
+      // Clear any stale event buffer so a subsequent WS connection
+      // doesn't replay old-session events into the new session.
+      if (wsFns) wsFns.clearBuffer(convId);
+      const result = await chatService.resetSession(convId);
       if (!result) return res.status(404).json({ error: 'Conversation not found' });
       res.json(result);
     } catch (err: unknown) {
