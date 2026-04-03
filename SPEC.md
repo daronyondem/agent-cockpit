@@ -519,8 +519,7 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
   5. `git pull origin main` (60s timeout)
   6. `npm install` (120s timeout)
   7. Verify interpreter — reads `ecosystem.config.js`, checks the configured interpreter binary exists on disk (prevents restart with missing dependencies)
-  8. Resolve pm2 — resolves full path to `pm2` via `which`, falls back to `node_modules/.bin/pm2` (ensures detached shell can find it)
-  9. `pm2 delete` + `pm2 start` using resolved path (fire-and-forget, detached spawn, output logged to `data/update-restart.log`)
+  8. `pm2 delete` + `pm2 start` (fire-and-forget, detached spawn with `node_modules/.bin` prepended to PATH, output logged to `data/update-restart.log`)
 
 Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
 
@@ -812,7 +811,7 @@ Update OAuth callback URLs to include the ngrok URL.
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |
 | `test/sessionStore.test.ts` | Session file-store persistence |
-| `test/updateService.test.ts` | Version comparison, status, trigger guards, interval management, interpreter verification, pm2 resolution fallback |
+| `test/updateService.test.ts` | Version comparison, status, trigger guards, interval management, interpreter verification, PATH setup for restart |
 
 ### CI/CD
 
