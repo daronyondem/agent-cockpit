@@ -2487,6 +2487,7 @@ function chatStartElapsedTimer(convId) {
     const st = chatStreamingState.get(convId);
     if (!st || !st.streamingMsgEl || !st.streamingMsgEl.isConnected) {
       clearInterval(state.elapsedTimerInterval);
+      state.elapsedTimerInterval = null;
       return;
     }
     const el = st.streamingMsgEl.querySelector('.chat-elapsed-timer');
