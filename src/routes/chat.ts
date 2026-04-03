@@ -16,7 +16,7 @@ function param(req: Request, name: string): string {
   return Array.isArray(val) ? val[0] : val;
 }
 
-// ── Stream processing (shared by SSE and WebSocket) ─────────────────────────
+// ── Stream processing ────────────────────────────────────────────────────────
 
 interface ProcessStreamDeps {
   chatService: ChatService;
@@ -24,7 +24,7 @@ interface ProcessStreamDeps {
 
 /**
  * Processes a CLI stream, accumulating state and emitting typed frames.
- * Transport-agnostic: the caller provides `emit` (SSE res.write or WS send)
+ * Transport-agnostic: the caller provides `emit` (WS send)
  * and `isClosed` (checks if the connection is gone).
  */
 export async function processStream(
@@ -494,7 +494,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
-  // ── Send message + stream response (SSE) ──────────────────────────────────
+  // ── Send message + stream response ────────────────────────────────────────
   router.post('/conversations/:id/message', csrfGuard, async (req: Request, res: Response) => {
     const convId = param(req, 'id');
     const { content, backend } = req.body as { content?: string; backend?: string };
