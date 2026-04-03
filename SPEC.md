@@ -529,7 +529,7 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
   4. `git checkout main` (30s timeout)
   5. `git pull origin main` (60s timeout)
   6. `npm install` (120s timeout)
-  7. Verify interpreter — reads `ecosystem.config.js`, checks the configured interpreter binary exists on disk (prevents restart with missing dependencies)
+  7. Verify interpreter — reads `ecosystem.config.js` fresh from disk (via `fs.readFileSync`, not `require`, to avoid stale cache), checks the configured interpreter exists. Path-based interpreters (starting with `.` or `/`) are checked on disk; bare commands (e.g. `npx`, `node`) are resolved via `which` on PATH
   8. Write restart script to `data/restart.sh` (sets PATH, sleeps 2s, `pm2 delete` + `pm2 start`), launch via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. Output logged to `data/update-restart.log`
 
 Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.

@@ -106,15 +106,33 @@ export class UpdateService {
       // Verify the interpreter from ecosystem config exists after npm install
       const ecosystemPath = path.join(this._appRoot, 'ecosystem.config.js');
       try {
-        const ecoConfig = require(ecosystemPath);
+        // Read fresh from disk — require() caches modules and returns stale
+        // config even after git pull updates the file
+        const ecoSource = fs.readFileSync(ecosystemPath, 'utf8');
+        const mod: { exports: Record<string, unknown> } = { exports: {} };
+        new Function('module', 'exports', ecoSource)(mod, mod.exports);
+        const ecoConfig = mod.exports as { apps?: Array<{ interpreter?: string }> };
         const app = ecoConfig.apps?.[0];
         if (app?.interpreter) {
-          const interpreterPath = path.resolve(this._appRoot, app.interpreter);
-          if (!fs.existsSync(interpreterPath)) {
-            steps.push({ name: 'verify interpreter', success: false, output: `Interpreter not found: ${interpreterPath}` });
-            return { success: false, steps, error: `Interpreter not found after npm install: ${app.interpreter}. Dependencies may not have installed correctly.` };
+          // Relative or absolute paths: resolve against appRoot and check on disk
+          // Bare commands (e.g. "npx", "node"): look up via PATH
+          const isPath = app.interpreter.startsWith('.') || app.interpreter.startsWith('/');
+          if (isPath) {
+            const interpreterPath = path.resolve(this._appRoot, app.interpreter);
+            if (!fs.existsSync(interpreterPath)) {
+              steps.push({ name: 'verify interpreter', success: false, output: `Interpreter not found: ${interpreterPath}` });
+              return { success: false, steps, error: `Interpreter not found after npm install: ${app.interpreter}. Dependencies may not have installed correctly.` };
+            }
+            steps.push({ name: 'verify interpreter', success: true, output: `Found: ${interpreterPath}` });
+          } else {
+            try {
+              const resolved = await this._exec('which', [app.interpreter], 5000);
+              steps.push({ name: 'verify interpreter', success: true, output: `Found on PATH: ${resolved.trim()}` });
+            } catch {
+              steps.push({ name: 'verify interpreter', success: false, output: `Interpreter not found on PATH: ${app.interpreter}` });
+              return { success: false, steps, error: `Interpreter not found on PATH: ${app.interpreter}. Ensure it is installed and available.` };
+            }
           }
-          steps.push({ name: 'verify interpreter', success: true, output: `Found: ${interpreterPath}` });
         }
       } catch (err: unknown) {
         steps.push({ name: 'verify interpreter', success: false, output: (err as Error).message });
