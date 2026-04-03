@@ -366,8 +366,8 @@ describe('UpdateService', () => {
       ]);
 
       await service.triggerUpdate({ hasActiveStreams: () => false });
-      const spawnArgs = mockSpawnFn.mock.calls[0];
-      expect(spawnArgs[1][1]).toContain('/opt/homebrew/bin/pm2');
+      const spawnArgs = mockSpawnFn.mock.calls[0] as unknown[];
+      expect((spawnArgs[1] as string[])[1]).toContain('/opt/homebrew/bin/pm2');
     });
 
     test('logs restart output to data/update-restart.log', async () => {
@@ -380,8 +380,8 @@ describe('UpdateService', () => {
       ]);
 
       await service.triggerUpdate({ hasActiveStreams: () => false });
-      const spawnArgs = mockSpawnFn.mock.calls[0];
-      const shellCmd = spawnArgs[1][1];
+      const spawnArgs = mockSpawnFn.mock.calls[0] as unknown[];
+      const shellCmd = (spawnArgs[1] as string[])[1];
       expect(shellCmd).toContain('update-restart.log');
     });
   });
