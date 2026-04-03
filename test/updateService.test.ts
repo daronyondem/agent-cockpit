@@ -48,8 +48,14 @@ describe('UpdateService', () => {
   const appRoot = path.join(__dirname, '..');
 
   const interpreterPath = path.join(appRoot, 'node_modules', '.bin', 'tsx');
+  const ecosystemPath = path.join(appRoot, 'ecosystem.config.js');
+  const ecosystemExists = originalExistsSync(ecosystemPath);
 
   beforeEach(() => {
+    // Ensure ecosystem.config.js exists for tests (it's gitignored, so absent in CI)
+    if (!ecosystemExists) {
+      fs.writeFileSync(ecosystemPath, `module.exports = { apps: [{ script: 'server.ts', interpreter: './node_modules/.bin/tsx' }] };`);
+    }
     service = new UpdateService(appRoot);
     mockExecFileFn.mockReset();
     mockSpawnFn.mockClear();
@@ -57,10 +63,15 @@ describe('UpdateService', () => {
     mockExistsSyncOverrides = {};
     // Default: interpreter exists
     mockExistsSyncOverrides[interpreterPath] = true;
+    // Clear require cache so each test gets a fresh load
+    delete require.cache[require.resolve(ecosystemPath)];
   });
 
   afterEach(() => {
     service.stop();
+    if (!ecosystemExists && originalExistsSync(ecosystemPath)) {
+      fs.unlinkSync(ecosystemPath);
+    }
   });
 
   // ── _isNewer ────────────────────────────────────────────────────────────
