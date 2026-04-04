@@ -98,6 +98,7 @@ export interface ConversationEntry {
   usage?: Usage;
   usageByBackend?: Record<string, Usage>;
   sessions: SessionEntry[];
+  archived?: boolean;
 }
 
 export interface WorkspaceIndex {
@@ -128,6 +129,7 @@ export interface ConversationListItem {
   messageCount: number;
   lastMessage: string | null;
   usage: Usage | null;
+  archived?: boolean;
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────

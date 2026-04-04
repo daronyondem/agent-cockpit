@@ -12,6 +12,7 @@ export const state = {
   chatStreamingState: new Map(), // convId -> { assistantContent, assistantThinking, activeTools, activeAgents, planModeActive, pendingInteraction, streamingMsgEl }
   chatAbortController: null,
   chatSidebarCollapsed: false,
+  chatViewingArchive: false,
   chatSearchTimeout: null,
   chatContextMenuEl: null,
   chatSettingsData: null,

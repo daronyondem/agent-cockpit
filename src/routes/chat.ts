@@ -363,7 +363,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   router.get('/conversations', async (req: Request, res: Response) => {
     try {
       const q = (req.query.q as string) || '';
-      const convs = q ? await chatService.searchConversations(q) : await chatService.listConversations();
+      const archived = req.query.archived === 'true';
+      const opts = { archived };
+      const convs = q ? await chatService.searchConversations(q, opts) : await chatService.listConversations(opts);
       res.json({ conversations: convs });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -411,6 +413,33 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         activeStreams.delete(param(req, 'id'));
       }
       const ok = await chatService.deleteConversation(param(req, 'id'));
+      if (!ok) return res.status(404).json({ error: 'Conversation not found' });
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Archive conversation ───────────────────────────────────────────────────
+  router.patch('/conversations/:id/archive', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const entry = activeStreams.get(param(req, 'id'));
+      if (entry) {
+        entry.abort();
+        activeStreams.delete(param(req, 'id'));
+      }
+      const ok = await chatService.archiveConversation(param(req, 'id'));
+      if (!ok) return res.status(404).json({ error: 'Conversation not found' });
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Restore conversation ──────────────────────────────────────────────────
+  router.patch('/conversations/:id/restore', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const ok = await chatService.restoreConversation(param(req, 'id'));
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
     } catch (err: unknown) {

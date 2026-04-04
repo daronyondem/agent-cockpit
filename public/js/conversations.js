@@ -196,8 +196,11 @@ export function chatToggleSidebar() {
 export async function chatLoadConversations(query) {
   const gen = ++state.chatConvLoadGen;
   try {
-    const q = query ? `?q=${encodeURIComponent(query)}` : '';
-    const res = await chatFetch(`conversations${q}`);
+    const params = new URLSearchParams();
+    if (query) params.set('q', query);
+    if (state.chatViewingArchive) params.set('archived', 'true');
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await chatFetch(`conversations${qs}`);
     if (gen !== state.chatConvLoadGen) return;
     const data = await res.json();
     state.chatConversations = data.conversations || [];
@@ -243,8 +246,10 @@ export function chatRenderConvList() {
   const list = document.getElementById('chat-conv-list');
   if (!list) return;
 
+  const emptyMsg = state.chatViewingArchive ? 'No archived conversations' : 'No conversations yet';
   if (state.chatConversations.length === 0) {
-    list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">No conversations yet</div>';
+    list.innerHTML = `<div style="padding:20px;text-align:center;color:var(--muted);font-size:12px;">${emptyMsg}</div>`;
+    chatRenderArchiveToggle();
     return;
   }
 
@@ -278,11 +283,49 @@ export function chatRenderConvList() {
     }
   }
   list.innerHTML = html;
+  chatRenderArchiveToggle();
+}
+
+function chatRenderArchiveToggle() {
+  const sidebar = document.getElementById('chat-sidebar');
+  if (!sidebar) return;
+  let toggle = sidebar.querySelector('.chat-archive-toggle');
+  if (!toggle) {
+    toggle = document.createElement('button');
+    toggle.className = 'chat-archive-toggle';
+    toggle.addEventListener('click', chatToggleArchiveView);
+    const settingsBtn = document.getElementById('chat-settings-btn');
+    if (settingsBtn) {
+      sidebar.insertBefore(toggle, settingsBtn);
+    } else {
+      sidebar.appendChild(toggle);
+    }
+  }
+  if (state.chatViewingArchive) {
+    toggle.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 12L2 8l4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 8h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Back to conversations';
+  } else {
+    toggle.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 5.5h13" stroke="currentColor" stroke-width="1.3"/><path d="M6 8.5h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg> Archive';
+  }
+}
+
+export function chatToggleArchiveView() {
+  state.chatViewingArchive = !state.chatViewingArchive;
+  if (state.chatViewingArchive) {
+    state.chatActiveConvId = null;
+    state.chatActiveConv = null;
+    chatRenderMessages();
+    chatUpdateHeader();
+  }
+  chatLoadConversations();
 }
 
 // ── Conversation operations ───────────────────────────────────────────────────
 
 export async function chatNewConversation() {
+  if (state.chatViewingArchive) {
+    state.chatViewingArchive = false;
+    chatLoadConversations();
+  }
   chatShowFolderPicker();
 }
 
@@ -596,6 +639,37 @@ export async function chatDeleteConversation(id) {
   }
 }
 
+export async function chatArchiveConversation(id) {
+  try {
+    await chatFetch(`conversations/${id}/archive`, { method: 'PATCH' });
+    state.chatDraftState.delete(id);
+    if (state.chatActiveConvId === id) {
+      for (const entry of state.chatPendingFiles) {
+        if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
+      }
+      state.chatPendingFiles = [];
+      chatRenderFileChips();
+      state.chatActiveConvId = null;
+      state.chatActiveConv = null;
+      chatRenderMessages();
+      chatUpdateHeader();
+      chatUpdateSendButtonState();
+    }
+    chatLoadConversations();
+  } catch (err) {
+    alert('Failed to archive: ' + err.message);
+  }
+}
+
+export async function chatRestoreConversation(id) {
+  try {
+    await chatFetch(`conversations/${id}/restore`, { method: 'PATCH' });
+    chatLoadConversations();
+  } catch (err) {
+    alert('Failed to restore: ' + err.message);
+  }
+}
+
 // ── Header / usage display ───────────────────────────────────────────────────
 
 export function chatUpdateHeader() {
@@ -691,10 +765,18 @@ export function chatShowContextMenu(e, convId) {
   chatCloseContextMenu();
   const menu = document.createElement('div');
   menu.className = 'chat-context-menu';
-  menu.innerHTML = `
-    <button class="chat-context-menu-item" data-action="rename">Rename</button>
-    <button class="chat-context-menu-item danger" data-action="delete">Delete</button>
-  `;
+  if (state.chatViewingArchive) {
+    menu.innerHTML = `
+      <button class="chat-context-menu-item" data-action="restore">Restore</button>
+      <button class="chat-context-menu-item danger" data-action="delete">Delete</button>
+    `;
+  } else {
+    menu.innerHTML = `
+      <button class="chat-context-menu-item" data-action="rename">Rename</button>
+      <button class="chat-context-menu-item" data-action="archive">Archive</button>
+      <button class="chat-context-menu-item danger" data-action="delete">Delete</button>
+    `;
+  }
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
 
@@ -703,6 +785,8 @@ export function chatShowContextMenu(e, convId) {
       chatCloseContextMenu();
       if (item.dataset.action === 'rename') chatRenameConversation(convId);
       else if (item.dataset.action === 'delete') chatDeleteConversation(convId);
+      else if (item.dataset.action === 'archive') chatArchiveConversation(convId);
+      else if (item.dataset.action === 'restore') chatRestoreConversation(convId);
     };
   });
 

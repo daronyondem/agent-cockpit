@@ -84,7 +84,7 @@ function makeRequest(method: string, urlPath: string, body?: any): Promise<{ sta
       method,
       hostname: url.hostname,
       port: url.port,
-      path: url.pathname,
+      path: url.pathname + url.search,
       headers: {
         'x-csrf-token': CSRF_TOKEN,
         'Content-Type': 'application/json',
@@ -1003,7 +1003,71 @@ describe('System prompt passthrough', () => {
   });
 });
 
-// ── DELETE /conversations/:id/upload/:filename ────────────────────────────────
+// ── PATCH /conversations/:id/archive ───────────────────��─────────────────────
+
+describe('PATCH /conversations/:id/archive', () => {
+  test('archives a conversation', async () => {
+    const conv = await chatService.createConversation('Test');
+    const res = await makeRequest('PATCH', `/api/chat/conversations/${conv.id}/archive`);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // Should not appear in default list
+    const listRes = await makeRequest('GET', '/api/chat/conversations');
+    expect(listRes.body.conversations.find((c: any) => c.id === conv.id)).toBeUndefined();
+
+    // Should appear in archived list
+    const archiveRes = await makeRequest('GET', '/api/chat/conversations?archived=true');
+    expect(archiveRes.body.conversations.find((c: any) => c.id === conv.id)).toBeDefined();
+  });
+
+  test('returns 404 for non-existent conversation', async () => {
+    const res = await makeRequest('PATCH', '/api/chat/conversations/nope/archive');
+    expect(res.status).toBe(404);
+  });
+});
+
+// ── PATCH /conversations/:id/restore ─────────────────────────────────────────
+
+describe('PATCH /conversations/:id/restore', () => {
+  test('restores an archived conversation', async () => {
+    const conv = await chatService.createConversation('Test');
+    await chatService.archiveConversation(conv.id);
+
+    const res = await makeRequest('PATCH', `/api/chat/conversations/${conv.id}/restore`);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    // Should appear in default list again
+    const listRes = await makeRequest('GET', '/api/chat/conversations');
+    expect(listRes.body.conversations.find((c: any) => c.id === conv.id)).toBeDefined();
+  });
+
+  test('returns 404 for non-existent conversation', async () => {
+    const res = await makeRequest('PATCH', '/api/chat/conversations/nope/restore');
+    expect(res.status).toBe(404);
+  });
+});
+
+// ── GET /conversations?archived=true ──────��─────────────────────────────────
+
+describe('GET /conversations?archived=true', () => {
+  test('returns only archived conversations', async () => {
+    const c1 = await chatService.createConversation('Active');
+    const c2 = await chatService.createConversation('Archived');
+    await chatService.archiveConversation(c2.id);
+
+    const activeRes = await makeRequest('GET', '/api/chat/conversations');
+    expect(activeRes.body.conversations).toHaveLength(1);
+    expect(activeRes.body.conversations[0].id).toBe(c1.id);
+
+    const archivedRes = await makeRequest('GET', '/api/chat/conversations?archived=true');
+    expect(archivedRes.body.conversations).toHaveLength(1);
+    expect(archivedRes.body.conversations[0].id).toBe(c2.id);
+  });
+});
+
+// ── DELETE /conversations/:id/upload/:filename ─────────────────────────────��──
 
 describe('DELETE /conversations/:id/upload/:filename', () => {
   test('deletes an uploaded file', async () => {

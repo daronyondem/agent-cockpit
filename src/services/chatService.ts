@@ -259,7 +259,8 @@ export class ChatService {
     };
   }
 
-  async listConversations(): Promise<ConversationListItem[]> {
+  async listConversations(opts?: { archived?: boolean }): Promise<ConversationListItem[]> {
+    const wantArchived = opts?.archived === true;
     const convs: ConversationListItem[] = [];
     let dirs: string[];
     try {
@@ -274,6 +275,8 @@ export class ChatService {
       const index = await this._readWorkspaceIndex(hash);
       if (!index || !index.conversations) continue;
       for (const conv of index.conversations) {
+        const isArchived = !!conv.archived;
+        if (isArchived !== wantArchived) continue;
         const activeSession = conv.sessions.find(s => s.active);
         convs.push({
           id: conv.id,
@@ -285,6 +288,7 @@ export class ChatService {
           messageCount: activeSession ? activeSession.messageCount : 0,
           lastMessage: conv.lastMessage,
           usage: conv.usage || null,
+          archived: conv.archived,
         });
       }
     }
@@ -302,6 +306,24 @@ export class ChatService {
     await this._writeWorkspaceIndex(hash, index);
 
     return this.getConversation(id);
+  }
+
+  async archiveConversation(id: string): Promise<boolean> {
+    const result = await this._getConvFromIndex(id);
+    if (!result) return false;
+    const { hash, index, convEntry } = result;
+    convEntry.archived = true;
+    await this._writeWorkspaceIndex(hash, index);
+    return true;
+  }
+
+  async restoreConversation(id: string): Promise<boolean> {
+    const result = await this._getConvFromIndex(id);
+    if (!result) return false;
+    const { hash, index, convEntry } = result;
+    delete convEntry.archived;
+    await this._writeWorkspaceIndex(hash, index);
+    return true;
   }
 
   async deleteConversation(id: string): Promise<boolean> {
@@ -673,10 +695,10 @@ export class ChatService {
 
   // ── Search ─────────────────────────────────────────────────────────────────
 
-  async searchConversations(query: string): Promise<ConversationListItem[]> {
-    if (!query) return this.listConversations();
+  async searchConversations(query: string, opts?: { archived?: boolean }): Promise<ConversationListItem[]> {
+    if (!query) return this.listConversations(opts);
     const q = query.toLowerCase();
-    const all = await this.listConversations();
+    const all = await this.listConversations(opts);
     const results: ConversationListItem[] = [];
 
     for (const c of all) {

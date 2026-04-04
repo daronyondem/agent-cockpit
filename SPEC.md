@@ -101,6 +101,7 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
     usageByBackend: {            // Per-backend usage breakdown (keyed by backend id)
       [backendId]: Usage
     }|null,
+    archived: boolean|undefined, // true when conversation is archived; absent/false = active
     sessions: [{
       number: number,           // 1-based session number
       sessionId: string,        // UUID passed to CLI
@@ -231,11 +232,13 @@ Recursively deletes directory. Refuses filesystem root. Returns `{ deleted, pare
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
-| GET | `/conversations?q=<search>` | — | List all, sorted by `updatedAt` desc. Each summary includes `workspaceHash`. |
+| GET | `/conversations?q=<search>&archived=true` | — | List all, sorted by `updatedAt` desc. Each summary includes `workspaceHash`. Pass `archived=true` to list only archived conversations (default: active only). |
 | GET | `/conversations/:id` | — | Full conversation object. `404` if not found. |
 | POST | `/conversations` | Yes | `{ title?, workingDir? }` → creates conversation with initial session. |
 | PUT | `/conversations/:id` | Yes | `{ title }` → rename. `404` if not found. |
-| DELETE | `/conversations/:id` | Yes | Aborts active stream, removes from workspace index, deletes session folder + artifacts. |
+| DELETE | `/conversations/:id` | Yes | Aborts active stream, removes from workspace index, deletes session folder + artifacts. Works on both active and archived conversations. |
+| PATCH | `/conversations/:id/archive` | Yes | Sets `archived: true` on the conversation. Aborts active stream. Files remain on disk. `404` if not found. |
+| PATCH | `/conversations/:id/restore` | Yes | Removes `archived` flag, restoring the conversation to the active list. `404` if not found. |
 
 ### 3.3 Download
 
@@ -427,9 +430,11 @@ Unauthenticated requests redirect to `/auth/login`.
 | `initialize()` | Runs migration if legacy `conversations/` dir exists, builds convId→workspace lookup map. |
 | `createConversation(title, workingDir)` | Creates entry in workspace index + empty session-1.json. Falls back to `_defaultWorkspace`. |
 | `getConversation(id)` | Returns API-compatible object with messages, or `null`. |
-| `listConversations()` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc, each with `workspaceHash`. |
+| `listConversations(opts?)` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc, each with `workspaceHash`. Pass `{ archived: true }` to list only archived; default returns active only. |
 | `renameConversation(id, newTitle)` | Updates title in workspace index. Returns full conversation or `null`. |
-| `deleteConversation(id)` | Removes from index, deletes session folder + artifacts, removes from lookup map. |
+| `archiveConversation(id)` | Sets `archived: true` on conversation entry in workspace index. Returns `true` or `false` if not found. Files remain on disk. |
+| `restoreConversation(id)` | Removes `archived` flag from conversation entry. Returns `true` or `false` if not found. |
+| `deleteConversation(id)` | Removes from index, deletes session folder + artifacts, removes from lookup map. Works on both active and archived conversations. |
 | `updateConversationBackend(convId, backend)` | Updates backend field in workspace index. |
 | `addMessage(convId, role, content, backend, thinking, toolActivity)` | Appends to active session + updates index metadata. Auto-titles on first user message (session 1 only; post-reset sessions rely on LLM title generation). `thinking` omitted if falsy. `toolActivity` omitted if falsy or empty array. |
 | `updateMessageContent(convId, messageId, newContent)` | Truncates after target message, adds edited content as new message. |
@@ -443,7 +448,7 @@ Unauthenticated requests redirect to `/auth/login`.
 | `setWorkspaceInstructions(hash, instructions)` | Saves to workspace index. Returns string or `null`. |
 | `getWorkspaceHashForConv(convId)` | Returns workspace hash or `null`. |
 | `getWorkspaceContext(convId)` | **Synchronous.** Returns injection prompt string or `null`. |
-| `searchConversations(query)` | Case-insensitive: checks title/lastMessage first, then deep-searches session files. |
+| `searchConversations(query, opts?)` | Case-insensitive: checks title/lastMessage first, then deep-searches session files. Respects `{ archived }` filter same as `listConversations`. |
 | `getSettings()` | Returns settings from disk or defaults. |
 | `saveSettings(settings)` | Writes settings to disk. |
 
@@ -692,8 +697,9 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 
 - **New conversation:** folder picker modal (via `/browse` API) → user selects directory → POST creates conversation
 - **Sidebar list:** grouped by workspace (last 2 path segments of `workingDir`), sorted by `updatedAt` desc. Groups are collapsible (state in localStorage). Each group header has a pencil icon for workspace instructions.
-- **Context menu:** right-click on conversation items for rename/delete
-- **Search:** debounced, case-insensitive search across titles, last messages, and full content
+- **Context menu:** right-click on conversation items for rename/archive/delete (active view) or restore/delete (archive view)
+- **Archive:** conversations can be archived via context menu. Archived conversations are hidden from the main sidebar but all files (sessions, artifacts) remain on disk. A toggle at the bottom of the sidebar switches between active and archived views. Archived conversations can be browsed, searched, restored, or permanently deleted.
+- **Search:** debounced, case-insensitive search across titles, last messages, and full content. Respects active/archive view filter.
 
 ### Messaging & Streaming
 
@@ -858,8 +864,8 @@ Update OAuth callback URLs to include the ngrok URL.
 | File | Focus |
 |------|-------|
 | `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage |
-| `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions |
-| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats), workspace storage, migration, markdown export |
+| `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, archive/restore endpoints |
+| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |
