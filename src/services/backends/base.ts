@@ -37,4 +37,21 @@ export class BaseBackendAdapter {
   async generateTitle(userMessage: string, fallback: string): Promise<string> {
     return fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
   }
+
+  /**
+   * Called during server shutdown.  Subclasses that spawn long-lived
+   * processes should override this to kill them.
+   */
+  shutdown(): void {
+    // no-op by default
+  }
+
+  /**
+   * Called when a user resets a session for a conversation.  Subclasses
+   * that cache per-conversation state (e.g. process handles, session
+   * mappings) should override this to clean up.
+   */
+  onSessionReset(_conversationId: string): void {
+    // no-op by default
+  }
 }

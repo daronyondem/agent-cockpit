@@ -40,9 +40,11 @@ agent-cockpit/
 │   ├── routes/
 │   │   └── chat.ts                     # All chat API routes
 │   └── services/
-│       ├── backends/
+��       ├── backends/
 │       │   ├── base.ts                 # BaseBackendAdapter interface
 │       │   ├── claudeCode.ts           # Claude Code adapter — CLI spawning, stream parsing
+│       │   ├── kiro.ts                 # Kiro adapter — ACP (Agent Client Protocol) over kiro-cli
+│       │   ��── toolUtils.ts            # Shared tool helpers (extractToolDetails, extractUsage, etc.)
 │       │   └── registry.ts             # BackendRegistry — maps IDs to adapter instances
 │       ├── chatService.ts              # Conversation CRUD, messages, sessions, settings
 │       └── updateService.ts            # Self-update: version checking, git pull, PM2 restart
@@ -111,7 +113,8 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
       startedAt: string,        // ISO 8601
       endedAt: string|null,     // ISO 8601 (null for active session)
       usage: Usage|null,        // Per-session token/cost totals (same shape as conversation usage)
-      usageByBackend: { [backendId]: Usage }|null  // Per-backend usage for this session
+      usageByBackend: { [backendId]: Usage }|null,  // Per-backend usage for this session
+      externalSessionId: string|null  // Backend-managed session ID (e.g. Kiro ACP session ID); null for backends that don't need it
     }]
   }]
 }
@@ -145,6 +148,7 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
     id: string|null,            // Block ID from CLI event
     isAgent?: boolean,          // true for Agent tool invocations
     subagentType?: string,      // 'Explore', 'general-purpose', etc. (when isAgent)
+    parentAgentId?: string,     // ID of parent agent (when tool runs inside a sub-agent)
     duration: number|null,      // Estimated duration in milliseconds
     startTime: number,          // Unix timestamp ms when event was received
     outcome?: string,           // Short outcome summary (e.g. 'exit 0', '4 matches', 'not found')
@@ -167,7 +171,8 @@ Flat object assembled from workspace index + active session file:
   sessionNumber: number,        // Active session number
   messages: Message[],          // Active session messages
   usage: Usage,                 // Cumulative token/cost totals (zeroed if no usage yet)
-  sessionUsage: Usage           // Active session token/cost totals (zeroed if no usage yet)
+  sessionUsage: Usage,          // Active session token/cost totals (zeroed if no usage yet)
+  externalSessionId: string|null // Backend-managed session ID (for resume after server restart)
 }
 ```
 
@@ -234,7 +239,7 @@ Recursively deletes directory. Refuses filesystem root. Returns `{ deleted, pare
 |--------|------|------|-------------|
 | GET | `/conversations?q=<search>&archived=true` | — | List all, sorted by `updatedAt` desc. Each summary includes `workspaceHash`. Pass `archived=true` to list only archived conversations (default: active only). |
 | GET | `/conversations/:id` | — | Full conversation object. `404` if not found. |
-| POST | `/conversations` | Yes | `{ title?, workingDir? }` → creates conversation with initial session. |
+| POST | `/conversations` | Yes | `{ title?, workingDir?, backend? }` → creates conversation with initial session. `backend` defaults to the server's default backend. |
 | PUT | `/conversations/:id` | Yes | `{ title }` → rename. `404` if not found. |
 | DELETE | `/conversations/:id` | Yes | Aborts active stream, removes from workspace index, deletes session folder + artifacts. Works on both active and archived conversations. |
 | PATCH | `/conversations/:id/archive` | Yes | Sets `archived: true` on the conversation. Aborts active stream. Files remain on disk. `404` if not found. |
@@ -428,7 +433,7 @@ Unauthenticated requests redirect to `/auth/login`.
 | Method | Description |
 |--------|-------------|
 | `initialize()` | Runs migration if legacy `conversations/` dir exists, builds convId→workspace lookup map. |
-| `createConversation(title, workingDir)` | Creates entry in workspace index + empty session-1.json. Falls back to `_defaultWorkspace`. |
+| `createConversation(title, workingDir, backend)` | Creates entry in workspace index + empty session-1.json. Falls back to `_defaultWorkspace`. `backend` defaults to the registry's first registered adapter. |
 | `getConversation(id)` | Returns API-compatible object with messages, or `null`. |
 | `listConversations(opts?)` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc, each with `workspaceHash`. Pass `{ archived: true }` to list only archived; default returns active only. |
 | `renameConversation(id, newTitle)` | Updates title in workspace index. Returns full conversation or `null`. |
@@ -480,9 +485,22 @@ The CLI backend layer uses a **pluggable adapter pattern**. New CLI tools can be
 
 Abstract base class. Every backend must implement:
 - **`get metadata`** — returns `{ id, label, icon, capabilities }` where capabilities: `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans)
-- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the stream event contract in Section 3
+- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the stream event contract in Section 3. `options` includes `{ sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId }`. `conversationId` is the stable conversation ID (does not change on session reset) — used by backends like Kiro that key long-lived processes by conversation.
 - **`generateSummary(messages, fallback)`** — returns a one-line summary string
 - **`generateTitle(userMessage, fallback)`** — returns a short conversation title. Base class provides a default that truncates the user message to 80 chars.
+- **`shutdown()`** — called during server shutdown. Override to kill long-lived processes. No-op by default.
+- **`onSessionReset(conversationId)`** — called when user resets a session. Override to clean up per-conversation state. No-op by default.
+
+#### Shared Tool Utilities (`src/services/backends/toolUtils.ts`)
+
+Shared helpers used by all backend adapters. Extracted for cross-adapter reuse — adapters import from here, never from each other.
+
+- `sanitizeSystemPrompt(prompt)` — strips control characters, truncates to 50K max
+- `isApiError(text)` — detects `API Error: NNN` patterns
+- `shortenPath(filePath)` — truncates long paths to `.../{last}/{two}`
+- `extractToolOutcome(toolName, content)` — classifies tool results as success/error/warning
+- `extractToolDetails(block)` — converts Claude Code tool_use blocks into ToolDetail objects
+- `extractUsage(event)` — normalizes usage/cost data into UsageEvent
 
 #### BackendRegistry (`src/services/backends/registry.ts`)
 
@@ -490,6 +508,7 @@ Abstract base class. Every backend must implement:
 - `get(id)` — returns adapter or `null`
 - `list()` — returns metadata array
 - `getDefault()` — returns first registered or `null`
+- `shutdownAll()` — calls `shutdown()` on all registered adapters (used in graceful server shutdown)
 
 #### ClaudeCodeAdapter (`src/services/backends/claudeCode.ts`)
 
@@ -541,11 +560,37 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
 
 **`generateTitle(userMessage, fallback)`** — spawns `claude --print -p <prompt>` with 30s timeout to generate a short title (max 60 chars) from the user's first message. Falls back to truncated user message.
 
+#### KiroAdapter (`src/services/backends/kiro.ts`)
+
+**Metadata:** `id: 'kiro'`, capabilities: `thinking: true, planMode: false, agents: true, toolActivity: true, userQuestions: false, stdinInput: false`.
+
+**Integration protocol:** ACP (Agent Client Protocol) — JSON-RPC 2.0 over stdin/stdout via `kiro-cli acp`.
+
+**ACP process lifecycle:** Lazy spawn + idle timeout + transparent recovery.
+- First message → spawn `kiro-cli acp` → `initialize` handshake → `session/new(cwd)` → `session/prompt`
+- Subsequent messages → reuse process → `session/prompt`
+- Idle timeout (configurable via `KIRO_ACP_IDLE_TIMEOUT_MS` env var, default 10 min) → kill process
+- Next message after timeout → respawn → `initialize` → `session/load(sessionId, cwd)` → `session/prompt`
+
+**Session mapping:** Agent Cockpit session IDs map to Kiro ACP session IDs via in-memory `sessionMap`. Persisted via `externalSessionId` on `SessionEntry` for server restart resilience.
+
+**Tool name normalization:** Kiro uses lowercase tool names (`read`, `shell`, `delegate`, etc.). The adapter normalizes to Agent Cockpit display names (Read, Bash, Agent, etc.) via `extractKiroToolDetails()`.
+
+**Thinking tool:** Kiro's `thinking` tool is special-cased — output is emitted as `ThinkingEvent` (displayed in thinking UI) rather than `ToolActivityEvent`.
+
+**Permission handling:** All `session/request_permission` messages are auto-approved with `allow_always`.
+
+**Usage tracking:** Kiro's `_kiro.dev/metadata` notifications are ignored — credits/contextUsage don't map to the `Usage` interface.
+
+**`generateSummary` / `generateTitle`:** Uses `kiro-cli chat --no-interactive --trust-all-tools` for one-shot LLM calls with 30s timeout. Falls back gracefully if kiro-cli is not installed or not authenticated.
+
 #### Adding a New Backend
 
 1. Create `src/services/backends/myBackend.ts` extending `BaseBackendAdapter`
-2. Implement `metadata`, `sendMessage()`, `generateSummary()`, and optionally `generateTitle()`
-3. Register in `server.ts` — no other changes needed
+2. Implement `metadata`, `sendMessage()`, `generateSummary()`, and optionally `generateTitle()`, `shutdown()`, `onSessionReset()`
+3. Import shared helpers from `toolUtils.ts` (never import from another adapter)
+4. Register in `server.ts` — no other changes needed
+5. Use the generic `externalSessionId` field on `SessionEntry`/`SendMessageOptions` if the backend manages its own session IDs
 
 ### 4.3 UpdateService
 
@@ -590,6 +635,7 @@ Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes 
 | `GITHUB_CALLBACK_URL` | No | — | GitHub OAuth callback URL |
 | `ALLOWED_EMAIL` | Yes | — | Comma-separated list of allowed email addresses |
 | `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
+| `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing the Kiro ACP process |
 | `BASE_PATH` | No | `''` | URL base path prefix (for reverse proxy deployments) |
 
 ### 5.2 Server Initialization Order
@@ -605,7 +651,7 @@ Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes 
 7. Apply `ensureCsrfToken` middleware globally
 8. Parse JSON bodies with `express.json()`
 9. Mount CSRF token endpoint at `GET /api/csrf-token`
-10. Create BackendRegistry, register ClaudeCodeAdapter
+10. Create BackendRegistry, register ClaudeCodeAdapter and KiroAdapter
 11. Initialize ChatService
 12. Initialize UpdateService
 13. Mount chat router at `/api/chat`
@@ -620,9 +666,10 @@ Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes 
 
 Signal handlers for `SIGTERM`/`SIGINT`:
 1. Call `chatShutdown()` — aborts all active CLI streams
-2. Call `wsShutdown()` — closes all WebSocket connections and the WS server
-3. Call `server.close()` — stop accepting connections
-4. 10-second forced exit timeout (`.unref()` as safety net)
+2. Call `backendRegistry.shutdownAll()` — kills long-lived backend processes (e.g. Kiro ACP)
+3. Call `wsShutdown()` — closes all WebSocket connections and the WS server
+4. Call `server.close()` — stop accepting connections
+5. 10-second forced exit timeout (`.unref()` as safety net)
 
 ### 5.3 Authentication
 
@@ -695,7 +742,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 
 ### Conversation Management
 
-- **New conversation:** folder picker modal (via `/browse` API) → user selects directory → POST creates conversation
+- **New conversation:** folder picker modal (via `/browse` API) → user selects directory → POST creates conversation with the user's `defaultBackend` from settings
 - **Sidebar list:** grouped by workspace (last 2 path segments of `workingDir`), sorted by `updatedAt` desc. Groups are collapsible (state in localStorage). Each group header has a pencil icon for workspace instructions.
 - **Context menu:** right-click on conversation items for rename/archive/delete (active view) or restore/delete (archive view)
 - **Archive:** conversations can be archived via context menu. Archived conversations are hidden from the main sidebar but all files (sessions, artifacts) remain on disk. A toggle at the bottom of the sidebar switches between active and archived views. Archived conversations can be browsed, searched, restored, or permanently deleted.
@@ -703,10 +750,11 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 
 ### Messaging & Streaming
 
-- `chatSendMessage()` gathers completed file paths from pending uploads, appends `[Uploaded files: ...]` to content, opens WebSocket, POSTs message, receives stream events via WS
+- `chatSendMessage()` gathers completed file paths from pending uploads, appends `[Uploaded files: ...]` to content, opens WebSocket, POSTs message, receives stream events via WS. When the selected backend differs from the stored `defaultBackend` setting, it auto-saves the new choice via `PUT /settings` (fire-and-forget) so future new conversations use it.
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API)
 - **Streaming state persistence:** `chatStreamingState` Map stores per-conversation state (accumulated text, thinking, tools, agents, tool/agent history, pending interactions). State survives conversation switches — on return, the streaming bubble is recreated and restored.
 - **WebSocket auto-reconnect:** On unexpected WS close during streaming, the client automatically attempts reconnection with exponential backoff (1s base, up to 5 attempts). On reconnect, the server replays buffered events wrapped in `replay_start`/`replay_end`. The client resets streaming state on `replay_start` (clears accumulated text/thinking/tools) and reprocesses replayed events from scratch. `assistant_message` events are deduplicated by message ID. `done` events during replay are ignored to prevent stale streams from destroying the current streaming state. After max attempts exhausted, `_doneResolve` is called to clean up. `chatDisconnectWs()` clears reconnect attempts to prevent auto-reconnect on deliberate close. Session reset clears the server-side event buffer to prevent stale events from replaying into the new session.
+- **Streaming avatar:** The streaming message bubble reads the backend from the `chat-backend-select` dropdown (not from `state.chatActiveConv.backend`) to ensure the correct icon is shown immediately when the user switches backends, even before the conversation object is updated.
 - **Elapsed timer:** live timer in streaming bubble header, self-cleans on DOM disconnect and nulls out the interval reference so it can restart on conversation switch-back
 - **Unified streaming content:** A single `chatUpdateStreamingContent()` function renders all streaming state (thinking, text, tool history, active tools, agents, plan mode) together in one stacked view. Text content and tool activity accumulate and remain visible simultaneously — new progress updates stack below previous content rather than replacing it. Items are grouped by agent via `chatGroupItemsByAgent()`: standalone tools render flat, while each agent card is followed by a scrollable sub-activity panel showing its child tools. Completed items show checkmarks and elapsed durations; running agents show animated spinners with live timers that count up in real-time.
 - **Tool activity on completed messages:** When a message has a `toolActivity` array, `chatRenderToolActivityBlock()` renders a collapsible `<details>/<summary>` block (same pattern as thinking blocks) with a summary line (e.g. "15 ops · 2 agents · 5 read, 2 edited") generated by `chatBuildActivitySummary()`. Collapsed by default; expands to show the full chronological tool/agent list. Agent entries render as agent cards, tool entries as history items.
@@ -714,7 +762,6 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 - **Sticky active section:** During streaming, when both completed and running tools exist, a `chat-activity-panel` container wraps them: completed items scroll in a bounded area while running items with spinners stay pinned at the bottom, always visible.
 - **Parallel group indicator:** `chatGroupParallelItems()` detects consecutive agent entries whose `startTime` values are within 500ms (`PARALLEL_THRESHOLD_MS`) and wraps them in a `chat-parallel-group` container with a "parallel" label and a left accent border. Works in both persisted activity blocks and streaming display.
 - **Agent detail expansion:** Agent cards with long descriptions or outcome data render as expandable `<details>` elements (`chatRenderAgentCard()`). Summary shows agent type, description, outcome badge, and elapsed time; expanding reveals full outcome details.
-- **Session activity overview:** `chatRenderSessionOverview()` aggregates `toolActivity` from all assistant messages in the current session and renders a collapsible dashboard at the top of the message list. Shows: total ops/agents/duration summary, status breakdown pills (success/error/warning counts), tool type bar chart sorted by frequency, and agent timeline with types and outcomes. Collapsed by default; only rendered when at least one message has `toolActivity`.
 - **Turn boundaries:** intermediate assistant messages saved, content reset. `turn_complete` event archives active tools/agents to history so spinners stop. On `assistant_message`, tool/agent history is cleared after archiving — the saved message's `toolActivity` now owns those entries, preventing duplicates when the next turn adds new agents to the streaming bubble. Agents are only archived when they have received their `tool_outcomes` (outcome/status set) — sub-tool `turn_complete` events within an agent do NOT prematurely archive the parent agent. This ensures agents show spinners and live timers throughout their full execution.
 - **Post-completion processing indicator:** When all tools/agents have completed but the model is still working (no text content yet), a "Processing..." indicator with typing dots is shown below the completed activity log. This fills the gap between agent completion and text output, so users always see ongoing work.
 - **Thinking events:** do NOT archive active tool/agent state — `turn_complete` handles archiving. This prevents premature archiving that would kill agent spinners and timers.
@@ -758,7 +805,7 @@ Tabbed layout with two tabs:
 - Theme: System / Light / Dark
 - Send behavior: Enter or Shift+Enter
 - System prompt textarea (global)
-- Default backend selector
+- Default backend selector (also auto-updated when user sends a message with a different backend)
 - Working directory
 
 **Usage Stats tab:**
@@ -863,7 +910,9 @@ Update OAuth callback URLs to include the ngrok URL.
 
 | File | Focus |
 |------|-------|
-| `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry, ClaudeCodeAdapter, extractToolDetails, extractToolOutcome, extractUsage |
+| `test/toolUtils.test.ts` | Shared backend helpers: extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError |
+| `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry (including shutdownAll), ClaudeCodeAdapter |
+| `test/kiroBackend.test.ts` | KiroAdapter metadata, lifecycle (shutdown, onSessionReset), extractKiroToolDetails tool name normalization, generateSummary/generateTitle fallbacks |
 | `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, archive/restore endpoints |
 | `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |

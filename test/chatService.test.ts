@@ -75,6 +75,18 @@ describe('createConversation', () => {
     expect(index.conversations).toHaveLength(2);
     expect(index.conversations.map((c: any) => c.id).sort()).toEqual([c1.id, c2.id].sort());
   });
+
+  test('creates with explicit backend parameter', async () => {
+    const conv = await service.createConversation('Kiro Chat', '/tmp/work', 'kiro');
+    expect(conv.backend).toBe('kiro');
+    const retrieved = await service.getConversation(conv.id);
+    expect(retrieved!.backend).toBe('kiro');
+  });
+
+  test('backend defaults to claude-code when not specified', async () => {
+    const conv = await service.createConversation('Default Backend');
+    expect(conv.backend).toBe('claude-code');
+  });
 });
 
 describe('getConversation', () => {
@@ -88,6 +100,26 @@ describe('getConversation', () => {
     expect(loaded!.id).toBe(conv.id);
     expect(loaded!.title).toBe('Get Test');
     expect(loaded!.messages).toEqual([]);
+  });
+
+  test('returns externalSessionId when set on active session', async () => {
+    const conv = await service.createConversation('Ext Session', '/tmp/ext');
+    // Write externalSessionId directly to the workspace index
+    const hash = workspaceHash('/tmp/ext');
+    const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const activeSession = index.conversations[0].sessions.find((s: any) => s.active);
+    activeSession.externalSessionId = 'kiro-acp-session-abc123';
+    fs.writeFileSync(indexPath, JSON.stringify(index));
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.externalSessionId).toBe('kiro-acp-session-abc123');
+  });
+
+  test('returns null externalSessionId when not set', async () => {
+    const conv = await service.createConversation('No Ext');
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.externalSessionId).toBeNull();
   });
 });
 
@@ -427,6 +459,19 @@ describe('addMessage', () => {
     const conv = await service.createConversation();
     const msg = await service.addMessage(conv.id, 'assistant', 'Empty tools', 'claude-code', null, []);
     expect(msg!.toolActivity).toBeUndefined();
+  });
+
+  test('preserves parentAgentId on tool activity entries', async () => {
+    const conv = await service.createConversation();
+    const activity = [
+      { tool: 'Agent', description: 'Research task', id: 'agent_1', isAgent: true, subagentType: 'Explore', duration: 5000, startTime: Date.now() - 5000 },
+      { tool: 'Read', description: 'Reading file', id: 'tool_1', parentAgentId: 'agent_1', duration: 300, startTime: Date.now() - 300 },
+    ];
+    const msg = await service.addMessage(conv.id, 'assistant', 'Done', 'kiro', null, activity);
+    expect(msg!.toolActivity![1].parentAgentId).toBe('agent_1');
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.messages[0].toolActivity![1].parentAgentId).toBe('agent_1');
   });
 
   test('persists toolActivity to disk', async () => {

@@ -12,6 +12,7 @@ import { attachWebSocket } from './src/ws';
 import { ChatService } from './src/services/chatService';
 import { BackendRegistry } from './src/services/backends/registry';
 import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
+import { KiroAdapter } from './src/services/backends/kiro';
 import { UpdateService } from './src/services/updateService';
 import type { Request, Response, NextFunction } from './src/types';
 
@@ -68,6 +69,7 @@ app.get('/api/csrf-token', (req: Request, res: Response) => {
 
 const backendRegistry = new BackendRegistry();
 backendRegistry.register(new ClaudeCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
+backendRegistry.register(new KiroAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 
 const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
 const updateService = new UpdateService(__dirname);
@@ -115,6 +117,7 @@ chatService.initialize().then(async () => {
     console.log(`\n[shutdown] Received ${signal}, shutting down gracefully...`);
 
     chatShutdown();
+    backendRegistry.shutdownAll();
     wsFns.shutdown();
 
     server.close(() => {

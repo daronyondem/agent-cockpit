@@ -138,6 +138,12 @@ export async function chatSendMessage() {
   const backend = document.getElementById('chat-backend-select')?.value || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
   const targetConvId = state.chatActiveConvId;
 
+  // Persist selected backend as the default for new conversations
+  if (state.chatSettingsData && state.chatSettingsData.defaultBackend !== backend) {
+    state.chatSettingsData.defaultBackend = backend;
+    chatFetch('settings', { method: 'PUT', body: state.chatSettingsData }).catch(() => {});
+  }
+
   state.chatStreamingConvs.add(targetConvId);
   state.chatStreamingState.set(targetConvId, {
     assistantContent: '',
