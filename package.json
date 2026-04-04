@@ -1,6 +1,6 @@
 {
   "name": "agent-cockpit",
-  "version": "0.1.57",
+  "version": "0.1.58",
   "private": true,
   "scripts": {
     "start": "tsx server.ts",
