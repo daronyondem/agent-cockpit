@@ -183,6 +183,121 @@ describe('deleteConversation', () => {
   });
 });
 
+// ── Archive / Restore ───────────────────────────────────────────────────────
+
+describe('archiveConversation', () => {
+  test('sets archived flag on conversation', async () => {
+    const conv = await service.createConversation('Archive Me');
+    expect(await service.archiveConversation(conv.id)).toBe(true);
+
+    // Should not appear in default list
+    const active = await service.listConversations();
+    expect(active.find(c => c.id === conv.id)).toBeUndefined();
+
+    // Should appear in archived list
+    const archived = await service.listConversations({ archived: true });
+    expect(archived).toHaveLength(1);
+    expect(archived[0].id).toBe(conv.id);
+  });
+
+  test('returns false for non-existent id', async () => {
+    expect(await service.archiveConversation('nope')).toBe(false);
+  });
+
+  test('does not delete session files or artifacts', async () => {
+    const conv = await service.createConversation('Keep Files', '/tmp/work');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    const artifactDir = path.join(tmpDir, 'data', 'chat', 'artifacts', conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(artifactDir, 'test.txt'), 'hello');
+
+    await service.archiveConversation(conv.id);
+
+    const hash = workspaceHash('/tmp/work');
+    const sessionPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, conv.id, 'session-1.json');
+    expect(fs.existsSync(sessionPath)).toBe(true);
+    expect(fs.existsSync(path.join(artifactDir, 'test.txt'))).toBe(true);
+  });
+});
+
+describe('restoreConversation', () => {
+  test('restores archived conversation to active list', async () => {
+    const conv = await service.createConversation('Restore Me');
+    await service.archiveConversation(conv.id);
+
+    expect(await service.restoreConversation(conv.id)).toBe(true);
+
+    const active = await service.listConversations();
+    expect(active.find(c => c.id === conv.id)).toBeDefined();
+
+    const archived = await service.listConversations({ archived: true });
+    expect(archived.find(c => c.id === conv.id)).toBeUndefined();
+  });
+
+  test('returns false for non-existent id', async () => {
+    expect(await service.restoreConversation('nope')).toBe(false);
+  });
+});
+
+describe('listConversations with archived filter', () => {
+  test('default excludes archived', async () => {
+    const c1 = await service.createConversation('Active');
+    const c2 = await service.createConversation('Archived');
+    await service.archiveConversation(c2.id);
+
+    const list = await service.listConversations();
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe(c1.id);
+  });
+
+  test('archived=true returns only archived', async () => {
+    const c1 = await service.createConversation('Active');
+    const c2 = await service.createConversation('Archived');
+    await service.archiveConversation(c2.id);
+
+    const list = await service.listConversations({ archived: true });
+    expect(list).toHaveLength(1);
+    expect(list[0].id).toBe(c2.id);
+  });
+});
+
+describe('searchConversations with archived filter', () => {
+  test('default search excludes archived', async () => {
+    await service.createConversation('Alpha Active');
+    const c2 = await service.createConversation('Alpha Archived');
+    await service.archiveConversation(c2.id);
+
+    const results = await service.searchConversations('alpha');
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe('Alpha Active');
+  });
+
+  test('archived search finds only archived', async () => {
+    await service.createConversation('Alpha Active');
+    const c2 = await service.createConversation('Alpha Archived');
+    await service.archiveConversation(c2.id);
+
+    const results = await service.searchConversations('alpha', { archived: true });
+    expect(results).toHaveLength(1);
+    expect(results[0].title).toBe('Alpha Archived');
+  });
+});
+
+describe('deleteConversation on archived conversation', () => {
+  test('deletes an archived conversation and removes files', async () => {
+    const conv = await service.createConversation('Archive Then Delete', '/tmp/work');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    await service.archiveConversation(conv.id);
+
+    expect(await service.deleteConversation(conv.id)).toBe(true);
+    expect(await service.getConversation(conv.id)).toBeNull();
+
+    const hash = workspaceHash('/tmp/work');
+    const convDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, conv.id);
+    expect(fs.existsSync(convDir)).toBe(false);
+  });
+});
+
 describe('updateConversationBackend', () => {
   test('updates backend in workspace index', async () => {
     const conv = await service.createConversation('Test');

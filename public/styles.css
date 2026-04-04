@@ -1843,6 +1843,25 @@
   .chat-context-menu-item.danger { color: var(--danger); }
   .chat-context-menu-item.danger:hover { background: rgba(220,38,38,0.08); }
 
+  /* ── Archive Toggle ──────────────────────────────────────── */
+  .chat-archive-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 10px 16px;
+    font-size: 12px;
+    color: var(--muted);
+    background: none;
+    border: none;
+    border-top: 1px solid var(--border);
+    cursor: pointer;
+    text-align: left;
+    flex-shrink: 0;
+  }
+  .chat-archive-toggle:hover { color: var(--text); background: var(--surface2); }
+  .chat-archive-toggle svg { flex-shrink: 0; }
+
   /* ── Settings Modal ───────────────────────────────────────── */
   .chat-modal-overlay {
     position: fixed;
