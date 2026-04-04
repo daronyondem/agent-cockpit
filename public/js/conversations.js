@@ -336,6 +336,9 @@ export async function chatCreateConversationWithDir(workingDir) {
       if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
     }
     const body = workingDir ? { workingDir } : {};
+    if (state.chatSettingsData?.defaultBackend) {
+      body.backend = state.chatSettingsData.defaultBackend;
+    }
     const res = await chatFetch('conversations', { method: 'POST', body });
     const conv = await res.json();
     state.chatActiveConvId = conv.id;
@@ -345,6 +348,10 @@ export async function chatCreateConversationWithDir(workingDir) {
     chatUpdateHeader();
     chatRestoreDraft(conv.id);
     chatCloseModal();
+    const backendSelect = document.getElementById('chat-backend-select');
+    if (backendSelect && conv.backend) {
+      backendSelect.value = conv.backend;
+    }
     const textarea = document.getElementById('chat-textarea');
     if (textarea) textarea.focus();
   } catch (err) {

@@ -386,7 +386,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // ── Create conversation ────────────────────────────────────────────────────
   router.post('/conversations', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const conv = await chatService.createConversation(req.body.title, req.body.workingDir);
+      const conv = await chatService.createConversation(req.body.title, req.body.workingDir, req.body.backend);
       res.json(conv);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -517,6 +517,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       if (wsFns) wsFns.clearBuffer(convId);
       const result = await chatService.resetSession(convId);
       if (!result) return res.status(404).json({ error: 'Conversation not found' });
+      // Let the backend adapter clean up per-conversation state (e.g. ACP processes)
+      const conv = await chatService.getConversation(convId);
+      if (conv) {
+        const adapter = backendRegistry.get(conv.backend);
+        if (adapter) adapter.onSessionReset(convId);
+      }
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -568,9 +574,11 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} backend=${backendId} workingDir=${conv.workingDir || 'default'}`);
     const { stream, abort, sendInput } = adapter.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
+      conversationId: convId,
       isNewSession,
       workingDir: conv.workingDir || null,
       systemPrompt,
+      externalSessionId: conv.externalSessionId || null,
     });
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
     activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });

@@ -30,4 +30,14 @@ export class BackendRegistry {
   list(): BackendMetadata[] {
     return [...this._adapters.values()].map(a => a.metadata);
   }
+
+  /**
+   * Call shutdown() on every registered adapter.
+   * Used during graceful server shutdown to clean up long-lived processes.
+   */
+  shutdownAll(): void {
+    for (const adapter of this._adapters.values()) {
+      adapter.shutdown();
+    }
+  }
 }

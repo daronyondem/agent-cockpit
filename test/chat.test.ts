@@ -1003,7 +1003,65 @@ describe('System prompt passthrough', () => {
   });
 });
 
-// ── PATCH /conversations/:id/archive ───────────────────��─────────────────────
+// ── conversationId and externalSessionId passthrough ──────────────────────────
+
+describe('sendMessage options passthrough', () => {
+  test('passes conversationId to backend adapter', async () => {
+    const conv = await chatService.createConversation('Test');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions!.conversationId).toBe(conv.id);
+  });
+
+  test('passes externalSessionId from conversation to backend adapter', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ext-test');
+    // Write externalSessionId to the workspace index
+    const crypto = require('crypto');
+    const hash = crypto.createHash('sha256').update('/tmp/ext-test').digest('hex').substring(0, 16);
+    const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const activeSession = index.conversations[0].sessions.find((s: any) => s.active);
+    activeSession.externalSessionId = 'kiro-session-xyz';
+    fs.writeFileSync(indexPath, JSON.stringify(index));
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions!.externalSessionId).toBe('kiro-session-xyz');
+  });
+
+  test('passes null externalSessionId when not set', async () => {
+    const conv = await chatService.createConversation('Test');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions!.externalSessionId).toBeNull();
+  });
+});
+
+// ── PATCH /conversations/:id/archive ─────────────────────────────────────────
 
 describe('PATCH /conversations/:id/archive', () => {
   test('archives a conversation', async () => {

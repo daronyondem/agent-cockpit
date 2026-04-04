@@ -181,7 +181,7 @@ export class ChatService {
 
   // ── Conversation CRUD ──────────────────────────────────────────────────────
 
-  async createConversation(title?: string, workingDir?: string): Promise<Conversation> {
+  async createConversation(title?: string, workingDir?: string, backend?: string): Promise<Conversation> {
     const id = this._newId();
     const now = new Date().toISOString();
     const sessionId = this._newId();
@@ -193,10 +193,11 @@ export class ChatService {
       index = { workspacePath, conversations: [] };
     }
 
+    const defaultBackend = this._backendRegistry?.getDefault()?.metadata.id || 'claude-code';
     const convEntry: ConversationEntry = {
       id,
       title: title || 'New Chat',
-      backend: 'claude-code',
+      backend: backend || defaultBackend,
       currentSessionId: sessionId,
       lastActivity: now,
       lastMessage: null,
@@ -256,6 +257,7 @@ export class ChatService {
       messages,
       usage: convEntry.usage || this._emptyUsage(),
       sessionUsage: activeSession?.usage || this._emptyUsage(),
+      externalSessionId: activeSession?.externalSessionId || null,
     };
   }
 

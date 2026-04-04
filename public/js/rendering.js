@@ -71,9 +71,7 @@ export function chatRenderMessages() {
 
   let html = '';
 
-  // Session activity overview — aggregate all toolActivity across messages
-  const overviewHtml = chatRenderSessionOverview(currentSessionMsgs);
-  if (overviewHtml) html += overviewHtml;
+  // Session activity overview removed — not needed in current UI
 
   for (let mi = 0; mi < currentSessionMsgs.length; mi++) {
     const msg = currentSessionMsgs[mi];
@@ -266,20 +264,46 @@ export function chatRenderCompletedItem(t) {
 export function chatRenderToolActivityBlock(toolActivity) {
   if (!toolActivity || toolActivity.length === 0) return '';
   const summary = chatBuildActivitySummary(toolActivity);
-  const groups = chatGroupParallelItems(toolActivity);
+
+  // Use agent-aware grouping so tools nest under their parent agents
+  const hasAgents = toolActivity.some(t => t.isAgent);
   let itemsHtml = '';
-  for (const group of groups) {
-    if (group.type === 'parallel') {
-      itemsHtml += '<div class="chat-parallel-group">';
-      itemsHtml += '<div class="chat-parallel-label">parallel</div>';
-      for (const t of group.items) {
-        itemsHtml += chatRenderCompletedItem(t);
+
+  if (hasAgents) {
+    const sorted = [...toolActivity].sort((a, b) => (a.startTime || 0) - (b.startTime || 0));
+    const agentGroups = chatGroupItemsByAgent(sorted);
+    for (const group of agentGroups) {
+      if (group.type === 'agent') {
+        itemsHtml += chatRenderCompletedItem(group.agent);
+        if (group.items.length > 0) {
+          itemsHtml += '<div class="chat-agent-subactivities">';
+          for (const t of group.items) {
+            itemsHtml += chatRenderCompletedItem(t);
+          }
+          itemsHtml += '</div>';
+        }
+      } else if (group.type === 'standalone') {
+        for (const t of group.items) {
+          itemsHtml += chatRenderCompletedItem(t);
+        }
       }
-      itemsHtml += '</div>';
-    } else {
-      itemsHtml += chatRenderCompletedItem(group.item);
+    }
+  } else {
+    const groups = chatGroupParallelItems(toolActivity);
+    for (const group of groups) {
+      if (group.type === 'parallel') {
+        itemsHtml += '<div class="chat-parallel-group">';
+        itemsHtml += '<div class="chat-parallel-label">parallel</div>';
+        for (const t of group.items) {
+          itemsHtml += chatRenderCompletedItem(t);
+        }
+        itemsHtml += '</div>';
+      } else {
+        itemsHtml += chatRenderCompletedItem(group.item);
+      }
     }
   }
+
   return `<details class="chat-activity-block">
     <summary class="chat-activity-toggle">Activity: ${summary}</summary>
     <div class="chat-activity-block-content">${itemsHtml}</div>
@@ -505,7 +529,8 @@ export function chatAppendStreamingMessage() {
   const container = document.getElementById('chat-messages');
   if (!container) return null;
 
-  const currentBackend = state.chatActiveConv?.backend || 'claude-code';
+  const currentBackend = document.getElementById('chat-backend-select')?.value
+    || state.chatActiveConv?.backend || 'claude-code';
   const icon = getBackendIcon(currentBackend);
   const msgEl = document.createElement('div');
   msgEl.className = 'chat-msg assistant streaming';
@@ -601,14 +626,7 @@ export function chatUpdateStreamingContent(msgEl, st) {
     html += chatRenderThinkingBlock(st.assistantThinking, true);
   }
 
-  // 2. Text content
-  if (st.assistantContent) {
-    html += chatRenderMarkdown(st.assistantContent);
-  } else if (st.assistantThinking) {
-    html += '<div class="chat-thinking-status">Thinking...</div>';
-  }
-
-  // 3. Tool activity — per-agent layout
+  // 2. Tool activity — per-agent layout (before text so agents show on top)
   const allItems = [
     ...chatCombinedTools(st).map(t => ({ ...t, _kind: 'tool' })),
     ...chatCombinedAgents(st).map(a => ({ ...a, _kind: 'agent' })),
@@ -666,6 +684,13 @@ export function chatUpdateStreamingContent(msgEl, st) {
         html += renderAgentCard(agent);
       }
     }
+  }
+
+  // 3. Text content (after tool activity so agents show on top)
+  if (st.assistantContent) {
+    html += chatRenderMarkdown(st.assistantContent);
+  } else if (st.assistantThinking && !allItems.length) {
+    html += '<div class="chat-thinking-status">Thinking...</div>';
   }
 
   // Post-completion processing indicator

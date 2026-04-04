@@ -66,6 +66,8 @@ export interface SessionEntry {
   endedAt: string | null;
   usage?: Usage | null;
   usageByBackend?: Record<string, Usage> | null;
+  /** Backend-managed session ID (e.g. Kiro ACP session ID). Generic — any backend can use this. */
+  externalSessionId?: string | null;
 }
 
 export interface SessionFile {
@@ -117,6 +119,8 @@ export interface Conversation {
   messages: Message[];
   usage?: Usage;
   sessionUsage?: Usage;
+  /** Backend-managed session ID from the active session, for resume/rehydration. */
+  externalSessionId?: string | null;
 }
 
 export interface ConversationListItem {
@@ -244,9 +248,13 @@ export interface BackendMetadata {
 
 export interface SendMessageOptions {
   sessionId: string;
+  /** Stable conversation ID (does not change on session reset). */
+  conversationId?: string;
   isNewSession: boolean;
   workingDir: string | null;
   systemPrompt: string;
+  /** Backend-managed session ID from a previous session, for resume/rehydration. */
+  externalSessionId?: string | null;
 }
 
 export interface SendMessageResult {
