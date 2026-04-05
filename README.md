@@ -23,6 +23,8 @@ Agent Cockpit solves this by decoupling **your data** from **the AI provider**. 
 
 Switch between backends per-conversation using the dropdown in the chat input area. Your selected backend is remembered for new conversations.
 
+See [BACKENDS.md](BACKENDS.md) for a comparison of feature support across backends.
+
 ## How It Works
 
 Agent Cockpit runs on the same machine as your CLI tools. When you send a message through the browser, the server spawns a CLI process locally, streams the response back over WebSocket, and stores the conversation as a JSON file on disk. The CLI runs with full access to your local filesystem and tools, just as it would in your terminal.
