@@ -8,6 +8,10 @@ export interface Usage {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   costUsd: number;
+  /** Kiro credits consumed (fractional, Kiro-specific unit). */
+  credits?: number;
+  /** Percentage of the model's context window used (0–100). Snapshot, not cumulative. */
+  contextUsagePercentage?: number;
 }
 
 // ── Usage Ledger (daily per-backend/model records) ──────────────────────────

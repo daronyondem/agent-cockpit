@@ -961,9 +961,16 @@ export class ChatService {
     target.cacheReadTokens += source.cacheReadTokens || 0;
     target.cacheWriteTokens += source.cacheWriteTokens || 0;
     target.costUsd += source.costUsd || 0;
+    // Kiro-specific: credits accumulate, contextUsagePercentage is a snapshot (overwrite)
+    if (source.credits !== undefined) {
+      target.credits = (target.credits || 0) + source.credits;
+    }
+    if (source.contextUsagePercentage !== undefined) {
+      target.contextUsagePercentage = source.contextUsagePercentage;
+    }
   }
 
-  async addUsage(convId: string, usage: Usage, backend?: string, model?: string): Promise<{ conversationUsage: Usage; sessionUsage: Usage } | null> {
+  async addUsage(convId: string, usage: Usage, backend?: string, model?: string, options?: { skipLedger?: boolean }): Promise<{ conversationUsage: Usage; sessionUsage: Usage } | null> {
     if (!usage) return null;
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
@@ -995,9 +1002,12 @@ export class ChatService {
     await this._writeWorkspaceIndex(hash, index);
 
     // Record to daily ledger (fire-and-forget, don't block the response)
-    this._recordToLedger(backendId, model || 'unknown', usage).catch(err => {
-      console.error('[usage] Failed to write ledger:', (err as Error).message);
-    });
+    // Skip ledger for backends that don't provide token-based usage (e.g. Kiro)
+    if (!options?.skipLedger) {
+      this._recordToLedger(backendId, model || 'unknown', usage).catch(err => {
+        console.error('[usage] Failed to write ledger:', (err as Error).message);
+      });
+    }
 
     return { conversationUsage: convEntry.usage, sessionUsage };
   }

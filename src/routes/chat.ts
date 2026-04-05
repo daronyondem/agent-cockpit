@@ -151,7 +151,8 @@ export async function processStream(
       } else if (event.type === 'result') {
         resultText = event.content;
       } else if (event.type === 'usage') {
-        const updated = await chatService.addUsage(convId, event.usage, backend, event.model);
+        const skipLedger = backend === 'kiro';
+        const updated = await chatService.addUsage(convId, event.usage, backend, event.model, { skipLedger });
         if (!isClosed()) {
           emit({ type: 'usage', usage: updated?.conversationUsage || event.usage, sessionUsage: updated?.sessionUsage });
         }
