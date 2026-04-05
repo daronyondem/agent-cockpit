@@ -1259,6 +1259,50 @@ describe('addUsage', () => {
     expect(record).toBeDefined();
     expect(record!.model).toBe('unknown');
   });
+
+  test('accumulates Kiro credits across calls', async () => {
+    const conv = await service.createConversation('Kiro Credits');
+    await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, credits: 0.1 }, 'kiro');
+    const updated = await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, credits: 0.25 }, 'kiro');
+
+    expect(updated!.conversationUsage.credits).toBeCloseTo(0.35);
+    expect(updated!.sessionUsage.credits).toBeCloseTo(0.35);
+  });
+
+  test('contextUsagePercentage is overwritten (snapshot), not accumulated', async () => {
+    const conv = await service.createConversation('Kiro Context');
+    await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, contextUsagePercentage: 30 }, 'kiro');
+    const updated = await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, contextUsagePercentage: 55 }, 'kiro');
+
+    expect(updated!.conversationUsage.contextUsagePercentage).toBe(55);
+    expect(updated!.sessionUsage.contextUsagePercentage).toBe(55);
+  });
+
+  test('skipLedger option prevents ledger write', async () => {
+    const conv = await service.createConversation('Kiro Skip Ledger');
+    await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, credits: 0.5 }, 'kiro', undefined, { skipLedger: true });
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const ledger = await service.getUsageStats();
+    const today = new Date().toISOString().slice(0, 10);
+    const dayEntry = ledger.days.find((d: any) => d.date === today);
+    // No ledger entry should exist for kiro
+    if (dayEntry) {
+      const kiroRecord = dayEntry.records.find((r: any) => r.backend === 'kiro');
+      expect(kiroRecord).toBeUndefined();
+    }
+  });
+
+  test('skipLedger still persists usage on conversation and session', async () => {
+    const conv = await service.createConversation('Kiro Persist');
+    const updated = await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, credits: 0.3, contextUsagePercentage: 42 }, 'kiro', undefined, { skipLedger: true });
+
+    expect(updated!.conversationUsage.credits).toBeCloseTo(0.3);
+    expect(updated!.conversationUsage.contextUsagePercentage).toBe(42);
+    expect(updated!.sessionUsage.credits).toBeCloseTo(0.3);
+    expect(updated!.sessionUsage.contextUsagePercentage).toBe(42);
+  });
 });
 
 describe('getUsage', () => {

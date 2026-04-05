@@ -98,7 +98,9 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
       outputTokens: number,
       cacheReadTokens: number,
       cacheWriteTokens: number,
-      costUsd: number
+      costUsd: number,
+      credits?: number,                // Kiro only: accumulated credits consumed (fractional)
+      contextUsagePercentage?: number  // Kiro only: context window usage snapshot (0–100)
     }|null,
     usageByBackend: {            // Per-backend usage breakdown (keyed by backend id)
       [backendId]: Usage
@@ -591,7 +593,7 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
 
 **Permission handling:** All `session/request_permission` messages are auto-approved with `allow_always`.
 
-**Usage tracking:** Kiro's `_kiro.dev/metadata` notifications are ignored — credits/contextUsage don't map to the `Usage` interface.
+**Usage tracking:** Kiro's `_kiro.dev/metadata` notifications are parsed for `credits` (accumulated) and `contextUsagePercentage` (snapshot, overwritten each update). These are persisted on the conversation and session `Usage` objects but **excluded from the daily usage ledger** — Kiro's credit-based billing is not comparable with token-based backends. The frontend header displays credits and context % instead of tokens when the conversation backend is `kiro`.
 
 **`generateSummary` / `generateTitle`:** Uses `kiro-cli chat --no-interactive --trust-all-tools` for one-shot LLM calls with 30s timeout. Falls back gracefully if kiro-cli is not installed or not authenticated.
 
@@ -779,7 +781,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 - **Plan approval:** renders plan as markdown with approve/reject buttons → sends `{ type: 'input', text: 'yes'|'no' }` via WebSocket
 - **User questions:** renders question text + option buttons → sends answer via WebSocket `input` frame
 - **Auto title update:** handles `title_updated` event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
-- **Usage display:** a small indicator in the conversation header shows **session-level** token count and USD cost. Updated in real-time when `usage` events arrive during streaming. Displays on hover a tooltip with session input/output/cache token breakdown and cost, plus conversation-level totals. Hidden when no usage data exists (e.g. new conversation).
+- **Usage display:** a small indicator in the conversation header shows **session-level** token count and USD cost. Updated in real-time when `usage` events arrive during streaming. Displays on hover a tooltip with session input/output/cache token breakdown and cost, plus conversation-level totals. Hidden when no usage data exists (e.g. new conversation). For **Kiro** conversations, shows credits consumed and context usage percentage instead of tokens/cost.
 - **Stream cleanup:** `chatCleanupStreamState()` accepts `{ force }` option. The `finally` block uses `force: true` to ensure cleanup even when a pending interaction was never resolved. Interaction response handlers also use forced cleanup when the stream has already ended.
 - **Send button state:** shows stop (■) when streaming with no text input, send (↑) when idle or when streaming with text input (to queue). Disabled during uploads or session resets.
 - **Message queue:** Users can compose and submit messages while the CLI is actively responding. Queued messages are stored client-side in `chatMessageQueue` (Map of convId → array of `{ id, content, inFlight }`) and **persisted server-side** as `messageQueue` (array of content strings) on the conversation entry. On every queue mutation (add, edit, delete, shift, clear), a sequential coalescing PUT syncs the current state to the server — at most one PUT in flight at a time, with a follow-up if mutations occur during the request. Queued messages appear inline in the chat after the streaming bubble, styled as user messages with reduced opacity and an accent left border. Each shows a "Queued" badge and has Edit and Delete buttons. In-flight messages show "Sending..." and cannot be edited or deleted. When a response completes successfully, the next queued message is automatically sent (FIFO). Queue has three states: **Active** (streaming, auto-execute on completion), **Paused** (error, banner with Resume/Clear), and **Suspended** (restored from server after page load). The `chatQueuePaused` Set tracks paused conversations; `chatQueueSuspended` tracks restored conversations. On loading a conversation with a non-empty persisted queue and no active stream, the queue is restored into client state and marked suspended. A banner reads "N queued messages from a previous session" with Resume and Clear buttons. Suspended queues do not auto-execute — the user must explicitly resume. Queue is automatically cleared on session reset and archive.
@@ -925,7 +927,7 @@ Update OAuth callback URLs to include the ngrok URL.
 | `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry (including shutdownAll), ClaudeCodeAdapter |
 | `test/kiroBackend.test.ts` | KiroAdapter metadata, lifecycle (shutdown, onSessionReset), extractKiroToolDetails tool name normalization, generateSummary/generateTitle fallbacks |
 | `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, archive/restore endpoints, message queue persistence (GET/PUT/DELETE, included in conversation response, cleared on reset/archive) |
-| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats), workspace storage, migration, markdown export |
+| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats, Kiro credits accumulation, contextUsagePercentage snapshot, skipLedger option), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state, suspended (restored) state |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |

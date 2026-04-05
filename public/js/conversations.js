@@ -729,9 +729,13 @@ export function chatUpdateUsageDisplay() {
   let el = document.getElementById('chat-header-usage');
   const convUsage = state.chatActiveConv?.usage;
   const sessUsage = state.chatActiveConv?.sessionUsage;
+  const isKiro = state.chatActiveConv?.backend === 'kiro';
 
-  const hasUsage = (sessUsage && (sessUsage.inputTokens > 0 || sessUsage.outputTokens > 0 || sessUsage.costUsd > 0))
-    || (convUsage && (convUsage.inputTokens > 0 || convUsage.outputTokens > 0 || convUsage.costUsd > 0));
+  // Kiro: check for credits; others: check for tokens/cost
+  const hasUsage = isKiro
+    ? (sessUsage?.credits > 0 || convUsage?.credits > 0 || sessUsage?.contextUsagePercentage > 0 || convUsage?.contextUsagePercentage > 0)
+    : ((sessUsage && (sessUsage.inputTokens > 0 || sessUsage.outputTokens > 0 || sessUsage.costUsd > 0))
+      || (convUsage && (convUsage.inputTokens > 0 || convUsage.outputTokens > 0 || convUsage.costUsd > 0)));
 
   if (!hasUsage) {
     if (el) el.style.display = 'none';
@@ -748,6 +752,33 @@ export function chatUpdateUsageDisplay() {
   }
 
   const displayUsage = sessUsage || convUsage;
+
+  if (isKiro) {
+    // ── Kiro: show credits + context usage ──
+    const credits = displayUsage.credits || 0;
+    const contextPct = displayUsage.contextUsagePercentage || 0;
+    const creditsStr = credits < 0.01 && credits > 0 ? credits.toFixed(4) : credits < 1 ? credits.toFixed(3) : credits.toFixed(2);
+    const contextStr = contextPct.toFixed(2);
+
+    let tooltipLines = ['\u2500\u2500 Session \u2500\u2500'];
+    tooltipLines.push(`Credits: ${creditsStr}`);
+    tooltipLines.push(`Context: ${contextStr}%`);
+
+    if (convUsage && convUsage !== displayUsage && convUsage.credits > 0) {
+      tooltipLines.push('');
+      tooltipLines.push('\u2500\u2500 Conversation \u2500\u2500');
+      const convCredits = convUsage.credits || 0;
+      tooltipLines.push(`Credits: ${convCredits < 1 ? convCredits.toFixed(3) : convCredits.toFixed(2)}`);
+    }
+
+    el.title = tooltipLines.join('\n');
+    el.innerHTML = `<span class="chat-usage-tokens">${creditsStr} credits</span>`
+      + (contextPct > 0 ? `<span class="chat-usage-cost">${contextStr}% context</span>` : '');
+    el.style.display = '';
+    return;
+  }
+
+  // ── Token-based backends (Claude Code, etc.) ──
   const sessionTokens = (displayUsage.inputTokens || 0) + (displayUsage.outputTokens || 0);
 
   let tooltipLines = ['\u2500\u2500 Session \u2500\u2500'];
