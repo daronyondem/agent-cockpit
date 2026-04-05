@@ -104,6 +104,7 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
       [backendId]: Usage
     }|null,
     archived: boolean|undefined, // true when conversation is archived; absent/false = active
+    messageQueue: string[]|undefined, // Persisted follow-up message queue (content strings); absent when empty
     sessions: [{
       number: number,           // 1-based session number
       sessionId: string,        // UUID passed to CLI
@@ -245,29 +246,39 @@ Recursively deletes directory. Refuses filesystem root. Returns `{ deleted, pare
 | PATCH | `/conversations/:id/archive` | Yes | Sets `archived: true` on the conversation. Aborts active stream. Files remain on disk. `404` if not found. |
 | PATCH | `/conversations/:id/restore` | Yes | Removes `archived` flag, restoring the conversation to the active list. `404` if not found. |
 
-### 3.3 Download
+### 3.3 Message Queue
+
+| Method | Path | CSRF | Description |
+|--------|------|------|-------------|
+| GET | `/conversations/:id/queue` | — | Returns `{ queue: string[] }`. Empty array if none persisted. |
+| PUT | `/conversations/:id/queue` | Yes | `{ queue: string[] }` → replaces the full queue. `400` if body is invalid. `404` if conversation not found. |
+| DELETE | `/conversations/:id/queue` | Yes | Clears the queue. `404` if conversation not found. |
+
+The queue is also included in the `GET /conversations/:id` response as `messageQueue` (omitted when empty). Queue is automatically cleared on session reset and archive.
+
+### 3.4 Download
 
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/conversations/:id/download` | Full conversation as `.md` attachment. |
 | GET | `/conversations/:id/sessions/:num/download` | Single session as `.md` attachment. |
 
-### 3.4 Sessions
+### 3.5 Sessions
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
 | GET | `/conversations/:id/sessions` | — | Session list with `isCurrent` flag and `summary`. |
 | GET | `/conversations/:id/sessions/:num/messages` | — | Messages for a specific session. `400`/`404` on error. |
-| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session, resets title to "New Chat". `409` if streaming. Clears any stale WebSocket event buffer for the conversation. Returns `{ conversation, newSessionNumber, archivedSession }`. |
+| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session, resets title to "New Chat", clears message queue. `409` if streaming. Clears any stale WebSocket event buffer for the conversation. Returns `{ conversation, newSessionNumber, archivedSession }`. |
 
-### 3.5 Backends
+### 3.6 Backends
 
 ```
 GET /backends
 ```
 Returns `{ backends: [{ id, label, icon, capabilities }] }` — metadata for every registered adapter.
 
-### 3.6 Messaging and Streaming
+### 3.7 Messaging and Streaming
 
 **Send message:**
 ```
@@ -349,7 +360,7 @@ ws(s)://host/api/chat/conversations/:id/ws
 4. Session reset → new session with fresh UUID
 5. `isNewSession` determined by `messageCount === 0`
 
-### 3.7 File Upload
+### 3.8 File Upload
 
 ```
 POST /conversations/:id/upload  [CSRF]
@@ -368,21 +379,21 @@ GET /conversations/:id/files/:filename
 ```
 Serves file via `res.sendFile()`. Path traversal guard. No CSRF (used by `<img>` tags).
 
-### 3.8 Settings
+### 3.9 Settings
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
 | GET | `/settings` | — | Returns settings (defaults if file missing). |
 | PUT | `/settings` | Yes | Writes full body to `settings.json`. |
 
-### 3.9 Usage Statistics
+### 3.10 Usage Statistics
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
 | GET | `/usage-stats` | — | Returns the usage ledger (`{ days: [...] }`). |
 | DELETE | `/usage-stats` | Yes | Clears all usage statistics (resets ledger to empty). |
 
-### 3.10 Workspace Instructions
+### 3.11 Workspace Instructions
 
 Per-workspace instructions appended to the global system prompt on new sessions. Stored in workspace `index.json` under `instructions`.
 
@@ -397,7 +408,7 @@ Per-workspace instructions appended to the global system prompt on new sessions.
 
 Concatenated with `\n\n` and passed as `--append-system-prompt`. Not sent on session resume.
 
-### 3.10 Version & Self-Update
+### 3.12 Version & Self-Update
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
@@ -406,7 +417,7 @@ Concatenated with `\n\n` and passed as `--append-system-prompt`. Not sent on ses
 | POST | `/check-version` | Yes | Triggers immediate remote check, returns status. |
 | POST | `/update-trigger` | Yes | Full update sequence (see Section 4, UpdateService). |
 
-### 3.11 Error Response Patterns
+### 3.13 Error Response Patterns
 
 | Status | Meaning | Body |
 |--------|---------|------|
@@ -771,7 +782,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 - **Usage display:** a small indicator in the conversation header shows **session-level** token count and USD cost. Updated in real-time when `usage` events arrive during streaming. Displays on hover a tooltip with session input/output/cache token breakdown and cost, plus conversation-level totals. Hidden when no usage data exists (e.g. new conversation).
 - **Stream cleanup:** `chatCleanupStreamState()` accepts `{ force }` option. The `finally` block uses `force: true` to ensure cleanup even when a pending interaction was never resolved. Interaction response handlers also use forced cleanup when the stream has already ended.
 - **Send button state:** shows stop (■) when streaming with no text input, send (↑) when idle or when streaming with text input (to queue). Disabled during uploads or session resets.
-- **Message queue:** Users can compose and submit messages while the CLI is actively responding. Queued messages are stored client-side in `chatMessageQueue` (Map of convId → array of `{ id, content, inFlight }`). They appear inline in the chat after the streaming bubble, styled as user messages with reduced opacity and an accent left border. Each queued message shows a "Queued" badge and has Edit and Delete buttons. Editing is inline via a textarea replacing the message content. In-flight messages (being dispatched to the CLI) show "Sending..." and cannot be edited or deleted. When a response completes successfully, the next queued message is automatically sent (FIFO). On error, the queue pauses and a banner appears with Resume and Clear buttons. The `chatQueuePaused` Set tracks paused conversations. Queuing a new message while paused un-pauses the queue. Queue state is per-conversation and purely client-side (not persisted to disk).
+- **Message queue:** Users can compose and submit messages while the CLI is actively responding. Queued messages are stored client-side in `chatMessageQueue` (Map of convId → array of `{ id, content, inFlight }`) and **persisted server-side** as `messageQueue` (array of content strings) on the conversation entry. On every queue mutation (add, edit, delete, shift, clear), a sequential coalescing PUT syncs the current state to the server — at most one PUT in flight at a time, with a follow-up if mutations occur during the request. Queued messages appear inline in the chat after the streaming bubble, styled as user messages with reduced opacity and an accent left border. Each shows a "Queued" badge and has Edit and Delete buttons. In-flight messages show "Sending..." and cannot be edited or deleted. When a response completes successfully, the next queued message is automatically sent (FIFO). Queue has three states: **Active** (streaming, auto-execute on completion), **Paused** (error, banner with Resume/Clear), and **Suspended** (restored from server after page load). The `chatQueuePaused` Set tracks paused conversations; `chatQueueSuspended` tracks restored conversations. On loading a conversation with a non-empty persisted queue and no active stream, the queue is restored into client state and marked suspended. A banner reads "N queued messages from a previous session" with Resume and Clear buttons. Suspended queues do not auto-execute — the user must explicitly resume. Queue is automatically cleared on session reset and archive.
 
 ### File Handling
 
@@ -913,10 +924,10 @@ Update OAuth callback URLs to include the ngrok URL.
 | `test/toolUtils.test.ts` | Shared backend helpers: extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError |
 | `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry (including shutdownAll), ClaudeCodeAdapter |
 | `test/kiroBackend.test.ts` | KiroAdapter metadata, lifecycle (shutdown, onSessionReset), extractKiroToolDetails tool name normalization, generateSummary/generateTitle fallbacks |
-| `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, archive/restore endpoints |
+| `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, archive/restore endpoints, message queue persistence (GET/PUT/DELETE, included in conversation response, cleared on reset/archive) |
 | `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
-| `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state |
+| `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state, suspended (restored) state |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |
 | `test/sessionStore.test.ts` | Session file-store persistence |
 | `test/updateService.test.ts` | Version comparison, status, trigger guards, interval management, interpreter verification, PATH setup for restart |

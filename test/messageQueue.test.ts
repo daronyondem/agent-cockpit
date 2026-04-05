@@ -16,6 +16,7 @@ beforeEach(() => {
   (global as any).chatActiveConvId = 'conv-1';
   (global as any).chatMessageQueue = new Map();
   (global as any).chatQueuePaused = new Set();
+  (global as any).chatQueueSuspended = new Set();
   (global as any).chatQueueIdCounter = 0;
   (global as any).chatStreamingConvs = new Set();
   (global as any).chatPendingFiles = [];
@@ -37,13 +38,19 @@ function chatRenderQueuedMessages() {
 
   container.querySelectorAll('.chat-msg-queued').forEach(el => el.remove());
   container.querySelectorAll('.chat-queue-paused-banner').forEach(el => el.remove());
+  container.querySelectorAll('.chat-queue-suspended-banner').forEach(el => el.remove());
 
   const convId = (global as any).chatActiveConvId;
   if (!convId) return;
   const queue = (global as any).chatMessageQueue.get(convId);
   if (!queue || queue.length === 0) return;
 
-  if ((global as any).chatQueuePaused.has(convId)) {
+  if ((global as any).chatQueueSuspended.has(convId)) {
+    const bannerEl = document.createElement('div');
+    bannerEl.className = 'chat-queue-suspended-banner';
+    bannerEl.innerHTML = `<span>${queue.length} queued message${queue.length !== 1 ? 's' : ''} from a previous session</span>`;
+    container.appendChild(bannerEl);
+  } else if ((global as any).chatQueuePaused.has(convId)) {
     const bannerEl = document.createElement('div');
     bannerEl.className = 'chat-queue-paused-banner';
     bannerEl.innerHTML = '<span>Queue paused due to error.</span>';
@@ -81,6 +88,7 @@ function chatDeleteQueuedMessage(queueId: number) {
   if (queue.length === 0) {
     (global as any).chatMessageQueue.delete(convId);
     (global as any).chatQueuePaused.delete(convId);
+    (global as any).chatQueueSuspended.delete(convId);
   }
   chatRenderQueuedMessages();
 }
@@ -303,5 +311,85 @@ describe('Message Queue: per-conversation isolation', () => {
     expect((global as any).chatMessageQueue.get('conv-2')).toHaveLength(1);
     expect((global as any).chatMessageQueue.get('conv-1')[0].content).toBe('conv1-msg');
     expect((global as any).chatMessageQueue.get('conv-2')[0].content).toBe('conv2-msg');
+  });
+});
+
+describe('Message Queue: suspended (restored) state', () => {
+  function restoreQueue(contents: string[]) {
+    const convId = (global as any).chatActiveConvId;
+    const restored = contents.map(content => ({
+      id: ++(global as any).chatQueueIdCounter,
+      content,
+      inFlight: false,
+    }));
+    (global as any).chatMessageQueue.set(convId, restored);
+    (global as any).chatQueueSuspended.add(convId);
+  }
+
+  test('restore populates queue and marks as suspended', () => {
+    restoreQueue(['msg1', 'msg2']);
+    const convId = (global as any).chatActiveConvId;
+    expect((global as any).chatMessageQueue.get(convId)).toHaveLength(2);
+    expect((global as any).chatQueueSuspended.has(convId)).toBe(true);
+  });
+
+  test('renders suspended banner with correct count', () => {
+    restoreQueue(['a', 'b', 'c']);
+    chatRenderQueuedMessages();
+    const banner = document.querySelector('.chat-queue-suspended-banner');
+    expect(banner).not.toBeNull();
+    expect(banner?.textContent).toContain('3 queued messages from a previous session');
+  });
+
+  test('renders singular form for single message', () => {
+    restoreQueue(['only']);
+    chatRenderQueuedMessages();
+    const banner = document.querySelector('.chat-queue-suspended-banner');
+    expect(banner?.textContent).toContain('1 queued message from a previous session');
+  });
+
+  test('suspended banner takes priority over paused banner', () => {
+    restoreQueue(['msg']);
+    (global as any).chatQueuePaused.add('conv-1');
+    chatRenderQueuedMessages();
+    expect(document.querySelector('.chat-queue-suspended-banner')).not.toBeNull();
+    expect(document.querySelector('.chat-queue-paused-banner')).toBeNull();
+  });
+
+  test('queued messages are still rendered below suspended banner', () => {
+    restoreQueue(['hello', 'world']);
+    chatRenderQueuedMessages();
+    const msgs = document.querySelectorAll('.chat-msg-queued');
+    expect(msgs).toHaveLength(2);
+    expect(msgs[0].textContent).toContain('hello');
+    expect(msgs[1].textContent).toContain('world');
+  });
+
+  test('resume clears suspended state', () => {
+    restoreQueue(['msg']);
+    const convId = (global as any).chatActiveConvId;
+    (global as any).chatQueueSuspended.delete(convId);
+    expect((global as any).chatQueueSuspended.has(convId)).toBe(false);
+    // Queue items remain
+    expect((global as any).chatMessageQueue.get(convId)).toHaveLength(1);
+  });
+
+  test('clear removes suspended state and empties queue', () => {
+    restoreQueue(['msg1', 'msg2']);
+    const convId = (global as any).chatActiveConvId;
+    // Simulate chatClearQueue behavior
+    (global as any).chatMessageQueue.delete(convId);
+    (global as any).chatQueueSuspended.delete(convId);
+    expect((global as any).chatQueueSuspended.has(convId)).toBe(false);
+    expect((global as any).chatMessageQueue.has(convId)).toBe(false);
+  });
+
+  test('deleting last item clears suspended state', () => {
+    restoreQueue(['only']);
+    const convId = (global as any).chatActiveConvId;
+    const queue = (global as any).chatMessageQueue.get(convId);
+    chatDeleteQueuedMessage(queue[0].id);
+    expect((global as any).chatQueueSuspended.has(convId)).toBe(false);
+    expect((global as any).chatMessageQueue.has(convId)).toBe(false);
   });
 });
