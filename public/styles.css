@@ -1500,6 +1500,20 @@
     color: var(--text);
   }
 
+  .chat-queue-suspended-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    max-width: 800px;
+    margin: 8px auto;
+    padding: 8px 16px;
+    background: color-mix(in srgb, #f59e0b 8%, var(--surface));
+    border: 1px solid color-mix(in srgb, #f59e0b 25%, var(--border));
+    border-radius: 8px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
   .chat-queue-resume-btn,
   .chat-queue-clear-btn {
     padding: 3px 10px;

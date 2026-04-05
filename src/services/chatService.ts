@@ -258,6 +258,7 @@ export class ChatService {
       usage: convEntry.usage || this._emptyUsage(),
       sessionUsage: activeSession?.usage || this._emptyUsage(),
       externalSessionId: activeSession?.externalSessionId || null,
+      messageQueue: convEntry.messageQueue || undefined,
     };
   }
 
@@ -315,6 +316,7 @@ export class ChatService {
     if (!result) return false;
     const { hash, index, convEntry } = result;
     convEntry.archived = true;
+    delete convEntry.messageQueue;
     await this._writeWorkspaceIndex(hash, index);
     return true;
   }
@@ -479,6 +481,31 @@ export class ChatService {
     return newTitle;
   }
 
+  // ── Message Queue Persistence ──────────────────────────────────────────────
+
+  async getQueue(convId: string): Promise<string[]> {
+    const result = await this._getConvFromIndex(convId);
+    if (!result) return [];
+    return result.convEntry.messageQueue || [];
+  }
+
+  async setQueue(convId: string, queue: string[]): Promise<boolean> {
+    const result = await this._getConvFromIndex(convId);
+    if (!result) return false;
+    const { hash, index, convEntry } = result;
+    if (queue.length === 0) {
+      delete convEntry.messageQueue;
+    } else {
+      convEntry.messageQueue = queue;
+    }
+    await this._writeWorkspaceIndex(hash, index);
+    return true;
+  }
+
+  async clearQueue(convId: string): Promise<boolean> {
+    return this.setQueue(convId, []);
+  }
+
   // ── Session Management ─────────────────────────────────────────────────────
 
   async resetSession(convId: string): Promise<ResetSessionResult | null> {
@@ -511,6 +538,7 @@ export class ChatService {
     const newSessionNumber = currentSessionNumber + 1;
     const newSessionId = this._newId();
 
+    delete convEntry.messageQueue;
     convEntry.currentSessionId = newSessionId;
     convEntry.title = 'New Chat';
     convEntry.sessions.push({

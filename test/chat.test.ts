@@ -2069,3 +2069,77 @@ describe('WebSocket reconnection', () => {
     ws2.close();
   });
 });
+
+// ── Message Queue Persistence ──────────────────────────────────────────────
+
+describe('Message Queue API', () => {
+  test('GET /conversations/:id/queue returns empty array by default', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/queue`);
+    expect(res.status).toBe(200);
+    expect(res.body.queue).toEqual([]);
+  });
+
+  test('PUT /conversations/:id/queue persists and GET retrieves', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    const putRes = await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['msg1', 'msg2'] });
+    expect(putRes.status).toBe(200);
+    expect(putRes.body.ok).toBe(true);
+
+    const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}/queue`);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.queue).toEqual(['msg1', 'msg2']);
+  });
+
+  test('DELETE /conversations/:id/queue clears the queue', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['msg1'] });
+
+    const delRes = await makeRequest('DELETE', `/api/chat/conversations/${conv.id}/queue`);
+    expect(delRes.status).toBe(200);
+    expect(delRes.body.ok).toBe(true);
+
+    const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}/queue`);
+    expect(getRes.body.queue).toEqual([]);
+  });
+
+  test('PUT /conversations/:id/queue returns 400 for invalid body', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    const res = await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: [123] });
+    expect(res.status).toBe(400);
+  });
+
+  test('PUT /conversations/:id/queue returns 404 for unknown conversation', async () => {
+    const res = await makeRequest('PUT', '/api/chat/conversations/nonexistent/queue', { queue: ['msg'] });
+    expect(res.status).toBe(404);
+  });
+
+  test('queue is included in GET /conversations/:id response', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['hello', 'world'] });
+
+    const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}`);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.messageQueue).toEqual(['hello', 'world']);
+  });
+
+  test('queue is cleared on session reset', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['pending msg'] });
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/reset`);
+
+    const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}/queue`);
+    expect(getRes.body.queue).toEqual([]);
+  });
+
+  test('queue is cleared on archive', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['pending msg'] });
+
+    await makeRequest('PATCH', `/api/chat/conversations/${conv.id}/archive`);
+
+    const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}/queue`);
+    expect(getRes.body.queue).toEqual([]);
+  });
+});

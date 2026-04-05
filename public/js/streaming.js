@@ -1,4 +1,4 @@
-import { state, chatFetch, chatApiUrl, fetchCsrfToken } from './state.js';
+import { state, chatFetch, chatApiUrl, fetchCsrfToken, chatSyncQueueToServer } from './state.js';
 import { esc, escWithCode } from './utils.js';
 import {
   chatRenderMessages, chatRenderMarkdown, chatAutoResize, chatScrollToBottom,
@@ -17,6 +17,7 @@ import {
 
 export async function chatProcessNextQueuedMessage(convId) {
   if (state.chatQueuePaused.has(convId)) return;
+  if (state.chatQueueSuspended.has(convId)) return;
   if (state.chatStreamingConvs.has(convId)) return;
   const queue = state.chatMessageQueue.get(convId);
   if (!queue || queue.length === 0) return;
@@ -34,6 +35,7 @@ export async function chatProcessNextQueuedMessage(convId) {
   queue.shift();
   if (queue.length === 0) state.chatMessageQueue.delete(convId);
   chatRenderQueuedMessages();
+  chatSyncQueueToServer(convId);
 
   if (state.chatActiveConvId === convId) {
     await chatSendMessage();
@@ -44,6 +46,16 @@ export function chatResumeQueue() {
   const convId = state.chatActiveConvId;
   if (!convId) return;
   state.chatQueuePaused.delete(convId);
+  chatRenderQueuedMessages();
+  if (!state.chatStreamingConvs.has(convId)) {
+    chatProcessNextQueuedMessage(convId);
+  }
+}
+
+export function chatResumeSuspendedQueue() {
+  const convId = state.chatActiveConvId;
+  if (!convId) return;
+  state.chatQueueSuspended.delete(convId);
   chatRenderQueuedMessages();
   if (!state.chatStreamingConvs.has(convId)) {
     chatProcessNextQueuedMessage(convId);
@@ -62,8 +74,10 @@ export function chatClearQueue() {
     state.chatMessageQueue.delete(convId);
   }
   state.chatQueuePaused.delete(convId);
+  state.chatQueueSuspended.delete(convId);
   chatRenderQueuedMessages();
   chatUpdateSendButtonState();
+  chatSyncQueueToServer(convId);
 }
 
 // ── Stream cleanup ───────────────────────────────────────────────────────────
@@ -131,6 +145,7 @@ export async function chatSendMessage() {
     chatRenderQueuedMessages();
     chatUpdateSendButtonState();
     chatScrollToBottom();
+    chatSyncQueueToServer(state.chatActiveConvId);
     return;
   }
 

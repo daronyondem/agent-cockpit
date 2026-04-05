@@ -447,6 +447,40 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
+  // ── Message queue persistence ──────────────────────────────────────────────
+  router.get('/conversations/:id/queue', async (req: Request, res: Response) => {
+    try {
+      const queue = await chatService.getQueue(param(req, 'id'));
+      res.json({ queue });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.put('/conversations/:id/queue', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { queue } = req.body as { queue?: string[] };
+      if (!Array.isArray(queue) || !queue.every(item => typeof item === 'string')) {
+        return res.status(400).json({ error: 'queue must be an array of strings' });
+      }
+      const ok = await chatService.setQueue(param(req, 'id'), queue);
+      if (!ok) return res.status(404).json({ error: 'Conversation not found' });
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.delete('/conversations/:id/queue', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const ok = await chatService.clearQueue(param(req, 'id'));
+      if (!ok) return res.status(404).json({ error: 'Conversation not found' });
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Download conversation as markdown ──────────────────────────────────────
   router.get('/conversations/:id/download', async (req: Request, res: Response) => {
     try {

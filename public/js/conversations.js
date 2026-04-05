@@ -1,4 +1,4 @@
-import { state, chatFetch, fetchCsrfToken, chatApiUrl } from './state.js';
+import { state, chatFetch, fetchCsrfToken, chatApiUrl, chatSyncQueueToServer } from './state.js';
 import { esc, chatFormatFileSize, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { chatRenderMessages, chatRenderMarkdown, chatAutoResize, chatScrollToBottom } from './rendering.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
@@ -591,8 +591,22 @@ export async function chatSelectConversation(id) {
     const res = await chatFetch(`conversations/${id}`);
     state.chatActiveConv = await res.json();
     state.chatActiveConvId = id;
+
+    // Restore persisted queue if present and no active stream
+    if (state.chatActiveConv.messageQueue && state.chatActiveConv.messageQueue.length > 0
+        && !state.chatStreamingConvs.has(id) && !state.chatMessageQueue.has(id)) {
+      const restored = state.chatActiveConv.messageQueue.map(content => ({
+        id: ++state.chatQueueIdCounter,
+        content,
+        inFlight: false,
+      }));
+      state.chatMessageQueue.set(id, restored);
+      state.chatQueueSuspended.add(id);
+    }
+
     chatRenderConvList();
     chatRenderMessages();
+    chatRenderQueuedMessages();
     chatUpdateHeader();
     chatRestoreDraft(id);
     const resetBtn = document.getElementById('chat-reset-btn');
@@ -822,13 +836,23 @@ export function chatRenderQueuedMessages() {
 
   container.querySelectorAll('.chat-msg-queued').forEach(el => el.remove());
   container.querySelectorAll('.chat-queue-paused-banner').forEach(el => el.remove());
+  container.querySelectorAll('.chat-queue-suspended-banner').forEach(el => el.remove());
 
   const convId = state.chatActiveConvId;
   if (!convId) return;
   const queue = state.chatMessageQueue.get(convId);
   if (!queue || queue.length === 0) return;
 
-  if (state.chatQueuePaused.has(convId)) {
+  if (state.chatQueueSuspended.has(convId)) {
+    const bannerEl = document.createElement('div');
+    bannerEl.className = 'chat-queue-suspended-banner';
+    bannerEl.innerHTML = `
+      <span>${queue.length} queued message${queue.length !== 1 ? 's' : ''} from a previous session</span>
+      <button class="chat-queue-resume-btn" onclick="chatResumeSuspendedQueue()">Resume</button>
+      <button class="chat-queue-clear-btn" onclick="chatClearQueue()">Clear</button>
+    `;
+    container.appendChild(bannerEl);
+  } else if (state.chatQueuePaused.has(convId)) {
     const bannerEl = document.createElement('div');
     bannerEl.className = 'chat-queue-paused-banner';
     bannerEl.innerHTML = `
@@ -879,9 +903,11 @@ export function chatDeleteQueuedMessage(queueId) {
   if (queue.length === 0) {
     state.chatMessageQueue.delete(convId);
     state.chatQueuePaused.delete(convId);
+    state.chatQueueSuspended.delete(convId);
   }
   chatRenderQueuedMessages();
   chatUpdateSendButtonState();
+  chatSyncQueueToServer(convId);
 }
 
 export function chatEditQueuedMessage(queueId) {
@@ -925,6 +951,7 @@ export function chatEditQueuedMessage(queueId) {
       item.content = newContent;
     }
     chatRenderQueuedMessages();
+    chatSyncQueueToServer(convId);
   };
 
   editActions.querySelector('.chat-queue-edit-cancel').onclick = () => {

@@ -24,7 +24,10 @@ export const state = {
   chatConvLoadGen: 0, // generation counter for chatLoadConversations to discard stale responses
   chatMessageQueue: new Map(), // convId -> [{ id, content, inFlight }]
   chatQueuePaused: new Set(), // convIds where queue is paused due to error
+  chatQueueSuspended: new Set(), // convIds where queue was restored from server
   chatQueueIdCounter: 0,
+  _queueSyncInFlight: false,
+  _queueSyncDirty: false,
   chatWebSockets: new Map(), // convId -> WebSocket
   chatReconnectAttempts: new Map(), // convId -> attempt count
   _usageStatsCache: null,
@@ -32,6 +35,31 @@ export const state = {
   BACKEND_CAPABILITIES: {},
   BACKEND_ICONS: {},
 };
+
+// ─── Queue sync ─────────────────────────────────────────────────────────────
+// Sequential coalescing: at most one PUT in flight; if mutations happen during
+// the in-flight request, a single follow-up PUT sends the latest state.
+
+export function chatSyncQueueToServer(convId) {
+  if (!convId) return;
+  if (state._queueSyncInFlight) {
+    state._queueSyncDirty = true;
+    return;
+  }
+  const queue = state.chatMessageQueue.get(convId);
+  const contents = queue ? queue.filter(i => !i.inFlight).map(i => i.content) : [];
+  state._queueSyncInFlight = true;
+  chatFetch(`conversations/${convId}/queue`, {
+    method: 'PUT',
+    body: { queue: contents },
+  }).catch(() => {}).finally(() => {
+    state._queueSyncInFlight = false;
+    if (state._queueSyncDirty) {
+      state._queueSyncDirty = false;
+      chatSyncQueueToServer(convId);
+    }
+  });
+}
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 export const CHAT_MAX_RECONNECT_ATTEMPTS = 5;

@@ -101,6 +101,7 @@ export interface ConversationEntry {
   usageByBackend?: Record<string, Usage>;
   sessions: SessionEntry[];
   archived?: boolean;
+  messageQueue?: string[];
 }
 
 export interface WorkspaceIndex {
@@ -121,6 +122,7 @@ export interface Conversation {
   sessionUsage?: Usage;
   /** Backend-managed session ID from the active session, for resume/rehydration. */
   externalSessionId?: string | null;
+  messageQueue?: string[];
 }
 
 export interface ConversationListItem {

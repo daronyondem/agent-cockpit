@@ -21,7 +21,7 @@ import {
 } from './conversations.js';
 import {
   chatSendMessage, chatStopStreaming, chatRetryLast,
-  chatResumeQueue, chatClearQueue, chatHandleStreamEvent,
+  chatResumeQueue, chatResumeSuspendedQueue, chatClearQueue, chatHandleStreamEvent,
   chatShowPlanApproval, chatShowUserQuestion,
 } from './streaming.js';
 
@@ -42,6 +42,7 @@ window.chatToggleCodeBlock = chatToggleCodeBlock;
 window.chatOpenLightbox = chatOpenLightbox;
 window.chatCloseLightbox = chatCloseLightbox;
 window.chatResumeQueue = chatResumeQueue;
+window.chatResumeSuspendedQueue = chatResumeSuspendedQueue;
 window.chatClearQueue = chatClearQueue;
 window.chatRetryLast = chatRetryLast;
 window.chatSaveSettings = chatSaveSettings;
