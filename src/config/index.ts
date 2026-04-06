@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import type { AppConfig } from '../types';
 
-dotenv.config();
+dotenv.config({ override: true });
 
 const config: AppConfig = {
   PORT: Number(process.env.PORT) || 3334,
