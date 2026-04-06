@@ -110,7 +110,8 @@ export class UpdateService {
         // config even after git pull updates the file
         const ecoSource = fs.readFileSync(ecosystemPath, 'utf8');
         const mod: { exports: Record<string, unknown> } = { exports: {} };
-        new Function('module', 'exports', ecoSource)(mod, mod.exports);
+        const ecoDir = path.dirname(ecosystemPath);
+        new Function('module', 'exports', '__dirname', ecoSource)(mod, mod.exports, ecoDir);
         const ecoConfig = mod.exports as { apps?: Array<{ interpreter?: string }> };
         const app = ecoConfig.apps?.[0];
         if (app?.interpreter) {
