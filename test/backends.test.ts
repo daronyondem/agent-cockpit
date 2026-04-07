@@ -784,15 +784,23 @@ describe('resolveClaudeMemoryDir', () => {
     expect(resolved).toBe(expected);
   });
 
-  test('returns null when no .md files exist', () => {
+  test('returns the deterministic short-path even when the dir is empty', () => {
     const workspace = '/tmp/empty-ws';
     const sanitized = '-tmp-empty-ws';
-    fs.mkdirSync(path.join(tmpHome, '.claude', 'projects', sanitized, 'memory'), { recursive: true });
-    expect(resolveClaudeMemoryDir(workspace)).toBeNull();
+    const memDir = path.join(tmpHome, '.claude', 'projects', sanitized, 'memory');
+    fs.mkdirSync(memDir, { recursive: true });
+    // Empty dir — but the watcher needs a path to attach to, so we return
+    // the deterministic path for short workspaces regardless of contents.
+    expect(resolveClaudeMemoryDir(workspace)).toBe(memDir);
   });
 
-  test('returns null when projects dir does not exist', () => {
-    expect(resolveClaudeMemoryDir('/tmp/never-seen')).toBeNull();
+  test('returns the deterministic short-path even when projects dir is absent', () => {
+    const workspace = '/tmp/never-seen';
+    const sanitized = '-tmp-never-seen';
+    const expected = path.join(tmpHome, '.claude', 'projects', sanitized, 'memory');
+    // The watcher attach site mkdir's the path, so we must return it even
+    // when nothing exists yet.  extractMemory handles ENOENT separately.
+    expect(resolveClaudeMemoryDir(workspace)).toBe(expected);
   });
 
   test('falls back to prefix match for hashed directories', () => {
@@ -1086,8 +1094,14 @@ describe('ClaudeCodeAdapter.getMemoryDir', () => {
     expect(adapter.getMemoryDir('')).toBeNull();
   });
 
-  test('returns null when no memory directory exists', () => {
-    expect(adapter.getMemoryDir('/tmp/never-seen')).toBeNull();
+  test('returns the deterministic short-path even when the dir does not exist', () => {
+    // getMemoryDir is used by the real-time watcher, which needs a path
+    // to attach to before Claude Code has written anything.  For short
+    // workspace paths we can compute the exact dirname, so return it
+    // regardless of whether anything exists on disk yet.
+    const sanitized = '-tmp-never-seen';
+    const expected = path.join(tmpHome, '.claude', 'projects', sanitized, 'memory');
+    expect(adapter.getMemoryDir('/tmp/never-seen')).toBe(expected);
   });
 
   test('returns the sanitized directory path when memory exists', () => {

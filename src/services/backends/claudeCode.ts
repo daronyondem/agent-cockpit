@@ -627,8 +627,14 @@ export function resolveCanonicalWorkspacePath(workspacePath: string): string {
  * (>200 chars) Claude Code appends a hash suffix we can't reproduce
  * in Node (Bun.hash vs djb2), so we fall back to a directory scan.
  *
- * Returns the absolute path to the memory directory if one matches,
- * or `null` if no candidate exists.
+ * Returns the absolute path where memory *will live*, even if the
+ * directory does not exist yet or contains no `.md` files — callers
+ * like the real-time memory watcher need to know the target path up
+ * front so they can create and watch it before Claude Code writes
+ * anything.  Only returns `null` when the workspace path is long
+ * enough to require a hash suffix *and* no existing dir matches —
+ * in that case the watcher can't attach until a session-reset capture
+ * reveals the real dirname.
  */
 export function resolveClaudeMemoryDir(workspacePath: string): string | null {
   // Prefer $HOME env var over os.homedir() so tests can sandbox the
@@ -638,12 +644,21 @@ export function resolveClaudeMemoryDir(workspacePath: string): string | null {
   const projectsDir = path.join(home, '.claude', 'projects');
   const sanitized = workspacePath.replace(/[^a-zA-Z0-9]/g, '-');
 
-  // Fast path: exact sanitized match.
+  // Short paths: the sanitized name is the exact dirname, so return
+  // the deterministic path regardless of whether anything has been
+  // written yet.  `extractMemory` independently handles ENOENT when
+  // actually reading files, so returning a non-existent path here is
+  // safe and lets the watcher attach early.
   const direct = path.join(projectsDir, sanitized, 'memory');
+  if (sanitized.length <= 200) {
+    return direct;
+  }
+
+  // Long paths: Claude Code appends a hash we can't reproduce.  First
+  // check the exact sanitized path (no hash) in case Claude Code didn't
+  // truncate, then scan for a prefix match.
   if (dirHasMemory(direct)) return direct;
 
-  // Slow path: scan for a directory whose name starts with the
-  // sanitized prefix (covers the >200-char hash suffix case).
   let entries: string[];
   try {
     entries = fs.readdirSync(projectsDir);

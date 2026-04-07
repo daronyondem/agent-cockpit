@@ -239,10 +239,24 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
   const sessions = new Map<string, MemoryMcpSession>(); // token → session
   const byConversation = new Map<string, string>(); // convId → token
 
-  /** Issue a token + mcpServers entry for a new non-Claude session. */
+  /**
+   * Issue a token + mcpServers entry for a new non-Claude session.
+   *
+   * The returned `mcpServers` entry follows the ACP stdio MCP schema:
+   * `env` is an **array of `{name, value}` objects**, NOT a plain
+   * `Record<string, string>`.  Passing a plain object here causes
+   * kiro-cli (and other strict ACP servers) to fail deserialization
+   * and crash the ACP process with "ACP process closed".
+   * See https://agentclientprotocol.com/protocol/session-setup
+   */
   function issueMemoryMcpSession(conversationId: string, workspaceHash: string): {
     token: string;
-    mcpServers: Array<{ name: string; command: string; args: string[]; env: Record<string, string> }>;
+    mcpServers: Array<{
+      name: string;
+      command: string;
+      args: string[];
+      env: Array<{ name: string; value: string }>;
+    }>;
   } {
     // Revoke any existing token for this conversation so we don't leak tokens.
     revokeMemoryMcpSession(conversationId);
@@ -268,10 +282,10 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
           name: 'agent-cockpit-memory',
           command: 'node',
           args: [MEMORY_MCP_STUB_PATH],
-          env: {
-            MEMORY_TOKEN: token,
-            MEMORY_ENDPOINT: endpoint,
-          },
+          env: [
+            { name: 'MEMORY_TOKEN', value: token },
+            { name: 'MEMORY_ENDPOINT', value: endpoint },
+          ],
         },
       ],
     };

@@ -107,8 +107,14 @@ describe('memoryMcp.issueMemoryMcpSession', () => {
     expect(a.mcpServers[0].name).toBe('agent-cockpit-memory');
     expect(a.mcpServers[0].command).toBe('node');
     expect(a.mcpServers[0].args).toEqual([MEMORY_MCP_STUB_PATH]);
-    expect(a.mcpServers[0].env.MEMORY_TOKEN).toBe(a.token);
-    expect(a.mcpServers[0].env.MEMORY_ENDPOINT).toMatch(/\/api\/chat\/mcp\/memory\/notes$/);
+    // ACP spec requires env as an array of {name, value} objects, NOT a
+    // plain Record.  A plain object crashes strict ACP servers like
+    // kiro-cli with "ACP process closed".
+    expect(Array.isArray(a.mcpServers[0].env)).toBe(true);
+    const tokenEntry = a.mcpServers[0].env.find((e) => e.name === 'MEMORY_TOKEN');
+    const endpointEntry = a.mcpServers[0].env.find((e) => e.name === 'MEMORY_ENDPOINT');
+    expect(tokenEntry?.value).toBe(a.token);
+    expect(endpointEntry?.value).toMatch(/\/api\/chat\/mcp\/memory\/notes$/);
   });
 
   test('reissuing a session for the same conversation revokes the previous token', () => {

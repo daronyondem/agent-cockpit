@@ -808,6 +808,16 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       if (memoryOnForWatch && watchWorkspacePath) {
         const memDir = adapter.getMemoryDir(watchWorkspacePath);
         if (memDir) {
+          // `fs.watch` requires the directory to exist — on brand new
+          // workspaces where the CLI hasn't written any memory yet the
+          // dir is absent, and without this `mkdirSync` the watcher
+          // silently fails to attach and mid-session memory writes
+          // never produce a `memory_update` frame.
+          try {
+            fs.mkdirSync(memDir, { recursive: true });
+          } catch (err: unknown) {
+            console.warn(`[memoryWatcher] could not create ${memDir}:`, (err as Error).message);
+          }
           memoryWatcher.watch(convId, memDir, async () => {
             try {
               const snapshot = await chatService.captureWorkspaceMemory(convId, backendId);

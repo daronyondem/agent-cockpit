@@ -370,11 +370,19 @@ export interface BackendMetadata {
   models?: ModelOption[];
 }
 
+/**
+ * ACP-shaped MCP server config for `session/new` and `session/load`.
+ *
+ * NOTE: `env` is an **array of `{name, value}` objects**, not a plain
+ * `Record<string, string>`, because that is what the ACP spec
+ * (https://agentclientprotocol.com/protocol/session-setup) requires.
+ * Passing a plain object breaks strict ACP servers like kiro-cli.
+ */
 export interface McpServerConfig {
   name: string;
   command: string;
   args: string[];
-  env?: Record<string, string>;
+  env?: Array<{ name: string; value: string }>;
 }
 
 export interface SendMessageOptions {
