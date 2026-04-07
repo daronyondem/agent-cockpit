@@ -319,9 +319,9 @@ async function chatResetSession(convIdOverride) {
       progressEl.id = 'chat-reset-progress';
       progressEl.innerHTML = `
         <div class="chat-msg-wrapper">
-          <div class="chat-msg-avatar chat-msg-avatar-svg">${getBackendIcon(state.chatActiveConv?.backend || 'claude-code')}</div>
+          <div class="chat-msg-avatar chat-msg-avatar-cockpit"><img src="logo-small.svg" alt="Agent Cockpit" /></div>
           <div class="chat-msg-body">
-            <div class="chat-msg-role">System</div>
+            <div class="chat-msg-role">Agent Cockpit</div>
             <div class="chat-msg-content">
               <div class="chat-activity-indicator">
                 <div class="chat-typing"><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div><div class="chat-typing-dot"></div></div>

@@ -589,6 +589,20 @@
     display: block;
   }
 
+  /* Agent Cockpit-branded avatar for synthetic system bubbles (archiving,
+     memory updates, etc.).  Neutral background so it's not themed to any
+     specific subsystem. */
+  .chat-msg-avatar-cockpit {
+    background: var(--surface2) !important;
+    padding: 4px;
+  }
+  .chat-msg-avatar-cockpit img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+
   .chat-msg-body {
     flex: 1;
     min-width: 0;
