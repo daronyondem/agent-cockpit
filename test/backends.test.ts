@@ -54,6 +54,16 @@ describe('BaseBackendAdapter', () => {
     const adapter = new BaseBackendAdapter({ workingDir: '/tmp/test' });
     expect(adapter.workingDir).toBe('/tmp/test');
   });
+
+  test('getMemoryDir returns null by default', () => {
+    const adapter = new BaseBackendAdapter();
+    expect(adapter.getMemoryDir('/tmp/anywhere')).toBeNull();
+  });
+
+  test('extractMemory returns null by default', async () => {
+    const adapter = new BaseBackendAdapter();
+    await expect(adapter.extractMemory('/tmp/anywhere')).resolves.toBeNull();
+  });
 });
 
 // ── BackendRegistry ────────────────────────────────────────────────────────
@@ -1038,6 +1048,71 @@ Shared memory body.
         'memory',
       );
       expect(snapshot!.sourcePath).toBe(expectedDir);
+    } finally {
+      fs.rmSync(reposRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ClaudeCodeAdapter.getMemoryDir', () => {
+  let tmpHome: string;
+  let originalHome: string | undefined;
+  let adapter: ClaudeCodeAdapter;
+
+  beforeEach(() => {
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-home-'));
+    originalHome = process.env.HOME;
+    process.env.HOME = tmpHome;
+    adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
+  });
+
+  afterEach(() => {
+    if (originalHome !== undefined) process.env.HOME = originalHome;
+    else delete process.env.HOME;
+    fs.rmSync(tmpHome, { recursive: true, force: true });
+  });
+
+  function mkMemory(workspace: string, files: Record<string, string>): string {
+    const sanitized = workspace.replace(/[^a-zA-Z0-9]/g, '-');
+    const full = path.join(tmpHome, '.claude', 'projects', sanitized, 'memory');
+    fs.mkdirSync(full, { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      fs.writeFileSync(path.join(full, name), content, 'utf8');
+    }
+    return full;
+  }
+
+  test('returns null for empty workspacePath', () => {
+    expect(adapter.getMemoryDir('')).toBeNull();
+  });
+
+  test('returns null when no memory directory exists', () => {
+    expect(adapter.getMemoryDir('/tmp/never-seen')).toBeNull();
+  });
+
+  test('returns the sanitized directory path when memory exists', () => {
+    const expected = mkMemory('/tmp/mem-getter', {
+      'MEMORY.md': '- nothing\n',
+      'feedback_x.md': '---\ntype: feedback\n---\nbody\n',
+    });
+    expect(adapter.getMemoryDir('/tmp/mem-getter')).toBe(expected);
+  });
+
+  test('worktree workspaces resolve to the main repo memory dir', () => {
+    const reposRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ac-worktree-'));
+    try {
+      const main = path.join(reposRoot, 'main');
+      const mainGit = path.join(main, '.git');
+      const worktreeMeta = path.join(mainGit, 'worktrees', 'feature');
+      const worktree = path.join(reposRoot, 'feature');
+      fs.mkdirSync(worktreeMeta, { recursive: true });
+      fs.mkdirSync(worktree, { recursive: true });
+      fs.writeFileSync(path.join(worktree, '.git'), `gitdir: ${worktreeMeta}\n`, 'utf8');
+      fs.writeFileSync(path.join(worktreeMeta, 'commondir'), '../..\n', 'utf8');
+
+      const expected = mkMemory(main, { 'MEMORY.md': '- shared\n' });
+      // Resolving via the worktree path should return the main repo's memory dir.
+      expect(adapter.getMemoryDir(worktree)).toBe(expected);
     } finally {
       fs.rmSync(reposRoot, { recursive: true, force: true });
     }
