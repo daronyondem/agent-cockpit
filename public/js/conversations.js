@@ -2,6 +2,7 @@ import { state, chatFetch, fetchCsrfToken, chatApiUrl, chatSyncQueueToServer } f
 import { esc, chatFormatFileSize, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { chatRenderMessages, chatRenderMarkdown, chatAutoResize, chatScrollToBottom } from './rendering.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
+import { populateModelSelect } from './backends.js';
 
 // ── File attachment helpers ──────────────────────────────────────────────────
 
@@ -352,6 +353,7 @@ export async function chatCreateConversationWithDir(workingDir) {
     if (backendSelect && conv.backend) {
       backendSelect.value = conv.backend;
     }
+    populateModelSelect(state.chatSettingsData?.defaultModel);
     const textarea = document.getElementById('chat-textarea');
     if (textarea) textarea.focus();
   } catch (err) {
@@ -618,6 +620,7 @@ export async function chatSelectConversation(id) {
     if (backendSelect && state.chatActiveConv.backend) {
       backendSelect.value = state.chatActiveConv.backend;
     }
+    populateModelSelect(state.chatActiveConv.model);
   } catch (err) {
     alert('Failed to load conversation: ' + err.message);
   }

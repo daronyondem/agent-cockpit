@@ -34,6 +34,7 @@ export const state = {
   CHAT_BACKENDS: [],
   BACKEND_CAPABILITIES: {},
   BACKEND_ICONS: {},
+  BACKEND_MODELS: {},  // backendId -> ModelOption[] | null
 };
 
 // ─── Queue sync ─────────────────────────────────────────────────────────────

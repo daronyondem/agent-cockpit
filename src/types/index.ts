@@ -98,6 +98,7 @@ export interface ConversationEntry {
   id: string;
   title: string;
   backend: string;
+  model?: string;
   currentSessionId: string;
   lastActivity: string;
   lastMessage: string | null;
@@ -118,6 +119,7 @@ export interface Conversation {
   id: string;
   title: string;
   backend: string;
+  model?: string;
   workingDir: string;
   currentSessionId: string;
   sessionNumber: number;
@@ -134,6 +136,7 @@ export interface ConversationListItem {
   title: string;
   updatedAt: string;
   backend: string;
+  model?: string;
   workingDir: string;
   workspaceHash: string;
   messageCount: number;
@@ -149,6 +152,7 @@ export interface Settings {
   sendBehavior: 'enter' | 'ctrlEnter';
   systemPrompt: string;
   defaultBackend: string;
+  defaultModel?: string;
   workingDirectory?: string;
   customInstructions?: {
     aboutUser?: string;
@@ -245,11 +249,21 @@ export interface BackendCapabilities {
   stdinInput: boolean;
 }
 
+export interface ModelOption {
+  id: string;
+  label: string;
+  family: string;
+  description?: string;
+  costTier?: 'high' | 'medium' | 'low';
+  default?: boolean;
+}
+
 export interface BackendMetadata {
   id: string;
   label: string;
   icon: string | null;
   capabilities: BackendCapabilities;
+  models?: ModelOption[];
 }
 
 export interface SendMessageOptions {
@@ -261,6 +275,8 @@ export interface SendMessageOptions {
   systemPrompt: string;
   /** Backend-managed session ID from a previous session, for resume/rehydration. */
   externalSessionId?: string | null;
+  /** Model ID or alias (e.g., 'opus', 'claude-sonnet-4-6'). Backends that don't support model selection ignore this. */
+  model?: string;
 }
 
 export interface SendMessageResult {

@@ -151,12 +151,24 @@ export async function chatSendMessage() {
 
   state.chatDraftState.delete(state.chatActiveConvId);
   const backend = document.getElementById('chat-backend-select')?.value || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
+  const modelSelect = document.getElementById('chat-model-select');
+  const model = (modelSelect && modelSelect.style.display !== 'none') ? modelSelect.value : undefined;
   const targetConvId = state.chatActiveConvId;
 
-  // Persist selected backend as the default for new conversations
-  if (state.chatSettingsData && state.chatSettingsData.defaultBackend !== backend) {
-    state.chatSettingsData.defaultBackend = backend;
-    chatFetch('settings', { method: 'PUT', body: state.chatSettingsData }).catch(() => {});
+  // Persist selected backend (and model) as the default for new conversations
+  if (state.chatSettingsData) {
+    let dirty = false;
+    if (state.chatSettingsData.defaultBackend !== backend) {
+      state.chatSettingsData.defaultBackend = backend;
+      dirty = true;
+    }
+    if (model !== undefined && state.chatSettingsData.defaultModel !== model) {
+      state.chatSettingsData.defaultModel = model;
+      dirty = true;
+    }
+    if (dirty) {
+      chatFetch('settings', { method: 'PUT', body: state.chatSettingsData }).catch(() => {});
+    }
   }
 
   state.chatStreamingConvs.add(targetConvId);
@@ -194,7 +206,7 @@ export async function chatSendMessage() {
         'x-csrf-token': state.csrfToken || '',
       },
       credentials: 'same-origin',
-      body: JSON.stringify({ content, backend }),
+      body: JSON.stringify({ content, backend, model }),
     });
 
     if (!response.ok) {

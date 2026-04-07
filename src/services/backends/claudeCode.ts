@@ -53,6 +53,44 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
         userQuestions: true,
         stdinInput: true,
       },
+      models: [
+        {
+          id: 'opus',
+          label: 'Opus 4.6',
+          family: 'opus',
+          description: 'Most capable — complex reasoning, architecture, nuanced tasks',
+          costTier: 'high',
+        },
+        {
+          id: 'sonnet',
+          label: 'Sonnet 4.6',
+          family: 'sonnet',
+          description: 'Balanced — fast and capable for most coding tasks',
+          costTier: 'medium',
+          default: true,
+        },
+        {
+          id: 'haiku',
+          label: 'Haiku 4.5',
+          family: 'haiku',
+          description: 'Fastest and cheapest — simple tasks, quick iterations',
+          costTier: 'low',
+        },
+        {
+          id: 'opus[1m]',
+          label: 'Opus 4.6 (1M context)',
+          family: 'opus',
+          description: 'Extended context window for large codebases',
+          costTier: 'high',
+        },
+        {
+          id: 'sonnet[1m]',
+          label: 'Sonnet 4.6 (1M context)',
+          family: 'sonnet',
+          description: 'Extended context window with balanced performance',
+          costTier: 'medium',
+        },
+      ],
     };
   }
 
@@ -131,7 +169,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     options: SendMessageOptions,
     state: StreamState,
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, isNewSession, workingDir, systemPrompt } = options;
+    const { sessionId, isNewSession, workingDir, systemPrompt, model } = options;
 
     const args = [
       '--print',
@@ -139,6 +177,10 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       '--output-format', 'stream-json',
       '--verbose',
     ];
+
+    if (model) {
+      args.push('--model', model);
+    }
 
     if (isNewSession) {
       args.push('--session-id', sessionId);

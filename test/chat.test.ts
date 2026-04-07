@@ -1059,6 +1059,55 @@ describe('sendMessage options passthrough', () => {
 
     expect(mockBackend._lastOptions!.externalSessionId).toBeNull();
   });
+
+  test('passes model to backend adapter', async () => {
+    const conv = await chatService.createConversation('Test');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+      model: 'opus',
+    });
+
+    expect(mockBackend._lastOptions!.model).toBe('opus');
+  });
+
+  test('uses stored conversation model when not in request', async () => {
+    const conv = await chatService.createConversation('Test', undefined, undefined, 'haiku');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions!.model).toBe('haiku');
+  });
+
+  test('updates stored model when request includes different model', async () => {
+    const conv = await chatService.createConversation('Test', undefined, undefined, 'haiku');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+      model: 'opus',
+    });
+
+    expect(mockBackend._lastOptions!.model).toBe('opus');
+    const loaded = await chatService.getConversation(conv.id);
+    expect(loaded!.model).toBe('opus');
+  });
 });
 
 // ── PATCH /conversations/:id/archive ─────────────────────────────────────────

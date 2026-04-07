@@ -132,6 +132,29 @@ describe('ClaudeCodeAdapter', () => {
     });
   });
 
+  test('metadata includes models array', () => {
+    const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
+    const meta = adapter.metadata;
+    expect(meta.models).toBeDefined();
+    expect(Array.isArray(meta.models)).toBe(true);
+    expect(meta.models!.length).toBeGreaterThanOrEqual(3);
+
+    const opus = meta.models!.find(m => m.id === 'opus');
+    expect(opus).toBeDefined();
+    expect(opus!.label).toBe('Opus 4.6');
+    expect(opus!.family).toBe('opus');
+    expect(opus!.costTier).toBe('high');
+
+    const sonnet = meta.models!.find(m => m.id === 'sonnet');
+    expect(sonnet).toBeDefined();
+    expect(sonnet!.default).toBe(true);
+    expect(sonnet!.costTier).toBe('medium');
+
+    const haiku = meta.models!.find(m => m.id === 'haiku');
+    expect(haiku).toBeDefined();
+    expect(haiku!.costTier).toBe('low');
+  });
+
   test('uses default working directory', () => {
     const adapter = new ClaudeCodeAdapter();
     expect(adapter.workingDir).toContain('.openclaw');
@@ -166,6 +189,83 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     }
     await sleep(500);
   }, 10000);
+
+  test('passes --model flag when model option is set', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-model',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        model: 'opus',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    const idx = capturedArgs!.indexOf('--model');
+    expect(idx).toBeGreaterThan(-1);
+    expect(capturedArgs![idx + 1]).toBe('opus');
+  });
+
+  test('omits --model flag when model option is not set', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-no-model',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    expect(capturedArgs).not.toContain('--model');
+  });
 
   test('includes --append-system-prompt for new sessions with systemPrompt', async () => {
     let capturedArgs: string[] | undefined;
