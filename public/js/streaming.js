@@ -13,6 +13,7 @@ import {
   chatRenderQueuedMessages,
 } from './conversations.js';
 import { loadBackends, populateModelSelect } from './backends.js';
+import { chatOpenMemoryPanel } from './memory.js';
 
 // ── Queue processing ─────────────────────────────────────────────────────────
 
@@ -393,6 +394,10 @@ export function chatHandleStreamEvent(targetConvId, event) {
       if (event.sessionUsage) state.chatActiveConv.sessionUsage = event.sessionUsage;
       chatUpdateUsageDisplay();
     }
+  } else if (event.type === 'memory_update') {
+    if (isStillActive && state.chatActiveConv) {
+      chatAppendMemoryUpdateMessage(event);
+    }
   } else if (event.type === 'error') {
     st.pendingInteraction = null;
     chatArchiveActiveState(st);
@@ -541,6 +546,36 @@ function chatFormatErrorMessage(errorMsg) {
     return `API error ${code}${detail ? ': ' + detail : ''}`;
   }
   return errorMsg;
+}
+
+// Append a synthetic system message representing a memory_update WS frame.
+// Synthetic because: it's not stored on the backend, only lives in the
+// client-side messages array for the current session. By being part of
+// `chatActiveConv.messages`, it survives every chatRenderMessages() rebuild
+// (unlike a transient appended DOM node that gets wiped on innerHTML reset).
+export function chatAppendMemoryUpdateMessage(event) {
+  if (!state.chatActiveConv) return;
+
+  const fileCount = Number(event.fileCount) || 0;
+  const changed = Array.isArray(event.changedFiles) ? event.changedFiles : [];
+  const capturedAt = event.capturedAt || new Date().toISOString();
+
+  const synthetic = {
+    id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role: 'system',
+    kind: 'memory_update',
+    content: '',
+    backend: '',
+    timestamp: capturedAt,
+    memoryUpdate: {
+      fileCount,
+      changedFiles: changed,
+      capturedAt,
+    },
+  };
+
+  state.chatActiveConv.messages.push(synthetic);
+  chatRenderMessages();
 }
 
 export function chatAppendError(errorMsg) {

@@ -27,6 +27,8 @@ class MockBackendAdapter extends BaseBackendAdapter {
   _mockEvents: StreamEvent[];
   _sendInputCalls: string[];
   _mockTitle?: string;
+  _streamDelayMs: number = 0;
+  _mockMemoryDir: string | null = null;
 
   constructor() {
     super({ workingDir: '/tmp' });
@@ -54,14 +56,51 @@ class MockBackendAdapter extends BaseBackendAdapter {
     this._mockEvents = events;
   }
 
+  /** Configure a delay (in ms) inserted before each event yielded by the stream.
+      Used by tests that need the watcher to stay alive long enough to detect a
+      file change in the mock memory dir. */
+  setStreamDelayMs(ms: number) {
+    this._streamDelayMs = ms;
+  }
+
+  /** Point the adapter at a real directory acting as the backend's native
+      memory dir. Both `getMemoryDir` and `extractMemory` honor this. */
+  setMockMemoryDir(dir: string | null) {
+    this._mockMemoryDir = dir;
+  }
+
+  getMemoryDir(_workspacePath: string): string | null {
+    return this._mockMemoryDir;
+  }
+
+  async extractMemory(_workspacePath: string) {
+    if (!this._mockMemoryDir || !fs.existsSync(this._mockMemoryDir)) return null;
+    const filenames = fs.readdirSync(this._mockMemoryDir).filter((f) => f.endsWith('.md'));
+    return {
+      capturedAt: new Date().toISOString(),
+      sourceBackend: 'claude-code',
+      sourcePath: this._mockMemoryDir,
+      index: '',
+      files: filenames.map((f) => ({
+        filename: f,
+        name: null,
+        description: null,
+        type: 'unknown' as const,
+        content: fs.readFileSync(path.join(this._mockMemoryDir!, f), 'utf8'),
+      })),
+    };
+  }
+
   sendMessage(message: string, options?: SendMessageOptions): SendMessageResult {
     this._lastMessage = message;
     this._lastOptions = options || null;
     const events = this._mockEvents.slice();
+    const delayMs = this._streamDelayMs;
     const self = this;
 
     async function* createStream() {
       for (const event of events) {
+        if (delayMs > 0) await new Promise((r) => setTimeout(r, delayMs));
         yield event;
       }
     }
@@ -2249,5 +2288,161 @@ describe('Message Queue API', () => {
 
     const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}/queue`);
     expect(getRes.body.queue).toEqual([]);
+  });
+});
+
+// ── Workspace memory: GET endpoint ────────────────────────────────────────
+
+describe('GET /workspaces/:hash/memory', () => {
+  test('returns 404 when no snapshot has been captured', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ws-mem-empty');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/memory`);
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('No memory captured for workspace');
+  });
+
+  test('returns 404 for unknown workspace', async () => {
+    const res = await makeRequest('GET', '/api/chat/workspaces/nonexistent999/memory');
+    expect(res.status).toBe(404);
+  });
+
+  test('returns the snapshot when one has been saved', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ws-mem-full');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    const snapshot = {
+      capturedAt: '2026-04-07T12:00:00.000Z',
+      sourceBackend: 'claude-code',
+      sourcePath: '/tmp/source-mem',
+      index: '- [Pref](user_pref.md)\n',
+      files: [
+        {
+          filename: 'user_pref.md',
+          name: 'Pref',
+          description: 'A preference',
+          type: 'user' as const,
+          content: '---\nname: Pref\ndescription: A preference\ntype: user\n---\n\nBody',
+        },
+      ],
+    };
+    await chatService.saveWorkspaceMemory(hash, snapshot);
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/memory`);
+    expect(res.status).toBe(200);
+    expect(res.body.snapshot.sourceBackend).toBe('claude-code');
+    expect(res.body.snapshot.files).toHaveLength(1);
+    expect(res.body.snapshot.files[0].filename).toBe('user_pref.md');
+    expect(res.body.snapshot.files[0].type).toBe('user');
+  });
+});
+
+// ── memory_update WS frame ────────────────────────────────────────────────
+
+describe('memory_update WebSocket frame', () => {
+  function makeMockMemoryDir(): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'mock-mem-'));
+    return dir;
+  }
+
+  function writeMemoryFile(dir: string, name: string, body: string) {
+    fs.writeFileSync(
+      path.join(dir, name),
+      `---\nname: ${name}\ndescription: test\ntype: user\n---\n\n${body}`,
+    );
+  }
+
+  test('emits memory_update frame with all files on first capture during stream', async () => {
+    const memDir = makeMockMemoryDir();
+    writeMemoryFile(memDir, 'one.md', 'first');
+
+    const conv = await chatService.createConversation('Test', '/tmp/ws-mem-frame-1');
+    mockBackend.setMockMemoryDir(memDir);
+    mockBackend.setStreamDelayMs(900); // keep stream alive past the 500ms watcher debounce
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws, 5000);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'hello',
+      backend: 'claude-code',
+    });
+
+    // Trigger a memory file change after the watcher has had time to attach
+    await new Promise((r) => setTimeout(r, 100));
+    writeMemoryFile(memDir, 'two.md', 'second');
+
+    const events = await eventsPromise;
+    fs.rmSync(memDir, { recursive: true, force: true });
+
+    const memUpdate = events.find((e) => e.type === 'memory_update');
+    expect(memUpdate).toBeDefined();
+    expect(memUpdate.fileCount).toBe(2);
+    expect(memUpdate.changedFiles).toEqual(expect.arrayContaining(['one.md', 'two.md']));
+    expect(typeof memUpdate.capturedAt).toBe('string');
+  });
+
+  test('changedFiles only includes files that changed since previous frame', async () => {
+    const memDir = makeMockMemoryDir();
+    writeMemoryFile(memDir, 'a.md', 'A');
+    writeMemoryFile(memDir, 'b.md', 'B');
+
+    const conv = await chatService.createConversation('Test', '/tmp/ws-mem-frame-2');
+    mockBackend.setMockMemoryDir(memDir);
+    mockBackend.setStreamDelayMs(1500);
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'x', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws, 6000);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'hello',
+      backend: 'claude-code',
+    });
+
+    // First memory burst → first frame should include both files
+    await new Promise((r) => setTimeout(r, 100));
+    fs.utimesSync(path.join(memDir, 'a.md'), new Date(), new Date()); // touch
+    await new Promise((r) => setTimeout(r, 700)); // wait past debounce so a frame fires
+
+    // Second burst: change only b.md
+    writeMemoryFile(memDir, 'b.md', 'B-changed');
+
+    const events = await eventsPromise;
+    fs.rmSync(memDir, { recursive: true, force: true });
+
+    const memUpdates = events.filter((e) => e.type === 'memory_update');
+    expect(memUpdates.length).toBeGreaterThanOrEqual(2);
+    // First frame: both files are unknown to the diff state, so both appear
+    expect(memUpdates[0].changedFiles).toEqual(expect.arrayContaining(['a.md', 'b.md']));
+    // Second frame: only b.md changed
+    expect(memUpdates[memUpdates.length - 1].changedFiles).toEqual(['b.md']);
+  });
+
+  test('does not emit memory_update when adapter has no memory dir', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ws-mem-frame-3');
+    mockBackend.setMockMemoryDir(null);
+    mockBackend.setStreamDelayMs(800);
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws, 4000);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'hello',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    expect(events.find((e) => e.type === 'memory_update')).toBeUndefined();
   });
 });

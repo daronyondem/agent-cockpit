@@ -212,7 +212,32 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
 
   const activeStreams = new Map<string, ActiveStreamEntry>();
   const memoryWatcher = new MemoryWatcher();
+  // Per-conversation map of last-known memory file fingerprints (filename → sha-ish)
+  // used by the watcher to compute `changedFiles` for the `memory_update` WS frame.
+  // Cleared when the watcher is unwatched so a re-watched conversation starts fresh.
+  const memoryFingerprints = new Map<string, Map<string, string>>();
   let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer'> | null = null;
+
+  function fingerprintMemoryFiles(snapshot: { files: Array<{ filename: string; content: string }> }): Map<string, string> {
+    const fp = new Map<string, string>();
+    for (const f of snapshot.files) {
+      // Cheap content fingerprint: length + first 32 chars hash via djb2.
+      // Good enough to detect edits without pulling in crypto.
+      let hash = 5381;
+      const sample = f.content.slice(0, 256);
+      for (let i = 0; i < sample.length; i++) hash = ((hash << 5) + hash) ^ sample.charCodeAt(i);
+      fp.set(f.filename, `${f.content.length}:${(hash >>> 0).toString(36)}`);
+    }
+    return fp;
+  }
+
+  function diffFingerprints(prev: Map<string, string> | undefined, next: Map<string, string>): string[] {
+    const changed: string[] = [];
+    for (const [filename, fp] of next) {
+      if (!prev || prev.get(filename) !== fp) changed.push(filename);
+    }
+    return changed;
+  }
 
   // ── Available backends ──────────────────────────────────────────────────────
   router.get('/backends', (_req: Request, res: Response) => {
@@ -423,6 +448,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         activeStreams.delete(convId);
       }
       memoryWatcher.unwatch(convId);
+      memoryFingerprints.delete(convId);
       const ok = await chatService.deleteConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
@@ -441,6 +467,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         activeStreams.delete(convId);
       }
       memoryWatcher.unwatch(convId);
+      memoryFingerprints.delete(convId);
       const ok = await chatService.archiveConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
@@ -701,6 +728,17 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
               const snapshot = await chatService.captureWorkspaceMemory(convId, backendId);
               if (snapshot) {
                 console.log(`[memoryWatcher] re-captured ${snapshot.files.length} memory file(s) for conv=${convId} backend=${backendId}`);
+                const nextFp = fingerprintMemoryFiles(snapshot);
+                const changedFiles = diffFingerprints(memoryFingerprints.get(convId), nextFp);
+                memoryFingerprints.set(convId, nextFp);
+                if (wsFns && wsFns.isConnected(convId)) {
+                  wsFns.send(convId, {
+                    type: 'memory_update',
+                    capturedAt: snapshot.capturedAt,
+                    fileCount: snapshot.files.length,
+                    changedFiles,
+                  });
+                }
               }
             } catch (err: unknown) {
               console.error(`[memoryWatcher] capture failed for conv=${convId}:`, (err as Error).message);
@@ -717,6 +755,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         () => {
           activeStreams.delete(convId);
           memoryWatcher.unwatch(convId);
+          memoryFingerprints.delete(convId);
         },
         { chatService },
       ).catch((err) => {
@@ -727,6 +766,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         }
         activeStreams.delete(convId);
         memoryWatcher.unwatch(convId);
+        memoryFingerprints.delete(convId);
       });
     }
 
@@ -814,6 +854,17 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
+  // ── Workspace memory (read-only) ───────────────────────────────────────────
+  router.get('/workspaces/:hash/memory', async (req: Request, res: Response) => {
+    try {
+      const snapshot = await chatService.getWorkspaceMemory(param(req, 'hash'));
+      if (snapshot === null) return res.status(404).json({ error: 'No memory captured for workspace' });
+      res.json({ snapshot });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Usage Stats ────────────────────────────────────────────────────────────
   router.get('/usage-stats', async (_req: Request, res: Response) => {
     try {
@@ -859,6 +910,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
     activeStreams.clear();
     memoryWatcher.unwatchAll();
+    memoryFingerprints.clear();
     if (updateService) updateService.stop();
   }
 
