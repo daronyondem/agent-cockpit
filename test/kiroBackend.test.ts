@@ -22,6 +22,62 @@ describe('KiroAdapter', () => {
     });
   });
 
+  test('metadata.models is undefined before first session', () => {
+    const adapter = new KiroAdapter({ workingDir: '/tmp' });
+    expect(adapter.metadata.models).toBeUndefined();
+  });
+
+  test('metadata.models is populated after setCachedModels', () => {
+    const adapter = new KiroAdapter({ workingDir: '/tmp' });
+    (adapter as any).cachedModels = [
+      { modelId: 'auto', name: 'auto', description: 'Models chosen by task' },
+      { modelId: 'claude-opus-4.6', name: 'claude-opus-4.6', description: 'The latest Claude Opus model' },
+      { modelId: 'claude-sonnet-4.6', name: 'claude-sonnet-4.6', description: 'The latest Claude Sonnet model' },
+      { modelId: 'claude-haiku-4.5', name: 'claude-haiku-4.5', description: 'The latest Claude Haiku model' },
+      { modelId: 'claude-opus-4.6-1m', name: 'claude-opus-4.6-1m', description: '[Deprecated] Please switch to Opus 4.6' },
+      { modelId: 'kimi-k2.5', name: 'kimi-k2.5', description: '[Internal] Internal test model' },
+    ];
+    const models = adapter.metadata.models;
+    expect(models).toBeDefined();
+    expect(models!.length).toBe(4); // auto + opus + sonnet + haiku (deprecated and internal filtered)
+
+    const auto = models!.find(m => m.id === 'auto');
+    expect(auto).toBeDefined();
+    expect(auto!.default).toBe(true);
+    expect(auto!.family).toBe('router');
+    expect(auto!.costTier).toBe('medium');
+
+    const opus = models!.find(m => m.id === 'claude-opus-4.6');
+    expect(opus).toBeDefined();
+    expect(opus!.family).toBe('opus');
+    expect(opus!.costTier).toBe('high');
+
+    const sonnet = models!.find(m => m.id === 'claude-sonnet-4.6');
+    expect(sonnet).toBeDefined();
+    expect(sonnet!.family).toBe('sonnet');
+    expect(sonnet!.costTier).toBe('medium');
+
+    const haiku = models!.find(m => m.id === 'claude-haiku-4.5');
+    expect(haiku).toBeDefined();
+    expect(haiku!.family).toBe('haiku');
+    expect(haiku!.costTier).toBe('low');
+
+    // Deprecated and internal models are filtered out
+    expect(models!.find(m => m.id === 'claude-opus-4.6-1m')).toBeUndefined();
+    expect(models!.find(m => m.id === 'kimi-k2.5')).toBeUndefined();
+  });
+
+  test('model family detection for non-Claude models', () => {
+    const adapter = new KiroAdapter({ workingDir: '/tmp' });
+    (adapter as any).cachedModels = [
+      { modelId: 'deepseek-3.2', name: 'deepseek-3.2', description: 'DeepSeek open model' },
+    ];
+    const models = adapter.metadata.models;
+    expect(models).toBeDefined();
+    expect(models![0].family).toBe('other');
+    expect(models![0].costTier).toBe('low');
+  });
+
   test('stdinInput is false', () => {
     const adapter = new KiroAdapter();
     expect(adapter.metadata.capabilities.stdinInput).toBe(false);

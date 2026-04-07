@@ -5,6 +5,7 @@ import { BaseBackendAdapter } from './base';
 import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUtils';
 import type {
   BackendMetadata,
+  ModelOption,
   SendMessageOptions,
   SendMessageResult,
   StreamEvent,
@@ -91,6 +92,14 @@ interface JsonRpcNotification {
 }
 
 type JsonRpcMessage = JsonRpcResponse | JsonRpcNotification;
+
+interface KiroSessionNewResult {
+  sessionId: string;
+  models?: {
+    currentModelId: string;
+    availableModels: Array<{ modelId: string; name: string; description: string }>;
+  };
+}
 
 interface AcpProcess {
   proc: ChildProcess;
@@ -239,6 +248,7 @@ class AcpClient {
 export class KiroAdapter extends BaseBackendAdapter {
   private processes: Map<string, AcpProcess> = new Map();
   private sessionMap: Map<string, string> = new Map();
+  private cachedModels: Array<{ modelId: string; name: string; description: string }> | null = null;
 
   constructor(options: { workingDir?: string } = {}) {
     super(options);
@@ -258,7 +268,38 @@ export class KiroAdapter extends BaseBackendAdapter {
         userQuestions: false,
         stdinInput: false,
       },
+      models: this._getModelOptions(),
     };
+  }
+
+  private _getModelOptions(): ModelOption[] | undefined {
+    if (!this.cachedModels) return undefined;
+    return this.cachedModels
+      .filter(m => !m.description.includes('[Deprecated]') && !m.description.includes('[Internal]'))
+      .map(m => ({
+        id: m.modelId,
+        label: m.name,
+        family: this._modelFamily(m.modelId),
+        description: m.description,
+        costTier: this._costTier(m.modelId),
+        default: m.modelId === 'auto',
+      }));
+  }
+
+  private _modelFamily(modelId: string): string {
+    if (modelId === 'auto') return 'router';
+    if (modelId.startsWith('claude-opus')) return 'opus';
+    if (modelId.startsWith('claude-sonnet')) return 'sonnet';
+    if (modelId.startsWith('claude-haiku')) return 'haiku';
+    return 'other';
+  }
+
+  private _costTier(modelId: string): 'high' | 'medium' | 'low' {
+    if (modelId === 'auto') return 'medium';
+    if (modelId.startsWith('claude-opus')) return 'high';
+    if (modelId.startsWith('claude-sonnet')) return 'medium';
+    if (modelId.startsWith('claude-haiku')) return 'low';
+    return 'low';
   }
 
   shutdown(): void {
@@ -457,9 +498,12 @@ export class KiroAdapter extends BaseBackendAdapter {
       let kiroSessionId = this.sessionMap.get(sessionId);
 
       if (isNewSession) {
-        const result = await client.request('session/new', { cwd, mcpServers: [] }) as { sessionId: string };
+        const result = await client.request('session/new', { cwd, mcpServers: [] }) as KiroSessionNewResult;
         kiroSessionId = result.sessionId;
         this.sessionMap.set(sessionId, kiroSessionId);
+        if (result.models?.availableModels) {
+          this.cachedModels = result.models.availableModels;
+        }
         console.log(`[kiro] Created new session: ${kiroSessionId} for cockpit session ${sessionId}`);
       } else if (!kiroSessionId && externalSessionId) {
         // Rehydrate from persisted externalSessionId (server restart scenario)
@@ -481,6 +525,27 @@ export class KiroAdapter extends BaseBackendAdapter {
           console.log(`[kiro] Loaded session: ${kiroSessionId}`);
         }
         acpEntry.loadedSessionId = kiroSessionId;
+      }
+
+      // ── Model selection ──────────────────────────────────────────────
+      // session/set_model is silently ignored (no response) if sessionId is
+      // wrong or model is unsupported, so we race against a timeout to avoid
+      // blocking the prompt indefinitely.
+      if (options.model) {
+        try {
+          await Promise.race([
+            client.request('session/set_model', {
+              sessionId: kiroSessionId,
+              modelId: options.model,
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+          ]);
+          console.log(`[kiro] Set model to ${options.model} for session ${kiroSessionId}`);
+        } catch (err) {
+          const reason = (err as Error).message;
+          console.warn(`[kiro] Failed to set model (${reason}), continuing with default`);
+          yield { type: 'error', error: `Failed to switch to model "${options.model}" — ${reason === 'timeout' ? 'Kiro did not respond (model may be unavailable)' : reason}. Using default model.` };
+        }
       }
 
       // ── Build prompt ─────────────────��─────────────────────────────────
