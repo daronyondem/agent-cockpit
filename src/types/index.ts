@@ -94,11 +94,16 @@ export interface SessionHistoryItem {
 
 // ── Conversations ────────────────────────────────────────────────────────────
 
+/** Adaptive reasoning effort level. `max` is Opus 4.6 only. */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
+
 export interface ConversationEntry {
   id: string;
   title: string;
   backend: string;
   model?: string;
+  /** Adaptive reasoning effort level for supported models. */
+  effort?: EffortLevel;
   currentSessionId: string;
   lastActivity: string;
   lastMessage: string | null;
@@ -120,6 +125,7 @@ export interface Conversation {
   title: string;
   backend: string;
   model?: string;
+  effort?: EffortLevel;
   workingDir: string;
   currentSessionId: string;
   sessionNumber: number;
@@ -137,6 +143,7 @@ export interface ConversationListItem {
   updatedAt: string;
   backend: string;
   model?: string;
+  effort?: EffortLevel;
   workingDir: string;
   workspaceHash: string;
   messageCount: number;
@@ -153,6 +160,8 @@ export interface Settings {
   systemPrompt: string;
   defaultBackend: string;
   defaultModel?: string;
+  /** Default adaptive reasoning effort. Only applies when defaultBackend/model supports it. */
+  defaultEffort?: EffortLevel;
   workingDirectory?: string;
   customInstructions?: {
     aboutUser?: string;
@@ -286,6 +295,12 @@ export interface ModelOption {
   description?: string;
   costTier?: 'high' | 'medium' | 'low';
   default?: boolean;
+  /**
+   * Adaptive reasoning effort levels this model supports. Omit for models
+   * without effort support (e.g. Haiku). UI uses presence of this field to
+   * decide whether to show the effort dropdown.
+   */
+  supportedEffortLevels?: EffortLevel[];
 }
 
 export interface BackendMetadata {
@@ -307,6 +322,11 @@ export interface SendMessageOptions {
   externalSessionId?: string | null;
   /** Model ID or alias (e.g., 'opus', 'claude-sonnet-4-6'). Backends that don't support model selection ignore this. */
   model?: string;
+  /**
+   * Adaptive reasoning effort level. Backends that don't support effort
+   * (or backends whose selected model doesn't) ignore this.
+   */
+  effort?: EffortLevel;
 }
 
 export interface SendMessageResult {

@@ -377,6 +377,116 @@ describe('model selection', () => {
   });
 });
 
+// ── Effort selection ─────────────────────────────────────────────────────────
+
+describe('effort selection', () => {
+  // Build an isolated service with a backend registry that knows about the
+  // canonical opus/sonnet/haiku supportedEffortLevels so _effectiveEffort has
+  // something to look up.
+  let svc: ChatService;
+
+  beforeEach(async () => {
+    class EffortAwareAdapter extends BaseBackendAdapter {
+      get metadata(): BackendMetadata {
+        return {
+          id: 'claude-code',
+          label: 'Claude Code',
+          icon: null,
+          capabilities: {
+            thinking: true,
+            planMode: true,
+            agents: true,
+            toolActivity: true,
+            userQuestions: true,
+            stdinInput: true,
+          },
+          models: [
+            { id: 'opus', label: 'Opus', family: 'opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] },
+            { id: 'sonnet', label: 'Sonnet', family: 'sonnet', default: true, supportedEffortLevels: ['low', 'medium', 'high'] },
+            { id: 'haiku', label: 'Haiku', family: 'haiku' },
+          ],
+        };
+      }
+      sendMessage(_m: string, _o: SendMessageOptions): SendMessageResult {
+        return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} };
+      }
+      async generateSummary(_msgs: Pick<Message, 'role' | 'content'>[], fb: string): Promise<string> { return fb; }
+    }
+    const registry = new BackendRegistry();
+    registry.register(new EffortAwareAdapter());
+    svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE, backendRegistry: registry });
+    await svc.initialize();
+  });
+
+  test('creates conversation with supported effort', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'opus', 'max');
+    expect(conv.effort).toBe('max');
+    const loaded = await svc.getConversation(conv.id);
+    expect(loaded!.effort).toBe('max');
+  });
+
+  test('silently downgrades effort when model does not support the level', async () => {
+    // Sonnet does not support 'max' → downgrade to 'high'.
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'sonnet', 'max');
+    expect(conv.effort).toBe('high');
+  });
+
+  test('drops effort when model has no effort support', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'haiku', 'high');
+    expect(conv.effort).toBeUndefined();
+  });
+
+  test('drops effort when no model is specified', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', undefined, 'high');
+    expect(conv.effort).toBeUndefined();
+  });
+
+  test('updateConversationModel downgrades stored effort on switch to weaker model', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'opus', 'max');
+    expect(conv.effort).toBe('max');
+
+    await svc.updateConversationModel(conv.id, 'sonnet');
+    const loaded = await svc.getConversation(conv.id);
+    expect(loaded!.model).toBe('sonnet');
+    expect(loaded!.effort).toBe('high');
+  });
+
+  test('updateConversationModel clears effort when new model has no support', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'opus', 'max');
+    await svc.updateConversationModel(conv.id, 'haiku');
+    const loaded = await svc.getConversation(conv.id);
+    expect(loaded!.effort).toBeUndefined();
+  });
+
+  test('updateConversationEffort sets a new supported level', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'opus', 'high');
+    await svc.updateConversationEffort(conv.id, 'max');
+    const loaded = await svc.getConversation(conv.id);
+    expect(loaded!.effort).toBe('max');
+  });
+
+  test('updateConversationEffort downgrades when level is unsupported', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'sonnet', 'high');
+    // sonnet does not support max — should downgrade to high
+    await svc.updateConversationEffort(conv.id, 'max');
+    const loaded = await svc.getConversation(conv.id);
+    expect(loaded!.effort).toBe('high');
+  });
+
+  test('updateConversationEffort clears effort with null', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'opus', 'max');
+    await svc.updateConversationEffort(conv.id, null);
+    const loaded = await svc.getConversation(conv.id);
+    expect(loaded!.effort).toBeUndefined();
+  });
+
+  test('effort appears in listConversations', async () => {
+    await svc.createConversation('T', undefined, 'claude-code', 'opus', 'max');
+    const list = await svc.listConversations();
+    expect(list[0].effort).toBe('max');
+  });
+});
+
 // ── Messages ─────────────────────────────────────────────────────────────────
 
 describe('addMessage', () => {

@@ -353,7 +353,7 @@ export async function chatCreateConversationWithDir(workingDir) {
     if (backendSelect && conv.backend) {
       backendSelect.value = conv.backend;
     }
-    populateModelSelect(state.chatSettingsData?.defaultModel);
+    populateModelSelect(state.chatSettingsData?.defaultModel, state.chatSettingsData?.defaultEffort);
     const textarea = document.getElementById('chat-textarea');
     if (textarea) textarea.focus();
   } catch (err) {
@@ -620,7 +620,7 @@ export async function chatSelectConversation(id) {
     if (backendSelect && state.chatActiveConv.backend) {
       backendSelect.value = state.chatActiveConv.backend;
     }
-    populateModelSelect(state.chatActiveConv.model);
+    populateModelSelect(state.chatActiveConv.model, state.chatActiveConv.effort);
   } catch (err) {
     alert('Failed to load conversation: ' + err.message);
   }
