@@ -127,6 +127,7 @@ export interface Conversation {
   model?: string;
   effort?: EffortLevel;
   workingDir: string;
+  workspaceHash: string;
   currentSessionId: string;
   sessionNumber: number;
   messages: Message[];
@@ -236,6 +237,23 @@ export interface DoneEvent {
   type: 'done';
 }
 
+/**
+ * Fired when the real-time MemoryWatcher re-captures workspace memory
+ * during an active stream. Lightweight payload — the frontend uses this
+ * only as a trigger to show a "memory updated" pill and to refresh the
+ * memory panel if it's open. The full snapshot is fetched separately via
+ * `GET /workspaces/:hash/memory`.
+ */
+export interface MemoryUpdateEvent {
+  type: 'memory_update';
+  /** ISO 8601 timestamp of the new snapshot. */
+  capturedAt: string;
+  /** Total number of `.md` files in the new snapshot. */
+  fileCount: number;
+  /** Filenames added or whose content changed since the previous frame for this conversation. */
+  changedFiles: string[];
+}
+
 export type StreamEvent =
   | TextEvent
   | ThinkingEvent
@@ -245,7 +263,8 @@ export type StreamEvent =
   | ResultEvent
   | UsageEvent
   | ErrorEvent
-  | DoneEvent;
+  | DoneEvent
+  | MemoryUpdateEvent;
 
 // ── Workspace Memory ─────────────────────────────────────────────────────────
 

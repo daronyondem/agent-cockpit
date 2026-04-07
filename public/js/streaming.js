@@ -13,6 +13,7 @@ import {
   chatRenderQueuedMessages,
 } from './conversations.js';
 import { loadBackends, populateModelSelect } from './backends.js';
+import { chatOpenMemoryPanel } from './memory.js';
 
 // ── Queue processing ─────────────────────────────────────────────────────────
 
@@ -393,6 +394,10 @@ export function chatHandleStreamEvent(targetConvId, event) {
       if (event.sessionUsage) state.chatActiveConv.sessionUsage = event.sessionUsage;
       chatUpdateUsageDisplay();
     }
+  } else if (event.type === 'memory_update') {
+    if (isStillActive) {
+      chatAppendMemoryUpdatePill(event);
+    }
   } else if (event.type === 'error') {
     st.pendingInteraction = null;
     chatArchiveActiveState(st);
@@ -541,6 +546,35 @@ function chatFormatErrorMessage(errorMsg) {
     return `API error ${code}${detail ? ': ' + detail : ''}`;
   }
   return errorMsg;
+}
+
+export function chatAppendMemoryUpdatePill(event) {
+  const container = document.getElementById('chat-messages');
+  if (!container) return;
+
+  const fileCount = Number(event.fileCount) || 0;
+  const changed = Array.isArray(event.changedFiles) ? event.changedFiles : [];
+  const changedCount = changed.length;
+  const label = changedCount === 0
+    ? `memory snapshot refreshed (${fileCount} file${fileCount === 1 ? '' : 's'})`
+    : `memory updated: ${changedCount} file${changedCount === 1 ? '' : 's'} changed`;
+  const tooltip = changedCount > 0 ? changed.join('\n') : '';
+
+  const pillEl = document.createElement('div');
+  pillEl.className = 'chat-memory-pill';
+  pillEl.title = tooltip;
+  pillEl.innerHTML = `
+    <span class="chat-memory-pill-icon" aria-hidden="true">🧠</span>
+    <span class="chat-memory-pill-label">${esc(label)}</span>
+    <button class="chat-memory-pill-action" type="button">View</button>
+  `;
+  pillEl.querySelector('.chat-memory-pill-action').addEventListener('click', (e) => {
+    e.stopPropagation();
+    chatOpenMemoryPanel();
+  });
+  pillEl.addEventListener('click', () => chatOpenMemoryPanel());
+  container.appendChild(pillEl);
+  chatScrollToBottom();
 }
 
 export function chatAppendError(errorMsg) {
