@@ -54,6 +54,69 @@ function normalizeKiroToolName(kiroName: string): string {
   return KIRO_TOOL_NAME_MAP[kiroName] || kiroName;
 }
 
+// ── kiro-cli one-shot output parser ─────────────────────────────────────────
+//
+// `kiro-cli chat --no-interactive` does NOT produce plain text.  It always
+// emits ANSI colour codes (ignores `NO_COLOR` and `TERM=dumb`), wraps the
+// answer in a `> ` prompt prefix, prints a fixed "trust all tools" warning
+// header on stderr/stdout, and finishes with a `▸ Credits: X • Time: Ys`
+// footer.  Feeding this raw output into titles or memory-note JSON parsing
+// leaves garbage like `[38;5;141m> [0mAsking about a number`.
+//
+// This helper extracts the clean answer body.  It is exported for unit tests.
+//
+// Sample raw output (with ANSI stripped for readability):
+//   All tools are now trusted (!). Kiro will execute tools without asking...
+//   Agents can sometimes do unexpected things so understand the risks.
+//
+//   Learn more at https://kiro.dev/docs/cli/chat/security/#using-tools-trust-all-safely
+//
+//
+//
+//   > Hey there, friend!
+//
+//    ▸ Credits: 0.02 • Time: 3s
+//
+// After parsing: "Hey there, friend!"
+//
+// CSI regex covers colour codes (`\x1b[32m`), 256-colour (`\x1b[38;5;141m`),
+// cursor-show/hide (`\x1b[?25l`), and similar standard escape sequences.
+const ANSI_CSI_REGEX = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
+
+export function parseKiroChatOutput(raw: string): string {
+  if (!raw) return '';
+
+  // 1. Strip ANSI escape sequences.
+  const noAnsi = raw.replace(ANSI_CSI_REGEX, '');
+
+  // 2. Strip the fixed trust-warning header if present.  The end of the
+  //    header is the stable URL fragment, which avoids fragile line counts.
+  const headerEndMarker = '/chat/security/#using-tools-trust-all-safely';
+  const headerEndIdx = noAnsi.indexOf(headerEndMarker);
+  let body = headerEndIdx >= 0
+    ? noAnsi.slice(headerEndIdx + headerEndMarker.length)
+    : noAnsi;
+
+  // 3. Strip the `▸ Credits: ... • Time: ...` footer line.  Match from the
+  //    start of its line so we never slice into the answer itself.
+  const footerIdx = body.search(/\n\s*▸\s+Credits:/);
+  if (footerIdx >= 0) {
+    body = body.slice(0, footerIdx);
+  }
+
+  // 4. Trim whitespace.
+  body = body.trim();
+
+  // 5. Strip the single leading `> ` prompt prefix kiro-cli prints before
+  //    the first line of the answer.  Only the very first two characters —
+  //    never anywhere else — so markdown blockquotes in the answer survive.
+  if (body.startsWith('> ')) {
+    body = body.slice(2);
+  }
+
+  return body.trim();
+}
+
 export function extractKiroToolDetails(toolCallId: string, kiroName: string, title: string, kind?: string): ToolDetail {
   const normalizedName = normalizeKiroToolName(kiroName);
   const detail: ToolDetail = { tool: normalizedName, id: toolCallId, description: '' };
@@ -380,8 +443,13 @@ export class KiroAdapter extends BaseBackendAdapter {
 
   /**
    * Run `kiro-cli chat` in one-shot mode against a single prompt and
-   * return the full text output.  Used by the Memory MCP server when
+   * return the clean answer text.  Used by the Memory MCP server when
    * Kiro is the configured Memory CLI.
+   *
+   * kiro-cli always emits ANSI colour codes plus a trust-warning header
+   * and a credits footer around the answer, even with `--no-interactive`
+   * and `NO_COLOR=1`.  We run the raw output through `parseKiroChatOutput`
+   * so callers get just the answer body.
    */
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
     const { timeoutMs = 60000, workingDir } = options;
@@ -396,7 +464,7 @@ export class KiroAdapter extends BaseBackendAdapter {
             reject(new Error(`kiro-cli chat failed: ${msg}`));
             return;
           }
-          resolve((stdout || '').trim());
+          resolve(parseKiroChatOutput(stdout || ''));
         },
       );
     });
@@ -412,10 +480,11 @@ export class KiroAdapter extends BaseBackendAdapter {
 
       return await new Promise<string>((resolve) => {
         execFile('kiro-cli', ['chat', '--no-interactive', '--trust-all-tools', prompt], { timeout: 30000 }, (err, stdout) => {
-          if (err || !stdout.trim()) {
+          const cleaned = parseKiroChatOutput(stdout || '');
+          if (err || !cleaned) {
             resolve(fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat');
           } else {
-            resolve(stdout.trim().substring(0, 80));
+            resolve(cleaned.substring(0, 80));
           }
         });
       });
