@@ -528,15 +528,21 @@ export class KiroAdapter extends BaseBackendAdapter {
       }
 
       // ── Model selection ──────────────────────────────────────────────
+      // session/set_model is silently ignored (no response) if sessionId is
+      // wrong or model is unsupported, so we race against a timeout to avoid
+      // blocking the prompt indefinitely.
       if (options.model) {
         try {
-          await client.request('session/set_model', {
-            sessionId: kiroSessionId,
-            modelId: options.model,
-          });
+          await Promise.race([
+            client.request('session/set_model', {
+              sessionId: kiroSessionId,
+              modelId: options.model,
+            }),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+          ]);
           console.log(`[kiro] Set model to ${options.model} for session ${kiroSessionId}`);
         } catch (err) {
-          console.warn(`[kiro] Failed to set model: ${(err as Error).message}`);
+          console.warn(`[kiro] Failed to set model (${(err as Error).message}), continuing with default`);
         }
       }
 
