@@ -285,7 +285,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     options: SendMessageOptions,
     state: StreamState,
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, isNewSession, workingDir, systemPrompt, model, effort } = options;
+    const { sessionId, isNewSession, workingDir, systemPrompt, model, effort, mcpServers } = options;
 
     const args = [
       '--print',
@@ -315,6 +315,16 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       }
     } else {
       args.push('--resume', sessionId);
+    }
+
+    // Transform the ACP-shaped mcpServers array into Claude Code's
+    // `--mcp-config` JSON (env is a plain object, not an array). This
+    // lets the cockpit wire the Memory MCP stub for Claude Code sessions
+    // the same way it does for Kiro, so `memory_note` is available as
+    // `mcp__agent-cockpit-memory__memory_note` in the model's tool list.
+    if (Array.isArray(mcpServers) && mcpServers.length > 0) {
+      const configJson = mcpServersToClaudeConfigJson(mcpServers);
+      args.push('--mcp-config', configJson);
     }
 
     args.push('-p', message);
@@ -542,6 +552,42 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       // no cleanup needed
     }
   }
+}
+
+// ── MCP config ──────────────────────────────────────────────────────────────
+
+/**
+ * Transform the ACP-shaped `mcpServers` array the cockpit builds for
+ * `memoryMcp.issueMemoryMcpSession` into the JSON string that Claude
+ * Code's `--mcp-config` flag accepts.
+ *
+ * - ACP shape: `[{ name, command, args, env: [{name, value}] }]`
+ * - Claude Code shape: `{ mcpServers: { [name]: { command, args, env: {K: V} } } }`
+ *
+ * The ACP env-as-array format is a protocol requirement for Kiro; Claude
+ * Code expects a plain `Record<string,string>`, so we flatten here.
+ */
+export function mcpServersToClaudeConfigJson(
+  servers: Array<{
+    name: string;
+    command: string;
+    args: string[];
+    env?: Array<{ name: string; value: string }>;
+  }>,
+): string {
+  const mcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {};
+  for (const server of servers) {
+    const envObj: Record<string, string> = {};
+    for (const pair of server.env || []) {
+      if (pair && typeof pair.name === 'string') envObj[pair.name] = pair.value;
+    }
+    mcpServers[server.name] = {
+      command: server.command,
+      args: Array.isArray(server.args) ? server.args : [],
+      ...(Object.keys(envObj).length > 0 ? { env: envObj } : {}),
+    };
+  }
+  return JSON.stringify({ mcpServers });
 }
 
 // ── Memory helpers ──────────────────────────────────────────────────────────

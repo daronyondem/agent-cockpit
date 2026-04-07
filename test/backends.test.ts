@@ -8,6 +8,7 @@ import {
   parseFrontmatter,
   resolveClaudeMemoryDir,
   resolveCanonicalWorkspacePath,
+  mcpServersToClaudeConfigJson,
 } from '../src/services/backends/claudeCode';
 import type { BackendMetadata, SendMessageResult } from '../src/types';
 
@@ -691,6 +692,162 @@ describe('ClaudeCodeAdapter sendMessage', () => {
 
     abort();
     expect(() => sendInput('some text')).not.toThrow();
+  });
+
+  test('passes --mcp-config JSON string when mcpServers are provided', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-mcp',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        mcpServers: [
+          {
+            name: 'agent-cockpit-memory',
+            command: 'node',
+            args: ['/path/to/stub.cjs'],
+            env: [
+              { name: 'MEMORY_TOKEN', value: 'tok-abc' },
+              { name: 'MEMORY_ENDPOINT', value: 'http://127.0.0.1:3335/x' },
+            ],
+          },
+        ],
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    const idx = capturedArgs!.indexOf('--mcp-config');
+    expect(idx).toBeGreaterThan(-1);
+    const configJson = capturedArgs![idx + 1];
+    expect(typeof configJson).toBe('string');
+    const parsed = JSON.parse(configJson);
+    expect(parsed.mcpServers['agent-cockpit-memory']).toEqual({
+      command: 'node',
+      args: ['/path/to/stub.cjs'],
+      env: {
+        MEMORY_TOKEN: 'tok-abc',
+        MEMORY_ENDPOINT: 'http://127.0.0.1:3335/x',
+      },
+    });
+  });
+
+  test('omits --mcp-config when mcpServers is empty or missing', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-no-mcp',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    expect(capturedArgs).not.toContain('--mcp-config');
+  });
+});
+
+// ── mcpServersToClaudeConfigJson ───────────────────────────────────────────
+
+describe('mcpServersToClaudeConfigJson', () => {
+  test('transforms ACP env array into Claude Code env object', () => {
+    const json = mcpServersToClaudeConfigJson([
+      {
+        name: 'agent-cockpit-memory',
+        command: 'node',
+        args: ['/path/to/stub.cjs'],
+        env: [
+          { name: 'MEMORY_TOKEN', value: 'abc123' },
+          { name: 'MEMORY_ENDPOINT', value: 'http://127.0.0.1:3335/x' },
+        ],
+      },
+    ]);
+    const parsed = JSON.parse(json);
+    expect(parsed).toEqual({
+      mcpServers: {
+        'agent-cockpit-memory': {
+          command: 'node',
+          args: ['/path/to/stub.cjs'],
+          env: {
+            MEMORY_TOKEN: 'abc123',
+            MEMORY_ENDPOINT: 'http://127.0.0.1:3335/x',
+          },
+        },
+      },
+    });
+  });
+
+  test('omits env key when no env vars are provided', () => {
+    const json = mcpServersToClaudeConfigJson([
+      { name: 'plain', command: 'node', args: [] },
+    ]);
+    const parsed = JSON.parse(json);
+    expect(parsed.mcpServers.plain).toEqual({ command: 'node', args: [] });
+    expect(parsed.mcpServers.plain.env).toBeUndefined();
+  });
+
+  test('handles multiple servers', () => {
+    const json = mcpServersToClaudeConfigJson([
+      { name: 'first', command: 'node', args: ['a.js'], env: [{ name: 'K1', value: 'v1' }] },
+      { name: 'second', command: 'python', args: ['b.py'], env: [{ name: 'K2', value: 'v2' }] },
+    ]);
+    const parsed = JSON.parse(json);
+    expect(Object.keys(parsed.mcpServers)).toEqual(['first', 'second']);
+    expect(parsed.mcpServers.first.env).toEqual({ K1: 'v1' });
+    expect(parsed.mcpServers.second.env).toEqual({ K2: 'v2' });
+  });
+
+  test('coerces missing args to empty array', () => {
+    const json = mcpServersToClaudeConfigJson([
+      { name: 'x', command: 'node', args: undefined as any },
+    ]);
+    const parsed = JSON.parse(json);
+    expect(parsed.mcpServers.x.args).toEqual([]);
   });
 });
 

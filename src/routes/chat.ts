@@ -632,12 +632,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
           console.error(`[memory] capture on reset failed for conv=${convId}:`, (err as Error).message);
         }
 
-        // For non-Claude backends, also run post-session extraction: the
-        // Memory CLI scans the just-ended session transcript and writes
-        // any new memory notes into `files/notes/` via addMemoryNoteEntry.
-        // Claude Code is skipped because its native memory capture above
-        // already covers this path.
-        if (endingBackend !== 'claude-code' && resetWsHash && preConv?.messages?.length) {
+        // Also run post-session extraction for every backend: the Memory
+        // CLI scans the just-ended session transcript and writes any new
+        // memory notes into `files/notes/` via addMemoryNoteEntry. This
+        // runs for Claude Code too — its native `#` capture covers
+        // explicitly-saved memories but misses incidental durable facts
+        // (user role, deadlines, corrections) mentioned conversationally.
+        if (resetWsHash && preConv?.messages?.length) {
           console.log(`[memory] reset handler: running post-session extraction for conv=${convId} backend=${endingBackend}`);
           try {
             const savedCount = await memoryMcp.extractMemoryFromSession({
@@ -717,9 +718,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     const memoryEnabledForSend = wsHashForSend
       ? await chatService.getWorkspaceMemoryEnabled(wsHashForSend)
       : false;
-    // Non-Claude CLIs rely on the Memory MCP stub to persist memory; Claude
-    // Code handles this natively, so we skip the MCP wiring for it.
-    const needsMemoryMcp = memoryEnabledForSend && backendId !== 'claude-code' && !!wsHashForSend;
+    // All memory-enabled sessions get the Memory MCP stub so they can
+    // persist notes via `memory_note`. Kiro spawns it over ACP's
+    // `mcpServers`; Claude Code spawns it via `--mcp-config`.
+    const needsMemoryMcp = memoryEnabledForSend && !!wsHashForSend;
 
     let systemPrompt = '';
     if (isNewSession) {
@@ -731,10 +733,11 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         const snapshot = await chatService.getWorkspaceMemory(wsHashForSend);
         memoryBlock = chatService.serializeMemoryForInjection(snapshot);
       }
-      // For non-Claude CLIs, append an addendum that teaches them to call
-      // the `memory_note` MCP tool when they learn something worth
-      // remembering.  Claude Code has its own native memory capture flow
-      // so we skip the addendum there.
+      // Append an addendum that teaches the CLI to call the `memory_note`
+      // MCP tool when it learns something worth remembering. Runs for
+      // Claude Code too: its native `#` flow covers explicit saves, but
+      // `memory_note` captures incidental durable facts mentioned
+      // conversationally.
       const memoryMcpAddendum = needsMemoryMcp
         ? [
             '# Persistent memory',
@@ -756,8 +759,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       return res.status(400).json({ error: `Unknown backend: ${backendId}` });
     }
 
-    // Mint a Memory MCP token + mcpServers config for non-Claude backends
-    // when Memory is enabled.  The token is revoked on session reset.
+    // Mint a Memory MCP token + mcpServers config for all backends when
+    // Memory is enabled. Kiro consumes the array shape over ACP; Claude
+    // Code transforms it into `--mcp-config` JSON. The token is revoked
+    // on session reset.
     let mcpServers: import('../types').McpServerConfig[] | undefined;
     if (needsMemoryMcp && wsHashForSend) {
       const issued = memoryMcp.issueMemoryMcpSession(convId, wsHashForSend);
