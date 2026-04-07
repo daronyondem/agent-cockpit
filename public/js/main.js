@@ -2,7 +2,7 @@ import { state, chatFetch, apiUrl, DEFAULT_BACKEND_ICON } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
-import { loadBackends, getBackendIcon, getBackendCapabilities, populateModelSelect } from './backends.js';
+import { loadBackends, getBackendIcon, getBackendCapabilities, populateModelSelect, populateEffortSelect } from './backends.js';
 import { setStreamEventHandler } from './websocket.js';
 import {
   chatRenderMessages, chatAutoResize, chatRenderMarkdown, chatHighlightCode,
@@ -47,6 +47,7 @@ window.chatClearQueue = chatClearQueue;
 window.chatRetryLast = chatRetryLast;
 window.chatSaveSettings = chatSaveSettings;
 window.chatSettingsBackendChanged = chatSettingsBackendChanged;
+window.chatSettingsModelChanged = chatSettingsModelChanged;
 window.chatUpdateUsageStats = chatUpdateUsageStats;
 window.chatClearUsageStats = chatClearUsageStats;
 window.chatSaveWorkspaceInstructions = chatSaveWorkspaceInstructions;
@@ -88,7 +89,7 @@ function chatInit() {
   chatFetch('settings').then(res => res.json()).then(s => {
     state.chatSettingsData = s;
     applyTheme(s.theme || 'system');
-    if (s.defaultModel) populateModelSelect(s.defaultModel);
+    if (s.defaultModel) populateModelSelect(s.defaultModel, s.defaultEffort);
   }).catch(() => {});
 }
 
@@ -141,6 +142,14 @@ function chatWireEvents() {
     backendSel._modelWired = true;
     backendSel.addEventListener('change', () => {
       populateModelSelect();
+    });
+  }
+
+  const modelSel = document.getElementById('chat-model-select');
+  if (modelSel && !modelSel._effortWired) {
+    modelSel._effortWired = true;
+    modelSel.addEventListener('change', () => {
+      populateEffortSelect();
     });
   }
 
@@ -530,8 +539,29 @@ async function chatShowSettings(initialTab) {
         </div>
         <div class="chat-settings-group" id="chat-settings-model-group"${(() => { const models = state.BACKEND_MODELS[s.defaultBackend]; return (!models || models.length === 0) ? ' style="display:none;"' : ''; })()}>
           <div class="chat-settings-label">Default Model</div>
-          <select class="chat-settings-select" id="chat-settings-model">
+          <select class="chat-settings-select" id="chat-settings-model" onchange="chatSettingsModelChanged()">
             ${(() => { const models = state.BACKEND_MODELS[s.defaultBackend] || []; return models.map(m => `<option value="${m.id}"${s.defaultModel === m.id ? ' selected' : (m.default && !s.defaultModel ? ' selected' : '')}>${esc(m.label)}</option>`).join(''); })()}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-effort-group"${(() => {
+          const models = state.BACKEND_MODELS[s.defaultBackend] || [];
+          const selected = s.defaultModel || models.find(m => m.default)?.id;
+          const model = models.find(m => m.id === selected);
+          return (!model || !model.supportedEffortLevels || model.supportedEffortLevels.length === 0) ? ' style="display:none;"' : '';
+        })()}>
+          <div class="chat-settings-label">Default Effort</div>
+          <div class="chat-settings-desc">Adaptive reasoning level for the default model. Applied to new conversations when they use the default model.</div>
+          <select class="chat-settings-select" id="chat-settings-effort">
+            ${(() => {
+              const models = state.BACKEND_MODELS[s.defaultBackend] || [];
+              const selected = s.defaultModel || models.find(m => m.default)?.id;
+              const model = models.find(m => m.id === selected);
+              const levels = model?.supportedEffortLevels || [];
+              const current = s.defaultEffort && levels.includes(s.defaultEffort)
+                ? s.defaultEffort
+                : (levels.includes('high') ? 'high' : levels[0]);
+              return levels.map(lv => `<option value="${lv}"${lv === current ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`).join('');
+            })()}
           </select>
         </div>
         <div class="chat-settings-group">
@@ -590,11 +620,50 @@ function chatSettingsBackendChanged() {
   if (!models || models.length === 0) {
     modelGroup.style.display = 'none';
     modelSelect.innerHTML = '';
+    chatSettingsRefreshEffortGroup();
     return;
   }
   modelGroup.style.display = '';
   modelSelect.innerHTML = models.map(m =>
     `<option value="${esc(m.id)}"${m.default ? ' selected' : ''}>${esc(m.label)}</option>`
+  ).join('');
+  chatSettingsRefreshEffortGroup();
+}
+
+function chatSettingsModelChanged() {
+  chatSettingsRefreshEffortGroup();
+}
+
+function chatSettingsRefreshEffortGroup() {
+  const effortGroup = document.getElementById('chat-settings-effort-group');
+  const effortSelect = document.getElementById('chat-settings-effort');
+  if (!effortGroup || !effortSelect) return;
+
+  const backendId = document.getElementById('chat-settings-backend')?.value;
+  const models = state.BACKEND_MODELS[backendId] || [];
+  const selectedModelId = document.getElementById('chat-settings-model')?.value;
+  const model = models.find(m => m.id === selectedModelId);
+  const levels = model?.supportedEffortLevels || [];
+
+  if (levels.length === 0) {
+    effortGroup.style.display = 'none';
+    effortSelect.innerHTML = '';
+    return;
+  }
+
+  // Preserve the current selection if possible; otherwise fall back to stored
+  // default, then to 'high', then to the first supported level.
+  const prev = effortSelect.value;
+  const stored = state.chatSettingsData?.defaultEffort;
+  let next = null;
+  if (prev && levels.includes(prev)) next = prev;
+  else if (stored && levels.includes(stored)) next = stored;
+  else if (levels.includes('high')) next = 'high';
+  else next = levels[0];
+
+  effortGroup.style.display = '';
+  effortSelect.innerHTML = levels.map(lv =>
+    `<option value="${lv}"${lv === next ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`
   ).join('');
 }
 
@@ -602,11 +671,17 @@ function chatSaveSettings() {
   const defaultBackend = document.getElementById('chat-settings-backend')?.value || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
   const modelEl = document.getElementById('chat-settings-model');
   const defaultModel = (modelEl && modelEl.closest('.chat-settings-group')?.style.display !== 'none') ? modelEl.value : undefined;
+  const effortEl = document.getElementById('chat-settings-effort');
+  const effortGroup = document.getElementById('chat-settings-effort-group');
+  // Drop defaultEffort when the effort group is hidden (backend/model doesn't
+  // support effort). This matches the "drop on model change" rule.
+  const defaultEffort = (effortEl && effortGroup?.style.display !== 'none') ? effortEl.value : undefined;
   const settings = {
     theme: document.getElementById('chat-settings-theme')?.value || 'system',
     sendBehavior: document.getElementById('chat-settings-send')?.value || 'enter',
     defaultBackend,
     defaultModel,
+    defaultEffort,
     systemPrompt: document.getElementById('chat-settings-system-prompt')?.value || '',
   };
   applyTheme(settings.theme);

@@ -18,6 +18,7 @@ import type {
   Settings,
   MemorySnapshot,
   MemoryFile,
+  EffortLevel,
 } from '../types';
 
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
@@ -196,7 +197,13 @@ export class ChatService {
 
   // ── Conversation CRUD ──────────────────────────────────────────────────────
 
-  async createConversation(title?: string, workingDir?: string, backend?: string, model?: string): Promise<Conversation> {
+  async createConversation(
+    title?: string,
+    workingDir?: string,
+    backend?: string,
+    model?: string,
+    effort?: EffortLevel,
+  ): Promise<Conversation> {
     const id = this._newId();
     const now = new Date().toISOString();
     const sessionId = this._newId();
@@ -209,11 +216,14 @@ export class ChatService {
     }
 
     const defaultBackend = this._backendRegistry?.getDefault()?.metadata.id || 'claude-code';
+    const resolvedBackend = backend || defaultBackend;
+    const effective = this._effectiveEffort(resolvedBackend, model, effort);
     const convEntry: ConversationEntry = {
       id,
       title: title || 'New Chat',
-      backend: backend || defaultBackend,
+      backend: resolvedBackend,
       model: model || undefined,
+      effort: effective,
       currentSessionId: sessionId,
       lastActivity: now,
       lastMessage: null,
@@ -246,11 +256,36 @@ export class ChatService {
       title: convEntry.title,
       backend: convEntry.backend,
       model: convEntry.model,
+      effort: convEntry.effort,
       workingDir: workspacePath,
       currentSessionId: sessionId,
       sessionNumber: 1,
       messages: [],
     };
+  }
+
+  /**
+   * Returns the effort value that should be stored on a conversation given its
+   * backend, model, and a requested effort. If the backend/model pair doesn't
+   * support the requested level, the result is silently downgraded (to the
+   * highest supported level below the request) or cleared if nothing matches.
+   */
+  private _effectiveEffort(backend: string, model: string | undefined, requested: EffortLevel | undefined): EffortLevel | undefined {
+    if (!requested || !model) return undefined;
+    const adapter = this._backendRegistry?.get(backend);
+    const modelOption = adapter?.metadata.models?.find(m => m.id === model);
+    const supported = modelOption?.supportedEffortLevels;
+    if (!supported || supported.length === 0) return undefined;
+    if (supported.includes(requested)) return requested;
+    // Downgrade: pick the highest supported level that is <= the request.
+    const order: EffortLevel[] = ['low', 'medium', 'high', 'max'];
+    const requestedIdx = order.indexOf(requested);
+    for (let i = requestedIdx - 1; i >= 0; i--) {
+      if (supported.includes(order[i])) return order[i];
+    }
+    // Nothing at or below the request is supported — fall back to the first
+    // supported level rather than dropping it entirely.
+    return supported[0];
   }
 
   async getConversation(id: string): Promise<Conversation | null> {
@@ -269,6 +304,7 @@ export class ChatService {
       title: convEntry.title,
       backend: convEntry.backend,
       model: convEntry.model,
+      effort: convEntry.effort,
       workingDir: index.workspacePath,
       currentSessionId: convEntry.currentSessionId,
       sessionNumber,
@@ -305,6 +341,7 @@ export class ChatService {
           updatedAt: conv.lastActivity,
           backend: conv.backend,
           model: conv.model,
+          effort: conv.effort,
           workingDir: index.workspacePath,
           workspaceHash: hash,
           messageCount: activeSession ? activeSession.messageCount : 0,
@@ -388,6 +425,20 @@ export class ChatService {
     if (!result) return;
     const { hash, index, convEntry } = result;
     convEntry.model = model || undefined;
+    // Silently downgrade stored effort if the new model doesn't support it.
+    if (convEntry.effort) {
+      convEntry.effort = this._effectiveEffort(convEntry.backend, convEntry.model, convEntry.effort);
+    }
+    await this._writeWorkspaceIndex(hash, index);
+  }
+
+  async updateConversationEffort(convId: string, effort: EffortLevel | null): Promise<void> {
+    const result = await this._getConvFromIndex(convId);
+    if (!result) return;
+    const { hash, index, convEntry } = result;
+    convEntry.effort = effort
+      ? this._effectiveEffort(convEntry.backend, convEntry.model, effort)
+      : undefined;
     await this._writeWorkspaceIndex(hash, index);
   }
 

@@ -65,6 +65,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           family: 'opus',
           description: 'Most capable — complex reasoning, architecture, nuanced tasks',
           costTier: 'high',
+          supportedEffortLevels: ['low', 'medium', 'high', 'max'],
         },
         {
           id: 'sonnet',
@@ -73,6 +74,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           description: 'Balanced — fast and capable for most coding tasks',
           costTier: 'medium',
           default: true,
+          supportedEffortLevels: ['low', 'medium', 'high'],
         },
         {
           id: 'haiku',
@@ -87,6 +89,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           family: 'opus',
           description: 'Extended context window for large codebases',
           costTier: 'high',
+          supportedEffortLevels: ['low', 'medium', 'high', 'max'],
         },
         {
           id: 'sonnet[1m]',
@@ -94,6 +97,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           family: 'sonnet',
           description: 'Extended context window with balanced performance',
           costTier: 'medium',
+          supportedEffortLevels: ['low', 'medium', 'high'],
         },
       ],
     };
@@ -241,7 +245,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     options: SendMessageOptions,
     state: StreamState,
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, isNewSession, workingDir, systemPrompt, model } = options;
+    const { sessionId, isNewSession, workingDir, systemPrompt, model, effort } = options;
 
     const args = [
       '--print',
@@ -252,6 +256,15 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
 
     if (model) {
       args.push('--model', model);
+    }
+
+    // Only forward --effort when the selected model actually supports the level.
+    // This guards against stale conversation state after a model downgrade.
+    if (effort && model) {
+      const modelOption = this.metadata.models?.find(m => m.id === model);
+      if (modelOption?.supportedEffortLevels?.includes(effort)) {
+        args.push('--effort', effort);
+      }
     }
 
     if (isNewSession) {

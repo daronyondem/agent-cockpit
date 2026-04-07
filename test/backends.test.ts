@@ -163,6 +163,29 @@ describe('ClaudeCodeAdapter', () => {
     expect(haiku!.costTier).toBe('low');
   });
 
+  test('metadata declares supportedEffortLevels per model', () => {
+    const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
+    const meta = adapter.metadata;
+
+    // Opus 4.6 supports all four levels including max
+    const opus = meta.models!.find(m => m.id === 'opus');
+    expect(opus!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'max']);
+
+    // Sonnet 4.6 supports low/medium/high (no max)
+    const sonnet = meta.models!.find(m => m.id === 'sonnet');
+    expect(sonnet!.supportedEffortLevels).toEqual(['low', 'medium', 'high']);
+
+    // Haiku does not support effort at all
+    const haiku = meta.models!.find(m => m.id === 'haiku');
+    expect(haiku!.supportedEffortLevels).toBeUndefined();
+
+    // 1M context variants inherit their base family's effort support
+    const opus1m = meta.models!.find(m => m.id === 'opus[1m]');
+    expect(opus1m!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'max']);
+    const sonnet1m = meta.models!.find(m => m.id === 'sonnet[1m]');
+    expect(sonnet1m!.supportedEffortLevels).toEqual(['low', 'medium', 'high']);
+  });
+
   test('uses default working directory', () => {
     const adapter = new ClaudeCodeAdapter();
     expect(adapter.workingDir).toContain('.openclaw');
@@ -273,6 +296,166 @@ describe('ClaudeCodeAdapter sendMessage', () => {
 
     expect(capturedArgs).toBeDefined();
     expect(capturedArgs).not.toContain('--model');
+  });
+
+  test('passes --effort flag when effort is supported by the selected model', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-effort-high',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        model: 'sonnet',
+        effort: 'high',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    const idx = capturedArgs!.indexOf('--effort');
+    expect(idx).toBeGreaterThan(-1);
+    expect(capturedArgs![idx + 1]).toBe('high');
+  });
+
+  test('passes --effort max only when supported (Opus)', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-effort-max',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        model: 'opus',
+        effort: 'max',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    const idx = capturedArgs!.indexOf('--effort');
+    expect(capturedArgs![idx + 1]).toBe('max');
+  });
+
+  test('drops --effort when the selected model does not support that level', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      // Sonnet does not support 'max' — adapter must not forward the flag.
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-effort-unsupported',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        model: 'sonnet',
+        effort: 'max',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    expect(capturedArgs).not.toContain('--effort');
+  });
+
+  test('drops --effort for Haiku (no effort support)', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-effort-haiku',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        model: 'haiku',
+        effort: 'high',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    expect(capturedArgs).not.toContain('--effort');
   });
 
   test('includes --append-system-prompt for new sessions with systemPrompt', async () => {

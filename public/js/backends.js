@@ -40,7 +40,7 @@ export function populateBackendSelects() {
  * Populate the model dropdown based on the currently selected backend.
  * If the backend has no models array, hide the dropdown.
  */
-export function populateModelSelect(selectedModel) {
+export function populateModelSelect(selectedModel, selectedEffort) {
   const modelSelect = document.getElementById('chat-model-select');
   if (!modelSelect) return;
 
@@ -51,6 +51,7 @@ export function populateModelSelect(selectedModel) {
   if (!models || models.length === 0) {
     modelSelect.style.display = 'none';
     modelSelect.innerHTML = '';
+    populateEffortSelect(selectedEffort);
     return;
   }
 
@@ -68,6 +69,58 @@ export function populateModelSelect(selectedModel) {
     const defaultModel = models.find(m => m.default);
     if (defaultModel) modelSelect.value = defaultModel.id;
   }
+
+  populateEffortSelect(selectedEffort);
+}
+
+/**
+ * Populate the effort dropdown based on the currently selected model's
+ * supportedEffortLevels. Hides the dropdown if the model doesn't support
+ * effort. Default selection logic:
+ *   1. explicit selectedEffort (from conversation)
+ *   2. settings.defaultEffort when the selected model matches settings.defaultModel
+ *   3. 'high' (hardcoded fallback)
+ *   4. first supported level (defensive fallback)
+ */
+export function populateEffortSelect(selectedEffort) {
+  const effortSelect = document.getElementById('chat-effort-select');
+  if (!effortSelect) return;
+
+  const backendId = document.getElementById('chat-backend-select')?.value || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
+  const modelId = document.getElementById('chat-model-select')?.value;
+  const models = state.BACKEND_MODELS[backendId] || [];
+  const model = models.find(m => m.id === modelId);
+  const levels = model?.supportedEffortLevels || [];
+
+  if (levels.length === 0) {
+    effortSelect.style.display = 'none';
+    effortSelect.innerHTML = '';
+    return;
+  }
+
+  effortSelect.style.display = '';
+
+  // Determine default selection
+  const settings = state.chatSettingsData || {};
+  const prev = effortSelect.value;
+  let chosen;
+  if (selectedEffort && levels.includes(selectedEffort)) {
+    chosen = selectedEffort;
+  } else if (prev && levels.includes(prev)) {
+    chosen = prev;
+  } else if (settings.defaultEffort
+    && settings.defaultModel === modelId
+    && levels.includes(settings.defaultEffort)) {
+    chosen = settings.defaultEffort;
+  } else if (levels.includes('high')) {
+    chosen = 'high';
+  } else {
+    chosen = levels[0];
+  }
+
+  effortSelect.innerHTML = levels.map(lv =>
+    `<option value="${lv}"${lv === chosen ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`
+  ).join('');
 }
 
 export function getBackendIcon(backendId) {

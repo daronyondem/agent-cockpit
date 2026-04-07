@@ -42,6 +42,11 @@ class MockBackendAdapter extends BaseBackendAdapter {
       label: 'Claude Code',
       icon: null,
       capabilities: { thinking: true, planMode: true, agents: true, toolActivity: true, userQuestions: true, stdinInput: true },
+      models: [
+        { id: 'opus', label: 'Opus', family: 'opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] },
+        { id: 'sonnet', label: 'Sonnet', family: 'sonnet', default: true, supportedEffortLevels: ['low', 'medium', 'high'] },
+        { id: 'haiku', label: 'Haiku', family: 'haiku' },
+      ],
     };
   }
 
@@ -1107,6 +1112,60 @@ describe('sendMessage options passthrough', () => {
     expect(mockBackend._lastOptions!.model).toBe('opus');
     const loaded = await chatService.getConversation(conv.id);
     expect(loaded!.model).toBe('opus');
+  });
+
+  test('passes effort to backend adapter on send', async () => {
+    const conv = await chatService.createConversation('Test', undefined, 'claude-code', 'opus');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+      model: 'opus',
+      effort: 'max',
+    });
+
+    expect(mockBackend._lastOptions!.effort).toBe('max');
+    const loaded = await chatService.getConversation(conv.id);
+    expect(loaded!.effort).toBe('max');
+  });
+
+  test('downgrades effort when request switches to a weaker model', async () => {
+    const conv = await chatService.createConversation('Test', undefined, 'claude-code', 'opus', 'max');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    // Switch to sonnet — route should downgrade stored effort from 'max' to 'high'
+    // before passing options to the adapter.
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+      model: 'sonnet',
+    });
+
+    const loaded = await chatService.getConversation(conv.id);
+    expect(loaded!.model).toBe('sonnet');
+    expect(loaded!.effort).toBe('high');
+  });
+
+  test('uses stored conversation effort when request omits it', async () => {
+    const conv = await chatService.createConversation('Test', undefined, 'claude-code', 'opus', 'high');
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastOptions!.effort).toBe('high');
   });
 });
 

@@ -154,9 +154,13 @@ export async function chatSendMessage() {
   const backend = document.getElementById('chat-backend-select')?.value || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
   const modelSelect = document.getElementById('chat-model-select');
   const model = (modelSelect && modelSelect.style.display !== 'none') ? modelSelect.value : undefined;
+  const effortSelect = document.getElementById('chat-effort-select');
+  const effort = (effortSelect && effortSelect.style.display !== 'none') ? effortSelect.value : undefined;
   const targetConvId = state.chatActiveConvId;
 
-  // Persist selected backend (and model) as the default for new conversations
+  // Persist selected backend (and model/effort) as the default for new conversations.
+  // defaultEffort only persists when the chosen model matches defaultModel, so
+  // switching models mid-flight doesn't clobber the settings-level default.
   if (state.chatSettingsData) {
     let dirty = false;
     if (state.chatSettingsData.defaultBackend !== backend) {
@@ -165,6 +169,12 @@ export async function chatSendMessage() {
     }
     if (model !== undefined && state.chatSettingsData.defaultModel !== model) {
       state.chatSettingsData.defaultModel = model;
+      dirty = true;
+    }
+    if (effort !== undefined
+      && state.chatSettingsData.defaultModel === model
+      && state.chatSettingsData.defaultEffort !== effort) {
+      state.chatSettingsData.defaultEffort = effort;
       dirty = true;
     }
     if (dirty) {
@@ -207,7 +217,7 @@ export async function chatSendMessage() {
         'x-csrf-token': state.csrfToken || '',
       },
       credentials: 'same-origin',
-      body: JSON.stringify({ content, backend, model }),
+      body: JSON.stringify({ content, backend, model, effort }),
     });
 
     if (!response.ok) {
@@ -397,7 +407,7 @@ export function chatHandleStreamEvent(targetConvId, event) {
     // (e.g. Kiro populates models dynamically on first session/new)
     const currentBackend = document.getElementById('chat-backend-select')?.value;
     if (currentBackend && !state.BACKEND_MODELS[currentBackend]) {
-      loadBackends().then(() => populateModelSelect(state.chatActiveConv?.model));
+      loadBackends().then(() => populateModelSelect(state.chatActiveConv?.model, state.chatActiveConv?.effort));
     }
   }
 }

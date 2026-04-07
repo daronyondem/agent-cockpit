@@ -7,7 +7,7 @@ import { csrfGuard } from '../middleware/csrf';
 import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
-import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame } from '../types';
+import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
@@ -387,7 +387,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // ── Create conversation ────────────────────────────────────────────────────
   router.post('/conversations', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const conv = await chatService.createConversation(req.body.title, req.body.workingDir, req.body.backend, req.body.model);
+      const conv = await chatService.createConversation(
+        req.body.title,
+        req.body.workingDir,
+        req.body.backend,
+        req.body.model,
+        req.body.effort,
+      );
       res.json(conv);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -592,7 +598,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // ── Send message + stream response ────────────────────────────────────────
   router.post('/conversations/:id/message', csrfGuard, async (req: Request, res: Response) => {
     const convId = param(req, 'id');
-    const { content, backend, model } = req.body as { content?: string; backend?: string; model?: string };
+    const { content, backend, model, effort } = req.body as {
+      content?: string;
+      backend?: string;
+      model?: string;
+      effort?: EffortLevel;
+    };
 
     if (!content || typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ error: 'Message content required' });
@@ -606,6 +617,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
     if (model !== undefined && model !== (conv.model || undefined)) {
       await chatService.updateConversationModel(convId, model || null);
+    }
+    if (effort !== undefined && effort !== (conv.effort || undefined)) {
+      await chatService.updateConversationEffort(convId, effort || null);
     }
 
     const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backend || conv.backend);
@@ -640,6 +654,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
 
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} backend=${backendId} workingDir=${conv.workingDir || 'default'}`);
+    // Re-fetch conversation so we pick up any effort downgrade triggered by a
+    // model change in this same request.
+    const refreshedConv = await chatService.getConversation(convId);
+    const effectiveEffort = effort !== undefined
+      ? (refreshedConv?.effort || undefined)
+      : (conv.effort || undefined);
     const { stream, abort, sendInput } = adapter.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
       conversationId: convId,
@@ -648,6 +668,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       systemPrompt,
       externalSessionId: conv.externalSessionId || null,
       model: model || conv.model || undefined,
+      effort: effectiveEffort,
     });
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
     activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });
