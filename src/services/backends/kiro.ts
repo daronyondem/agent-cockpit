@@ -542,7 +542,9 @@ export class KiroAdapter extends BaseBackendAdapter {
           ]);
           console.log(`[kiro] Set model to ${options.model} for session ${kiroSessionId}`);
         } catch (err) {
-          console.warn(`[kiro] Failed to set model (${(err as Error).message}), continuing with default`);
+          const reason = (err as Error).message;
+          console.warn(`[kiro] Failed to set model (${reason}), continuing with default`);
+          yield { type: 'error', error: `Failed to switch to model "${options.model}" — ${reason === 'timeout' ? 'Kiro did not respond (model may be unavailable)' : reason}. Using default model.` };
         }
       }
 
