@@ -1929,45 +1929,50 @@
     min-height: 0;
   }
 
-  /* ── Memory update pill (inline in chat timeline) ─────────── */
-  .chat-memory-pill {
-    margin: 10px auto;
-    max-width: 720px;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 14px;
+  /* ── Memory update inline message (uses chat-msg layout) ─── */
+  .chat-msg-avatar-memory {
     background: color-mix(in srgb, var(--accent-memory) 12%, transparent);
+    padding: 4px;
+  }
+  .chat-msg-avatar-memory img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+  .chat-memory-msg-card {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: color-mix(in srgb, var(--accent-memory) 8%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-memory) 30%, transparent);
-    border-radius: 999px;
-    color: var(--accent-memory);
-    font-size: 13px;
+    border-radius: 10px;
+    padding: 12px 14px;
     cursor: pointer;
+    color: var(--text);
+    font: inherit;
     transition: background 120ms ease, border-color 120ms ease;
   }
-  .chat-memory-pill:hover {
-    background: color-mix(in srgb, var(--accent-memory) 20%, transparent);
+  .chat-memory-msg-card:hover {
+    background: color-mix(in srgb, var(--accent-memory) 16%, transparent);
     border-color: color-mix(in srgb, var(--accent-memory) 50%, transparent);
   }
-  .chat-memory-pill-icon {
-    font-size: 14px;
-    line-height: 1;
-  }
-  .chat-memory-pill-label {
-    flex: 1;
+  .chat-memory-msg-headline {
+    font-size: 13px;
+    font-weight: 500;
     color: var(--text);
   }
-  .chat-memory-pill-action {
-    background: transparent;
-    border: 1px solid color-mix(in srgb, var(--accent-memory) 50%, transparent);
-    color: var(--accent-memory);
-    border-radius: 6px;
+  .chat-memory-msg-files {
+    margin-top: 4px;
     font-size: 12px;
-    padding: 3px 10px;
-    cursor: pointer;
+    color: var(--muted);
+    word-break: break-all;
   }
-  .chat-memory-pill-action:hover {
-    background: color-mix(in srgb, var(--accent-memory) 18%, transparent);
+  .chat-memory-msg-cta {
+    margin-top: 6px;
+    font-size: 12px;
+    color: var(--accent-memory);
+    font-weight: 500;
   }
 
   /* ── Memory panel (modal contents) ──────────────────────── */

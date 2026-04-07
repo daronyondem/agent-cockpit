@@ -395,8 +395,8 @@ export function chatHandleStreamEvent(targetConvId, event) {
       chatUpdateUsageDisplay();
     }
   } else if (event.type === 'memory_update') {
-    if (isStillActive) {
-      chatAppendMemoryUpdatePill(event);
+    if (isStillActive && state.chatActiveConv) {
+      chatAppendMemoryUpdateMessage(event);
     }
   } else if (event.type === 'error') {
     st.pendingInteraction = null;
@@ -548,33 +548,34 @@ function chatFormatErrorMessage(errorMsg) {
   return errorMsg;
 }
 
-export function chatAppendMemoryUpdatePill(event) {
-  const container = document.getElementById('chat-messages');
-  if (!container) return;
+// Append a synthetic system message representing a memory_update WS frame.
+// Synthetic because: it's not stored on the backend, only lives in the
+// client-side messages array for the current session. By being part of
+// `chatActiveConv.messages`, it survives every chatRenderMessages() rebuild
+// (unlike a transient appended DOM node that gets wiped on innerHTML reset).
+export function chatAppendMemoryUpdateMessage(event) {
+  if (!state.chatActiveConv) return;
 
   const fileCount = Number(event.fileCount) || 0;
   const changed = Array.isArray(event.changedFiles) ? event.changedFiles : [];
-  const changedCount = changed.length;
-  const label = changedCount === 0
-    ? `memory snapshot refreshed (${fileCount} file${fileCount === 1 ? '' : 's'})`
-    : `memory updated: ${changedCount} file${changedCount === 1 ? '' : 's'} changed`;
-  const tooltip = changedCount > 0 ? changed.join('\n') : '';
+  const capturedAt = event.capturedAt || new Date().toISOString();
 
-  const pillEl = document.createElement('div');
-  pillEl.className = 'chat-memory-pill';
-  pillEl.title = tooltip;
-  pillEl.innerHTML = `
-    <span class="chat-memory-pill-icon" aria-hidden="true">🧠</span>
-    <span class="chat-memory-pill-label">${esc(label)}</span>
-    <button class="chat-memory-pill-action" type="button">View</button>
-  `;
-  pillEl.querySelector('.chat-memory-pill-action').addEventListener('click', (e) => {
-    e.stopPropagation();
-    chatOpenMemoryPanel();
-  });
-  pillEl.addEventListener('click', () => chatOpenMemoryPanel());
-  container.appendChild(pillEl);
-  chatScrollToBottom();
+  const synthetic = {
+    id: `mem-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    role: 'system',
+    kind: 'memory_update',
+    content: '',
+    backend: '',
+    timestamp: capturedAt,
+    memoryUpdate: {
+      fileCount,
+      changedFiles: changed,
+      capturedAt,
+    },
+  };
+
+  state.chatActiveConv.messages.push(synthetic);
+  chatRenderMessages();
 }
 
 export function chatAppendError(errorMsg) {

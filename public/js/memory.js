@@ -3,7 +3,7 @@
 // `GET /api/chat/workspaces/:hash/memory`. Triggered from the inline
 // `memory_update` pill that streaming.js drops into the chat timeline.
 
-import { state, chatFetch, chatApiUrl } from './state.js';
+import { state, chatApiUrl } from './state.js';
 import { esc } from './utils.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
 
@@ -37,7 +37,12 @@ export async function chatOpenMemoryPanel() {
   let snapshot = null;
   let errorMsg = null;
   try {
-    const res = await chatFetch(chatApiUrl(`/workspaces/${encodeURIComponent(hash)}/memory`));
+    // Use raw fetch (not chatFetch) so we can treat 404 as the "no snapshot
+    // yet" empty case rather than an exception. This is a GET endpoint with
+    // no CSRF requirement.
+    const res = await fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/memory`), {
+      credentials: 'same-origin',
+    });
     if (res.status === 404) {
       // No snapshot captured yet — that's normal, not an error.
     } else if (!res.ok) {

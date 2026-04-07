@@ -1,6 +1,7 @@
 import { state, IMAGE_EXTENSIONS, PARALLEL_THRESHOLD_MS, DEFAULT_BACKEND_ICON, chatApiUrl } from './state.js';
 import { esc, escWithCode, chatFormatTimestamp, chatFormatElapsed, chatFormatElapsedShort } from './utils.js';
 import { getBackendIcon, getBackendCapabilities } from './backends.js';
+import { chatOpenMemoryPanel } from './memory.js';
 
 // Late-binding callbacks to avoid circular imports with streaming.js / conversations.js.
 // main.js wires these after all imports resolve.
@@ -76,6 +77,14 @@ export function chatRenderMessages() {
   for (let mi = 0; mi < currentSessionMsgs.length; mi++) {
     const msg = currentSessionMsgs[mi];
 
+    // Synthetic memory_update bubble — uses the Agent Cockpit logo as the
+    // avatar and stays inline like any other message. See
+    // chatAppendMemoryUpdateMessage in streaming.js.
+    if (msg.kind === 'memory_update') {
+      html += chatRenderMemoryUpdateMessage(msg);
+      continue;
+    }
+
     const isUser = msg.role === 'user';
     const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
     const avatar = isUser ? '\u{1F464}' : (backendIcon || DEFAULT_BACKEND_ICON);
@@ -149,6 +158,47 @@ export function chatRenderMessages() {
   if (_renderQueuedMessages) _renderQueuedMessages();
 
   chatScrollToBottom();
+}
+
+// ── Memory update inline message ─────────────────────────────────────────────
+// Renders a synthetic chat-msg bubble for a memory_update WS frame. The
+// message lives in chatActiveConv.messages with kind 'memory_update' so it
+// survives every chatRenderMessages() rebuild. The whole bubble is clickable
+// to open the read-only memory panel (handled in chatWireMessageActions).
+
+export function chatRenderMemoryUpdateMessage(msg) {
+  const data = msg.memoryUpdate || {};
+  const fileCount = Number(data.fileCount) || 0;
+  const changed = Array.isArray(data.changedFiles) ? data.changedFiles : [];
+  const changedCount = changed.length;
+
+  const headline = changedCount === 0
+    ? `Memory snapshot refreshed (${fileCount} file${fileCount === 1 ? '' : 's'})`
+    : `Memory updated: ${changedCount} file${changedCount === 1 ? '' : 's'} changed`;
+
+  const detailHtml = changedCount > 0
+    ? `<div class="chat-memory-msg-files">${changed.slice(0, 5).map(f => esc(f)).join(', ')}${changedCount > 5 ? `, +${changedCount - 5} more` : ''}</div>`
+    : '';
+
+  const timeLabel = msg.timestamp ? `<span class="chat-msg-time">${chatFormatTimestamp(msg.timestamp)}</span>` : '';
+
+  return `
+    <div class="chat-msg system chat-msg-memory" data-msg-id="${esc(msg.id)}">
+      <div class="chat-msg-wrapper">
+        <div class="chat-msg-avatar chat-msg-avatar-memory"><img src="logo-small.svg" alt="Agent Cockpit" /></div>
+        <div class="chat-msg-body">
+          <div class="chat-msg-role">Agent Cockpit ${timeLabel}</div>
+          <div class="chat-msg-content">
+            <button type="button" class="chat-memory-msg-card" data-action="open-memory">
+              <div class="chat-memory-msg-headline">${esc(headline)}</div>
+              ${detailHtml}
+              <div class="chat-memory-msg-cta">View memory →</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // ── Thinking / activity blocks ───────────────────────────────────────────────
@@ -519,6 +569,13 @@ export function chatWireMessageActions(container) {
         const content = msgEl.querySelector('.chat-msg-content');
         if (content) navigator.clipboard.writeText(content.textContent);
       }
+    };
+  });
+  container.querySelectorAll('[data-action="open-memory"]').forEach(btn => {
+    btn.onclick = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      chatOpenMemoryPanel();
     };
   });
 }
