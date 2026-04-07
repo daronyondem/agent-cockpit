@@ -149,6 +149,14 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     }
   }
 
+  getMemoryDir(workspacePath: string): string | null {
+    if (!workspacePath) return null;
+    // Canonicalize worktrees to the main repo path so all worktrees of
+    // one repo share a single memory directory.
+    const canonicalPath = resolveCanonicalWorkspacePath(workspacePath);
+    return resolveClaudeMemoryDir(canonicalPath);
+  }
+
   async extractMemory(workspacePath: string): Promise<MemorySnapshot | null> {
     if (!workspacePath) {
       console.log('[memory] ClaudeCode.extractMemory: empty workspacePath');

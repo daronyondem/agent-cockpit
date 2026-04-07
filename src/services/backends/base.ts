@@ -65,4 +65,18 @@ export class BaseBackendAdapter {
   async extractMemory(_workspacePath: string): Promise<MemorySnapshot | null> {
     return null;
   }
+
+  /**
+   * Resolve the absolute path to the backend's native memory directory
+   * for a given workspace, without reading its contents.  Used by the
+   * real-time memory watcher to know which directory to watch.
+   *
+   * Returns `null` when the backend has no memory system, or when no
+   * memory directory exists yet for this workspace.  Subclasses that
+   * implement `extractMemory` should also implement this so the watcher
+   * can track their memory live.
+   */
+  getMemoryDir(_workspacePath: string): string | null {
+    return null;
+  }
 }

@@ -7,6 +7,7 @@ import { csrfGuard } from '../middleware/csrf';
 import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
+import { MemoryWatcher } from '../services/memoryWatcher';
 import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
@@ -210,6 +211,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   const packageJson = require('../../package.json');
 
   const activeStreams = new Map<string, ActiveStreamEntry>();
+  const memoryWatcher = new MemoryWatcher();
   let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer'> | null = null;
 
   // ── Available backends ──────────────────────────────────────────────────────
@@ -414,12 +416,14 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // ── Delete conversation ────────────────────────────────────────────────────
   router.delete('/conversations/:id', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const entry = activeStreams.get(param(req, 'id'));
+      const convId = param(req, 'id');
+      const entry = activeStreams.get(convId);
       if (entry) {
         entry.abort();
-        activeStreams.delete(param(req, 'id'));
+        activeStreams.delete(convId);
       }
-      const ok = await chatService.deleteConversation(param(req, 'id'));
+      memoryWatcher.unwatch(convId);
+      const ok = await chatService.deleteConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
     } catch (err: unknown) {
@@ -430,12 +434,14 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // ── Archive conversation ───────────────────────────────────────────────────
   router.patch('/conversations/:id/archive', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const entry = activeStreams.get(param(req, 'id'));
+      const convId = param(req, 'id');
+      const entry = activeStreams.get(convId);
       if (entry) {
         entry.abort();
-        activeStreams.delete(param(req, 'id'));
+        activeStreams.delete(convId);
       }
-      const ok = await chatService.archiveConversation(param(req, 'id'));
+      memoryWatcher.unwatch(convId);
+      const ok = await chatService.archiveConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
     } catch (err: unknown) {
@@ -676,12 +682,42 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     // If a WebSocket is connected for this conversation, pipe the stream to it
     if (wsFns && wsFns.isConnected(convId)) {
       wsFns.clearBuffer(convId); // Fresh buffer for the new stream
+
+      // Start real-time memory watching for this stream.  When Claude
+      // Code's extraction agent writes to its memory directory, the
+      // watcher debounces for 500ms then re-snapshots into workspace
+      // storage via captureWorkspaceMemory — so memories written mid-
+      // session aren't lost if the user closes the browser before
+      // the next session reset.  Best-effort: if the backend has no
+      // memory dir (or hasn't created one yet), nothing happens.
+      // Scoped to the processStream lifecycle so the watcher is always
+      // cleaned up in the onDone callback below.
+      const watchWorkspacePath = conv.workingDir || adapter.workingDir || null;
+      if (watchWorkspacePath) {
+        const memDir = adapter.getMemoryDir(watchWorkspacePath);
+        if (memDir) {
+          memoryWatcher.watch(convId, memDir, async () => {
+            try {
+              const snapshot = await chatService.captureWorkspaceMemory(convId, backendId);
+              if (snapshot) {
+                console.log(`[memoryWatcher] re-captured ${snapshot.files.length} memory file(s) for conv=${convId} backend=${backendId}`);
+              }
+            } catch (err: unknown) {
+              console.error(`[memoryWatcher] capture failed for conv=${convId}:`, (err as Error).message);
+            }
+          });
+        }
+      }
+
       processStream(
         convId,
         activeStreams.get(convId)!,
         (frame) => { wsFns!.send(convId, frame); },
         () => !wsFns!.isStreamAlive(convId),
-        () => { activeStreams.delete(convId); },
+        () => {
+          activeStreams.delete(convId);
+          memoryWatcher.unwatch(convId);
+        },
         { chatService },
       ).catch((err) => {
         console.error(`[chat] WS stream error for conv=${convId}:`, err);
@@ -690,6 +726,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
           wsFns.send(convId, { type: 'done' });
         }
         activeStreams.delete(convId);
+        memoryWatcher.unwatch(convId);
       });
     }
 
@@ -821,6 +858,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       entry.abort();
     }
     activeStreams.clear();
+    memoryWatcher.unwatchAll();
     if (updateService) updateService.stop();
   }
 
