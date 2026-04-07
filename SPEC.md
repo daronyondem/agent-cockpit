@@ -67,6 +67,11 @@ agent-cockpit/
     ├── chat/
     │   ├── workspaces/{hash}/          # Workspace-based storage (see below)
     │   │   ├── index.json              # Source of truth: conversations + session metadata
+    │   │   ├── memory/                 # CLI memory captured on session reset (optional)
+    │   │   │   ├── snapshot.json       # Parsed snapshot with captured_at + per-file metadata
+    │   │   │   └── files/              # Raw .md files mirrored from the source CLI
+    │   │   │       ├── MEMORY.md       # Source index (if present)
+    │   │   │       └── *.md            # Per-topic memory files with YAML frontmatter
     │   │   └── {convId}/
     │   │       ├── session-1.json      # Archived session
     │   │       └── session-N.json      # Active session (updated every message)
@@ -274,7 +279,7 @@ The queue is also included in the `GET /conversations/:id` response as `messageQ
 |--------|------|------|-------------|
 | GET | `/conversations/:id/sessions` | — | Session list with `isCurrent` flag and `summary`. |
 | GET | `/conversations/:id/sessions/:num/messages` | — | Messages for a specific session. `400`/`404` on error. |
-| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session, resets title to "New Chat", clears message queue. `409` if streaming. Clears any stale WebSocket event buffer for the conversation. Returns `{ conversation, newSessionNumber, archivedSession }`. |
+| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session, resets title to "New Chat", clears message queue. `409` if streaming. Clears any stale WebSocket event buffer for the conversation. After archiving, invokes `captureWorkspaceMemory(convId, endingBackend)` so the ending backend's native memory is mirrored to `workspaces/{hash}/memory/` (best-effort — capture failures do not block the reset). Returns `{ conversation, newSessionNumber, archivedSession }`. |
 
 ### 3.6 Backends
 
@@ -470,6 +475,10 @@ Unauthenticated requests redirect to `/auth/login`.
 | `setWorkspaceInstructions(hash, instructions)` | Saves to workspace index. Returns string or `null`. |
 | `getWorkspaceHashForConv(convId)` | Returns workspace hash or `null`. |
 | `getWorkspaceContext(convId)` | **Synchronous.** Returns injection prompt string or `null`. |
+| `saveWorkspaceMemory(hash, snapshot)` | Persists a `MemorySnapshot` to `workspaces/{hash}/memory/`: writes `snapshot.json` plus raw `.md` files under `memory/files/`. Replaces any previously stored files. |
+| `getWorkspaceMemory(hash)` | Loads and returns the stored `MemorySnapshot` for the workspace, or `null` if none has been captured. |
+| `serializeMemoryForInjection(snapshot)` | Serializes a snapshot into a plain-text block grouped by memory type (user/feedback/project/reference/other) with frontmatter stripped. Returns `''` for null/empty. |
+| `captureWorkspaceMemory(convId, backendId)` | Resolves the workspace for `convId`, invokes the backend adapter's `extractMemory()`, and persists the result via `saveWorkspaceMemory`. Returns the snapshot or `null`. Never throws — extraction/save errors are logged. |
 | `searchConversations(query, opts?)` | Case-insensitive: checks title/lastMessage first, then deep-searches session files. Respects `{ archived }` filter same as `listConversations`. |
 | `getSettings()` | Returns settings from disk or defaults. |
 | `saveSettings(settings)` | Writes settings to disk. |
@@ -485,6 +494,35 @@ When a new CLI session starts, the router prepends (not stored in messages):
 Read index.json for all past and current conversations in this workspace with per-session summaries.
 Each conversation subfolder contains session-N.json files with full message histories.
 When the user references previous work, decisions, or discussions, consult the relevant session files for context.]
+```
+
+#### Workspace Memory
+
+CLI backends may have their own memory systems (e.g. Claude Code stores memory under `~/.claude/projects/{sanitized}/memory/`). Agent Cockpit captures that memory at the **workspace** level so it survives CLI switches, session resets, and fresh conversations.
+
+**Capture trigger:** On `POST /conversations/:id/reset`, after the session is archived, the router calls `chatService.captureWorkspaceMemory(convId, endingBackend)`. The ending backend's `extractMemory(workspacePath)` is invoked and the resulting `MemorySnapshot` is persisted to `workspaces/{hash}/memory/` (raw `.md` files mirrored into `memory/files/`, parsed metadata written to `snapshot.json`). Capture is best-effort — extraction or persistence errors are logged and never block the reset.
+
+**Injection trigger:** On `POST /conversations/:id/message` for a new session, the router loads the stored snapshot via `getWorkspaceMemory(hash)` and appends a serialized text block (grouped by memory type: user / feedback / project / reference / other) to the system prompt alongside global prompt and per-workspace instructions. If no memory has been captured for the workspace, nothing is appended.
+
+**Claude Code path resolution:** `resolveClaudeMemoryDir(workspacePath)` first tries the exact sanitized match (`/workspace/path` → `-workspace-path`) and falls back to scanning `~/.claude/projects/` for directories whose name starts with the first 200 sanitized chars — this handles the hashed-suffix case Claude Code uses for long paths, where Bun's hash can't be reproduced in Node. The `HOME` env var is preferred over `os.homedir()` so tests can sandbox the lookup.
+
+**Worktree canonicalization:** Before the path lookup, `ClaudeCodeAdapter.extractMemory` calls `resolveCanonicalWorkspacePath(workspacePath)`, a pure-filesystem helper that detects git worktrees by looking for a `.git` **file** (not directory) containing a `gitdir:` pointer. When a worktree is detected, it reads the `commondir` file inside the worktree's metadata dir to locate the main repo's `.git` directory, and returns its parent as the canonical workspace path. This ensures all worktrees of one repo share a single memory store. Non-git workspaces (no `.git` entry) and main repos (`.git` is a directory) pass through unchanged, as do any worktrees whose metadata is malformed or whose resolved main repo no longer exists.
+
+**`MemorySnapshot` shape:**
+```typescript
+{
+  capturedAt: string,        // ISO 8601
+  sourceBackend: string,     // e.g. 'claude-code'
+  sourcePath: string | null, // absolute path the snapshot was read from
+  index: string,             // raw contents of source MEMORY.md (may be '')
+  files: Array<{
+    filename: string,
+    name: string | null,         // from YAML frontmatter
+    description: string | null,  // from YAML frontmatter
+    type: 'user' | 'feedback' | 'project' | 'reference' | 'unknown',
+    content: string              // raw .md (frontmatter + body)
+  }>
+}
 ```
 
 #### Migration
@@ -507,6 +545,7 @@ Abstract base class. Every backend must implement:
 - **`generateTitle(userMessage, fallback)`** — returns a short conversation title. Base class provides a default that truncates the user message to 80 chars.
 - **`shutdown()`** — called during server shutdown. Override to kill long-lived processes. No-op by default.
 - **`onSessionReset(conversationId)`** — called when user resets a session. Override to clean up per-conversation state. No-op by default.
+- **`extractMemory(workspacePath)`** — returns a `MemorySnapshot` for the backend's native memory system, or `null` if unsupported / no memory exists. Called by `ChatService.captureWorkspaceMemory` on session reset. Base class returns `null`.
 
 #### Shared Tool Utilities (`src/services/backends/toolUtils.ts`)
 
@@ -932,10 +971,10 @@ Update OAuth callback URLs to include the ngrok URL.
 | File | Focus |
 |------|-------|
 | `test/toolUtils.test.ts` | Shared backend helpers: extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError |
-| `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry (including shutdownAll), ClaudeCodeAdapter (metadata models, --model flag passthrough) |
+| `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry (including shutdownAll), ClaudeCodeAdapter (metadata models, --model flag passthrough, extractMemory with frontmatter parsing and `~/.claude/projects` path resolution, git worktree canonicalization to main repo memory), parseFrontmatter helper, resolveCanonicalWorkspacePath helper |
 | `test/kiroBackend.test.ts` | KiroAdapter metadata (including dynamic models, deprecated/internal filtering, model family detection), lifecycle (shutdown, onSessionReset), extractKiroToolDetails tool name normalization, generateSummary/generateTitle fallbacks |
 | `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, archive/restore endpoints, message queue persistence (GET/PUT/DELETE, included in conversation response, cleared on reset/archive), model passthrough (explicit model, stored model, model update) |
-| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats, Kiro credits accumulation, contextUsagePercentage snapshot, skipLedger option), model selection (create with model, updateConversationModel, listConversations model), workspace storage, migration, markdown export |
+| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats, Kiro credits accumulation, contextUsagePercentage snapshot, skipLedger option), model selection (create with model, updateConversationModel, listConversations model), workspace storage, workspace memory (save/get/serialize/captureWorkspaceMemory including adapter stub happy path, no-memory fallback, and extraction errors), migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state, suspended (restored) state |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |

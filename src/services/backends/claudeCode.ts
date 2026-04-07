@@ -1,4 +1,6 @@
 import { spawn, execFile, type ChildProcess } from 'child_process';
+import fs from 'fs';
+import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import { BaseBackendAdapter } from './base';
@@ -18,6 +20,9 @@ import type {
   CliEvent,
   CliToolUseBlock,
   CliToolResultBlock,
+  MemorySnapshot,
+  MemoryFile,
+  MemoryType,
 } from '../../types';
 
 // Re-export shared helpers for backwards compatibility with existing imports
@@ -138,6 +143,73 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     } catch {
       return fallback || `Session (${messages.length} messages)`;
     }
+  }
+
+  async extractMemory(workspacePath: string): Promise<MemorySnapshot | null> {
+    if (!workspacePath) {
+      console.log('[memory] ClaudeCode.extractMemory: empty workspacePath');
+      return null;
+    }
+    // If the workspace is a git worktree, resolve to the main repo's path
+    // so all worktrees of the same repo share one memory directory.
+    // Non-git workspaces and main repos pass through unchanged.
+    const canonicalPath = resolveCanonicalWorkspacePath(workspacePath);
+    if (canonicalPath !== workspacePath) {
+      console.log(`[memory] ClaudeCode.extractMemory: canonicalized worktree ${workspacePath} -> ${canonicalPath}`);
+    }
+    const memDir = resolveClaudeMemoryDir(canonicalPath);
+    if (!memDir) {
+      const sanitized = canonicalPath.replace(/[^a-zA-Z0-9]/g, '-');
+      console.log(`[memory] ClaudeCode.extractMemory: no memory dir found for workspacePath=${canonicalPath} (sanitized=${sanitized})`);
+      return null;
+    }
+    console.log(`[memory] ClaudeCode.extractMemory: resolved memDir=${memDir}`);
+
+    let entries: string[];
+    try {
+      entries = await fsp.readdir(memDir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+
+    const mdFiles = entries.filter(f => f.toLowerCase().endsWith('.md'));
+    let indexContent = '';
+    const files: MemoryFile[] = [];
+
+    for (const filename of mdFiles) {
+      const full = path.join(memDir, filename);
+      let content: string;
+      try {
+        content = await fsp.readFile(full, 'utf8');
+      } catch {
+        continue;
+      }
+      if (filename === 'MEMORY.md') {
+        indexContent = content;
+        continue;
+      }
+      const meta = parseFrontmatter(content);
+      files.push({
+        filename,
+        name: meta.name,
+        description: meta.description,
+        type: meta.type,
+        content,
+      });
+    }
+
+    if (!indexContent && files.length === 0) return null;
+
+    files.sort((a, b) => a.filename.localeCompare(b.filename));
+
+    return {
+      capturedAt: new Date().toISOString(),
+      sourceBackend: 'claude-code',
+      sourcePath: memDir,
+      index: indexContent,
+      files,
+    };
   }
 
   async generateTitle(userMessage: string, fallback: string): Promise<string> {
@@ -417,4 +489,181 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       // no cleanup needed
     }
   }
+}
+
+// ── Memory helpers ──────────────────────────────────────────────────────────
+
+/**
+ * If `workspacePath` is a git worktree, returns the absolute path to the
+ * main repository's workspace (so all worktrees of one repo share memory).
+ * For main repos, non-git workspaces, or anything we can't confidently
+ * resolve, returns `workspacePath` unchanged.  Pure filesystem — does not
+ * shell out to `git`.
+ *
+ * Detection is intentionally conservative: we only canonicalize when
+ * `workspacePath/.git` is a FILE containing a `gitdir:` pointer (the
+ * on-disk signature of a worktree).  A `.git` directory means this is
+ * already the main repo, and no `.git` at all means it isn't a git
+ * workspace — both are returned as-is.
+ */
+export function resolveCanonicalWorkspacePath(workspacePath: string): string {
+  if (!workspacePath) return workspacePath;
+  const gitEntry = path.join(workspacePath, '.git');
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(gitEntry);
+  } catch {
+    return workspacePath;
+  }
+  if (stat.isDirectory()) return workspacePath;
+  if (!stat.isFile()) return workspacePath;
+
+  let gitFileContent: string;
+  try {
+    gitFileContent = fs.readFileSync(gitEntry, 'utf8');
+  } catch {
+    return workspacePath;
+  }
+
+  // Worktree .git file looks like: "gitdir: <path-to-worktree-metadata>"
+  const match = gitFileContent.match(/^\s*gitdir:\s*(.+?)\s*$/m);
+  if (!match) return workspacePath;
+
+  let worktreeGitDir = match[1];
+  if (!path.isAbsolute(worktreeGitDir)) {
+    worktreeGitDir = path.resolve(workspacePath, worktreeGitDir);
+  }
+
+  // Inside the worktree's gitdir, `commondir` points at the main .git dir.
+  // It's usually "../.." (relative to the worktree gitdir) but can be absolute.
+  const commondirFile = path.join(worktreeGitDir, 'commondir');
+  let commonDirRaw: string;
+  try {
+    commonDirRaw = fs.readFileSync(commondirFile, 'utf8').trim();
+  } catch {
+    return workspacePath;
+  }
+  if (!commonDirRaw) return workspacePath;
+
+  const mainGitDir = path.isAbsolute(commonDirRaw)
+    ? commonDirRaw
+    : path.resolve(worktreeGitDir, commonDirRaw);
+
+  // The main repo's workspace is the directory containing the main .git dir.
+  const mainWorkspace = path.dirname(mainGitDir);
+
+  // Sanity check: the resolved main workspace should actually exist and
+  // contain a `.git` directory.  If not, bail out and keep the original.
+  try {
+    const mainGitStat = fs.statSync(path.join(mainWorkspace, '.git'));
+    if (!mainGitStat.isDirectory()) return workspacePath;
+  } catch {
+    return workspacePath;
+  }
+
+  return mainWorkspace;
+}
+
+/**
+ * Claude Code stores per-project memory under:
+ *   ~/.claude/projects/{sanitized-path}/memory/
+ *
+ * The sanitized path is produced by replacing every non-alphanumeric
+ * character in the absolute workspace path with `-`.  For long paths
+ * (>200 chars) Claude Code appends a hash suffix we can't reproduce
+ * in Node (Bun.hash vs djb2), so we fall back to a directory scan.
+ *
+ * Returns the absolute path to the memory directory if one matches,
+ * or `null` if no candidate exists.
+ */
+export function resolveClaudeMemoryDir(workspacePath: string): string | null {
+  // Prefer $HOME env var over os.homedir() so tests can sandbox the
+  // lookup by pointing HOME at a temp directory — os.homedir() caches
+  // its result in some runtimes and ignores later env-var changes.
+  const home = process.env.HOME || os.homedir();
+  const projectsDir = path.join(home, '.claude', 'projects');
+  const sanitized = workspacePath.replace(/[^a-zA-Z0-9]/g, '-');
+
+  // Fast path: exact sanitized match.
+  const direct = path.join(projectsDir, sanitized, 'memory');
+  if (dirHasMemory(direct)) return direct;
+
+  // Slow path: scan for a directory whose name starts with the
+  // sanitized prefix (covers the >200-char hash suffix case).
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(projectsDir);
+  } catch {
+    return null;
+  }
+
+  const prefix = sanitized.slice(0, Math.min(sanitized.length, 200));
+  const candidates: string[] = [];
+  for (const entry of entries) {
+    if (entry === sanitized || entry.startsWith(prefix + '-') || entry.startsWith(prefix)) {
+      const candidate = path.join(projectsDir, entry, 'memory');
+      if (dirHasMemory(candidate)) candidates.push(candidate);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+  // Deterministic pick: shortest dir name (no suffix) wins.
+  candidates.sort((a, b) => a.length - b.length);
+  return candidates[0];
+}
+
+function dirHasMemory(memDir: string): boolean {
+  try {
+    const stat = fs.statSync(memDir);
+    if (!stat.isDirectory()) return false;
+    const files = fs.readdirSync(memDir);
+    return files.some(f => f.toLowerCase().endsWith('.md'));
+  } catch {
+    return false;
+  }
+}
+
+interface ParsedFrontmatter {
+  name: string | null;
+  description: string | null;
+  type: MemoryType;
+}
+
+/**
+ * Parses the YAML frontmatter at the top of a Claude Code memory file.
+ * Only extracts `name`, `description`, and `type` — the fields the
+ * memory system documents.  We don't pull in a full YAML parser for
+ * this; frontmatter in these files is simple `key: value` pairs.
+ */
+export function parseFrontmatter(content: string): ParsedFrontmatter {
+  const result: ParsedFrontmatter = { name: null, description: null, type: 'unknown' };
+  if (!content.startsWith('---')) return result;
+
+  const end = content.indexOf('\n---', 3);
+  if (end === -1) return result;
+
+  const block = content.slice(3, end);
+  for (const raw of block.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('#')) continue;
+    const sep = line.indexOf(':');
+    if (sep === -1) continue;
+    const key = line.slice(0, sep).trim().toLowerCase();
+    let value = line.slice(sep + 1).trim();
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (!value) continue;
+    if (key === 'name') result.name = value;
+    else if (key === 'description') result.description = value;
+    else if (key === 'type') {
+      const t = value.toLowerCase();
+      if (t === 'user' || t === 'feedback' || t === 'project' || t === 'reference') {
+        result.type = t;
+      }
+    }
+  }
+  return result;
 }

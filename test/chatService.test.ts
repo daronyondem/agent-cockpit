@@ -7,7 +7,7 @@ import crypto from 'crypto';
 import { ChatService } from '../src/services/chatService';
 import { BackendRegistry } from '../src/services/backends/registry';
 import { BaseBackendAdapter } from '../src/services/backends/base';
-import type { BackendMetadata, SendMessageOptions, SendMessageResult, Message } from '../src/types';
+import type { BackendMetadata, SendMessageOptions, SendMessageResult, Message, MemorySnapshot } from '../src/types';
 
 const DEFAULT_WORKSPACE = '/tmp/test-workspace';
 
@@ -1468,5 +1468,248 @@ describe('usage stats ledger', () => {
 
     const opus = dayEntry!.records.find((r: any) => r.model === 'claude-opus-4');
     expect(opus!.usage.inputTokens).toBe(500);
+  });
+});
+
+// ── Workspace Memory ─────────────────────────────────────────────────────────
+
+describe('workspace memory', () => {
+  function makeSnapshot(): MemorySnapshot {
+    return {
+      capturedAt: '2026-04-07T12:00:00Z',
+      sourceBackend: 'claude-code',
+      sourcePath: '/fake/source',
+      index: '- [Testing](feedback_testing.md) — use real DB\n',
+      files: [
+        {
+          filename: 'feedback_testing.md',
+          name: 'testing-preferences',
+          description: 'use real DB not mocks',
+          type: 'feedback',
+          content: `---
+name: testing-preferences
+description: use real DB not mocks
+type: feedback
+---
+
+Integration tests must use real DB.
+`,
+        },
+        {
+          filename: 'user_role.md',
+          name: 'user-role',
+          description: 'senior backend engineer',
+          type: 'user',
+          content: `---
+name: user-role
+description: senior backend engineer
+type: user
+---
+
+Backend engineer with deep Go experience.
+`,
+        },
+      ],
+    };
+  }
+
+  test('saveWorkspaceMemory writes snapshot.json and raw files', async () => {
+    const conv = await service.createConversation('Mem Test', '/tmp/mem-save');
+    const hash = workspaceHash('/tmp/mem-save');
+    const snapshot = makeSnapshot();
+
+    await service.saveWorkspaceMemory(hash, snapshot);
+
+    const memDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'memory');
+    expect(fs.existsSync(path.join(memDir, 'snapshot.json'))).toBe(true);
+    expect(fs.existsSync(path.join(memDir, 'files', 'MEMORY.md'))).toBe(true);
+    expect(fs.existsSync(path.join(memDir, 'files', 'feedback_testing.md'))).toBe(true);
+    expect(fs.existsSync(path.join(memDir, 'files', 'user_role.md'))).toBe(true);
+
+    const stored = JSON.parse(fs.readFileSync(path.join(memDir, 'snapshot.json'), 'utf8'));
+    expect(stored.files).toHaveLength(2);
+    expect(stored.sourceBackend).toBe('claude-code');
+
+    // Silence unused-variable warning.
+    expect(conv.id).toBeDefined();
+  });
+
+  test('saveWorkspaceMemory replaces old files on re-capture', async () => {
+    await service.createConversation('Mem Replace', '/tmp/mem-replace');
+    const hash = workspaceHash('/tmp/mem-replace');
+
+    await service.saveWorkspaceMemory(hash, makeSnapshot());
+
+    const smaller: MemorySnapshot = {
+      ...makeSnapshot(),
+      index: '',
+      files: [makeSnapshot().files[0]],
+    };
+    await service.saveWorkspaceMemory(hash, smaller);
+
+    const filesDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'memory', 'files');
+    const files = fs.readdirSync(filesDir);
+    expect(files).toEqual(['feedback_testing.md']);
+  });
+
+  test('getWorkspaceMemory returns null when none stored', async () => {
+    await service.createConversation('Mem None', '/tmp/mem-none');
+    const hash = workspaceHash('/tmp/mem-none');
+    expect(await service.getWorkspaceMemory(hash)).toBeNull();
+  });
+
+  test('getWorkspaceMemory returns the stored snapshot', async () => {
+    await service.createConversation('Mem Get', '/tmp/mem-get');
+    const hash = workspaceHash('/tmp/mem-get');
+    const snapshot = makeSnapshot();
+    await service.saveWorkspaceMemory(hash, snapshot);
+
+    const loaded = await service.getWorkspaceMemory(hash);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.files).toHaveLength(2);
+    expect(loaded!.sourceBackend).toBe('claude-code');
+  });
+
+  test('serializeMemoryForInjection groups by type and strips frontmatter', () => {
+    const text = service.serializeMemoryForInjection(makeSnapshot());
+    expect(text).toContain('## Workspace Memory');
+    expect(text).toContain('### User Preferences');
+    expect(text).toContain('### Feedback');
+    expect(text).toContain('senior backend engineer');
+    expect(text).toContain('use real DB not mocks');
+    expect(text).toContain('Backend engineer with deep Go experience.');
+    // Frontmatter keys should NOT appear in the injected prompt.
+    expect(text).not.toContain('---\nname:');
+    expect(text).not.toContain('type: user');
+  });
+
+  test('serializeMemoryForInjection returns empty string for null or empty', () => {
+    expect(service.serializeMemoryForInjection(null)).toBe('');
+    const empty: MemorySnapshot = {
+      capturedAt: '2026-04-07T12:00:00Z',
+      sourceBackend: 'claude-code',
+      sourcePath: null,
+      index: '',
+      files: [],
+    };
+    expect(service.serializeMemoryForInjection(empty)).toBe('');
+  });
+
+  test('captureWorkspaceMemory invokes adapter extractMemory and persists', async () => {
+    const conv = await service.createConversation('Mem Capture', '/tmp/mem-cap');
+    const hash = workspaceHash('/tmp/mem-cap');
+
+    const snapshot = makeSnapshot();
+    class StubAdapter extends BaseBackendAdapter {
+      get metadata(): BackendMetadata {
+        return {
+          id: 'claude-code',
+          label: 'Stub',
+          icon: null,
+          capabilities: {
+            thinking: false, planMode: false, agents: false,
+            toolActivity: false, userQuestions: false, stdinInput: false,
+          },
+        };
+      }
+      sendMessage(_m: string): SendMessageResult {
+        return {
+          stream: (async function*() { yield { type: 'done' as const }; })(),
+          abort: () => {},
+          sendInput: () => {},
+        };
+      }
+      async generateSummary(_msgs: Pick<Message, 'role' | 'content'>[], _fallback: string): Promise<string> {
+        return 'summary';
+      }
+      async extractMemory(workspacePath: string): Promise<MemorySnapshot | null> {
+        expect(workspacePath).toBe('/tmp/mem-cap');
+        return snapshot;
+      }
+    }
+
+    const registry = new BackendRegistry();
+    registry.register(new StubAdapter());
+    // Swap in the registry for this test.
+    (service as any)._backendRegistry = registry;
+
+    const result = await service.captureWorkspaceMemory(conv.id, 'claude-code');
+    expect(result).not.toBeNull();
+    expect(result!.files).toHaveLength(2);
+
+    const loaded = await service.getWorkspaceMemory(hash);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.files).toHaveLength(2);
+  });
+
+  test('captureWorkspaceMemory returns null when adapter has no memory', async () => {
+    const conv = await service.createConversation('Mem NoMem', '/tmp/mem-nomem');
+
+    class NoMemAdapter extends BaseBackendAdapter {
+      get metadata(): BackendMetadata {
+        return {
+          id: 'claude-code',
+          label: 'NoMem',
+          icon: null,
+          capabilities: {
+            thinking: false, planMode: false, agents: false,
+            toolActivity: false, userQuestions: false, stdinInput: false,
+          },
+        };
+      }
+      sendMessage(_m: string): SendMessageResult {
+        return {
+          stream: (async function*() { yield { type: 'done' as const }; })(),
+          abort: () => {},
+          sendInput: () => {},
+        };
+      }
+      async generateSummary(): Promise<string> { return 'ok'; }
+    }
+
+    const registry = new BackendRegistry();
+    registry.register(new NoMemAdapter());
+    (service as any)._backendRegistry = registry;
+
+    const result = await service.captureWorkspaceMemory(conv.id, 'claude-code');
+    expect(result).toBeNull();
+  });
+
+  test('captureWorkspaceMemory swallows extraction errors and returns null', async () => {
+    const conv = await service.createConversation('Mem Err', '/tmp/mem-err');
+
+    class BrokenAdapter extends BaseBackendAdapter {
+      get metadata(): BackendMetadata {
+        return {
+          id: 'claude-code',
+          label: 'Broken',
+          icon: null,
+          capabilities: {
+            thinking: false, planMode: false, agents: false,
+            toolActivity: false, userQuestions: false, stdinInput: false,
+          },
+        };
+      }
+      sendMessage(_m: string): SendMessageResult {
+        return {
+          stream: (async function*() { yield { type: 'done' as const }; })(),
+          abort: () => {},
+          sendInput: () => {},
+        };
+      }
+      async generateSummary(): Promise<string> { return 'ok'; }
+      async extractMemory(): Promise<MemorySnapshot | null> {
+        throw new Error('boom');
+      }
+    }
+
+    const registry = new BackendRegistry();
+    registry.register(new BrokenAdapter());
+    (service as any)._backendRegistry = registry;
+
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    const result = await service.captureWorkspaceMemory(conv.id, 'claude-code');
+    expect(result).toBeNull();
+    errSpy.mockRestore();
   });
 });

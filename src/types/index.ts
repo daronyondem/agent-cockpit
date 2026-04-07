@@ -238,6 +238,36 @@ export type StreamEvent =
   | ErrorEvent
   | DoneEvent;
 
+// ── Workspace Memory ─────────────────────────────────────────────────────────
+
+export type MemoryType = 'user' | 'feedback' | 'project' | 'reference' | 'unknown';
+
+export interface MemoryFile {
+  /** Original filename (e.g. "feedback_testing.md"). */
+  filename: string;
+  /** Parsed frontmatter `name`, if present. */
+  name: string | null;
+  /** Parsed frontmatter `description`, if present. */
+  description: string | null;
+  /** Parsed frontmatter `type`, normalized to a known type or 'unknown'. */
+  type: MemoryType;
+  /** Raw file content (frontmatter + body). */
+  content: string;
+}
+
+export interface MemorySnapshot {
+  /** ISO 8601 timestamp of when this snapshot was captured. */
+  capturedAt: string;
+  /** Backend the snapshot was extracted from (e.g. "claude-code"). */
+  sourceBackend: string;
+  /** Absolute path to the source memory directory the snapshot came from. */
+  sourcePath: string | null;
+  /** Contents of the source `MEMORY.md` index (may be empty). */
+  index: string;
+  /** Individual memory files. */
+  files: MemoryFile[];
+}
+
 // ── Backend Adapter ──────────────────────────────────────────────────────────
 
 export interface BackendCapabilities {
