@@ -461,6 +461,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       }
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
+      memoryMcp.revokeMemoryMcpSession(convId);
       const ok = await chatService.deleteConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });

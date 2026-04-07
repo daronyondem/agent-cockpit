@@ -117,9 +117,35 @@ describe('memoryMcp.issueMemoryMcpSession', () => {
     expect(endpointEntry?.value).toMatch(/\/api\/chat\/mcp\/memory\/notes$/);
   });
 
-  test('reissuing a session for the same conversation revokes the previous token', () => {
+  test('reissuing a session for the same conversation+workspace returns the same token', () => {
+    // The MCP stub is spawned once per ACP session (on session/new) and
+    // captures its bearer token from its spawn-time env forever.  The chat
+    // route calls `issueMemoryMcpSession` on every message, so if this
+    // minted a fresh token each time we would revoke the live token the
+    // still-running stub is holding and every subsequent memory_note call
+    // would hit HTTP 401.  Idempotency is the only correct shape.
     const first = memoryMcp.issueMemoryMcpSession('conv-x', 'hash-x');
     const second = memoryMcp.issueMemoryMcpSession('conv-x', 'hash-x');
+    const third = memoryMcp.issueMemoryMcpSession('conv-x', 'hash-x');
+    expect(second.token).toBe(first.token);
+    expect(third.token).toBe(first.token);
+    // And the mcpServers config should carry the same token through.
+    const tokenEntry = third.mcpServers[0].env.find((e) => e.name === 'MEMORY_TOKEN');
+    expect(tokenEntry?.value).toBe(first.token);
+  });
+
+  test('reissuing with a different workspace hash rotates the token', () => {
+    // If the conversation's workspace changes out from under us we must
+    // rotate — the previous token pointed at a different workspace snapshot.
+    const first = memoryMcp.issueMemoryMcpSession('conv-y', 'hash-original');
+    const second = memoryMcp.issueMemoryMcpSession('conv-y', 'hash-moved');
+    expect(second.token).not.toBe(first.token);
+  });
+
+  test('reissuing after an explicit revoke mints a fresh token', () => {
+    const first = memoryMcp.issueMemoryMcpSession('conv-z', 'hash-z');
+    memoryMcp.revokeMemoryMcpSession('conv-z');
+    const second = memoryMcp.issueMemoryMcpSession('conv-z', 'hash-z');
     expect(second.token).not.toBe(first.token);
   });
 });

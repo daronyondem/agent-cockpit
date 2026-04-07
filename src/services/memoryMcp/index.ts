@@ -240,7 +240,29 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
   const byConversation = new Map<string, string>(); // convId → token
 
   /**
-   * Issue a token + mcpServers entry for a new non-Claude session.
+   * Issue (or re-use) a token + `mcpServers` entry for a non-Claude
+   * session.
+   *
+   * ## Idempotency
+   *
+   * This function is called by the chat route on **every message** a
+   * memory-enabled workspace sends to a non-Claude backend, but the
+   * MCP stub is only ever spawned once per ACP session — kiro-cli
+   * spawns it inside `session/new` (or `session/load` on rehydrate)
+   * and keeps it alive for the lifetime of that ACP process.  The
+   * stub captures its bearer token from its spawn-time env and never
+   * reads the env again.
+   *
+   * If we minted a fresh token on every call, every message after the
+   * first one would revoke the token the still-running stub is holding,
+   * and the model's next `memory_note` call would hit the endpoint with
+   * an orphaned token and get HTTP 401.  So when a token already exists
+   * for this conversation, we return it unchanged.  Rotation happens
+   * exclusively at real lifetime boundaries: `revokeMemoryMcpSession`
+   * is called on session reset, conversation delete, and graceful
+   * shutdown.
+   *
+   * ## ACP env shape
    *
    * The returned `mcpServers` entry follows the ACP stdio MCP schema:
    * `env` is an **array of `{name, value}` objects**, NOT a plain
@@ -258,17 +280,29 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
       env: Array<{ name: string; value: string }>;
     }>;
   } {
-    // Revoke any existing token for this conversation so we don't leak tokens.
-    revokeMemoryMcpSession(conversationId);
-
-    const token = mintToken();
-    sessions.set(token, {
-      token,
-      conversationId,
-      workspaceHash,
-      createdAt: Date.now(),
-    });
-    byConversation.set(conversationId, token);
+    // Reuse the existing token for this conversation if one is already
+    // live.  We only mint a fresh token when none exists, or when the
+    // cached session points at a different workspace (e.g. if the
+    // conversation's workspace changed out from under us).
+    const cachedToken = byConversation.get(conversationId);
+    const cached = cachedToken ? sessions.get(cachedToken) : undefined;
+    let token: string;
+    if (cached && cached.workspaceHash === workspaceHash) {
+      token = cached.token;
+    } else {
+      if (cachedToken) {
+        // Stale or workspace mismatch — drop the old token before minting.
+        revokeMemoryMcpSession(conversationId);
+      }
+      token = mintToken();
+      sessions.set(token, {
+        token,
+        conversationId,
+        workspaceHash,
+        createdAt: Date.now(),
+      });
+      byConversation.set(conversationId, token);
+    }
 
     // The endpoint URL is built relative to the in-process Express app.
     // Callers pass this in the env of the spawned MCP stub.
