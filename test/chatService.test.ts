@@ -340,6 +340,43 @@ describe('updateConversationBackend', () => {
   });
 });
 
+describe('model selection', () => {
+  test('creates conversation with model', async () => {
+    const conv = await service.createConversation('Test', undefined, undefined, 'opus');
+    expect(conv.model).toBe('opus');
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.model).toBe('opus');
+  });
+
+  test('creates conversation without model', async () => {
+    const conv = await service.createConversation('Test');
+    expect(conv.model).toBeUndefined();
+  });
+
+  test('updateConversationModel sets model', async () => {
+    const conv = await service.createConversation('Test');
+    await service.updateConversationModel(conv.id, 'haiku');
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.model).toBe('haiku');
+  });
+
+  test('updateConversationModel clears model with null', async () => {
+    const conv = await service.createConversation('Test', undefined, undefined, 'opus');
+    await service.updateConversationModel(conv.id, null);
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.model).toBeUndefined();
+  });
+
+  test('model appears in listConversations', async () => {
+    await service.createConversation('Test', undefined, undefined, 'sonnet');
+    const list = await service.listConversations();
+    expect(list[0].model).toBe('sonnet');
+  });
+});
+
 // ── Messages ─────────────────────────────────────────────────────────────────
 
 describe('addMessage', () => {

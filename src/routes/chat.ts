@@ -387,7 +387,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // ── Create conversation ────────────────────────────────────────────────────
   router.post('/conversations', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const conv = await chatService.createConversation(req.body.title, req.body.workingDir, req.body.backend);
+      const conv = await chatService.createConversation(req.body.title, req.body.workingDir, req.body.backend, req.body.model);
       res.json(conv);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -567,7 +567,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // ── Send message + stream response ────────────────────────────────────────
   router.post('/conversations/:id/message', csrfGuard, async (req: Request, res: Response) => {
     const convId = param(req, 'id');
-    const { content, backend } = req.body as { content?: string; backend?: string };
+    const { content, backend, model } = req.body as { content?: string; backend?: string; model?: string };
 
     if (!content || typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ error: 'Message content required' });
@@ -578,6 +578,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
 
     if (backend && backend !== conv.backend) {
       await chatService.updateConversationBackend(convId, backend);
+    }
+    if (model !== undefined && model !== (conv.model || undefined)) {
+      await chatService.updateConversationModel(convId, model || null);
     }
 
     const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backend || conv.backend);
@@ -614,6 +617,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       workingDir: conv.workingDir || null,
       systemPrompt,
       externalSessionId: conv.externalSessionId || null,
+      model: model || conv.model || undefined,
     });
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
     activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });

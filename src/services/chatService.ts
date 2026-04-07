@@ -181,7 +181,7 @@ export class ChatService {
 
   // ── Conversation CRUD ──────────────────────────────────────────────────────
 
-  async createConversation(title?: string, workingDir?: string, backend?: string): Promise<Conversation> {
+  async createConversation(title?: string, workingDir?: string, backend?: string, model?: string): Promise<Conversation> {
     const id = this._newId();
     const now = new Date().toISOString();
     const sessionId = this._newId();
@@ -198,6 +198,7 @@ export class ChatService {
       id,
       title: title || 'New Chat',
       backend: backend || defaultBackend,
+      model: model || undefined,
       currentSessionId: sessionId,
       lastActivity: now,
       lastMessage: null,
@@ -229,6 +230,7 @@ export class ChatService {
       id,
       title: convEntry.title,
       backend: convEntry.backend,
+      model: convEntry.model,
       workingDir: workspacePath,
       currentSessionId: sessionId,
       sessionNumber: 1,
@@ -251,6 +253,7 @@ export class ChatService {
       id: convEntry.id,
       title: convEntry.title,
       backend: convEntry.backend,
+      model: convEntry.model,
       workingDir: index.workspacePath,
       currentSessionId: convEntry.currentSessionId,
       sessionNumber,
@@ -286,6 +289,7 @@ export class ChatService {
           title: conv.title,
           updatedAt: conv.lastActivity,
           backend: conv.backend,
+          model: conv.model,
           workingDir: index.workspacePath,
           workspaceHash: hash,
           messageCount: activeSession ? activeSession.messageCount : 0,
@@ -361,6 +365,14 @@ export class ChatService {
     if (!result) return;
     const { hash, index, convEntry } = result;
     convEntry.backend = backend;
+    await this._writeWorkspaceIndex(hash, index);
+  }
+
+  async updateConversationModel(convId: string, model: string | null): Promise<void> {
+    const result = await this._getConvFromIndex(convId);
+    if (!result) return;
+    const { hash, index, convEntry } = result;
+    convEntry.model = model || undefined;
     await this._writeWorkspaceIndex(hash, index);
   }
 

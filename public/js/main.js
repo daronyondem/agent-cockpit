@@ -2,7 +2,7 @@ import { state, chatFetch, apiUrl, DEFAULT_BACKEND_ICON } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
-import { loadBackends, getBackendIcon, getBackendCapabilities } from './backends.js';
+import { loadBackends, getBackendIcon, getBackendCapabilities, populateModelSelect } from './backends.js';
 import { setStreamEventHandler } from './websocket.js';
 import {
   chatRenderMessages, chatAutoResize, chatRenderMarkdown, chatHighlightCode,
@@ -46,6 +46,7 @@ window.chatResumeSuspendedQueue = chatResumeSuspendedQueue;
 window.chatClearQueue = chatClearQueue;
 window.chatRetryLast = chatRetryLast;
 window.chatSaveSettings = chatSaveSettings;
+window.chatSettingsBackendChanged = chatSettingsBackendChanged;
 window.chatUpdateUsageStats = chatUpdateUsageStats;
 window.chatClearUsageStats = chatClearUsageStats;
 window.chatSaveWorkspaceInstructions = chatSaveWorkspaceInstructions;
@@ -87,6 +88,7 @@ function chatInit() {
   chatFetch('settings').then(res => res.json()).then(s => {
     state.chatSettingsData = s;
     applyTheme(s.theme || 'system');
+    if (s.defaultModel) populateModelSelect(s.defaultModel);
   }).catch(() => {});
 }
 
@@ -133,6 +135,14 @@ function chatWireEvents() {
 
   const toggleBtn = document.getElementById('chat-header-toggle');
   if (toggleBtn) toggleBtn.onclick = () => chatToggleSidebar();
+
+  const backendSel = document.getElementById('chat-backend-select');
+  if (backendSel && !backendSel._modelWired) {
+    backendSel._modelWired = true;
+    backendSel.addEventListener('change', () => {
+      populateModelSelect();
+    });
+  }
 
   const sendBtn = document.getElementById('chat-send-btn');
   if (sendBtn) sendBtn.onclick = () => {
@@ -514,8 +524,14 @@ async function chatShowSettings(initialTab) {
         </div>
         <div class="chat-settings-group">
           <div class="chat-settings-label">Default Backend</div>
-          <select class="chat-settings-select" id="chat-settings-backend">
+          <select class="chat-settings-select" id="chat-settings-backend" onchange="chatSettingsBackendChanged()">
             ${state.CHAT_BACKENDS.map(b => `<option value="${b.id}"${s.defaultBackend === b.id ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-model-group"${(() => { const models = state.BACKEND_MODELS[s.defaultBackend]; return (!models || models.length === 0) ? ' style="display:none;"' : ''; })()}>
+          <div class="chat-settings-label">Default Model</div>
+          <select class="chat-settings-select" id="chat-settings-model">
+            ${(() => { const models = state.BACKEND_MODELS[s.defaultBackend] || []; return models.map(m => `<option value="${m.id}"${s.defaultModel === m.id ? ' selected' : (m.default && !s.defaultModel ? ' selected' : '')}>${esc(m.label)}</option>`).join(''); })()}
           </select>
         </div>
         <div class="chat-settings-group">
@@ -564,11 +580,33 @@ async function chatShowSettings(initialTab) {
   }
 }
 
+function chatSettingsBackendChanged() {
+  const backendId = document.getElementById('chat-settings-backend')?.value;
+  const modelGroup = document.getElementById('chat-settings-model-group');
+  const modelSelect = document.getElementById('chat-settings-model');
+  if (!modelGroup || !modelSelect) return;
+
+  const models = state.BACKEND_MODELS[backendId];
+  if (!models || models.length === 0) {
+    modelGroup.style.display = 'none';
+    modelSelect.innerHTML = '';
+    return;
+  }
+  modelGroup.style.display = '';
+  modelSelect.innerHTML = models.map(m =>
+    `<option value="${esc(m.id)}"${m.default ? ' selected' : ''}>${esc(m.label)}</option>`
+  ).join('');
+}
+
 function chatSaveSettings() {
+  const defaultBackend = document.getElementById('chat-settings-backend')?.value || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
+  const modelEl = document.getElementById('chat-settings-model');
+  const defaultModel = (modelEl && modelEl.closest('.chat-settings-group')?.style.display !== 'none') ? modelEl.value : undefined;
   const settings = {
     theme: document.getElementById('chat-settings-theme')?.value || 'system',
     sendBehavior: document.getElementById('chat-settings-send')?.value || 'enter',
-    defaultBackend: document.getElementById('chat-settings-backend')?.value || (state.CHAT_BACKENDS[0]?.id || 'claude-code'),
+    defaultBackend,
+    defaultModel,
     systemPrompt: document.getElementById('chat-settings-system-prompt')?.value || '',
   };
   applyTheme(settings.theme);

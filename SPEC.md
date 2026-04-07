@@ -90,6 +90,7 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
     backend: string,            // 'claude-code'
+    model?: string,             // Selected model alias (e.g. 'opus', 'sonnet', 'haiku'); absent = backend default
     currentSessionId: string,   // UUID of the active CLI session
     lastActivity: string,       // ISO 8601, updated on every message
     lastMessage: string|null,   // First 100 chars of last message content
@@ -169,6 +170,7 @@ Flat object assembled from workspace index + active session file:
   id: string,
   title: string,
   backend: string,
+  model?: string,               // Selected model alias (e.g. 'opus', 'sonnet', 'haiku')
   workingDir: string,           // The workspace path
   currentSessionId: string,
   sessionNumber: number,        // Active session number
@@ -204,6 +206,7 @@ Daily per-backend/model token usage records for global statistics:
   "sendBehavior": "enter",
   "systemPrompt": "",
   "defaultBackend": "claude-code",
+  "defaultModel": "sonnet",
   "workingDirectory": ""
 }
 ```
@@ -278,16 +281,16 @@ The queue is also included in the `GET /conversations/:id` response as `messageQ
 ```
 GET /backends
 ```
-Returns `{ backends: [{ id, label, icon, capabilities }] }` — metadata for every registered adapter.
+Returns `{ backends: [{ id, label, icon, capabilities, models? }] }` — metadata for every registered adapter. The optional `models` array lists available models: `[{ id, label, family, description?, costTier?, default? }]`. Backends without model selection (e.g. Kiro) omit this field.
 
 ### 3.7 Messaging and Streaming
 
 **Send message:**
 ```
 POST /conversations/:id/message  [CSRF]
-Body: { content: string, backend?: string }
+Body: { content: string, backend?: string, model?: string }
 ```
-- Saves user message, updates backend if changed
+- Saves user message, updates backend and/or model if changed
 - Determines if new CLI session (`messageCount === 0`) or resume
 - New sessions: prepends workspace context injection (not stored in messages)
 - Spawns CLI process, stores in `activeStreams` map
@@ -446,7 +449,7 @@ Unauthenticated requests redirect to `/auth/login`.
 | Method | Description |
 |--------|-------------|
 | `initialize()` | Runs migration if legacy `conversations/` dir exists, builds convId→workspace lookup map. |
-| `createConversation(title, workingDir, backend)` | Creates entry in workspace index + empty session-1.json. Falls back to `_defaultWorkspace`. `backend` defaults to the registry's first registered adapter. |
+| `createConversation(title, workingDir, backend, model?)` | Creates entry in workspace index + empty session-1.json. Falls back to `_defaultWorkspace`. `backend` defaults to the registry's first registered adapter. `model` is the optional model alias to persist. |
 | `getConversation(id)` | Returns API-compatible object with messages, or `null`. |
 | `listConversations(opts?)` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc, each with `workspaceHash`. Pass `{ archived: true }` to list only archived; default returns active only. |
 | `renameConversation(id, newTitle)` | Updates title in workspace index. Returns full conversation or `null`. |
@@ -454,6 +457,7 @@ Unauthenticated requests redirect to `/auth/login`.
 | `restoreConversation(id)` | Removes `archived` flag from conversation entry. Returns `true` or `false` if not found. |
 | `deleteConversation(id)` | Removes from index, deletes session folder + artifacts, removes from lookup map. Works on both active and archived conversations. |
 | `updateConversationBackend(convId, backend)` | Updates backend field in workspace index. |
+| `updateConversationModel(convId, model)` | Updates model field in workspace index. Pass `null` to clear. |
 | `addMessage(convId, role, content, backend, thinking, toolActivity)` | Appends to active session + updates index metadata. Auto-titles on first user message (session 1 only; post-reset sessions rely on LLM title generation). `thinking` omitted if falsy. `toolActivity` omitted if falsy or empty array. |
 | `updateMessageContent(convId, messageId, newContent)` | Truncates after target message, adds edited content as new message. |
 | `generateAndUpdateTitle(convId, userMessage)` | Generates a new title via the backend adapter's `generateTitle()` and persists it. Returns the new title or `null`. |
@@ -497,8 +501,8 @@ The CLI backend layer uses a **pluggable adapter pattern**. New CLI tools can be
 #### BaseBackendAdapter (`src/services/backends/base.ts`)
 
 Abstract base class. Every backend must implement:
-- **`get metadata`** — returns `{ id, label, icon, capabilities }` where capabilities: `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans)
-- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the stream event contract in Section 3. `options` includes `{ sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId }`. `conversationId` is the stable conversation ID (does not change on session reset) — used by backends like Kiro that key long-lived processes by conversation.
+- **`get metadata`** — returns `{ id, label, icon, capabilities, models? }` where capabilities: `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans). `models` is an optional array of `{ id, label, family, description?, costTier?, default? }` for backends that support model selection.
+- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the stream event contract in Section 3. `options` includes `{ sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model? }`. `conversationId` is the stable conversation ID (does not change on session reset) — used by backends like Kiro that key long-lived processes by conversation. `model` is the model alias or ID to use for this invocation (backends that don't support model selection ignore it).
 - **`generateSummary(messages, fallback)`** — returns a one-line summary string
 - **`generateTitle(userMessage, fallback)`** — returns a short conversation title. Base class provides a default that truncates the user message to 80 chars.
 - **`shutdown()`** — called during server shutdown. Override to kill long-lived processes. No-op by default.
@@ -525,10 +529,10 @@ Shared helpers used by all backend adapters. Extracted for cross-adapter reuse �
 
 #### ClaudeCodeAdapter (`src/services/backends/claudeCode.ts`)
 
-**Metadata:** `id: 'claude-code'`, all capabilities enabled.
+**Metadata:** `id: 'claude-code'`, all capabilities enabled. Exposes `models` array with `opus`, `sonnet` (default), `haiku`, `opus[1m]`, and `sonnet[1m]` options using aliases so they auto-resolve to the latest version.
 
 **`sendMessage(message, options)`:**
-- `options`: `{ sessionId, isNewSession, workingDir, systemPrompt }`
+- `options`: `{ sessionId, isNewSession, workingDir, systemPrompt, model? }`
 - Returns `{ stream, abort, sendInput }`
 - `abort()` sends SIGTERM to CLI process
 - `sendInput(text)` writes to stdin (safe after abort)
@@ -540,6 +544,7 @@ claude --print \
   --permission-mode bypassPermissions \
   --output-format stream-json \
   --verbose \
+  [--model <alias|id>]              # if model specified (e.g. opus, sonnet, haiku)
   [--session-id <uuid>]              # if isNewSession
   [--append-system-prompt <prompt>]  # if isNewSession and systemPrompt
   [--resume <uuid>]                  # if not isNewSession
@@ -750,12 +755,12 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 
 - Flexbox: sidebar (fixed 280px) + main area (flex: 1)
 - Sidebar: new chat button, search, conversation list grouped by workspace, settings, sign out, version label
-- Main area: header with title + usage indicator + action buttons, messages container, input area with backend selector + file chips + textarea
+- Main area: header with title + usage indicator + action buttons, messages container, input area with backend selector + model selector + file chips + textarea
 - Responsive: below ~768px sidebar overlays content
 
 ### Conversation Management
 
-- **New conversation:** folder picker modal (via `/browse` API) → user selects directory → POST creates conversation with the user's `defaultBackend` from settings
+- **New conversation:** folder picker modal (via `/browse` API) → user selects directory → POST creates conversation with the user's `defaultBackend` and `defaultModel` from settings
 - **Sidebar list:** grouped by workspace (last 2 path segments of `workingDir`), sorted by `updatedAt` desc. Groups are collapsible (state in localStorage). Each group header has a pencil icon for workspace instructions.
 - **Context menu:** right-click on conversation items for rename/archive/delete (active view) or restore/delete (archive view)
 - **Archive:** conversations can be archived via context menu. Archived conversations are hidden from the main sidebar but all files (sessions, artifacts) remain on disk. A toggle at the bottom of the sidebar switches between active and archived views. Archived conversations can be browsed, searched, restored, or permanently deleted.
@@ -763,7 +768,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 
 ### Messaging & Streaming
 
-- `chatSendMessage()` gathers completed file paths from pending uploads, appends `[Uploaded files: ...]` to content, opens WebSocket, POSTs message, receives stream events via WS. When the selected backend differs from the stored `defaultBackend` setting, it auto-saves the new choice via `PUT /settings` (fire-and-forget) so future new conversations use it.
+- `chatSendMessage()` gathers completed file paths from pending uploads, appends `[Uploaded files: ...]` to content, opens WebSocket, POSTs message (with `backend` and `model`), receives stream events via WS. When the selected backend or model differs from the stored defaults, it auto-saves the new choice via `PUT /settings` (fire-and-forget) so future new conversations use it.
 - Streaming uses `fetch` with manual ReadableStream parsing (not EventSource API)
 - **Streaming state persistence:** `chatStreamingState` Map stores per-conversation state (accumulated text, thinking, tools, agents, tool/agent history, pending interactions). State survives conversation switches — on return, the streaming bubble is recreated and restored.
 - **WebSocket auto-reconnect:** On unexpected WS close during streaming, the client automatically attempts reconnection with exponential backoff (1s base, up to 5 attempts). On reconnect, the server replays buffered events wrapped in `replay_start`/`replay_end`. The client resets streaming state on `replay_start` (clears accumulated text/thinking/tools) and reprocesses replayed events from scratch. `assistant_message` events are deduplicated by message ID. `done` events during replay are ignored to prevent stale streams from destroying the current streaming state. After max attempts exhausted, `_doneResolve` is called to clean up. `chatDisconnectWs()` clears reconnect attempts to prevent auto-reconnect on deliberate close. Session reset clears the server-side event buffer to prevent stale events from replaying into the new session.
@@ -819,6 +824,7 @@ Tabbed layout with two tabs:
 - Send behavior: Enter or Shift+Enter
 - System prompt textarea (global)
 - Default backend selector (also auto-updated when user sends a message with a different backend)
+- Default model selector (shown only when the selected backend has models; auto-updated with backend changes)
 - Working directory
 
 **Usage Stats tab:**
@@ -924,10 +930,10 @@ Update OAuth callback URLs to include the ngrok URL.
 | File | Focus |
 |------|-------|
 | `test/toolUtils.test.ts` | Shared backend helpers: extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError |
-| `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry (including shutdownAll), ClaudeCodeAdapter |
+| `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry (including shutdownAll), ClaudeCodeAdapter (metadata models, --model flag passthrough) |
 | `test/kiroBackend.test.ts` | KiroAdapter metadata, lifecycle (shutdown, onSessionReset), extractKiroToolDetails tool name normalization, generateSummary/generateTitle fallbacks |
-| `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, archive/restore endpoints, message queue persistence (GET/PUT/DELETE, included in conversation response, cleared on reset/archive) |
-| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats, Kiro credits accumulation, contextUsagePercentage snapshot, skipLedger option), workspace storage, migration, markdown export |
+| `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, archive/restore endpoints, message queue persistence (GET/PUT/DELETE, included in conversation response, cleared on reset/archive), model passthrough (explicit model, stored model, model update) |
+| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats, Kiro credits accumulation, contextUsagePercentage snapshot, skipLedger option), model selection (create with model, updateConversationModel, listConversations model), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state, suspended (restored) state |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |
