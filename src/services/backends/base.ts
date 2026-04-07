@@ -3,6 +3,7 @@ import type {
   SendMessageOptions,
   SendMessageResult,
   Message,
+  MemorySnapshot,
 } from '../../types';
 
 /**
@@ -53,5 +54,15 @@ export class BaseBackendAdapter {
    */
   onSessionReset(_conversationId: string): void {
     // no-op by default
+  }
+
+  /**
+   * Extract the backend's native memory for a given workspace path.
+   * Returns `null` when the backend has no memory system, or when
+   * no memory exists for this workspace.  Called by ChatService on
+   * session reset to persist memory at the workspace level.
+   */
+  async extractMemory(_workspacePath: string): Promise<MemorySnapshot | null> {
+    return null;
   }
 }

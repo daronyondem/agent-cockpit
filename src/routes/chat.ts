@@ -547,11 +547,36 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       if (activeStreams.has(convId)) {
         return res.status(409).json({ error: 'Cannot reset session while streaming' });
       }
+      // Capture the current backend BEFORE resetting the session, so
+      // memory is extracted from whichever CLI the ending session used.
+      const preConv = await chatService.getConversation(convId);
+      const endingBackend = preConv?.backend || null;
+
       // Clear any stale event buffer so a subsequent WS connection
       // doesn't replay old-session events into the new session.
       if (wsFns) wsFns.clearBuffer(convId);
       const result = await chatService.resetSession(convId);
       if (!result) return res.status(404).json({ error: 'Conversation not found' });
+
+      // Capture the ending backend's native memory into workspace storage
+      // so it can be injected into the next session (including when the
+      // user switches CLIs). Runs best-effort — failures never block reset.
+      if (endingBackend) {
+        console.log(`[memory] reset handler: attempting capture for conv=${convId} backend=${endingBackend}`);
+        try {
+          const snapshot = await chatService.captureWorkspaceMemory(convId, endingBackend);
+          if (snapshot) {
+            console.log(`[memory] captured ${snapshot.files.length} memory file(s) for conv=${convId} backend=${endingBackend}`);
+          } else {
+            console.log(`[memory] reset handler: no memory captured for conv=${convId} backend=${endingBackend}`);
+          }
+        } catch (err: unknown) {
+          console.error(`[memory] capture on reset failed for conv=${convId}:`, (err as Error).message);
+        }
+      } else {
+        console.log(`[memory] reset handler: no ending backend for conv=${convId}, skipping capture`);
+      }
+
       // Let the backend adapter clean up per-conversation state (e.g. ACP processes)
       const conv = await chatService.getConversation(convId);
       if (conv) {
@@ -599,7 +624,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       const globalPrompt = settings.systemPrompt || '';
       const wsHash = chatService.getWorkspaceHashForConv(convId);
       const wsInstructions = wsHash ? (await chatService.getWorkspaceInstructions(wsHash)) || '' : '';
-      const parts = [globalPrompt, wsInstructions].filter(Boolean);
+      let memoryBlock = '';
+      if (wsHash) {
+        const snapshot = await chatService.getWorkspaceMemory(wsHash);
+        memoryBlock = chatService.serializeMemoryForInjection(snapshot);
+      }
+      const parts = [globalPrompt, wsInstructions, memoryBlock].filter(Boolean);
       systemPrompt = parts.join('\n\n');
     }
 
