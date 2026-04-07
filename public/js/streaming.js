@@ -12,6 +12,7 @@ import {
   chatRenderFileChips, chatUpdateHeader, chatUpdateUsageDisplay,
   chatRenderQueuedMessages,
 } from './conversations.js';
+import { loadBackends, populateModelSelect } from './backends.js';
 
 // ── Queue processing ─────────────────────────────────────────────────────────
 
@@ -392,6 +393,12 @@ export function chatHandleStreamEvent(targetConvId, event) {
     if (st._replaying) return;
     if (st._doneResolve) { st._doneResolve(); delete st._doneResolve; }
     chatCleanupStreamState(targetConvId);
+    // Refetch backend metadata if the current backend's models aren't loaded yet
+    // (e.g. Kiro populates models dynamically on first session/new)
+    const currentBackend = document.getElementById('chat-backend-select')?.value;
+    if (currentBackend && !state.BACKEND_MODELS[currentBackend]) {
+      loadBackends().then(() => populateModelSelect(state.chatActiveConv?.model));
+    }
   }
 }
 
