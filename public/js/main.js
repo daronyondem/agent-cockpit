@@ -1,4 +1,4 @@
-import { state, chatFetch, apiUrl, DEFAULT_BACKEND_ICON } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
@@ -48,6 +48,8 @@ window.chatRetryLast = chatRetryLast;
 window.chatSaveSettings = chatSaveSettings;
 window.chatSettingsBackendChanged = chatSettingsBackendChanged;
 window.chatSettingsModelChanged = chatSettingsModelChanged;
+window.chatSettingsMemoryBackendChanged = chatSettingsMemoryBackendChanged;
+window.chatSettingsMemoryModelChanged = chatSettingsMemoryModelChanged;
 window.chatUpdateUsageStats = chatUpdateUsageStats;
 window.chatClearUsageStats = chatClearUsageStats;
 window.chatSaveWorkspaceInstructions = chatSaveWorkspaceInstructions;
@@ -103,7 +105,7 @@ function chatWireEvents() {
       const instrBtn = e.target.closest('.chat-conv-group-instructions-btn');
       if (instrBtn) {
         e.stopPropagation();
-        chatShowWorkspaceInstructions(instrBtn.dataset.wsHash, instrBtn.dataset.wsLabel);
+        chatShowWorkspaceSettings(instrBtn.dataset.wsHash, instrBtn.dataset.wsLabel);
         return;
       }
       const groupHeader = e.target.closest('.chat-conv-group-header');
@@ -509,9 +511,20 @@ async function chatShowSettings(initialTab) {
   }
 
   const s = state.chatSettingsData;
+  const mem = s.memory || {};
+  const memBackendId = mem.cliBackend || s.defaultBackend || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
+  const memModels = state.BACKEND_MODELS[memBackendId] || [];
+  const memSelectedModel = mem.cliModel || memModels.find((m) => m.default)?.id || (memModels[0]?.id || '');
+  const memModel = memModels.find((m) => m.id === memSelectedModel);
+  const memLevels = memModel?.supportedEffortLevels || [];
+  const memSelectedEffort = mem.cliEffort && memLevels.includes(mem.cliEffort)
+    ? mem.cliEffort
+    : (memLevels.includes('high') ? 'high' : memLevels[0] || '');
+
   const html = `
     <div class="chat-settings-tabs">
       <button class="chat-settings-tab active" data-tab="general">General</button>
+      <button class="chat-settings-tab" data-tab="memory">Memory</button>
       <button class="chat-settings-tab" data-tab="usage">Usage Stats</button>
     </div>
     <div class="chat-modal-body">
@@ -568,6 +581,36 @@ async function chatShowSettings(initialTab) {
           <div class="chat-settings-label">System Prompt</div>
           <div class="chat-settings-desc">Prepended to every new CLI session.</div>
           <textarea class="chat-settings-textarea" id="chat-settings-system-prompt" style="min-height:120px">${esc(s.systemPrompt || '')}</textarea>
+        </div>
+        <button class="chat-settings-save" onclick="chatSaveSettings()">Save Settings</button>
+      </div>
+      <div class="chat-settings-tab-content" id="chat-tab-memory" style="display:none;">
+        <div class="chat-settings-group">
+          <div class="chat-settings-desc">
+            The Memory CLI is used to process <code>memory_note</code> MCP calls
+            from non-Claude chat sessions and to extract memories from their
+            transcripts on session reset. Claude Code sessions continue to use
+            their own native memory system regardless of this setting.
+          </div>
+        </div>
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">Memory CLI</div>
+          <select class="chat-settings-select" id="chat-settings-memory-backend" onchange="chatSettingsMemoryBackendChanged()">
+            ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === memBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-memory-model-group"${memModels.length === 0 ? ' style="display:none;"' : ''}>
+          <div class="chat-settings-label">Memory Model</div>
+          <select class="chat-settings-select" id="chat-settings-memory-model" onchange="chatSettingsMemoryModelChanged()">
+            ${memModels.map((m) => `<option value="${esc(m.id)}"${m.id === memSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-memory-effort-group"${memLevels.length === 0 ? ' style="display:none;"' : ''}>
+          <div class="chat-settings-label">Memory Effort</div>
+          <div class="chat-settings-desc">Adaptive reasoning level for the Memory CLI. Lower levels are faster and cheaper.</div>
+          <select class="chat-settings-select" id="chat-settings-memory-effort">
+            ${memLevels.map((lv) => `<option value="${esc(lv)}"${lv === memSelectedEffort ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`).join('')}
+          </select>
         </div>
         <button class="chat-settings-save" onclick="chatSaveSettings()">Save Settings</button>
       </div>
@@ -630,6 +673,61 @@ function chatSettingsBackendChanged() {
   chatSettingsRefreshEffortGroup();
 }
 
+function chatSettingsMemoryBackendChanged() {
+  const backendId = document.getElementById('chat-settings-memory-backend')?.value;
+  const modelGroup = document.getElementById('chat-settings-memory-model-group');
+  const modelSelect = document.getElementById('chat-settings-memory-model');
+  if (!modelGroup || !modelSelect) return;
+
+  const models = state.BACKEND_MODELS[backendId];
+  if (!models || models.length === 0) {
+    modelGroup.style.display = 'none';
+    modelSelect.innerHTML = '';
+    chatSettingsRefreshMemoryEffortGroup();
+    return;
+  }
+  modelGroup.style.display = '';
+  modelSelect.innerHTML = models.map(m =>
+    `<option value="${esc(m.id)}"${m.default ? ' selected' : ''}>${esc(m.label)}</option>`
+  ).join('');
+  chatSettingsRefreshMemoryEffortGroup();
+}
+
+function chatSettingsMemoryModelChanged() {
+  chatSettingsRefreshMemoryEffortGroup();
+}
+
+function chatSettingsRefreshMemoryEffortGroup() {
+  const effortGroup = document.getElementById('chat-settings-memory-effort-group');
+  const effortSelect = document.getElementById('chat-settings-memory-effort');
+  if (!effortGroup || !effortSelect) return;
+
+  const backendId = document.getElementById('chat-settings-memory-backend')?.value;
+  const models = state.BACKEND_MODELS[backendId] || [];
+  const selectedModelId = document.getElementById('chat-settings-memory-model')?.value;
+  const model = models.find((m) => m.id === selectedModelId);
+  const levels = model?.supportedEffortLevels || [];
+
+  if (levels.length === 0) {
+    effortGroup.style.display = 'none';
+    effortSelect.innerHTML = '';
+    return;
+  }
+
+  const prev = effortSelect.value;
+  const stored = state.chatSettingsData?.memory?.cliEffort;
+  let next = null;
+  if (prev && levels.includes(prev)) next = prev;
+  else if (stored && levels.includes(stored)) next = stored;
+  else if (levels.includes('high')) next = 'high';
+  else next = levels[0];
+
+  effortGroup.style.display = '';
+  effortSelect.innerHTML = levels.map((lv) =>
+    `<option value="${lv}"${lv === next ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`
+  ).join('');
+}
+
 function chatSettingsModelChanged() {
   chatSettingsRefreshEffortGroup();
 }
@@ -676,6 +774,20 @@ function chatSaveSettings() {
   // Drop defaultEffort when the effort group is hidden (backend/model doesn't
   // support effort). This matches the "drop on model change" rule.
   const defaultEffort = (effortEl && effortGroup?.style.display !== 'none') ? effortEl.value : undefined;
+
+  // Memory CLI config — only include keys that are visible (i.e. the picker
+  // is populated). Missing values are dropped so the server stores a clean
+  // shape and falls back to defaults when nothing is configured yet.
+  const memBackendEl = document.getElementById('chat-settings-memory-backend');
+  const memModelEl = document.getElementById('chat-settings-memory-model');
+  const memModelGroup = document.getElementById('chat-settings-memory-model-group');
+  const memEffortEl = document.getElementById('chat-settings-memory-effort');
+  const memEffortGroup = document.getElementById('chat-settings-memory-effort-group');
+  const memory = {};
+  if (memBackendEl?.value) memory.cliBackend = memBackendEl.value;
+  if (memModelEl?.value && memModelGroup?.style.display !== 'none') memory.cliModel = memModelEl.value;
+  if (memEffortEl?.value && memEffortGroup?.style.display !== 'none') memory.cliEffort = memEffortEl.value;
+
   const settings = {
     theme: document.getElementById('chat-settings-theme')?.value || 'system',
     sendBehavior: document.getElementById('chat-settings-send')?.value || 'enter',
@@ -683,6 +795,7 @@ function chatSaveSettings() {
     defaultModel,
     defaultEffort,
     systemPrompt: document.getElementById('chat-settings-system-prompt')?.value || '',
+    memory: Object.keys(memory).length > 0 ? memory : undefined,
   };
   applyTheme(settings.theme);
   chatFetch('settings', { method: 'PUT', body: settings }).then(() => {
@@ -821,29 +934,180 @@ async function chatClearUsageStats() {
   }
 }
 
-// ── Workspace Instructions ───────────────────────────────────────────────────
+// ── Workspace Settings ───────────────────────────────────────────────────────
+// Multi-section modal: "Instructions" (existing textarea) and "Memory"
+// (enable toggle + read-only browser with per-entry delete). Opened from
+// the pencil icon on each workspace group header in the conversation list.
 
-async function chatShowWorkspaceInstructions(hash, label) {
+async function chatShowWorkspaceSettings(hash, label) {
+  // Fetch current state in parallel — these are two independent endpoints.
   let instructions = '';
+  let memoryEnabled = false;
+  let snapshot = null;
   try {
-    const res = await chatFetch(`workspaces/${encodeURIComponent(hash)}/instructions`);
-    const data = await res.json();
-    instructions = data.instructions || '';
+    const [instrRes, memRes] = await Promise.all([
+      chatFetch(`workspaces/${encodeURIComponent(hash)}/instructions`).then((r) => r.json()).catch(() => ({})),
+      fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/memory`), { credentials: 'same-origin' }).then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+    ]);
+    instructions = instrRes.instructions || '';
+    memoryEnabled = Boolean(memRes.enabled);
+    snapshot = memRes.snapshot || null;
   } catch {
-    // Workspace may not have instructions yet
+    // Workspace may not have instructions yet — leave defaults.
   }
 
   const html = `
+    <div class="chat-settings-tabs">
+      <button class="chat-settings-tab active" data-tab="instructions">Instructions</button>
+      <button class="chat-settings-tab" data-tab="memory">Memory</button>
+    </div>
     <div class="chat-modal-body">
-      <div class="chat-settings-group">
-        <div class="chat-settings-desc">Additional instructions prepended to every new CLI session in this workspace. Combined with the global system prompt.</div>
-        <textarea class="chat-settings-textarea" id="chat-ws-instructions" style="min-height:160px">${esc(instructions)}</textarea>
+      <div class="chat-settings-tab-content" id="chat-ws-tab-instructions">
+        <div class="chat-settings-group">
+          <div class="chat-settings-desc">Additional instructions prepended to every new CLI session in this workspace. Combined with the global system prompt.</div>
+          <textarea class="chat-settings-textarea" id="chat-ws-instructions" style="min-height:160px">${esc(instructions)}</textarea>
+        </div>
+        <button class="chat-settings-save" onclick="chatSaveWorkspaceInstructions('${esc(hash)}')">Save</button>
       </div>
-      <button class="chat-settings-save" onclick="chatSaveWorkspaceInstructions('${esc(hash)}')">Save</button>
+      <div class="chat-settings-tab-content" id="chat-ws-tab-memory" style="display:none;">
+        <div class="chat-settings-group">
+          <div class="chat-settings-desc">
+            When enabled, memory from prior sessions is injected into every
+            new session's system prompt. Claude Code sessions contribute via
+            their native memory system; other CLIs contribute via the
+            <code>memory_note</code> MCP tool and post-session extraction.
+          </div>
+          <label class="chat-settings-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="chat-ws-memory-enabled"${memoryEnabled ? ' checked' : ''} />
+            <span>Enable Memory for this workspace</span>
+          </label>
+        </div>
+        <div class="chat-settings-group" id="chat-ws-memory-browser">
+          ${chatRenderWorkspaceMemoryBrowser(snapshot, memoryEnabled, hash)}
+        </div>
+      </div>
     </div>
   `;
 
-  chatShowModal(`Instructions: ${label}`, html);
+  chatShowModal(`Workspace Settings: ${label}`, html);
+
+  // Tab switching.
+  document.querySelectorAll('.chat-settings-tab').forEach((tab) => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.chat-settings-tab').forEach((t) => t.classList.remove('active'));
+      tab.classList.add('active');
+      document.querySelectorAll('.chat-settings-tab-content').forEach((c) => c.style.display = 'none');
+      const target = tab.getAttribute('data-tab');
+      const panel = document.getElementById('chat-ws-tab-' + target);
+      if (panel) panel.style.display = '';
+    });
+  });
+
+  // Memory-enable toggle — persists immediately on change so the user doesn't
+  // need a separate Save button for this one control.
+  const toggleEl = document.getElementById('chat-ws-memory-enabled');
+  if (toggleEl) {
+    toggleEl.addEventListener('change', async () => {
+      const enabled = toggleEl.checked;
+      try {
+        await chatFetch(`workspaces/${encodeURIComponent(hash)}/memory/enabled`, {
+          method: 'PUT',
+          body: { enabled },
+        });
+        // Re-render the browser to reflect the toggle.
+        const [memRes] = await Promise.all([
+          fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/memory`), { credentials: 'same-origin' }).then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+        ]);
+        const browser = document.getElementById('chat-ws-memory-browser');
+        if (browser) {
+          browser.innerHTML = chatRenderWorkspaceMemoryBrowser(memRes.snapshot || null, enabled, hash);
+          chatWireWorkspaceMemoryBrowser(browser, hash);
+        }
+      } catch (err) {
+        alert('Failed to update memory setting: ' + err.message);
+        toggleEl.checked = !enabled;
+      }
+    });
+  }
+
+  // Wire delete buttons on first render.
+  const browser = document.getElementById('chat-ws-memory-browser');
+  if (browser) chatWireWorkspaceMemoryBrowser(browser, hash);
+}
+
+function chatRenderWorkspaceMemoryBrowser(snapshot, enabled, hash) {
+  if (!enabled) {
+    return `<p style="color:var(--muted);font-size:13px;">Memory is disabled for this workspace.</p>`;
+  }
+  const files = snapshot?.files || [];
+  if (files.length === 0) {
+    return `<p style="color:var(--muted);font-size:13px;">No memory entries yet. Entries appear here when Claude Code captures memory on session reset, or when a non-Claude CLI calls the <code>memory_note</code> tool.</p>`;
+  }
+  const order = ['user', 'feedback', 'project', 'reference', 'unknown'];
+  const labels = { user: 'User', feedback: 'Feedback', project: 'Project', reference: 'Reference', unknown: 'Other' };
+  const grouped = {};
+  for (const t of order) grouped[t] = [];
+  for (const f of files) {
+    (grouped[f.type] || grouped.unknown).push(f);
+  }
+  const rows = order
+    .filter((t) => grouped[t].length > 0)
+    .map((t) => `
+      <div class="chat-memory-group">
+        <div class="chat-memory-group-header">${esc(labels[t])} <span class="chat-memory-group-count">${grouped[t].length}</span></div>
+        <ul class="chat-memory-file-list">
+          ${grouped[t].map((f) => {
+            const heading = f.name || f.filename;
+            const sub = f.description || '';
+            return `
+              <li class="chat-memory-file">
+                <div style="display:flex;align-items:flex-start;gap:8px;">
+                  <button type="button" class="chat-memory-file-toggle" data-filename="${esc(f.filename)}" style="flex:1;">
+                    <div class="chat-memory-file-heading">${esc(heading)}</div>
+                    ${sub ? `<div class="chat-memory-file-desc">${esc(sub)}</div>` : ''}
+                    <div class="chat-memory-file-name">${esc(f.filename)}</div>
+                  </button>
+                  <button type="button" class="chat-memory-file-delete" data-relpath="${esc(f.filename)}" title="Delete entry" style="background:transparent;border:none;color:var(--muted);cursor:pointer;padding:4px;">
+                    <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 4h10M6 4V2.5h4V4M5 4l.5 9h5L11 4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
+                </div>
+                <pre class="chat-memory-file-body" hidden>${esc(f.content || '')}</pre>
+              </li>
+            `;
+          }).join('')}
+        </ul>
+      </div>
+    `).join('');
+  return `<div class="chat-memory-groups">${rows}</div>`;
+}
+
+function chatWireWorkspaceMemoryBrowser(container, hash) {
+  container.querySelectorAll('.chat-memory-file-toggle').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const pre = btn.closest('.chat-memory-file')?.querySelector('.chat-memory-file-body');
+      if (!pre) return;
+      pre.hidden = !pre.hidden;
+      btn.classList.toggle('expanded', !pre.hidden);
+    });
+  });
+  container.querySelectorAll('.chat-memory-file-delete').forEach((btn) => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const relpath = btn.dataset.relpath;
+      if (!relpath) return;
+      if (!confirm(`Delete memory entry "${relpath}"?`)) return;
+      try {
+        await chatFetch(`workspaces/${encodeURIComponent(hash)}/memory/entries/${encodeURIComponent(relpath)}`, {
+          method: 'DELETE',
+        });
+        const memRes = await fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/memory`), { credentials: 'same-origin' }).then((r) => r.ok ? r.json() : {}).catch(() => ({}));
+        container.innerHTML = chatRenderWorkspaceMemoryBrowser(memRes.snapshot || null, Boolean(memRes.enabled), hash);
+        chatWireWorkspaceMemoryBrowser(container, hash);
+      } catch (err) {
+        alert('Failed to delete entry: ' + err.message);
+      }
+    });
+  });
 }
 
 function chatSaveWorkspaceInstructions(hash) {

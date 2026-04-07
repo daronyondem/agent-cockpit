@@ -3,7 +3,7 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { BaseBackendAdapter } from './base';
+import { BaseBackendAdapter, type RunOneShotOptions } from './base';
 import {
   sanitizeSystemPrompt,
   isApiError,
@@ -222,6 +222,38 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       index: indexContent,
       files,
     };
+  }
+
+  /**
+   * Run the Claude CLI in one-shot (`--print`) mode against a single
+   * prompt and return the full text output.  Used by the Memory MCP
+   * server when Claude Code is the configured Memory CLI.
+   */
+  async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
+    const { model, effort, timeoutMs = 60000, workingDir } = options;
+    const args = ['--print', '-p', prompt];
+    if (model) args.push('--model', model);
+    if (effort && model) {
+      const modelOption = this.metadata.models?.find(m => m.id === model);
+      if (modelOption?.supportedEffortLevels?.includes(effort)) {
+        args.push('--effort', effort);
+      }
+    }
+    return await new Promise<string>((resolve, reject) => {
+      execFile(
+        'claude',
+        args,
+        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined },
+        (err, stdout, stderr) => {
+          if (err) {
+            const msg = (stderr && stderr.trim()) || err.message;
+            reject(new Error(`claude --print failed: ${msg}`));
+            return;
+          }
+          resolve((stdout || '').trim());
+        },
+      );
+    });
   }
 
   async generateTitle(userMessage: string, fallback: string): Promise<string> {

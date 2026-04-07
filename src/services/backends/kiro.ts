@@ -1,7 +1,7 @@
 import { spawn, execFile, type ChildProcess } from 'child_process';
 import path from 'path';
 import os from 'os';
-import { BaseBackendAdapter } from './base';
+import { BaseBackendAdapter, type RunOneShotOptions } from './base';
 import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUtils';
 import type {
   BackendMetadata,
@@ -378,6 +378,30 @@ export class KiroAdapter extends BaseBackendAdapter {
     }
   }
 
+  /**
+   * Run `kiro-cli chat` in one-shot mode against a single prompt and
+   * return the full text output.  Used by the Memory MCP server when
+   * Kiro is the configured Memory CLI.
+   */
+  async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
+    const { timeoutMs = 60000, workingDir } = options;
+    return await new Promise<string>((resolve, reject) => {
+      execFile(
+        'kiro-cli',
+        ['chat', '--no-interactive', '--trust-all-tools', prompt],
+        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined },
+        (err, stdout, stderr) => {
+          if (err) {
+            const msg = (stderr && stderr.trim()) || err.message;
+            reject(new Error(`kiro-cli chat failed: ${msg}`));
+            return;
+          }
+          resolve((stdout || '').trim());
+        },
+      );
+    });
+  }
+
   async generateTitle(userMessage: string, fallback: string): Promise<string> {
     if (!userMessage || typeof userMessage !== 'string' || !userMessage.trim()) {
       return fallback || 'New Chat';
@@ -474,9 +498,12 @@ export class KiroAdapter extends BaseBackendAdapter {
     options: SendMessageOptions,
     state: { readonly aborted: boolean; client: AcpClient | null },
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId } = options;
+    const { sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, mcpServers } = options;
     const convId = conversationId || sessionId; // fallback to sessionId if conversationId not provided
     const cwd = workingDir || this.workingDir || undefined;
+    // ACP expects `mcpServers: []` at minimum; forward any configured servers
+    // (e.g. the Memory MCP stub) from the caller.
+    const mcpServersForAcp = Array.isArray(mcpServers) ? mcpServers : [];
 
     let client: AcpClient;
     try {
@@ -498,7 +525,7 @@ export class KiroAdapter extends BaseBackendAdapter {
       let kiroSessionId = this.sessionMap.get(sessionId);
 
       if (isNewSession) {
-        const result = await client.request('session/new', { cwd, mcpServers: [] }) as KiroSessionNewResult;
+        const result = await client.request('session/new', { cwd, mcpServers: mcpServersForAcp }) as KiroSessionNewResult;
         kiroSessionId = result.sessionId;
         this.sessionMap.set(sessionId, kiroSessionId);
         if (result.models?.availableModels) {
@@ -521,7 +548,7 @@ export class KiroAdapter extends BaseBackendAdapter {
       const acpEntry = this.processes.get(convId);
       if (acpEntry && acpEntry.loadedSessionId !== kiroSessionId) {
         if (!isNewSession) {
-          await client.request('session/load', { sessionId: kiroSessionId, cwd, mcpServers: [] });
+          await client.request('session/load', { sessionId: kiroSessionId, cwd, mcpServers: mcpServersForAcp });
           console.log(`[kiro] Loaded session: ${kiroSessionId}`);
         }
         acpEntry.loadedSessionId = kiroSessionId;

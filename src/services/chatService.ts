@@ -3,6 +3,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import type { BackendRegistry } from './backends/registry';
+import { parseFrontmatter as parseMemoryFrontmatter } from './backends/claudeCode';
 import type {
   Message,
   ToolActivity,
@@ -34,6 +35,19 @@ function stripFrontmatter(content: string): string {
   if (end === -1) return content;
   const rest = content.slice(end + 4);
   return rest.startsWith('\n') ? rest.slice(1) : rest;
+}
+
+/**
+ * Turn an arbitrary string into a short, filesystem-safe slug. Used to
+ * build memory-note filenames like `note_<timestamp>_<slug>.md`.
+ */
+function slugify(input: string): string {
+  const cleaned = (input || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+  return cleaned || 'note';
 }
 
 interface ConvLookupResult {
@@ -790,6 +804,19 @@ export class ChatService {
   }
 
   // ── Workspace Memory ───────────────────────────────────────────────────────
+  //
+  // Memory is stored per-workspace under `memory/` with this layout:
+  //
+  //   memory/
+  //     snapshot.json     — canonical parsed index (merged view of all files)
+  //     files/
+  //       claude/         — Claude Code native captures; wiped+rewritten on each capture
+  //       notes/          — memory_note MCP writes + post-session extractions; preserved across captures
+  //
+  // This split is what prevents a Claude Code re-capture from clobbering
+  // entries written by the MCP `memory_note` tool or by post-session
+  // extraction. `saveWorkspaceMemory()` only wipes `files/claude/`; the
+  // notes subtree is left untouched and merged back into the snapshot.
 
   private _memoryDir(hash: string): string {
     return path.join(this._workspaceDir(hash), 'memory');
@@ -803,52 +830,321 @@ export class ChatService {
     return path.join(this._memoryDir(hash), 'files');
   }
 
+  private _memoryClaudeDir(hash: string): string {
+    return path.join(this._memoryFilesDir(hash), 'claude');
+  }
+
+  private _memoryNotesDir(hash: string): string {
+    return path.join(this._memoryFilesDir(hash), 'notes');
+  }
+
   /**
-   * Persist a captured memory snapshot to the workspace's memory directory.
-   * Raw `.md` files are written to `memory/files/` and a `snapshot.json`
-   * is written alongside with parsed metadata.  Old files are removed
-   * first so the workspace memory is an accurate mirror of the capture.
+   * Migrate legacy `memory/files/*.md` (flat layout from before this feature)
+   * into `memory/files/claude/*.md`.  Idempotent and silent if there's
+   * nothing to migrate.
+   */
+  private async _migrateLegacyMemoryLayout(hash: string): Promise<void> {
+    const filesDir = this._memoryFilesDir(hash);
+    let entries: string[];
+    try {
+      entries = await fsp.readdir(filesDir);
+    } catch {
+      return;
+    }
+    const loose = entries.filter((e) => e.endsWith('.md'));
+    if (loose.length === 0) return;
+
+    const claudeDir = this._memoryClaudeDir(hash);
+    await fsp.mkdir(claudeDir, { recursive: true });
+    for (const name of loose) {
+      const from = path.join(filesDir, name);
+      const to = path.join(claudeDir, name);
+      try {
+        await fsp.rename(from, to);
+      } catch (err: unknown) {
+        console.warn(`[memory] legacy migration: could not move ${from} → ${to}:`, (err as Error).message);
+      }
+    }
+    console.log(`[memory] migrated ${loose.length} legacy file(s) into ${claudeDir}`);
+  }
+
+  /**
+   * Enumerate notes stored under `files/notes/` and return them as
+   * MemoryFile entries. Returns an empty array if the notes dir doesn't
+   * exist yet.
+   */
+  private async _readNotesFromDisk(hash: string): Promise<MemoryFile[]> {
+    const notesDir = this._memoryNotesDir(hash);
+    let names: string[];
+    try {
+      names = await fsp.readdir(notesDir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+    const files: MemoryFile[] = [];
+    for (const name of names.sort()) {
+      if (!name.endsWith('.md')) continue;
+      const full = path.join(notesDir, name);
+      let content: string;
+      try {
+        content = await fsp.readFile(full, 'utf8');
+      } catch (err: unknown) {
+        console.warn(`[memory] could not read note ${full}:`, (err as Error).message);
+        continue;
+      }
+      const parsed = parseMemoryFrontmatter(content);
+      // Infer source from filename prefix if frontmatter didn't say.
+      let source: 'memory-note' | 'session-extraction' = 'memory-note';
+      if (name.startsWith('session_')) source = 'session-extraction';
+      files.push({
+        filename: `notes/${name}`,
+        name: parsed.name,
+        description: parsed.description,
+        type: parsed.type,
+        content,
+        source,
+      });
+    }
+    return files;
+  }
+
+  /**
+   * Persist a CLI-capture snapshot (e.g. from Claude Code) to the
+   * workspace's memory directory. Only the `files/claude/` subtree is
+   * wiped — any notes written via `memory_note` or post-session
+   * extraction in `files/notes/` are preserved and merged back into the
+   * canonical `snapshot.json`.
    */
   async saveWorkspaceMemory(hash: string, snapshot: MemorySnapshot): Promise<void> {
     const memDir = this._memoryDir(hash);
     const filesDir = this._memoryFilesDir(hash);
+    const claudeDir = this._memoryClaudeDir(hash);
 
     await fsp.mkdir(memDir, { recursive: true });
+    await fsp.mkdir(filesDir, { recursive: true });
+
+    // Migrate any legacy loose files before we touch things.
+    await this._migrateLegacyMemoryLayout(hash);
+
+    // Wipe ONLY the claude subdirectory — notes are preserved.
     try {
-      await fsp.rm(filesDir, { recursive: true, force: true });
+      await fsp.rm(claudeDir, { recursive: true, force: true });
     } catch {
       // ignore
     }
-    await fsp.mkdir(filesDir, { recursive: true });
+    await fsp.mkdir(claudeDir, { recursive: true });
 
     if (snapshot.index) {
-      await fsp.writeFile(path.join(filesDir, 'MEMORY.md'), snapshot.index, 'utf8');
+      await fsp.writeFile(path.join(claudeDir, 'MEMORY.md'), snapshot.index, 'utf8');
     }
+    const claudeFiles: MemoryFile[] = [];
     for (const file of snapshot.files) {
-      // Guard against path traversal in filenames pulled from disk.
-      const safeName = path.basename(file.filename);
-      if (!safeName || safeName === '.' || safeName === '..') continue;
-      await fsp.writeFile(path.join(filesDir, safeName), file.content, 'utf8');
+      // The adapter returns bare filenames; guard against path traversal
+      // and normalize them into `claude/<name>`.
+      const bareName = path.basename(file.filename);
+      if (!bareName || bareName === '.' || bareName === '..') continue;
+      await fsp.writeFile(path.join(claudeDir, bareName), file.content, 'utf8');
+      claudeFiles.push({
+        ...file,
+        filename: `claude/${bareName}`,
+        source: 'cli-capture',
+      });
     }
+
+    // Merge preserved notes back into the snapshot.
+    const notes = await this._readNotesFromDisk(hash);
+
+    const merged: MemorySnapshot = {
+      ...snapshot,
+      files: [...claudeFiles, ...notes],
+    };
 
     await fsp.writeFile(
       this._memorySnapshotPath(hash),
-      JSON.stringify(snapshot, null, 2),
+      JSON.stringify(merged, null, 2),
       'utf8',
     );
   }
 
   /**
    * Load the stored memory snapshot for a workspace, or `null` if none.
+   * Reconciles the on-disk snapshot with any notes that may have been
+   * written since the last CLI capture, so the caller always sees a
+   * fresh merged view.
    */
   async getWorkspaceMemory(hash: string): Promise<MemorySnapshot | null> {
+    let snapshot: MemorySnapshot | null;
     try {
       const data = await fsp.readFile(this._memorySnapshotPath(hash), 'utf8');
-      return JSON.parse(data) as MemorySnapshot;
+      snapshot = JSON.parse(data) as MemorySnapshot;
     } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      snapshot = null;
+    }
+
+    // Even if there's no CLI-capture snapshot yet, notes alone can
+    // constitute a memory store (non-Claude workspace that only uses
+    // memory_note). Build a minimal snapshot in that case.
+    const notes = await this._readNotesFromDisk(hash);
+    if (!snapshot) {
+      if (notes.length === 0) return null;
+      return {
+        capturedAt: new Date().toISOString(),
+        sourceBackend: 'memory-note',
+        sourcePath: null,
+        index: '',
+        files: notes,
+      };
+    }
+
+    // Rebuild: keep CLI-capture files as stored, but always re-read notes
+    // fresh from disk so post-snapshot writes are reflected.
+    const claudeFiles = (snapshot.files || []).filter(
+      (f) => (f.source || 'cli-capture') === 'cli-capture',
+    );
+    return { ...snapshot, files: [...claudeFiles, ...notes] };
+  }
+
+  /**
+   * Append a memory entry under `files/notes/`. Used by both the
+   * `memory_note` MCP tool and post-session extraction. Updates
+   * `snapshot.json` atomically so `getWorkspaceMemory()` reflects the
+   * write immediately. Returns the relative path (`notes/<name>`).
+   */
+  async addMemoryNoteEntry(
+    hash: string,
+    args: {
+      content: string;
+      source: 'memory-note' | 'session-extraction';
+      filenameHint?: string;
+    },
+  ): Promise<string> {
+    const notesDir = this._memoryNotesDir(hash);
+    await fsp.mkdir(notesDir, { recursive: true });
+
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const slugSource = args.filenameHint || 'note';
+    const slug = slugify(slugSource);
+    const prefix = args.source === 'session-extraction' ? 'session' : 'note';
+
+    // Pick a non-colliding filename.
+    let attempt = 0;
+    let name = `${prefix}_${timestamp}_${slug}.md`;
+    while (true) {
+      try {
+        await fsp.access(path.join(notesDir, name));
+        attempt++;
+        name = `${prefix}_${timestamp}_${slug}_${attempt}.md`;
+      } catch {
+        break;
+      }
+    }
+
+    await fsp.writeFile(path.join(notesDir, name), args.content, 'utf8');
+
+    // Rebuild snapshot.json so callers immediately see the new entry.
+    await this._refreshSnapshotIndex(hash);
+
+    return `notes/${name}`;
+  }
+
+  /**
+   * Delete a single memory entry by its relative path (`claude/<name>`
+   * or `notes/<name>`). Path is validated to stay inside
+   * `files/`. Updates `snapshot.json` after deletion. Returns true if
+   * the file was deleted, false if it didn't exist.
+   */
+  async deleteMemoryEntry(hash: string, relPath: string): Promise<boolean> {
+    const filesDir = this._memoryFilesDir(hash);
+    const resolved = path.resolve(filesDir, relPath);
+    if (!resolved.startsWith(path.resolve(filesDir) + path.sep)) {
+      throw new Error('Path traversal rejected');
+    }
+    if (!resolved.endsWith('.md')) {
+      throw new Error('Only .md entries can be deleted');
+    }
+    try {
+      await fsp.unlink(resolved);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
       throw err;
     }
+
+    // Rebuild snapshot.json so the deletion is reflected.
+    await this._refreshSnapshotIndex(hash);
+    return true;
+  }
+
+  /**
+   * Rewrite `snapshot.json` from the current on-disk state without
+   * re-running capture. Used after note writes and deletions so
+   * `getWorkspaceMemory()` stays consistent.
+   */
+  private async _refreshSnapshotIndex(hash: string): Promise<void> {
+    const snapshotPath = this._memorySnapshotPath(hash);
+    let snapshot: MemorySnapshot;
+    try {
+      const data = await fsp.readFile(snapshotPath, 'utf8');
+      snapshot = JSON.parse(data) as MemorySnapshot;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      // No prior snapshot — synthesize a minimal one keyed on the notes.
+      snapshot = {
+        capturedAt: new Date().toISOString(),
+        sourceBackend: 'memory-note',
+        sourcePath: null,
+        index: '',
+        files: [],
+      };
+      await fsp.mkdir(this._memoryDir(hash), { recursive: true });
+    }
+
+    // Re-read the Claude subtree so deletions of claude/* also take effect.
+    const claudeDir = this._memoryClaudeDir(hash);
+    const claudeFiles: MemoryFile[] = [];
+    try {
+      const names = await fsp.readdir(claudeDir);
+      for (const name of names.sort()) {
+        if (!name.endsWith('.md') || name === 'MEMORY.md') continue;
+        const full = path.join(claudeDir, name);
+        const content = await fsp.readFile(full, 'utf8');
+        const parsed = parseMemoryFrontmatter(content);
+        claudeFiles.push({
+          filename: `claude/${name}`,
+          name: parsed.name,
+          description: parsed.description,
+          type: parsed.type,
+          content,
+          source: 'cli-capture',
+        });
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+
+    const notes = await this._readNotesFromDisk(hash);
+    const next: MemorySnapshot = {
+      ...snapshot,
+      capturedAt: new Date().toISOString(),
+      files: [...claudeFiles, ...notes],
+    };
+    await fsp.writeFile(snapshotPath, JSON.stringify(next, null, 2), 'utf8');
+  }
+
+  /** Per-workspace Memory enable/disable (stored on the workspace index). */
+  async getWorkspaceMemoryEnabled(hash: string): Promise<boolean> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return false;
+    return Boolean(index.memoryEnabled);
+  }
+
+  async setWorkspaceMemoryEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    index.memoryEnabled = Boolean(enabled);
+    await this._writeWorkspaceIndex(hash, index);
+    return index.memoryEnabled;
   }
 
   /**
