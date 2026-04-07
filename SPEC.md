@@ -580,13 +580,15 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
 
 #### KiroAdapter (`src/services/backends/kiro.ts`)
 
-**Metadata:** `id: 'kiro'`, capabilities: `thinking: true, planMode: false, agents: true, toolActivity: true, userQuestions: false, stdinInput: false`.
+**Metadata:** `id: 'kiro'`, capabilities: `thinking: true, planMode: false, agents: true, toolActivity: true, userQuestions: false, stdinInput: false`. Exposes dynamic `models` array populated from `session/new` response (undefined until first session). Deprecated (`[Deprecated]`) and internal (`[Internal]`) models are filtered out.
 
 **Integration protocol:** ACP (Agent Client Protocol) — JSON-RPC 2.0 over stdin/stdout via `kiro-cli acp`.
 
+**Model selection:** After session setup (`session/new` or `session/load`), calls `session/set_model({ sessionId, modelId })` if `options.model` is set. Non-fatal — continues with default model on failure. Model can be changed mid-session without process restart (unlike Claude Code).
+
 **ACP process lifecycle:** Lazy spawn + idle timeout + transparent recovery.
-- First message → spawn `kiro-cli acp` → `initialize` handshake → `session/new(cwd)` → `session/prompt`
-- Subsequent messages → reuse process → `session/prompt`
+- First message → spawn `kiro-cli acp` → `initialize` handshake → `session/new(cwd)` → `[session/set_model]` → `session/prompt`
+- Subsequent messages → reuse process → `[session/set_model]` → `session/prompt`
 - Idle timeout (configurable via `KIRO_ACP_IDLE_TIMEOUT_MS` env var, default 10 min) → kill process
 - Next message after timeout → respawn → `initialize` → `session/load(sessionId, cwd)` → `session/prompt`
 
@@ -931,7 +933,7 @@ Update OAuth callback URLs to include the ngrok URL.
 |------|-------|
 | `test/toolUtils.test.ts` | Shared backend helpers: extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError |
 | `test/backends.test.ts` | BaseBackendAdapter (including generateTitle), BackendRegistry (including shutdownAll), ClaudeCodeAdapter (metadata models, --model flag passthrough) |
-| `test/kiroBackend.test.ts` | KiroAdapter metadata, lifecycle (shutdown, onSessionReset), extractKiroToolDetails tool name normalization, generateSummary/generateTitle fallbacks |
+| `test/kiroBackend.test.ts` | KiroAdapter metadata (including dynamic models, deprecated/internal filtering, model family detection), lifecycle (shutdown, onSessionReset), extractKiroToolDetails tool name normalization, generateSummary/generateTitle fallbacks |
 | `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, archive/restore endpoints, message queue persistence (GET/PUT/DELETE, included in conversation response, cleared on reset/archive), model passthrough (explicit model, stored model, model update) |
 | `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats, Kiro credits accumulation, contextUsagePercentage snapshot, skipLedger option), model selection (create with model, updateConversationModel, listConversations model), workspace storage, migration, markdown export |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
