@@ -946,6 +946,49 @@ describe('getWorkspaceContext', () => {
   });
 });
 
+// ── Workspace Memory Pointer ────────────────────────────────────────────────
+
+describe('getWorkspaceMemoryPointer', () => {
+  test('returns null when memory is disabled for the workspace', async () => {
+    await service.createConversation('Test', '/tmp/mem-ptr-off');
+    const hash = workspaceHash('/tmp/mem-ptr-off');
+    // Default state is disabled.
+    const pointer = await service.getWorkspaceMemoryPointer(hash);
+    expect(pointer).toBeNull();
+  });
+
+  test('returns pointer text with the absolute memory files dir when enabled', async () => {
+    await service.createConversation('Test', '/tmp/mem-ptr-on');
+    const hash = workspaceHash('/tmp/mem-ptr-on');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const pointer = await service.getWorkspaceMemoryPointer(hash);
+    expect(pointer).not.toBeNull();
+    expect(pointer).toContain('Workspace memory is available at');
+    expect(pointer).toContain(hash);
+    expect(pointer).toContain('memory/files/');
+    // The pointer should be a self-contained bracketed block.
+    expect(pointer!.startsWith('[')).toBe(true);
+    expect(pointer!.endsWith(']')).toBe(true);
+  });
+
+  test('creates memory/files/ on disk so the model never hits ENOENT', async () => {
+    await service.createConversation('Test', '/tmp/mem-ptr-mkdir');
+    const hash = workspaceHash('/tmp/mem-ptr-mkdir');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const filesDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'memory', 'files');
+    expect(fs.existsSync(filesDir)).toBe(false);
+
+    await service.getWorkspaceMemoryPointer(hash);
+    expect(fs.existsSync(filesDir)).toBe(true);
+  });
+
+  test('returns null when hash is empty', async () => {
+    expect(await service.getWorkspaceMemoryPointer('')).toBeNull();
+  });
+});
+
 // ── Workspace Instructions ──────────────────────────────────────────────────
 
 describe('getWorkspaceInstructions', () => {
@@ -1842,31 +1885,6 @@ Body.
     expect(loaded).not.toBeNull();
     expect(loaded!.files).toHaveLength(2);
     expect(loaded!.sourceBackend).toBe('claude-code');
-  });
-
-  test('serializeMemoryForInjection groups by type and strips frontmatter', () => {
-    const text = service.serializeMemoryForInjection(makeSnapshot());
-    expect(text).toContain('## Workspace Memory');
-    expect(text).toContain('### User Preferences');
-    expect(text).toContain('### Feedback');
-    expect(text).toContain('senior backend engineer');
-    expect(text).toContain('use real DB not mocks');
-    expect(text).toContain('Backend engineer with deep Go experience.');
-    // Frontmatter keys should NOT appear in the injected prompt.
-    expect(text).not.toContain('---\nname:');
-    expect(text).not.toContain('type: user');
-  });
-
-  test('serializeMemoryForInjection returns empty string for null or empty', () => {
-    expect(service.serializeMemoryForInjection(null)).toBe('');
-    const empty: MemorySnapshot = {
-      capturedAt: '2026-04-07T12:00:00Z',
-      sourceBackend: 'claude-code',
-      sourcePath: null,
-      index: '',
-      files: [],
-    };
-    expect(service.serializeMemoryForInjection(empty)).toBe('');
   });
 
   test('captureWorkspaceMemory invokes adapter extractMemory and persists', async () => {

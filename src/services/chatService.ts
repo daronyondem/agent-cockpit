@@ -25,19 +25,6 @@ import type {
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
 
 /**
- * Strips YAML frontmatter from the head of a memory file so only the
- * body is included in the injected prompt.  Memory files start with
- * `---\n...\n---\n` and everything after is the body.
- */
-function stripFrontmatter(content: string): string {
-  if (!content.startsWith('---')) return content;
-  const end = content.indexOf('\n---', 3);
-  if (end === -1) return content;
-  const rest = content.slice(end + 4);
-  return rest.startsWith('\n') ? rest.slice(1) : rest;
-}
-
-/**
  * Turn an arbitrary string into a short, filesystem-safe slug. Used to
  * build memory-note filenames like `note_<timestamp>_<slug>.md`.
  */
@@ -1181,68 +1168,6 @@ export class ChatService {
   }
 
   /**
-   * Serialize a workspace memory snapshot into a text block suitable
-   * for injection into a CLI system prompt.  Groups memories by type
-   * (user / feedback / project / reference) and uses the frontmatter
-   * `description` as the heading, falling back to `name` or filename.
-   * Returns an empty string if there is nothing useful to inject.
-   */
-  serializeMemoryForInjection(snapshot: MemorySnapshot | null): string {
-    if (!snapshot || !snapshot.files || snapshot.files.length === 0) return '';
-
-    const groups: Record<string, MemoryFile[]> = {
-      user: [],
-      feedback: [],
-      project: [],
-      reference: [],
-      unknown: [],
-    };
-    for (const file of snapshot.files) {
-      const bucket = groups[file.type] || groups.unknown;
-      bucket.push(file);
-    }
-
-    const sectionHeadings: Array<[keyof typeof groups, string]> = [
-      ['user', 'User Preferences'],
-      ['feedback', 'Feedback'],
-      ['project', 'Project Context'],
-      ['reference', 'References'],
-      ['unknown', 'Other'],
-    ];
-
-    const sections: string[] = [];
-    for (const [key, heading] of sectionHeadings) {
-      const files = groups[key];
-      if (!files || files.length === 0) continue;
-      const lines = [`### ${heading}`, ''];
-      for (const file of files) {
-        const label = file.description || file.name || file.filename.replace(/\.md$/i, '');
-        lines.push(`- **${label}**`);
-        const body = stripFrontmatter(file.content).trim();
-        if (body) {
-          for (const bodyLine of body.split('\n')) {
-            lines.push(`  ${bodyLine}`);
-          }
-        }
-        lines.push('');
-      }
-      sections.push(lines.join('\n').trimEnd());
-    }
-
-    if (sections.length === 0) return '';
-
-    return [
-      '## Workspace Memory (captured from prior sessions)',
-      '',
-      'The following context was captured from prior CLI sessions in this workspace.',
-      'Use it to inform your behavior but treat it as potentially stale — verify against',
-      'the current code state before acting on it.',
-      '',
-      ...sections,
-    ].join('\n').trim();
-  }
-
-  /**
    * Capture memory from the given backend adapter for the workspace
    * associated with `convId` and persist it.  Returns the snapshot or
    * `null` if the backend doesn't support memory extraction or no
@@ -1304,6 +1229,44 @@ export class ChatService {
       `Read index.json for all past and current conversations in this workspace with per-session summaries.`,
       `Each conversation subfolder contains session-N.json files with full message histories.`,
       `When the user references previous work, decisions, or discussions, consult the relevant session files for context.]`,
+    ].join('\n');
+  }
+
+  /**
+   * Returns a bracketed pointer block that tells the CLI where the
+   * workspace's memory directory lives on disk, or `null` when memory
+   * is disabled for this workspace.
+   *
+   * This is the read-side counterpart to the `memory_note` MCP writer.
+   * Instead of dumping the entire memory into the system prompt (which
+   * pays a token cost on every spawn, doesn't survive `--resume`, and
+   * is frozen at session start), we prepend a short pointer to the
+   * first user message on new sessions. Because the pointer lives in
+   * the user message, it survives `--resume` via the CLI's own
+   * conversation history, and because the model reads the files on
+   * demand via its normal file tools, mid-session additions (e.g. a
+   * `memory_note` call from a different tab) are visible on the very
+   * next turn.
+   *
+   * The method `mkdir -p`s `memory/files/` so the model never hits
+   * ENOENT on a brand-new workspace where nothing has been written
+   * yet.
+   */
+  async getWorkspaceMemoryPointer(hash: string): Promise<string | null> {
+    if (!hash) return null;
+    const enabled = await this.getWorkspaceMemoryEnabled(hash);
+    if (!enabled) return null;
+    const filesDir = this._memoryFilesDir(hash);
+    try {
+      await fsp.mkdir(filesDir, { recursive: true });
+    } catch (err: unknown) {
+      console.warn(`[memory] getWorkspaceMemoryPointer: could not create ${filesDir}:`, (err as Error).message);
+    }
+    const absPath = path.resolve(filesDir);
+    return [
+      `[Workspace memory is available at ${absPath}/`,
+      `Contains .md files with YAML frontmatter (type, name, description) followed by body text.`,
+      `Read these when the user references preferences, feedback, decisions, project context, or prior work style.]`,
     ].join('\n');
   }
 
