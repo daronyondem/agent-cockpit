@@ -1027,6 +1027,37 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
+  // DELETE all memory entries for a workspace — the "Clear all memory"
+  // button in Workspace Settings → Memory. Wipes both `claude/` (CLI
+  // capture) and `notes/` (memory_note + session extraction). Leaves the
+  // workspace's Memory-enabled flag untouched so the user can keep the
+  // feature on and just start over.
+  router.delete('/workspaces/:hash/memory/entries', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const deleted = await chatService.clearWorkspaceMemory(hash);
+      const snapshot = await chatService.getWorkspaceMemory(hash);
+
+      // Notify any connected WebSocket so open memory panels refresh.
+      if (wsFns) {
+        for (const [convId] of activeStreams) {
+          if (chatService.getWorkspaceHashForConv(convId) === hash && wsFns.isConnected(convId)) {
+            wsFns.send(convId, {
+              type: 'memory_update',
+              capturedAt: snapshot?.capturedAt || new Date().toISOString(),
+              fileCount: snapshot?.files.length || 0,
+              changedFiles: [],
+            });
+          }
+        }
+      }
+
+      res.json({ ok: true, deleted, snapshot });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message || 'Clear failed' });
+    }
+  });
+
   // ── Usage Stats ────────────────────────────────────────────────────────────
   router.get('/usage-stats', async (_req: Request, res: Response) => {
     try {

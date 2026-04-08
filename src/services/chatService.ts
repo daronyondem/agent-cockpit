@@ -1077,6 +1077,39 @@ export class ChatService {
   }
 
   /**
+   * Wipe all memory entries for a workspace. Removes every `.md` under
+   * `memory/files/claude/` and `memory/files/notes/`, then rewrites
+   * `snapshot.json` to reflect the empty state. Leaves the workspace's
+   * Memory-enabled flag untouched. Returns the number of files deleted.
+   */
+  async clearWorkspaceMemory(hash: string): Promise<number> {
+    let deleted = 0;
+    for (const dir of [this._memoryClaudeDir(hash), this._memoryNotesDir(hash)]) {
+      let entries: string[];
+      try {
+        entries = await fsp.readdir(dir);
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      for (const name of entries) {
+        if (!name.endsWith('.md')) continue;
+        try {
+          await fsp.unlink(path.join(dir, name));
+          deleted++;
+        } catch (err: unknown) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+        }
+      }
+    }
+
+    // Rebuild snapshot.json so getWorkspaceMemory() reflects the wipe
+    // immediately. Safe even if no prior snapshot existed.
+    await this._refreshSnapshotIndex(hash);
+    return deleted;
+  }
+
+  /**
    * Rewrite `snapshot.json` from the current on-disk state without
    * re-running capture. Used after note writes and deletions so
    * `getWorkspaceMemory()` stays consistent.

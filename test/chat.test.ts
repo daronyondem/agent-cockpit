@@ -2410,6 +2410,53 @@ describe('DELETE /workspaces/:hash/memory/entries/:relpath', () => {
   });
 });
 
+describe('DELETE /workspaces/:hash/memory/entries (bulk)', () => {
+  test('clears every memory entry and returns the emptied snapshot', async () => {
+    const conv = await chatService.createConversation('ClearAll', '/tmp/ws-mem-clear-all');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+
+    // Seed two note entries so there's something to wipe.
+    await chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: one\ndescription: first\ntype: user\n---\n\nOne.',
+      source: 'memory-note',
+      filenameHint: 'one',
+    });
+    await chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: two\ndescription: second\ntype: feedback\n---\n\nTwo.',
+      source: 'memory-note',
+      filenameHint: 'two',
+    });
+
+    const beforeClear = await chatService.getWorkspaceMemory(hash);
+    expect((beforeClear?.files || []).length).toBe(2);
+
+    const res = await makeRequest(
+      'DELETE',
+      `/api/chat/workspaces/${hash}/memory/entries`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.deleted).toBe(2);
+    expect((res.body.snapshot?.files || []).length).toBe(0);
+
+    const afterClear = await chatService.getWorkspaceMemory(hash);
+    expect((afterClear?.files || []).length).toBe(0);
+  });
+
+  test('is a no-op (200, deleted: 0) when no entries exist', async () => {
+    const conv = await chatService.createConversation('ClearEmpty', '/tmp/ws-mem-clear-empty');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const res = await makeRequest(
+      'DELETE',
+      `/api/chat/workspaces/${hash}/memory/entries`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.deleted).toBe(0);
+  });
+});
+
 // ── memory_update WS frame ────────────────────────────────────────────────
 
 describe('memory_update WebSocket frame', () => {

@@ -1078,7 +1078,13 @@ function chatRenderWorkspaceMemoryBrowser(snapshot, enabled, hash) {
         </ul>
       </div>
     `).join('');
-  return `<div class="chat-memory-groups">${rows}</div>`;
+  return `
+    <div class="chat-memory-groups">${rows}</div>
+    <div class="chat-memory-clear-all">
+      <button type="button" class="chat-memory-clear-all-btn" data-action="clear-all">Clear all memory</button>
+      <span class="chat-memory-clear-all-hint">Removes every entry for this workspace. Cannot be undone.</span>
+    </div>
+  `;
 }
 
 function chatWireWorkspaceMemoryBrowser(container, hash) {
@@ -1108,6 +1114,22 @@ function chatWireWorkspaceMemoryBrowser(container, hash) {
       }
     });
   });
+  const clearBtn = container.querySelector('.chat-memory-clear-all-btn');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', async () => {
+      if (!confirm('Clear all memory entries for this workspace? This cannot be undone.')) return;
+      try {
+        await chatFetch(`workspaces/${encodeURIComponent(hash)}/memory/entries`, {
+          method: 'DELETE',
+        });
+        const memRes = await fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/memory`), { credentials: 'same-origin' }).then((r) => r.ok ? r.json() : {}).catch(() => ({}));
+        container.innerHTML = chatRenderWorkspaceMemoryBrowser(memRes.snapshot || null, Boolean(memRes.enabled), hash);
+        chatWireWorkspaceMemoryBrowser(container, hash);
+      } catch (err) {
+        alert('Failed to clear memory: ' + err.message);
+      }
+    });
+  }
 }
 
 function chatSaveWorkspaceInstructions(hash) {

@@ -1751,6 +1751,70 @@ Body.
     ).rejects.toThrow(/traversal/i);
   });
 
+  test('clearWorkspaceMemory wipes every entry across claude/ and notes/', async () => {
+    await service.createConversation('Mem Clear', '/tmp/mem-clear');
+    const hash = workspaceHash('/tmp/mem-clear');
+
+    // Seed a CLI-capture snapshot with a claude/ entry and add a note entry.
+    await service.saveWorkspaceMemory(hash, {
+      capturedAt: new Date().toISOString(),
+      sourceBackend: 'claude-code',
+      sourcePath: null,
+      index: '',
+      files: [
+        {
+          filename: 'keep_me.md',
+          name: 'keep-me',
+          description: 'captured',
+          type: 'project',
+          content: '---\nname: keep-me\ndescription: captured\ntype: project\n---\n\nBody.',
+        },
+      ],
+    });
+    await service.addMemoryNoteEntry(hash, {
+      content: '---\nname: note-one\ndescription: first\ntype: user\n---\n\nOne.',
+      source: 'memory-note',
+      filenameHint: 'note-one',
+    });
+    await service.addMemoryNoteEntry(hash, {
+      content: '---\nname: note-two\ndescription: second\ntype: feedback\n---\n\nTwo.',
+      source: 'session-extraction',
+      filenameHint: 'note-two',
+    });
+
+    const beforeClear = await service.getWorkspaceMemory(hash);
+    expect(beforeClear?.files.length).toBe(3);
+
+    const deleted = await service.clearWorkspaceMemory(hash);
+    expect(deleted).toBe(3);
+
+    const afterClear = await service.getWorkspaceMemory(hash);
+    expect(afterClear?.files.length || 0).toBe(0);
+  });
+
+  test('clearWorkspaceMemory returns 0 and is a no-op when no entries exist', async () => {
+    await service.createConversation('Mem Clear Empty', '/tmp/mem-clear-empty');
+    const hash = workspaceHash('/tmp/mem-clear-empty');
+
+    const deleted = await service.clearWorkspaceMemory(hash);
+    expect(deleted).toBe(0);
+  });
+
+  test('clearWorkspaceMemory leaves the Memory-enabled flag untouched', async () => {
+    await service.createConversation('Mem Clear Flag', '/tmp/mem-clear-flag');
+    const hash = workspaceHash('/tmp/mem-clear-flag');
+
+    await service.setWorkspaceMemoryEnabled(hash, true);
+    await service.addMemoryNoteEntry(hash, {
+      content: '---\nname: x\ndescription: x\ntype: user\n---\n\nX.',
+      source: 'memory-note',
+      filenameHint: 'x',
+    });
+
+    await service.clearWorkspaceMemory(hash);
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(true);
+  });
+
   test('getWorkspaceMemoryEnabled defaults to false and persists after set', async () => {
     await service.createConversation('Mem Toggle', '/tmp/mem-toggle');
     const hash = workspaceHash('/tmp/mem-toggle');

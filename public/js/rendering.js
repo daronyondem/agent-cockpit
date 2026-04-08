@@ -176,7 +176,7 @@ export function chatRenderMemoryUpdateMessage(msg) {
     ? `Memory snapshot refreshed (${fileCount} file${fileCount === 1 ? '' : 's'})`
     : `Memory updated: ${changedCount} file${changedCount === 1 ? '' : 's'} changed`;
 
-  const detailHtml = changedCount > 0
+  const filesHtml = changedCount > 0
     ? `<div class="chat-memory-msg-files">${changed.slice(0, 5).map(f => esc(f)).join(', ')}${changedCount > 5 ? `, +${changedCount - 5} more` : ''}</div>`
     : '';
 
@@ -189,11 +189,16 @@ export function chatRenderMemoryUpdateMessage(msg) {
         <div class="chat-msg-body">
           <div class="chat-msg-role">Agent Cockpit ${timeLabel}</div>
           <div class="chat-msg-content">
-            <button type="button" class="chat-memory-msg-card" data-action="open-memory">
-              <div class="chat-memory-msg-headline">${esc(headline)}</div>
-              ${detailHtml}
-              <div class="chat-memory-msg-cta">View memory →</div>
-            </button>
+            <details class="chat-memory-msg-card">
+              <summary class="chat-memory-msg-summary">
+                <span class="chat-memory-msg-caret" aria-hidden="true"></span>
+                <span class="chat-memory-msg-headline">${esc(headline)}</span>
+              </summary>
+              <div class="chat-memory-msg-body">
+                ${filesHtml}
+                <button type="button" class="chat-memory-msg-cta" data-action="open-memory">View memory →</button>
+              </div>
+            </details>
           </div>
         </div>
       </div>
