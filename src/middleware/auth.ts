@@ -140,5 +140,11 @@ function isLocalRequest(req: Request): boolean {
 
 export function requireAuth(req: Request, res: Response, next: NextFunction): void {
   if (isLocalRequest(req) || req.isAuthenticated()) return next();
+  // API requests get a JSON 401 so the client can show a session-expired UI
+  // instead of receiving the HTML login page (which breaks `res.json()`).
+  if (req.path.startsWith('/api/')) {
+    res.status(401).json({ error: 'Not authenticated' });
+    return;
+  }
   res.redirect('/auth/login');
 }

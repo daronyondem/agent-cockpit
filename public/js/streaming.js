@@ -1,4 +1,4 @@
-import { state, chatFetch, chatApiUrl, fetchCsrfToken, chatSyncQueueToServer } from './state.js';
+import { state, chatFetch, chatApiUrl, fetchCsrfToken, chatSyncQueueToServer, chatShowSessionExpired } from './state.js';
 import { esc, escWithCode } from './utils.js';
 import {
   chatRenderMessages, chatRenderMarkdown, chatAutoResize, chatScrollToBottom,
@@ -220,6 +220,11 @@ export async function chatSendMessage() {
       credentials: 'same-origin',
       body: JSON.stringify({ content, backend, model, effort }),
     });
+
+    if (response.status === 401) {
+      chatShowSessionExpired();
+      throw new Error('Session expired');
+    }
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
