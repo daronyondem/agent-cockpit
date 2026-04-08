@@ -972,6 +972,75 @@ describe('Workspace context injection', () => {
     expect(mockBackend._lastMessage).not.toContain('Workspace discussion history');
   });
 
+  test('injects memory pointer on new session when memory is enabled', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/inject-mem-on');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceMemoryEnabled(hash, true);
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    // Both pointers should be in the user message on a new session.
+    expect(mockBackend._lastMessage).toContain('Workspace discussion history');
+    expect(mockBackend._lastMessage).toContain('Workspace memory is available at');
+    expect(mockBackend._lastMessage).toContain('memory/files/');
+    expect(mockBackend._lastMessage).toContain('Hello');
+
+    // Memory content MUST NOT be dumped into the system prompt anymore.
+    expect(mockBackend._lastOptions!.systemPrompt).not.toContain('Workspace Memory');
+    expect(mockBackend._lastOptions!.systemPrompt).not.toContain('User Preferences');
+  });
+
+  test('does not inject memory pointer when memory is disabled', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/inject-mem-off');
+    // Memory stays disabled (default).
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+
+    expect(mockBackend._lastMessage).toContain('Workspace discussion history');
+    expect(mockBackend._lastMessage).not.toContain('Workspace memory is available');
+  });
+
+  test('does not inject memory pointer on subsequent messages', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/inject-mem-resume');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceMemoryEnabled(hash, true);
+    // Pre-seed a message so this is no longer a new session.
+    await chatService.addMessage(conv.id, 'user', 'First msg', 'claude-code');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Response', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Second msg',
+      backend: 'claude-code',
+    });
+
+    // On resumed sessions the pointer is NOT re-prepended — the CLI
+    // still sees it via its own conversation history from the first
+    // new-session message.
+    expect(mockBackend._lastMessage).toBe('Second msg');
+    expect(mockBackend._lastMessage).not.toContain('Workspace memory is available');
+    expect(mockBackend._lastMessage).not.toContain('Workspace discussion history');
+  });
+
   test('stores user message without injection in conversation', async () => {
     const conv = await chatService.createConversation('Test', '/tmp/inject-test');
 

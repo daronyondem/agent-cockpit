@@ -707,12 +707,6 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
 
     const isNewSession = conv.messages.length === 0;
 
-    let cliMessage = content.trim();
-    if (isNewSession) {
-      const ctx = chatService.getWorkspaceContext(convId);
-      if (ctx) cliMessage = ctx + '\n\n' + cliMessage;
-    }
-
     const backendId = backend || conv.backend;
     const wsHashForSend = chatService.getWorkspaceHashForConv(convId);
     const memoryEnabledForSend = wsHashForSend
@@ -723,16 +717,30 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     // `mcpServers`; Claude Code spawns it via `--mcp-config`.
     const needsMemoryMcp = memoryEnabledForSend && !!wsHashForSend;
 
+    let cliMessage = content.trim();
+    if (isNewSession) {
+      // Build the user-message prefix: workspace discussion history
+      // pointer, then workspace memory pointer (read-side access to the
+      // merged memory store). Both live in the user message — not the
+      // system prompt — so they survive `--resume` via the CLI's own
+      // conversation history on subsequent turns.
+      const prefixes: string[] = [];
+      const ctx = chatService.getWorkspaceContext(convId);
+      if (ctx) prefixes.push(ctx);
+      if (wsHashForSend) {
+        const memPointer = await chatService.getWorkspaceMemoryPointer(wsHashForSend);
+        if (memPointer) prefixes.push(memPointer);
+      }
+      if (prefixes.length > 0) {
+        cliMessage = prefixes.join('\n\n') + '\n\n' + cliMessage;
+      }
+    }
+
     let systemPrompt = '';
     if (isNewSession) {
       const settings = await chatService.getSettings();
       const globalPrompt = settings.systemPrompt || '';
       const wsInstructions = wsHashForSend ? (await chatService.getWorkspaceInstructions(wsHashForSend)) || '' : '';
-      let memoryBlock = '';
-      if (memoryEnabledForSend && wsHashForSend) {
-        const snapshot = await chatService.getWorkspaceMemory(wsHashForSend);
-        memoryBlock = chatService.serializeMemoryForInjection(snapshot);
-      }
       // Append an addendum that teaches the CLI to call the `memory_note`
       // MCP tool when it learns something worth remembering. Runs for
       // Claude Code too: its native `#` flow covers explicit saves, but
@@ -750,7 +758,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
             'Each call should capture ONE fact in natural language — do not batch unrelated facts. Pass the category in `type` when you know it. Keep notes terse. Do not call `memory_note` for ephemeral task state or things already visible in the current code.',
           ].join('\n')
         : '';
-      const parts = [globalPrompt, wsInstructions, memoryBlock, memoryMcpAddendum].filter(Boolean);
+      const parts = [globalPrompt, wsInstructions, memoryMcpAddendum].filter(Boolean);
       systemPrompt = parts.join('\n\n');
     }
 
