@@ -83,6 +83,10 @@ export function chatApiUrl(path) {
 
 export async function fetchCsrfToken() {
   const res = await fetch(apiUrl('/csrf-token'), { credentials: 'same-origin' });
+  if (res.status === 401) {
+    chatShowSessionExpired();
+    throw new Error('Session expired');
+  }
   if (!res.ok) throw new Error(`CSRF token fetch failed (${res.status})`);
   const body = await res.json();
   state.csrfToken = body.csrfToken;
@@ -97,9 +101,36 @@ export async function chatFetch(path, opts = {}) {
     opts.body = JSON.stringify(opts.body);
   }
   const res = await fetch(chatApiUrl(path), { ...opts, headers, credentials: 'same-origin' });
+  if (res.status === 401) {
+    chatShowSessionExpired();
+    throw new Error('Session expired');
+  }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(err.error || res.statusText);
   }
   return res;
+}
+
+// ─── Session expiry overlay ──────────────────────────────────────────────────
+// Shown when any API request returns 401. Idempotent — calling it multiple
+// times does not stack overlays. Drafts are already persisted to localStorage
+// by draftState.js, so they survive the sign-in redirect and page reload.
+
+export function chatShowSessionExpired() {
+  if (document.getElementById('chat-session-expired-overlay')) return;
+  const loginUrl = new URL('./auth/login', window.location.href).toString();
+  const overlay = document.createElement('div');
+  overlay.id = 'chat-session-expired-overlay';
+  overlay.innerHTML =
+    '<div class="session-expired-dialog">'
+    + '<div style="font-size:18px;font-weight:600;margin-bottom:8px;">Session expired</div>'
+    + '<div style="font-size:13px;color:var(--muted);margin-bottom:20px;">'
+    + 'You have been signed out. Your draft message is preserved — sign in to continue.'
+    + '</div>'
+    + '<a class="session-expired-btn" id="chat-session-expired-btn" href="' + loginUrl + '">Sign in again</a>'
+    + '</div>';
+  document.body.appendChild(overlay);
+  const btn = document.getElementById('chat-session-expired-btn');
+  if (btn) btn.focus();
 }

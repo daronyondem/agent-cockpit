@@ -450,12 +450,13 @@ Concatenated with `\n\n` and passed as the backend's system prompt. Not sent on 
 | Status | Meaning | Body |
 |--------|---------|------|
 | `400` | Bad input | `{ error: "message" }` |
+| `401` | Session expired / not authenticated (API routes only) | `{ error: "Not authenticated" }` |
 | `403` | CSRF failure or access denied | `{ error: "Invalid CSRF token" }` |
 | `404` | Not found | `{ error: "Conversation not found" }` etc. |
 | `409` | Conflict | `{ error: "Cannot reset session while streaming" }` |
 | `500` | Server error | `{ error: err.message }` |
 
-Unauthenticated requests redirect to `/auth/login`.
+Unauthenticated requests to `/api/*` return `401 { error: "Not authenticated" }` as JSON so the client can react without trying to parse an HTML login page. All other unauthenticated requests redirect to `/auth/login`.
 
 ---
 
@@ -822,7 +823,9 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 | `/auth/denied` | GET | Access denied page |
 | `/auth/logout` | GET | Destroys session, clears cookie, redirects to `/` |
 
-**`requireAuth` middleware:** Localhost passes through without auth. Otherwise requires `req.isAuthenticated()` or redirects to `/auth/login`.
+**`requireAuth` middleware:** Localhost passes through without auth. Otherwise requires `req.isAuthenticated()`. For unauthenticated requests to `/api/*` paths, responds with `401 { error: "Not authenticated" }` as JSON (so client `fetch` callers can handle it without trying to parse an HTML login page). All other unauthenticated requests are redirected to `/auth/login`.
+
+**Frontend session-expired handling:** When any API request returns `401`, `chatFetch` / `fetchCsrfToken` / the streaming send path each call `chatShowSessionExpired()` (in `public/js/state.js`), which renders a modal overlay (`#chat-session-expired-overlay`) with a "Sign in again" button pointing at `./auth/login`. The overlay is idempotent — calling it repeatedly does not stack overlays. Drafts are preserved by existing `draftState.js` localStorage persistence and survive the sign-in redirect.
 
 ### 5.4 CSRF Protection
 
@@ -1053,6 +1056,7 @@ Update OAuth callback URLs to include the ngrok URL.
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |
 | `test/sessionStore.test.ts` | Session file-store persistence |
 | `test/updateService.test.ts` | Version comparison, status, trigger guards, interval management, interpreter verification, PATH setup for restart |
+| `test/auth.test.ts` | `requireAuth` middleware: unauthenticated `/api/*` returns JSON 401, unauthenticated non-API paths redirect to `/auth/login`, authenticated passthrough, localhost bypass for both API and non-API paths |
 
 ### CI/CD
 
