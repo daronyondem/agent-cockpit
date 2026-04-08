@@ -589,6 +589,20 @@
     display: block;
   }
 
+  /* Agent Cockpit-branded avatar for synthetic system bubbles (archiving,
+     memory updates, etc.).  Neutral background so it's not themed to any
+     specific subsystem. */
+  .chat-msg-avatar-cockpit {
+    background: var(--surface2) !important;
+    padding: 4px;
+  }
+  .chat-msg-avatar-cockpit img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+    display: block;
+  }
+
   .chat-msg-body {
     flex: 1;
     min-width: 0;
@@ -1941,38 +1955,69 @@
     display: block;
   }
   .chat-memory-msg-card {
-    display: block;
-    width: 100%;
-    text-align: left;
+    display: inline-block;
+    max-width: 100%;
     background: color-mix(in srgb, var(--accent-memory) 8%, transparent);
     border: 1px solid color-mix(in srgb, var(--accent-memory) 30%, transparent);
-    border-radius: 10px;
-    padding: 12px 14px;
-    cursor: pointer;
+    border-radius: 8px;
     color: var(--text);
     font: inherit;
     transition: background 120ms ease, border-color 120ms ease;
   }
   .chat-memory-msg-card:hover {
-    background: color-mix(in srgb, var(--accent-memory) 16%, transparent);
-    border-color: color-mix(in srgb, var(--accent-memory) 50%, transparent);
+    background: color-mix(in srgb, var(--accent-memory) 14%, transparent);
+    border-color: color-mix(in srgb, var(--accent-memory) 45%, transparent);
+  }
+  .chat-memory-msg-summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+    list-style: none;
+    user-select: none;
+  }
+  .chat-memory-msg-summary::-webkit-details-marker { display: none; }
+  .chat-memory-msg-caret {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 4px solid transparent;
+    border-bottom: 4px solid transparent;
+    color: var(--muted);
+    transition: transform 120ms ease;
+  }
+  .chat-memory-msg-card[open] .chat-memory-msg-caret {
+    transform: rotate(90deg);
   }
   .chat-memory-msg-headline {
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
     color: var(--text);
   }
+  .chat-memory-msg-body {
+    padding: 6px 10px 8px 20px;
+    border-top: 1px solid color-mix(in srgb, var(--accent-memory) 18%, transparent);
+  }
   .chat-memory-msg-files {
-    margin-top: 4px;
-    font-size: 12px;
+    font-size: 11px;
     color: var(--muted);
     word-break: break-all;
+    margin-bottom: 6px;
   }
   .chat-memory-msg-cta {
-    margin-top: 6px;
-    font-size: 12px;
+    background: none;
+    border: none;
+    padding: 0;
+    font: inherit;
+    font-size: 11px;
     color: var(--accent-memory);
     font-weight: 500;
+    cursor: pointer;
+  }
+  .chat-memory-msg-cta:hover {
+    text-decoration: underline;
   }
 
   /* ── Memory panel (modal contents) ──────────────────────── */
@@ -2088,6 +2133,33 @@
     word-break: break-word;
     max-height: 320px;
     overflow-y: auto;
+  }
+  .chat-memory-clear-all {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+  .chat-memory-clear-all-btn {
+    background: transparent;
+    color: var(--danger, #d9534f);
+    border: 1px solid var(--danger, #d9534f);
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 12px;
+    cursor: pointer;
+    font-weight: 500;
+  }
+  .chat-memory-clear-all-btn:hover {
+    background: var(--danger, #d9534f);
+    color: #fff;
+  }
+  .chat-memory-clear-all-hint {
+    color: var(--muted);
+    font-size: 11px;
   }
 
   /* ── Folder Browser ──────────────────────────────────────── */

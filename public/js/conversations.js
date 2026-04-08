@@ -265,7 +265,7 @@ export function chatRenderConvList() {
         <svg class="chat-conv-group-chevron${isCollapsed ? ' collapsed' : ''}" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4.5 6L8 9.5L11.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="chat-conv-group-label">${esc(label)}</span>
         ${isCollapsed ? `<span class="chat-conv-group-count">${count}</span>` : ''}
-        ${group.hash ? `<button class="chat-conv-group-instructions-btn" data-ws-hash="${esc(group.hash)}" data-ws-label="${esc(label)}" title="Workspace instructions"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 4.5l-2-2L3 11l-.5 2.5L5 13l8.5-8.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.5 3.5l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>` : ''}
+        ${group.hash ? `<button class="chat-conv-group-instructions-btn" data-ws-hash="${esc(group.hash)}" data-ws-label="${esc(label)}" title="Workspace settings"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 4.5l-2-2L3 11l-.5 2.5L5 13l8.5-8.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.5 3.5l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>` : ''}
       </div>`;
     if (!isCollapsed) {
       for (const c of group.convs) {

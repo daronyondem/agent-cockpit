@@ -4,7 +4,19 @@ import type {
   SendMessageResult,
   Message,
   MemorySnapshot,
+  EffortLevel,
 } from '../../types';
+
+export interface RunOneShotOptions {
+  /** Optional model override; backends ignore if unsupported. */
+  model?: string;
+  /** Optional reasoning effort; backends ignore if unsupported. */
+  effort?: EffortLevel;
+  /** Hard timeout in ms (default: 60s). */
+  timeoutMs?: number;
+  /** Working directory for the spawned CLI. */
+  workingDir?: string | null;
+}
 
 /**
  * Base adapter class for CLI backends.
@@ -37,6 +49,19 @@ export class BaseBackendAdapter {
 
   async generateTitle(userMessage: string, fallback: string): Promise<string> {
     return fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+  }
+
+  /**
+   * Invoke the backend CLI in one-shot mode with a single prompt, collect
+   * its full text output, and return it as a plain string.  Used by the
+   * Memory MCP server to run the configured Memory CLI against a prompt
+   * template without going through the streaming session machinery.
+   *
+   * Default implementation throws.  Subclasses that can be used as a
+   * Memory CLI must override this.
+   */
+  async runOneShot(_prompt: string, _options?: RunOneShotOptions): Promise<string> {
+    throw new Error(`${this.constructor.name}.runOneShot is not implemented`);
   }
 
   /**

@@ -3,7 +3,7 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { BaseBackendAdapter } from './base';
+import { BaseBackendAdapter, type RunOneShotOptions } from './base';
 import {
   sanitizeSystemPrompt,
   isApiError,
@@ -224,6 +224,38 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     };
   }
 
+  /**
+   * Run the Claude CLI in one-shot (`--print`) mode against a single
+   * prompt and return the full text output.  Used by the Memory MCP
+   * server when Claude Code is the configured Memory CLI.
+   */
+  async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
+    const { model, effort, timeoutMs = 60000, workingDir } = options;
+    const args = ['--print', '-p', prompt];
+    if (model) args.push('--model', model);
+    if (effort && model) {
+      const modelOption = this.metadata.models?.find(m => m.id === model);
+      if (modelOption?.supportedEffortLevels?.includes(effort)) {
+        args.push('--effort', effort);
+      }
+    }
+    return await new Promise<string>((resolve, reject) => {
+      execFile(
+        'claude',
+        args,
+        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined },
+        (err, stdout, stderr) => {
+          if (err) {
+            const msg = (stderr && stderr.trim()) || err.message;
+            reject(new Error(`claude --print failed: ${msg}`));
+            return;
+          }
+          resolve((stdout || '').trim());
+        },
+      );
+    });
+  }
+
   async generateTitle(userMessage: string, fallback: string): Promise<string> {
     if (!userMessage || typeof userMessage !== 'string' || !userMessage.trim()) {
       return fallback || 'New Chat';
@@ -253,7 +285,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     options: SendMessageOptions,
     state: StreamState,
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, isNewSession, workingDir, systemPrompt, model, effort } = options;
+    const { sessionId, isNewSession, workingDir, systemPrompt, model, effort, mcpServers } = options;
 
     const args = [
       '--print',
@@ -283,6 +315,16 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       }
     } else {
       args.push('--resume', sessionId);
+    }
+
+    // Transform the ACP-shaped mcpServers array into Claude Code's
+    // `--mcp-config` JSON (env is a plain object, not an array). This
+    // lets the cockpit wire the Memory MCP stub for Claude Code sessions
+    // the same way it does for Kiro, so `memory_note` is available as
+    // `mcp__agent-cockpit-memory__memory_note` in the model's tool list.
+    if (Array.isArray(mcpServers) && mcpServers.length > 0) {
+      const configJson = mcpServersToClaudeConfigJson(mcpServers);
+      args.push('--mcp-config', configJson);
     }
 
     args.push('-p', message);
@@ -512,6 +554,42 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
   }
 }
 
+// ── MCP config ──────────────────────────────────────────────────────────────
+
+/**
+ * Transform the ACP-shaped `mcpServers` array the cockpit builds for
+ * `memoryMcp.issueMemoryMcpSession` into the JSON string that Claude
+ * Code's `--mcp-config` flag accepts.
+ *
+ * - ACP shape: `[{ name, command, args, env: [{name, value}] }]`
+ * - Claude Code shape: `{ mcpServers: { [name]: { command, args, env: {K: V} } } }`
+ *
+ * The ACP env-as-array format is a protocol requirement for Kiro; Claude
+ * Code expects a plain `Record<string,string>`, so we flatten here.
+ */
+export function mcpServersToClaudeConfigJson(
+  servers: Array<{
+    name: string;
+    command: string;
+    args: string[];
+    env?: Array<{ name: string; value: string }>;
+  }>,
+): string {
+  const mcpServers: Record<string, { command: string; args: string[]; env?: Record<string, string> }> = {};
+  for (const server of servers) {
+    const envObj: Record<string, string> = {};
+    for (const pair of server.env || []) {
+      if (pair && typeof pair.name === 'string') envObj[pair.name] = pair.value;
+    }
+    mcpServers[server.name] = {
+      command: server.command,
+      args: Array.isArray(server.args) ? server.args : [],
+      ...(Object.keys(envObj).length > 0 ? { env: envObj } : {}),
+    };
+  }
+  return JSON.stringify({ mcpServers });
+}
+
 // ── Memory helpers ──────────────────────────────────────────────────────────
 
 /**
@@ -595,8 +673,14 @@ export function resolveCanonicalWorkspacePath(workspacePath: string): string {
  * (>200 chars) Claude Code appends a hash suffix we can't reproduce
  * in Node (Bun.hash vs djb2), so we fall back to a directory scan.
  *
- * Returns the absolute path to the memory directory if one matches,
- * or `null` if no candidate exists.
+ * Returns the absolute path where memory *will live*, even if the
+ * directory does not exist yet or contains no `.md` files — callers
+ * like the real-time memory watcher need to know the target path up
+ * front so they can create and watch it before Claude Code writes
+ * anything.  Only returns `null` when the workspace path is long
+ * enough to require a hash suffix *and* no existing dir matches —
+ * in that case the watcher can't attach until a session-reset capture
+ * reveals the real dirname.
  */
 export function resolveClaudeMemoryDir(workspacePath: string): string | null {
   // Prefer $HOME env var over os.homedir() so tests can sandbox the
@@ -606,12 +690,21 @@ export function resolveClaudeMemoryDir(workspacePath: string): string | null {
   const projectsDir = path.join(home, '.claude', 'projects');
   const sanitized = workspacePath.replace(/[^a-zA-Z0-9]/g, '-');
 
-  // Fast path: exact sanitized match.
+  // Short paths: the sanitized name is the exact dirname, so return
+  // the deterministic path regardless of whether anything has been
+  // written yet.  `extractMemory` independently handles ENOENT when
+  // actually reading files, so returning a non-existent path here is
+  // safe and lets the watcher attach early.
   const direct = path.join(projectsDir, sanitized, 'memory');
+  if (sanitized.length <= 200) {
+    return direct;
+  }
+
+  // Long paths: Claude Code appends a hash we can't reproduce.  First
+  // check the exact sanitized path (no hash) in case Claude Code didn't
+  // truncate, then scan for a prefix match.
   if (dirHasMemory(direct)) return direct;
 
-  // Slow path: scan for a directory whose name starts with the
-  // sanitized prefix (covers the >200-char hash suffix case).
   let entries: string[];
   try {
     entries = fs.readdirSync(projectsDir);

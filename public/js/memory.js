@@ -39,12 +39,13 @@ export async function chatOpenMemoryPanel() {
   try {
     // Use raw fetch (not chatFetch) so we can treat 404 as the "no snapshot
     // yet" empty case rather than an exception. This is a GET endpoint with
-    // no CSRF requirement.
+    // no CSRF requirement. Response shape is { enabled, snapshot }; legacy
+    // responses with just { snapshot } still work because we fall back.
     const res = await fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/memory`), {
       credentials: 'same-origin',
     });
     if (res.status === 404) {
-      // No snapshot captured yet — that's normal, not an error.
+      // Workspace not found — treat as empty.
     } else if (!res.ok) {
       errorMsg = `Failed to load memory (HTTP ${res.status})`;
     } else {

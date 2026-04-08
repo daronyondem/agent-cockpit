@@ -117,6 +117,12 @@ export interface ConversationEntry {
 export interface WorkspaceIndex {
   workspacePath: string;
   instructions?: string;
+  /**
+   * Whether per-workspace Memory is enabled. When false/undefined, the
+   * workspace behaves exactly as before this feature: no memory injection,
+   * no MCP memory_note exposure, no post-session extraction.
+   */
+  memoryEnabled?: boolean;
   conversations: ConversationEntry[];
 }
 
@@ -164,6 +170,19 @@ export interface Settings {
   /** Default adaptive reasoning effort. Only applies when defaultBackend/model supports it. */
   defaultEffort?: EffortLevel;
   workingDirectory?: string;
+  /**
+   * Globally-configured Memory CLI used for:
+   *   (a) backing the `memory_note` MCP tool — processes incoming notes,
+   *       classifies/dedupes, and formats them with frontmatter.
+   *   (b) post-session extraction — reads non-Claude session transcripts and
+   *       writes new memory entries.
+   * The CLI selected here must be a registered backend (e.g. 'claude-code').
+   */
+  memory?: {
+    cliBackend?: string;
+    cliModel?: string;
+    cliEffort?: EffortLevel;
+  };
   customInstructions?: {
     aboutUser?: string;
     responseStyle?: string;
@@ -270,8 +289,20 @@ export type StreamEvent =
 
 export type MemoryType = 'user' | 'feedback' | 'project' | 'reference' | 'unknown';
 
+/** Where a memory file came from. */
+export type MemorySource = 'cli-capture' | 'memory-note' | 'session-extraction';
+
 export interface MemoryFile {
-  /** Original filename (e.g. "feedback_testing.md"). */
+  /**
+   * Relative path inside the workspace memory files dir, using forward
+   * slashes. Examples:
+   *   - `claude/feedback_testing.md`  (Claude Code native capture)
+   *   - `notes/note_2026-04-07T18-30-15_slug.md`  (memory_note MCP tool)
+   *   - `notes/session_abc123_1.md`  (post-session extraction)
+   *
+   * Legacy snapshots may have a bare filename like `feedback_testing.md`;
+   * those are treated as living under `claude/` at read time.
+   */
   filename: string;
   /** Parsed frontmatter `name`, if present. */
   name: string | null;
@@ -281,18 +312,27 @@ export interface MemoryFile {
   type: MemoryType;
   /** Raw file content (frontmatter + body). */
   content: string;
+  /**
+   * Provenance of this file. Defaults to `cli-capture` for entries loaded
+   * from older snapshots that don't carry the field.
+   */
+  source?: MemorySource;
 }
 
 export interface MemorySnapshot {
   /** ISO 8601 timestamp of when this snapshot was captured. */
   capturedAt: string;
-  /** Backend the snapshot was extracted from (e.g. "claude-code"). */
+  /**
+   * Backend the most recent CLI-capture came from (e.g. "claude-code"), or
+   * the backend that most recently touched the store for non-capture
+   * backends (e.g. after a memory_note write).
+   */
   sourceBackend: string;
   /** Absolute path to the source memory directory the snapshot came from. */
   sourcePath: string | null;
   /** Contents of the source `MEMORY.md` index (may be empty). */
   index: string;
-  /** Individual memory files. */
+  /** Individual memory files (both CLI captures and notes). */
   files: MemoryFile[];
 }
 
@@ -330,6 +370,21 @@ export interface BackendMetadata {
   models?: ModelOption[];
 }
 
+/**
+ * ACP-shaped MCP server config for `session/new` and `session/load`.
+ *
+ * NOTE: `env` is an **array of `{name, value}` objects**, not a plain
+ * `Record<string, string>`, because that is what the ACP spec
+ * (https://agentclientprotocol.com/protocol/session-setup) requires.
+ * Passing a plain object breaks strict ACP servers like kiro-cli.
+ */
+export interface McpServerConfig {
+  name: string;
+  command: string;
+  args: string[];
+  env?: Array<{ name: string; value: string }>;
+}
+
 export interface SendMessageOptions {
   sessionId: string;
   /** Stable conversation ID (does not change on session reset). */
@@ -346,6 +401,12 @@ export interface SendMessageOptions {
    * (or backends whose selected model doesn't) ignore this.
    */
   effort?: EffortLevel;
+  /**
+   * MCP servers to expose to the backend for this session.  Currently
+   * only used by ACP-based backends (e.g. Kiro) to forward the
+   * Memory MCP stub.  Backends that don't support MCP ignore this.
+   */
+  mcpServers?: McpServerConfig[];
 }
 
 export interface SendMessageResult {

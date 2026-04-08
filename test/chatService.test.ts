@@ -1623,7 +1623,7 @@ Backend engineer with deep Go experience.
     };
   }
 
-  test('saveWorkspaceMemory writes snapshot.json and raw files', async () => {
+  test('saveWorkspaceMemory writes snapshot.json and raw files under claude/', async () => {
     const conv = await service.createConversation('Mem Test', '/tmp/mem-save');
     const hash = workspaceHash('/tmp/mem-save');
     const snapshot = makeSnapshot();
@@ -1632,19 +1632,21 @@ Backend engineer with deep Go experience.
 
     const memDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'memory');
     expect(fs.existsSync(path.join(memDir, 'snapshot.json'))).toBe(true);
-    expect(fs.existsSync(path.join(memDir, 'files', 'MEMORY.md'))).toBe(true);
-    expect(fs.existsSync(path.join(memDir, 'files', 'feedback_testing.md'))).toBe(true);
-    expect(fs.existsSync(path.join(memDir, 'files', 'user_role.md'))).toBe(true);
+    expect(fs.existsSync(path.join(memDir, 'files', 'claude', 'MEMORY.md'))).toBe(true);
+    expect(fs.existsSync(path.join(memDir, 'files', 'claude', 'feedback_testing.md'))).toBe(true);
+    expect(fs.existsSync(path.join(memDir, 'files', 'claude', 'user_role.md'))).toBe(true);
 
     const stored = JSON.parse(fs.readFileSync(path.join(memDir, 'snapshot.json'), 'utf8'));
     expect(stored.files).toHaveLength(2);
+    expect(stored.files[0].filename).toBe('claude/feedback_testing.md');
+    expect(stored.files[0].source).toBe('cli-capture');
     expect(stored.sourceBackend).toBe('claude-code');
 
     // Silence unused-variable warning.
     expect(conv.id).toBeDefined();
   });
 
-  test('saveWorkspaceMemory replaces old files on re-capture', async () => {
+  test('saveWorkspaceMemory replaces only the claude subtree on re-capture', async () => {
     await service.createConversation('Mem Replace', '/tmp/mem-replace');
     const hash = workspaceHash('/tmp/mem-replace');
 
@@ -1657,9 +1659,171 @@ Backend engineer with deep Go experience.
     };
     await service.saveWorkspaceMemory(hash, smaller);
 
-    const filesDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'memory', 'files');
-    const files = fs.readdirSync(filesDir);
+    const claudeDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'memory', 'files', 'claude');
+    const files = fs.readdirSync(claudeDir);
     expect(files).toEqual(['feedback_testing.md']);
+  });
+
+  test('saveWorkspaceMemory preserves notes across re-captures', async () => {
+    await service.createConversation('Mem Notes', '/tmp/mem-notes');
+    const hash = workspaceHash('/tmp/mem-notes');
+
+    // First add a note.
+    await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: test-note
+description: a sticky note
+type: project
+---
+
+Body.
+`,
+      source: 'memory-note',
+      filenameHint: 'sticky',
+    });
+
+    // Then do a Claude capture — the note should still be there.
+    await service.saveWorkspaceMemory(hash, makeSnapshot());
+
+    const loaded = await service.getWorkspaceMemory(hash);
+    expect(loaded).not.toBeNull();
+    const filenames = (loaded!.files || []).map((f) => f.filename);
+    expect(filenames.some((f) => f.startsWith('claude/'))).toBe(true);
+    expect(filenames.some((f) => f.startsWith('notes/'))).toBe(true);
+  });
+
+  test('addMemoryNoteEntry writes to notes/ and refreshes snapshot', async () => {
+    await service.createConversation('Mem Note Add', '/tmp/mem-note-add');
+    const hash = workspaceHash('/tmp/mem-note-add');
+
+    const relPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: new-fact
+description: something new
+type: user
+---
+
+New fact body.
+`,
+      source: 'memory-note',
+      filenameHint: 'new-fact',
+    });
+    expect(relPath.startsWith('notes/')).toBe(true);
+
+    const snapshot = await service.getWorkspaceMemory(hash);
+    expect(snapshot).not.toBeNull();
+    expect(snapshot!.files.length).toBe(1);
+    expect(snapshot!.files[0].filename).toBe(relPath);
+    expect(snapshot!.files[0].source).toBe('memory-note');
+    expect(snapshot!.files[0].type).toBe('user');
+  });
+
+  test('deleteMemoryEntry removes a file and refreshes snapshot', async () => {
+    await service.createConversation('Mem Delete', '/tmp/mem-delete');
+    const hash = workspaceHash('/tmp/mem-delete');
+
+    const relPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: to-delete
+description: will be deleted
+type: project
+---
+
+Body.
+`,
+      source: 'memory-note',
+      filenameHint: 'to-delete',
+    });
+
+    const deleted = await service.deleteMemoryEntry(hash, relPath);
+    expect(deleted).toBe(true);
+
+    const snapshot = await service.getWorkspaceMemory(hash);
+    expect(snapshot?.files.length || 0).toBe(0);
+  });
+
+  test('deleteMemoryEntry rejects path traversal', async () => {
+    await service.createConversation('Mem Traverse', '/tmp/mem-traverse');
+    const hash = workspaceHash('/tmp/mem-traverse');
+
+    await expect(
+      service.deleteMemoryEntry(hash, '../../../etc/passwd'),
+    ).rejects.toThrow(/traversal/i);
+  });
+
+  test('clearWorkspaceMemory wipes every entry across claude/ and notes/', async () => {
+    await service.createConversation('Mem Clear', '/tmp/mem-clear');
+    const hash = workspaceHash('/tmp/mem-clear');
+
+    // Seed a CLI-capture snapshot with a claude/ entry and add a note entry.
+    await service.saveWorkspaceMemory(hash, {
+      capturedAt: new Date().toISOString(),
+      sourceBackend: 'claude-code',
+      sourcePath: null,
+      index: '',
+      files: [
+        {
+          filename: 'keep_me.md',
+          name: 'keep-me',
+          description: 'captured',
+          type: 'project',
+          content: '---\nname: keep-me\ndescription: captured\ntype: project\n---\n\nBody.',
+        },
+      ],
+    });
+    await service.addMemoryNoteEntry(hash, {
+      content: '---\nname: note-one\ndescription: first\ntype: user\n---\n\nOne.',
+      source: 'memory-note',
+      filenameHint: 'note-one',
+    });
+    await service.addMemoryNoteEntry(hash, {
+      content: '---\nname: note-two\ndescription: second\ntype: feedback\n---\n\nTwo.',
+      source: 'session-extraction',
+      filenameHint: 'note-two',
+    });
+
+    const beforeClear = await service.getWorkspaceMemory(hash);
+    expect(beforeClear?.files.length).toBe(3);
+
+    const deleted = await service.clearWorkspaceMemory(hash);
+    expect(deleted).toBe(3);
+
+    const afterClear = await service.getWorkspaceMemory(hash);
+    expect(afterClear?.files.length || 0).toBe(0);
+  });
+
+  test('clearWorkspaceMemory returns 0 and is a no-op when no entries exist', async () => {
+    await service.createConversation('Mem Clear Empty', '/tmp/mem-clear-empty');
+    const hash = workspaceHash('/tmp/mem-clear-empty');
+
+    const deleted = await service.clearWorkspaceMemory(hash);
+    expect(deleted).toBe(0);
+  });
+
+  test('clearWorkspaceMemory leaves the Memory-enabled flag untouched', async () => {
+    await service.createConversation('Mem Clear Flag', '/tmp/mem-clear-flag');
+    const hash = workspaceHash('/tmp/mem-clear-flag');
+
+    await service.setWorkspaceMemoryEnabled(hash, true);
+    await service.addMemoryNoteEntry(hash, {
+      content: '---\nname: x\ndescription: x\ntype: user\n---\n\nX.',
+      source: 'memory-note',
+      filenameHint: 'x',
+    });
+
+    await service.clearWorkspaceMemory(hash);
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(true);
+  });
+
+  test('getWorkspaceMemoryEnabled defaults to false and persists after set', async () => {
+    await service.createConversation('Mem Toggle', '/tmp/mem-toggle');
+    const hash = workspaceHash('/tmp/mem-toggle');
+
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(false);
+
+    const result = await service.setWorkspaceMemoryEnabled(hash, true);
+    expect(result).toBe(true);
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(true);
   });
 
   test('getWorkspaceMemory returns null when none stored', async () => {

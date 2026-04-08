@@ -8,6 +8,7 @@ import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
 import { MemoryWatcher } from '../services/memoryWatcher';
+import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
 import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
@@ -217,6 +218,17 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // Cleared when the watcher is unwatched so a re-watched conversation starts fresh.
   const memoryFingerprints = new Map<string, Map<string, string>>();
   let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer'> | null = null;
+
+  // Memory MCP server — exposes `memory_note` tool to non-Claude CLIs via the
+  // stdio stub in `src/services/memoryMcp/stub.cjs`.  The router is mounted
+  // at `/mcp/memory/notes` below; the `issue`/`revoke` helpers are used by
+  // the Kiro backend wiring to hand out per-session bearer tokens.
+  const memoryMcp: MemoryMcpServer = createMemoryMcpServer({
+    chatService,
+    backendRegistry,
+    getWsFns: () => wsFns,
+  });
+  router.use('/mcp', memoryMcp.router);
 
   function fingerprintMemoryFiles(snapshot: { files: Array<{ filename: string; content: string }> }): Map<string, string> {
     const fp = new Map<string, string>();
@@ -449,6 +461,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       }
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
+      memoryMcp.revokeMemoryMcpSession(convId);
       const ok = await chatService.deleteConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
@@ -600,7 +613,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       // Capture the ending backend's native memory into workspace storage
       // so it can be injected into the next session (including when the
       // user switches CLIs). Runs best-effort — failures never block reset.
-      if (endingBackend) {
+      // Gated on the per-workspace Memory toggle: when Memory is disabled,
+      // we do nothing, and the workspace memory store stays inert.
+      const resetWsHash = chatService.getWorkspaceHashForConv(convId);
+      const memoryOnForReset = resetWsHash
+        ? await chatService.getWorkspaceMemoryEnabled(resetWsHash)
+        : false;
+      if (endingBackend && memoryOnForReset) {
         console.log(`[memory] reset handler: attempting capture for conv=${convId} backend=${endingBackend}`);
         try {
           const snapshot = await chatService.captureWorkspaceMemory(convId, endingBackend);
@@ -612,8 +631,32 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         } catch (err: unknown) {
           console.error(`[memory] capture on reset failed for conv=${convId}:`, (err as Error).message);
         }
-      } else {
+
+        // Also run post-session extraction for every backend: the Memory
+        // CLI scans the just-ended session transcript and writes any new
+        // memory notes into `files/notes/` via addMemoryNoteEntry. This
+        // runs for Claude Code too — its native `#` capture covers
+        // explicitly-saved memories but misses incidental durable facts
+        // (user role, deadlines, corrections) mentioned conversationally.
+        if (resetWsHash && preConv?.messages?.length) {
+          console.log(`[memory] reset handler: running post-session extraction for conv=${convId} backend=${endingBackend}`);
+          try {
+            const savedCount = await memoryMcp.extractMemoryFromSession({
+              workspaceHash: resetWsHash,
+              conversationId: convId,
+              messages: preConv.messages.map((m) => ({ role: m.role, content: m.content })),
+            });
+            if (savedCount > 0) {
+              console.log(`[memory] post-session extraction saved ${savedCount} entry(ies) for conv=${convId}`);
+            }
+          } catch (err: unknown) {
+            console.error(`[memory] post-session extraction failed for conv=${convId}:`, (err as Error).message);
+          }
+        }
+      } else if (!endingBackend) {
         console.log(`[memory] reset handler: no ending backend for conv=${convId}, skipping capture`);
+      } else {
+        console.log(`[memory] reset handler: memory disabled for conv=${convId}, skipping capture`);
       }
 
       // Let the backend adapter clean up per-conversation state (e.g. ACP processes)
@@ -622,6 +665,11 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         const adapter = backendRegistry.get(conv.backend);
         if (adapter) adapter.onSessionReset(convId);
       }
+
+      // Revoke any Memory MCP token issued for this conversation — a new
+      // one will be minted on the next non-Claude message for this workspace.
+      memoryMcp.revokeMemoryMcpSession(convId);
+
       res.json(result);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -665,25 +713,61 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       if (ctx) cliMessage = ctx + '\n\n' + cliMessage;
     }
 
+    const backendId = backend || conv.backend;
+    const wsHashForSend = chatService.getWorkspaceHashForConv(convId);
+    const memoryEnabledForSend = wsHashForSend
+      ? await chatService.getWorkspaceMemoryEnabled(wsHashForSend)
+      : false;
+    // All memory-enabled sessions get the Memory MCP stub so they can
+    // persist notes via `memory_note`. Kiro spawns it over ACP's
+    // `mcpServers`; Claude Code spawns it via `--mcp-config`.
+    const needsMemoryMcp = memoryEnabledForSend && !!wsHashForSend;
+
     let systemPrompt = '';
     if (isNewSession) {
       const settings = await chatService.getSettings();
       const globalPrompt = settings.systemPrompt || '';
-      const wsHash = chatService.getWorkspaceHashForConv(convId);
-      const wsInstructions = wsHash ? (await chatService.getWorkspaceInstructions(wsHash)) || '' : '';
+      const wsInstructions = wsHashForSend ? (await chatService.getWorkspaceInstructions(wsHashForSend)) || '' : '';
       let memoryBlock = '';
-      if (wsHash) {
-        const snapshot = await chatService.getWorkspaceMemory(wsHash);
+      if (memoryEnabledForSend && wsHashForSend) {
+        const snapshot = await chatService.getWorkspaceMemory(wsHashForSend);
         memoryBlock = chatService.serializeMemoryForInjection(snapshot);
       }
-      const parts = [globalPrompt, wsInstructions, memoryBlock].filter(Boolean);
+      // Append an addendum that teaches the CLI to call the `memory_note`
+      // MCP tool when it learns something worth remembering. Runs for
+      // Claude Code too: its native `#` flow covers explicit saves, but
+      // `memory_note` captures incidental durable facts mentioned
+      // conversationally.
+      const memoryMcpAddendum = needsMemoryMcp
+        ? [
+            '# Persistent memory',
+            'You have access to a `memory_note` MCP tool (from the `agent-cockpit-memory` server). Call it whenever you learn something worth remembering across sessions:',
+            '- **user** — the user\'s role, expertise, preferences, or responsibilities',
+            '- **feedback** — a correction or confirmation the user has given you (include the reason if known)',
+            '- **project** — ongoing work context, goals, deadlines, constraints, or stakeholders',
+            '- **reference** — pointers to external systems (Linear, Slack, Grafana, etc.)',
+            '',
+            'Each call should capture ONE fact in natural language — do not batch unrelated facts. Pass the category in `type` when you know it. Keep notes terse. Do not call `memory_note` for ephemeral task state or things already visible in the current code.',
+          ].join('\n')
+        : '';
+      const parts = [globalPrompt, wsInstructions, memoryBlock, memoryMcpAddendum].filter(Boolean);
       systemPrompt = parts.join('\n\n');
     }
 
-    const backendId = backend || conv.backend;
     const adapter = backendRegistry.get(backendId);
     if (!adapter) {
       return res.status(400).json({ error: `Unknown backend: ${backendId}` });
+    }
+
+    // Mint a Memory MCP token + mcpServers config for all backends when
+    // Memory is enabled. Kiro consumes the array shape over ACP; Claude
+    // Code transforms it into `--mcp-config` JSON. The token is revoked
+    // on session reset.
+    let mcpServers: import('../types').McpServerConfig[] | undefined;
+    if (needsMemoryMcp && wsHashForSend) {
+      const issued = memoryMcp.issueMemoryMcpSession(convId, wsHashForSend);
+      mcpServers = issued.mcpServers;
+      console.log(`[memoryMcp] Issued token for conv=${convId} backend=${backendId}`);
     }
 
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} backend=${backendId} workingDir=${conv.workingDir || 'default'}`);
@@ -702,6 +786,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       externalSessionId: conv.externalSessionId || null,
       model: model || conv.model || undefined,
       effort: effectiveEffort,
+      mcpServers,
     });
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
     activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });
@@ -719,10 +804,26 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       // memory dir (or hasn't created one yet), nothing happens.
       // Scoped to the processStream lifecycle so the watcher is always
       // cleaned up in the onDone callback below.
+      // Gated on the per-workspace Memory toggle — watching is skipped
+      // entirely when Memory is disabled for this workspace.
+      const watchWorkspaceHash = chatService.getWorkspaceHashForConv(convId);
+      const memoryOnForWatch = watchWorkspaceHash
+        ? await chatService.getWorkspaceMemoryEnabled(watchWorkspaceHash)
+        : false;
       const watchWorkspacePath = conv.workingDir || adapter.workingDir || null;
-      if (watchWorkspacePath) {
+      if (memoryOnForWatch && watchWorkspacePath) {
         const memDir = adapter.getMemoryDir(watchWorkspacePath);
         if (memDir) {
+          // `fs.watch` requires the directory to exist — on brand new
+          // workspaces where the CLI hasn't written any memory yet the
+          // dir is absent, and without this `mkdirSync` the watcher
+          // silently fails to attach and mid-session memory writes
+          // never produce a `memory_update` frame.
+          try {
+            fs.mkdirSync(memDir, { recursive: true });
+          } catch (err: unknown) {
+            console.warn(`[memoryWatcher] could not create ${memDir}:`, (err as Error).message);
+          }
           memoryWatcher.watch(convId, memDir, async () => {
             try {
               const snapshot = await chatService.captureWorkspaceMemory(convId, backendId);
@@ -854,14 +955,106 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
-  // ── Workspace memory (read-only) ───────────────────────────────────────────
+  // ── Workspace memory ───────────────────────────────────────────────────────
+  // GET returns the merged snapshot (CLI captures + notes) together with the
+  // per-workspace enable flag so the memory panel can render a single view.
+  // 404 is reserved for "workspace doesn't exist"; an enabled workspace with
+  // no entries yet returns 200 with `snapshot: null`.
   router.get('/workspaces/:hash/memory', async (req: Request, res: Response) => {
     try {
-      const snapshot = await chatService.getWorkspaceMemory(param(req, 'hash'));
-      if (snapshot === null) return res.status(404).json({ error: 'No memory captured for workspace' });
-      res.json({ snapshot });
+      const hash = param(req, 'hash');
+      const enabled = await chatService.getWorkspaceMemoryEnabled(hash);
+      const snapshot = await chatService.getWorkspaceMemory(hash);
+      if (snapshot === null && !enabled) {
+        // If there's no snapshot AND memory is off, it's effectively a
+        // legacy GET. Preserve the existing "empty panel" contract.
+        return res.json({ enabled, snapshot: null });
+      }
+      res.json({ enabled, snapshot });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.put('/workspaces/:hash/memory/enabled', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { enabled } = req.body as { enabled?: boolean };
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ error: 'enabled must be a boolean' });
+      }
+      const hash = param(req, 'hash');
+      const result = await chatService.setWorkspaceMemoryEnabled(hash, enabled);
+      if (result === null) return res.status(404).json({ error: 'Workspace not found' });
+      res.json({ enabled: result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // DELETE a single memory entry by relative path (e.g. `claude/foo.md` or
+  // `notes/note_...md`). Path is validated against the workspace's memory
+  // files dir inside chatService to prevent traversal.
+  router.delete('/workspaces/:hash/memory/entries/:relpath(*)', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const relPath = decodeURIComponent(param(req, 'relpath'));
+      if (!relPath) return res.status(400).json({ error: 'relpath required' });
+
+      const deleted = await chatService.deleteMemoryEntry(hash, relPath);
+      if (!deleted) return res.status(404).json({ error: 'Entry not found' });
+
+      const snapshot = await chatService.getWorkspaceMemory(hash);
+
+      // Notify any connected WebSocket so open memory panels refresh.
+      if (wsFns) {
+        for (const [convId] of activeStreams) {
+          if (chatService.getWorkspaceHashForConv(convId) === hash && wsFns.isConnected(convId)) {
+            wsFns.send(convId, {
+              type: 'memory_update',
+              capturedAt: snapshot?.capturedAt || new Date().toISOString(),
+              fileCount: snapshot?.files.length || 0,
+              changedFiles: [relPath],
+            });
+          }
+        }
+      }
+
+      res.json({ ok: true, snapshot });
+    } catch (err: unknown) {
+      const msg = (err as Error).message || 'Delete failed';
+      const status = /traversal/i.test(msg) ? 400 : 500;
+      res.status(status).json({ error: msg });
+    }
+  });
+
+  // DELETE all memory entries for a workspace — the "Clear all memory"
+  // button in Workspace Settings → Memory. Wipes both `claude/` (CLI
+  // capture) and `notes/` (memory_note + session extraction). Leaves the
+  // workspace's Memory-enabled flag untouched so the user can keep the
+  // feature on and just start over.
+  router.delete('/workspaces/:hash/memory/entries', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const deleted = await chatService.clearWorkspaceMemory(hash);
+      const snapshot = await chatService.getWorkspaceMemory(hash);
+
+      // Notify any connected WebSocket so open memory panels refresh.
+      if (wsFns) {
+        for (const [convId] of activeStreams) {
+          if (chatService.getWorkspaceHashForConv(convId) === hash && wsFns.isConnected(convId)) {
+            wsFns.send(convId, {
+              type: 'memory_update',
+              capturedAt: snapshot?.capturedAt || new Date().toISOString(),
+              fileCount: snapshot?.files.length || 0,
+              changedFiles: [],
+            });
+          }
+        }
+      }
+
+      res.json({ ok: true, deleted, snapshot });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message || 'Clear failed' });
     }
   });
 
@@ -918,5 +1111,5 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     wsFns = fns;
   }
 
-  return { router, shutdown, activeStreams, setWsFunctions };
+  return { router, shutdown, activeStreams, setWsFunctions, memoryMcp };
 }

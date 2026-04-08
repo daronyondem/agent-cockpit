@@ -2294,17 +2294,23 @@ describe('Message Queue API', () => {
 // ── Workspace memory: GET endpoint ────────────────────────────────────────
 
 describe('GET /workspaces/:hash/memory', () => {
-  test('returns 404 when no snapshot has been captured', async () => {
+  test('returns enabled=false and snapshot=null when no snapshot has been captured', async () => {
     const conv = await chatService.createConversation('Test', '/tmp/ws-mem-empty');
     const hash = chatService.getWorkspaceHashForConv(conv.id)!;
     const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/memory`);
-    expect(res.status).toBe(404);
-    expect(res.body.error).toBe('No memory captured for workspace');
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(false);
+    expect(res.body.snapshot).toBeNull();
   });
 
-  test('returns 404 for unknown workspace', async () => {
+  test('returns 200 with null snapshot and enabled for unknown workspace (legacy empty contract)', async () => {
     const res = await makeRequest('GET', '/api/chat/workspaces/nonexistent999/memory');
-    expect(res.status).toBe(404);
+    // The new GET endpoint returns a consistent empty shape regardless of
+    // whether the workspace index exists; this mirrors the panel UX which
+    // treats "unknown" and "no memory yet" identically.
+    expect(res.status).toBe(200);
+    expect(res.body.snapshot).toBeNull();
+    expect(res.body.enabled).toBe(false);
   });
 
   test('returns the snapshot when one has been saved', async () => {
@@ -2331,8 +2337,123 @@ describe('GET /workspaces/:hash/memory', () => {
     expect(res.status).toBe(200);
     expect(res.body.snapshot.sourceBackend).toBe('claude-code');
     expect(res.body.snapshot.files).toHaveLength(1);
-    expect(res.body.snapshot.files[0].filename).toBe('user_pref.md');
+    // Saved files now live under `claude/` in the merged snapshot.
+    expect(res.body.snapshot.files[0].filename).toBe('claude/user_pref.md');
     expect(res.body.snapshot.files[0].type).toBe('user');
+    expect(res.body.snapshot.files[0].source).toBe('cli-capture');
+    expect(res.body.enabled).toBe(false);
+  });
+});
+
+// ── Workspace memory: enable toggle + entry deletion ─────────────────────
+
+describe('PUT /workspaces/:hash/memory/enabled', () => {
+  test('persists the enable flag and is round-tripped via GET', async () => {
+    const conv = await chatService.createConversation('Toggle', '/tmp/ws-mem-toggle');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const put = await makeRequest(
+      'PUT',
+      `/api/chat/workspaces/${hash}/memory/enabled`,
+      { enabled: true },
+    );
+    expect(put.status).toBe(200);
+    expect(put.body.enabled).toBe(true);
+
+    const get = await makeRequest('GET', `/api/chat/workspaces/${hash}/memory`);
+    expect(get.status).toBe(200);
+    expect(get.body.enabled).toBe(true);
+  });
+
+  test('rejects non-boolean enabled values', async () => {
+    const conv = await chatService.createConversation('Toggle Bad', '/tmp/ws-mem-toggle-bad');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    const res = await makeRequest(
+      'PUT',
+      `/api/chat/workspaces/${hash}/memory/enabled`,
+      { enabled: 'yes' as unknown as boolean },
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('DELETE /workspaces/:hash/memory/entries/:relpath', () => {
+  test('deletes a note entry and returns the updated snapshot', async () => {
+    const conv = await chatService.createConversation('Del', '/tmp/ws-mem-del');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const relPath = await chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: drop\ndescription: drop me\ntype: user\n---\n\nDrop.',
+      source: 'memory-note',
+      filenameHint: 'drop',
+    });
+
+    const res = await makeRequest(
+      'DELETE',
+      `/api/chat/workspaces/${hash}/memory/entries/${encodeURIComponent(relPath)}`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+
+    const loaded = await chatService.getWorkspaceMemory(hash);
+    expect((loaded?.files || []).find((f) => f.filename === relPath)).toBeUndefined();
+  });
+
+  test('returns 400 on path traversal attempts', async () => {
+    const conv = await chatService.createConversation('Traverse', '/tmp/ws-mem-traverse-http');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    const res = await makeRequest(
+      'DELETE',
+      `/api/chat/workspaces/${hash}/memory/entries/${encodeURIComponent('../../../etc/passwd')}`,
+    );
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('DELETE /workspaces/:hash/memory/entries (bulk)', () => {
+  test('clears every memory entry and returns the emptied snapshot', async () => {
+    const conv = await chatService.createConversation('ClearAll', '/tmp/ws-mem-clear-all');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+
+    // Seed two note entries so there's something to wipe.
+    await chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: one\ndescription: first\ntype: user\n---\n\nOne.',
+      source: 'memory-note',
+      filenameHint: 'one',
+    });
+    await chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: two\ndescription: second\ntype: feedback\n---\n\nTwo.',
+      source: 'memory-note',
+      filenameHint: 'two',
+    });
+
+    const beforeClear = await chatService.getWorkspaceMemory(hash);
+    expect((beforeClear?.files || []).length).toBe(2);
+
+    const res = await makeRequest(
+      'DELETE',
+      `/api/chat/workspaces/${hash}/memory/entries`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.deleted).toBe(2);
+    expect((res.body.snapshot?.files || []).length).toBe(0);
+
+    const afterClear = await chatService.getWorkspaceMemory(hash);
+    expect((afterClear?.files || []).length).toBe(0);
+  });
+
+  test('is a no-op (200, deleted: 0) when no entries exist', async () => {
+    const conv = await chatService.createConversation('ClearEmpty', '/tmp/ws-mem-clear-empty');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const res = await makeRequest(
+      'DELETE',
+      `/api/chat/workspaces/${hash}/memory/entries`,
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.deleted).toBe(0);
   });
 });
 
@@ -2356,6 +2477,7 @@ describe('memory_update WebSocket frame', () => {
     writeMemoryFile(memDir, 'one.md', 'first');
 
     const conv = await chatService.createConversation('Test', '/tmp/ws-mem-frame-1');
+    await chatService.setWorkspaceMemoryEnabled(chatService.getWorkspaceHashForConv(conv.id)!, true);
     mockBackend.setMockMemoryDir(memDir);
     mockBackend.setStreamDelayMs(900); // keep stream alive past the 500ms watcher debounce
     mockBackend.setMockEvents([
@@ -2391,6 +2513,7 @@ describe('memory_update WebSocket frame', () => {
     writeMemoryFile(memDir, 'b.md', 'B');
 
     const conv = await chatService.createConversation('Test', '/tmp/ws-mem-frame-2');
+    await chatService.setWorkspaceMemoryEnabled(chatService.getWorkspaceHashForConv(conv.id)!, true);
     mockBackend.setMockMemoryDir(memDir);
     mockBackend.setStreamDelayMs(1500);
     mockBackend.setMockEvents([
@@ -2427,6 +2550,7 @@ describe('memory_update WebSocket frame', () => {
 
   test('does not emit memory_update when adapter has no memory dir', async () => {
     const conv = await chatService.createConversation('Test', '/tmp/ws-mem-frame-3');
+    await chatService.setWorkspaceMemoryEnabled(chatService.getWorkspaceHashForConv(conv.id)!, true);
     mockBackend.setMockMemoryDir(null);
     mockBackend.setStreamDelayMs(800);
     mockBackend.setMockEvents([

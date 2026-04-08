@@ -1,6 +1,6 @@
 import { BaseBackendAdapter } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
-import { KiroAdapter, extractKiroToolDetails } from '../src/services/backends/kiro';
+import { KiroAdapter, extractKiroToolDetails, parseKiroChatOutput } from '../src/services/backends/kiro';
 import type { BackendMetadata, SendMessageResult } from '../src/types';
 
 // ── KiroAdapter metadata ────────────────────────────────────────────────────
@@ -342,5 +342,74 @@ describe('KiroAdapter generateTitle', () => {
     const adapter = new KiroAdapter();
     const result = await adapter.generateTitle('', '');
     expect(result).toBe('New Chat');
+  });
+});
+
+// ── parseKiroChatOutput ─────────────────────────────────────────────────────
+
+describe('parseKiroChatOutput', () => {
+  // Build the real output shape that `kiro-cli chat --no-interactive
+  // --trust-all-tools` produces, so the tests exercise the same bytes that
+  // the adapter will see in production.
+  function buildKiroRawOutput(answer: string): string {
+    return (
+      '\x1b[32mAll tools are now trusted (\x1b[0m\x1b[31m!\x1b[0m\x1b[32m). ' +
+      'Kiro will execute tools without asking for confirmation.\x1b[0m\n' +
+      'Agents can sometimes do unexpected things so understand the risks.\n\n' +
+      'Learn more at \x1b[38;5;141mhttps://kiro.dev/docs/cli/chat/security/' +
+      '#using-tools-trust-all-safely\x1b[0m\n\n\n\n' +
+      '\x1b[38;5;252m\x1b[0m\x1b[?25l\x1b[38;5;141m> \x1b[0m' + answer + '\n\n' +
+      ' \x1b[38;5;141m▸\x1b[0m Credits: 0.02 • Time: 3s\n'
+    );
+  }
+
+  test('strips ANSI, trust header, prompt prefix and credits footer', () => {
+    const raw = buildKiroRawOutput('Hey there, friend!');
+    expect(parseKiroChatOutput(raw)).toBe('Hey there, friend!');
+  });
+
+  test('preserves multi-line answers', () => {
+    const raw = buildKiroRawOutput('Red\nBlue\nGreen');
+    expect(parseKiroChatOutput(raw)).toBe('Red\nBlue\nGreen');
+  });
+
+  test('preserves markdown blockquotes inside the answer', () => {
+    // Leading `> ` in the answer body must survive — only the FIRST `> `
+    // prompt prefix is stripped.
+    const raw = buildKiroRawOutput('Here is a quote:\n> the inner quote\nDone.');
+    expect(parseKiroChatOutput(raw)).toBe('Here is a quote:\n> the inner quote\nDone.');
+  });
+
+  test('strips ANSI codes embedded inside the answer', () => {
+    const raw = buildKiroRawOutput('\x1b[1mBold\x1b[0m answer');
+    expect(parseKiroChatOutput(raw)).toBe('Bold answer');
+  });
+
+  test('returns empty string for empty input', () => {
+    expect(parseKiroChatOutput('')).toBe('');
+  });
+
+  test('handles output without the trust-warning header (format drift safety)', () => {
+    // If kiro-cli ever stops emitting the trust header, we should still
+    // return a usable answer rather than a blank string.
+    const raw = '\x1b[38;5;141m> \x1b[0mHello world\n\n \x1b[38;5;141m▸\x1b[0m Credits: 0.01 • Time: 1s\n';
+    expect(parseKiroChatOutput(raw)).toBe('Hello world');
+  });
+
+  test('handles output without the credits footer', () => {
+    const raw = buildKiroRawOutput('No footer answer').replace(/\n \x1b\[38;5;141m▸.*$/s, '\n');
+    expect(parseKiroChatOutput(raw)).toBe('No footer answer');
+  });
+
+  test('strips the specific sequence reported in the bug ([38;5;141m> [0m)', () => {
+    // Reproducer from GitHub issue: user reported seeing
+    //   "[38;5;141m> [0mAsking about a number"
+    // in their Kiro conversation titles.
+    const raw = buildKiroRawOutput('Asking about a number');
+    const result = parseKiroChatOutput(raw);
+    expect(result).toBe('Asking about a number');
+    expect(result).not.toMatch(/\x1b/);
+    expect(result).not.toMatch(/^> /);
+    expect(result).not.toMatch(/\[38;5;141m/);
   });
 });
