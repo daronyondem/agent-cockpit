@@ -14,6 +14,18 @@ When you use vendor-hosted AI interfaces — Anthropic's Claude, Amazon's Kiro, 
 
 Agent Cockpit solves this by decoupling **your data** from **the AI provider**. It sits on your machine, talks to CLI-based coding agents, and keeps all conversations, sessions, and context locally on disk in open JSON files. When you switch to a different CLI backend, the new agent can access everything the previous one built up. Your investment in AI-assisted workflows stays with you, not with a vendor.
 
+## Highlighted features
+
+- **Own your data across any CLI** — Every conversation, session, and memory update is stored locally as open JSON on your own disk. Switch between Claude Code, Kiro, and future backends without losing history or context. When a better model ships from another vendor, your accumulated context comes with you instead of being locked inside their platform.
+- **Remote web access to local or remote CLIs** — Install Agent Cockpit on your laptop or on a remote machine and drive it from any browser. Pair it with a tunnel like Cloudflare Tunnel to chat with your coding agents from your phone, tablet, or a café laptop while they operate on real files in their native environment.
+- **Integrated memory system** — Adds persistent memory to CLIs that don't have one (like Kiro) and captures memory on the fly from CLIs that do (like Claude Code). Every change to the CLI's own memory file is snapshotted locally, so your accumulated context is portable and vendor-neutral — not trapped inside whichever CLI happens to own it today.
+- **Token and cost tracking** — Token usage and cost are tracked per conversation so you always know what a long-running task or an experiment is actually costing you.
+- **Message queue** — Keep typing while the CLI is still responding. Queued messages fire automatically as soon as the current response finishes, so your thinking isn't gated on the agent's latency — a feature rarely found in other chat UIs.
+- **File and image uploads** — Drag and drop, paste from the clipboard, or use the attach button to send images and text files directly into chat, with inline previews, just like any modern chat interface.
+- **Pick your CLI, model, and effort** — Switch backends per-conversation, choose the model, and set the reasoning effort when the CLI supports it.
+- **Markdown export** — Download any conversation or individual session as a Markdown file with one click, so your history is usable outside Agent Cockpit too.
+- **Knowledge base (coming soon)** — Curate large sets of information beyond memory, to ground each workspace's agents with dedicated context that goes further than a memory file can.
+
 ## Supported Backends
 
 | Backend | CLI | Status |
@@ -34,23 +46,20 @@ This means:
 - **Expose the server for remote access.** Use a tunnel like [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) to chat with your coding agents from any browser, anywhere, while they operate on your local files and environment.
 - **OAuth protects access.** Only the email addresses you configure in `ALLOWED_EMAIL` can log in, so your CLI sessions stay private even when exposed over the internet.
 
-## Features
+## Additional features
 
-- **Multi-backend support** — switch between Claude Code and Kiro (or any future backend) per-conversation from a single interface
-- **Real-time streaming** — responses stream live via WebSocket as the CLI generates them, with automatic reconnection and state recovery
-- **Agent & tool visualization** — see sub-agents, tool calls, thinking, and outcomes in real-time with grouped activity panels
-- **Multi-workspace support** — conversations are organized by workspace directory, each with its own instruction set
-- **Per-workspace instructions** — customize the system prompt for each project directory
+Beyond the headline capabilities above, Agent Cockpit also ships with:
+
+- **Real-time streaming** — responses stream live via WebSocket with automatic reconnection and state recovery
+- **Agent & tool visualization** — sub-agents, tool calls, thinking, and outcomes shown in real time with grouped activity panels
+- **Multi-workspace support** — conversations are organized by workspace directory, each with its own system prompt
 - **Conversation management** — create, rename, search, archive, and delete conversations grouped by workspace
-- **Session management** — reset CLI sessions, view session history with LLM-generated summaries, download session archives as Markdown
-- **Auto-generated titles** — conversation titles are automatically generated from the first message
-- **File uploads** — drag-and-drop, paste from clipboard, or use the attach button with inline image previews
+- **Session management** — reset CLI sessions and view session history with LLM-generated summaries
+- **Auto-generated titles** — conversation titles are generated automatically from the first message
 - **Draft persistence** — unsent messages and attached files are preserved when switching conversations
-- **Message queue** — queue messages while the CLI is responding; they send automatically when the current response completes
 - **Plan mode and interactive questions** — approve plans and answer questions from the CLI directly in the browser
 - **Dark and light themes** — system-aware theme with manual override
 - **Google and GitHub OAuth** — email whitelist for access control
-- **Download conversations** — export entire conversations or individual sessions as Markdown
 - **Self-update** — check for updates and apply them from the UI with one click
 - **Pluggable backend system** — extensible adapter architecture for adding new CLI backends
 - **Graceful shutdown** — clean process cleanup on SIGTERM/SIGINT
