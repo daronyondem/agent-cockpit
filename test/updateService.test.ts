@@ -416,4 +416,72 @@ describe('UpdateService', () => {
       expect(shellCmd).toContain('update-restart.log');
     });
   });
+
+  // ── restart (plain server restart, no git pull / npm install) ────────────
+
+  describe('restart', () => {
+    test('blocks when update or restart is already in progress', async () => {
+      (service as any)._updateInProgress = true;
+      const result = await service.restart();
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/already in progress/);
+      // Should not touch disk or fork a subprocess when blocked.
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockSpawnFn).not.toHaveBeenCalled();
+    });
+
+    test('blocks when active streams exist', async () => {
+      const result = await service.restart({ hasActiveStreams: () => true });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/actively running/);
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+      expect(mockSpawnFn).not.toHaveBeenCalled();
+    });
+
+    test('writes restart script and double-forks it on success', async () => {
+      const result = await service.restart({ hasActiveStreams: () => false });
+      expect(result.success).toBe(true);
+      expect(result.steps).toHaveLength(1);
+      expect(result.steps[0].name).toBe('pm2 restart');
+      expect(result.steps[0].success).toBe(true);
+
+      // Same script shape as the update flow — PATH export + pm2 delete + pm2 start.
+      const writeCall = mockWriteFileSync.mock.calls.find(
+        (c) => String(c[0]).includes('restart.sh'),
+      );
+      expect(writeCall).toBeDefined();
+      const script = String(writeCall![1]);
+      expect(script).toContain('node_modules/.bin');
+      expect(script).toMatch(/export PATH=.*node_modules\/\.bin/);
+      expect(script).toContain('pm2 delete');
+      expect(script).toContain('pm2 start');
+      expect(script).toContain('sleep 2');
+
+      // Double-fork via nohup inside a subshell.
+      const spawnArgs = mockSpawnFn.mock.calls[0] as unknown[];
+      const shellCmd = (spawnArgs[1] as string[])[1];
+      expect(shellCmd).toContain('nohup');
+      expect(shellCmd).toContain('restart.sh');
+    });
+
+    test('does not run git or npm commands', async () => {
+      await service.restart({ hasActiveStreams: () => false });
+      // triggerUpdate shells out to git/npm via execFile — restart() must not.
+      expect(mockExecFileFn).not.toHaveBeenCalled();
+    });
+
+    test('resets updateInProgress flag after success', async () => {
+      await service.restart({ hasActiveStreams: () => false });
+      expect((service as any)._updateInProgress).toBe(false);
+    });
+
+    test('resets updateInProgress flag after a blocked restart', async () => {
+      (service as any)._updateInProgress = true;
+      await service.restart();
+      // Still true because we were already in-progress before the call — the
+      // call should not have cleared a flag it did not own.
+      expect((service as any)._updateInProgress).toBe(true);
+      (service as any)._updateInProgress = false;
+    });
+  });
 });

@@ -56,6 +56,7 @@ window.chatSettingsKbDreamBackendChanged = chatSettingsKbDreamBackendChanged;
 window.chatSettingsKbDreamModelChanged = chatSettingsKbDreamModelChanged;
 window.chatUpdateUsageStats = chatUpdateUsageStats;
 window.chatClearUsageStats = chatClearUsageStats;
+window.chatTriggerServerRestart = chatTriggerServerRestart;
 window.chatSaveWorkspaceInstructions = chatSaveWorkspaceInstructions;
 window.chatCloseModal = chatCloseModal;
 window.chatShowFolderPicker = chatShowFolderPicker;
@@ -562,6 +563,7 @@ async function chatShowSettings(initialTab) {
       <button class="chat-settings-tab" data-tab="memory">Memory</button>
       <button class="chat-settings-tab" data-tab="kb">Knowledge Base</button>
       <button class="chat-settings-tab" data-tab="usage">Usage Stats</button>
+      <button class="chat-settings-tab" data-tab="server">Server</button>
     </div>
     <div class="chat-modal-body">
       <div class="chat-settings-tab-content" id="chat-tab-general">
@@ -669,9 +671,10 @@ async function chatShowSettings(initialTab) {
             preserving tables. Install it from
             <a href="https://pandoc.org/installing.html" target="_blank" rel="noreferrer">pandoc.org</a>
             or via your package manager (<code>brew install pandoc</code>,
-            <code>apt install pandoc</code>, <code>choco install pandoc</code>)
-            and restart Agent Cockpit. DOCX uploads are rejected until
-            pandoc is detected on the server PATH.
+            <code>apt install pandoc</code>, <code>choco install pandoc</code>),
+            then restart the server from the <strong>Server</strong> tab so
+            detection can re-run. DOCX uploads are rejected until pandoc is
+            detected on the server PATH.
           </div>
         </div>
         <div class="chat-settings-group">
@@ -742,6 +745,19 @@ async function chatShowSettings(initialTab) {
         </div>
         <div id="chat-usage-stats-body">
           <div class="chat-usage-loading">Loading...</div>
+        </div>
+      </div>
+      <div class="chat-settings-tab-content" id="chat-tab-server" style="display:none;">
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">Restart Server</div>
+          <div class="chat-settings-desc">
+            Restart the Agent Cockpit process via pm2. Use this after installing
+            external binaries (like <code>pandoc</code> or <code>libreoffice</code>)
+            so startup-time detection runs again. Active conversations will be
+            aborted, so wait for them to finish first.
+          </div>
+          <div id="chat-server-restart-status" style="display:none;margin:8px 0;font-size:13px;"></div>
+          <button class="chat-settings-save" id="chat-server-restart-btn" onclick="chatTriggerServerRestart()">Restart Server</button>
         </div>
       </div>
     </div>
@@ -1588,6 +1604,65 @@ function chatShowRestartOverlay() {
     + '</div>';
   document.body.appendChild(overlay);
 }
+
+// Manual server restart triggered from the "Server" tab in Global Settings.
+// Mirrors the success/fetch-failure handling of chatTriggerUpdate: on success
+// we briefly show a status line, then flip to the restart overlay while pm2
+// cycles the process, then reload. The "Failed to fetch" branch is critical —
+// the script kills the process during the request, so the in-flight fetch
+// will reject; we treat that as success too.
+async function chatTriggerServerRestart() {
+  const statusEl = document.getElementById('chat-server-restart-status');
+  const btn = document.getElementById('chat-server-restart-btn');
+  if (!confirm('Restart the server now? Any active conversations will be aborted.')) return;
+  if (statusEl) {
+    statusEl.style.display = 'block';
+    statusEl.innerHTML = '<span style="color:var(--muted);">Requesting restart...</span>';
+  }
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Restarting...';
+  }
+
+  try {
+    const res = await chatFetch('server/restart', { method: 'POST' });
+    const result = await res.json().catch(() => ({}));
+
+    if (res.ok && result.success) {
+      if (statusEl) {
+        statusEl.innerHTML = '<span style="color:var(--done);">Restart launched. Reconnecting...</span>';
+      }
+      setTimeout(() => chatShowRestartOverlay(), 500);
+      setTimeout(() => window.location.reload(), 6000);
+    } else {
+      if (statusEl) {
+        statusEl.innerHTML = '<span style="color:var(--danger);">' + esc(result.error || ('HTTP ' + res.status)) + '</span>';
+      }
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Restart Server';
+      }
+    }
+  } catch (err) {
+    // The restart script sleeps 2s before killing pm2, so the fetch above
+    // usually resolves cleanly. But if the timing races and the process
+    // dies first, a "Failed to fetch" is the expected outcome — treat it
+    // as success and show the overlay.
+    if (err && (err.message === 'Failed to fetch' || err.name === 'TypeError')) {
+      chatShowRestartOverlay();
+      setTimeout(() => window.location.reload(), 5000);
+      return;
+    }
+    if (statusEl) {
+      statusEl.innerHTML = '<span style="color:var(--danger);">Restart failed: ' + esc(err && err.message ? err.message : 'unknown error') + '</span>';
+    }
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = 'Restart Server';
+    }
+  }
+}
+
 
 // ── Keyboard shortcuts ───────────────────────────────────────────────────────
 

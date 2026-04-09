@@ -326,6 +326,27 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
+  // ── Server restart ─────────────────────────────────────────────────────────
+  // Plain pm2 restart without the git pull/npm install steps of /update-trigger.
+  // Used by the "Restart Server" button in Global Settings so users can
+  // re-trigger startup-time detection (e.g. pandoc) after installing something
+  // externally. Guards against active streams the same way update-trigger does.
+  router.post('/server/restart', csrfGuard, async (_req: Request, res: Response) => {
+    if (!updateService) return res.status(501).json({ error: 'Update service not available' });
+    try {
+      const result = await updateService.restart({
+        hasActiveStreams: () => activeStreams.size > 0,
+      });
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(409).json(result);
+      }
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Browse directories ─────────────────────────────────────────────────────
   router.get('/browse', (req: Request, res: Response) => {
     try {

@@ -492,6 +492,7 @@ Memory content itself is **not** dumped into the system prompt. Instead, a short
 | GET | `/update-status` | — | Cached status: `{ localVersion, remoteVersion, updateAvailable, lastCheckAt, lastError, updateInProgress }` |
 | POST | `/check-version` | Yes | Triggers immediate remote check, returns status. |
 | POST | `/update-trigger` | Yes | Full update sequence (see Section 4, UpdateService). |
+| POST | `/server/restart` | Yes | Plain pm2 restart (no git pull / npm install) via `UpdateService.restart()`. Returns `409` if an update is in progress or active conversation streams exist. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. |
 
 ### 3.13 Error Response Patterns
 
@@ -864,9 +865,11 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
   5. `git pull origin main` (60s timeout)
   6. `npm install` (120s timeout)
   7. Verify interpreter — reads `ecosystem.config.js` fresh from disk (via `fs.readFileSync`, not `require`, to avoid stale cache), checks the configured interpreter exists. Path-based interpreters (starting with `.` or `/`) are checked on disk; bare commands (e.g. `npx`, `node`) are resolved via `which` on PATH
-  8. Write restart script to `data/restart.sh` (sets PATH, sleeps 2s, `pm2 delete` + `pm2 start`), launch via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. Output logged to `data/update-restart.log`
+  8. Delegates to `_launchRestartScript()` (shared with `restart()` below)
+- `restart({ hasActiveStreams })` — plain server restart (no git pull / npm install / interpreter verification). Applies the same concurrent + active-streams guards as `triggerUpdate()`, then calls `_launchRestartScript()`. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries.
+- `_launchRestartScript()` (private) — writes `data/restart.sh` (sets PATH to `node_modules/.bin`, sleeps 2s, `pm2 delete` + `pm2 start` against `ecosystem.config.js`), then launches it via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. Output logged to `data/update-restart.log`. Shared by `triggerUpdate()` and `restart()`.
 
-Returns `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
+Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
 
 - `_checkRemoteVersion()` — `git fetch origin main` + `git show origin/main:package.json`
 - `_isNewer(remote, local)` — three-part numeric semver comparison
@@ -1057,7 +1060,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 
 ### Settings Modal
 
-Tabbed layout with two tabs:
+Tabbed layout with five tabs:
 
 **General tab:**
 - Theme: System / Light / Dark
@@ -1074,6 +1077,9 @@ Tabbed layout with two tabs:
 - Daily breakdown table (when multiple days selected): date, backend, tokens, cost
 - "Clear All Data" button: clears the usage ledger (requires confirmation)
 - Data loaded from `GET /usage-stats` endpoint
+
+**Server tab:**
+- **Restart Server** button: calls `POST /server/restart` which delegates to `UpdateService.restart()`. Same pm2 double-fork mechanism as self-update, without the git pull / npm install steps. Used to re-trigger startup-time binary detection (e.g. pandoc) after installing external tools. Confirms before firing; shows the existing restart overlay on success and reloads the page when the new pm2 process is back. `TypeError` / "Failed to fetch" during the in-flight POST is treated as success (the process died before the response flushed).
 
 ### Workspace Settings Modal
 
@@ -1198,7 +1204,7 @@ Update OAuth callback URLs to include the ngrok URL.
 | `test/messageQueue.test.ts` | Message queue: adding, deleting, rendering, in-flight protection, pause/resume, per-conversation isolation, send button state, suspended (restored) state |
 | `test/graceful-shutdown.test.ts` | Server shutdown on SIGINT/SIGTERM |
 | `test/sessionStore.test.ts` | Session file-store persistence |
-| `test/updateService.test.ts` | Version comparison, status, trigger guards, interval management, interpreter verification, PATH setup for restart |
+| `test/updateService.test.ts` | Version comparison, status, trigger guards, interval management, interpreter verification, PATH setup for restart, plus standalone `restart()` method (in-progress/active-streams guards, script + double-fork shape, does not call git/npm) |
 | `test/auth.test.ts` | `requireAuth` middleware: unauthenticated `/api/*` returns JSON 401, unauthenticated non-API paths redirect to `/auth/login`, authenticated passthrough, localhost bypass for both API and non-API paths |
 
 ### CI/CD
