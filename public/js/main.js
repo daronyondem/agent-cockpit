@@ -666,7 +666,7 @@ async function chatShowSettings(initialTab) {
         <div class="chat-settings-group">
           <div class="chat-settings-label">Pandoc (required for DOCX ingestion)</div>
           <div class="chat-settings-desc" id="chat-settings-pandoc-status">Checking…</div>
-          <div class="chat-settings-desc">
+          <div class="chat-settings-desc" id="chat-settings-pandoc-info">
             Pandoc is an external binary that converts DOCX to Markdown while
             preserving tables. Install it from
             <a href="https://pandoc.org/installing.html" target="_blank" rel="noreferrer">pandoc.org</a>
@@ -770,6 +770,7 @@ async function chatShowSettings(initialTab) {
   // just reads the module-level cache populated at startup.
   async function chatLoadPandocStatus() {
     const el = document.getElementById('chat-settings-pandoc-status');
+    const info = document.getElementById('chat-settings-pandoc-info');
     if (!el) return;
     try {
       const res = await fetch(chatApiUrl('kb/pandoc-status'), { credentials: 'same-origin' });
@@ -778,6 +779,9 @@ async function chatShowSettings(initialTab) {
       if (status && status.available) {
         const version = status.version ? ` v${status.version}` : '';
         el.innerHTML = `<span style="color:var(--success,#2e7d32);">Detected${esc(version)}</span> at <code>${esc(status.binaryPath || '')}</code>`;
+        if (info) {
+          info.textContent = 'Pandoc is an external binary that converts DOCX to Markdown while preserving tables.';
+        }
       } else {
         el.innerHTML = '<span style="color:var(--error,#d32f2f);">Not found on PATH.</span> DOCX uploads will be rejected until pandoc is installed and the server is restarted.';
       }
