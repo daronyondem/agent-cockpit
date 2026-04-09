@@ -10,7 +10,12 @@ import type { UpdateService } from '../services/updateService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
 import { detectLibreOffice } from '../services/knowledgeBase/libreOffice';
-import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
+import { detectPandoc } from '../services/knowledgeBase/pandoc';
+import {
+  KbIngestionService,
+  KbDisabledError,
+} from '../services/knowledgeBase/ingestion';
+import type { Request, Response, NextFunction, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
@@ -220,6 +225,30 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   const memoryFingerprints = new Map<string, Map<string, string>>();
   let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer'> | null = null;
 
+  /**
+   * Fan out a `kb_state_update` frame to every active stream whose
+   * conversation belongs to the target workspace. Mirrors the pattern
+   * used for `memory_update` — only conversations with a live WS get
+   * the frame; the KB Browser polls GET /kb when it's opened standalone
+   * (no active stream) so it still sees changes.
+   */
+  function broadcastKbStateUpdate(hash: string, frame: import('../types').KbStateUpdateEvent): void {
+    if (!wsFns) return;
+    for (const [convId] of activeStreams) {
+      if (chatService.getWorkspaceHashForConv(convId) === hash && wsFns.isConnected(convId)) {
+        wsFns.send(convId, frame);
+      }
+    }
+  }
+
+  // Knowledge Base ingestion orchestrator. Owns the per-workspace queue
+  // that runs format handlers (pdf/docx/pptx/passthrough) and emits
+  // `kb_state_update` frames when state.json changes.
+  const kbIngestion = new KbIngestionService({
+    chatService,
+    emit: broadcastKbStateUpdate,
+  });
+
   // Memory MCP server — exposes `memory_note` tool to non-Claude CLIs via the
   // stdio stub in `src/services/memoryMcp/stub.cjs`.  The router is mounted
   // at `/mcp/memory/notes` below; the `issue`/`revoke` helpers are used by
@@ -292,6 +321,27 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         hasActiveStreams: () => activeStreams.size > 0,
       });
       res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Server restart ─────────────────────────────────────────────────────────
+  // Plain pm2 restart without the git pull/npm install steps of /update-trigger.
+  // Used by the "Restart Server" button in Global Settings so users can
+  // re-trigger startup-time detection (e.g. pandoc) after installing something
+  // externally. Guards against active streams the same way update-trigger does.
+  router.post('/server/restart', csrfGuard, async (_req: Request, res: Response) => {
+    if (!updateService) return res.status(501).json({ error: 'Update service not available' });
+    try {
+      const result = await updateService.restart({
+        hasActiveStreams: () => activeStreams.size > 0,
+      });
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(409).json(result);
+      }
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -1104,6 +1154,140 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
+  // ── KB raw-file ingestion ───────────────────────────────────────────────────
+  // POST accepts a single file via multipart/form-data under the `file`
+  // field, stages it under `knowledge/raw/<rawId>.<ext>`, and kicks off
+  // background ingestion on the per-workspace queue. Returns 202 with the
+  // initial raw entry (status='ingesting') so the frontend can render the
+  // row immediately and swap its badge as `kb_state_update` frames arrive.
+  //
+  // We use in-memory multer storage because the orchestrator needs the
+  // buffer to compute the sha256 rawId *before* deciding where on disk
+  // the file belongs. 200 MB comfortably fits real-world PPTX decks and
+  // media-heavy PDFs — the conversation-attachment endpoint keeps its
+  // own smaller limit since those uploads are a different use case.
+  const KB_UPLOAD_LIMIT_MB = 200;
+  const kbUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: KB_UPLOAD_LIMIT_MB * 1024 * 1024, files: 1 },
+  });
+
+  // Multer throws `LIMIT_FILE_SIZE` (and friends) via `next(err)` BEFORE
+  // the route handler runs, so an inline try/catch in the handler never
+  // sees them — Express's default error handler ends up returning an
+  // HTML 500 which the client can't parse. Wrap multer in a shim that
+  // converts its errors into proper JSON responses the KB Browser can
+  // display to the user.
+  const kbUploadMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+    kbUpload.single('file')(req, res, (err: unknown) => {
+      if (err instanceof multer.MulterError) {
+        const msg = err.code === 'LIMIT_FILE_SIZE'
+          ? `File exceeds the ${KB_UPLOAD_LIMIT_MB} MB upload limit.`
+          : err.message;
+        res.status(400).json({ error: msg });
+        return;
+      }
+      if (err) {
+        res.status(500).json({ error: (err as Error).message });
+        return;
+      }
+      next();
+    });
+  };
+
+  router.post(
+    '/workspaces/:hash/kb/raw',
+    csrfGuard,
+    kbUploadMiddleware,
+    async (req: Request, res: Response) => {
+      try {
+        const hash = param(req, 'hash');
+        const file = (req as unknown as { file?: Express.Multer.File }).file;
+        if (!file) return res.status(400).json({ error: 'Missing "file" form field.' });
+
+        // Pre-flight format guards — done here (not in the handler) so the
+        // user sees an actionable error immediately instead of a failed
+        // ingestion entry sitting in state.json.
+        const lowerName = file.originalname.toLowerCase();
+        if (lowerName.endsWith('.doc')) {
+          return res.status(400).json({
+            error:
+              'Legacy .doc format is not supported. Please resave the document as .docx in Word or LibreOffice and upload again.',
+          });
+        }
+        if (lowerName.endsWith('.docx')) {
+          const pandocStatus = await detectPandoc();
+          if (!pandocStatus.available) {
+            return res.status(400).json({
+              error:
+                'DOCX ingestion requires Pandoc, which was not found on the server PATH. ' +
+                'Install it from https://pandoc.org/installing.html (or via your package manager: `brew install pandoc`, `apt install pandoc`, `choco install pandoc`) and restart Agent Cockpit.',
+            });
+          }
+        }
+
+        // Multer gives us the raw bytes on `file.buffer` when using memoryStorage.
+        const result = await kbIngestion.enqueueUpload(hash, {
+          buffer: file.buffer,
+          filename: file.originalname,
+          mimeType: file.mimetype || 'application/octet-stream',
+        });
+        res.status(202).json(result);
+      } catch (err: unknown) {
+        if (err instanceof KbDisabledError) {
+          return res.status(400).json({ error: err.message });
+        }
+        res.status(500).json({ error: (err as Error).message });
+      }
+    },
+  );
+
+  router.delete('/workspaces/:hash/kb/raw/:rawId', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const rawId = param(req, 'rawId');
+      const removed = await kbIngestion.deleteRaw(hash, rawId);
+      if (!removed) return res.status(404).json({ error: 'Raw file not found.' });
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      if (err instanceof KbDisabledError) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Stream the original bytes back for the Raw tab preview. We sanitize
+  // the rawId against a hex character class to prevent path traversal —
+  // the ingestion path already guarantees this shape, but belt-and-braces
+  // here because this endpoint reads from disk and returns whatever it
+  // finds under the safely-joined path.
+  router.get('/workspaces/:hash/kb/raw/:rawId', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const rawId = param(req, 'rawId');
+      if (!/^[a-f0-9]{1,64}$/i.test(rawId)) {
+        return res.status(400).json({ error: 'Invalid rawId.' });
+      }
+      const diskPath = await chatService.getKbRawFilePath(hash, rawId);
+      if (!diskPath) return res.status(404).json({ error: 'Raw file not found.' });
+      // Confirm the resolved path is still inside the workspace KB dir —
+      // defense in depth against a path that somehow escapes.
+      const rawDir = path.resolve(chatService.getKbRawDir(hash));
+      if (!path.resolve(diskPath).startsWith(rawDir)) {
+        return res.status(400).json({ error: 'Invalid path.' });
+      }
+      try {
+        await fs.promises.access(diskPath);
+      } catch {
+        return res.status(404).json({ error: 'Raw file not found on disk.' });
+      }
+      res.sendFile(path.resolve(diskPath));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // Expose the cached LibreOffice detection result to the frontend so the
   // global Settings → Knowledge Base "Convert PPTX slides to images" checkbox
   // can validate on-click and auto-uncheck with a warning when the binary is
@@ -1113,6 +1297,19 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   router.get('/kb/libreoffice-status', async (_req: Request, res: Response) => {
     try {
       const status = await detectLibreOffice();
+      res.json(status);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Pandoc detection mirror of the LibreOffice endpoint above. Unlike
+  // LibreOffice this is required for DOCX ingestion (not optional), so the
+  // UI uses this to show a persistent "install pandoc" banner on the KB
+  // Raw tab and to block DOCX uploads pre-flight.
+  router.get('/kb/pandoc-status', async (_req: Request, res: Response) => {
+    try {
+      const status = await detectPandoc();
       res.json(status);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

@@ -107,7 +107,13 @@ export async function chatFetch(path, opts = {}) {
   }
   if (!res.ok) {
     const err = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(err.error || res.statusText);
+    // HTTP/2 responses leave `statusText` empty, so on a path like
+    // `fetch over Cloudflare tunnel → Express default 404 HTML` the
+    // JSON parse falls through and statusText is '' — that used to
+    // throw `new Error('')` which gave UI alerts a blank message.
+    // Fall back to the numeric status so a missing endpoint still
+    // surfaces as `HTTP 404` rather than an empty line.
+    throw new Error(err.error || res.statusText || `HTTP ${res.status}`);
   }
   return res;
 }

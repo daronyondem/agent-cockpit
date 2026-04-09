@@ -2541,3 +2541,242 @@
     .chat-msg { padding-left: 12px; padding-right: 12px; }
     .chat-input-area { padding: 8px 12px 12px; }
   }
+
+  /* ── KB Browser ──────────────────────────────────────────────────────────
+   * The KB Browser swaps with `.chat-messages` in the main area when the
+   * user clicks the KB button on a workspace group header. It has its own
+   * header row (workspace label + Close button), a tab bar (only "Raw" in
+   * PR 2), and a content area that hosts the active tab. The styling is
+   * intentionally close to the existing memory-browser palette so the two
+   * features feel like siblings, not cousins.
+   */
+  .chat-kb-browser {
+    flex: 1 1 auto;
+    overflow: auto;
+    padding: 20px 24px 24px;
+    font-size: 13px;
+    color: var(--text);
+  }
+  .chat-kb-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .chat-kb-header h2 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chat-kb-header-close {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+  .chat-kb-header-close:hover { background: var(--surface3, var(--surface2)); }
+  .chat-kb-tabs {
+    display: flex;
+    gap: 4px;
+    margin: 14px 0 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .chat-kb-tab {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    padding: 8px 14px;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .chat-kb-tab.active {
+    color: var(--text);
+    border-bottom-color: var(--accent, #4a9eff);
+  }
+  .chat-kb-tab-disabled {
+    color: var(--muted);
+    cursor: not-allowed;
+    opacity: 0.55;
+  }
+  .chat-kb-tab-content { padding-top: 8px; }
+  .chat-kb-upload {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 14px 16px;
+    background: var(--surface2);
+    border: 1px dashed var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+  .chat-kb-upload.dragging {
+    border-color: var(--accent, #4a9eff);
+    background: var(--surface3, var(--surface2));
+  }
+  .chat-kb-upload-hint {
+    flex: 1 1 auto;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .chat-kb-upload-btn {
+    background: var(--accent, #4a9eff);
+    color: #fff;
+    border: none;
+    padding: 7px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .chat-kb-upload-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .chat-kb-upload-progress {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 10px 14px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+  }
+  .chat-kb-upload-progress-label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .chat-kb-upload-progress-bar {
+    position: relative;
+    width: 100%;
+    height: 6px;
+    background: var(--surface3, var(--border));
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .chat-kb-upload-progress-fill {
+    height: 100%;
+    width: 0%;
+    background: var(--accent, #4a9eff);
+    border-radius: 3px;
+    transition: width 0.15s ease-out;
+  }
+  .chat-kb-upload-progress-fill.indeterminate {
+    width: 100% !important;
+    background: linear-gradient(
+      90deg,
+      var(--surface3, var(--border)) 0%,
+      var(--accent, #4a9eff) 50%,
+      var(--surface3, var(--border)) 100%
+    );
+    background-size: 200% 100%;
+    animation: chat-kb-upload-progress-slide 1.2s linear infinite;
+    transition: none;
+  }
+  @keyframes chat-kb-upload-progress-slide {
+    0% { background-position: 100% 0; }
+    100% { background-position: -100% 0; }
+  }
+  .chat-kb-raw-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .chat-kb-raw-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+  .chat-kb-raw-filename {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 500;
+  }
+  .chat-kb-raw-meta {
+    color: var(--muted);
+    font-size: 11px;
+    white-space: nowrap;
+  }
+  .chat-kb-raw-status {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: 999px;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
+  .chat-kb-raw-status.ingesting { background: #2e3a52; color: #9fb8e5; }
+  .chat-kb-raw-status.ingested  { background: #1f3e32; color: #7fd4a6; }
+  .chat-kb-raw-status.digesting { background: #3a2f52; color: #b89fe5; }
+  .chat-kb-raw-status.digested  { background: #1f3e32; color: #7fd4a6; }
+  .chat-kb-raw-status.failed    { background: #52242c; color: #e89a9a; }
+  .chat-kb-raw-error {
+    flex: 1 1 100%;
+    color: #e89a9a;
+    font-size: 11px;
+    margin-top: 4px;
+  }
+  .chat-kb-raw-delete {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 16px;
+    padding: 4px 8px;
+    border-radius: 4px;
+  }
+  .chat-kb-raw-delete:hover { color: #e89a9a; background: var(--surface2); }
+  .chat-kb-empty {
+    color: var(--muted);
+    text-align: center;
+    padding: 24px 12px;
+    font-size: 13px;
+  }
+  .chat-kb-banner {
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 0 0 14px 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .chat-kb-banner-warn {
+    background: rgba(230, 180, 80, 0.15);
+    border: 1px solid rgba(230, 180, 80, 0.45);
+    color: var(--text);
+  }
+  .chat-kb-banner-warn a { color: inherit; text-decoration: underline; }
+  .chat-kb-banner-warn code {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+  .chat-conv-group-kb-btn {
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    padding: 2px 4px;
+    border-radius: 4px;
+    display: inline-flex;
+    align-items: center;
+  }
+  .chat-conv-group-kb-btn:hover { color: var(--text); background: var(--surface2); }

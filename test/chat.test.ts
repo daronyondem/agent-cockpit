@@ -2738,3 +2738,268 @@ describe('memory_update WebSocket frame', () => {
     expect(events.find((e) => e.type === 'memory_update')).toBeUndefined();
   });
 });
+
+// ── KB raw ingestion routes ────────────────────────────────────────────────
+// POST uses multipart/form-data, so we build the request body by hand rather
+// than reusing `makeRequest`. The body is small enough (< 10 KB) that we can
+// hold it entirely in one Buffer and let node's http.request send it in a
+// single chunk.
+
+function makeMultipartRequest(
+  method: string,
+  urlPath: string,
+  field: string,
+  filename: string,
+  contentType: string,
+  content: Buffer,
+): Promise<{ status: number; body: any; headers: http.IncomingHttpHeaders }> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlPath, baseUrl);
+    const boundary = '----ac-kb-test-' + Math.random().toString(36).slice(2);
+    const head = Buffer.from(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${field}"; filename="${filename}"\r\n` +
+        `Content-Type: ${contentType}\r\n\r\n`,
+    );
+    const tail = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const body = Buffer.concat([head, content, tail]);
+    const options: http.RequestOptions = {
+      method,
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname + url.search,
+      headers: {
+        'x-csrf-token': CSRF_TOKEN,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': body.length,
+      },
+    };
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk: Buffer) => {
+        data += chunk;
+      });
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode!, body: JSON.parse(data), headers: res.headers });
+        } catch {
+          resolve({ status: res.statusCode!, body: data, headers: res.headers });
+        }
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+describe('POST /workspaces/:hash/kb/raw', () => {
+  test('202 stages a text file and creates a raw entry', async () => {
+    const conv = await chatService.createConversation('KB upload', '/tmp/ws-kb-up-1');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const res = await makeMultipartRequest(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/raw`,
+      'file',
+      'note.md',
+      'text/markdown',
+      Buffer.from('# Hello KB'),
+    );
+    expect(res.status).toBe(202);
+    expect(res.body.entry).toBeTruthy();
+    expect(res.body.entry.status).toBe('ingesting');
+    expect(res.body.entry.filename).toBe('note.md');
+    expect(res.body.deduped).toBe(false);
+
+    // After a short wait, the entry should be ingested.
+    await new Promise((r) => setTimeout(r, 100));
+    const state = await chatService.getKbState(hash);
+    const entry = state?.raw[res.body.entry.rawId];
+    expect(entry?.status).toBe('ingested');
+  });
+
+  test('400 when KB is disabled', async () => {
+    const conv = await chatService.createConversation('KB off', '/tmp/ws-kb-up-2');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    // KB intentionally not enabled.
+
+    const res = await makeMultipartRequest(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/raw`,
+      'file',
+      'note.md',
+      'text/markdown',
+      Buffer.from('blocked'),
+    );
+    expect(res.status).toBe(400);
+    expect(String(res.body.error || '')).toMatch(/not enabled/i);
+  });
+
+  test('unsupported file types land as failed with a helpful error', async () => {
+    const conv = await chatService.createConversation('KB bad', '/tmp/ws-kb-up-3');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const res = await makeMultipartRequest(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/raw`,
+      'file',
+      'mystery.xyz',
+      'application/octet-stream',
+      Buffer.from([0x00, 0x01, 0x02]),
+    );
+    expect(res.status).toBe(202);
+    await new Promise((r) => setTimeout(r, 80));
+    const state = await chatService.getKbState(hash);
+    const entry = state?.raw[res.body.entry.rawId];
+    expect(entry?.status).toBe('failed');
+    expect(entry?.error || '').toMatch(/Unsupported file type/);
+  });
+
+  test('400 rejects legacy .doc files before they ever hit the handler', async () => {
+    const conv = await chatService.createConversation('KB doc legacy', '/tmp/ws-kb-up-4');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const res = await makeMultipartRequest(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/raw`,
+      'file',
+      'legacy.doc',
+      'application/msword',
+      Buffer.from([0xd0, 0xcf, 0x11, 0xe0]), // ole2 magic (doesn't matter, we reject on extension)
+    );
+    expect(res.status).toBe(400);
+    expect(String(res.body.error || '')).toMatch(/Legacy \.doc format is not supported/);
+    // And no raw entry should have been created.
+    const state = await chatService.getKbState(hash);
+    expect(Object.keys(state?.raw || {})).toHaveLength(0);
+  });
+
+  test('400 rejects .docx uploads with an install hint when pandoc is unavailable', async () => {
+    const conv = await chatService.createConversation('KB docx no pandoc', '/tmp/ws-kb-up-5');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    // Force the pandoc detection to report "not available" by pointing
+    // PATH at an empty directory and clearing the cache.
+    const {
+      _resetPandocCacheForTests,
+    } = require('../src/services/knowledgeBase/pandoc');
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), 'no-pandoc-'));
+    const origPath = process.env.PATH;
+    process.env.PATH = emptyPath;
+    _resetPandocCacheForTests();
+
+    try {
+      const res = await makeMultipartRequest(
+        'POST',
+        `/api/chat/workspaces/${hash}/kb/raw`,
+        'file',
+        'report.docx',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      );
+      expect(res.status).toBe(400);
+      expect(String(res.body.error || '')).toMatch(/Pandoc/);
+      expect(String(res.body.error || '')).toMatch(/pandoc\.org/);
+      // And no raw entry should have been created.
+      const state = await chatService.getKbState(hash);
+      expect(Object.keys(state?.raw || {})).toHaveLength(0);
+    } finally {
+      process.env.PATH = origPath;
+      _resetPandocCacheForTests();
+      fs.rmSync(emptyPath, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('DELETE /workspaces/:hash/kb/raw/:rawId', () => {
+  test('cascades the raw file and converted output', async () => {
+    const conv = await chatService.createConversation('KB del', '/tmp/ws-kb-del-1');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const upload = await makeMultipartRequest(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/raw`,
+      'file',
+      'note.md',
+      'text/markdown',
+      Buffer.from('to delete'),
+    );
+    const rawId = upload.body.entry.rawId;
+    await new Promise((r) => setTimeout(r, 80));
+
+    const del = await makeRequest('DELETE', `/api/chat/workspaces/${hash}/kb/raw/${rawId}`);
+    expect(del.status).toBe(200);
+    expect(del.body.ok).toBe(true);
+
+    const state = await chatService.getKbState(hash);
+    expect(state?.raw[rawId]).toBeUndefined();
+    const rawPath = path.join(chatService.getKbRawDir(hash), `${rawId}.md`);
+    expect(fs.existsSync(rawPath)).toBe(false);
+  });
+
+  test('404 for an unknown rawId', async () => {
+    const conv = await chatService.createConversation('KB del 2', '/tmp/ws-kb-del-2');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+    const res = await makeRequest('DELETE', `/api/chat/workspaces/${hash}/kb/raw/deadbeefdeadbeef`);
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('GET /workspaces/:hash/kb/raw/:rawId', () => {
+  test('streams back the original bytes', async () => {
+    const conv = await chatService.createConversation('KB get', '/tmp/ws-kb-get-1');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const original = Buffer.from('# Original content\n');
+    const upload = await makeMultipartRequest(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/raw`,
+      'file',
+      'original.md',
+      'text/markdown',
+      original,
+    );
+    const rawId = upload.body.entry.rawId;
+
+    // Fetch raw bytes via plain http (makeRequest tries to JSON.parse).
+    const bytes = await new Promise<Buffer>((resolve, reject) => {
+      const url = new URL(`/api/chat/workspaces/${hash}/kb/raw/${rawId}`, baseUrl);
+      http
+        .get(
+          {
+            hostname: url.hostname,
+            port: url.port,
+            path: url.pathname,
+            headers: { 'x-csrf-token': CSRF_TOKEN },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (c: Buffer) => chunks.push(c));
+            res.on('end', () => resolve(Buffer.concat(chunks)));
+          },
+        )
+        .on('error', reject);
+    });
+    expect(bytes.equals(original)).toBe(true);
+  });
+
+  test('400 for a non-hex rawId', async () => {
+    const conv = await chatService.createConversation('KB bad id', '/tmp/ws-kb-get-2');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/kb/raw/../etc/passwd`);
+    // Path has slashes so Express will 404 before we even see it; accept either.
+    expect([400, 404]).toContain(res.status);
+  });
+});

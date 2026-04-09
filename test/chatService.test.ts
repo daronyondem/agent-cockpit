@@ -1208,6 +1208,24 @@ describe('listConversations includes workspaceHash', () => {
     const list = await service.listConversations();
     expect(list[0].workspaceHash).toBe(workspaceHash('/tmp/list-hash'));
   });
+
+  test('workspaceKbEnabled defaults to false', async () => {
+    await service.createConversation('Test', '/tmp/kb-off');
+    const list = await service.listConversations();
+    const conv = list.find(c => c.workingDir === '/tmp/kb-off');
+    expect(conv).toBeDefined();
+    expect(conv!.workspaceKbEnabled).toBe(false);
+  });
+
+  test('workspaceKbEnabled is true after flipping the workspace flag', async () => {
+    await service.createConversation('Test', '/tmp/kb-on');
+    const hash = workspaceHash('/tmp/kb-on');
+    await service.setWorkspaceKbEnabled(hash, true);
+    const list = await service.listConversations();
+    const conv = list.find(c => c.workingDir === '/tmp/kb-on');
+    expect(conv).toBeDefined();
+    expect(conv!.workspaceKbEnabled).toBe(true);
+  });
 });
 
 // ── Migration ───────────────────────────────────────────────────────────────

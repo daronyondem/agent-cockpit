@@ -55,6 +55,13 @@
         </div>
       </div>
     </div>
+    <!--
+      KB Browser view — swaps with `chat-messages` when the user clicks the
+      KB button on a workspace group header. Populated by chatOpenKbBrowser
+      in main.js. Kept as a sibling of chat-messages so the main-area
+      chrome (header + input) can be hidden or repurposed consistently.
+    -->
+    <div class="chat-kb-browser" id="chat-kb-browser" style="display:none;"></div>
     <div class="chat-input-area">
       <div class="chat-input-wrapper">
         <div class="chat-model-select-row">

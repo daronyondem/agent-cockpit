@@ -161,6 +161,8 @@ export interface ConversationListItem {
   effort?: EffortLevel;
   workingDir: string;
   workspaceHash: string;
+  /** Per-workspace Knowledge Base toggle. Defaults to false for legacy workspaces. */
+  workspaceKbEnabled: boolean;
   messageCount: number;
   lastMessage: string | null;
   usage: Usage | null;

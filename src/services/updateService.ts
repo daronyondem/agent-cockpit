@@ -140,35 +140,69 @@ export class UpdateService {
         return { success: false, steps, error: 'Failed to read ecosystem config: ' + (err as Error).message };
       }
 
-      // Write a restart script to disk, then execute it via a double-fork
-      // so it survives PM2's treekill. PM2 kills the server process AND
-      // all descendants when `pm2 delete` runs. A simple `detached: true`
-      // spawn is still a child (by PPID) and gets killed before reaching
-      // `pm2 start`. The double-fork (nohup ... &) in a subshell ensures
-      // the restart process is reparented to init before treekill runs.
-      const binDir = path.join(this._appRoot, 'node_modules', '.bin');
-      const logFile = path.join(this._appRoot, 'data', 'update-restart.log');
-      const scriptFile = path.join(this._appRoot, 'data', 'restart.sh');
-      const scriptContent = [
-        '#!/bin/sh',
-        `export PATH="${binDir}:$PATH"`,
-        'sleep 2',
-        `pm2 delete "${ecosystemPath}" 2>/dev/null`,
-        `pm2 start "${ecosystemPath}"`,
-      ].join('\n');
-      fs.writeFileSync(scriptFile, scriptContent, { mode: 0o755 });
-      // Double-fork: subshell backgrounds nohup, then exits immediately.
-      // The nohup process gets reparented to init, surviving treekill.
-      spawn('sh', ['-c', `(nohup "${scriptFile}" >> "${logFile}" 2>&1 &)`], {
-        cwd: this._appRoot,
-        stdio: 'ignore',
-      });
+      this._launchRestartScript();
       steps.push({ name: 'pm2 restart', success: true, output: 'Restart script written and launched' });
 
       return { success: true, steps };
     } finally {
       this._updateInProgress = false;
     }
+  }
+
+  // Plain server restart — same pm2 double-fork mechanism as triggerUpdate()
+  // but without the git pull / npm install / interpreter verification steps.
+  // Used by the "Restart Server" button in Global Settings so users can pick
+  // up side-effects of external changes that are only read at startup (e.g.
+  // installing pandoc, whose detection result is cached per process).
+  async restart(opts: { hasActiveStreams?: () => boolean } = {}): Promise<UpdateResult> {
+    if (this._updateInProgress) {
+      return { success: false, steps: [], error: 'Update or restart already in progress' };
+    }
+    if (opts.hasActiveStreams && opts.hasActiveStreams()) {
+      return {
+        success: false,
+        steps: [],
+        error: 'Cannot restart while conversations are actively running. Please wait for them to complete or abort them first.',
+      };
+    }
+
+    this._updateInProgress = true;
+    try {
+      this._launchRestartScript();
+      return {
+        success: true,
+        steps: [{ name: 'pm2 restart', success: true, output: 'Restart script written and launched' }],
+      };
+    } finally {
+      this._updateInProgress = false;
+    }
+  }
+
+  // Write a restart script to disk, then execute it via a double-fork so it
+  // survives PM2's treekill. PM2 kills the server process AND all descendants
+  // when `pm2 delete` runs. A simple `detached: true` spawn is still a child
+  // (by PPID) and gets killed before reaching `pm2 start`. The double-fork
+  // (nohup ... &) in a subshell ensures the restart process is reparented to
+  // init before treekill runs.
+  private _launchRestartScript(): void {
+    const ecosystemPath = path.join(this._appRoot, 'ecosystem.config.js');
+    const binDir = path.join(this._appRoot, 'node_modules', '.bin');
+    const logFile = path.join(this._appRoot, 'data', 'update-restart.log');
+    const scriptFile = path.join(this._appRoot, 'data', 'restart.sh');
+    const scriptContent = [
+      '#!/bin/sh',
+      `export PATH="${binDir}:$PATH"`,
+      'sleep 2',
+      `pm2 delete "${ecosystemPath}" 2>/dev/null`,
+      `pm2 start "${ecosystemPath}"`,
+    ].join('\n');
+    fs.writeFileSync(scriptFile, scriptContent, { mode: 0o755 });
+    // Double-fork: subshell backgrounds nohup, then exits immediately.
+    // The nohup process gets reparented to init, surviving treekill.
+    spawn('sh', ['-c', `(nohup "${scriptFile}" >> "${logFile}" 2>&1 &)`], {
+      cwd: this._appRoot,
+      stdio: 'ignore',
+    });
   }
 
   private async _checkRemoteVersion(): Promise<void> {
