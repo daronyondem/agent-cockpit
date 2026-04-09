@@ -112,6 +112,12 @@ function chatWireEvents() {
         chatShowWorkspaceSettings(instrBtn.dataset.wsHash, instrBtn.dataset.wsLabel);
         return;
       }
+      const kbBtn = e.target.closest('.chat-conv-group-kb-btn');
+      if (kbBtn) {
+        e.stopPropagation();
+        chatOpenKbBrowser(kbBtn.dataset.kbHash, kbBtn.dataset.kbLabel);
+        return;
+      }
       const groupHeader = e.target.closest('.chat-conv-group-header');
       if (groupHeader) {
         const grp = groupHeader.dataset.group;
@@ -1592,6 +1598,278 @@ document.addEventListener('keydown', (e) => {
     return;
   }
 });
+
+// ── KB Browser ────────────────────────────────────────────────────────────
+// The KB Browser is a main-area view that swaps with the chat messages list
+// when the user clicks the KB button on a workspace group header. It is
+// NOT bound to a specific conversation — it's workspace-scoped. When it's
+// open, any `kb_state_update` WS frame that targets a conversation in the
+// same workspace triggers a refetch. A periodic refetch runs on top for
+// the standalone case where no conversation is active (and therefore no
+// WS is connected) for the viewed workspace.
+//
+// PR 2 ships only the Raw tab. Entries and Synthesis tabs land in PR 3/4
+// and are rendered as disabled placeholders so users see the roadmap.
+
+/**
+ * State for the currently-open KB browser view. `null` when the view is
+ * hidden. Fields are all non-persistent — closing and reopening resets
+ * everything.
+ */
+let chatKbBrowserState = null;
+
+/** Expose the kb_state_update handler to streaming.js (wired via window). */
+window.chatHandleKbStateUpdate = function chatHandleKbStateUpdate(convId, event) {
+  if (!chatKbBrowserState) return;
+  // The event is conversation-scoped, so map back to workspace hash
+  // before deciding whether it's relevant to us. We rely on the global
+  // state's conversation list since we don't get the hash in the frame.
+  const conv = state.chatConversations.find((c) => c.id === convId);
+  // When the conversation has no workingDir hash yet (very rare race),
+  // fall back to refetching — safer than dropping the frame.
+  if (!conv || chatKbBrowserState.hash === conv.hash) {
+    chatKbBrowserRefetch();
+  }
+};
+
+async function chatOpenKbBrowser(hash, label) {
+  const messagesEl = document.getElementById('chat-messages');
+  const browserEl = document.getElementById('chat-kb-browser');
+  const inputArea = document.querySelector('.chat-input-area');
+  if (!messagesEl || !browserEl) return;
+
+  // Hide the messages view and the input row. We leave the header as-is
+  // — the existing header title/buttons stay visible but are effectively
+  // dormant while the KB browser is open. Re-rendering the header to
+  // reflect KB context felt like overkill for PR 2 given we already
+  // stamp the workspace label inside the browser chrome.
+  messagesEl.style.display = 'none';
+  if (inputArea) inputArea.style.display = 'none';
+  browserEl.style.display = '';
+
+  chatKbBrowserState = {
+    hash,
+    label,
+    activeTab: 'raw',
+    enabled: false,
+    state: null,
+    pollTimer: null,
+    uploading: false,
+  };
+
+  // Initial render with a loading message; refetch populates it.
+  browserEl.innerHTML = chatKbBrowserChrome(label, true);
+  chatKbBrowserWireChrome();
+  await chatKbBrowserRefetch();
+
+  // Start polling so a KB browser open on a workspace with no active
+  // conversation still sees state changes as ingestion progresses. 1500ms
+  // is snappy enough for text-sized files without hammering the server.
+  chatKbBrowserState.pollTimer = setInterval(() => {
+    if (!chatKbBrowserState) return;
+    chatKbBrowserRefetch();
+  }, 1500);
+}
+
+function chatCloseKbBrowser() {
+  if (chatKbBrowserState?.pollTimer) {
+    clearInterval(chatKbBrowserState.pollTimer);
+  }
+  chatKbBrowserState = null;
+  const messagesEl = document.getElementById('chat-messages');
+  const browserEl = document.getElementById('chat-kb-browser');
+  const inputArea = document.querySelector('.chat-input-area');
+  if (browserEl) {
+    browserEl.style.display = 'none';
+    browserEl.innerHTML = '';
+  }
+  if (messagesEl) messagesEl.style.display = '';
+  if (inputArea) inputArea.style.display = '';
+}
+window.chatCloseKbBrowser = chatCloseKbBrowser;
+
+function chatKbBrowserChrome(label, loading) {
+  return `
+    <div class="chat-kb-header">
+      <h2>Knowledge Base: ${esc(label || 'Workspace')}</h2>
+      <button class="chat-kb-header-close" id="chat-kb-close-btn">Close</button>
+    </div>
+    <div class="chat-kb-tabs">
+      <button class="chat-kb-tab active" data-kb-tab="raw">Raw</button>
+      <button class="chat-kb-tab chat-kb-tab-disabled" disabled title="Lands in PR 3">Entries</button>
+      <button class="chat-kb-tab chat-kb-tab-disabled" disabled title="Lands in PR 4">Synthesis</button>
+    </div>
+    <div class="chat-kb-tab-content" id="chat-kb-tab-content">
+      ${loading ? '<p class="chat-kb-empty">Loading…</p>' : ''}
+    </div>
+  `;
+}
+
+function chatKbBrowserWireChrome() {
+  const closeBtn = document.getElementById('chat-kb-close-btn');
+  if (closeBtn) closeBtn.onclick = chatCloseKbBrowser;
+}
+
+async function chatKbBrowserRefetch() {
+  if (!chatKbBrowserState) return;
+  const { hash } = chatKbBrowserState;
+  try {
+    const res = await fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/kb`), {
+      credentials: 'same-origin',
+    });
+    if (!res.ok) throw new Error(`GET /kb returned ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState || chatKbBrowserState.hash !== hash) return;
+    chatKbBrowserState.enabled = Boolean(data.enabled);
+    chatKbBrowserState.state = data.state || null;
+    chatKbBrowserRenderTab();
+  } catch (err) {
+    console.error('[kb] refetch failed:', err);
+  }
+}
+
+function chatKbBrowserRenderTab() {
+  const content = document.getElementById('chat-kb-tab-content');
+  if (!content || !chatKbBrowserState) return;
+  if (!chatKbBrowserState.enabled) {
+    content.innerHTML = `
+      <p class="chat-kb-empty">
+        Knowledge Base is disabled for this workspace. Enable it under
+        Workspace Settings → Knowledge Base to start uploading files.
+      </p>
+    `;
+    return;
+  }
+  content.innerHTML = chatKbBrowserRawTab(chatKbBrowserState.state);
+  chatKbBrowserWireRawTab();
+}
+
+function chatKbBrowserRawTab(kbState) {
+  const raws = kbState ? Object.values(kbState.raw || {}) : [];
+  raws.sort((a, b) => (b.uploadedAt || '').localeCompare(a.uploadedAt || ''));
+  const rows = raws.map((r) => chatKbBrowserRawRow(r)).join('');
+  const emptyMsg = raws.length === 0
+    ? '<p class="chat-kb-empty">No files yet. Upload a PDF, DOCX, PPTX, text, or image file to get started.</p>'
+    : '';
+  return `
+    <div class="chat-kb-upload" id="chat-kb-upload-zone">
+      <div class="chat-kb-upload-hint">
+        Drop a file here, or click the button to choose one. Supported:
+        PDF, DOCX, PPTX, text (.txt .md .json .yaml …), images.
+      </div>
+      <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">Upload file</button>
+      <input type="file" id="chat-kb-upload-input" style="display:none;" />
+    </div>
+    <ul class="chat-kb-raw-list">
+      ${rows}
+    </ul>
+    ${emptyMsg}
+  `;
+}
+
+function chatKbBrowserRawRow(raw) {
+  const size = chatKbFormatSize(raw.sizeBytes || 0);
+  const when = raw.uploadedAt ? chatKbFormatRelative(raw.uploadedAt) : '';
+  const errorLine = raw.error
+    ? `<div class="chat-kb-raw-error">${esc(raw.error)}</div>`
+    : '';
+  return `
+    <li class="chat-kb-raw-row" data-kb-raw-id="${esc(raw.rawId)}">
+      <span class="chat-kb-raw-filename" title="${esc(raw.filename)}">${esc(raw.filename)}</span>
+      <span class="chat-kb-raw-meta">${esc(size)} · ${esc(when)}</span>
+      <span class="chat-kb-raw-status ${esc(raw.status)}">${esc(raw.status)}</span>
+      <button class="chat-kb-raw-delete" data-kb-del="${esc(raw.rawId)}" title="Delete">×</button>
+      ${errorLine}
+    </li>
+  `;
+}
+
+function chatKbBrowserWireRawTab() {
+  const zone = document.getElementById('chat-kb-upload-zone');
+  const btn = document.getElementById('chat-kb-upload-btn');
+  const input = document.getElementById('chat-kb-upload-input');
+  if (btn && input) {
+    btn.onclick = () => input.click();
+    input.onchange = () => {
+      const f = input.files && input.files[0];
+      if (f) chatKbUploadFile(f);
+      input.value = '';
+    };
+  }
+  if (zone) {
+    zone.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      zone.classList.add('dragging');
+    });
+    zone.addEventListener('dragleave', () => zone.classList.remove('dragging'));
+    zone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      zone.classList.remove('dragging');
+      const f = e.dataTransfer?.files?.[0];
+      if (f) chatKbUploadFile(f);
+    });
+  }
+  document.querySelectorAll('.chat-kb-raw-delete').forEach((el) => {
+    el.onclick = () => chatKbDeleteRaw(el.dataset.kbDel);
+  });
+}
+
+async function chatKbUploadFile(file) {
+  if (!chatKbBrowserState || chatKbBrowserState.uploading) return;
+  chatKbBrowserState.uploading = true;
+  const btn = document.getElementById('chat-kb-upload-btn');
+  if (btn) btn.disabled = true;
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    // We go through chatFetch so the CSRF token header and base URL
+    // handling stay consistent with every other mutation endpoint.
+    await chatFetch(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw`,
+      { method: 'POST', body: fd },
+    );
+    await chatKbBrowserRefetch();
+  } catch (err) {
+    alert('Upload failed: ' + err.message);
+  } finally {
+    chatKbBrowserState.uploading = false;
+    const btn2 = document.getElementById('chat-kb-upload-btn');
+    if (btn2) btn2.disabled = false;
+  }
+}
+
+async function chatKbDeleteRaw(rawId) {
+  if (!chatKbBrowserState || !rawId) return;
+  if (!confirm('Delete this file and all its digested entries?')) return;
+  try {
+    await chatFetch(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw/${encodeURIComponent(rawId)}`,
+      { method: 'DELETE' },
+    );
+    await chatKbBrowserRefetch();
+  } catch (err) {
+    alert('Delete failed: ' + err.message);
+  }
+}
+
+function chatKbFormatSize(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function chatKbFormatRelative(iso) {
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '';
+  const delta = Math.max(0, Date.now() - then);
+  const min = Math.floor(delta / 60_000);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min}m ago`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h ago`;
+  const day = Math.floor(hr / 24);
+  return `${day}d ago`;
+}
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 chatInit();

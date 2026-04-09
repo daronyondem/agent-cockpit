@@ -403,6 +403,19 @@ export function chatHandleStreamEvent(targetConvId, event) {
     if (isStillActive && state.chatActiveConv) {
       chatAppendMemoryUpdateMessage(event);
     }
+  } else if (event.type === 'kb_state_update') {
+    // KB Browser handles this via a module-global callback wired at boot
+    // in main.js. We don't need the conversation to be active for it to
+    // matter — the browser may be open in standalone mode for any
+    // workspace. The handler dispatches by comparing the target conv's
+    // workspace hash to the currently-open browser workspace.
+    if (typeof window.chatHandleKbStateUpdate === 'function') {
+      try {
+        window.chatHandleKbStateUpdate(targetConvId, event);
+      } catch (err) {
+        console.error('[kb] state update handler failed:', err);
+      }
+    }
   } else if (event.type === 'error') {
     st.pendingInteraction = null;
     chatArchiveActiveState(st);

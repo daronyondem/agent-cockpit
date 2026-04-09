@@ -1327,6 +1327,29 @@ export class ChatService {
     return path.join(this._knowledgeDir(hash), 'synthesis');
   }
 
+  // ── Public KB directory accessors ────────────────────────────────────────
+  // Exposed so the ingestion orchestrator (which lives outside chatService)
+  // can resolve paths without duplicating the directory layout. The layout
+  // itself stays centralized here — callers never hardcode `knowledge/raw`
+  // etc., they always go through one of these getters.
+  getKbRawDir(hash: string): string { return this._kbRawDir(hash); }
+  getKbConvertedDir(hash: string): string { return this._kbConvertedDir(hash); }
+  getKbEntriesDir(hash: string): string { return this._kbEntriesDir(hash); }
+  getKbSynthesisDir(hash: string): string { return this._kbSynthesisDir(hash); }
+
+  /**
+   * Read the on-disk path of a staged raw file. Returns `null` when the
+   * workspace has no KB state or the rawId isn't known. Used by the HTTP
+   * layer to stream raw bytes back for the Raw tab preview.
+   */
+  async getKbRawFilePath(hash: string, rawId: string): Promise<string | null> {
+    const state = await this.getKbState(hash);
+    const entry = state?.raw[rawId];
+    if (!entry) return null;
+    const ext = path.extname(entry.filename) || '';
+    return path.join(this._kbRawDir(hash), `${rawId}${ext}`);
+  }
+
   /** Return a fresh empty `KbState` scaffold for a new workspace. */
   private _emptyKbState(): KbState {
     return {

@@ -265,6 +265,7 @@ export function chatRenderConvList() {
         <svg class="chat-conv-group-chevron${isCollapsed ? ' collapsed' : ''}" width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4.5 6L8 9.5L11.5 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span class="chat-conv-group-label">${esc(label)}</span>
         ${isCollapsed ? `<span class="chat-conv-group-count">${count}</span>` : ''}
+        ${group.hash ? `<button class="chat-conv-group-kb-btn" data-kb-hash="${esc(group.hash)}" data-kb-label="${esc(label)}" title="Open Knowledge Base"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3.5C3 2.67 3.67 2 4.5 2H12v11H4.5C3.67 13 3 12.33 3 11.5v-8z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M3 11.5c0-.83.67-1.5 1.5-1.5H12" stroke="currentColor" stroke-width="1.3"/><path d="M6 5h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>` : ''}
         ${group.hash ? `<button class="chat-conv-group-instructions-btn" data-ws-hash="${esc(group.hash)}" data-ws-label="${esc(label)}" title="Workspace settings"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M13.5 4.5l-2-2L3 11l-.5 2.5L5 13l8.5-8.5z" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.5 3.5l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>` : ''}
       </div>`;
     if (!isCollapsed) {
