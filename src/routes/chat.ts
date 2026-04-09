@@ -14,7 +14,7 @@ import {
   KbIngestionService,
   KbDisabledError,
 } from '../services/knowledgeBase/ingestion';
-import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
+import type { Request, Response, NextFunction, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
@@ -1141,16 +1141,42 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   //
   // We use in-memory multer storage because the orchestrator needs the
   // buffer to compute the sha256 rawId *before* deciding where on disk
-  // the file belongs. 50 MB is the same soft limit as conversation uploads.
+  // the file belongs. 200 MB comfortably fits real-world PPTX decks and
+  // media-heavy PDFs — the conversation-attachment endpoint keeps its
+  // own smaller limit since those uploads are a different use case.
+  const KB_UPLOAD_LIMIT_MB = 200;
   const kbUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: 50 * 1024 * 1024, files: 1 },
+    limits: { fileSize: KB_UPLOAD_LIMIT_MB * 1024 * 1024, files: 1 },
   });
+
+  // Multer throws `LIMIT_FILE_SIZE` (and friends) via `next(err)` BEFORE
+  // the route handler runs, so an inline try/catch in the handler never
+  // sees them — Express's default error handler ends up returning an
+  // HTML 500 which the client can't parse. Wrap multer in a shim that
+  // converts its errors into proper JSON responses the KB Browser can
+  // display to the user.
+  const kbUploadMiddleware = (req: Request, res: Response, next: NextFunction): void => {
+    kbUpload.single('file')(req, res, (err: unknown) => {
+      if (err instanceof multer.MulterError) {
+        const msg = err.code === 'LIMIT_FILE_SIZE'
+          ? `File exceeds the ${KB_UPLOAD_LIMIT_MB} MB upload limit.`
+          : err.message;
+        res.status(400).json({ error: msg });
+        return;
+      }
+      if (err) {
+        res.status(500).json({ error: (err as Error).message });
+        return;
+      }
+      next();
+    });
+  };
 
   router.post(
     '/workspaces/:hash/kb/raw',
     csrfGuard,
-    kbUpload.single('file'),
+    kbUploadMiddleware,
     async (req: Request, res: Response) => {
       try {
         const hash = param(req, 'hash');
