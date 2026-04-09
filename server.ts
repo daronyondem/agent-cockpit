@@ -14,6 +14,7 @@ import { BackendRegistry } from './src/services/backends/registry';
 import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
 import { KiroAdapter } from './src/services/backends/kiro';
 import { UpdateService } from './src/services/updateService';
+import { detectLibreOffice } from './src/services/knowledgeBase/libreOffice';
 import type { Request, Response, NextFunction } from './src/types';
 
 const FileStore = FileStoreFactory(session);
@@ -100,6 +101,20 @@ chatService.initialize().then(async () => {
   }
 
   updateService.start();
+
+  // Detect LibreOffice in the background — used by the KB PPTX ingestion
+  // path when `Settings.knowledgeBase.convertSlidesToImages` is enabled.
+  // Non-fatal: if detection fails or LibreOffice is missing, we log and
+  // the KB feature falls back to text-only extraction at ingest time.
+  detectLibreOffice().then((status) => {
+    if (status.available) {
+      console.log(`[kb] LibreOffice detected at ${status.binaryPath}`);
+    } else {
+      console.log('[kb] LibreOffice not found on PATH (optional — required only for PPTX slide-to-image conversion)');
+    }
+  }).catch((err: unknown) => {
+    console.warn('[kb] LibreOffice detection failed:', (err as Error).message);
+  });
 
   const server = app.listen(config.PORT, () => {
     console.log(`Agent Cockpit running on port ${config.PORT}`);

@@ -20,7 +20,23 @@ import type {
   MemorySnapshot,
   MemoryFile,
   EffortLevel,
+  KbState,
 } from '../types';
+
+/**
+ * Schema version of the `state.json` envelope itself. Bumped only when
+ * we change the top-level shape (e.g. add a new top-level map). Distinct
+ * from `entrySchemaVersion`, which tracks the digestion output format.
+ */
+const KB_STATE_VERSION = 1;
+
+/**
+ * Current digestion entry schema version. Bumped when the digestion
+ * prompt or the entry YAML frontmatter format changes. When bumped,
+ * existing entries in `state.json` get `staleSchema: true` and are
+ * surfaced in the KB Browser as "needs re-digestion".
+ */
+const KB_ENTRY_SCHEMA_VERSION = 1;
 
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
 
@@ -1267,6 +1283,164 @@ export class ChatService {
       `[Workspace memory is available at ${absPath}/`,
       `Contains .md files with YAML frontmatter (type, name, description) followed by body text.`,
       `Read these when the user references preferences, feedback, decisions, project context, or prior work style.]`,
+    ].join('\n');
+  }
+
+  // ── Workspace Knowledge Base ───────────────────────────────────────────────
+  //
+  // KB directory layout on disk (all under the workspace root to keep
+  // per-workspace data colocated):
+  //
+  //   data/chat/workspaces/{hash}/knowledge/
+  //     state.json                       — single source of truth (KbState)
+  //     raw/<rawId>.<ext>                — raw uploads, stored verbatim
+  //     converted/<rawId>/...            — ingestion output (text, media, etc.)
+  //     entries/<entryId>.md             — digestion output (YAML frontmatter + body)
+  //     synthesis/                       — dreaming output (populated by PR 4)
+  //       manifest.json                  — artifact lineage
+  //       *.md                           — synthesis layer files
+  //
+  // PR 1 only creates/reads `state.json`. The other directories are
+  // created lazily by subsequent PRs as the pipeline stages land.
+
+  private _knowledgeDir(hash: string): string {
+    return path.join(this._workspaceDir(hash), 'knowledge');
+  }
+
+  private _kbStatePath(hash: string): string {
+    return path.join(this._knowledgeDir(hash), 'state.json');
+  }
+
+  private _kbRawDir(hash: string): string {
+    return path.join(this._knowledgeDir(hash), 'raw');
+  }
+
+  private _kbConvertedDir(hash: string): string {
+    return path.join(this._knowledgeDir(hash), 'converted');
+  }
+
+  private _kbEntriesDir(hash: string): string {
+    return path.join(this._knowledgeDir(hash), 'entries');
+  }
+
+  private _kbSynthesisDir(hash: string): string {
+    return path.join(this._knowledgeDir(hash), 'synthesis');
+  }
+
+  /** Return a fresh empty `KbState` scaffold for a new workspace. */
+  private _emptyKbState(): KbState {
+    return {
+      version: KB_STATE_VERSION,
+      entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
+      raw: {},
+      entries: {},
+      synthesis: {
+        status: 'empty',
+        lastDreamedAt: null,
+        staleEntryIds: [],
+      },
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /** Per-workspace KB enable/disable (stored on the workspace index). */
+  async getWorkspaceKbEnabled(hash: string): Promise<boolean> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return false;
+    return Boolean(index.kbEnabled);
+  }
+
+  async setWorkspaceKbEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    index.kbEnabled = Boolean(enabled);
+    await this._writeWorkspaceIndex(hash, index);
+    return index.kbEnabled;
+  }
+
+  /**
+   * Read the per-workspace `KbState` from disk. Returns `null` when the
+   * workspace doesn't exist or when `state.json` has never been written
+   * (e.g. KB enabled but no raw files uploaded yet).
+   */
+  async getKbState(hash: string): Promise<KbState | null> {
+    if (!hash) return null;
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    try {
+      const data = await fsp.readFile(this._kbStatePath(hash), 'utf8');
+      return JSON.parse(data) as KbState;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  /**
+   * Persist a `KbState` to disk. Always bumps `updatedAt` to now so
+   * callers don't need to remember. Creates the `knowledge/` dir on
+   * first write.
+   */
+  async saveKbState(hash: string, state: KbState): Promise<KbState> {
+    const dir = this._knowledgeDir(hash);
+    await fsp.mkdir(dir, { recursive: true });
+    const next: KbState = { ...state, updatedAt: new Date().toISOString() };
+    await fsp.writeFile(this._kbStatePath(hash), JSON.stringify(next, null, 2), 'utf8');
+    return next;
+  }
+
+  /**
+   * Return the KB state for a workspace, creating and persisting an
+   * empty scaffold on the first call for an enabled workspace. Used by
+   * the `GET /kb` endpoint so the UI always has a concrete shape to
+   * render (status counters, empty tabs, etc.) instead of having to
+   * special-case "no state yet".
+   *
+   * Returns `null` when the workspace doesn't exist. Returns an empty
+   * scaffold (in-memory only, NOT persisted) when KB is disabled, so
+   * the frontend can render the disabled tab without polluting disk
+   * with state.json for workspaces that never opt in.
+   */
+  async getOrInitKbState(hash: string): Promise<KbState | null> {
+    if (!hash) return null;
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    const existing = await this.getKbState(hash);
+    if (existing) return existing;
+    if (!index.kbEnabled) return this._emptyKbState();
+    // Enabled with no state on disk — initialize and persist.
+    return this.saveKbState(hash, this._emptyKbState());
+  }
+
+  /**
+   * Returns a bracketed pointer block that tells the CLI where the
+   * workspace's knowledge base lives on disk, or `null` when KB is
+   * disabled for this workspace. Mirrors `getWorkspaceMemoryPointer`
+   * in shape and rationale: read-side access without paying the token
+   * cost of dumping the whole KB into the system prompt, and the CLI
+   * reads the state file + entries on demand via its own file tools.
+   *
+   * Creates `knowledge/entries/` so the CLI never hits ENOENT on a
+   * brand-new workspace with KB enabled but no files yet.
+   */
+  async getWorkspaceKbPointer(hash: string): Promise<string | null> {
+    if (!hash) return null;
+    const enabled = await this.getWorkspaceKbEnabled(hash);
+    if (!enabled) return null;
+    const kbDir = this._knowledgeDir(hash);
+    const entriesDir = this._kbEntriesDir(hash);
+    try {
+      await fsp.mkdir(entriesDir, { recursive: true });
+    } catch (err: unknown) {
+      console.warn(`[kb] getWorkspaceKbPointer: could not create ${entriesDir}:`, (err as Error).message);
+    }
+    const absKbDir = path.resolve(kbDir);
+    return [
+      `[Workspace knowledge base is available at ${absKbDir}/`,
+      `- state.json: pipeline state (raw uploads, digested entries, synthesis status).`,
+      `- entries/*.md: digested knowledge entries with YAML frontmatter (title, tags, source).`,
+      `- synthesis/*.md: cross-entry synthesis (created by the Dreaming stage).`,
+      `Read these when the user references documents they've uploaded, domain knowledge, or asks questions the digested entries may cover.]`,
     ].join('\n');
   }
 

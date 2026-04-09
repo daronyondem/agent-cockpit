@@ -2526,6 +2526,89 @@ describe('DELETE /workspaces/:hash/memory/entries (bulk)', () => {
   });
 });
 
+// ── Workspace Knowledge Base endpoints ────────────────────────────────────
+
+describe('GET /workspaces/:hash/kb', () => {
+  test('returns enabled=false and an empty state scaffold for a new workspace', async () => {
+    const conv = await chatService.createConversation('KB GET', '/tmp/ws-kb-empty');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/kb`);
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(false);
+    expect(res.body.state).toBeTruthy();
+    expect(res.body.state.version).toBe(1);
+    expect(res.body.state.raw).toEqual({});
+    expect(res.body.state.entries).toEqual({});
+    expect(res.body.state.synthesis.status).toBe('empty');
+  });
+
+  test('returns enabled=true and persists empty state when KB is turned on', async () => {
+    const conv = await chatService.createConversation('KB ON', '/tmp/ws-kb-on');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/kb`);
+    expect(res.status).toBe(200);
+    expect(res.body.enabled).toBe(true);
+    expect(res.body.state.raw).toEqual({});
+  });
+
+  test('returns 404 for unknown workspace', async () => {
+    const res = await makeRequest('GET', '/api/chat/workspaces/nonexistent999/kb');
+    expect(res.status).toBe(404);
+  });
+});
+
+describe('PUT /workspaces/:hash/kb/enabled', () => {
+  test('persists the enable flag and is round-tripped via GET', async () => {
+    const conv = await chatService.createConversation('KB Toggle', '/tmp/ws-kb-toggle');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const put = await makeRequest(
+      'PUT',
+      `/api/chat/workspaces/${hash}/kb/enabled`,
+      { enabled: true },
+    );
+    expect(put.status).toBe(200);
+    expect(put.body.enabled).toBe(true);
+
+    const get = await makeRequest('GET', `/api/chat/workspaces/${hash}/kb`);
+    expect(get.status).toBe(200);
+    expect(get.body.enabled).toBe(true);
+  });
+
+  test('rejects non-boolean enabled values', async () => {
+    const conv = await chatService.createConversation('KB Bad', '/tmp/ws-kb-bad');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    const res = await makeRequest(
+      'PUT',
+      `/api/chat/workspaces/${hash}/kb/enabled`,
+      { enabled: 'yes' as unknown as boolean },
+    );
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 404 for unknown workspace', async () => {
+    const res = await makeRequest(
+      'PUT',
+      `/api/chat/workspaces/nonexistent999/kb/enabled`,
+      { enabled: true },
+    );
+    expect(res.status).toBe(404);
+  });
+
+  test('does not touch memoryEnabled when toggled', async () => {
+    const conv = await chatService.createConversation('KB Split', '/tmp/ws-kb-split');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceMemoryEnabled(hash, true);
+
+    await makeRequest('PUT', `/api/chat/workspaces/${hash}/kb/enabled`, { enabled: true });
+
+    expect(await chatService.getWorkspaceMemoryEnabled(hash)).toBe(true);
+    expect(await chatService.getWorkspaceKbEnabled(hash)).toBe(true);
+  });
+});
+
 // ── memory_update WS frame ────────────────────────────────────────────────
 
 describe('memory_update WebSocket frame', () => {
