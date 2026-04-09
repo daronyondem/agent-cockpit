@@ -989,6 +989,157 @@ describe('getWorkspaceMemoryPointer', () => {
   });
 });
 
+// ── Workspace Knowledge Base ────────────────────────────────────────────────
+
+describe('getWorkspaceKbEnabled / setWorkspaceKbEnabled', () => {
+  test('defaults to false and persists after set', async () => {
+    await service.createConversation('KB Toggle', '/tmp/kb-toggle');
+    const hash = workspaceHash('/tmp/kb-toggle');
+
+    expect(await service.getWorkspaceKbEnabled(hash)).toBe(false);
+
+    const result = await service.setWorkspaceKbEnabled(hash, true);
+    expect(result).toBe(true);
+    expect(await service.getWorkspaceKbEnabled(hash)).toBe(true);
+  });
+
+  test('setWorkspaceKbEnabled returns null for unknown workspace', async () => {
+    expect(await service.setWorkspaceKbEnabled('nopehash', true)).toBeNull();
+  });
+
+  test('enable/disable is independent of memoryEnabled', async () => {
+    await service.createConversation('KB/Mem Split', '/tmp/kb-mem-split');
+    const hash = workspaceHash('/tmp/kb-mem-split');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+    await service.setWorkspaceKbEnabled(hash, false);
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(true);
+    expect(await service.getWorkspaceKbEnabled(hash)).toBe(false);
+
+    await service.setWorkspaceKbEnabled(hash, true);
+    await service.setWorkspaceMemoryEnabled(hash, false);
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(false);
+    expect(await service.getWorkspaceKbEnabled(hash)).toBe(true);
+  });
+});
+
+describe('getOrInitKbState / getKbState / saveKbState', () => {
+  test('getKbState returns null when no state file exists', async () => {
+    await service.createConversation('KB State None', '/tmp/kb-state-none');
+    const hash = workspaceHash('/tmp/kb-state-none');
+    expect(await service.getKbState(hash)).toBeNull();
+  });
+
+  test('getOrInitKbState returns null for unknown workspace', async () => {
+    expect(await service.getOrInitKbState('nopehash')).toBeNull();
+  });
+
+  test('getOrInitKbState returns in-memory empty state when disabled (does not persist)', async () => {
+    await service.createConversation('KB Init Disabled', '/tmp/kb-init-disabled');
+    const hash = workspaceHash('/tmp/kb-init-disabled');
+
+    const state = await service.getOrInitKbState(hash);
+    expect(state).not.toBeNull();
+    expect(state!.version).toBe(1);
+    expect(state!.raw).toEqual({});
+    expect(state!.entries).toEqual({});
+    expect(state!.synthesis.status).toBe('empty');
+
+    // Should NOT have written state.json to disk for a disabled workspace.
+    const statePath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'knowledge', 'state.json');
+    expect(fs.existsSync(statePath)).toBe(false);
+  });
+
+  test('getOrInitKbState persists an empty state when enabled', async () => {
+    await service.createConversation('KB Init Enabled', '/tmp/kb-init-enabled');
+    const hash = workspaceHash('/tmp/kb-init-enabled');
+    await service.setWorkspaceKbEnabled(hash, true);
+
+    const state = await service.getOrInitKbState(hash);
+    expect(state).not.toBeNull();
+    expect(state!.version).toBe(1);
+    expect(state!.entrySchemaVersion).toBe(1);
+
+    const statePath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'knowledge', 'state.json');
+    expect(fs.existsSync(statePath)).toBe(true);
+
+    // Round-trip via getKbState.
+    const loaded = await service.getKbState(hash);
+    expect(loaded).not.toBeNull();
+    expect(loaded!.raw).toEqual({});
+  });
+
+  test('saveKbState bumps updatedAt and round-trips', async () => {
+    await service.createConversation('KB Save', '/tmp/kb-save');
+    const hash = workspaceHash('/tmp/kb-save');
+    await service.setWorkspaceKbEnabled(hash, true);
+
+    const initial = await service.getOrInitKbState(hash);
+    expect(initial).not.toBeNull();
+
+    // Wait a hair to guarantee a different timestamp.
+    await new Promise((r) => setTimeout(r, 5));
+    const saved = await service.saveKbState(hash, {
+      ...initial!,
+      raw: {
+        abc123: {
+          rawId: 'abc123',
+          filename: 'paper.pdf',
+          mimeType: 'application/pdf',
+          sizeBytes: 1024,
+          uploadedAt: '2026-04-08T12:00:00.000Z',
+          status: 'ingested',
+        },
+      },
+    });
+    expect(saved.updatedAt > initial!.updatedAt).toBe(true);
+
+    const reloaded = await service.getKbState(hash);
+    expect(reloaded).not.toBeNull();
+    expect(reloaded!.raw.abc123.filename).toBe('paper.pdf');
+    expect(reloaded!.raw.abc123.status).toBe('ingested');
+  });
+});
+
+describe('getWorkspaceKbPointer', () => {
+  test('returns null when KB is disabled for the workspace', async () => {
+    await service.createConversation('KB Ptr Off', '/tmp/kb-ptr-off');
+    const hash = workspaceHash('/tmp/kb-ptr-off');
+    expect(await service.getWorkspaceKbPointer(hash)).toBeNull();
+  });
+
+  test('returns pointer text with the knowledge dir when enabled', async () => {
+    await service.createConversation('KB Ptr On', '/tmp/kb-ptr-on');
+    const hash = workspaceHash('/tmp/kb-ptr-on');
+    await service.setWorkspaceKbEnabled(hash, true);
+
+    const pointer = await service.getWorkspaceKbPointer(hash);
+    expect(pointer).not.toBeNull();
+    expect(pointer).toContain('Workspace knowledge base is available at');
+    expect(pointer).toContain(hash);
+    expect(pointer).toContain('knowledge');
+    expect(pointer).toContain('state.json');
+    expect(pointer).toContain('entries/');
+    expect(pointer!.startsWith('[')).toBe(true);
+    expect(pointer!.endsWith(']')).toBe(true);
+  });
+
+  test('creates knowledge/entries/ on disk so the model never hits ENOENT', async () => {
+    await service.createConversation('KB Ptr Mkdir', '/tmp/kb-ptr-mkdir');
+    const hash = workspaceHash('/tmp/kb-ptr-mkdir');
+    await service.setWorkspaceKbEnabled(hash, true);
+
+    const entriesDir = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'knowledge', 'entries');
+    expect(fs.existsSync(entriesDir)).toBe(false);
+
+    await service.getWorkspaceKbPointer(hash);
+    expect(fs.existsSync(entriesDir)).toBe(true);
+  });
+
+  test('returns null when hash is empty', async () => {
+    expect(await service.getWorkspaceKbPointer('')).toBeNull();
+  });
+});
+
 // ── Workspace Instructions ──────────────────────────────────────────────────
 
 describe('getWorkspaceInstructions', () => {

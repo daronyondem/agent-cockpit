@@ -9,6 +9,7 @@ import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
+import { detectLibreOffice } from '../services/knowledgeBase/libreOffice';
 import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
@@ -721,15 +722,19 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     if (isNewSession) {
       // Build the user-message prefix: workspace discussion history
       // pointer, then workspace memory pointer (read-side access to the
-      // merged memory store). Both live in the user message — not the
-      // system prompt — so they survive `--resume` via the CLI's own
-      // conversation history on subsequent turns.
+      // merged memory store), then workspace KB pointer (read-side
+      // access to the knowledge pipeline state and entries). All live
+      // in the user message — not the system prompt — so they survive
+      // `--resume` via the CLI's own conversation history on subsequent
+      // turns.
       const prefixes: string[] = [];
       const ctx = chatService.getWorkspaceContext(convId);
       if (ctx) prefixes.push(ctx);
       if (wsHashForSend) {
         const memPointer = await chatService.getWorkspaceMemoryPointer(wsHashForSend);
         if (memPointer) prefixes.push(memPointer);
+        const kbPointer = await chatService.getWorkspaceKbPointer(wsHashForSend);
+        if (kbPointer) prefixes.push(kbPointer);
       }
       if (prefixes.length > 0) {
         cliMessage = prefixes.join('\n\n') + '\n\n' + cliMessage;
@@ -1063,6 +1068,54 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       res.json({ ok: true, deleted, snapshot });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message || 'Clear failed' });
+    }
+  });
+
+  // ── Workspace Knowledge Base ────────────────────────────────────────────────
+  // GET returns the KB state (pipeline counters, raw/entry/synthesis lists)
+  // together with the per-workspace enable flag so the KB Browser can render
+  // a single consolidated view. 404 is reserved for "workspace doesn't exist";
+  // an enabled workspace with no files yet returns 200 with an empty state
+  // scaffold (entries/raw empty, synthesis.status = 'empty').
+  router.get('/workspaces/:hash/kb', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const enabled = await chatService.getWorkspaceKbEnabled(hash);
+      const state = await chatService.getOrInitKbState(hash);
+      if (state === null) return res.status(404).json({ error: 'Workspace not found' });
+      res.json({ enabled, state });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.put('/workspaces/:hash/kb/enabled', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { enabled } = req.body as { enabled?: boolean };
+      if (typeof enabled !== 'boolean') {
+        return res.status(400).json({ error: 'enabled must be a boolean' });
+      }
+      const hash = param(req, 'hash');
+      const result = await chatService.setWorkspaceKbEnabled(hash, enabled);
+      if (result === null) return res.status(404).json({ error: 'Workspace not found' });
+      res.json({ enabled: result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Expose the cached LibreOffice detection result to the frontend so the
+  // global Settings → Knowledge Base "Convert PPTX slides to images" checkbox
+  // can validate on-click and auto-uncheck with a warning when the binary is
+  // missing. `detectLibreOffice()` is cached at module level after the first
+  // call (server.ts runs it at startup), so this endpoint is effectively a
+  // read of that cache on every request.
+  router.get('/kb/libreoffice-status', async (_req: Request, res: Response) => {
+    try {
+      const status = await detectLibreOffice();
+      res.json(status);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
     }
   });
 

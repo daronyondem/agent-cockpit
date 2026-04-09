@@ -123,6 +123,14 @@ export interface WorkspaceIndex {
    * no MCP memory_note exposure, no post-session extraction.
    */
   memoryEnabled?: boolean;
+  /**
+   * Whether per-workspace Knowledge Base is enabled. When false/undefined,
+   * the workspace behaves exactly as before the KB feature: no KB pointer
+   * injection, no `kb_ingest` MCP exposure, no pipeline activity. Default
+   * is `false` — users opt in per workspace via the KB tab in Workspace
+   * Settings.
+   */
+  kbEnabled?: boolean;
   conversations: ConversationEntry[];
 }
 
@@ -182,6 +190,33 @@ export interface Settings {
     cliBackend?: string;
     cliModel?: string;
     cliEffort?: EffortLevel;
+  };
+  /**
+   * Globally-configured Knowledge Base CLIs. Two separate roles:
+   *   - Digestion: runs once per raw file to produce structured entries.
+   *   - Dreaming: manually invoked to synthesize entries into a coherent
+   *     knowledge graph. Incremental by default, full rebuild on demand.
+   * Both must be registered backends. Shape mirrors `memory` so the
+   * config surface stays consistent. `convertSlidesToImages` opts into
+   * the LibreOffice-backed PPTX slide rasterization path (global, not
+   * per-workspace).
+   */
+  knowledgeBase?: {
+    digestionCliBackend?: string;
+    digestionCliModel?: string;
+    digestionCliEffort?: EffortLevel;
+    dreamingCliBackend?: string;
+    dreamingCliModel?: string;
+    dreamingCliEffort?: EffortLevel;
+    /**
+     * When true, PPTX ingestion shells out to LibreOffice to render each
+     * slide as a PNG (better fidelity for decks that rely on visual
+     * layout). When false, only extracted text, speaker notes, and
+     * embedded media are captured. Requires LibreOffice on PATH; if
+     * missing, a warning is logged and the pipeline falls back to
+     * text-only.
+     */
+    convertSlidesToImages?: boolean;
   };
   customInstructions?: {
     aboutUser?: string;
@@ -283,7 +318,8 @@ export type StreamEvent =
   | UsageEvent
   | ErrorEvent
   | DoneEvent
-  | MemoryUpdateEvent;
+  | MemoryUpdateEvent
+  | KbStateUpdateEvent;
 
 // ── Workspace Memory ─────────────────────────────────────────────────────────
 
@@ -334,6 +370,122 @@ export interface MemorySnapshot {
   index: string;
   /** Individual memory files (both CLI captures and notes). */
   files: MemoryFile[];
+}
+
+// ── Workspace Knowledge Base ────────────────────────────────────────────────
+//
+// The per-workspace KB is a three-stage pipeline:
+//   1. Ingestion  — our code parses the raw file into a lossless converted
+//                   form (`converted/<rawId>/...`).
+//   2. Digestion  — a CLI (configured globally) reads one converted item and
+//                   emits a structured entry file (`entries/<id>.md`) with
+//                   YAML frontmatter.
+//   3. Dreaming   — a CLI (configured globally, manual only) integrates
+//                   entries into a synthesis layer (`synthesis/*.md`) that
+//                   cross-links concepts. Incremental by default.
+//
+// All pipeline state is tracked in `state.json` at the workspace KB root.
+// Schema version lets us evolve the entry format without silently
+// re-digesting existing files.
+
+/** Status of an individual raw file progressing through the pipeline. */
+export type KbRawStatus =
+  | 'ingesting'
+  | 'ingested'
+  | 'digesting'
+  | 'digested'
+  | 'failed';
+
+/** Status of the workspace's synthesis layer (produced by Dreaming). */
+export type KbSynthesisStatus = 'empty' | 'fresh' | 'stale' | 'dreaming';
+
+export interface KbRawEntry {
+  /** First 16 chars of sha256(file). Stable across renames, unique per workspace. */
+  rawId: string;
+  /** Original filename as uploaded (for display only). */
+  filename: string;
+  /** MIME type as detected at upload time. */
+  mimeType: string;
+  /** Raw byte size of the uploaded file. */
+  sizeBytes: number;
+  /** ISO 8601 timestamp of the upload. */
+  uploadedAt: string;
+  /** Current pipeline status for this raw file. */
+  status: KbRawStatus;
+  /** Last error message if `status === 'failed'`. */
+  error?: string;
+  /**
+   * ID of the digested entry this raw produced, once digestion completes.
+   * Present iff `status === 'digested'`.
+   */
+  entryId?: string;
+}
+
+export interface KbEntryRef {
+  /** Stable entry ID, typically sha256 of the entry content at creation time. */
+  entryId: string;
+  /** RawId this entry was digested from. */
+  rawId: string;
+  /** Entry schema version — bumped when the digestion prompt/format changes. */
+  schemaVersion: number;
+  /** ISO 8601 timestamp of the last digestion. */
+  digestedAt: string;
+  /** True when the current `entry_schema_version` is newer than this entry's. */
+  staleSchema?: boolean;
+}
+
+export interface KbSynthesisState {
+  /** High-level status of the synthesis layer. */
+  status: KbSynthesisStatus;
+  /** ISO 8601 timestamp of the last dreaming run (null before first run). */
+  lastDreamedAt: string | null;
+  /** EntryIds that have been added or changed since the last dreaming run. */
+  staleEntryIds: string[];
+  /** Backend that produced the current synthesis (e.g. "claude-code"). */
+  lastDreamBackend?: string;
+}
+
+/**
+ * Source of truth for the per-workspace KB pipeline. Lives at
+ * `data/chat/workspaces/{hash}/knowledge/state.json`. Rewritten as a
+ * single JSON blob on every state change so readers always see a
+ * consistent view. Concurrency is per-workspace serialized, so there
+ * is no contention.
+ */
+export interface KbState {
+  /** Schema version of this state file itself (distinct from entry schema). */
+  version: number;
+  /** Current digestion entry schema version. */
+  entrySchemaVersion: number;
+  /** Raw files the user has uploaded, keyed by rawId. */
+  raw: Record<string, KbRawEntry>;
+  /** Digested entries, keyed by entryId. */
+  entries: Record<string, KbEntryRef>;
+  /** Dreaming/synthesis state. */
+  synthesis: KbSynthesisState;
+  /** ISO 8601 timestamp of the most recent mutation (for cache busting). */
+  updatedAt: string;
+}
+
+/**
+ * Lightweight notification emitted when `state.json` changes during an
+ * active stream (or via an HTTP mutation). The full state is fetched
+ * separately via `GET /workspaces/:hash/kb` — this frame is only a
+ * trigger. Shape mirrors `memory_update` for consistency.
+ */
+export interface KbStateUpdateEvent {
+  type: 'kb_state_update';
+  /** ISO 8601 timestamp of the new state. */
+  updatedAt: string;
+  /**
+   * What changed in this tick. Frontend uses this to decide whether to
+   * refetch, toast, or highlight the affected row.
+   */
+  changed: {
+    raw?: string[];
+    entries?: string[];
+    synthesis?: boolean;
+  };
 }
 
 // ── Backend Adapter ──────────────────────────────────────────────────────────

@@ -50,6 +50,10 @@ window.chatSettingsBackendChanged = chatSettingsBackendChanged;
 window.chatSettingsModelChanged = chatSettingsModelChanged;
 window.chatSettingsMemoryBackendChanged = chatSettingsMemoryBackendChanged;
 window.chatSettingsMemoryModelChanged = chatSettingsMemoryModelChanged;
+window.chatSettingsKbDigestBackendChanged = chatSettingsKbDigestBackendChanged;
+window.chatSettingsKbDigestModelChanged = chatSettingsKbDigestModelChanged;
+window.chatSettingsKbDreamBackendChanged = chatSettingsKbDreamBackendChanged;
+window.chatSettingsKbDreamModelChanged = chatSettingsKbDreamModelChanged;
 window.chatUpdateUsageStats = chatUpdateUsageStats;
 window.chatClearUsageStats = chatClearUsageStats;
 window.chatSaveWorkspaceInstructions = chatSaveWorkspaceInstructions;
@@ -521,10 +525,36 @@ async function chatShowSettings(initialTab) {
     ? mem.cliEffort
     : (memLevels.includes('high') ? 'high' : memLevels[0] || '');
 
+  // Knowledge Base config mirrors the Memory shape but has two separate
+  // CLI roles: Digestion (runs per raw file) and Dreaming (manual synthesis).
+  // Both fall back to the default backend so fresh installs don't require
+  // extra config before the feature starts working.
+  const kb = s.knowledgeBase || {};
+  const kbDigestBackendId = kb.digestionCliBackend || s.defaultBackend || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
+  const kbDigestModels = state.BACKEND_MODELS[kbDigestBackendId] || [];
+  const kbDigestSelectedModel = kb.digestionCliModel || kbDigestModels.find((m) => m.default)?.id || (kbDigestModels[0]?.id || '');
+  const kbDigestModel = kbDigestModels.find((m) => m.id === kbDigestSelectedModel);
+  const kbDigestLevels = kbDigestModel?.supportedEffortLevels || [];
+  const kbDigestSelectedEffort = kb.digestionCliEffort && kbDigestLevels.includes(kb.digestionCliEffort)
+    ? kb.digestionCliEffort
+    : (kbDigestLevels.includes('high') ? 'high' : kbDigestLevels[0] || '');
+
+  const kbDreamBackendId = kb.dreamingCliBackend || s.defaultBackend || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
+  const kbDreamModels = state.BACKEND_MODELS[kbDreamBackendId] || [];
+  const kbDreamSelectedModel = kb.dreamingCliModel || kbDreamModels.find((m) => m.default)?.id || (kbDreamModels[0]?.id || '');
+  const kbDreamModel = kbDreamModels.find((m) => m.id === kbDreamSelectedModel);
+  const kbDreamLevels = kbDreamModel?.supportedEffortLevels || [];
+  const kbDreamSelectedEffort = kb.dreamingCliEffort && kbDreamLevels.includes(kb.dreamingCliEffort)
+    ? kb.dreamingCliEffort
+    : (kbDreamLevels.includes('high') ? 'high' : kbDreamLevels[0] || '');
+
+  const kbConvertSlides = Boolean(kb.convertSlidesToImages);
+
   const html = `
     <div class="chat-settings-tabs">
       <button class="chat-settings-tab active" data-tab="general">General</button>
       <button class="chat-settings-tab" data-tab="memory">Memory</button>
+      <button class="chat-settings-tab" data-tab="kb">Knowledge Base</button>
       <button class="chat-settings-tab" data-tab="usage">Usage Stats</button>
     </div>
     <div class="chat-modal-body">
@@ -614,6 +644,70 @@ async function chatShowSettings(initialTab) {
         </div>
         <button class="chat-settings-save" onclick="chatSaveSettings()">Save Settings</button>
       </div>
+      <div class="chat-settings-tab-content" id="chat-tab-kb" style="display:none;">
+        <div class="chat-settings-group">
+          <div class="chat-settings-desc">
+            The Knowledge Base pipeline has two CLI roles. <strong>Digestion</strong>
+            runs once per uploaded file to produce a structured entry. <strong>Dreaming</strong>
+            is triggered manually to synthesize entries into a cross-linked
+            knowledge graph. Both fall back to the default backend when
+            unset. These settings are global — enable the feature per
+            workspace in Workspace Settings → Knowledge Base.
+          </div>
+        </div>
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">Digestion CLI</div>
+          <select class="chat-settings-select" id="chat-settings-kb-digest-backend" onchange="chatSettingsKbDigestBackendChanged()">
+            ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbDigestBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-kb-digest-model-group"${kbDigestModels.length === 0 ? ' style="display:none;"' : ''}>
+          <div class="chat-settings-label">Digestion Model</div>
+          <select class="chat-settings-select" id="chat-settings-kb-digest-model" onchange="chatSettingsKbDigestModelChanged()">
+            ${kbDigestModels.map((m) => `<option value="${esc(m.id)}"${m.id === kbDigestSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-kb-digest-effort-group"${kbDigestLevels.length === 0 ? ' style="display:none;"' : ''}>
+          <div class="chat-settings-label">Digestion Effort</div>
+          <div class="chat-settings-desc">Adaptive reasoning level for the Digestion CLI. Lower levels are faster and cheaper per file.</div>
+          <select class="chat-settings-select" id="chat-settings-kb-digest-effort">
+            ${kbDigestLevels.map((lv) => `<option value="${esc(lv)}"${lv === kbDigestSelectedEffort ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">Dreaming CLI</div>
+          <select class="chat-settings-select" id="chat-settings-kb-dream-backend" onchange="chatSettingsKbDreamBackendChanged()">
+            ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbDreamBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-kb-dream-model-group"${kbDreamModels.length === 0 ? ' style="display:none;"' : ''}>
+          <div class="chat-settings-label">Dreaming Model</div>
+          <select class="chat-settings-select" id="chat-settings-kb-dream-model" onchange="chatSettingsKbDreamModelChanged()">
+            ${kbDreamModels.map((m) => `<option value="${esc(m.id)}"${m.id === kbDreamSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-kb-dream-effort-group"${kbDreamLevels.length === 0 ? ' style="display:none;"' : ''}>
+          <div class="chat-settings-label">Dreaming Effort</div>
+          <div class="chat-settings-desc">Adaptive reasoning level for the Dreaming CLI. Higher levels produce richer synthesis at higher cost per run.</div>
+          <select class="chat-settings-select" id="chat-settings-kb-dream-effort">
+            ${kbDreamLevels.map((lv) => `<option value="${esc(lv)}"${lv === kbDreamSelectedEffort ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group">
+          <label class="chat-settings-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="chat-settings-kb-convert-slides"${kbConvertSlides ? ' checked' : ''} />
+            <span>Convert PPTX slides to images for better results (Requires LibreOffice)</span>
+          </label>
+          <div class="chat-settings-desc">
+            When enabled, PPTX ingestion shells out to LibreOffice to render
+            each slide as a high-fidelity PNG. Without LibreOffice installed,
+            the pipeline still captures text, speaker notes, and embedded
+            media, but per-slide visuals are skipped.
+          </div>
+          <div id="chat-settings-kb-convert-slides-warning" style="display:none;margin-top:6px;font-size:12px;color:var(--error,#d32f2f);"></div>
+        </div>
+        <button class="chat-settings-save" onclick="chatSaveSettings()">Save Settings</button>
+      </div>
       <div class="chat-settings-tab-content" id="chat-tab-usage" style="display:none;">
         <div class="chat-usage-stats-controls">
           <div class="chat-settings-group" style="flex:1;">
@@ -647,6 +741,39 @@ async function chatShowSettings(initialTab) {
       if (target === 'usage') chatLoadUsageStats();
     });
   });
+
+  // PPTX → images checkbox validates LibreOffice availability on check.
+  // If the binary is missing, the box reverts to unchecked and a small
+  // warning appears underneath. Validation only fires when the user tries
+  // to turn the setting ON — unchecking never calls the endpoint.
+  const kbConvertEl = document.getElementById('chat-settings-kb-convert-slides');
+  const kbConvertWarnEl = document.getElementById('chat-settings-kb-convert-slides-warning');
+  if (kbConvertEl && kbConvertWarnEl) {
+    kbConvertEl.addEventListener('change', async () => {
+      if (!kbConvertEl.checked) {
+        kbConvertWarnEl.style.display = 'none';
+        kbConvertWarnEl.textContent = '';
+        return;
+      }
+      try {
+        const res = await fetch(chatApiUrl('kb/libreoffice-status'), { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const status = await res.json();
+        if (status && status.available) {
+          kbConvertWarnEl.style.display = 'none';
+          kbConvertWarnEl.textContent = '';
+          return;
+        }
+        kbConvertEl.checked = false;
+        kbConvertWarnEl.textContent = 'LibreOffice is not installed or not on PATH. Install it (e.g. `brew install --cask libreoffice` on macOS) and restart Agent Cockpit to enable slide-to-image conversion.';
+        kbConvertWarnEl.style.display = '';
+      } catch (err) {
+        kbConvertEl.checked = false;
+        kbConvertWarnEl.textContent = 'Could not verify LibreOffice availability: ' + (err && err.message ? err.message : 'unknown error');
+        kbConvertWarnEl.style.display = '';
+      }
+    });
+  }
 
   if (initialTab === 'usage') {
     document.querySelector('.chat-settings-tab[data-tab="usage"]')?.click();
@@ -692,6 +819,68 @@ function chatSettingsMemoryBackendChanged() {
   ).join('');
   chatSettingsRefreshMemoryEffortGroup();
 }
+
+// ── Knowledge Base settings handlers ─────────────────────────────────────────
+// Two parallel copies (Digestion + Dreaming) of the same backend/model/effort
+// cascade the Memory tab uses. Factored out into a small helper to keep the
+// top-level handlers cheap and obvious.
+
+function chatSettingsKbBackendChanged(role) {
+  const backendSel = document.getElementById(`chat-settings-kb-${role}-backend`);
+  const modelGroup = document.getElementById(`chat-settings-kb-${role}-model-group`);
+  const modelSelect = document.getElementById(`chat-settings-kb-${role}-model`);
+  if (!backendSel || !modelGroup || !modelSelect) return;
+
+  const models = state.BACKEND_MODELS[backendSel.value];
+  if (!models || models.length === 0) {
+    modelGroup.style.display = 'none';
+    modelSelect.innerHTML = '';
+    chatSettingsRefreshKbEffortGroup(role);
+    return;
+  }
+  modelGroup.style.display = '';
+  modelSelect.innerHTML = models.map((m) =>
+    `<option value="${esc(m.id)}"${m.default ? ' selected' : ''}>${esc(m.label)}</option>`
+  ).join('');
+  chatSettingsRefreshKbEffortGroup(role);
+}
+
+function chatSettingsRefreshKbEffortGroup(role) {
+  const effortGroup = document.getElementById(`chat-settings-kb-${role}-effort-group`);
+  const effortSelect = document.getElementById(`chat-settings-kb-${role}-effort`);
+  if (!effortGroup || !effortSelect) return;
+
+  const backendId = document.getElementById(`chat-settings-kb-${role}-backend`)?.value;
+  const models = state.BACKEND_MODELS[backendId] || [];
+  const selectedModelId = document.getElementById(`chat-settings-kb-${role}-model`)?.value;
+  const model = models.find((m) => m.id === selectedModelId);
+  const levels = model?.supportedEffortLevels || [];
+
+  if (levels.length === 0) {
+    effortGroup.style.display = 'none';
+    effortSelect.innerHTML = '';
+    return;
+  }
+
+  const prev = effortSelect.value;
+  const kb = state.chatSettingsData?.knowledgeBase || {};
+  const stored = role === 'digest' ? kb.digestionCliEffort : kb.dreamingCliEffort;
+  let next = null;
+  if (prev && levels.includes(prev)) next = prev;
+  else if (stored && levels.includes(stored)) next = stored;
+  else if (levels.includes('high')) next = 'high';
+  else next = levels[0];
+
+  effortGroup.style.display = '';
+  effortSelect.innerHTML = levels.map((lv) =>
+    `<option value="${lv}"${lv === next ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`
+  ).join('');
+}
+
+function chatSettingsKbDigestBackendChanged() { chatSettingsKbBackendChanged('digest'); }
+function chatSettingsKbDigestModelChanged() { chatSettingsRefreshKbEffortGroup('digest'); }
+function chatSettingsKbDreamBackendChanged() { chatSettingsKbBackendChanged('dream'); }
+function chatSettingsKbDreamModelChanged() { chatSettingsRefreshKbEffortGroup('dream'); }
 
 function chatSettingsMemoryModelChanged() {
   chatSettingsRefreshMemoryEffortGroup();
@@ -788,6 +977,29 @@ function chatSaveSettings() {
   if (memModelEl?.value && memModelGroup?.style.display !== 'none') memory.cliModel = memModelEl.value;
   if (memEffortEl?.value && memEffortGroup?.style.display !== 'none') memory.cliEffort = memEffortEl.value;
 
+  // Knowledge Base CLI config — same "drop hidden values" rule as Memory.
+  // Digestion and Dreaming roles are independent to let users route costly
+  // synthesis work through a different (cheaper or smarter) model.
+  const kbDigestBackendEl = document.getElementById('chat-settings-kb-digest-backend');
+  const kbDigestModelEl = document.getElementById('chat-settings-kb-digest-model');
+  const kbDigestModelGroup = document.getElementById('chat-settings-kb-digest-model-group');
+  const kbDigestEffortEl = document.getElementById('chat-settings-kb-digest-effort');
+  const kbDigestEffortGroup = document.getElementById('chat-settings-kb-digest-effort-group');
+  const kbDreamBackendEl = document.getElementById('chat-settings-kb-dream-backend');
+  const kbDreamModelEl = document.getElementById('chat-settings-kb-dream-model');
+  const kbDreamModelGroup = document.getElementById('chat-settings-kb-dream-model-group');
+  const kbDreamEffortEl = document.getElementById('chat-settings-kb-dream-effort');
+  const kbDreamEffortGroup = document.getElementById('chat-settings-kb-dream-effort-group');
+  const kbConvertSlidesEl = document.getElementById('chat-settings-kb-convert-slides');
+  const knowledgeBase = {};
+  if (kbDigestBackendEl?.value) knowledgeBase.digestionCliBackend = kbDigestBackendEl.value;
+  if (kbDigestModelEl?.value && kbDigestModelGroup?.style.display !== 'none') knowledgeBase.digestionCliModel = kbDigestModelEl.value;
+  if (kbDigestEffortEl?.value && kbDigestEffortGroup?.style.display !== 'none') knowledgeBase.digestionCliEffort = kbDigestEffortEl.value;
+  if (kbDreamBackendEl?.value) knowledgeBase.dreamingCliBackend = kbDreamBackendEl.value;
+  if (kbDreamModelEl?.value && kbDreamModelGroup?.style.display !== 'none') knowledgeBase.dreamingCliModel = kbDreamModelEl.value;
+  if (kbDreamEffortEl?.value && kbDreamEffortGroup?.style.display !== 'none') knowledgeBase.dreamingCliEffort = kbDreamEffortEl.value;
+  if (kbConvertSlidesEl) knowledgeBase.convertSlidesToImages = Boolean(kbConvertSlidesEl.checked);
+
   const settings = {
     theme: document.getElementById('chat-settings-theme')?.value || 'system',
     sendBehavior: document.getElementById('chat-settings-send')?.value || 'enter',
@@ -796,6 +1008,7 @@ function chatSaveSettings() {
     defaultEffort,
     systemPrompt: document.getElementById('chat-settings-system-prompt')?.value || '',
     memory: Object.keys(memory).length > 0 ? memory : undefined,
+    knowledgeBase: Object.keys(knowledgeBase).length > 0 ? knowledgeBase : undefined,
   };
   applyTheme(settings.theme);
   chatFetch('settings', { method: 'PUT', body: settings }).then(() => {
@@ -940,18 +1153,21 @@ async function chatClearUsageStats() {
 // the pencil icon on each workspace group header in the conversation list.
 
 async function chatShowWorkspaceSettings(hash, label) {
-  // Fetch current state in parallel — these are two independent endpoints.
+  // Fetch current state in parallel — these are three independent endpoints.
   let instructions = '';
   let memoryEnabled = false;
   let snapshot = null;
+  let kbEnabled = false;
   try {
-    const [instrRes, memRes] = await Promise.all([
+    const [instrRes, memRes, kbRes] = await Promise.all([
       chatFetch(`workspaces/${encodeURIComponent(hash)}/instructions`).then((r) => r.json()).catch(() => ({})),
       fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/memory`), { credentials: 'same-origin' }).then((r) => r.ok ? r.json() : {}).catch(() => ({})),
+      fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/kb`), { credentials: 'same-origin' }).then((r) => r.ok ? r.json() : {}).catch(() => ({})),
     ]);
     instructions = instrRes.instructions || '';
     memoryEnabled = Boolean(memRes.enabled);
     snapshot = memRes.snapshot || null;
+    kbEnabled = Boolean(kbRes.enabled);
   } catch {
     // Workspace may not have instructions yet — leave defaults.
   }
@@ -960,6 +1176,7 @@ async function chatShowWorkspaceSettings(hash, label) {
     <div class="chat-settings-tabs">
       <button class="chat-settings-tab active" data-tab="instructions">Instructions</button>
       <button class="chat-settings-tab" data-tab="memory">Memory</button>
+      <button class="chat-settings-tab" data-tab="kb">Knowledge Base</button>
     </div>
     <div class="chat-modal-body">
       <div class="chat-settings-tab-content" id="chat-ws-tab-instructions">
@@ -984,6 +1201,25 @@ async function chatShowWorkspaceSettings(hash, label) {
         </div>
         <div class="chat-settings-group" id="chat-ws-memory-browser">
           ${chatRenderWorkspaceMemoryBrowser(snapshot, memoryEnabled, hash)}
+        </div>
+      </div>
+      <div class="chat-settings-tab-content" id="chat-ws-tab-kb" style="display:none;">
+        <div class="chat-settings-group">
+          <div class="chat-settings-desc">
+            When enabled, files you upload to this workspace are ingested,
+            digested into structured entries, and (on demand) synthesized
+            into a cross-linked knowledge base. The CLI sees a pointer to
+            the knowledge directory on new sessions and reads entries as
+            needed. Configure the digestion and dreaming CLIs in global
+            Settings → Knowledge Base.
+          </div>
+          <label class="chat-settings-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="chat-ws-kb-enabled"${kbEnabled ? ' checked' : ''} />
+            <span>Enable Knowledge Base for this workspace</span>
+          </label>
+        </div>
+        <div class="chat-settings-group" id="chat-ws-kb-browser">
+          ${chatRenderWorkspaceKbBrowser(kbEnabled)}
         </div>
       </div>
     </div>
@@ -1033,6 +1269,45 @@ async function chatShowWorkspaceSettings(hash, label) {
   // Wire delete buttons on first render.
   const browser = document.getElementById('chat-ws-memory-browser');
   if (browser) chatWireWorkspaceMemoryBrowser(browser, hash);
+
+  // KB-enable toggle — persists immediately like the memory toggle. Ingestion
+  // and browser rendering land in PR 2; for now the tab is just a placeholder
+  // so users can opt in and the system prompt pointer starts firing.
+  const kbToggleEl = document.getElementById('chat-ws-kb-enabled');
+  if (kbToggleEl) {
+    kbToggleEl.addEventListener('change', async () => {
+      const enabled = kbToggleEl.checked;
+      try {
+        await chatFetch(`workspaces/${encodeURIComponent(hash)}/kb/enabled`, {
+          method: 'PUT',
+          body: { enabled },
+        });
+        const kbBrowser = document.getElementById('chat-ws-kb-browser');
+        if (kbBrowser) {
+          kbBrowser.innerHTML = chatRenderWorkspaceKbBrowser(enabled);
+        }
+      } catch (err) {
+        alert('Failed to update knowledge base setting: ' + err.message);
+        kbToggleEl.checked = !enabled;
+      }
+    });
+  }
+}
+
+function chatRenderWorkspaceKbBrowser(enabled) {
+  if (!enabled) {
+    return `<p style="color:var(--muted);font-size:13px;">Knowledge Base is disabled for this workspace.</p>`;
+  }
+  // PR 1 ships the enable toggle only — ingestion, entries, and synthesis
+  // tabs land in subsequent PRs. A placeholder keeps the empty state
+  // informative without pretending features exist yet.
+  return `
+    <p style="color:var(--muted);font-size:13px;">
+      Knowledge Base is enabled. File upload, digestion, and the KB Browser
+      land in upcoming releases. For now the CLI receives a pointer to the
+      knowledge directory on new sessions.
+    </p>
+  `;
 }
 
 function chatRenderWorkspaceMemoryBrowser(snapshot, enabled, hash) {

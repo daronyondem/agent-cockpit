@@ -67,7 +67,7 @@ agent-cockpit/
 └── data/                               # Runtime data (gitignored, created at startup)
     ├── chat/
     │   ├── workspaces/{hash}/          # Workspace-based storage (see below)
-    │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled` flag)
+    │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled` and `kbEnabled` flags)
     │   │   ├── memory/                 # Per-workspace memory store (opt-in per workspace)
     │   │   │   ├── snapshot.json       # Merged snapshot: claude captures + notes (parsed metadata + content)
     │   │   │   └── files/              # Raw .md entries, split by source
@@ -76,6 +76,14 @@ agent-cockpit/
     │   │   │       │   └── *.md        # Per-topic memory files with YAML frontmatter
     │   │   │       └── notes/          # `memory_note` MCP writes + post-session extractions; preserved across captures
     │   │   │           └── *.md        # Per-note memory files with YAML frontmatter
+    │   │   ├── knowledge/              # Per-workspace Knowledge Base (opt-in per workspace). Created lazily on first enable.
+    │   │   │   ├── state.json          # KbState: raw/entries/synthesis source of truth
+    │   │   │   ├── raw/<rawId>.<ext>   # Uploaded files, stored verbatim (rawId = sha256[:16])
+    │   │   │   ├── converted/<rawId>/  # Ingestion output (text, media, etc.) — populated by PR 2
+    │   │   │   ├── entries/<id>.md     # Digestion output (YAML frontmatter + body) — populated by PR 3
+    │   │   │   └── synthesis/          # Dreaming output — populated by PR 4
+    │   │   │       ├── manifest.json   # Artifact lineage
+    │   │   │       └── *.md            # Synthesis layer files
     │   │   └── {convId}/
     │   │       ├── session-1.json      # Archived session
     │   │       └── session-N.json      # Active session (updated every message)
@@ -95,6 +103,8 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
 {
   workspacePath: string,        // Absolute path to the workspace directory
   instructions: string,         // Per-workspace instructions (appended to system prompt on new sessions)
+  memoryEnabled: boolean|undefined, // Opt-in per-workspace Memory feature. Defaults to false.
+  kbEnabled: boolean|undefined,     // Opt-in per-workspace Knowledge Base feature. Defaults to false.
   conversations: [{
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
@@ -219,13 +229,31 @@ Daily per-backend/model token usage records for global statistics:
   "defaultBackend": "claude-code",
   "defaultModel": "sonnet",
   "defaultEffort": "high",
-  "workingDirectory": ""
+  "workingDirectory": "",
+  "memory": {
+    "cliBackend": "claude-code",
+    "cliModel": "sonnet",
+    "cliEffort": "high"
+  },
+  "knowledgeBase": {
+    "digestionCliBackend": "claude-code",
+    "digestionCliModel": "sonnet",
+    "digestionCliEffort": "high",
+    "dreamingCliBackend": "claude-code",
+    "dreamingCliModel": "opus",
+    "dreamingCliEffort": "high",
+    "convertSlidesToImages": false
+  }
 }
 ```
 
 `defaultEffort` is the default adaptive reasoning level for new conversations. It only applies when the chosen model matches `defaultModel` AND the model supports that effort level; otherwise the per-conversation selection falls back to `high` (or, defensively, the first supported level of the chosen model). The settings modal only renders the **Default Effort** field when `defaultBackend`/`defaultModel` resolve to a model that declares `supportedEffortLevels`; changing the default model to one without effort support drops `defaultEffort` on save.
 
 The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the start of each new session. It is additive — Claude Code's built-in system prompt is preserved. Legacy `customInstructions` objects are auto-migrated to `systemPrompt` on first read.
+
+The `memory` block configures the globally-shared **Memory CLI** used for `memory_note` MCP processing and post-session extraction (see Section 5 — Workspace Memory).
+
+The `knowledgeBase` block configures the globally-shared **Digestion CLI** and **Dreaming CLI** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). Both CLIs default to `defaultBackend` when unset. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime.
 
 ---
 
@@ -427,6 +455,9 @@ Per-workspace instructions appended to the global system prompt on new sessions.
 | DELETE | `/workspaces/:hash/memory/entries/:relpath(*)` | Yes | Deletes a single memory entry by its relative path (`claude/<name>` or `notes/<name>`). Path is validated against the workspace's memory files dir to prevent traversal (`400` on attempts). `404` if the entry doesn't exist. On success, rewrites `snapshot.json` and emits a `memory_update` WS frame to any active stream in that workspace. |
 | DELETE | `/workspaces/:hash/memory/entries` | Yes | Bulk-clears every memory entry for the workspace — wipes both `claude/` (CLI capture) and `notes/` (memory_note + session extraction), then rewrites `snapshot.json`. Leaves the per-workspace `memoryEnabled` flag untouched. Returns `{ ok: true, deleted: number, snapshot }`. Emits a `memory_update` WS frame (empty `changedFiles`) to any active stream in that workspace. No-op returns 200 with `deleted: 0` when there were no entries. Powers the "Clear all memory" button in Workspace Settings → Memory. |
 | POST | `/mcp/memory/notes` | No CSRF (bearer) | Internal endpoint called by `stub.cjs` on behalf of non-Claude CLIs. Auth via `X-Memory-Token` header (per-session token minted by `memoryMcp.issueMemoryMcpSession`). Body: `{ content, type?, tags? }`. Loads the workspace snapshot for dedup context, spawns the configured Memory CLI via `runOneShot`, parses the response (either `SKIP: <filename>` or a frontmatter markdown doc), and writes new entries via `addMemoryNoteEntry`. Returns `{ ok, filename }` or `{ ok, skipped }`. `403` if memory is disabled on the workspace. |
+| GET | `/workspaces/:hash/kb` | — | Returns `{ enabled: boolean, state: KbState }` for the workspace. Always 200 for an existing workspace — an enabled workspace with no files yet returns an empty state scaffold (`raw: {}, entries: {}, synthesis.status: 'empty'`). `404` if the workspace doesn't exist. Persists `state.json` on first call for enabled workspaces; returns an in-memory-only empty scaffold (not written to disk) for disabled workspaces so the KB Browser can still render its disabled state. |
+| PUT | `/workspaces/:hash/kb/enabled` | Yes | `{ enabled: boolean }`. Toggles the per-workspace Knowledge Base switch (stored on `WorkspaceIndex.kbEnabled`). `400` if not boolean. `404` if workspace not found. Independent of the Memory toggle — enabling KB does not touch `memoryEnabled`. |
+| GET | `/kb/libreoffice-status` | — | Returns the cached `LibreOfficeStatus` (`{ available, binaryPath, checkedAt }`). Used by the global Settings → Knowledge Base "Convert PPTX slides to images" checkbox to validate on-click: if `available` is `false`, the frontend auto-unchecks the box and shows a warning underneath. Safe to call on every check because `detectLibreOffice()` is cached at module level after the first invocation (server startup). |
 
 **System prompt composition on new sessions:**
 1. Global system prompt (from `settings.json`)
@@ -505,6 +536,12 @@ Unauthenticated requests to `/api/*` return `401 { error: "Not authenticated" }`
 | `clearWorkspaceMemory(hash)` | Wipes every `.md` under `memory/files/claude/` and `memory/files/notes/`, then rewrites `snapshot.json` to reflect the empty state. Leaves the workspace's `memoryEnabled` flag untouched so the user can keep the feature on and start over. Returns the number of files deleted. Used by the "Clear all memory" button in Workspace Settings → Memory. |
 | `getWorkspaceMemoryEnabled(hash)` | Returns the per-workspace Memory toggle (`WorkspaceIndex.memoryEnabled`). Defaults to `false` for legacy workspaces. |
 | `setWorkspaceMemoryEnabled(hash, enabled)` | Persists the toggle to the workspace index. Returns the new value or `null` if the workspace doesn't exist. |
+| `getWorkspaceKbEnabled(hash)` | Returns the per-workspace Knowledge Base toggle (`WorkspaceIndex.kbEnabled`). Defaults to `false`. |
+| `setWorkspaceKbEnabled(hash, enabled)` | Persists the KB toggle to the workspace index. Returns the new value or `null` if the workspace doesn't exist. Independent of the Memory toggle. |
+| `getKbState(hash)` | Reads the per-workspace `KbState` from `knowledge/state.json`. Returns `null` when the workspace doesn't exist or when no state file has been written yet. |
+| `saveKbState(hash, state)` | Persists a `KbState` to `knowledge/state.json`, bumping `updatedAt` to now. Creates the `knowledge/` dir on first write. Returns the persisted state. |
+| `getOrInitKbState(hash)` | Returns the workspace KB state, creating and persisting an empty scaffold on first call for an enabled workspace. Returns an in-memory empty scaffold (not persisted) for disabled workspaces so the UI can render the disabled state without polluting disk. Returns `null` for unknown workspaces. |
+| `getWorkspaceKbPointer(hash)` | Returns a bracketed pointer block telling the CLI where the workspace's `knowledge/` dir lives on disk, or `null` when KB is disabled. `mkdir -p`s `knowledge/entries/` so the CLI never hits ENOENT on a brand-new enabled workspace. Prepended to the user message on new sessions alongside the discussion-history and memory pointers. |
 | `searchConversations(query, opts?)` | Case-insensitive: checks title/lastMessage first, then deep-searches session files. Respects `{ archived }` filter same as `listConversations`. |
 | `getSettings()` | Returns settings from disk or defaults. |
 | `saveSettings(settings)` | Writes settings to disk. |
@@ -513,7 +550,7 @@ All methods are `async` except `getWorkspaceContext()`. `getWorkspaceMemoryPoint
 
 #### Workspace Context Injection
 
-When a new CLI session starts, the router prepends one or two bracketed pointer blocks to the outgoing user message (not stored in the conversation's message list). The first is always present; the second is added only when Memory is enabled for the workspace.
+When a new CLI session starts, the router prepends up to three bracketed pointer blocks to the outgoing user message (not stored in the conversation's message list). The first is always present; the second is added only when Memory is enabled for the workspace; the third is added only when Knowledge Base is enabled for the workspace.
 
 ```
 [Workspace discussion history is available at {abs_workspace_path}/
@@ -524,9 +561,15 @@ When the user references previous work, decisions, or discussions, consult the r
 [Workspace memory is available at {abs_workspace_path}/memory/files/
 Contains .md files with YAML frontmatter (type, name, description) followed by body text.
 Read these when the user references preferences, feedback, decisions, project context, or prior work style.]
+
+[Workspace knowledge base is available at {abs_workspace_path}/knowledge/
+- state.json: pipeline state (raw uploads, digested entries, synthesis status).
+- entries/*.md: digested knowledge entries with YAML frontmatter (title, tags, source).
+- synthesis/*.md: cross-entry synthesis (created by the Dreaming stage).
+Read these when the user references documents they've uploaded, domain knowledge, or asks questions the digested entries may cover.]
 ```
 
-These prefixes are **only added on new sessions**. On resumed sessions the CLI already has them in its conversation history from the original first user message, so the pointers remain visible to the model across `--resume` without re-injection. The memory pointer is produced by `chatService.getWorkspaceMemoryPointer(hash)`, which returns `null` when memory is disabled and otherwise `mkdir -p`s `memory/files/` before returning so the model never hits ENOENT on a brand-new workspace.
+These prefixes are **only added on new sessions**. On resumed sessions the CLI already has them in its conversation history from the original first user message, so the pointers remain visible to the model across `--resume` without re-injection. The memory pointer is produced by `chatService.getWorkspaceMemoryPointer(hash)`, which returns `null` when memory is disabled and otherwise `mkdir -p`s `memory/files/` before returning so the model never hits ENOENT on a brand-new workspace. The KB pointer is produced by `chatService.getWorkspaceKbPointer(hash)` with the same "return null when disabled / `mkdir -p` when enabled" contract, targeting `knowledge/entries/`.
 
 #### Workspace Memory
 
@@ -594,6 +637,42 @@ Exposes a `memory_note` MCP tool to every CLI backend so they can persist durabl
   }>
 }
 ```
+
+#### Workspace Knowledge Base
+
+Per-workspace **Knowledge Base** gives each workspace a curated store of documents the CLI can consult on demand. The feature is **opt-in per workspace** via `WorkspaceIndex.kbEnabled` (defaults to `false`) and is independent of the Memory toggle — enabling one does not enable the other. When the toggle is off, every KB code path (pointer injection, pipeline, UI browser) short-circuits and the `knowledge/` directory is never created on disk.
+
+The feature is delivered across five sequential PRs. **PR 1** (this PR) lands the storage layer, types, settings plumbing, feature toggles, and system-prompt pointer — "visible but inert." Later phases add: ingestion + file conversion (PR 2), digestion via the Digestion CLI (PR 3), dreaming / cross-entry synthesis via the Dreaming CLI (PR 4), and the `knowledge_search` MCP tool (PR 5). PR 1 does not spawn any CLIs, does not accept uploads, and does not run the pipeline — it only ships the types, storage helpers, settings UI, and workspace toggle so subsequent PRs can wire each stage into a fixed surface.
+
+**Pipeline stages (for context; implemented in later PRs):**
+1. **Ingestion** — Our code. Accepts a raw upload, stores it under `knowledge/raw/<rawId>.<ext>`, extracts text + media into `knowledge/converted/<rawId>/`. LibreOffice is used as an opt-in helper for PPTX slide rasterization when `Settings.knowledgeBase.convertSlidesToImages` is true.
+2. **Digestion** — Per-item. Spawns the Digestion CLI (`Settings.knowledgeBase.digestionCliBackend`) one-shot per converted item, producing one or more `knowledge/entries/<id>.md` files with YAML frontmatter (`title`, `tags`, `source`).
+3. **Dreaming** — Cross-entry, manual trigger. Spawns the Dreaming CLI (`Settings.knowledgeBase.dreamingCliBackend`) with the current entry set and asks it to produce synthesis artifacts under `knowledge/synthesis/`, tracking lineage in `synthesis/manifest.json`.
+
+All three stages run **serialized per workspace** — the KB pipeline holds at most one in-flight CLI invocation per workspace hash, so a background digestion cannot overlap with a user-triggered dreaming pass on the same store.
+
+**`KbState` shape** (persisted to `knowledge/state.json`, source of truth for the pipeline):
+```typescript
+{
+  version: number,              // KB_STATE_VERSION — bumped on schema migration
+  entrySchemaVersion: number,   // KB_ENTRY_SCHEMA_VERSION — bumped on entry frontmatter change
+  raw: Record<string, KbRawEntry>,        // rawId → ingestion record (file info, status)
+  entries: Record<string, KbEntryRef>,    // entryId → digested entry pointer (path, title, rawId)
+  synthesis: KbSynthesisState,  // Dreaming status: { status, lastRunAt, artifacts[] }
+  updatedAt: string             // ISO 8601
+}
+```
+`KbRawEntry.status` cycles through `pending | converting | converted | digesting | digested | failed`. `KbSynthesisState.status` cycles through `idle | running | completed | failed`. PR 1 only ships the empty scaffold (`raw: {}`, `entries: {}`, `synthesis: { status: 'idle', artifacts: [] }`); subsequent PRs mutate it as items flow through the pipeline.
+
+**Feature gating:** `getOrInitKbState(hash)` is the single entry point for UI/pipeline reads. It returns an in-memory empty scaffold when KB is disabled (not persisted to disk, so workspaces that never opt in stay clean) and a persisted empty scaffold on first access when KB is enabled. `getWorkspaceKbPointer(hash)` follows the same pattern as `getWorkspaceMemoryPointer`: returns `null` when disabled, otherwise `mkdir -p`s `knowledge/entries/` so the CLI can read the directory without hitting ENOENT on a brand-new workspace, and returns a bracketed text block naming the absolute path.
+
+**Pointer injection:** On new sessions, the chat route prepends three bracketed blocks to the outgoing user message — discussion history (always), memory (when enabled), knowledge base (when enabled) — see **Workspace Context Injection** above. KB content itself is never serialized into the system prompt; the CLI reads `state.json` and `entries/*.md` on demand via its own file tools, so resumed sessions keep access and mid-session additions are visible on the next turn.
+
+**LibreOffice detection** (`src/services/knowledgeBase/libreOffice.ts`): `detectLibreOffice()` runs once at server startup (fire-and-forget, so it never blocks port binding) and caches the result at module level. It uses `which soffice` on POSIX and `where soffice` on Windows — not `soffice --version`, because launching the full binary would spawn a user profile at startup. The cached `LibreOfficeStatus` (`{ available, binaryPath, checkedAt }`) is consulted by the ingestion stage (PR 2) when `Settings.knowledgeBase.convertSlidesToImages` is true; if LibreOffice is unavailable, ingestion logs a warning and falls back to extracting text + speaker notes + embedded media only. The cached status is also exposed via `GET /kb/libreoffice-status` so the global Settings modal can validate the checkbox on click: when the user turns the "Convert PPTX slides to images" box on, the frontend fetches the endpoint, and if `available` is `false` the box auto-reverts to unchecked and a warning appears underneath telling the user to install LibreOffice and restart the cockpit. Detection is cached for the process lifetime, so installing LibreOffice while the server is running requires a restart to pick up.
+
+**Global settings:** `Settings.knowledgeBase` configures the Digestion and Dreaming CLIs separately (each with its own `cliBackend`, `cliModel`, `cliEffort`) and the `convertSlidesToImages` opt-in. Both CLI roles fall back to `Settings.defaultBackend` when unset. The settings modal exposes cascading backend → model → effort pickers per role, mirroring the existing Memory CLI picker pattern.
+
+**Workspace settings:** The workspace Settings modal has a Knowledge Base tab with a single checkbox (`kbEnabled`) plus a disabled browser placeholder that will host the upload UI and entry list in PR 2+. Saving the toggle hits `PUT /workspaces/:hash/kb/enabled` and does not touch `memoryEnabled`.
 
 #### Migration
 
@@ -1054,8 +1133,8 @@ Update OAuth callback URLs to include the ngrok URL.
 | `test/toolUtils.test.ts` | Shared backend helpers: extractToolDetails, extractToolOutcome, extractUsage, shortenPath, sanitizeSystemPrompt, isApiError |
 | `test/backends.test.ts` | BaseBackendAdapter (including generateTitle, getMemoryDir + extractMemory default null), BackendRegistry (including shutdownAll), ClaudeCodeAdapter (metadata models including `supportedEffortLevels` per model, --model flag passthrough, --effort flag passthrough with silent drop when the selected model does not support the requested level, Opus-only `max` enforcement, Haiku effort drop, --mcp-config passthrough from `mcpServers` option and omission when absent, extractMemory with frontmatter parsing and `~/.claude/projects` path resolution, git worktree canonicalization to main repo memory, getMemoryDir path resolution including empty/missing/sanitized/worktree-canonical cases), parseFrontmatter helper, resolveCanonicalWorkspacePath helper, mcpServersToClaudeConfigJson (ACP env-array to Claude Code env-object shape transform, omitted env key, multiple servers, missing args coercion) |
 | `test/kiroBackend.test.ts` | KiroAdapter metadata (including dynamic models, deprecated/internal filtering, model family detection), lifecycle (shutdown, onSessionReset), extractKiroToolDetails tool name normalization, generateSummary/generateTitle fallbacks, parseKiroChatOutput (ANSI stripping, header/footer/prompt-prefix removal, markdown blockquote preservation, format-drift safety) |
-| `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, workspace context injection (discussion history pointer on new sessions, memory pointer on new sessions when memory is enabled, no memory pointer when memory is disabled, neither pointer on resumed sessions, memory content never leaks into the system prompt), workspace memory GET endpoint (empty returns `{enabled:false, snapshot:null}`, unknown workspace returns same empty shape, saved snapshot returned with `claude/` filenames), PUT `/memory/enabled` toggle round-trip and non-boolean rejection, DELETE `/memory/entries/:relpath` including path-traversal rejection, DELETE `/memory/entries` bulk clear (returns deleted count and empty snapshot, no-op returns 200 with `deleted: 0`), `memory_update` WS frame (first capture lists all files, second capture only diffs, no frame when adapter has no memory dir — gated on `setWorkspaceMemoryEnabled`), archive/restore endpoints, message queue persistence (GET/PUT/DELETE, included in conversation response, cleared on reset/archive), model passthrough (explicit model, stored model, model update), effort passthrough (explicit effort on send, silent downgrade when model switch drops `max`, stored effort reused on subsequent sends) |
-| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats, Kiro credits accumulation, contextUsagePercentage snapshot, skipLedger option), model selection (create with model, updateConversationModel, listConversations model), effort selection (create with effort, silent downgrade when requested level is unsupported, fallback to highest supported level, updateConversationModel downgrades stored effort, updateConversationEffort set/clear, listConversations includes effort), workspace storage, workspace memory (save under `files/claude/`, re-capture replaces only the `claude/` subtree while preserving `notes/`, `addMemoryNoteEntry` writes to `notes/` and refreshes snapshot, `deleteMemoryEntry` removes files and rejects path traversal, `clearWorkspaceMemory` wipes both `claude/` and `notes/` and is a no-op when empty and preserves `memoryEnabled`, `getWorkspaceMemoryEnabled` defaults to false and persists after `setWorkspaceMemoryEnabled`, `getWorkspaceMemoryPointer` returns null when memory disabled or hash empty, returns bracketed block with absolute `memory/files/` path when enabled, creates the files dir on first access, get/captureWorkspaceMemory including adapter stub happy path, no-memory fallback, and extraction errors), migration, markdown export |
+| `test/chat.test.ts` | Chat routes: WebSocket streaming (text, tool_activity, stdin input, abort, assistant_message), WebSocket reconnection (replay buffered events, CLI survives disconnect, CLI crash buffers error, abort clears buffer, session reset clears buffer), turn boundaries, turn_complete event forwarding, tool activity persistence, parallel agent persistence, session overview aggregation, auto title update on session reset, usage event forwarding and persistence (including sessionUsage), usage stats endpoints (GET/DELETE), file upload/serve, workspace instructions, workspace context injection (discussion history pointer on new sessions, memory pointer on new sessions when memory is enabled, no memory pointer when memory is disabled, neither pointer on resumed sessions, memory content never leaks into the system prompt), workspace memory GET endpoint (empty returns `{enabled:false, snapshot:null}`, unknown workspace returns same empty shape, saved snapshot returned with `claude/` filenames), PUT `/memory/enabled` toggle round-trip and non-boolean rejection, DELETE `/memory/entries/:relpath` including path-traversal rejection, DELETE `/memory/entries` bulk clear (returns deleted count and empty snapshot, no-op returns 200 with `deleted: 0`), `memory_update` WS frame (first capture lists all files, second capture only diffs, no frame when adapter has no memory dir — gated on `setWorkspaceMemoryEnabled`), workspace knowledge base GET endpoint (returns `{enabled:false, state:<empty scaffold>}` when KB disabled, `{enabled:true, state:<persisted scaffold>}` when enabled, 404 for unknown workspace), PUT `/kb/enabled` toggle round-trip, non-boolean rejection, 404 for unknown workspace, Memory independence (toggling KB does not touch `memoryEnabled` and vice versa), `GET /kb/libreoffice-status` shape (boolean `available`, nullable `binaryPath`, string `checkedAt`, availability/binaryPath consistency), archive/restore endpoints, message queue persistence (GET/PUT/DELETE, included in conversation response, cleared on reset/archive), model passthrough (explicit model, stored model, model update), effort passthrough (explicit effort on send, silent downgrade when model switch drops `max`, stored effort reused on subsequent sends) |
+| `test/chatService.test.ts` | ChatService CRUD, messages (including toolActivity persistence), sessions, generateAndUpdateTitle, archive/restore (flag set/remove, file preservation, list filtering, search filtering, delete-after-archive), usage tracking (addUsage with conversationUsage/sessionUsage, usageByBackend, daily ledger with backend+model dimensions, model separation, getUsage, getUsageStats, clearUsageStats, Kiro credits accumulation, contextUsagePercentage snapshot, skipLedger option), model selection (create with model, updateConversationModel, listConversations model), effort selection (create with effort, silent downgrade when requested level is unsupported, fallback to highest supported level, updateConversationModel downgrades stored effort, updateConversationEffort set/clear, listConversations includes effort), workspace storage, workspace memory (save under `files/claude/`, re-capture replaces only the `claude/` subtree while preserving `notes/`, `addMemoryNoteEntry` writes to `notes/` and refreshes snapshot, `deleteMemoryEntry` removes files and rejects path traversal, `clearWorkspaceMemory` wipes both `claude/` and `notes/` and is a no-op when empty and preserves `memoryEnabled`, `getWorkspaceMemoryEnabled` defaults to false and persists after `setWorkspaceMemoryEnabled`, `getWorkspaceMemoryPointer` returns null when memory disabled or hash empty, returns bracketed block with absolute `memory/files/` path when enabled, creates the files dir on first access, get/captureWorkspaceMemory including adapter stub happy path, no-memory fallback, and extraction errors), workspace knowledge base (`getWorkspaceKbEnabled` defaults to false and persists after `setWorkspaceKbEnabled`, KB toggle is independent of Memory toggle, `getOrInitKbState` returns in-memory empty scaffold when KB disabled (not persisted), persisted empty scaffold on first call when KB enabled, returns null for unknown workspace, `saveKbState`/`getKbState` round-trip with `updatedAt` bump, `getWorkspaceKbPointer` returns null when KB disabled or hash empty, returns bracketed block with absolute `knowledge/` path when enabled, creates the `entries/` dir on first access), migration, markdown export |
 | `test/memoryWatcher.test.ts` | MemoryWatcher: watch/unwatch/unwatchAll lifecycle, idempotence, rejects missing dirs and file paths, detects .md create/update, ignores non-.md files, debounces rapid bursts into a single callback, re-fires after debounce window closes, cancels fire when unwatched mid-debounce, multi-key independence, swallows sync + async onChange errors without crashing |
 | `test/memoryMcp.test.ts` | Memory MCP server factory: `issueMemoryMcpSession` mints unique tokens with an `mcpServers` array pointing at the stub (correct command/args/env including `MEMORY_TOKEN` and `MEMORY_ENDPOINT`), reissuing a session for the same conversation revokes the previous token; `extractMemoryFromSession` returns 0 when memory is disabled (no CLI call), returns 0 when CLI returns `NONE`, parses a single frontmatter entry and saves it under `source: session-extraction`, parses a multi-entry `===`-delimited response and saves all entries, swallows runOneShot errors/empty responses and returns 0 |
 | `test/draftState.test.ts` | Draft save/restore, key migration, cleanup, round-trip |
