@@ -1,4 +1,4 @@
-import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, fetchCsrfToken, chatShowSessionExpired } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
@@ -1924,6 +1924,12 @@ function chatKbBrowserRawTab(kbState) {
       <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">Upload file</button>
       <input type="file" id="chat-kb-upload-input" style="display:none;" />
     </div>
+    <div class="chat-kb-upload-progress" id="chat-kb-upload-progress" style="display:none;">
+      <div class="chat-kb-upload-progress-label" id="chat-kb-upload-progress-label"></div>
+      <div class="chat-kb-upload-progress-bar">
+        <div class="chat-kb-upload-progress-fill" id="chat-kb-upload-progress-fill" style="width:0%;"></div>
+      </div>
+    </div>
     <ul class="chat-kb-raw-list">
       ${rows}
     </ul>
@@ -1983,15 +1989,79 @@ async function chatKbUploadFile(file) {
   chatKbBrowserState.uploading = true;
   const btn = document.getElementById('chat-kb-upload-btn');
   if (btn) btn.disabled = true;
+
+  // Show progress UI. We intentionally grab the three elements once up
+  // front — the browser tab isn't re-rendered while an upload is in
+  // flight, so these references stay valid for the lifetime of the
+  // request.
+  const progressEl = document.getElementById('chat-kb-upload-progress');
+  const labelEl = document.getElementById('chat-kb-upload-progress-label');
+  const fillEl = document.getElementById('chat-kb-upload-progress-fill');
+  if (progressEl) progressEl.style.display = '';
+  if (fillEl) {
+    fillEl.classList.remove('indeterminate');
+    fillEl.style.width = '0%';
+  }
+  if (labelEl) labelEl.textContent = `Uploading ${file.name}…`;
+
+  // fetch() can't report upload progress, so we fall back to
+  // XMLHttpRequest just like `chatUploadSingleFile` does for
+  // conversation file chips. We reuse the same CSRF + credentials setup.
   try {
-    const fd = new FormData();
-    fd.append('file', file);
-    // We go through chatFetch so the CSRF token header and base URL
-    // handling stay consistent with every other mutation endpoint.
-    await chatFetch(
-      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw`,
-      { method: 'POST', body: fd },
-    );
+    if (!state.csrfToken) await fetchCsrfToken();
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const fd = new FormData();
+      fd.append('file', file);
+      xhr.open(
+        'POST',
+        chatApiUrl(`workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw`),
+      );
+      xhr.setRequestHeader('x-csrf-token', state.csrfToken || '');
+      xhr.withCredentials = true;
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable) return;
+        const pct = Math.round((e.loaded / e.total) * 100);
+        if (fillEl) fillEl.style.width = `${pct}%`;
+        if (labelEl) {
+          labelEl.textContent = `Uploading ${file.name} — ${pct}% (${chatKbFormatSize(e.loaded)} / ${chatKbFormatSize(e.total)})`;
+        }
+      };
+      xhr.upload.onload = () => {
+        // Bytes are all on the wire; server is now writing the raw file
+        // and enqueuing it for the ingest worker. Swap to an
+        // indeterminate "Processing…" state so the user knows something
+        // is still happening during the gap between upload-complete and
+        // the HTTP response.
+        if (fillEl) {
+          fillEl.style.width = '100%';
+          fillEl.classList.add('indeterminate');
+        }
+        if (labelEl) labelEl.textContent = `Processing ${file.name}…`;
+      };
+      xhr.onload = () => {
+        if (xhr.status === 401) {
+          chatShowSessionExpired();
+          reject(new Error('Session expired'));
+          return;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve();
+          return;
+        }
+        let message = `HTTP ${xhr.status}`;
+        try {
+          const body = JSON.parse(xhr.responseText);
+          if (body && body.error) message = body.error;
+        } catch {
+          // Response wasn't JSON — keep the HTTP status fallback.
+        }
+        reject(new Error(message));
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.onabort = () => reject(new Error('Upload aborted'));
+      xhr.send(fd);
+    });
     await chatKbBrowserRefetch();
   } catch (err) {
     alert('Upload failed: ' + err.message);
@@ -1999,6 +2069,13 @@ async function chatKbUploadFile(file) {
     chatKbBrowserState.uploading = false;
     const btn2 = document.getElementById('chat-kb-upload-btn');
     if (btn2) btn2.disabled = false;
+    const progressEl2 = document.getElementById('chat-kb-upload-progress');
+    const fillEl2 = document.getElementById('chat-kb-upload-progress-fill');
+    if (progressEl2) progressEl2.style.display = 'none';
+    if (fillEl2) {
+      fillEl2.classList.remove('indeterminate');
+      fillEl2.style.width = '0%';
+    }
   }
 }
 
