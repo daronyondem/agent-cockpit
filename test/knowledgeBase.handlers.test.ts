@@ -45,7 +45,7 @@ afterEach(() => {
 // ── PDF ─────────────────────────────────────────────────────────────────────
 
 describe('pdfHandler', () => {
-  test('extracts per-page text with H2 headers', async () => {
+  test('rasterizes each page to PNG and returns a thin markdown index', async () => {
     const buffer = readFixture('sample.pdf');
     const result = await pdfHandler({
       buffer,
@@ -53,13 +53,38 @@ describe('pdfHandler', () => {
       mimeType: 'application/pdf',
       outDir,
     });
-    expect(result.handler).toBe('pdf');
+
+    // Handler identity + title prefix.
+    expect(result.handler).toBe('pdf/rasterized');
     expect(result.text).toContain('# sample.pdf');
+
+    // One section per page. The 1-page fixture produces exactly one `## Page 1`.
     expect(result.text).toContain('## Page 1');
-    expect(result.text).toContain('Hello KB test PDF');
-    expect(result.mediaFiles).toEqual([]);
+    // No extracted prose — the thin index is image-references-only.
+    expect(result.text).not.toContain('Hello KB test PDF');
+
+    // The page image reference uses the same relative path we expose
+    // via `mediaFiles`, so a CLI following the link lands on the file.
+    expect(result.text).toMatch(/!\[Page 1\]\(pages\/page-0001\.png\)/);
+    expect(result.mediaFiles).toEqual(['pages/page-0001.png']);
+    // The PNG actually exists on disk and is non-empty.
+    const onDisk = fs.statSync(path.join(outDir, 'pages/page-0001.png'));
+    expect(onDisk.size).toBeGreaterThan(0);
+    // PNG magic bytes sanity check.
+    const header = fs.readFileSync(path.join(outDir, 'pages/page-0001.png'), {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    } as any).subarray(0, 8);
+    expect(header[0]).toBe(0x89);
+    expect(header[1]).toBe(0x50);
+    expect(header[2]).toBe(0x4e);
+    expect(header[3]).toBe(0x47);
+
+    // Metadata reflects the new shape (pageCount + renderedPageCount,
+    // no word count because we don't extract text anymore).
     expect(result.metadata?.pageCount).toBe(1);
-    expect(typeof result.metadata?.wordCount).toBe('number');
+    expect(result.metadata?.renderedPageCount).toBe(1);
+    expect(result.metadata?.rasterDpi).toBe(150);
+    expect(result.metadata?.wordCount).toBeUndefined();
   });
 });
 
@@ -341,7 +366,10 @@ describe('dispatch', () => {
       mimeType: 'application/pdf',
       outDir,
     });
-    expect(result.handler).toBe('pdf');
-    expect(result.text).toContain('Hello KB test PDF');
+    expect(result.handler).toBe('pdf/rasterized');
+    // Dispatcher returns a rasterized index, not prose — the one page
+    // of our fixture turns into exactly one PNG reference.
+    expect(result.mediaFiles).toEqual(['pages/page-0001.png']);
+    expect(result.text).toMatch(/!\[Page 1\]\(pages\/page-0001\.png\)/);
   });
 });

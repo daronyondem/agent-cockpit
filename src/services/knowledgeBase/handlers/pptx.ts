@@ -18,6 +18,8 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
+import { renderPageAsImage, getDocumentProxy } from 'unpdf';
+import * as napiCanvas from '@napi-rs/canvas';
 import { detectLibreOffice } from '../libreOffice';
 import type { Handler, HandlerResult } from './types';
 
@@ -193,13 +195,11 @@ async function rasterizeSlidesViaLibreOffice(
       };
     }
 
-    // Render each page with unpdf's `renderPageAsImage` helper. This
-    // requires `@napi-rs/canvas` to be installed — we treat it as an
-    // optional peer dep and load it dynamically so the package isn't
-    // required to install Agent Cockpit (it carries native binaries that
-    // are large and platform-specific). When the dep is missing, the
-    // dynamic import throws and we return a clear warning.
-    const { renderPageAsImage, getDocumentProxy } = await import('unpdf');
+    // Render each page with unpdf's `renderPageAsImage` helper. It takes
+    // a `canvasImport` factory; we hand it the statically-imported
+    // `@napi-rs/canvas` namespace so there's no per-page dynamic import
+    // overhead (and no optional-dep failure mode — canvas is a regular
+    // dep now).
     const data = new Uint8Array(pdfBuffer.buffer.slice(
       pdfBuffer.byteOffset,
       pdfBuffer.byteOffset + pdfBuffer.byteLength,
@@ -210,25 +210,10 @@ async function rasterizeSlidesViaLibreOffice(
     await fsp.mkdir(slidesDir, { recursive: true });
     const rel: string[] = [];
 
-    // Probe `@napi-rs/canvas` once so we can return a targeted warning
-    // if it's absent, instead of failing per-page.
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const canvasImport: any = (specifier: string) => import(specifier);
-      await canvasImport('@napi-rs/canvas');
-    } catch {
-      return {
-        images: [],
-        warning: 'Slide rasterization requires the optional peer dependency `@napi-rs/canvas`. Run `npm install @napi-rs/canvas` and restart to enable it.',
-      };
-    }
-
     for (let page = 1; page <= totalPages; page += 1) {
       try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const dynImport: any = (specifier: string) => import(specifier);
         const pngBuffer = await renderPageAsImage(pdf, page, {
-          canvasImport: () => dynImport('@napi-rs/canvas'),
+          canvasImport: async () => napiCanvas,
           scale: 1.5,
         });
         const pngPath = path.join(slidesDir, `slide-${String(page).padStart(3, '0')}.png`);
