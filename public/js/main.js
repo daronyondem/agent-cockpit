@@ -704,6 +704,7 @@ async function chatShowSettings(initialTab) {
             the pipeline still captures text, speaker notes, and embedded
             media, but per-slide visuals are skipped.
           </div>
+          <div id="chat-settings-kb-convert-slides-warning" style="display:none;margin-top:6px;font-size:12px;color:var(--error,#d32f2f);"></div>
         </div>
         <button class="chat-settings-save" onclick="chatSaveSettings()">Save Settings</button>
       </div>
@@ -740,6 +741,39 @@ async function chatShowSettings(initialTab) {
       if (target === 'usage') chatLoadUsageStats();
     });
   });
+
+  // PPTX → images checkbox validates LibreOffice availability on check.
+  // If the binary is missing, the box reverts to unchecked and a small
+  // warning appears underneath. Validation only fires when the user tries
+  // to turn the setting ON — unchecking never calls the endpoint.
+  const kbConvertEl = document.getElementById('chat-settings-kb-convert-slides');
+  const kbConvertWarnEl = document.getElementById('chat-settings-kb-convert-slides-warning');
+  if (kbConvertEl && kbConvertWarnEl) {
+    kbConvertEl.addEventListener('change', async () => {
+      if (!kbConvertEl.checked) {
+        kbConvertWarnEl.style.display = 'none';
+        kbConvertWarnEl.textContent = '';
+        return;
+      }
+      try {
+        const res = await fetch(chatApiUrl('kb/libreoffice-status'), { credentials: 'same-origin' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const status = await res.json();
+        if (status && status.available) {
+          kbConvertWarnEl.style.display = 'none';
+          kbConvertWarnEl.textContent = '';
+          return;
+        }
+        kbConvertEl.checked = false;
+        kbConvertWarnEl.textContent = 'LibreOffice is not installed or not on PATH. Install it (e.g. `brew install --cask libreoffice` on macOS) and restart Agent Cockpit to enable slide-to-image conversion.';
+        kbConvertWarnEl.style.display = '';
+      } catch (err) {
+        kbConvertEl.checked = false;
+        kbConvertWarnEl.textContent = 'Could not verify LibreOffice availability: ' + (err && err.message ? err.message : 'unknown error');
+        kbConvertWarnEl.style.display = '';
+      }
+    });
+  }
 
   if (initialTab === 'usage') {
     document.querySelector('.chat-settings-tab[data-tab="usage"]')?.click();

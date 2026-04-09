@@ -2609,6 +2609,22 @@ describe('PUT /workspaces/:hash/kb/enabled', () => {
   });
 });
 
+describe('GET /kb/libreoffice-status', () => {
+  test('returns LibreOfficeStatus shape', async () => {
+    const res = await makeRequest('GET', '/api/chat/kb/libreoffice-status');
+    expect(res.status).toBe(200);
+    expect(typeof res.body.available).toBe('boolean');
+    expect(res.body.binaryPath === null || typeof res.body.binaryPath === 'string').toBe(true);
+    expect(typeof res.body.checkedAt).toBe('string');
+    // `available` and `binaryPath` must be consistent with each other.
+    if (res.body.available) {
+      expect(res.body.binaryPath).not.toBeNull();
+    } else {
+      expect(res.body.binaryPath).toBeNull();
+    }
+  });
+});
+
 // ── memory_update WS frame ────────────────────────────────────────────────
 
 describe('memory_update WebSocket frame', () => {

@@ -9,6 +9,7 @@ import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
+import { detectLibreOffice } from '../services/knowledgeBase/libreOffice';
 import type { Request, Response, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
@@ -1098,6 +1099,21 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       const result = await chatService.setWorkspaceKbEnabled(hash, enabled);
       if (result === null) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ enabled: result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Expose the cached LibreOffice detection result to the frontend so the
+  // global Settings → Knowledge Base "Convert PPTX slides to images" checkbox
+  // can validate on-click and auto-uncheck with a warning when the binary is
+  // missing. `detectLibreOffice()` is cached at module level after the first
+  // call (server.ts runs it at startup), so this endpoint is effectively a
+  // read of that cache on every request.
+  router.get('/kb/libreoffice-status', async (_req: Request, res: Response) => {
+    try {
+      const status = await detectLibreOffice();
+      res.json(status);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
