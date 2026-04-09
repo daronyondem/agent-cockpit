@@ -15,6 +15,7 @@ import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
 import { KiroAdapter } from './src/services/backends/kiro';
 import { UpdateService } from './src/services/updateService';
 import { detectLibreOffice } from './src/services/knowledgeBase/libreOffice';
+import { detectPandoc } from './src/services/knowledgeBase/pandoc';
 import type { Request, Response, NextFunction } from './src/types';
 
 const FileStore = FileStoreFactory(session);
@@ -114,6 +115,21 @@ chatService.initialize().then(async () => {
     }
   }).catch((err: unknown) => {
     console.warn('[kb] LibreOffice detection failed:', (err as Error).message);
+  });
+
+  // Detect Pandoc in the background — required by the KB DOCX ingestion
+  // path. Unlike LibreOffice this isn't optional: without pandoc, DOCX
+  // uploads are rejected at the route level with install instructions.
+  // We still start the server so the rest of the app works, and surface
+  // the missing-binary state via the `/kb/pandoc-status` endpoint.
+  detectPandoc().then((status) => {
+    if (status.available) {
+      console.log(`[kb] Pandoc detected at ${status.binaryPath}${status.version ? ` (v${status.version})` : ''}`);
+    } else {
+      console.log('[kb] Pandoc not found on PATH — DOCX uploads will be rejected until pandoc is installed (https://pandoc.org/installing.html)');
+    }
+  }).catch((err: unknown) => {
+    console.warn('[kb] Pandoc detection failed:', (err as Error).message);
   });
 
   const server = app.listen(config.PORT, () => {

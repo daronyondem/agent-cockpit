@@ -2705,6 +2705,25 @@
     padding: 24px 12px;
     font-size: 13px;
   }
+  .chat-kb-banner {
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 0 0 14px 0;
+    font-size: 13px;
+    line-height: 1.5;
+  }
+  .chat-kb-banner-warn {
+    background: rgba(230, 180, 80, 0.15);
+    border: 1px solid rgba(230, 180, 80, 0.45);
+    color: var(--text);
+  }
+  .chat-kb-banner-warn a { color: inherit; text-decoration: underline; }
+  .chat-kb-banner-warn code {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 0 4px;
+    border-radius: 3px;
+    font-size: 12px;
+  }
   .chat-conv-group-kb-btn {
     background: transparent;
     border: none;

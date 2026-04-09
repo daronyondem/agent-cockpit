@@ -662,6 +662,19 @@ async function chatShowSettings(initialTab) {
           </div>
         </div>
         <div class="chat-settings-group">
+          <div class="chat-settings-label">Pandoc (required for DOCX ingestion)</div>
+          <div class="chat-settings-desc" id="chat-settings-pandoc-status">Checking…</div>
+          <div class="chat-settings-desc">
+            Pandoc is an external binary that converts DOCX to Markdown while
+            preserving tables. Install it from
+            <a href="https://pandoc.org/installing.html" target="_blank" rel="noreferrer">pandoc.org</a>
+            or via your package manager (<code>brew install pandoc</code>,
+            <code>apt install pandoc</code>, <code>choco install pandoc</code>)
+            and restart Agent Cockpit. DOCX uploads are rejected until
+            pandoc is detected on the server PATH.
+          </div>
+        </div>
+        <div class="chat-settings-group">
           <div class="chat-settings-label">Digestion CLI</div>
           <select class="chat-settings-select" id="chat-settings-kb-digest-backend" onchange="chatSettingsKbDigestBackendChanged()">
             ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbDigestBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
@@ -736,6 +749,27 @@ async function chatShowSettings(initialTab) {
 
   chatShowModal('Settings', html);
 
+  // Fetch cached pandoc status from the server and render it into the KB
+  // tab's Pandoc status row. Safe to call multiple times — the endpoint
+  // just reads the module-level cache populated at startup.
+  async function chatLoadPandocStatus() {
+    const el = document.getElementById('chat-settings-pandoc-status');
+    if (!el) return;
+    try {
+      const res = await fetch(chatApiUrl('kb/pandoc-status'), { credentials: 'same-origin' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const status = await res.json();
+      if (status && status.available) {
+        const version = status.version ? ` v${status.version}` : '';
+        el.innerHTML = `<span style="color:var(--success,#2e7d32);">Detected${esc(version)}</span> at <code>${esc(status.binaryPath || '')}</code>`;
+      } else {
+        el.innerHTML = '<span style="color:var(--error,#d32f2f);">Not found on PATH.</span> DOCX uploads will be rejected until pandoc is installed and the server is restarted.';
+      }
+    } catch (err) {
+      el.textContent = 'Could not check pandoc status: ' + (err && err.message ? err.message : 'unknown error');
+    }
+  }
+
   document.querySelectorAll('.chat-settings-tab').forEach(tab => {
     tab.addEventListener('click', () => {
       document.querySelectorAll('.chat-settings-tab').forEach(t => t.classList.remove('active'));
@@ -745,8 +779,14 @@ async function chatShowSettings(initialTab) {
       const panel = document.getElementById('chat-tab-' + target);
       if (panel) panel.style.display = '';
       if (target === 'usage') chatLoadUsageStats();
+      if (target === 'kb') chatLoadPandocStatus();
     });
   });
+
+  // Also trigger on first render if KB is the default-visible tab.
+  if (document.getElementById('chat-tab-kb')?.style.display !== 'none') {
+    chatLoadPandocStatus();
+  }
 
   // PPTX → images checkbox validates LibreOffice availability on check.
   // If the binary is missing, the box reverts to unchecked and a small
@@ -1658,11 +1698,16 @@ async function chatOpenKbBrowser(hash, label) {
     state: null,
     pollTimer: null,
     uploading: false,
+    pandocStatus: null, // populated on first render; only used for the banner
   };
 
   // Initial render with a loading message; refetch populates it.
   browserEl.innerHTML = chatKbBrowserChrome(label, true);
   chatKbBrowserWireChrome();
+  // Fire pandoc status fetch in parallel with the first state refetch —
+  // we don't block the initial render on it, but when it lands we
+  // re-render so the banner appears without another user action.
+  chatKbBrowserLoadPandocStatus();
   await chatKbBrowserRefetch();
 
   // Start polling so a KB browser open on a workspace with no active
@@ -1713,6 +1758,23 @@ function chatKbBrowserWireChrome() {
   if (closeBtn) closeBtn.onclick = chatCloseKbBrowser;
 }
 
+async function chatKbBrowserLoadPandocStatus() {
+  if (!chatKbBrowserState) return;
+  try {
+    const res = await fetch(chatApiUrl('kb/pandoc-status'), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const status = await res.json();
+    if (!chatKbBrowserState) return;
+    chatKbBrowserState.pandocStatus = status || null;
+  } catch {
+    if (!chatKbBrowserState) return;
+    // Treat a fetch failure the same as "unknown" — don't block the UI on it.
+    chatKbBrowserState.pandocStatus = null;
+  }
+  // Re-render the active tab so the banner appears (or clears) immediately.
+  chatKbBrowserRenderTab();
+}
+
 async function chatKbBrowserRefetch() {
   if (!chatKbBrowserState) return;
   const { hash } = chatKbBrowserState;
@@ -1754,7 +1816,27 @@ function chatKbBrowserRawTab(kbState) {
   const emptyMsg = raws.length === 0
     ? '<p class="chat-kb-empty">No files yet. Upload a PDF, DOCX, PPTX, text, or image file to get started.</p>'
     : '';
+  // Show a persistent banner when pandoc detection has run and reported
+  // "not available". We deliberately skip the banner when pandocStatus is
+  // still null (request in flight) to avoid a flash during the first few
+  // hundred ms after opening the browser.
+  const pandoc = chatKbBrowserState?.pandocStatus;
+  const pandocBanner = pandoc && pandoc.available === false
+    ? `
+      <div class="chat-kb-banner chat-kb-banner-warn">
+        <strong>Pandoc not installed.</strong> DOCX uploads will be rejected
+        until you install pandoc and restart Agent Cockpit. Install it from
+        <a href="https://pandoc.org/installing.html" target="_blank" rel="noreferrer">pandoc.org</a>
+        or via your package manager
+        (<code>brew install pandoc</code>,
+        <code>apt install pandoc</code>,
+        <code>choco install pandoc</code>).
+        PDF, PPTX, text, and image uploads are unaffected.
+      </div>
+    `
+    : '';
   return `
+    ${pandocBanner}
     <div class="chat-kb-upload" id="chat-kb-upload-zone">
       <div class="chat-kb-upload-hint">
         Drop a file here, or click the button to choose one. Supported:

@@ -1,12 +1,13 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 // ─── Format handler tests ───────────────────────────────────────────────────
-// Each handler is tested against a real fixture in `test/fixtures/kb/`:
+// PDF and PPTX handlers are tested against real fixtures in
+// `test/fixtures/kb/`:
 //   - sample.pdf    (592 B)   — tiny single-page PDF with one text line
-//   - sample.docx   (1.1 KB) — two paragraphs + one embedded PNG
 //   - sample.pptx   (1.9 KB) — two slides with speaker notes on slide 1
-// Plus ad-hoc text/image buffers for the passthrough handler. The fixtures
-// total <4 KB so they're cheap to ship in the repo.
+// The DOCX handler shells out to pandoc, so instead of shipping a docx
+// fixture + requiring pandoc everywhere, we stub `runPandoc` per test.
+// Plus ad-hoc text/image buffers for the passthrough handler.
 
 import fs from 'fs';
 import path from 'path';
@@ -14,6 +15,7 @@ import os from 'os';
 import { pdfHandler } from '../src/services/knowledgeBase/handlers/pdf';
 import { docxHandler } from '../src/services/knowledgeBase/handlers/docx';
 import { pptxHandler } from '../src/services/knowledgeBase/handlers/pptx';
+import * as pandocModule from '../src/services/knowledgeBase/pandoc';
 import {
   passthroughHandler,
   passthroughSupports,
@@ -63,74 +65,115 @@ describe('pdfHandler', () => {
 
 // ── DOCX ────────────────────────────────────────────────────────────────────
 
+// The docx handler shells out to pandoc, so rather than ship a real docx
+// fixture and require pandoc on every dev machine + CI box, we stub
+// `runPandoc` per test. The stub simulates what pandoc would write into
+// `--extract-media` and returns the markdown body on stdout — exactly the
+// contract the handler relies on.
 describe('docxHandler', () => {
-  test('extracts text and copies embedded media', async () => {
-    const buffer = readFixture('sample.docx');
+  let runPandocSpy: jest.SpyInstance;
+
+  afterEach(() => {
+    if (runPandocSpy) runPandocSpy.mockRestore();
+  });
+
+  test('flattens pandoc-extracted media and preserves table markdown', async () => {
+    runPandocSpy = jest
+      .spyOn(pandocModule, 'runPandoc')
+      .mockImplementation(async (args) => {
+        // Find the --extract-media flag and simulate what pandoc does:
+        // writes a `media/` subdir under the target with the embedded
+        // image, using its OOXML-relative path.
+        const extractArg = (args as string[]).find((a) =>
+          a.startsWith('--extract-media='),
+        )!;
+        const mediaRoot = extractArg.replace('--extract-media=', '');
+        const nested = path.join(mediaRoot, 'media');
+        fs.mkdirSync(nested, { recursive: true });
+        fs.writeFileSync(path.join(nested, 'image1.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+        return {
+          stdout:
+            'Hello from the DOCX fixture.\n\n' +
+            'Second paragraph for word count.\n\n' +
+            '| a | b |\n|---|---|\n| 1 | 2 |\n\n' +
+            '![image](media/media/image1.png)\n',
+          stderr: '',
+        };
+      });
+
     const result = await docxHandler({
-      buffer,
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]), // any bytes — handler just writes to a temp file
       filename: 'sample.docx',
       mimeType:
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       outDir,
     });
-    expect(result.handler).toBe('docx');
+
+    // Handler identity + title prefix.
+    expect(result.handler).toBe('docx/pandoc');
+    expect(result.text).toContain('# sample.docx');
     expect(result.text).toContain('Hello from the DOCX fixture.');
     expect(result.text).toContain('Second paragraph for word count.');
-    expect(result.text).toContain('## Embedded Media');
-    expect(result.mediaFiles).toHaveLength(1);
-    expect(result.mediaFiles[0]).toMatch(/^media\//);
-    // The referenced file must actually exist on disk under outDir.
-    expect(fs.existsSync(path.join(outDir, result.mediaFiles[0]))).toBe(true);
-    expect(result.metadata?.wordCount).toBeGreaterThan(0);
+    // Markdown tables are preserved (the whole reason we switched to pandoc).
+    expect(result.text).toContain('| a | b |');
+    expect(result.text).toContain('| 1 | 2 |');
+
+    // Media is flattened one level and referenced via the new path.
+    expect(result.mediaFiles).toEqual(['media/image1.png']);
+    expect(fs.existsSync(path.join(outDir, 'media', 'image1.png'))).toBe(true);
+    // And pandoc's nested media/media/ subdir is cleaned up.
+    expect(fs.existsSync(path.join(outDir, 'media', 'media'))).toBe(false);
+    // The handler rewrites `media/media/...` references to match the flattened layout.
+    expect(result.text).toContain('](media/image1.png)');
+    expect(result.text).not.toContain('media/media/');
+
+    // Pandoc got the expected argument shape.
+    expect(runPandocSpy).toHaveBeenCalledTimes(1);
+    const [argsArr] = runPandocSpy.mock.calls[0];
+    expect(argsArr).toContain('--from=docx');
+    expect(argsArr).toContain('--to=gfm');
+    expect(argsArr).toContain('--wrap=none');
+    expect((argsArr as string[]).some((a) => a.startsWith('--extract-media='))).toBe(true);
+
     expect(result.metadata?.mediaCount).toBe(1);
+    expect(result.metadata?.wordCount).toBeGreaterThan(0);
   });
 
-  test('handles DOCX with no media', async () => {
-    // Build a DOCX on the fly with mammoth-friendly minimal XML but no
-    // `word/media/` directory, to exercise the "no media" branch without
-    // adding a second fixture.
-    const AdmZip = require('adm-zip');
-    const z = new AdmZip();
-    z.addFile(
-      '[Content_Types].xml',
-      Buffer.from(
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
-          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
-          '<Default Extension="xml" ContentType="application/xml"/>' +
-          '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
-          '</Types>',
-      ),
-    );
-    z.addFile(
-      '_rels/.rels',
-      Buffer.from(
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-          '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
-          '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>' +
-          '</Relationships>',
-      ),
-    );
-    z.addFile(
-      'word/document.xml',
-      Buffer.from(
-        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
-          '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
-          '<w:body><w:p><w:r><w:t>Text only.</w:t></w:r></w:p></w:body>' +
-          '</w:document>',
-      ),
-    );
-    const buffer = z.toBuffer();
+  test('returns empty mediaFiles when pandoc does not produce any media', async () => {
+    runPandocSpy = jest
+      .spyOn(pandocModule, 'runPandoc')
+      .mockResolvedValue({ stdout: 'Just some text.', stderr: '' });
+
     const result = await docxHandler({
-      buffer,
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
       filename: 'plain.docx',
-      mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       outDir,
     });
-    expect(result.text).toContain('Text only.');
-    expect(result.text).not.toContain('## Embedded Media');
+
+    expect(result.text).toContain('Just some text.');
     expect(result.mediaFiles).toEqual([]);
     expect(result.metadata?.mediaCount).toBe(0);
+    // We always pre-create the media dir (so we can walk it safely after);
+    // but it should be empty and no image refs should leak into the text.
+    expect(result.text).not.toContain('![');
+  });
+
+  test('propagates pandoc failures so the orchestrator can mark the entry failed', async () => {
+    runPandocSpy = jest
+      .spyOn(pandocModule, 'runPandoc')
+      .mockRejectedValue(new Error('pandoc failed: Couldn\'t parse docx'));
+
+    await expect(
+      docxHandler({
+        buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+        filename: 'broken.docx',
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        outDir,
+      }),
+    ).rejects.toThrow(/pandoc failed/);
   });
 });
 

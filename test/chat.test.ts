@@ -2857,6 +2857,66 @@ describe('POST /workspaces/:hash/kb/raw', () => {
     expect(entry?.status).toBe('failed');
     expect(entry?.error || '').toMatch(/Unsupported file type/);
   });
+
+  test('400 rejects legacy .doc files before they ever hit the handler', async () => {
+    const conv = await chatService.createConversation('KB doc legacy', '/tmp/ws-kb-up-4');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const res = await makeMultipartRequest(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/raw`,
+      'file',
+      'legacy.doc',
+      'application/msword',
+      Buffer.from([0xd0, 0xcf, 0x11, 0xe0]), // ole2 magic (doesn't matter, we reject on extension)
+    );
+    expect(res.status).toBe(400);
+    expect(String(res.body.error || '')).toMatch(/Legacy \.doc format is not supported/);
+    // And no raw entry should have been created.
+    const state = await chatService.getKbState(hash);
+    expect(Object.keys(state?.raw || {})).toHaveLength(0);
+  });
+
+  test('400 rejects .docx uploads with an install hint when pandoc is unavailable', async () => {
+    const conv = await chatService.createConversation('KB docx no pandoc', '/tmp/ws-kb-up-5');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    // Force the pandoc detection to report "not available" by pointing
+    // PATH at an empty directory and clearing the cache.
+    const {
+      _resetPandocCacheForTests,
+    } = require('../src/services/knowledgeBase/pandoc');
+    const fs = require('fs');
+    const os = require('os');
+    const path = require('path');
+    const emptyPath = fs.mkdtempSync(path.join(os.tmpdir(), 'no-pandoc-'));
+    const origPath = process.env.PATH;
+    process.env.PATH = emptyPath;
+    _resetPandocCacheForTests();
+
+    try {
+      const res = await makeMultipartRequest(
+        'POST',
+        `/api/chat/workspaces/${hash}/kb/raw`,
+        'file',
+        'report.docx',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      );
+      expect(res.status).toBe(400);
+      expect(String(res.body.error || '')).toMatch(/Pandoc/);
+      expect(String(res.body.error || '')).toMatch(/pandoc\.org/);
+      // And no raw entry should have been created.
+      const state = await chatService.getKbState(hash);
+      expect(Object.keys(state?.raw || {})).toHaveLength(0);
+    } finally {
+      process.env.PATH = origPath;
+      _resetPandocCacheForTests();
+      fs.rmSync(emptyPath, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('DELETE /workspaces/:hash/kb/raw/:rawId', () => {

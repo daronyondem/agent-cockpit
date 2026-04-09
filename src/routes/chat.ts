@@ -10,6 +10,7 @@ import type { UpdateService } from '../services/updateService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
 import { detectLibreOffice } from '../services/knowledgeBase/libreOffice';
+import { detectPandoc } from '../services/knowledgeBase/pandoc';
 import {
   KbIngestionService,
   KbDisabledError,
@@ -1182,6 +1183,28 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         const hash = param(req, 'hash');
         const file = (req as unknown as { file?: Express.Multer.File }).file;
         if (!file) return res.status(400).json({ error: 'Missing "file" form field.' });
+
+        // Pre-flight format guards — done here (not in the handler) so the
+        // user sees an actionable error immediately instead of a failed
+        // ingestion entry sitting in state.json.
+        const lowerName = file.originalname.toLowerCase();
+        if (lowerName.endsWith('.doc')) {
+          return res.status(400).json({
+            error:
+              'Legacy .doc format is not supported. Please resave the document as .docx in Word or LibreOffice and upload again.',
+          });
+        }
+        if (lowerName.endsWith('.docx')) {
+          const pandocStatus = await detectPandoc();
+          if (!pandocStatus.available) {
+            return res.status(400).json({
+              error:
+                'DOCX ingestion requires Pandoc, which was not found on the server PATH. ' +
+                'Install it from https://pandoc.org/installing.html (or via your package manager: `brew install pandoc`, `apt install pandoc`, `choco install pandoc`) and restart Agent Cockpit.',
+            });
+          }
+        }
+
         // Multer gives us the raw bytes on `file.buffer` when using memoryStorage.
         const result = await kbIngestion.enqueueUpload(hash, {
           buffer: file.buffer,
@@ -1253,6 +1276,19 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   router.get('/kb/libreoffice-status', async (_req: Request, res: Response) => {
     try {
       const status = await detectLibreOffice();
+      res.json(status);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Pandoc detection mirror of the LibreOffice endpoint above. Unlike
+  // LibreOffice this is required for DOCX ingestion (not optional), so the
+  // UI uses this to show a persistent "install pandoc" banner on the KB
+  // Raw tab and to block DOCX uploads pre-flight.
+  router.get('/kb/pandoc-status', async (_req: Request, res: Response) => {
+    try {
+      const status = await detectPandoc();
       res.json(status);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
