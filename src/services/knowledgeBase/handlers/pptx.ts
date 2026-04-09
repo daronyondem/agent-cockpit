@@ -26,12 +26,26 @@ import type { Handler, HandlerResult } from './types';
 const execFileAsync = promisify(execFile);
 
 interface ExtractedText {
-  /** 1-indexed slide number (matches file name `slide<N>.xml`). */
+  /**
+   * 1-indexed sequential number among *visible* slides, so it lines up
+   * with `slides/slide-NNN.png` from the LibreOffice rasterization path.
+   * This is NOT the original `slide<N>.xml` file number — hidden slides
+   * are filtered before numbering, see `extractPptxText`.
+   */
   slideNumber: number;
   /** Joined `<a:t>` runs from the slide body. */
   body: string;
   /** Joined `<a:t>` runs from the speaker notes, empty string if none. */
   notes: string;
+}
+
+interface ExtractTextResult {
+  /** Visible slides only, numbered 1..N sequentially. */
+  slides: ExtractedText[];
+  /** How many slide XMLs were marked `show="0"` and skipped. */
+  hiddenCount: number;
+  /** Total slide XMLs in the zip (visible + hidden). */
+  totalCount: number;
 }
 
 /** Walk an arbitrary parsed XML tree and collect every `a:t` text run. */
@@ -68,8 +82,17 @@ function slideNumberFromEntry(name: string): number | null {
 /**
  * Core text-and-media extractor. Always runs; image rasterization is an
  * optional add-on layered on top by the exported handler.
+ *
+ * Hidden slides (those with `show="0"` on the `<p:sld>` root element)
+ * are skipped and the survivors are renumbered 1..N. We have to do this
+ * because LibreOffice's PDF export *also* skips hidden slides — if we
+ * kept them in the text with their original numbers, "Slide 37" in the
+ * markdown would drift from `slides/slide-037.png` and the notes/body
+ * would end up attached to the wrong image. Keeping the two paths
+ * aligned is worth the small asymmetry (the markdown no longer mirrors
+ * the deck's raw structure 1:1 when the author used hidden slides).
  */
-async function extractPptxText(buffer: Buffer): Promise<ExtractedText[]> {
+async function extractPptxText(buffer: Buffer): Promise<ExtractTextResult> {
   const zip = new AdmZip(buffer);
   const entries = zip.getEntries();
   const parser = new XMLParser({
@@ -93,16 +116,31 @@ async function extractPptxText(buffer: Buffer): Promise<ExtractedText[]> {
     }
   }
 
-  const results: ExtractedText[] = [];
+  const slides: ExtractedText[] = [];
+  let hiddenCount = 0;
+  let displayNumber = 0;
   for (const { num, entry } of slideEntries) {
+    const rawXml = entry.getData().toString('utf8');
+    // We run with `ignoreAttributes: true` so parsed slide nodes have no
+    // attribute metadata — cheapest reliable way to detect `show="0"` is
+    // a small regex scoped to the `<p:sld>` root tag.
+    if (/<p:sld\b[^>]*\sshow="0"/.test(rawXml)) {
+      hiddenCount += 1;
+      continue;
+    }
+    displayNumber += 1;
+
     const bodyBucket: string[] = [];
     try {
-      const parsed = parser.parse(entry.getData().toString('utf8'));
+      const parsed = parser.parse(rawXml);
       collectTextRuns(parsed, bodyBucket);
     } catch {
       // Malformed XML on a single slide shouldn't kill the whole file.
     }
     const notesBucket: string[] = [];
+    // Notes are keyed by the *original* slide XML number, not the
+    // display number, because `ppt/notesSlides/notesSlide<N>.xml`
+    // mirrors the slide file naming scheme.
     const notesEntry = notesEntries.get(num);
     if (notesEntry) {
       try {
@@ -112,13 +150,13 @@ async function extractPptxText(buffer: Buffer): Promise<ExtractedText[]> {
         // Same as above — notes are best-effort.
       }
     }
-    results.push({
-      slideNumber: num,
+    slides.push({
+      slideNumber: displayNumber,
       body: bodyBucket.join(' ').replace(/\s+/g, ' ').trim(),
       notes: notesBucket.join(' ').replace(/\s+/g, ' ').trim(),
     });
   }
-  return results;
+  return { slides, hiddenCount, totalCount: slideEntries.length };
 }
 
 /** Copy `ppt/media/*` into `outDir/media/` and return the relative paths. */
@@ -248,7 +286,7 @@ export const pptxHandler: Handler = async ({
   outDir,
   convertSlidesToImages,
 }): Promise<HandlerResult> => {
-  const slides = await extractPptxText(buffer);
+  const { slides, hiddenCount, totalCount } = await extractPptxText(buffer);
   const embeddedMedia = await extractPptxMedia(buffer, outDir);
 
   // Body: one H2 per slide with body + optional notes block.
@@ -274,6 +312,13 @@ export const pptxHandler: Handler = async ({
   }
 
   let text = `# ${filename}\n\n${slideBlocks.join('\n\n')}`;
+  if (hiddenCount > 0) {
+    // Put the note near the top so downstream digestion sees it before
+    // the slide body. The sentence is intentionally terse — we don't
+    // know *which* original deck positions were hidden from our regex
+    // scan, only how many were skipped.
+    text += `\n\n> **Note:** ${hiddenCount} of ${totalCount} slides in this deck are marked hidden and were skipped during ingestion to stay in sync with the rasterized slide images.\n`;
+  }
   if (embeddedMedia.length > 0) {
     text += `\n\n## Embedded Media\n\n${embeddedMedia.map((rel) => `![${path.basename(rel)}](${rel})`).join('\n')}\n`;
   }
@@ -283,6 +328,8 @@ export const pptxHandler: Handler = async ({
 
   const metadata: Record<string, string | number | boolean> = {
     slideCount: slides.length,
+    totalSlideCount: totalCount,
+    hiddenSlideCount: hiddenCount,
     embeddedMediaCount: embeddedMedia.length,
     slidesToImagesRequested: Boolean(convertSlidesToImages),
   };

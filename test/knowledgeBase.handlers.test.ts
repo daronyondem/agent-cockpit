@@ -230,6 +230,50 @@ describe('pptxHandler', () => {
     expect(result.metadata?.slidesToImagesRequested).toBe(false);
   });
 
+  test('skips hidden slides and renumbers survivors to match rasterized PNGs', async () => {
+    // Synthesize a minimal pptx in memory with 3 slides where slide 2 is
+    // marked `show="0"` (hidden). The handler only looks at
+    // `ppt/slides/slideN.xml` entries during text extraction, so a
+    // partial pptx skeleton is enough — no need for content types,
+    // presentation.xml, or rels.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip();
+    const slideXml = (body: string, hidden = false): string =>
+      `<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"${hidden ? ' show="0"' : ''}>
+  <p:cSld><p:spTree>
+    <p:sp><p:txBody><a:p><a:r><a:t>${body}</a:t></a:r></a:p></p:txBody></p:sp>
+  </p:spTree></p:cSld>
+</p:sld>`;
+    zip.addFile('ppt/slides/slide1.xml', Buffer.from(slideXml('Visible Alpha')));
+    zip.addFile('ppt/slides/slide2.xml', Buffer.from(slideXml('Hidden Backup', true)));
+    zip.addFile('ppt/slides/slide3.xml', Buffer.from(slideXml('Visible Beta')));
+    const buffer: Buffer = zip.toBuffer();
+
+    const result = await pptxHandler({
+      buffer,
+      filename: 'hidden-slides.pptx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      outDir,
+    });
+
+    // Only visible slides should appear, renumbered 1..2 (NOT 1, 3).
+    expect(result.metadata?.slideCount).toBe(2);
+    expect(result.metadata?.totalSlideCount).toBe(3);
+    expect(result.metadata?.hiddenSlideCount).toBe(1);
+    expect(result.text).toContain('## Slide 1');
+    expect(result.text).toContain('Visible Alpha');
+    expect(result.text).toContain('## Slide 2');
+    expect(result.text).toContain('Visible Beta');
+    expect(result.text).not.toContain('## Slide 3');
+    expect(result.text).not.toContain('Hidden Backup');
+    // Surface the skip in the markdown so downstream consumers notice.
+    expect(result.text).toMatch(/1 of 3 slides.*hidden/);
+  });
+
   test('records a warning when slide rasterization is requested but LibreOffice is missing', async () => {
     // Force the LibreOffice detection to report "not available" without
     // touching the filesystem by pointing PATH at an empty directory and
