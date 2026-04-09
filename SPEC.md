@@ -295,7 +295,7 @@ Recursively deletes directory. Refuses filesystem root. Returns `{ deleted, pare
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
-| GET | `/conversations?q=<search>&archived=true` | — | List all, sorted by `updatedAt` desc. Each summary includes `workspaceHash`. Pass `archived=true` to list only archived conversations (default: active only). |
+| GET | `/conversations?q=<search>&archived=true` | — | List all, sorted by `updatedAt` desc. Each summary includes `workspaceHash` and `workspaceKbEnabled` (mirrors the workspace-level KB toggle so the sidebar can gate the KB button). Pass `archived=true` to list only archived conversations (default: active only). |
 | GET | `/conversations/:id` | — | Full conversation object. `404` if not found. |
 | POST | `/conversations` | Yes | `{ title?, workingDir?, backend? }` → creates conversation with initial session. `backend` defaults to the server's default backend. |
 | PUT | `/conversations/:id` | Yes | `{ title }` → rename. `404` if not found. |
@@ -521,7 +521,7 @@ Unauthenticated requests to `/api/*` return `401 { error: "Not authenticated" }`
 | `initialize()` | Runs migration if legacy `conversations/` dir exists, builds convId→workspace lookup map. |
 | `createConversation(title, workingDir, backend, model?, effort?)` | Creates entry in workspace index + empty session-1.json. Falls back to `_defaultWorkspace`. `backend` defaults to the registry's first registered adapter. `model` is the optional model alias to persist. `effort` is the optional adaptive reasoning level; silently downgraded (or dropped) if the chosen model doesn't support it. |
 | `getConversation(id)` | Returns API-compatible object with messages, or `null`. |
-| `listConversations(opts?)` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc, each with `workspaceHash`. Pass `{ archived: true }` to list only archived; default returns active only. |
+| `listConversations(opts?)` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc, each with `workspaceHash` and `workspaceKbEnabled` (defaults to `false` for legacy workspaces). Pass `{ archived: true }` to list only archived; default returns active only. |
 | `renameConversation(id, newTitle)` | Updates title in workspace index. Returns full conversation or `null`. |
 | `archiveConversation(id)` | Sets `archived: true` on conversation entry in workspace index. Returns `true` or `false` if not found. Files remain on disk. |
 | `restoreConversation(id)` | Removes `archived` flag from conversation entry. Returns `true` or `false` if not found. |
@@ -1083,7 +1083,7 @@ Triggered by the pencil icon on workspace group headers. Multi-tab modal:
 
 The **KB Browser** is a full-screen panel that swaps into the main chat area (hiding the active conversation) when the user clicks the **KB** icon on a workspace-group header in the sidebar. It is implemented inline in `public/js/main.js` — look for the `chatKbBrowser*` functions.
 
-- **Entry point:** `chatKbBrowser.chat-conv-group-kb-btn` click handler (wired in `chatWireEvents`) reads `data-kb-hash` and `data-kb-label` off the button and calls `chatOpenKbBrowser(hash, label)`. The button is only rendered for workspace groups that have a real hash (so the "ungrouped" placeholder never gets one).
+- **Entry point:** `chatKbBrowser.chat-conv-group-kb-btn` click handler (wired in `chatWireEvents`) reads `data-kb-hash` and `data-kb-label` off the button and calls `chatOpenKbBrowser(hash, label)`. The button is only rendered for workspace groups that have a real hash **and** whose `workspaceKbEnabled` flag is `true` (so the "ungrouped" placeholder never gets one, and workspaces with KB disabled in settings don't advertise an entry point). The flag is sourced from `ConversationListItem.workspaceKbEnabled` in the sidebar payload; toggling KB on/off via the settings modal calls `chatLoadConversations()` so the sidebar button appears/disappears without a page reload.
 - **Layout:** A `<div class="chat-kb-browser">` sibling of `#chat-messages` with a header (workspace label + close button), a tab row (**Raw** / Entries / Synthesis — only Raw is wired in PR 2), an upload drop zone, and a list body. Opening the browser hides `#chat-messages` and the input area; closing restores them.
 - **Polling:** While the browser is mounted, `chatKbBrowserState.intervalId` runs `chatKbBrowserRefetch()` every **1500 ms** against `GET /workspaces/:hash/kb`. Polling is required because WS frames are conversation-scoped — the browser can be open for a workspace that has no active CLI stream. On close, the interval is cleared.
 - **WS frame reactivity:** `streaming.js` dispatches `kb_state_update` frames to `window.chatHandleKbStateUpdate(convId, event)`. The handler checks whether the browser is open for the same workspace hash and, if so, triggers an immediate refetch (in addition to the polling cadence) so changes during active CLI streams render without waiting for the next poll tick.

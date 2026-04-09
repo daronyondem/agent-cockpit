@@ -1292,6 +1292,9 @@ async function chatShowWorkspaceSettings(hash, label) {
         if (kbBrowser) {
           kbBrowser.innerHTML = chatRenderWorkspaceKbBrowser(enabled);
         }
+        // Refresh the sidebar so the KB button (rendered only when KB is
+        // enabled for the workspace) appears/disappears without a reload.
+        chatLoadConversations();
       } catch (err) {
         alert('Failed to update knowledge base setting: ' + err.message);
         kbToggleEl.checked = !enabled;

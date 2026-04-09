@@ -363,6 +363,7 @@ export class ChatService {
           effort: conv.effort,
           workingDir: index.workspacePath,
           workspaceHash: hash,
+          workspaceKbEnabled: Boolean(index.kbEnabled),
           messageCount: activeSession ? activeSession.messageCount : 0,
           lastMessage: conv.lastMessage,
           usage: conv.usage || null,
