@@ -19,7 +19,7 @@
 
 import path from 'path';
 import { promises as fsp } from 'fs';
-import { renderPageAsImage, getDocumentProxy } from 'unpdf';
+import { renderPageAsImage, getDocumentProxy, createIsomorphicCanvasFactory } from 'unpdf';
 import * as napiCanvas from '@napi-rs/canvas';
 import type { Handler, HandlerResult } from './types';
 
@@ -42,7 +42,17 @@ export const pdfHandler: Handler = async ({
     buffer.byteOffset + buffer.byteLength,
   ));
 
-  const pdf = await getDocumentProxy(data);
+  // Pre-build the canvas factory and pass it to getDocumentProxy so the
+  // document carries it through to pdfjs internals. Without this, pdfjs
+  // uses its own NodeCanvasFactory fallback which throws "@napi-rs/canvas
+  // is not available in this environment" the first time it tries to
+  // paint an image XObject during page.render(). unpdf's renderPageAsImage
+  // only applies the factory when it loads the pdf itself — if we hand
+  // it a pre-loaded PDFDocumentProxy, we have to wire the factory in up
+  // front at getDocumentProxy() time.
+  const canvasImport = async () => napiCanvas;
+  const CanvasFactory = await createIsomorphicCanvasFactory(canvasImport);
+  const pdf = await getDocumentProxy(data, { CanvasFactory } as unknown as Parameters<typeof getDocumentProxy>[1]);
   const totalPages = pdf.numPages;
 
   // Stage output under `<outDir>/pages/`. Using a dedicated subdir keeps
@@ -53,35 +63,41 @@ export const pdfHandler: Handler = async ({
 
   const mediaFiles: string[] = [];
   const rendered: number[] = [];
-  const failed: number[] = [];
+  const failed: Array<{ page: number; error: string }> = [];
 
   for (let page = 1; page <= totalPages; page += 1) {
     try {
       const pngBuffer = await renderPageAsImage(pdf, page, {
-        canvasImport: async () => napiCanvas,
+        canvasImport,
         scale: TARGET_SCALE,
       });
       const rel = path.join('pages', `page-${String(page).padStart(4, '0')}.png`);
       await fsp.writeFile(path.join(outDir, rel), Buffer.from(pngBuffer));
       mediaFiles.push(rel);
       rendered.push(page);
-    } catch {
-      // A single bad page shouldn't fail the whole doc. We still record
-      // the page number so the index reflects reality.
-      failed.push(page);
+    } catch (err) {
+      // A single bad page shouldn't fail the whole doc, but silently
+      // swallowing errors is how we ended up with an all-pages-failed
+      // ingestion that nobody could debug. Log the reason so ops can
+      // correlate with server logs, and surface the first failure's
+      // message in the entry metadata for the UI.
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`[kb/pdf] Failed to rasterize page ${page} of "${filename}": ${message}`);
+      failed.push({ page, error: message });
     }
   }
 
   // Build a thin markdown index: one section per page with an embedded
   // image reference. The Digestion CLI follows the links to analyze
   // each page as an image. No extracted text — that's the whole point.
+  const failedByPage = new Map(failed.map((f) => [f.page, f.error]));
   const pageSections: string[] = [];
   for (let page = 1; page <= totalPages; page += 1) {
-    if (rendered.includes(page)) {
+    if (failedByPage.has(page)) {
+      pageSections.push(`## Page ${page}\n\n_[Failed to rasterize this page: ${failedByPage.get(page)}]_`);
+    } else {
       const rel = path.join('pages', `page-${String(page).padStart(4, '0')}.png`);
       pageSections.push(`## Page ${page}\n\n![Page ${page}](${rel})`);
-    } else {
-      pageSections.push(`## Page ${page}\n\n_[Failed to rasterize this page.]_`);
     }
   }
 
@@ -93,7 +109,8 @@ export const pdfHandler: Handler = async ({
     rasterDpi: 150,
   };
   if (failed.length > 0) {
-    metadata.failedPages = failed.join(',');
+    metadata.failedPages = failed.map((f) => f.page).join(',');
+    metadata.firstFailureMessage = failed[0].error;
   }
 
   return {

@@ -18,7 +18,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import AdmZip from 'adm-zip';
 import { XMLParser } from 'fast-xml-parser';
-import { renderPageAsImage, getDocumentProxy } from 'unpdf';
+import { renderPageAsImage, getDocumentProxy, createIsomorphicCanvasFactory } from 'unpdf';
 import * as napiCanvas from '@napi-rs/canvas';
 import { detectLibreOffice } from '../libreOffice';
 import type { Handler, HandlerResult } from './types';
@@ -199,12 +199,17 @@ async function rasterizeSlidesViaLibreOffice(
     // a `canvasImport` factory; we hand it the statically-imported
     // `@napi-rs/canvas` namespace so there's no per-page dynamic import
     // overhead (and no optional-dep failure mode — canvas is a regular
-    // dep now).
+    // dep now). Crucially, we also build the CanvasFactory up front and
+    // pass it to getDocumentProxy — without it pdfjs uses its own
+    // NodeCanvasFactory stub that throws on image XObjects during
+    // page.render() (see the matching comment in handlers/pdf.ts).
     const data = new Uint8Array(pdfBuffer.buffer.slice(
       pdfBuffer.byteOffset,
       pdfBuffer.byteOffset + pdfBuffer.byteLength,
     ));
-    const pdf = await getDocumentProxy(data);
+    const canvasImport = async () => napiCanvas;
+    const CanvasFactory = await createIsomorphicCanvasFactory(canvasImport);
+    const pdf = await getDocumentProxy(data, { CanvasFactory } as unknown as Parameters<typeof getDocumentProxy>[1]);
     const totalPages = pdf.numPages;
     const slidesDir = path.join(outDir, 'slides');
     await fsp.mkdir(slidesDir, { recursive: true });
@@ -213,14 +218,17 @@ async function rasterizeSlidesViaLibreOffice(
     for (let page = 1; page <= totalPages; page += 1) {
       try {
         const pngBuffer = await renderPageAsImage(pdf, page, {
-          canvasImport: async () => napiCanvas,
+          canvasImport,
           scale: 1.5,
         });
         const pngPath = path.join(slidesDir, `slide-${String(page).padStart(3, '0')}.png`);
         await fsp.writeFile(pngPath, Buffer.from(pngBuffer));
         rel.push(path.join('slides', `slide-${String(page).padStart(3, '0')}.png`));
-      } catch {
-        // Skip bad pages — we still keep the ones that rendered.
+      } catch (err) {
+        // Skip bad pages — we still keep the ones that rendered — but
+        // log so a catastrophic "every page failed" isn't silent.
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`[kb/pptx] Failed to rasterize slide ${page} of "${filename}": ${message}`);
       }
     }
     return { images: rel };
