@@ -48,19 +48,10 @@ export const passthroughHandler: Handler = async ({
   const ext = path.extname(filename).toLowerCase();
 
   // Text-like formats: decode as UTF-8 and inline into `text.md`.
-  // Oversized files are truncated with a marker so the digestion prompt
-  // never explodes — 200 KB is generous for any reasonable source or
-  // markdown doc.
+  // The full content is preserved — the Digestion CLI runs with
+  // allowTools and can read the file on disk if the prompt is too long.
   if (TEXT_EXTS.has(ext)) {
-    const MAX_BYTES = 200 * 1024;
-    let text: string;
-    let truncated = false;
-    if (buffer.byteLength > MAX_BYTES) {
-      text = buffer.subarray(0, MAX_BYTES).toString('utf8');
-      truncated = true;
-    } else {
-      text = buffer.toString('utf8');
-    }
+    const text = buffer.toString('utf8');
     // Wrap non-markdown text in a code fence for readability in the
     // digestion prompt. Markdown is passed through as-is so existing
     // headings survive.
@@ -69,14 +60,12 @@ export const passthroughHandler: Handler = async ({
         ? text
         : '```' + ext.slice(1) + '\n' + text + '\n```';
     const header = `# ${filename}\n\n`;
-    const footer = truncated ? `\n\n_[Truncated at ${MAX_BYTES} bytes.]_\n` : '';
     return {
-      text: header + body + footer,
+      text: header + body,
       mediaFiles: [],
       handler: 'passthrough/text',
       metadata: {
         byteLength: buffer.byteLength,
-        truncated,
       },
     };
   }

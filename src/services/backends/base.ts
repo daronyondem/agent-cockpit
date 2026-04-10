@@ -16,6 +16,15 @@ export interface RunOneShotOptions {
   timeoutMs?: number;
   /** Working directory for the spawned CLI. */
   workingDir?: string | null;
+  /**
+   * Grant the CLI unrestricted tool access (bypass permissions mode).
+   * Used by the Digestion and Dreaming orchestrators so the CLI can
+   * read every file under the workspace KB directory without prompting.
+   * Default `false` — memory prompts continue to run in the safe
+   * no-tool path. Individual backends map this to their own flag (e.g.
+   * `--permission-mode bypassPermissions` for Claude Code).
+   */
+  allowTools?: boolean;
 }
 
 /**

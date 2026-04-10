@@ -67,6 +67,11 @@ export const CHAT_MAX_RECONNECT_ATTEMPTS = 5;
 export const CHAT_RECONNECT_BASE_DELAY = 1000; // 1s, doubles each attempt
 export const DEFAULT_BACKEND_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" rx="128" fill="#888"/><text x="256" y="320" text-anchor="middle" fill="#fff" font-size="280" font-family="sans-serif">\u26A1</text></svg>';
 export const IMAGE_EXTENSIONS = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
+
+// KB pipeline icons — inline SVG strings sized for toolbar / status badge use.
+export const KB_ICON_INGEST = '<svg class="kb-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 14v5a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-5"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="3" x2="12" y2="15"/></svg>';
+export const KB_ICON_DIGEST = '<svg class="kb-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 5v14h7V5H3z"/><path d="M11 12h3"/><path d="M13 10l2 2-2 2"/><rect x="16" y="4" width="5" height="4" rx="0.5"/><rect x="16" y="10" width="5" height="4" rx="0.5"/><rect x="16" y="16" width="5" height="4" rx="0.5"/></svg>';
+export const KB_ICON_DREAM = '<svg class="kb-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="17" r="2"/><circle cx="12" cy="5" r="2"/><circle cx="19" cy="15" r="2"/><path d="M 6 15.3 Q 7 10 11 6.7"/><path d="M 13.1 6.6 Q 17 9 17.9 13.4"/><path d="M 7 16.7 Q 12 19 17 15.3"/></svg>';
 export const PARALLEL_THRESHOLD_MS = 500;
 
 // ─── API helpers ─────────────────────────────────────────────────────────────

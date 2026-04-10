@@ -1022,81 +1022,69 @@ describe('getWorkspaceKbEnabled / setWorkspaceKbEnabled', () => {
   });
 });
 
-describe('getOrInitKbState / getKbState / saveKbState', () => {
-  test('getKbState returns null when no state file exists', async () => {
-    await service.createConversation('KB State None', '/tmp/kb-state-none');
-    const hash = workspaceHash('/tmp/kb-state-none');
-    expect(await service.getKbState(hash)).toBeNull();
+describe('getKbStateSnapshot / getKbDb', () => {
+  test('getKbStateSnapshot returns null for unknown workspace', async () => {
+    expect(await service.getKbStateSnapshot('nopehash')).toBeNull();
   });
 
-  test('getOrInitKbState returns null for unknown workspace', async () => {
-    expect(await service.getOrInitKbState('nopehash')).toBeNull();
-  });
+  test('getKbStateSnapshot returns empty in-memory snapshot when disabled (no DB on disk)', async () => {
+    await service.createConversation('KB Snap Disabled', '/tmp/kb-snap-disabled');
+    const hash = workspaceHash('/tmp/kb-snap-disabled');
 
-  test('getOrInitKbState returns in-memory empty state when disabled (does not persist)', async () => {
-    await service.createConversation('KB Init Disabled', '/tmp/kb-init-disabled');
-    const hash = workspaceHash('/tmp/kb-init-disabled');
-
-    const state = await service.getOrInitKbState(hash);
+    const state = await service.getKbStateSnapshot(hash);
     expect(state).not.toBeNull();
     expect(state!.version).toBe(1);
-    expect(state!.raw).toEqual({});
-    expect(state!.entries).toEqual({});
-    expect(state!.synthesis.status).toBe('empty');
+    expect(state!.raw).toEqual([]);
+    expect(state!.folders).toEqual([]);
+    expect(state!.counters.rawTotal).toBe(0);
+    expect(state!.autoDigest).toBe(false);
 
-    // Should NOT have written state.json to disk for a disabled workspace.
-    const statePath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'knowledge', 'state.json');
-    expect(fs.existsSync(statePath)).toBe(false);
+    // Should NOT have written state.db to disk for a disabled workspace.
+    const dbPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'knowledge', 'state.db');
+    expect(fs.existsSync(dbPath)).toBe(false);
   });
 
-  test('getOrInitKbState persists an empty state when enabled', async () => {
-    await service.createConversation('KB Init Enabled', '/tmp/kb-init-enabled');
-    const hash = workspaceHash('/tmp/kb-init-enabled');
+  test('getKbStateSnapshot opens DB and returns empty-but-initialized state when enabled', async () => {
+    await service.createConversation('KB Snap Enabled', '/tmp/kb-snap-enabled');
+    const hash = workspaceHash('/tmp/kb-snap-enabled');
     await service.setWorkspaceKbEnabled(hash, true);
 
-    const state = await service.getOrInitKbState(hash);
+    const state = await service.getKbStateSnapshot(hash);
     expect(state).not.toBeNull();
     expect(state!.version).toBe(1);
     expect(state!.entrySchemaVersion).toBe(1);
+    // Root folder always exists after DB init.
+    expect(state!.folders.some((f) => f.folderPath === '')).toBe(true);
+    expect(state!.raw).toEqual([]);
 
-    const statePath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'knowledge', 'state.json');
-    expect(fs.existsSync(statePath)).toBe(true);
-
-    // Round-trip via getKbState.
-    const loaded = await service.getKbState(hash);
-    expect(loaded).not.toBeNull();
-    expect(loaded!.raw).toEqual({});
+    const dbPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'knowledge', 'state.db');
+    expect(fs.existsSync(dbPath)).toBe(true);
   });
 
-  test('saveKbState bumps updatedAt and round-trips', async () => {
-    await service.createConversation('KB Save', '/tmp/kb-save');
-    const hash = workspaceHash('/tmp/kb-save');
+  test('getKbDb returns a usable KbDatabase and caches it', async () => {
+    await service.createConversation('KB DB Cache', '/tmp/kb-db-cache');
+    const hash = workspaceHash('/tmp/kb-db-cache');
     await service.setWorkspaceKbEnabled(hash, true);
 
-    const initial = await service.getOrInitKbState(hash);
-    expect(initial).not.toBeNull();
+    const db1 = service.getKbDb(hash);
+    const db2 = service.getKbDb(hash);
+    expect(db1).not.toBeNull();
+    expect(db1).toBe(db2); // cached, same instance
 
-    // Wait a hair to guarantee a different timestamp.
-    await new Promise((r) => setTimeout(r, 5));
-    const saved = await service.saveKbState(hash, {
-      ...initial!,
-      raw: {
-        abc123: {
-          rawId: 'abc123',
-          filename: 'paper.pdf',
-          mimeType: 'application/pdf',
-          sizeBytes: 1024,
-          uploadedAt: '2026-04-08T12:00:00.000Z',
-          status: 'ingested',
-        },
-      },
-    });
-    expect(saved.updatedAt > initial!.updatedAt).toBe(true);
+    // The DB should expose folder/counters methods.
+    const counters = db1!.getCounters();
+    expect(counters.rawTotal).toBe(0);
+    expect(counters.folderCount).toBeGreaterThanOrEqual(1);
+  });
 
-    const reloaded = await service.getKbState(hash);
-    expect(reloaded).not.toBeNull();
-    expect(reloaded!.raw.abc123.filename).toBe('paper.pdf');
-    expect(reloaded!.raw.abc123.status).toBe('ingested');
+  test('getWorkspaceKbAutoDigest is false by default and toggles via setter', async () => {
+    await service.createConversation('KB Auto Digest', '/tmp/kb-auto-digest');
+    const hash = workspaceHash('/tmp/kb-auto-digest');
+    expect(await service.getWorkspaceKbAutoDigest(hash)).toBe(false);
+    await service.setWorkspaceKbAutoDigest(hash, true);
+    expect(await service.getWorkspaceKbAutoDigest(hash)).toBe(true);
+    // Unknown workspaces → null.
+    expect(await service.setWorkspaceKbAutoDigest('nopehash', true)).toBeNull();
   });
 });
 
@@ -1117,7 +1105,7 @@ describe('getWorkspaceKbPointer', () => {
     expect(pointer).toContain('Workspace knowledge base is available at');
     expect(pointer).toContain(hash);
     expect(pointer).toContain('knowledge');
-    expect(pointer).toContain('state.json');
+    expect(pointer).toContain('state.db');
     expect(pointer).toContain('entries/');
     expect(pointer!.startsWith('[')).toBe(true);
     expect(pointer!.endsWith(']')).toBe(true);

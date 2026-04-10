@@ -323,7 +323,6 @@ describe('passthroughHandler', () => {
     expect(result.text).toContain('# Hello');
     expect(result.text).toContain('Body text.');
     expect(result.mediaFiles).toEqual([]);
-    expect(result.metadata?.truncated).toBe(false);
   });
 
   test('wraps non-markdown text in a code fence', async () => {
@@ -337,7 +336,7 @@ describe('passthroughHandler', () => {
     expect(result.text).toContain('```json\nconst x = 1;\n```');
   });
 
-  test('truncates oversized text files with a marker', async () => {
+  test('preserves full content of large text files', async () => {
     const MAX = 200 * 1024;
     const big = Buffer.alloc(MAX + 500, 0x61); // 'a' repeated
     const result = await passthroughHandler({
@@ -346,8 +345,8 @@ describe('passthroughHandler', () => {
       mimeType: 'text/plain',
       outDir,
     });
-    expect(result.metadata?.truncated).toBe(true);
-    expect(result.text).toMatch(/Truncated at/);
+    expect(result.text).not.toMatch(/Truncated/);
+    expect(result.metadata?.byteLength).toBe(MAX + 500);
   });
 
   test('copies image files into media/ and embeds a reference', async () => {

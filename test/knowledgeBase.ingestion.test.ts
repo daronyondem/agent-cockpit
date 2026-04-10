@@ -82,8 +82,9 @@ describe('enqueueUpload', () => {
 
     // Wait for background conversion to finish, then inspect state.
     await ingestion.waitForIdle(hash);
-    const state = await chatService.getKbState(hash);
-    expect(state?.raw[result.entry.rawId].status).toBe('ingested');
+    const state = await chatService.getKbStateSnapshot(hash);
+    const entry = state?.raw.find((r) => r.rawId === result.entry.rawId);
+    expect(entry?.status).toBe('ingested');
 
     // Converted output exists with text.md + meta.json.
     const outDir = path.join(chatService.getKbConvertedDir(hash), result.entry.rawId);
@@ -107,7 +108,7 @@ describe('enqueueUpload', () => {
     }
   });
 
-  test('dedupes identical content without creating a second entry', async () => {
+  test('dedupes identical content: reuses rawId and adds a second location when filename differs', async () => {
     const buf = Buffer.from('duplicate me');
     const first = await ingestion.enqueueUpload(hash, {
       buffer: buf,
@@ -118,14 +119,37 @@ describe('enqueueUpload', () => {
 
     const second = await ingestion.enqueueUpload(hash, {
       buffer: buf,
-      filename: 'b.txt', // different filename, same content → same rawId
+      filename: 'b.txt', // different filename, same content → same rawId, new location
       mimeType: 'text/plain',
     });
     expect(second.deduped).toBe(true);
+    expect(second.addedLocation).toBe(true);
     expect(second.entry.rawId).toBe(first.entry.rawId);
 
-    const state = await chatService.getKbState(hash);
-    expect(Object.keys(state!.raw)).toHaveLength(1);
+    const state = await chatService.getKbStateSnapshot(hash);
+    // Exactly one raw row; two location rows (a.txt + b.txt in root).
+    expect(state!.counters.rawTotal).toBe(1);
+    expect(state!.raw).toHaveLength(2);
+    const names = state!.raw.map((r) => r.filename).sort();
+    expect(names).toEqual(['a.txt', 'b.txt']);
+  });
+
+  test('exact dedup (same folder + filename) is a no-op with deduped: true, addedLocation: false', async () => {
+    const buf = Buffer.from('exact dup');
+    await ingestion.enqueueUpload(hash, {
+      buffer: buf,
+      filename: 'c.txt',
+      mimeType: 'text/plain',
+    });
+    await ingestion.waitForIdle(hash);
+
+    const again = await ingestion.enqueueUpload(hash, {
+      buffer: buf,
+      filename: 'c.txt',
+      mimeType: 'text/plain',
+    });
+    expect(again.deduped).toBe(true);
+    expect(again.addedLocation).toBe(false);
   });
 
   test('marks unsupported file types as failed with a clear message', async () => {
@@ -135,10 +159,10 @@ describe('enqueueUpload', () => {
       mimeType: 'application/octet-stream',
     });
     await ingestion.waitForIdle(hash);
-    const state = await chatService.getKbState(hash);
-    const entry = state?.raw[result.entry.rawId];
+    const state = await chatService.getKbStateSnapshot(hash);
+    const entry = state?.raw.find((r) => r.rawId === result.entry.rawId);
     expect(entry?.status).toBe('failed');
-    expect(entry?.error || '').toMatch(/Unsupported file type/);
+    expect(entry?.errorMessage || '').toMatch(/Unsupported file type/);
   });
 });
 
@@ -161,12 +185,13 @@ describe('deleteRaw', () => {
     expect(removed).toBe(true);
     expect(fs.existsSync(rawPath)).toBe(false);
     expect(fs.existsSync(convertedDir)).toBe(false);
-    const state = await chatService.getKbState(hash);
-    expect(state?.raw[res.entry.rawId]).toBeUndefined();
+    const state = await chatService.getKbStateSnapshot(hash);
+    expect(state?.raw.find((r) => r.rawId === res.entry.rawId)).toBeUndefined();
+    expect(state?.counters.rawTotal).toBe(0);
 
-    // One kb_state_update emitted for the delete.
-    expect(emitted).toHaveLength(1);
-    expect(emitted[0].frame.changed.raw).toContain(res.entry.rawId);
+    // At least one kb_state_update emitted for the delete.
+    expect(emitted.length).toBeGreaterThanOrEqual(1);
+    expect(emitted.some((e) => (e.frame.changed.raw || []).includes(res.entry.rawId))).toBe(true);
   });
 
   test('returns false for an unknown rawId', async () => {

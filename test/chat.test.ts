@@ -2537,9 +2537,10 @@ describe('GET /workspaces/:hash/kb', () => {
     expect(res.body.enabled).toBe(false);
     expect(res.body.state).toBeTruthy();
     expect(res.body.state.version).toBe(1);
-    expect(res.body.state.raw).toEqual({});
-    expect(res.body.state.entries).toEqual({});
-    expect(res.body.state.synthesis.status).toBe('empty');
+    expect(res.body.state.raw).toEqual([]);
+    expect(res.body.state.folders).toEqual([]);
+    expect(res.body.state.counters.rawTotal).toBe(0);
+    expect(res.body.state.counters.entryCount).toBe(0);
   });
 
   test('returns enabled=true and persists empty state when KB is turned on', async () => {
@@ -2550,7 +2551,9 @@ describe('GET /workspaces/:hash/kb', () => {
     const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/kb`);
     expect(res.status).toBe(200);
     expect(res.body.enabled).toBe(true);
-    expect(res.body.state.raw).toEqual({});
+    expect(res.body.state.raw).toEqual([]);
+    // Root folder is always present once KB is enabled and a DB is opened.
+    expect(res.body.state.folders.some((f: { folderPath: string }) => f.folderPath === '')).toBe(true);
   });
 
   test('returns 404 for unknown workspace', async () => {
@@ -2815,8 +2818,8 @@ describe('POST /workspaces/:hash/kb/raw', () => {
 
     // After a short wait, the entry should be ingested.
     await new Promise((r) => setTimeout(r, 100));
-    const state = await chatService.getKbState(hash);
-    const entry = state?.raw[res.body.entry.rawId];
+    const state = await chatService.getKbStateSnapshot(hash);
+    const entry = state?.raw.find((r) => r.rawId === res.body.entry.rawId);
     expect(entry?.status).toBe('ingested');
   });
 
@@ -2852,10 +2855,10 @@ describe('POST /workspaces/:hash/kb/raw', () => {
     );
     expect(res.status).toBe(202);
     await new Promise((r) => setTimeout(r, 80));
-    const state = await chatService.getKbState(hash);
-    const entry = state?.raw[res.body.entry.rawId];
+    const state = await chatService.getKbStateSnapshot(hash);
+    const entry = state?.raw.find((r) => r.rawId === res.body.entry.rawId);
     expect(entry?.status).toBe('failed');
-    expect(entry?.error || '').toMatch(/Unsupported file type/);
+    expect(entry?.errorMessage || '').toMatch(/Unsupported file type/);
   });
 
   test('400 rejects legacy .doc files before they ever hit the handler', async () => {
@@ -2874,8 +2877,9 @@ describe('POST /workspaces/:hash/kb/raw', () => {
     expect(res.status).toBe(400);
     expect(String(res.body.error || '')).toMatch(/Legacy \.doc format is not supported/);
     // And no raw entry should have been created.
-    const state = await chatService.getKbState(hash);
-    expect(Object.keys(state?.raw || {})).toHaveLength(0);
+    const state = await chatService.getKbStateSnapshot(hash);
+    expect(state?.raw || []).toHaveLength(0);
+    expect(state?.counters.rawTotal).toBe(0);
   });
 
   test('400 rejects .docx uploads with an install hint when pandoc is unavailable', async () => {
@@ -2909,8 +2913,9 @@ describe('POST /workspaces/:hash/kb/raw', () => {
       expect(String(res.body.error || '')).toMatch(/Pandoc/);
       expect(String(res.body.error || '')).toMatch(/pandoc\.org/);
       // And no raw entry should have been created.
-      const state = await chatService.getKbState(hash);
-      expect(Object.keys(state?.raw || {})).toHaveLength(0);
+      const state = await chatService.getKbStateSnapshot(hash);
+      expect(state?.raw || []).toHaveLength(0);
+      expect(state?.counters.rawTotal).toBe(0);
     } finally {
       process.env.PATH = origPath;
       _resetPandocCacheForTests();
@@ -2940,8 +2945,8 @@ describe('DELETE /workspaces/:hash/kb/raw/:rawId', () => {
     expect(del.status).toBe(200);
     expect(del.body.ok).toBe(true);
 
-    const state = await chatService.getKbState(hash);
-    expect(state?.raw[rawId]).toBeUndefined();
+    const state = await chatService.getKbStateSnapshot(hash);
+    expect(state?.raw.find((r) => r.rawId === rawId)).toBeUndefined();
     const rawPath = path.join(chatService.getKbRawDir(hash), `${rawId}.md`);
     expect(fs.existsSync(rawPath)).toBe(false);
   });

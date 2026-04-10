@@ -1,0 +1,434 @@
+# 4. Backend Services
+
+[← Back to index](SPEC.md)
+
+---
+
+## 4.1 ChatService
+
+**File:** `src/services/chatService.ts`
+
+**Constructor:** `new ChatService(appRoot, options)` — sets `baseDir` to `<appRoot>/data/chat`, creates `workspaces/` and `artifacts/` dirs synchronously at startup, initializes in-memory `Map<convId, workspaceHash>` for fast lookup.
+
+### Methods
+
+| Method | Description |
+|--------|-------------|
+| `initialize()` | Runs migration if legacy `conversations/` dir exists, builds convId→workspace lookup map. |
+| `createConversation(title, workingDir, backend, model?, effort?)` | Creates entry in workspace index + empty session-1.json. Falls back to `_defaultWorkspace`. `backend` defaults to the registry's first registered adapter. `model` is the optional model alias to persist. `effort` is the optional adaptive reasoning level; silently downgraded (or dropped) if the chosen model doesn't support it. |
+| `getConversation(id)` | Returns API-compatible object with messages, or `null`. |
+| `listConversations(opts?)` | Scans all workspace indexes. Returns summaries sorted by `lastActivity` desc, each with `workspaceHash` and `workspaceKbEnabled` (defaults to `false` for legacy workspaces). Pass `{ archived: true }` to list only archived; default returns active only. |
+| `renameConversation(id, newTitle)` | Updates title in workspace index. Returns full conversation or `null`. |
+| `archiveConversation(id)` | Sets `archived: true` on conversation entry in workspace index. Returns `true` or `false` if not found. Files remain on disk. |
+| `restoreConversation(id)` | Removes `archived` flag from conversation entry. Returns `true` or `false` if not found. |
+| `deleteConversation(id)` | Removes from index, deletes session folder + artifacts, removes from lookup map. Works on both active and archived conversations. |
+| `updateConversationBackend(convId, backend)` | Updates backend field in workspace index. |
+| `updateConversationModel(convId, model)` | Updates model field in workspace index. Pass `null` to clear. Silently downgrades the stored `effort` when the new model doesn't support the current level, or clears it if the new model has no effort support at all. |
+| `updateConversationEffort(convId, effort)` | Updates effort field in workspace index. Pass `null` to clear. Silently downgrades the requested level to what the conversation's current model supports. |
+| `addMessage(convId, role, content, backend, thinking, toolActivity)` | Appends to active session + updates index metadata. Auto-titles on first user message (session 1 only; post-reset sessions rely on LLM title generation). `thinking` omitted if falsy. `toolActivity` omitted if falsy or empty array. |
+| `updateMessageContent(convId, messageId, newContent)` | Truncates after target message, adds edited content as new message. |
+| `generateAndUpdateTitle(convId, userMessage)` | Generates a new title via the backend adapter's `generateTitle()` and persists it. Returns the new title or `null`. |
+| `resetSession(convId)` | Archives active session (summary, endedAt), creates new session, resets title to "New Chat". Returns `{ conversation, newSessionNumber, archivedSession }`. |
+| `getSessionHistory(convId)` | Returns sessions array with `isCurrent` flag and `summary`. |
+| `getSessionMessages(convId, sessionNumber)` | Reads session file directly. Returns messages or `null`. |
+| `sessionToMarkdown(convId, sessionNumber)` | Exports single session as markdown. |
+| `conversationToMarkdown(convId)` | Exports all sessions as single markdown document. |
+| `getWorkspaceInstructions(hash)` | Returns instructions string, empty string if unset, `null` if workspace not found. |
+| `setWorkspaceInstructions(hash, instructions)` | Saves to workspace index. Returns string or `null`. |
+| `getWorkspaceHashForConv(convId)` | Returns workspace hash or `null`. |
+| `getWorkspaceContext(convId)` | **Synchronous.** Returns the workspace discussion-history pointer text or `null`. Prepended to the user message on new sessions. |
+| `getWorkspaceMemoryPointer(hash)` | Returns a bracketed pointer block telling the CLI where the workspace's `memory/files/` dir lives on disk, or `null` when memory is disabled for the workspace. `mkdir -p`s `memory/files/` so the model never hits ENOENT on a brand-new workspace. Prepended to the user message on new sessions alongside `getWorkspaceContext`. |
+| `saveWorkspaceMemory(hash, snapshot)` | Persists a `MemorySnapshot` to `workspaces/{hash}/memory/`. Only wipes and rewrites `memory/files/claude/` (Claude native captures); `memory/files/notes/` (memory_note writes + session extractions) is preserved across captures. The merged snapshot written to `snapshot.json` combines both directories. Runs legacy migration before writing (any loose files at `memory/files/` root are moved into `claude/`). |
+| `getWorkspaceMemory(hash)` | Loads the stored snapshot, reconciles it with any notes that may have been added since the last CLI capture, and returns the merged view. Returns `null` if neither a stored snapshot nor any notes exist. |
+| `captureWorkspaceMemory(convId, backendId)` | Resolves the workspace for `convId`, invokes the backend adapter's `extractMemory()`, and persists the result via `saveWorkspaceMemory`. Returns the raw adapter snapshot or `null`. Never throws — extraction/save errors are logged. |
+| `addMemoryNoteEntry(hash, { content, source, filenameHint? })` | Writes a single memory entry into `memory/files/notes/` with a timestamped, slug-based filename (`note_<ts>_<slug>.md` or `session_<ts>_<slug>.md` depending on `source`). Calls `_refreshSnapshotIndex` so `getWorkspaceMemory` immediately reflects the write. Returns the relative path (`notes/<name>`). Used by the Memory MCP server handler and the post-session extraction path. |
+| `deleteMemoryEntry(hash, relPath)` | Deletes a single memory entry by its relative path (`claude/<name>` or `notes/<name>`). Validates the path stays inside `memory/files/` (throws on traversal) and refuses non-`.md` files. Rewrites `snapshot.json` on success. Returns `true` if deleted, `false` if the file didn't exist. |
+| `clearWorkspaceMemory(hash)` | Wipes every `.md` under `memory/files/claude/` and `memory/files/notes/`, then rewrites `snapshot.json` to reflect the empty state. Leaves the workspace's `memoryEnabled` flag untouched so the user can keep the feature on and start over. Returns the number of files deleted. Used by the "Clear all memory" button in Workspace Settings → Memory. |
+| `getWorkspaceMemoryEnabled(hash)` | Returns the per-workspace Memory toggle (`WorkspaceIndex.memoryEnabled`). Defaults to `false` for legacy workspaces. |
+| `setWorkspaceMemoryEnabled(hash, enabled)` | Persists the toggle to the workspace index. Returns the new value or `null` if the workspace doesn't exist. |
+| `getWorkspaceKbEnabled(hash)` | Returns the per-workspace Knowledge Base toggle (`WorkspaceIndex.kbEnabled`). Defaults to `false`. |
+| `setWorkspaceKbEnabled(hash, enabled)` | Persists the KB toggle to the workspace index. Returns the new value or `null` if the workspace doesn't exist. Independent of the Memory toggle. |
+| `getKbState(hash)` | Reads the per-workspace `KbState` from `knowledge/state.json`. Returns `null` when the workspace doesn't exist or when no state file has been written yet. |
+| `saveKbState(hash, state)` | Persists a `KbState` to `knowledge/state.json`, bumping `updatedAt` to now. Creates the `knowledge/` dir on first write. Returns the persisted state. |
+| `getOrInitKbState(hash)` | Returns the workspace KB state, creating and persisting an empty scaffold on first call for an enabled workspace. Returns an in-memory empty scaffold (not persisted) for disabled workspaces so the UI can render the disabled state without polluting disk. Returns `null` for unknown workspaces. |
+| `getWorkspaceKbPointer(hash)` | Returns a bracketed pointer block telling the CLI where the workspace's `knowledge/` dir lives on disk, or `null` when KB is disabled. `mkdir -p`s `knowledge/entries/` so the CLI never hits ENOENT on a brand-new enabled workspace. Prepended to the user message on new sessions alongside the discussion-history and memory pointers. |
+| `getKbRawDir(hash)` / `getKbConvertedDir(hash)` / `getKbEntriesDir(hash)` / `getKbSynthesisDir(hash)` | Public path getters exposing the per-workspace KB subdirectories (synchronous, no I/O). Used by `KbIngestionService` and the chat route handlers so they don't need to recompute workspace paths. |
+| `getKbRawFilePath(hash, rawId)` | Async helper that looks up the stored `rawId` in `state.json` and returns the absolute path to `raw/<rawId>.<ext>` (using the persisted extension), or `null` if the entry or workspace doesn't exist. Powers `GET /workspaces/:hash/kb/raw/:rawId`. |
+| `searchConversations(query, opts?)` | Case-insensitive: checks title/lastMessage first, then deep-searches session files. Respects `{ archived }` filter same as `listConversations`. |
+| `getSettings()` | Returns settings from disk or defaults. |
+| `saveSettings(settings)` | Writes settings to disk. |
+
+All methods are `async` except `getWorkspaceContext()`. `getWorkspaceMemoryPointer()` is `async` so it can `mkdir -p` the memory dir on first access.
+
+### Workspace Context Injection
+
+When a new CLI session starts, the router prepends up to three bracketed pointer blocks to the outgoing user message (not stored in the conversation's message list). The first is always present; the second is added only when Memory is enabled for the workspace; the third is added only when Knowledge Base is enabled for the workspace.
+
+```
+[Workspace discussion history is available at {abs_workspace_path}/
+Read index.json for all past and current conversations in this workspace with per-session summaries.
+Each conversation subfolder contains session-N.json files with full message histories.
+When the user references previous work, decisions, or discussions, consult the relevant session files for context.]
+
+[Workspace memory is available at {abs_workspace_path}/memory/files/
+Contains .md files with YAML frontmatter (type, name, description) followed by body text.
+Read these when the user references preferences, feedback, decisions, project context, or prior work style.]
+
+[Workspace knowledge base is available at {abs_workspace_path}/knowledge/
+- state.json: pipeline state (raw uploads, digested entries, synthesis status).
+- entries/*.md: digested knowledge entries with YAML frontmatter (title, tags, source).
+- synthesis/*.md: cross-entry synthesis (created by the Dreaming stage).
+Read these when the user references documents they've uploaded, domain knowledge, or asks questions the digested entries may cover.]
+```
+
+These prefixes are **only added on new sessions**. On resumed sessions the CLI already has them in its conversation history from the original first user message, so the pointers remain visible to the model across `--resume` without re-injection. The memory pointer is produced by `chatService.getWorkspaceMemoryPointer(hash)`, which returns `null` when memory is disabled and otherwise `mkdir -p`s `memory/files/` before returning so the model never hits ENOENT on a brand-new workspace. The KB pointer is produced by `chatService.getWorkspaceKbPointer(hash)` with the same "return null when disabled / `mkdir -p` when enabled" contract, targeting `knowledge/entries/`.
+
+### Workspace Memory
+
+CLI backends may have their own memory systems (e.g. Claude Code stores memory under `~/.claude/projects/{sanitized}/memory/`). Agent Cockpit captures that memory at the **workspace** level so it survives CLI switches, session resets, and fresh conversations. Non-Claude CLIs that don't have a native memory system instead write memory via an MCP tool (`memory_note`) that the cockpit exposes to them — see **Memory MCP Server** below.
+
+Memory is **opt-in per workspace** via a toggle stored on `WorkspaceIndex.memoryEnabled`. When the toggle is off, every code path that would read or write memory (capture, watcher, injection, MCP addendum) is skipped, and the memory store stays inert. Toggling is done via the workspace Settings modal (Instructions + Memory tabs).
+
+**On-disk layout:** `memory/files/` is split into two subdirectories that correspond to the two write paths:
+- `memory/files/claude/` — Claude Code native captures. Wiped and rewritten every time `saveWorkspaceMemory` is called, so the directory always mirrors the current state of the CLI's extraction output.
+- `memory/files/notes/` — Entries written via the `memory_note` MCP tool and by post-session extraction. Preserved across captures. Each file has a timestamped, slug-based name (`note_<ts>_<slug>.md` or `session_<ts>_<slug>.md`).
+The merged snapshot (`memory/snapshot.json`) combines both directories so callers of `getWorkspaceMemory(hash)` see a single file list with a `source` field (`cli-capture | memory-note | session-extraction`) on each entry.
+
+**Capture trigger (Claude Code):** On `POST /conversations/:id/reset`, after the session is archived, the router calls `chatService.captureWorkspaceMemory(convId, endingBackend)` — gated on `getWorkspaceMemoryEnabled(hash)`. The ending backend's `extractMemory(workspacePath)` is invoked and the resulting `MemorySnapshot` is persisted via `saveWorkspaceMemory` (which only wipes the `claude/` subtree, preserving notes). Capture is best-effort — extraction or persistence errors are logged and never block the reset.
+
+**Post-session extraction (all backends):** After the same reset, the router additionally calls `memoryMcp.extractMemoryFromSession({ workspaceHash, conversationId, messages })` with the pre-reset transcript for every backend (including Claude Code). This spawns the globally-configured Memory CLI via `runOneShot` with a prompt that lists existing memory entries (for dedup context) and asks the CLI to extract any new durable memories. The CLI is expected to reply with either `NONE` or one or more frontmatter markdown entries separated by `===` delimiters. Each new entry is written to `notes/` via `addMemoryNoteEntry(hash, { source: 'session-extraction', ... })`. Claude Code still receives its native `captureWorkspaceMemory` first so explicit `#` saves are mirrored to `claude/`; extraction runs on top to catch incidental durable facts mentioned conversationally. This path is best-effort and swallows all errors.
+
+**Real-time capture (MemoryWatcher):** Session-reset capture misses memories written during long sessions if the browser is closed before the user resets. To close that gap, `src/services/memoryWatcher.ts` wraps `fs.watch()` on the backend's memory directory and re-captures into workspace storage whenever a `.md` file changes. The router (`createChatRouter`) owns one `MemoryWatcher` instance. When a message is sent and a WebSocket is connected for the conversation, the router calls `adapter.getMemoryDir(workingDir)`; if a directory is returned, `memoryWatcher.watch(convId, memDir, onChange)` is invoked alongside `processStream`. The `onChange` handler calls `chatService.captureWorkspaceMemory(convId, backendId)` — the same code path as session-reset capture — so there is a single write path into workspace memory storage. Change events are debounced (500ms default) to collapse bursts from Claude Code's extraction agent into a single re-snapshot. Non-`.md` files are ignored. The watcher is scoped to a processStream's lifecycle: it is unwatched in `processStream`'s `onDone` callback, in the `processStream().catch` branch, on `DELETE /conversations/:id`, on `PATCH /conversations/:id/archive`, and via `memoryWatcher.unwatchAll()` in `shutdown()`.
+
+**`memory_update` WebSocket frame:** After each successful re-capture, the router emits a lightweight `memory_update` `StreamEvent` over the active conversation's WebSocket: `{ type: 'memory_update', capturedAt, fileCount, changedFiles }`. `changedFiles` is computed by maintaining a per-conversation `Map<convId, Map<filename, fingerprint>>` in the router (`memoryFingerprints`); fingerprints are a cheap `length:hash` of the first 256 chars of file content (djb2). The diff returns any filename whose fingerprint changed or didn't exist in the previous frame. The map is cleared in every unwatch path (`onDone`, `.catch`, delete, archive, shutdown) so a re-watched conversation starts fresh and reports all files as changed on the first capture. The frame is only sent when the WebSocket is currently connected — if not, the snapshot is still persisted but no frame fires.
+
+**Memory panel UI:** The frontend dispatcher (`public/js/streaming.js`) handles `memory_update` by injecting a synthetic `system` message with `kind: 'memory_update'` into `state.chatActiveConv.messages` (`chatAppendMemoryUpdateMessage`), then triggering a normal `chatRenderMessages()` rebuild. Because the message lives in the conversation's message array, it survives every subsequent re-render (unlike a transient appended DOM node, which would be wiped by the next `innerHTML` reset). The synthetic message is rendered by `chatRenderMemoryUpdateMessage` in `public/js/rendering.js` as a regular chat-msg bubble using the Agent Cockpit logo (`logo-small.svg`) as the avatar; the body is a clickable card showing how many files changed and a preview of the changed filenames. Synthetic messages are client-side only — they are not persisted to backend session files and do not survive a page reload or conversation switch. Clicking the card opens the read-only memory panel modal (`public/js/memory.js → chatOpenMemoryPanel`), which fetches `GET /workspaces/:hash/memory` via raw `fetch` (so a 404 can be treated as the "no snapshot yet" empty state rather than an exception). The `workspaceHash` field is included on the `Conversation` API response. The panel groups files by type (user / feedback / project / reference / other) and lets the user expand each file to see the raw `.md` content. The panel has a Refresh button that re-fetches the snapshot. No editing — the panel is strictly read-only.
+
+**Read access (pointer, not dump):** On `POST /conversations/:id/message` for a new session, the router calls `chatService.getWorkspaceMemoryPointer(hash)` and prepends the returned bracketed block to the outgoing user message alongside the existing workspace discussion-history pointer from `getWorkspaceContext(convId)`. The pointer is a 3-line text block that names the absolute path to `memory/files/` and tells the CLI to read its `.md` files when the user references preferences, feedback, decisions, project context, or prior work style. Gated on `getWorkspaceMemoryEnabled(hash)`: when the toggle is off, the pointer is skipped entirely. The memory **content** is never serialized into the system prompt — the CLI reads the files on demand via its own file tools, so (a) resumed sessions keep access because the pointer lives in the CLI's conversation history from the first user message, (b) mid-session additions (notes written from another tab via `memory_note`) are visible on the very next turn because each read fetches fresh content, and (c) the static token cost per spawn is bounded by the pointer length rather than the memory size. For every backend (Claude Code included), an additional **Memory MCP addendum** is appended to the system prompt that teaches the CLI to call the `memory_note` MCP tool when it encounters durable facts — see the Memory MCP Server subsection below.
+
+### Memory MCP Server
+
+**File:** `src/services/memoryMcp/index.ts` (router + factory) and `src/services/memoryMcp/stub.cjs` (stdio shim).
+
+Exposes a `memory_note` MCP tool to every CLI backend so they can persist durable memory into workspace storage. Kiro has no native memory system; Claude Code does (via `#`) but gets `memory_note` too, so incidental durable facts mentioned conversationally are still captured.
+
+**Architecture:**
+1. **Stub (`stub.cjs`)** — A dependency-free CommonJS Node script that implements the minimal MCP protocol (`initialize`, `tools/list`, `tools/call`) over stdio. It exposes exactly one tool — `memory_note` with `{ content, type?, tags? }` — and forwards `tools/call` invocations to Agent Cockpit's HTTP endpoint over localhost via `X-Memory-Token`. The stub is spawned by the CLI's MCP host (Kiro's ACP `mcpServers` field, or Claude Code's `--mcp-config` flag) as `node <stub.cjs>` with `MEMORY_TOKEN` and `MEMORY_ENDPOINT` in its env.
+
+2. **Session registry** — `createMemoryMcpServer` maintains an in-memory `Map<token, { conversationId, workspaceHash, createdAt }>` and a reverse `Map<convId, token>`. `issueMemoryMcpSession(convId, hash)` is **idempotent per conversation**: if a token is already cached for the same `{convId, workspaceHash}` pair, it is returned unchanged; otherwise a fresh 24-byte hex token is minted and stored. Idempotency is load-bearing — the chat route calls this on every message, but the MCP stub is only spawned once per CLI session and captures its bearer token from its spawn-time env forever. Minting a fresh token on every message would revoke the live token the still-running stub is holding, causing every subsequent `memory_note` HTTP call to fail with `401 Invalid or missing memory token`. Token rotation only happens at real lifetime boundaries: `revokeMemoryMcpSession(convId)` is called on session reset, conversation delete, and workspace-hash change.
+
+3. **HTTP endpoint** — `POST /api/chat/mcp/memory/notes` (mounted under the chat router at `/mcp/memory/notes`). The handler:
+   - Validates `X-Memory-Token` against the session registry (`401` on mismatch)
+   - Enforces `getWorkspaceMemoryEnabled(hash)` (`403` if disabled)
+   - Loads the current merged snapshot for dedup context
+   - Resolves the **Memory CLI** from `Settings.memory.cliBackend` (falling back to `settings.defaultBackend`)
+   - Calls the adapter's `runOneShot(prompt, { model, effort, timeoutMs: 90s })` with a prompt template that lists existing entries and asks the CLI to reply with either `SKIP: <filename>` (duplicate) or a single frontmatter markdown document
+   - On SKIP, returns `{ ok, skipped }`. Otherwise writes the entry via `addMemoryNoteEntry(hash, { content, source: 'memory-note', filenameHint })` and emits a `memory_update` WS frame to any active stream in the same conversation.
+
+4. **Wiring into backends** — When a message is sent for a memory-enabled workspace, the chat route (`src/routes/chat.ts`) calls `memoryMcp.issueMemoryMcpSession` and passes the resulting array as `mcpServers` on `SendMessageOptions`. `KiroAdapter` forwards it to ACP's `session/new` and `session/load` (env as an array of `{name, value}` pairs per the ACP spec). `ClaudeCodeAdapter` transforms the array into Claude Code's `--mcp-config` JSON shape via `mcpServersToClaudeConfigJson` (env as a plain `Record<string, string>`, keyed by server name) and passes it as a JSON string argument. Both paths spawn the same `stub.cjs` with the same env vars.
+
+5. **Memory CLI helper** — `BaseBackendAdapter.runOneShot(prompt, options?)` is the cross-backend primitive used by the MCP handler and the post-session extraction path. The default base class implementation throws; `ClaudeCodeAdapter` overrides it with `execFile('claude', ['--print', '-p', prompt, '--model', ...])` and `KiroAdapter` with `execFile('kiro-cli', ['chat', '--no-interactive', '--trust-all-tools', prompt])`. Both respect a 60-90s hard timeout and throw a typed error on non-zero exit. **Important:** all `execFile` calls close stdin immediately via `child.stdin?.end()` to prevent the Claude CLI from emitting a "no stdin data received" warning that pollutes stderr.
+
+**Claude Code path resolution:** `resolveClaudeMemoryDir(workspacePath)` first tries the exact sanitized match (`/workspace/path` → `-workspace-path`) and falls back to scanning `~/.claude/projects/` for directories whose name starts with the first 200 sanitized chars — this handles the hashed-suffix case Claude Code uses for long paths, where Bun's hash can't be reproduced in Node. The `HOME` env var is preferred over `os.homedir()` so tests can sandbox the lookup. `ClaudeCodeAdapter.getMemoryDir(workspacePath)` exposes this same path resolution (wrapped with `resolveCanonicalWorkspacePath` for worktrees) as a pure function the `MemoryWatcher` can call without reading the directory contents.
+
+**Worktree canonicalization:** Before the path lookup, `ClaudeCodeAdapter.extractMemory` and `getMemoryDir` both call `resolveCanonicalWorkspacePath(workspacePath)`, a pure-filesystem helper that detects git worktrees by looking for a `.git` **file** (not directory) containing a `gitdir:` pointer. When a worktree is detected, it reads the `commondir` file inside the worktree's metadata dir to locate the main repo's `.git` directory, and returns its parent as the canonical workspace path. This ensures all worktrees of one repo share a single memory store. Non-git workspaces (no `.git` entry) and main repos (`.git` is a directory) pass through unchanged, as do any worktrees whose metadata is malformed or whose resolved main repo no longer exists.
+
+**`MemorySnapshot` shape:**
+```typescript
+{
+  capturedAt: string,        // ISO 8601
+  sourceBackend: string,     // e.g. 'claude-code'
+  sourcePath: string | null, // absolute path the snapshot was read from
+  index: string,             // raw contents of source MEMORY.md (may be '')
+  files: Array<{
+    filename: string,
+    name: string | null,         // from YAML frontmatter
+    description: string | null,  // from YAML frontmatter
+    type: 'user' | 'feedback' | 'project' | 'reference' | 'unknown',
+    content: string              // raw .md (frontmatter + body)
+  }>
+}
+```
+
+### Workspace Knowledge Base
+
+Per-workspace **Knowledge Base** gives each workspace a curated store of documents the CLI can consult on demand. The feature is **opt-in per workspace** via `WorkspaceIndex.kbEnabled` (defaults to `false`) and is independent of the Memory toggle — enabling one does not enable the other. When the toggle is off, every KB code path (pointer injection, pipeline, UI browser) short-circuits and the `knowledge/` directory is never created on disk.
+
+The feature is delivered across five sequential PRs. **PR 1** landed the storage layer, types, settings plumbing, feature toggles, and system-prompt pointer. **PR 2** added the ingestion stage: per-format handlers, background conversion, the upload endpoint, and the KB Browser UI for uploading/listing/deleting raw files. **PR 3** (current) rewrites the metadata layer as SQLite (`knowledge/state.db`), introduces virtual folders with multi-location (Option B) ref-counted deletes, adds the per-raw digestion pipeline with its own CLI, an auto-digest toggle, a pending-delete state, a batch "Digest All Pending" runner, and the Entries tab in the KB Browser. Later phases add: dreaming / cross-entry synthesis via the Dreaming CLI (PR 4), and the `knowledge_search` MCP tool (PR 5).
+
+**Pipeline stages:**
+1. **Ingestion** — Our code. Accepts a raw upload, stores it under `knowledge/raw/<rawId>.<ext>`, extracts text + media into `knowledge/converted/<rawId>/` via format-specific handlers. LibreOffice is used as an opt-in helper for PPTX slide rasterization when `Settings.knowledgeBase.convertSlidesToImages` is true.
+2. **Digestion** (PR 3 — active) — Per-raw. Spawns the Digestion CLI (`Settings.knowledgeBase.digestionCliBackend`) one-shot against each converted raw file with a prompt that pastes in `text.md` + the converted-file path so the multimodal CLI can follow links into `converted/<rawId>/pages/page-NNNN.png` etc. Produces one or more entry documents (YAML frontmatter + markdown body) which are parsed, slug-deduped, written to `knowledge/entries/<entryId>/entry.md`, and indexed in the `entries` + `entry_tags` SQLite tables.
+3. **Dreaming** — Cross-entry, manual trigger (PR 4, not yet implemented). Will spawn the Dreaming CLI (`Settings.knowledgeBase.dreamingCliBackend`) with the current entry set and ask it to produce synthesis artifacts under `knowledge/synthesis/`, tracking lineage in `synthesis/manifest.json`.
+
+Both active stages run **serialized per workspace** — the KB pipeline holds at most one in-flight CLI invocation per workspace hash on a shared FIFO queue (`Map<hash, Promise<unknown>>`). Ingestion and digestion share the same queue, so a background digest cannot overlap with a fresh upload's conversion handler on the same store.
+
+**SQLite layer** (`src/services/knowledgeBase/db.ts`): Each workspace owns one `knowledge/state.db` (better-sqlite3, WAL mode, `foreign_keys = ON`). The `KbDatabase` class is the only code allowed to talk to the DB — everything else goes through it. Schema:
+- **`meta`** — `{ schema_version, created_at }` key/value store. Schema is versioned via `KB_DB_SCHEMA_VERSION` and bumped on destructive migrations.
+- **`raw`** — one row per content-addressed raw file: `{ raw_id, sha256, status, byte_length, mime_type, handler, uploaded_at, digested_at, error_class, error_message, metadata_json }`. Indexed on `status` and `sha256` (the dedupe lookup key).
+- **`folders`** — virtual folder tree keyed on `folder_path` (root is the empty string `''`, always present after `_ensureRootFolder`). Folders are purely a metadata construct — no on-disk directories are created.
+- **`raw_locations`** — `(raw_id, folder_path, filename)` junction table. Same `raw_id` can live in multiple folders (Option B multi-location) so uploading the same bytes under a different name or in a different folder doesn't duplicate the raw file; it just adds a location row. `ON DELETE CASCADE` from `raw` and `ON DELETE RESTRICT` from `folders` so the orchestrator has to explicitly empty a folder before dropping it.
+- **`entries`** — digested entry metadata: `{ entry_id, raw_id, title, slug, summary, schema_version, stale_schema, digested_at }`. `entry_id` is stable across redigests (format: `<rawId>-<slug>[-<n>]`). Cascades on raw delete. `stale_schema` is set when the current `entrySchemaVersion` is newer than the row's, so the UI can flag old entries for re-digestion.
+- **`entry_tags`** — `(entry_id, tag)` many-to-many, cascades on entry delete.
+
+All writes go through prepared statements. Folder ops use `transaction()` wrappers so rename/cascade delete roll back atomically. Entry inserts also run in a transaction so the row and its tags land together. `normalizeFolderPath` strips leading/trailing slashes, collapses repeated slashes, rejects `..` / control chars / empty segments / segments longer than 128 chars / total paths longer than 4096 chars, and returns `''` for root — called from every DB method that touches a folder path so the rules live in one place.
+
+**Migration from Phase 1/2 state.json**: `openKbDatabase({ dbPath, legacyJsonPath, rawDir })` handles the one-shot migration:
+1. If `state.db` already exists → open and return (idempotent).
+2. Else if `state.json` exists → open a fresh DB, read the legacy JSON, **re-hash every raw file from disk** (the legacy format only kept the 16-char `rawId`; the DB needs the full `sha256` to dedupe), insert `raw` + `raw_locations` rows in one transaction, snap any `ingesting`/`digesting` row to `failed` (those states mean the server died mid-run), and rename the old JSON to `state.json.migrated` as a one-release safety copy.
+3. Else → open a fresh DB with the empty schema + root folder only.
+
+Files missing on disk during migration are still inserted with `sha256 = rawId` and a warning log — we'd rather surface the broken row in the UI than silently drop it.
+
+**`KbState` shape** surfaced by `GET /kb` (snapshot assembled on every read from the DB, not persisted separately):
+```typescript
+{
+  version: number,              // DB schema version from meta
+  entrySchemaVersion: number,   // KB_ENTRY_SCHEMA_VERSION from digest.ts
+  autoDigest: boolean,          // mirrors WorkspaceIndex.kbAutoDigest
+  counters: {                   // workspace totals for header badges
+    rawTotal: number,
+    rawByStatus: Record<KbRawStatus, number>,
+    entryCount: number,
+    pendingCount: number,       // ingested + pending-delete
+    folderCount: number,
+  },
+  folders: KbFolder[],          // full flat folder tree sorted by folderPath
+  raw: KbRawEntry[],            // ONE PAGE of the focused folder (not workspace-wide)
+  updatedAt: string,
+}
+```
+`KbRawStatus` is `'ingesting' | 'ingested' | 'digesting' | 'digested' | 'failed' | 'pending-delete'`. `pending-delete` is set when the last location of a raw file is removed while auto-digest is off — the raw row survives until "Digest All Pending" runs and decides whether to digest-then-purge or just purge. `KbErrorClass` is `'timeout' | 'cli_error' | 'malformed_output' | 'schema_rejection' | 'unknown'`, stored on the raw row alongside the full `errorMessage` so the UI can surface what actually went wrong.
+
+**Feature gating:** `getOrInitKbDb(hash)` on `ChatService` is the single entry point — it opens `state.db` (and runs migration) on first access for enabled workspaces, and returns `null` for disabled workspaces so nothing touches disk. `getKbStateSnapshot(hash, { folderPath, limit, offset })` assembles the `KbState` object from the DB for `GET /kb`; it returns an in-memory empty scaffold when KB is disabled. `getWorkspaceKbPointer(hash)` returns `null` when disabled, otherwise `mkdir -p`s `knowledge/entries/` so the CLI can read the directory without hitting ENOENT on a brand-new workspace, and returns a bracketed text block naming the absolute path.
+
+**Pointer injection:** On new sessions, the chat route prepends three bracketed blocks to the outgoing user message — discussion history (always), memory (when enabled), knowledge base (when enabled) — see **Workspace Context Injection** above. KB content itself is never serialized into the system prompt; the CLI reads `state.db` / `entries/<entryId>/entry.md` on demand via its own file tools, so resumed sessions keep access and mid-session additions are visible on the next turn.
+
+**LibreOffice detection** (`src/services/knowledgeBase/libreOffice.ts`): `detectLibreOffice()` runs once at server startup (fire-and-forget, so it never blocks port binding) and caches the result at module level. It uses `which soffice` on POSIX and `where soffice` on Windows — not `soffice --version`, because launching the full binary would spawn a user profile at startup. The cached `LibreOfficeStatus` (`{ available, binaryPath, checkedAt }`) is consulted by the ingestion stage (PR 2) when `Settings.knowledgeBase.convertSlidesToImages` is true; if LibreOffice is unavailable, ingestion logs a warning and falls back to extracting text + speaker notes + embedded media only. The cached status is also exposed via `GET /kb/libreoffice-status` so the global Settings modal can validate the checkbox on click: when the user turns the "Convert PPTX slides to images" box on, the frontend fetches the endpoint, and if `available` is `false` the box auto-reverts to unchecked and a warning appears underneath telling the user to install LibreOffice and restart the cockpit. Detection is cached for the process lifetime, so installing LibreOffice while the server is running requires a restart to pick up.
+
+**Pandoc detection** (`src/services/knowledgeBase/pandoc.ts`): Mirror of the LibreOffice module, with one key difference — pandoc is **required**, not optional, for DOCX ingestion. `detectPandoc()` runs once at server startup, uses `which pandoc` / `where pandoc` to locate the binary, then probes `pandoc --version` (cheap and side-effect-free) to surface the version string in the Settings UI. Result is cached as `PandocStatus` (`{ available, binaryPath, version, checkedAt }`) at module level. The shared `runPandoc(args, { timeoutMs, maxBuffer })` helper throws immediately when the cached status reports unavailable, so callers don't have to re-check. When pandoc is missing, the route layer rejects `.docx` uploads pre-flight with a `400` containing an install hint (`brew`/`apt`/`choco` one-liners and `https://pandoc.org/installing.html`). The frontend surfaces the same state in two places: the KB Browser Raw tab renders a persistent warning banner (`chat-kb-banner-warn`) above the upload zone when `GET /kb/pandoc-status` returns `available: false`, and the global Settings → Knowledge Base tab shows a "Pandoc (required for DOCX ingestion)" status row — green "Detected vX.Y.Z at /path" or red "Not found on PATH" — refreshed on tab open.
+
+**Global settings:** `Settings.knowledgeBase` configures the Digestion and Dreaming CLIs separately (each with its own `cliBackend`, `cliModel`, `cliEffort`) and the `convertSlidesToImages` opt-in. Both CLI roles fall back to `Settings.defaultBackend` when unset. The settings modal exposes cascading backend → model → effort pickers per role, mirroring the existing Memory CLI picker pattern.
+
+**Workspace settings:** The workspace Settings modal has a Knowledge Base tab with a single checkbox (`kbEnabled`). Once enabled, the full-screen **KB Browser** (see Section 6) becomes the upload UI and entry list. Saving the toggle hits `PUT /workspaces/:hash/kb/enabled` and does not touch `memoryEnabled`. A second per-workspace flag — `kbAutoDigest` — is surfaced as a toolbar switch in the KB Browser (not in the settings modal) because it's a day-to-day operational choice, not a setup step.
+
+**Ingestion pipeline:** `KbIngestionService` (`src/services/knowledgeBase/ingestion.ts`) is the single entry point the chat route calls for uploads, folder CRUD, and raw deletion. It is constructed with `{ chatService, emit, digestTrigger? }` where `emit(hash, frame)` is a workspace-scoped WS fan-out callback and `digestTrigger` is a late-bound reference to `KbDigestionService.enqueueDigest` — the circular dependency between the two services is broken via `setDigestTrigger()` after both are constructed.
+
+- **Content addressing** — `sha256 = sha256(buffer)` is the full hash, `rawId = sha256.slice(0, 16)` is the stable URL/filename prefix. Dedupe looks up the **full sha256** in the `raw` table via `getRawBySha`, so renames don't break dedupe and collisions on the short prefix would still be caught (extremely unlikely in practice).
+- **Multi-location (Option B)** — `enqueueUpload(hash, { buffer, filename, mimeType, folderPath })`:
+  - If the sha256 already exists and the same `(folderPath, filename)` tuple is already a location for that raw → no-op, returns `{ deduped: true, addedLocation: false }`.
+  - If the sha256 already exists but `(folderPath, filename)` is new → insert a single `raw_locations` row, re-stage the raw bytes on disk if they're missing (edge case), return `{ deduped: true, addedLocation: true }`. No reconversion.
+  - If the sha256 is new but `(folderPath, filename)` is already taken by a different sha256 → throw `KbLocationConflictError`, which the route maps to `409`. The UI surfaces "a different file already exists at this path — rename and retry".
+  - If both are new → write `raw/<rawId>.<ext>`, insert `raw` + `raw_locations` rows in a single transaction (status `ingesting`), and schedule background conversion.
+- **Per-workspace FIFO queue** — A `Map<hash, Promise<unknown>>` chains every mutation (ingestion, conversion handler, delete, folder rename, digestion) so a single workspace can only have one in-flight operation at a time. Different workspaces run in parallel. The queue is shared with `KbDigestionService` via constructor injection — batch digests and uploads can't interleave. `waitForIdle(hash)` returns when the chain is empty (used by tests and by the delete path to avoid TOCTOU against a still-running handler).
+- **Filename + folder validation** — Filenames can't contain path separators or be empty. Folder segments are validated through `normalizeFolderPath` in `db.ts` — reject `..`, control chars, `>128 chars` per segment, `>4096 chars` total. Validation failures surface as `KbValidationError` → `400`.
+- **Handler dispatch** — `pickHandler(filename, mimeType)` matches on extension first (`.pdf`→pdfHandler, `.docx`→docxHandler, `.pptx`→pptxHandler, passthrough-supported text/image extensions→passthroughHandler), then falls back to a MIME-type map. Unknown files throw `UnsupportedFileTypeError`, caught by the background handler which lands the raw row in `status='failed'` with the error message stored on `raw.error_message` and `errorClass='unknown'`.
+- **Conversion output** — Each handler writes into `converted/<rawId>/`:
+  - `text.md` — extracted text (or image index) with an `# <filename>` header. PDF is a **thin index** of `## Page N` sections each containing a single `![Page N](pages/page-NNNN.png)` link — no extracted prose — because the pipeline now rasterizes pages at 150 DPI and lets the multimodal Digestion CLI read the images directly. DOCX is GFM-flavored markdown from pandoc (tables preserved) with a `## Embedded Media` block when media is present. PPTX has `## Slide N` sections with optional `### Speaker Notes` plus a `## Embedded Media` block. Passthrough preserves markdown as-is or wraps other text in a code fence tagged with the file extension; full content is preserved regardless of file size.
+  - `meta.json` — `{ rawId, handler, extractedAt, metadata }` where `metadata` is handler-specific (`pageCount`, `wordCount`, `slideCount`, `totalSlideCount`, `hiddenSlideCount`, `slidesToImagesRequested`, `slideImagesWarning`, `mediaCount`, …).
+  - `media/` — copied embedded media (DOCX `word/media/`, PPTX `ppt/media/`, passthrough images). Text handlers that find no media omit the directory.
+- **Completion** — On success the orchestrator updates the `raw` row to `status='ingested'`, writes the handler tag to `raw.handler`, stores handler metadata on `raw.metadata_json`, and emits a `kb_state_update` frame. If `kbAutoDigest` is true, the orchestrator fires `digestTrigger(hash, rawId)` to chain a digest job onto the same queue before returning. On failure it sets `status='failed'` with the error class and message, emits the frame, and does not trigger digestion.
+- **Ref-counted delete** — `deleteLocation(hash, rawId, folder, filename)` removes a single `raw_locations` row. If `countLocations(rawId) > 0` after the delete, the raw row stays (another location still references it). If this was the last location, the raw is fully purged via `_purgeRawInternal` (removes raw bytes, converted dir, `entries/<entryId>/` dirs, DB rows) regardless of auto-digest setting.
+- **Full purge** — `purgeRaw(hash, rawId)` (also aliased as the legacy `deleteRaw` for test compatibility) unconditionally drops every `raw_locations` row, the `raw` row, the raw bytes, `converted/<rawId>/`, every entry's `entries/<entryId>/` dir, and the DB rows for the entries + `entry_tags` (cascade). Used by the "full purge" mode of `DELETE /kb/raw/:rawId` (no query string).
+- **Folder CRUD** — `createFolder`, `renameFolder`, `deleteFolder({ cascade })` all run on the same queue and emit `folders: true` frames. `renameFolder` rewrites every `raw_locations` row under the subtree in a single SQLite transaction — no on-disk renames happen because folders are purely virtual. `deleteFolder` with `cascade: true` walks the subtree and removes every location following the same ref-counted purge rules as `deleteLocation` (always full purge on last location), then drops the folder rows deepest-first; without `cascade` it throws if the subtree still contains any locations.
+- **WS fan-out** — The chat router instantiates `KbIngestionService` with an `emit` callback that walks `activeStreams` and, for every conversation whose workspace hash matches the frame, calls the WS module's `send`. The KB Browser is conversation-agnostic though, so it also polls `GET /workspaces/:hash/kb` every 1.5s while open to pick up changes even when no CLI stream is active in the target workspace.
+
+**Digestion pipeline:** `KbDigestionService` (`src/services/knowledgeBase/digest.ts`) handles the `ingested → digested` transition. It is constructed with `{ chatService, backendRegistry, emit }` and shares the per-workspace FIFO queue with the ingestion service so a user upload can't race with a batch digest.
+
+- **Prompt construction** — `buildDigestPrompt` renders a markdown prompt that names the filename + folder context, the handler tag, the MIME type, and the **relative path** to `converted/<rawId>/text.md` (so the CLI can read additional artifacts — slide PNGs, media, etc. — via its own file tools rather than having everything pasted into the prompt). Handler metadata is stringified into the prompt so the CLI knows up front how many pages/slides to expect.
+- **CLI invocation** — The Digestion CLI is resolved from `Settings.knowledgeBase.digestionCliBackend`/`digestionCliModel`/`digestionCliEffort` via `BackendRegistry.get(cliBackend)`. The call uses `runOneShot(prompt, { allowTools: true, cwd: knowledgeDir, timeoutMs: 15 * 60_000 })` so the CLI can follow relative paths inside `knowledge/`. The 15-minute timeout accommodates large documents (e.g. 80+ page rasterized PDFs processed with Opus). Missing/unregistered CLI lands as `errorClass='unknown'`.
+- **Error classification** — Each failure mode lands a specific `KbErrorClass` on the raw row so the UI can render actionable copy:
+  - **`timeout`** — `runOneShot` exceeded its 15-minute timeout.
+  - **`cli_error`** — CLI exited non-zero or threw an adapter error.
+  - **`malformed_output`** — stdout couldn't be parsed into entry-delimited frontmatter + body (also used for a missing `text.md`).
+  - **`schema_rejection`** — parsed entries exist but failed field validation (missing title/slug/summary/tags).
+  - **`unknown`** — catch-all (including "KB disabled mid-run" and config errors).
+- **Entry parsing** — Output is split on `---`-separated entry boundaries. Each chunk is parsed as YAML frontmatter + markdown body and validated against `ParsedEntry` (`title`, `slug`, `summary`, `tags[]`, `body`). The body accumulation loop distinguishes entry-boundary `---` lines from markdown horizontal rules within the body by peeking ahead: when `---` is encountered, the parser scans forward past blank lines and checks whether the next non-blank line matches `title:` (the required first frontmatter field). If it does, the `---` is treated as a new entry boundary; otherwise it is included in the current entry's body as a horizontal rule. The parser is lenient about common CLI output quirks: leading/trailing triple-backtick code fences (e.g. `` ```yaml ... ``` ``) are stripped, preamble prose before the first `---` fence is skipped, and frontmatter keys are lowercased before lookup so `Title:` and `TITLE:` both resolve to `title`. Malformed chunks raise `DigestParseError`, schema violations raise `DigestSchemaError` — both are caught internally and classified. On `malformed_output` or `schema_rejection` failures, the raw CLI output is dumped to `knowledge/digest-debug/<rawId>-<iso>.txt` and the debug path is appended to the error message so the user can inspect exactly what the CLI returned.
+- **Entry serialization** — `stringifyEntry(entry, opts?)` converts a `ParsedEntry` back to YAML frontmatter + markdown body. The frontmatter always includes `title`, `slug`, `summary`, `tags[]`, and `schemaVersion` in a deterministic order. Optional temporal metadata — `uploadedAt` (ISO 8601 from the raw row's `uploaded_at`) and `digestedAt` (ISO 8601 timestamp of the digestion run) — is appended to the frontmatter when provided via `StringifyEntryOptions`. Values containing YAML-special characters (colons, quotes) are auto-quoted.
+- **Entry frontmatter format** — Each `entry.md` on disk has the following YAML frontmatter fields:
+  ```yaml
+  ---
+  title: "Entry Title"
+  slug: entry-title
+  summary: "One-line summary"
+  tags: [tag1, tag2]
+  schemaVersion: 1
+  uploadedAt: "2026-04-10T08:30:00.000Z"
+  digestedAt: "2026-04-10T09:15:00.000Z"
+  ---
+  ```
+  `uploadedAt` records when the raw file was first uploaded; `digestedAt` records when this entry was produced by the Digestion CLI. Both are ISO 8601 strings. These timestamps are informational — they help users and downstream tooling understand the freshness of each entry.
+- **Slug collision handling** — `entryId = <rawId>-<slug>`. If that already exists in the DB (within the same run or from a previous digest of a different raw), the writer appends `-2`, `-3`, … until `entryIdTaken` returns false. Old entries for the same `rawId` are cleared first (`deleteEntriesByRawId`) so redigests replace, not accumulate.
+- **Entry writing** — Each entry is written to `entries/<entryId>/entry.md` (one dir per entry, because later PRs will park supporting files like vector chunks alongside the markdown). The `entries` + `entry_tags` rows are inserted in a single transaction. On any write failure the raw row lands in `failed` and nothing partial is committed.
+- **Completion** — On success the raw row moves to `status='digested'`, `digestedAt` is stamped, `errorClass/errorMessage` are cleared, and a `kb_state_update` frame is emitted with `raw: [rawId]` and `entries: [entryId, …]`.
+- **Pending-delete handling** — When `_runDigest` encounters a `pending-delete` raw it skips the entire CLI pipeline and purges the raw immediately (raw bytes, converted dir, leftover entries, DB rows). The user already deleted the last location — there's nothing to digest. The result carries `purged: true`.
+- **Top-level safety net** — The digest pipeline is wrapped in a top-level try/catch so unexpected errors land as `status='failed'` with `errorClass='unknown'` instead of leaving the raw stuck in `digesting` forever.
+- **Batch mode** — `enqueueBatchDigest(hash)` lists every `ingested` + `pending-delete` raw (`pending-delete` first so purges happen before digestions), chains each one onto the shared queue, and emits a `kb_state_update { batchProgress: { done, total } }` frame after each individual run settles. The "Digest All Pending" button in the KB Browser toolbar uses those frames to drive a live progress counter. Failures inside the batch don't stop the run — they land on their raw row and the loop continues.
+
+**Format handlers (`src/services/knowledgeBase/handlers/`):**
+- **`pdf.ts`** — Rasterizes each PDF page to a 150 DPI PNG using `unpdf`'s `renderPageAsImage` backed by a statically-imported `@napi-rs/canvas`. Files land under `converted/<rawId>/pages/page-NNNN.png` (zero-padded, 1-indexed). `text.md` is a **thin markdown index** — `# <filename>` plus one `## Page N\n\n![Page N](pages/page-NNNN.png)` section per page — deliberately stripped of any extracted text, because the previous pdfjs text path mangled tables and multi-column layouts in the same way mammoth mangled DOCX. The Digestion CLI (multimodal) is expected to follow the image links and reason about layout + tables visually. Per-page render failures are isolated (a single bad page doesn't kill the whole doc) and surfaced as a `_[Failed to rasterize this page.]_` placeholder in the index plus a `failedPages` metadata key. Metadata: `pageCount`, `renderedPageCount`, `rasterDpi` (always 150). Handler tag: `pdf/rasterized`. Media files are the list of rendered page images.
+- **`docx.ts`** — Shells out to `pandoc` via the shared `runPandoc` helper (`--from=docx --to=gfm --extract-media=<outDir>/media --wrap=none <tempDocx>`). Pandoc is the only tool in the stack that preserves semantic tables from OOXML; the previous `mammoth`-based path collapsed tables into flat prose and broke downstream digestion quality. Handler buffers the upload to a temp `.docx`, runs pandoc, flattens pandoc's nested `media/media/` output into a single `media/` dir (rewriting markdown references with collision-safe basenames), and prepends `# <filename>`. Returns `handler: 'docx/pandoc'`. **Pandoc is required** — the route layer rejects `.docx` uploads pre-flight when `detectPandoc()` reports missing. Legacy `.doc` (OLE binary format) is unsupported end-to-end: the route returns a `400` with the message `Legacy .doc format is not supported. Please resave the document as .docx…`.
+- **`pptx.ts`** — Uses `adm-zip` + `fast-xml-parser` (`removeNSPrefix: true`) to walk `ppt/slides/slide*.xml`, `ppt/notesSlides/notesSlide*.xml`, and `ppt/media/`. Writes `## Slide N` blocks with extracted text and optional `### Speaker Notes`. **Hidden slides** (those with `show="0"` on the `<p:sld>` root element) are filtered out during text extraction and the survivors are renumbered 1..N — this is required because LibreOffice's PDF export *also* skips hidden slides when rasterizing, so keeping them in the markdown with their original numbers would drift "Slide N" out of sync with `slides/slide-NNN.png` and attach notes/body to the wrong image. The metadata carries `slideCount` (visible), `totalSlideCount` (visible + hidden), and `hiddenSlideCount`, and a short `> **Note:** X of Y slides in this deck are marked hidden…` line is injected near the top of `text.md` whenever `hiddenSlideCount > 0` so downstream digestion sees the skip. When `convertSlidesToImages` is requested at ingestion time, the handler checks the cached `LibreOfficeStatus`; if unavailable, it records `slideImagesWarning` in metadata and injects a "Slide rasterization note" into `text.md` explaining LibreOffice is missing. When available, it shells out to `soffice --headless --convert-to pdf --outdir <tmp>` and then uses `unpdf`'s `renderPageAsImage` backed by a statically-imported `@napi-rs/canvas` (with a pre-built `CanvasFactory` passed to `getDocumentProxy` so pdfjs's internal auxiliary canvases also go through the native backend) to rasterize each slide into `slides/slide-NNN.png`. Canvas is a regular dependency (not an optional peer) since the same backend powers the new PDF rasterization path — no dynamic-import probe, no "install the optional peer dep" warning branch.
+- **`passthrough.ts`** — Handles text types (`txt, md, json, yaml, csv, tsv, log, xml, html, rst, markdown, htm, yml`) and image types (`png, jpg, jpeg, gif, webp, svg, bmp`). Markdown is inlined verbatim under the filename header; other text gets wrapped in a code fence tagged with the file extension. Full content is preserved regardless of file size — no truncation. Images are copied into `media/` and the text is a single `![filename](media/filename)` reference. Exports `passthroughSupports(filename)` for the dispatcher.
+
+**Multer configuration:** The `POST /kb/raw` route uses `multer({ storage: multer.memoryStorage(), limits: { fileSize: 200 * 1024 * 1024, files: 1 } }).single('file')`. The 200 MB cap is generous enough for real-world PPTX decks and media-heavy PDFs; the separate conversation-attachment endpoint keeps its smaller limit. Memory storage is required because the orchestrator needs to hash the buffer before touching disk (so dedup works and we never write a file the user already has). Multer errors (file-too-large, etc.) are wrapped in a JSON-returning middleware shim so the KB Browser surfaces a useful message instead of an HTML 500 — `LIMIT_FILE_SIZE` becomes `400 { error: "File exceeds the 200 MB upload limit." }`.
+
+### Migration
+
+On first startup after upgrade, `initialize()` detects legacy `conversations/` directory:
+1. Reads all conversation JSON files, groups by workspace
+2. Writes workspace index + session files to `workspaces/{hash}/`
+3. Renames old dirs to `*_backup/`
+
+## 4.2 Backend Adapter System
+
+The CLI backend layer uses a **pluggable adapter pattern**. New CLI tools can be added without modifying routes, chat service, or frontend.
+
+### BaseBackendAdapter (`src/services/backends/base.ts`)
+
+Abstract base class. Every backend must implement:
+- **`get metadata`** — returns `{ id, label, icon, capabilities, models? }` where capabilities: `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans). `models` is an optional array of `{ id, label, family, description?, costTier?, default?, supportedEffortLevels? }` for backends that support model selection. `supportedEffortLevels` is an optional `('low' | 'medium' | 'high' | 'max')[]`; omit it when the model does not support adaptive reasoning effort.
+- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the stream event contract in Section 3. `options` includes `{ sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model?, effort? }`. `conversationId` is the stable conversation ID (does not change on session reset) — used by backends like Kiro that key long-lived processes by conversation. `model` is the model alias or ID to use for this invocation (backends that don't support model selection ignore it). `effort` is the adaptive reasoning level for this turn; backends ignore it when the selected model doesn't declare the requested level in `supportedEffortLevels`.
+- **`generateSummary(messages, fallback)`** — returns a one-line summary string
+- **`generateTitle(userMessage, fallback)`** — returns a short conversation title. Base class provides a default that truncates the user message to 80 chars.
+- **`shutdown()`** — called during server shutdown. Override to kill long-lived processes. No-op by default.
+- **`onSessionReset(conversationId)`** — called when user resets a session. Override to clean up per-conversation state. No-op by default.
+- **`extractMemory(workspacePath)`** — returns a `MemorySnapshot` for the backend's native memory system, or `null` if unsupported / no memory exists. Called by `ChatService.captureWorkspaceMemory` on session reset. Base class returns `null`.
+- **`getMemoryDir(workspacePath)`** — resolves the absolute path to the backend's native memory directory for a workspace, without reading contents. Returns `null` when the backend has no memory system or no memory directory exists yet. Used by the real-time `MemoryWatcher` to know which directory to watch. Subclasses that implement `extractMemory` should also implement this. Base class returns `null`.
+- **`runOneShot(prompt, options?)`** — executes a one-shot LLM call without streaming. Used by the Memory MCP handler, post-session extraction, and the Digestion CLI. Options: `{ model?, effort?, timeoutMs?, allowTools?, cwd? }`. Returns the trimmed stdout. Default base class throws `Error('runOneShot not implemented')`.
+
+### Shared Tool Utilities (`src/services/backends/toolUtils.ts`)
+
+Shared helpers used by all backend adapters. Extracted for cross-adapter reuse — adapters import from here, never from each other.
+
+- `sanitizeSystemPrompt(prompt)` — strips control characters, truncates to 50K max
+- `isApiError(text)` — detects `API Error: NNN` patterns
+- `shortenPath(filePath)` — truncates long paths to `.../{last}/{two}`
+- `extractToolOutcome(toolName, content)` — classifies tool results as success/error/warning
+- `extractToolDetails(block)` — converts Claude Code tool_use blocks into ToolDetail objects
+- `extractUsage(event)` — normalizes usage/cost data into UsageEvent
+
+### BackendRegistry (`src/services/backends/registry.ts`)
+
+- `register(adapter)` — stores by `metadata.id`. First registered becomes default. Validates `instanceof BaseBackendAdapter`.
+- `get(id)` — returns adapter or `null`
+- `list()` — returns metadata array
+- `getDefault()` — returns first registered or `null`
+- `shutdownAll()` — calls `shutdown()` on all registered adapters (used in graceful server shutdown)
+
+### ClaudeCodeAdapter (`src/services/backends/claudeCode.ts`)
+
+**Metadata:** `id: 'claude-code'`, all capabilities enabled. Exposes `models` array with `opus`, `sonnet` (default), `haiku`, `opus[1m]`, and `sonnet[1m]` options using aliases so they auto-resolve to the latest version. Adaptive reasoning effort support (`supportedEffortLevels`):
+- `opus`, `opus[1m]`: `['low', 'medium', 'high', 'max']` — the `max` level is Opus-only
+- `sonnet`, `sonnet[1m]`: `['low', 'medium', 'high']`
+- `haiku`: field omitted (no effort support)
+
+**`sendMessage(message, options)`:**
+- `options`: `{ sessionId, isNewSession, workingDir, systemPrompt, model?, effort? }`
+- Returns `{ stream, abort, sendInput }`
+- `abort()` sends SIGTERM to CLI process
+- `sendInput(text)` writes to stdin (safe after abort)
+- Per-request state: each call creates its own `state` object (no shared mutable state)
+- Guards the `--effort` flag: only forwards it when the model declares the requested level in `supportedEffortLevels`. This protects against stale conversation state after a model swap.
+
+**CLI invocation:**
+```bash
+claude --print \
+  --permission-mode bypassPermissions \
+  --output-format stream-json \
+  --verbose \
+  [--model <alias|id>]              # if model specified (e.g. opus, sonnet, haiku)
+  [--effort <level>]                # if effort specified AND model supports that level
+  [--session-id <uuid>]              # if isNewSession
+  [--append-system-prompt <prompt>]  # if isNewSession and systemPrompt
+  [--resume <uuid>]                  # if not isNewSession
+  -p "<user message>"
+```
+
+**`extractToolDetails(block)`** — parses `tool_use` content blocks into enriched detail objects:
+
+| Tool | Description format | Extra fields |
+|------|-------------------|--------------|
+| `Read` | `Reading \`{path}\`` or `Reading file` | — |
+| `Write` | `Writing \`{path}\`` | `isPlanFile` if path contains `.claude/plans/` |
+| `Edit` | `Editing \`{path}\`` or `Editing file` | — |
+| `Bash` | `input.description`, or `Running: \`{cmd}\`` (truncated 60 chars), or `Running command` | — |
+| `Grep` | `Searching for \`{pattern}\` in {glob}` or `Searching files` | — |
+| `Glob` | `Finding files matching \`{pattern}\`` or `Finding files` | — |
+| `Agent` | Uses `input.description` | `isAgent: true`, `subagentType` (default `'general-purpose'`) |
+| `TodoWrite` | `Updating task list` | — |
+| `WebSearch` | `Searching: \`{query}\`` or `Searching the web` | — |
+| `WebFetch` | `Fetching: {url}` or `Fetching web content` | — |
+| `EnterPlanMode` | `Entering plan mode` | `isPlanMode: true`, `planAction: 'enter'` |
+| `ExitPlanMode` | `Plan ready for approval` | `isPlanMode: true`, `planAction: 'exit'` |
+| `AskUserQuestion` | `Asking a question` | `isQuestion: true`, `questions` array |
+| (unknown) | `Using {name}` | — |
+
+All detail objects include `tool`, `id` (block id or null), and `description`. Long file paths are shortened to `.../{last}/{two}` when >3 segments.
+
+**`extractUsage(event)`** — parses `result` events for usage data. Returns `{ type: 'usage', usage: { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens, costUsd } }` or `null` if no usage data is present. Field mapping: `input_tokens` → `inputTokens`, `output_tokens` → `outputTokens`, `cache_read_input_tokens` → `cacheReadTokens`, `cache_creation_input_tokens` → `cacheWriteTokens`, `cost_usd` → `costUsd`.
+
+**`generateSummary(messages, fallback)`** — spawns `claude --print -p <prompt>` with 30s timeout. Falls back gracefully. Closes stdin immediately via `child.stdin?.end()`.
+
+**`generateTitle(userMessage, fallback)`** — spawns `claude --print -p <prompt>` with 30s timeout to generate a short title (max 60 chars) from the user's first message. Falls back to truncated user message. Closes stdin immediately via `child.stdin?.end()`.
+
+**`runOneShot(prompt, options?)`** — spawns `claude --print` with the given prompt and options. Builds args: `['--print', '-p', prompt, '--model', model]`, plus `--allowedTools '*'` and `--cwd` when `allowTools`/`cwd` are set. Uses `execFile` with `{ timeout: timeoutMs, maxBuffer: 4MB }`. Closes stdin immediately via `child.stdin?.end()` to prevent the CLI's "no stdin data received" warning. Error handling filters the stdin warning from stderr and classifies errors: killed processes report timeout, non-empty stderr is preferred over generic exit codes. Default timeout: 15 minutes for digestion calls.
+
+### KiroAdapter (`src/services/backends/kiro.ts`)
+
+**Metadata:** `id: 'kiro'`, capabilities: `thinking: true, planMode: false, agents: true, toolActivity: true, userQuestions: false, stdinInput: false`. Exposes dynamic `models` array populated from `session/new` response (undefined until first session). Deprecated (`[Deprecated]`) and internal (`[Internal]`) models are filtered out.
+
+**Integration protocol:** ACP (Agent Client Protocol) — JSON-RPC 2.0 over stdin/stdout via `kiro-cli acp`.
+
+**Model selection:** After session setup (`session/new` or `session/load`), calls `session/set_model({ sessionId, modelId })` if `options.model` is set. Non-fatal — continues with default model on failure. Model can be changed mid-session without process restart (unlike Claude Code).
+
+**ACP process lifecycle:** Lazy spawn + idle timeout + transparent recovery.
+- First message → spawn `kiro-cli acp` → `initialize` handshake → `session/new(cwd)` → `[session/set_model]` → `session/prompt`
+- Subsequent messages → reuse process → `[session/set_model]` → `session/prompt`
+- Idle timeout (configurable via `KIRO_ACP_IDLE_TIMEOUT_MS` env var, default 10 min) → kill process
+- Next message after timeout → respawn → `initialize` → `session/load(sessionId, cwd)` → `session/prompt`
+
+**Session mapping:** Agent Cockpit session IDs map to Kiro ACP session IDs via in-memory `sessionMap`. Persisted via `externalSessionId` on `SessionEntry` for server restart resilience.
+
+**Tool name normalization:** Kiro uses lowercase tool names (`read`, `shell`, `delegate`, etc.). The adapter normalizes to Agent Cockpit display names (Read, Bash, Agent, etc.) via `extractKiroToolDetails()`.
+
+**Thinking tool:** Kiro's `thinking` tool is special-cased — output is emitted as `ThinkingEvent` (displayed in thinking UI) rather than `ToolActivityEvent`.
+
+**Permission handling:** All `session/request_permission` messages are auto-approved with `allow_always`.
+
+**Usage tracking:** Kiro's `_kiro.dev/metadata` notifications are parsed for `credits` (accumulated) and `contextUsagePercentage` (snapshot, overwritten each update). These are persisted on the conversation and session `Usage` objects but **excluded from the daily usage ledger** — Kiro's credit-based billing is not comparable with token-based backends. The frontend header displays credits and context % instead of tokens/cost when the conversation backend is `kiro`.
+
+**`generateSummary` / `generateTitle` / `runOneShot`:** Uses `kiro-cli chat --no-interactive --trust-all-tools` for one-shot LLM calls with 30s/60s timeout. Falls back gracefully if kiro-cli is not installed or not authenticated. kiro-cli always emits ANSI colour codes plus a fixed "trust all tools" warning header, a `> ` prompt prefix, and a `▸ Credits: X • Time: Ys` footer — it ignores `NO_COLOR` and `TERM=dumb`. Raw output is therefore routed through `parseKiroChatOutput()` which strips the ANSI escape sequences, the header (via the stable URL-fragment marker), the single leading `> ` prefix, and the credits footer, returning only the answer body. This prevents garbage like `[38;5;141m> [0mAsking about a number` from leaking into conversation titles or Memory MCP note parsing.
+
+### Adding a New Backend
+
+1. Create `src/services/backends/myBackend.ts` extending `BaseBackendAdapter`
+2. Implement `metadata`, `sendMessage()`, `generateSummary()`, and optionally `generateTitle()`, `shutdown()`, `onSessionReset()`
+3. Import shared helpers from `toolUtils.ts` (never import from another adapter)
+4. Register in `server.ts` — no other changes needed
+5. Use the generic `externalSessionId` field on `SessionEntry`/`SendMessageOptions` if the backend manages its own session IDs
+
+## 4.3 UpdateService
+
+**File:** `src/services/updateService.ts`
+
+- `start()` — runs `_checkRemoteVersion()` immediately, then polls every 15 minutes (unref'd interval)
+- `stop()` — clears polling interval
+- `getStatus()` — returns cached `{ localVersion, remoteVersion, updateAvailable, lastCheckAt, lastError, updateInProgress }`
+- `checkNow()` — immediate version check, returns status
+- `triggerUpdate({ hasActiveStreams })` — full update sequence with guards:
+  1. Concurrent guard (`_updateInProgress` flag)
+  2. Active streams guard (refuses if CLI streams active)
+  3. Dirty tree guard (`git status --porcelain`, ignoring `data/`, `.env`, `ecosystem.config.js`, `.DS_Store`, `.claude/`, `coverage/`, `plans/`)
+  4. `git checkout main` (30s timeout)
+  5. `git pull origin main` (60s timeout)
+  6. `npm install` (120s timeout)
+  7. Verify interpreter — reads `ecosystem.config.js` fresh from disk (via `fs.readFileSync`, not `require`, to avoid stale cache), checks the configured interpreter exists. Path-based interpreters (starting with `.` or `/`) are checked on disk; bare commands (e.g. `npx`, `node`) are resolved via `which` on PATH
+  8. Delegates to `_launchRestartScript()` (shared with `restart()` below)
+- `restart({ hasActiveStreams })` — plain server restart (no git pull / npm install / interpreter verification). Applies the same concurrent + active-streams guards as `triggerUpdate()`, then calls `_launchRestartScript()`. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries.
+- `_launchRestartScript()` (private) — writes `data/restart.sh` (sets PATH to `node_modules/.bin`, sleeps 2s, `pm2 delete` + `pm2 start` against `ecosystem.config.js`), then launches it via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. Output logged to `data/update-restart.log`. Shared by `triggerUpdate()` and `restart()`.
+
+Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
+
+- `_checkRemoteVersion()` — `git fetch origin main` + `git show origin/main:package.json`
+- `_isNewer(remote, local)` — three-part numeric semver comparison

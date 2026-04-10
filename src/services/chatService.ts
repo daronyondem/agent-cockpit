@@ -21,7 +21,14 @@ import type {
   MemoryFile,
   EffortLevel,
   KbState,
+  KbCounters,
+  KbRawStatus,
 } from '../types';
+import {
+  openKbDatabase,
+  normalizeFolderPath,
+  KbDatabase,
+} from './knowledgeBase/db';
 
 /**
  * Schema version of the `state.json` envelope itself. Bumped only when
@@ -88,6 +95,12 @@ export class ChatService {
   private _convWorkspaceMap: Map<string, string>;
   private _legacyConversationsDir: string;
   private _legacyArchivesDir: string;
+  /**
+   * Per-workspace KB database cache. Opened on first access (or during
+   * enqueueUpload), reused for the lifetime of the process. Closed via
+   * `closeKbDatabases()` on shutdown.
+   */
+  private _kbDbs: Map<string, KbDatabase> = new Map();
 
   constructor(appRoot: string, options: { defaultWorkspace?: string; backendRegistry?: BackendRegistry } = {}) {
     this.baseDir = path.join(appRoot, 'data', 'chat');
@@ -1293,22 +1306,29 @@ export class ChatService {
   // per-workspace data colocated):
   //
   //   data/chat/workspaces/{hash}/knowledge/
-  //     state.json                       — single source of truth (KbState)
+  //     state.db                         — SQLite index of the KB pipeline state
+  //     state.json.migrated              — legacy state snapshot, kept one release
   //     raw/<rawId>.<ext>                — raw uploads, stored verbatim
   //     converted/<rawId>/...            — ingestion output (text, media, etc.)
-  //     entries/<entryId>.md             — digestion output (YAML frontmatter + body)
+  //     entries/<entryId>/entry.md       — digestion output (YAML frontmatter + body)
   //     synthesis/                       — dreaming output (populated by PR 4)
   //       manifest.json                  — artifact lineage
   //       *.md                           — synthesis layer files
   //
-  // PR 1 only creates/reads `state.json`. The other directories are
-  // created lazily by subsequent PRs as the pipeline stages land.
+  // `state.db` is owned by the `KbDatabase` wrapper in `knowledgeBase/db.ts`.
+  // chatService opens it lazily per workspace and caches the handle for
+  // the life of the process. All KB mutations go through the DB; the
+  // filesystem stores only the actual file bytes.
 
   private _knowledgeDir(hash: string): string {
     return path.join(this._workspaceDir(hash), 'knowledge');
   }
 
-  private _kbStatePath(hash: string): string {
+  private _kbDbPath(hash: string): string {
+    return path.join(this._knowledgeDir(hash), 'state.db');
+  }
+
+  private _kbLegacyStatePath(hash: string): string {
     return path.join(this._knowledgeDir(hash), 'state.json');
   }
 
@@ -1333,38 +1353,77 @@ export class ChatService {
   // can resolve paths without duplicating the directory layout. The layout
   // itself stays centralized here — callers never hardcode `knowledge/raw`
   // etc., they always go through one of these getters.
+  getKbKnowledgeDir(hash: string): string { return this._knowledgeDir(hash); }
   getKbRawDir(hash: string): string { return this._kbRawDir(hash); }
   getKbConvertedDir(hash: string): string { return this._kbConvertedDir(hash); }
   getKbEntriesDir(hash: string): string { return this._kbEntriesDir(hash); }
   getKbSynthesisDir(hash: string): string { return this._kbSynthesisDir(hash); }
 
   /**
+   * Open (or return cached) per-workspace KB database handle. Creates
+   * the `knowledge/` directory on first call and runs the legacy
+   * `state.json → state.db` migration if needed (see `openKbDatabase`).
+   *
+   * Returns `null` when `hash` is falsy. Does NOT check workspace
+   * existence — callers should guard on `_readWorkspaceIndex` first
+   * if they need that behaviour.
+   */
+  getKbDb(hash: string): KbDatabase | null {
+    if (!hash) return null;
+    const cached = this._kbDbs.get(hash);
+    if (cached) return cached;
+    // Ensure parent dirs exist before better-sqlite3 tries to open.
+    fs.mkdirSync(this._knowledgeDir(hash), { recursive: true });
+    fs.mkdirSync(this._kbRawDir(hash), { recursive: true });
+    const db = openKbDatabase({
+      dbPath: this._kbDbPath(hash),
+      legacyJsonPath: this._kbLegacyStatePath(hash),
+      rawDir: this._kbRawDir(hash),
+    });
+    this._kbDbs.set(hash, db);
+    return db;
+  }
+
+  /** Close every cached KB database. Call during graceful shutdown. */
+  closeKbDatabases(): void {
+    for (const [hash, db] of this._kbDbs.entries()) {
+      try {
+        db.close();
+      } catch (err: unknown) {
+        console.warn(
+          `[kb] closeKbDatabases: failed to close ${hash}:`,
+          (err as Error).message,
+        );
+      }
+    }
+    this._kbDbs.clear();
+  }
+
+  /**
    * Read the on-disk path of a staged raw file. Returns `null` when the
    * workspace has no KB state or the rawId isn't known. Used by the HTTP
    * layer to stream raw bytes back for the Raw tab preview.
+   *
+   * The filename used for the extension comes from the first matching
+   * `raw_locations` row — multi-location raws all share the same bytes
+   * on disk under `<rawId>.<ext>`, and the orchestrator always uses the
+   * extension of the first-uploaded location when staging the file.
    */
   async getKbRawFilePath(hash: string, rawId: string): Promise<string | null> {
-    const state = await this.getKbState(hash);
-    const entry = state?.raw[rawId];
-    if (!entry) return null;
-    const ext = path.extname(entry.filename) || '';
+    if (!hash) return null;
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    const db = this.getKbDb(hash);
+    if (!db) return null;
+    const raw = db.getRawById(rawId);
+    if (!raw) return null;
+    const locations = db.listLocations(rawId);
+    // Prefer a named location's extension. When a raw row exists with no
+    // locations (pending-delete state), fall back to an empty extension so
+    // the file is still streamable by rawId.
+    const filename = locations[0]?.filename ?? '';
+    const ext = path.extname(filename) || '';
     return path.join(this._kbRawDir(hash), `${rawId}${ext}`);
-  }
-
-  /** Return a fresh empty `KbState` scaffold for a new workspace. */
-  private _emptyKbState(): KbState {
-    return {
-      version: KB_STATE_VERSION,
-      entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
-      raw: {},
-      entries: {},
-      synthesis: {
-        status: 'empty',
-        lastDreamedAt: null,
-        staleEntryIds: [],
-      },
-      updatedAt: new Date().toISOString(),
-    };
   }
 
   /** Per-workspace KB enable/disable (stored on the workspace index). */
@@ -1383,57 +1442,103 @@ export class ChatService {
   }
 
   /**
-   * Read the per-workspace `KbState` from disk. Returns `null` when the
-   * workspace doesn't exist or when `state.json` has never been written
-   * (e.g. KB enabled but no raw files uploaded yet).
-   */
-  async getKbState(hash: string): Promise<KbState | null> {
-    if (!hash) return null;
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
-    try {
-      const data = await fsp.readFile(this._kbStatePath(hash), 'utf8');
-      return JSON.parse(data) as KbState;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw err;
-    }
-  }
-
-  /**
-   * Persist a `KbState` to disk. Always bumps `updatedAt` to now so
-   * callers don't need to remember. Creates the `knowledge/` dir on
-   * first write.
-   */
-  async saveKbState(hash: string, state: KbState): Promise<KbState> {
-    const dir = this._knowledgeDir(hash);
-    await fsp.mkdir(dir, { recursive: true });
-    const next: KbState = { ...state, updatedAt: new Date().toISOString() };
-    await fsp.writeFile(this._kbStatePath(hash), JSON.stringify(next, null, 2), 'utf8');
-    return next;
-  }
-
-  /**
-   * Return the KB state for a workspace, creating and persisting an
-   * empty scaffold on the first call for an enabled workspace. Used by
-   * the `GET /kb` endpoint so the UI always has a concrete shape to
-   * render (status counters, empty tabs, etc.) instead of having to
-   * special-case "no state yet".
+   * Per-workspace auto-digest toggle. When true, newly-ingested files
+   * are automatically digested once conversion completes (ingestion
+   * handler enqueues a digest task). Toggling off only affects future
+   * ingestions — files currently in flight still finish whatever stage
+   * they're on.
    *
-   * Returns `null` when the workspace doesn't exist. Returns an empty
-   * scaffold (in-memory only, NOT persisted) when KB is disabled, so
-   * the frontend can render the disabled tab without polluting disk
-   * with state.json for workspaces that never opt in.
+   * Returns `null` when the workspace doesn't exist, matching
+   * `setWorkspaceKbEnabled`. The flag lives on the workspace index so
+   * tests that stub `getSettings` don't accidentally reset it.
    */
-  async getOrInitKbState(hash: string): Promise<KbState | null> {
+  async getWorkspaceKbAutoDigest(hash: string): Promise<boolean> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return false;
+    return Boolean(index.kbAutoDigest);
+  }
+
+  async setWorkspaceKbAutoDigest(hash: string, autoDigest: boolean): Promise<boolean | null> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    index.kbAutoDigest = Boolean(autoDigest);
+    await this._writeWorkspaceIndex(hash, index);
+    return index.kbAutoDigest;
+  }
+
+  /**
+   * Build a `KbState` snapshot for the UI. This is what the
+   * `GET /workspaces/:hash/kb` endpoint returns.
+   *
+   *   - Returns `null` when the workspace doesn't exist.
+   *   - Returns an all-empty in-memory snapshot when KB is disabled (no
+   *     DB is opened — we don't want to pollute disk with a state.db for
+   *     workspaces that never opt in).
+   *   - Otherwise opens the DB and reads counters + folder tree + a page
+   *     of raw rows in `opts.folderPath` (root by default).
+   *
+   * The `raw` array is always scoped to one folder + page — the UI
+   * fetches other folders on demand. Counters are global across the
+   * whole workspace so the header badges don't re-flicker on navigation.
+   */
+  async getKbStateSnapshot(
+    hash: string,
+    opts: { folderPath?: string; limit?: number; offset?: number } = {},
+  ): Promise<KbState | null> {
     if (!hash) return null;
     const index = await this._readWorkspaceIndex(hash);
     if (!index) return null;
-    const existing = await this.getKbState(hash);
-    if (existing) return existing;
-    if (!index.kbEnabled) return this._emptyKbState();
-    // Enabled with no state on disk — initialize and persist.
-    return this.saveKbState(hash, this._emptyKbState());
+
+    if (!index.kbEnabled) {
+      return this._emptyKbSnapshot(Boolean(index.kbAutoDigest));
+    }
+
+    const db = this.getKbDb(hash);
+    if (!db) return this._emptyKbSnapshot(Boolean(index.kbAutoDigest));
+
+    const folderPath = opts.folderPath !== undefined
+      ? normalizeFolderPath(opts.folderPath)
+      : '';
+
+    return {
+      version: KB_STATE_VERSION,
+      entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
+      autoDigest: Boolean(index.kbAutoDigest),
+      counters: db.getCounters(),
+      folders: db.listFolders(),
+      raw: db.listRawInFolder(folderPath, {
+        limit: opts.limit,
+        offset: opts.offset,
+      }),
+      updatedAt: new Date().toISOString(),
+    };
+  }
+
+  /** Zero-value snapshot used when KB is disabled or not yet initialized. */
+  private _emptyKbSnapshot(autoDigest: boolean): KbState {
+    const zeroCounters: KbCounters = {
+      rawTotal: 0,
+      rawByStatus: {
+        ingesting: 0,
+        ingested: 0,
+        digesting: 0,
+        digested: 0,
+        failed: 0,
+        'pending-delete': 0,
+      } as Record<KbRawStatus, number>,
+      entryCount: 0,
+      pendingCount: 0,
+      folderCount: 0,
+    };
+    return {
+      version: KB_STATE_VERSION,
+      entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
+      autoDigest,
+      counters: zeroCounters,
+      folders: [],
+      raw: [],
+      updatedAt: new Date().toISOString(),
+    };
   }
 
   /**
@@ -1461,8 +1566,8 @@ export class ChatService {
     const absKbDir = path.resolve(kbDir);
     return [
       `[Workspace knowledge base is available at ${absKbDir}/`,
-      `- state.json: pipeline state (raw uploads, digested entries, synthesis status).`,
-      `- entries/*.md: digested knowledge entries with YAML frontmatter (title, tags, source).`,
+      `- state.db: SQLite index of raw files, folders, and digested entries (read via CLI helpers).`,
+      `- entries/<entryId>/entry.md: digested knowledge entries with YAML frontmatter (title, tags, source).`,
       `- synthesis/*.md: cross-entry synthesis (created by the Dreaming stage).`,
       `Read these when the user references documents they've uploaded, domain knowledge, or asks questions the digested entries may cover.]`,
     ].join('\n');

@@ -10,6 +10,7 @@
   "dependencies": {
     "@napi-rs/canvas": "^0.1.97",
     "adm-zip": "^0.5.17",
+    "better-sqlite3": "^12.8.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^8.3.1",
@@ -28,6 +29,7 @@
   },
   "devDependencies": {
     "@types/adm-zip": "^0.5.8",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/cookie": "^0.6.0",
     "@types/express": "^5.0.6",
     "@types/express-session": "^1.18.2",

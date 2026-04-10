@@ -131,6 +131,13 @@ export interface WorkspaceIndex {
    * Settings.
    */
   kbEnabled?: boolean;
+  /**
+   * Per-workspace auto-digest flag. When true, ingested files are
+   * automatically digested once conversion completes. Default false.
+   * Toggling this on does NOT retroactively digest existing ingested
+   * files — users must click "Digest All Pending" for that.
+   */
+  kbAutoDigest?: boolean;
   conversations: ConversationEntry[];
 }
 
@@ -219,6 +226,16 @@ export interface Settings {
      * text-only.
      */
     convertSlidesToImages?: boolean;
+    /**
+     * Per-workspace auto-digest toggle. When true, ingested files are
+     * automatically digested once conversion completes. When false, the
+     * user must click "Digest All Pending" or per-row Digest. Default
+     * false. Stored in workspace settings (this field is per-workspace
+     * despite living on the global Settings shape — see WorkspaceIndex).
+     * NOTE: toggling from false → true does NOT retroactively digest
+     * existing ingested files.
+     */
+    autoDigest?: boolean;
   };
   customInstructions?: {
     aboutUser?: string;
@@ -390,87 +407,145 @@ export interface MemorySnapshot {
 // Schema version lets us evolve the entry format without silently
 // re-digesting existing files.
 
-/** Status of an individual raw file progressing through the pipeline. */
+/**
+ * Status of an individual raw file progressing through the pipeline.
+ * - ingesting: converting handler running
+ * - ingested: ready for digestion
+ * - digesting: CLI running
+ * - digested: has zero or more entries
+ * - failed: conversion or digestion failed (see error_class/error_message)
+ * - pending-delete: queued for deletion in manual-digest mode, processed
+ *   via "Digest All Pending"
+ */
 export type KbRawStatus =
   | 'ingesting'
   | 'ingested'
   | 'digesting'
   | 'digested'
-  | 'failed';
+  | 'failed'
+  | 'pending-delete';
 
 /** Status of the workspace's synthesis layer (produced by Dreaming). */
 export type KbSynthesisStatus = 'empty' | 'fresh' | 'stale' | 'dreaming';
 
+/**
+ * Classes of error that can land on a raw row. Stored as a string in the
+ * DB so new classes can be added without a schema migration.
+ * - timeout: runOneShot exceeded its timeout
+ * - cli_error: CLI exited non-zero
+ * - malformed_output: stdout unparseable as entry-delimited YAML/body
+ * - schema_rejection: parsed but a field failed validation
+ * - unknown: catch-all
+ */
+export type KbErrorClass =
+  | 'timeout'
+  | 'cli_error'
+  | 'malformed_output'
+  | 'schema_rejection'
+  | 'unknown';
+
+/**
+ * One raw file visible in the KB Browser list. Shape mirrors the `raw`
+ * table plus the location fields from `raw_locations`, so the UI has
+ * everything it needs for a row in one object. Same rawId can appear in
+ * multiple `KbRawEntry` objects (once per location) when identical bytes
+ * live in multiple folders.
+ */
 export interface KbRawEntry {
   /** First 16 chars of sha256(file). Stable across renames, unique per workspace. */
   rawId: string;
-  /** Original filename as uploaded (for display only). */
+  /** Full 64-hex sha256 of the raw bytes. */
+  sha256: string;
+  /** Original filename as uploaded (per-location — same rawId can have multiple). */
   filename: string;
+  /** Virtual folder path the file lives in. '' = root. */
+  folderPath: string;
   /** MIME type as detected at upload time. */
   mimeType: string;
   /** Raw byte size of the uploaded file. */
   sizeBytes: number;
-  /** ISO 8601 timestamp of the upload. */
+  /** Handler that produced the converted form (pdf, docx, pptx, passthrough/text, ...). */
+  handler?: string;
+  /** ISO 8601 timestamp of the upload (for this specific location). */
   uploadedAt: string;
-  /** Current pipeline status for this raw file. */
+  /** ISO 8601 timestamp of the most recent successful digestion, or null. */
+  digestedAt: string | null;
+  /** Current pipeline status for the raw row this location belongs to. */
   status: KbRawStatus;
-  /** Last error message if `status === 'failed'`. */
-  error?: string;
-  /**
-   * ID of the digested entry this raw produced, once digestion completes.
-   * Present iff `status === 'digested'`.
-   */
-  entryId?: string;
+  /** Error class if status === 'failed'. */
+  errorClass?: KbErrorClass | null;
+  /** Full error message if status === 'failed'. */
+  errorMessage?: string | null;
+  /** Handler metadata blob (pageCount, slideCount, etc.). */
+  metadata?: Record<string, unknown>;
 }
 
-export interface KbEntryRef {
-  /** Stable entry ID, typically sha256 of the entry content at creation time. */
-  entryId: string;
-  /** RawId this entry was digested from. */
-  rawId: string;
-  /** Entry schema version — bumped when the digestion prompt/format changes. */
-  schemaVersion: number;
-  /** ISO 8601 timestamp of the last digestion. */
-  digestedAt: string;
-  /** True when the current `entry_schema_version` is newer than this entry's. */
-  staleSchema?: boolean;
-}
-
-export interface KbSynthesisState {
-  /** High-level status of the synthesis layer. */
-  status: KbSynthesisStatus;
-  /** ISO 8601 timestamp of the last dreaming run (null before first run). */
-  lastDreamedAt: string | null;
-  /** EntryIds that have been added or changed since the last dreaming run. */
-  staleEntryIds: string[];
-  /** Backend that produced the current synthesis (e.g. "claude-code"). */
-  lastDreamBackend?: string;
+/** One virtual folder in the KB. '' is root. */
+export interface KbFolder {
+  folderPath: string;
+  createdAt: string;
 }
 
 /**
- * Source of truth for the per-workspace KB pipeline. Lives at
- * `data/chat/workspaces/{hash}/knowledge/state.json`. Rewritten as a
- * single JSON blob on every state change so readers always see a
- * consistent view. Concurrency is per-workspace serialized, so there
- * is no contention.
+ * One entry digested from a raw file. The body lives on disk at
+ * `entries/<entryId>/entry.md`; this is the metadata the UI and the DB
+ * care about. `tags` is the associated tag set (joined from entry_tags
+ * at read time for convenience).
+ */
+export interface KbEntry {
+  /** Stable entry ID in the form <rawId>-<slug>[-<n>]. */
+  entryId: string;
+  /** Parent raw file. */
+  rawId: string;
+  /** Entry title from the frontmatter. */
+  title: string;
+  /** Slug portion of the entry ID. */
+  slug: string;
+  /** One-line summary from the frontmatter. */
+  summary: string;
+  /** Entry schema version — bumped when the digestion prompt/format changes. */
+  schemaVersion: number;
+  /** True when the current entrySchemaVersion is newer than this entry's. */
+  staleSchema?: boolean;
+  /** ISO 8601 timestamp of the digestion that produced this entry. */
+  digestedAt: string;
+  /** Tag set for this entry (denormalized from entry_tags for UI convenience). */
+  tags: string[];
+}
+
+/** Aggregate counters rendered in the KB Browser header. */
+export interface KbCounters {
+  rawTotal: number;
+  rawByStatus: Record<KbRawStatus, number>;
+  entryCount: number;
+  pendingCount: number; // ingested + pending-delete
+  folderCount: number;
+}
+
+/**
+ * Snapshot of the KB state surfaced by `GET /kb`. The entries and raws
+ * lists are paginated at the endpoint level; this object always holds
+ * counters + folder tree + a page of the currently-focused folder.
  */
 export interface KbState {
-  /** Schema version of this state file itself (distinct from entry schema). */
+  /** State schema version (the DB layer's schema version — stored in meta table). */
   version: number;
   /** Current digestion entry schema version. */
   entrySchemaVersion: number;
-  /** Raw files the user has uploaded, keyed by rawId. */
-  raw: Record<string, KbRawEntry>;
-  /** Digested entries, keyed by entryId. */
-  entries: Record<string, KbEntryRef>;
-  /** Dreaming/synthesis state. */
-  synthesis: KbSynthesisState;
+  /** Per-workspace auto-digest flag (mirrors WorkspaceIndex.kbAutoDigest). */
+  autoDigest: boolean;
+  /** High-level counters for the header/badges. */
+  counters: KbCounters;
+  /** Folder tree, flat list sorted by folderPath. */
+  folders: KbFolder[];
+  /** Raw files in the currently-focused folder (or empty when listing is disabled). */
+  raw: KbRawEntry[];
   /** ISO 8601 timestamp of the most recent mutation (for cache busting). */
   updatedAt: string;
 }
 
 /**
- * Lightweight notification emitted when `state.json` changes during an
+ * Lightweight notification emitted when KB state changes during an
  * active stream (or via an HTTP mutation). The full state is fetched
  * separately via `GET /workspaces/:hash/kb` — this frame is only a
  * trigger. Shape mirrors `memory_update` for consistency.
@@ -481,12 +556,17 @@ export interface KbStateUpdateEvent {
   updatedAt: string;
   /**
    * What changed in this tick. Frontend uses this to decide whether to
-   * refetch, toast, or highlight the affected row.
+   * refetch, toast, or highlight the affected row. `folders: true` means
+   * the folder tree changed (created/renamed/deleted). `batchProgress`
+   * is emitted during "Digest All Pending" runs so the toolbar button
+   * can show live k/N progress.
    */
   changed: {
     raw?: string[];
     entries?: string[];
+    folders?: boolean;
     synthesis?: boolean;
+    batchProgress?: { done: number; total: number };
   };
 }
 

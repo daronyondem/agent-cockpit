@@ -36,7 +36,16 @@ let cached: PandocStatus | null = null;
 async function whichPandoc(): Promise<string | null> {
   const cmd = process.platform === 'win32' ? 'where' : 'which';
   return new Promise((resolve) => {
-    const child = spawn(cmd, ['pandoc'], { stdio: ['ignore', 'pipe', 'ignore'] });
+    // We must spread `process.env` explicitly instead of relying on spawn's
+    // default "inherit parent env" behavior. Jest's node environment swaps
+    // out `process.env` for a proxy, so mutations made inside a test (e.g.
+    // clearing PATH) don't reach the child via the C-level environ pointer
+    // spawn uses by default. Passing `env: { ...process.env }` reads Jest's
+    // proxied value and forwards the current state to the child.
+    const child = spawn(cmd, ['pandoc'], {
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env },
+    });
     let stdout = '';
     child.stdout.on('data', (chunk) => (stdout += chunk.toString('utf8')));
     child.on('error', () => resolve(null));
