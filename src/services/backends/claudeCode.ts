@@ -136,13 +136,14 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       const prompt = `Summarize the following chat session in one concise sentence (100-150 characters max). Only output the summary, nothing else:\n\n${sessionText}`;
 
       return await new Promise<string>((resolve) => {
-        execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
+        const child = execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
           if (err || !stdout.trim()) {
             resolve(fallback || `Session (${messages.length} messages)`);
           } else {
             resolve(stdout.trim().substring(0, 200));
           }
         });
+        child.stdin?.end();
       });
     } catch {
       return fallback || `Session (${messages.length} messages)`;
@@ -230,8 +231,15 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
    * server when Claude Code is the configured Memory CLI.
    */
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { model, effort, timeoutMs = 60000, workingDir } = options;
+    const { model, effort, timeoutMs = 60000, workingDir, allowTools } = options;
     const args = ['--print', '-p', prompt];
+    // Digestion / Dreaming need to read every file under the workspace
+    // KB directory; they run with `allowTools: true` so Claude's
+    // sandboxed tool use can proceed without per-call prompting. Memory
+    // callers leave this off so a buggy prompt can't read the disk.
+    if (allowTools) {
+      args.push('--permission-mode', 'bypassPermissions');
+    }
     if (model) args.push('--model', model);
     if (effort && model) {
       const modelOption = this.metadata.models?.find(m => m.id === model);
@@ -240,19 +248,37 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       }
     }
     return await new Promise<string>((resolve, reject) => {
-      execFile(
+      const child = execFile(
         'claude',
         args,
         { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined },
         (err, stdout, stderr) => {
           if (err) {
-            const msg = (stderr && stderr.trim()) || err.message;
+            // Filter the stdin warning — it's not the real error.
+            const filtered = (stderr || '')
+              .split('\n')
+              .filter(l => !l.includes('no stdin data received'))
+              .join('\n')
+              .trim();
+            // Build a concise error message — don't echo the full command
+            // (it contains the entire prompt and is useless in error output).
+            const execErr = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string; signal?: string };
+            let msg: string;
+            if (execErr.killed) {
+              msg = `Process killed (timeout after ${timeoutMs / 1000}s)`;
+            } else if (filtered) {
+              msg = filtered;
+            } else {
+              msg = `Process exited with code ${execErr.code ?? 'unknown'}`;
+            }
             reject(new Error(`claude --print failed: ${msg}`));
             return;
           }
           resolve((stdout || '').trim());
         },
       );
+      // Close stdin immediately so the CLI doesn't wait 3s and warn.
+      child.stdin?.end();
     });
   }
 
@@ -265,13 +291,14 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       const prompt = `Generate a short, descriptive title (max 60 characters) for a conversation that starts with this user message. Only output the title text, nothing else — no quotes, no prefix:\n\n${truncated}`;
 
       return await new Promise<string>((resolve) => {
-        execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
+        const child = execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
           if (err || !stdout.trim()) {
             resolve(fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat');
           } else {
             resolve(stdout.trim().substring(0, 80));
           }
         });
+        child.stdin?.end();
       });
     } catch {
       return fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';

@@ -1,7 +1,7 @@
-import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, fetchCsrfToken, chatShowSessionExpired } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, fetchCsrfToken, chatShowSessionExpired } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
-import { chatShowModal, chatCloseModal } from './modal.js';
+import { chatShowModal, chatCloseModal, chatShowAlert, chatShowConfirm, chatShowPrompt } from './modal.js';
 import { loadBackends, getBackendIcon, getBackendCapabilities, populateModelSelect, populateEffortSelect } from './backends.js';
 import { setStreamEventHandler } from './websocket.js';
 import {
@@ -249,8 +249,10 @@ function chatWireEvents() {
   if (settingsBtn) settingsBtn.onclick = chatShowSettings;
 
   const signoutBtn = document.getElementById('chat-signout-btn');
-  if (signoutBtn) signoutBtn.onclick = () => {
-    if (confirm('Sign out?')) window.location.href = '/auth/logout';
+  if (signoutBtn) signoutBtn.onclick = async () => {
+    if (await chatShowConfirm('Sign out?', { title: 'Sign Out', confirmLabel: 'Sign Out' })) {
+      window.location.href = '/auth/logout';
+    }
   };
 
   document.querySelectorAll('.chat-prompt-card').forEach(card => {
@@ -312,7 +314,7 @@ function chatWireEvents() {
 async function chatResetSession(convIdOverride) {
   const convId = typeof convIdOverride === 'string' ? convIdOverride : state.chatActiveConvId;
   if (!convId) return;
-  if (state.chatStreamingConvs.has(convId)) { alert('Cannot reset session while streaming.'); return; }
+  if (state.chatStreamingConvs.has(convId)) { chatShowAlert('Cannot reset session while streaming.'); return; }
   if (state.chatResettingConvs.has(convId)) return;
 
   state.chatResettingConvs.add(convId);
@@ -357,7 +359,7 @@ async function chatResetSession(convIdOverride) {
     chatLoadConversations();
   } catch (err) {
     if (progressEl && progressEl.isConnected) progressEl.remove();
-    alert('Session reset failed: ' + err.message);
+    chatShowAlert('Session reset failed: ' + err.message);
   } finally {
     state.chatResettingConvs.delete(convId);
     const leftover = document.getElementById('chat-reset-progress');
@@ -414,7 +416,7 @@ async function chatShowSessions() {
       });
     });
   } catch (err) {
-    alert('Failed to load sessions: ' + err.message);
+    chatShowAlert('Failed to load sessions: ' + err.message);
   }
 }
 
@@ -433,7 +435,7 @@ function chatViewSession(sessionNumber) {
         sessionMsgs = data.messages || [];
       }
     } catch (err) {
-      alert('Failed to load session: ' + err.message);
+      chatShowAlert('Failed to load session: ' + err.message);
       return;
     }
 
@@ -507,7 +509,7 @@ async function chatDownloadConversation() {
     a.click();
     URL.revokeObjectURL(url);
   } catch (err) {
-    alert('Download failed: ' + err.message);
+    chatShowAlert('Download failed: ' + err.message);
   }
 }
 
@@ -678,7 +680,7 @@ async function chatShowSettings(initialTab) {
           </div>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">Digestion CLI</div>
+          <div class="chat-settings-label">${KB_ICON_DIGEST} Digestion CLI</div>
           <select class="chat-settings-select" id="chat-settings-kb-digest-backend" onchange="chatSettingsKbDigestBackendChanged()">
             ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbDigestBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
@@ -697,7 +699,7 @@ async function chatShowSettings(initialTab) {
           </select>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">Dreaming CLI</div>
+          <div class="chat-settings-label">${KB_ICON_DREAM} Dreaming CLI</div>
           <select class="chat-settings-select" id="chat-settings-kb-dream-backend" onchange="chatSettingsKbDreamBackendChanged()">
             ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbDreamBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
@@ -1081,7 +1083,7 @@ function chatSaveSettings() {
     state.chatSettingsData = settings;
     chatCloseModal();
   }).catch(err => {
-    alert('Failed to save settings: ' + err.message);
+    chatShowAlert('Failed to save settings: ' + err.message);
   });
 }
 
@@ -1203,13 +1205,13 @@ function chatUpdateUsageStats() {
 }
 
 async function chatClearUsageStats() {
-  if (!confirm('Clear all usage statistics? This cannot be undone.')) return;
+  if (!await chatShowConfirm('Clear all usage statistics? This cannot be undone.', { title: 'Clear Stats', confirmLabel: 'Clear', destructive: true })) return;
   try {
     await chatFetch('usage-stats', { method: 'DELETE' });
     state._usageStatsCache = { days: [] };
     chatUpdateUsageStats();
   } catch (err) {
-    alert('Failed to clear usage stats: ' + err.message);
+    chatShowAlert('Failed to clear usage stats: ' + err.message);
   }
 }
 
@@ -1326,7 +1328,7 @@ async function chatShowWorkspaceSettings(hash, label) {
           chatWireWorkspaceMemoryBrowser(browser, hash);
         }
       } catch (err) {
-        alert('Failed to update memory setting: ' + err.message);
+        chatShowAlert('Failed to update memory setting: ' + err.message);
         toggleEl.checked = !enabled;
       }
     });
@@ -1356,7 +1358,7 @@ async function chatShowWorkspaceSettings(hash, label) {
         // enabled for the workspace) appears/disappears without a reload.
         chatLoadConversations();
       } catch (err) {
-        alert('Failed to update knowledge base setting: ' + err.message);
+        chatShowAlert('Failed to update knowledge base setting: ' + err.message);
         kbToggleEl.checked = !enabled;
       }
     });
@@ -1445,7 +1447,7 @@ function chatWireWorkspaceMemoryBrowser(container, hash) {
       e.stopPropagation();
       const relpath = btn.dataset.relpath;
       if (!relpath) return;
-      if (!confirm(`Delete memory entry "${relpath}"?`)) return;
+      if (!await chatShowConfirm(`Delete memory entry "${relpath}"?`, { title: 'Delete Entry', confirmLabel: 'Delete', destructive: true })) return;
       try {
         await chatFetch(`workspaces/${encodeURIComponent(hash)}/memory/entries/${encodeURIComponent(relpath)}`, {
           method: 'DELETE',
@@ -1454,14 +1456,14 @@ function chatWireWorkspaceMemoryBrowser(container, hash) {
         container.innerHTML = chatRenderWorkspaceMemoryBrowser(memRes.snapshot || null, Boolean(memRes.enabled), hash);
         chatWireWorkspaceMemoryBrowser(container, hash);
       } catch (err) {
-        alert('Failed to delete entry: ' + err.message);
+        chatShowAlert('Failed to delete entry: ' + err.message);
       }
     });
   });
   const clearBtn = container.querySelector('.chat-memory-clear-all-btn');
   if (clearBtn) {
     clearBtn.addEventListener('click', async () => {
-      if (!confirm('Clear all memory entries for this workspace? This cannot be undone.')) return;
+      if (!await chatShowConfirm('Clear all memory entries for this workspace? This cannot be undone.', { title: 'Clear Memory', confirmLabel: 'Clear All', destructive: true })) return;
       try {
         await chatFetch(`workspaces/${encodeURIComponent(hash)}/memory/entries`, {
           method: 'DELETE',
@@ -1470,7 +1472,7 @@ function chatWireWorkspaceMemoryBrowser(container, hash) {
         container.innerHTML = chatRenderWorkspaceMemoryBrowser(memRes.snapshot || null, Boolean(memRes.enabled), hash);
         chatWireWorkspaceMemoryBrowser(container, hash);
       } catch (err) {
-        alert('Failed to clear memory: ' + err.message);
+        chatShowAlert('Failed to clear memory: ' + err.message);
       }
     });
   }
@@ -1484,7 +1486,7 @@ function chatSaveWorkspaceInstructions(hash) {
   }).then(() => {
     chatCloseModal();
   }).catch(err => {
-    alert('Failed to save workspace instructions: ' + err.message);
+    chatShowAlert('Failed to save workspace instructions: ' + err.message);
   });
 }
 
@@ -1618,7 +1620,7 @@ function chatShowRestartOverlay() {
 async function chatTriggerServerRestart() {
   const statusEl = document.getElementById('chat-server-restart-status');
   const btn = document.getElementById('chat-server-restart-btn');
-  if (!confirm('Restart the server now? Any active conversations will be aborted.')) return;
+  if (!await chatShowConfirm('Restart the server now? Any active conversations will be aborted.', { title: 'Restart Server', confirmLabel: 'Restart', destructive: true })) return;
   if (statusEl) {
     statusEl.style.display = 'block';
     statusEl.innerHTML = '<span style="color:var(--muted);">Requesting restart...</span>';
@@ -1762,9 +1764,7 @@ async function chatOpenKbBrowser(hash, label) {
 
   // Hide the messages view and the input row. We leave the header as-is
   // — the existing header title/buttons stay visible but are effectively
-  // dormant while the KB browser is open. Re-rendering the header to
-  // reflect KB context felt like overkill for PR 2 given we already
-  // stamp the workspace label inside the browser chrome.
+  // dormant while the KB browser is open.
   messagesEl.style.display = 'none';
   if (inputArea) inputArea.style.display = 'none';
   browserEl.style.display = '';
@@ -1774,24 +1774,26 @@ async function chatOpenKbBrowser(hash, label) {
     label,
     activeTab: 'raw',
     enabled: false,
+    autoDigest: false,
     state: null,
     pollTimer: null,
     uploading: false,
-    pandocStatus: null, // populated on first render; only used for the banner
+    selectedFolder: '',
+    pandocStatus: null,
+    ingestingRawId: null,
+    ingestingFilename: null,
+    entries: { loading: false, items: [], selectedEntryId: null, entryBody: '' },
   };
 
   // Initial render with a loading message; refetch populates it.
   browserEl.innerHTML = chatKbBrowserChrome(label, true);
   chatKbBrowserWireChrome();
-  // Fire pandoc status fetch in parallel with the first state refetch —
-  // we don't block the initial render on it, but when it lands we
-  // re-render so the banner appears without another user action.
   chatKbBrowserLoadPandocStatus();
   await chatKbBrowserRefetch();
 
-  // Start polling so a KB browser open on a workspace with no active
-  // conversation still sees state changes as ingestion progresses. 1500ms
-  // is snappy enough for text-sized files without hammering the server.
+  // Periodic refetch catches ingestion/digestion progress even when the
+  // WS isn't carrying updates for this workspace. 1500ms is snappy enough
+  // for the inline state badges.
   chatKbBrowserState.pollTimer = setInterval(() => {
     if (!chatKbBrowserState) return;
     chatKbBrowserRefetch();
@@ -1816,15 +1818,20 @@ function chatCloseKbBrowser() {
 window.chatCloseKbBrowser = chatCloseKbBrowser;
 
 function chatKbBrowserChrome(label, loading) {
+  const counters = chatKbBrowserState?.state?.counters;
+  const countersHtml = counters
+    ? `<span class="chat-kb-header-counters" id="chat-kb-header-counters">${counters.rawTotal} files · ${counters.entryCount} entries · ${counters.folderCount} folders</span>`
+    : '<span class="chat-kb-header-counters" id="chat-kb-header-counters"></span>';
+  const active = chatKbBrowserState?.activeTab || 'raw';
   return `
     <div class="chat-kb-header">
       <h2>Knowledge Base: ${esc(label || 'Workspace')}</h2>
+      ${countersHtml}
       <button class="chat-kb-header-close" id="chat-kb-close-btn">Close</button>
     </div>
     <div class="chat-kb-tabs">
-      <button class="chat-kb-tab active" data-kb-tab="raw">Raw</button>
-      <button class="chat-kb-tab chat-kb-tab-disabled" disabled title="Lands in PR 3">Entries</button>
-      <button class="chat-kb-tab chat-kb-tab-disabled" disabled title="Lands in PR 4">Synthesis</button>
+      <button class="chat-kb-tab ${active === 'raw' ? 'active' : ''}" data-kb-tab="raw">${KB_ICON_INGEST} Raw</button>
+      <button class="chat-kb-tab ${active === 'entries' ? 'active' : ''}" data-kb-tab="entries">${KB_ICON_DIGEST} Entries</button>
     </div>
     <div class="chat-kb-tab-content" id="chat-kb-tab-content">
       ${loading ? '<p class="chat-kb-empty">Loading…</p>' : ''}
@@ -1835,6 +1842,19 @@ function chatKbBrowserChrome(label, loading) {
 function chatKbBrowserWireChrome() {
   const closeBtn = document.getElementById('chat-kb-close-btn');
   if (closeBtn) closeBtn.onclick = chatCloseKbBrowser;
+  document.querySelectorAll('.chat-kb-tab[data-kb-tab]').forEach((el) => {
+    el.onclick = () => {
+      if (!chatKbBrowserState) return;
+      const tab = el.dataset.kbTab;
+      if (tab === chatKbBrowserState.activeTab) return;
+      chatKbBrowserState.activeTab = tab;
+      document.querySelectorAll('.chat-kb-tab[data-kb-tab]').forEach((t) => {
+        t.classList.toggle('active', t.dataset.kbTab === tab);
+      });
+      chatKbBrowserRenderTab();
+      if (tab === 'entries') chatKbBrowserRefetchEntries();
+    };
+  });
 }
 
 async function chatKbBrowserLoadPandocStatus() {
@@ -1850,23 +1870,33 @@ async function chatKbBrowserLoadPandocStatus() {
     // Treat a fetch failure the same as "unknown" — don't block the UI on it.
     chatKbBrowserState.pandocStatus = null;
   }
-  // Re-render the active tab so the banner appears (or clears) immediately.
   chatKbBrowserRenderTab();
 }
 
 async function chatKbBrowserRefetch() {
   if (!chatKbBrowserState) return;
-  const { hash } = chatKbBrowserState;
+  const { hash, selectedFolder } = chatKbBrowserState;
   try {
-    const res = await fetch(chatApiUrl(`workspaces/${encodeURIComponent(hash)}/kb`), {
-      credentials: 'same-origin',
-    });
+    const folderParam = encodeURIComponent(selectedFolder || '');
+    const res = await fetch(
+      chatApiUrl(`workspaces/${encodeURIComponent(hash)}/kb?folder=${folderParam}`),
+      { credentials: 'same-origin' },
+    );
     if (!res.ok) throw new Error(`GET /kb returned ${res.status}`);
     const data = await res.json();
     if (!chatKbBrowserState || chatKbBrowserState.hash !== hash) return;
     chatKbBrowserState.enabled = Boolean(data.enabled);
     chatKbBrowserState.state = data.state || null;
+    chatKbBrowserState.autoDigest = Boolean(data.state?.autoDigest);
+    // Update counters in the chrome header without re-rendering the whole
+    // chrome (that would drop the tab content and focus).
+    const countersEl = document.getElementById('chat-kb-header-counters');
+    const counters = chatKbBrowserState.state?.counters;
+    if (countersEl && counters) {
+      countersEl.textContent = `${counters.rawTotal} files · ${counters.entryCount} entries · ${counters.folderCount} folders`;
+    }
     chatKbBrowserRenderTab();
+    chatKbDismissIngestionProgress();
   } catch (err) {
     console.error('[kb] refetch failed:', err);
   }
@@ -1875,6 +1905,14 @@ async function chatKbBrowserRefetch() {
 function chatKbBrowserRenderTab() {
   const content = document.getElementById('chat-kb-tab-content');
   if (!content || !chatKbBrowserState) return;
+
+  // While an XHR upload is in flight the progress bar DOM elements are
+  // referenced directly by the upload callbacks. Re-rendering via innerHTML
+  // would orphan those references and the progress bar would vanish. Skip
+  // re-renders entirely until the upload settles — the post-upload refetch
+  // will trigger a fresh render.
+  if (chatKbBrowserState.uploading) return;
+
   if (!chatKbBrowserState.enabled) {
     content.innerHTML = `
       <p class="chat-kb-empty">
@@ -1884,21 +1922,45 @@ function chatKbBrowserRenderTab() {
     `;
     return;
   }
-  content.innerHTML = chatKbBrowserRawTab(chatKbBrowserState.state);
-  chatKbBrowserWireRawTab();
+
+  // Preserve scroll position across re-renders — the full innerHTML swap
+  // destroys it, and the 1500ms poll + WS frames trigger re-renders often.
+  // Save scroll on the outer browser container AND tab-specific scrollable
+  // children (entries list + detail pane each have their own overflow).
+  const browserEl = document.getElementById('chat-kb-browser');
+  const savedBrowserScroll = browserEl ? browserEl.scrollTop : 0;
+  const entriesListEl = content.querySelector('.chat-kb-entries-list');
+  const entryDetailEl = content.querySelector('.chat-kb-entry-detail');
+  const savedEntriesListScroll = entriesListEl ? entriesListEl.scrollTop : 0;
+  const savedEntryDetailScroll = entryDetailEl ? entryDetailEl.scrollTop : 0;
+
+  if (chatKbBrowserState.activeTab === 'entries') {
+    content.innerHTML = chatKbBrowserEntriesTab();
+    chatKbBrowserWireEntriesTab();
+  } else {
+    content.innerHTML = chatKbBrowserRawTab(chatKbBrowserState.state);
+    chatKbBrowserWireRawTab();
+  }
+
+  // Restore scroll positions.
+  if (browserEl && savedBrowserScroll) browserEl.scrollTop = savedBrowserScroll;
+  const newEntriesListEl = content.querySelector('.chat-kb-entries-list');
+  const newEntryDetailEl = content.querySelector('.chat-kb-entry-detail');
+  if (newEntriesListEl && savedEntriesListScroll) newEntriesListEl.scrollTop = savedEntriesListScroll;
+  if (newEntryDetailEl && savedEntryDetailScroll) newEntryDetailEl.scrollTop = savedEntryDetailScroll;
 }
 
 function chatKbBrowserRawTab(kbState) {
-  const raws = kbState ? Object.values(kbState.raw || {}) : [];
-  raws.sort((a, b) => (b.uploadedAt || '').localeCompare(a.uploadedAt || ''));
+  const raws = Array.isArray(kbState?.raw) ? kbState.raw.slice() : [];
+  raws.sort((a, b) => (a.filename || '').localeCompare(b.filename || ''));
   const rows = raws.map((r) => chatKbBrowserRawRow(r)).join('');
   const emptyMsg = raws.length === 0
-    ? '<p class="chat-kb-empty">No files yet. Upload a PDF, DOCX, PPTX, text, or image file to get started.</p>'
+    ? '<p class="chat-kb-empty">No files in this folder. Drop a file or click Upload.</p>'
     : '';
-  // Show a persistent banner when pandoc detection has run and reported
-  // "not available". We deliberately skip the banner when pandocStatus is
-  // still null (request in flight) to avoid a flash during the first few
-  // hundred ms after opening the browser.
+
+  // Persistent banner when pandoc detection has run and reported
+  // "not available". We skip the banner when `pandocStatus` is still
+  // null to avoid a flash during the first few hundred ms.
   const pandoc = chatKbBrowserState?.pandocStatus;
   const pandocBanner = pandoc && pandoc.available === false
     ? `
@@ -1906,49 +1968,137 @@ function chatKbBrowserRawTab(kbState) {
         <strong>Pandoc not installed.</strong> DOCX uploads will be rejected
         until you install pandoc and restart Agent Cockpit. Install it from
         <a href="https://pandoc.org/installing.html" target="_blank" rel="noreferrer">pandoc.org</a>
-        or via your package manager
-        (<code>brew install pandoc</code>,
-        <code>apt install pandoc</code>,
-        <code>choco install pandoc</code>).
+        or via <code>brew install pandoc</code> / <code>apt install pandoc</code>.
         PDF, PPTX, text, and image uploads are unaffected.
       </div>
     `
     : '';
+
+  const counters = kbState?.counters || { pendingCount: 0, rawByStatus: {} };
+  const pendingCount = counters.pendingCount || 0;
+  const isDigesting = (counters.rawByStatus?.digesting || 0) > 0;
+  const digestAllDisabled = pendingCount === 0 || isDigesting;
+  const autoDigestOn = Boolean(chatKbBrowserState.autoDigest);
+  const selectedFolder = chatKbBrowserState.selectedFolder || '';
+  const crumb = chatKbBrowserFormatBreadcrumb(selectedFolder);
+
   return `
     ${pandocBanner}
-    <div class="chat-kb-upload" id="chat-kb-upload-zone">
-      <div class="chat-kb-upload-hint">
-        Drop a file here, or click the button to choose one. Supported:
-        PDF, DOCX, PPTX, text (.txt .md .json .yaml …), images.
-      </div>
-      <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">Upload file</button>
-      <input type="file" id="chat-kb-upload-input" style="display:none;" />
+    <div class="chat-kb-toolbar">
+      <label class="chat-kb-toolbar-switch">
+        <input type="checkbox" id="chat-kb-autodigest-toggle" ${autoDigestOn ? 'checked' : ''} />
+        <span>Auto-digest new files</span>
+      </label>
+      <button class="chat-kb-toolbar-btn" id="chat-kb-new-folder-btn">+ Folder</button>
+      <button class="chat-kb-toolbar-btn chat-kb-toolbar-btn-primary" id="chat-kb-digest-all-btn" ${digestAllDisabled ? 'disabled' : ''}>
+        ${KB_ICON_DIGEST} ${isDigesting ? 'Digesting…' : `Digest All Pending (${pendingCount})`}
+      </button>
     </div>
-    <div class="chat-kb-upload-progress" id="chat-kb-upload-progress" style="display:none;">
-      <div class="chat-kb-upload-progress-label" id="chat-kb-upload-progress-label"></div>
-      <div class="chat-kb-upload-progress-bar">
-        <div class="chat-kb-upload-progress-fill" id="chat-kb-upload-progress-fill" style="width:0%;"></div>
-      </div>
+    <div class="chat-kb-raw-layout">
+      <aside class="chat-kb-folder-tree">
+        ${chatKbBrowserRenderFolderTree(kbState?.folders || [], selectedFolder)}
+      </aside>
+      <section class="chat-kb-raw-main">
+        <div class="chat-kb-breadcrumb">${crumb}</div>
+        <div class="chat-kb-upload" id="chat-kb-upload-zone">
+          <div class="chat-kb-upload-hint">
+            Drop a file here, or click the button. Uploads go to
+            <strong>${esc(selectedFolder || '(root)')}</strong>.
+          </div>
+          <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">Upload file</button>
+          <input type="file" id="chat-kb-upload-input" style="display:none;" />
+        </div>
+        <div class="chat-kb-upload-progress" id="chat-kb-upload-progress"
+             style="display:${chatKbBrowserState.ingestingRawId ? '' : 'none'};">
+          <div class="chat-kb-upload-progress-label" id="chat-kb-upload-progress-label">${
+            chatKbBrowserState.ingestingRawId
+              ? `${KB_ICON_INGEST} Ingesting ${esc(chatKbBrowserState.ingestingFilename || '')}…`
+              : ''
+          }</div>
+          <div class="chat-kb-upload-progress-bar">
+            <div class="chat-kb-upload-progress-fill${chatKbBrowserState.ingestingRawId ? ' indeterminate' : ''}"
+                 id="chat-kb-upload-progress-fill" style="width:${chatKbBrowserState.ingestingRawId ? '100%' : '0%'};"></div>
+          </div>
+        </div>
+        <ul class="chat-kb-raw-list">
+          ${rows}
+        </ul>
+        ${emptyMsg}
+      </section>
     </div>
-    <ul class="chat-kb-raw-list">
-      ${rows}
-    </ul>
-    ${emptyMsg}
   `;
+}
+
+function chatKbBrowserFormatBreadcrumb(folderPath) {
+  const parts = (folderPath || '').split('/').filter(Boolean);
+  const segments = [`<a href="#" class="chat-kb-crumb-link" data-kb-folder="">root</a>`];
+  let acc = '';
+  for (const part of parts) {
+    acc = acc ? `${acc}/${part}` : part;
+    segments.push(`<a href="#" class="chat-kb-crumb-link" data-kb-folder="${esc(acc)}">${esc(part)}</a>`);
+  }
+  return segments.join(' <span class="chat-kb-crumb-sep">/</span> ');
+}
+
+function chatKbBrowserRenderFolderTree(folders, selectedFolder) {
+  // Flatten every folder + implicit ancestors into a sorted set. Root
+  // ('') is always rendered at depth 0.
+  const allPaths = new Set(['']);
+  for (const f of folders) {
+    const p = f.folderPath || '';
+    if (!p) continue;
+    allPaths.add(p);
+    const parts = p.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      allPaths.add(parts.slice(0, i).join('/'));
+    }
+  }
+  const sorted = Array.from(allPaths).sort();
+  return sorted.map((p) => {
+    const depth = p ? p.split('/').length : 0;
+    const label = p === '' ? '(root)' : p.split('/').pop();
+    const isSelected = p === (selectedFolder || '');
+    const controls = p !== '' ? `
+      <button class="chat-kb-folder-btn" data-kb-folder-rename="${esc(p)}" title="Rename">✎</button>
+      <button class="chat-kb-folder-btn chat-kb-folder-btn-del" data-kb-folder-delete="${esc(p)}" title="Delete">×</button>
+    ` : '';
+    return `
+      <div class="chat-kb-folder-row ${isSelected ? 'selected' : ''}" data-kb-folder-select="${esc(p)}" style="padding-left: ${6 + depth * 14}px;">
+        <span class="chat-kb-folder-label" title="${esc(p || 'root')}">${esc(label)}</span>
+        ${controls}
+      </div>
+    `;
+  }).join('');
+}
+
+function chatKbStatusIcon(status) {
+  if (status === 'ingesting' || status === 'ingested') return KB_ICON_INGEST;
+  if (status === 'digesting' || status === 'digested') return KB_ICON_DIGEST;
+  return '';
 }
 
 function chatKbBrowserRawRow(raw) {
   const size = chatKbFormatSize(raw.sizeBytes || 0);
   const when = raw.uploadedAt ? chatKbFormatRelative(raw.uploadedAt) : '';
-  const errorLine = raw.error
-    ? `<div class="chat-kb-raw-error">${esc(raw.error)}</div>`
+  const errorLine = raw.errorMessage
+    ? `<div class="chat-kb-raw-error">${esc(raw.errorMessage)}</div>`
     : '';
+  const canDigest = raw.status === 'ingested' || raw.status === 'pending-delete' || raw.status === 'failed';
+  const digestBtn = canDigest
+    ? `<button class="chat-kb-raw-digest" data-kb-digest="${esc(raw.rawId)}" title="Digest now">${KB_ICON_DIGEST}</button>`
+    : '';
+  const statusIcon = chatKbStatusIcon(raw.status);
   return `
     <li class="chat-kb-raw-row" data-kb-raw-id="${esc(raw.rawId)}">
       <span class="chat-kb-raw-filename" title="${esc(raw.filename)}">${esc(raw.filename)}</span>
       <span class="chat-kb-raw-meta">${esc(size)} · ${esc(when)}</span>
-      <span class="chat-kb-raw-status ${esc(raw.status)}">${esc(raw.status)}</span>
-      <button class="chat-kb-raw-delete" data-kb-del="${esc(raw.rawId)}" title="Delete">×</button>
+      <span class="chat-kb-raw-status ${esc(raw.status)}">${statusIcon} ${esc(raw.status)}</span>
+      ${digestBtn}
+      <button class="chat-kb-raw-delete"
+              data-kb-del="${esc(raw.rawId)}"
+              data-kb-del-folder="${esc(raw.folderPath || '')}"
+              data-kb-del-filename="${esc(raw.filename)}"
+              title="Delete this location">×</button>
       ${errorLine}
     </li>
   `;
@@ -1980,8 +2130,242 @@ function chatKbBrowserWireRawTab() {
     });
   }
   document.querySelectorAll('.chat-kb-raw-delete').forEach((el) => {
-    el.onclick = () => chatKbDeleteRaw(el.dataset.kbDel);
+    el.onclick = () => chatKbDeleteLocation(
+      el.dataset.kbDel,
+      el.dataset.kbDelFolder || '',
+      el.dataset.kbDelFilename || '',
+    );
   });
+  document.querySelectorAll('.chat-kb-raw-digest').forEach((el) => {
+    el.onclick = () => chatKbDigestRaw(el.dataset.kbDigest);
+  });
+  document.querySelectorAll('[data-kb-folder-select]').forEach((el) => {
+    el.onclick = (e) => {
+      if (e.target.closest('[data-kb-folder-rename],[data-kb-folder-delete]')) return;
+      chatKbBrowserSelectFolder(el.dataset.kbFolderSelect || '');
+    };
+  });
+  document.querySelectorAll('[data-kb-folder-rename]').forEach((el) => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      chatKbBrowserRenameFolder(el.dataset.kbFolderRename || '');
+    };
+  });
+  document.querySelectorAll('[data-kb-folder-delete]').forEach((el) => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      chatKbBrowserDeleteFolder(el.dataset.kbFolderDelete || '');
+    };
+  });
+  document.querySelectorAll('.chat-kb-crumb-link').forEach((el) => {
+    el.onclick = (e) => {
+      e.preventDefault();
+      chatKbBrowserSelectFolder(el.dataset.kbFolder || '');
+    };
+  });
+  const autoDigestEl = document.getElementById('chat-kb-autodigest-toggle');
+  if (autoDigestEl) autoDigestEl.onchange = () => chatKbBrowserToggleAutoDigest(autoDigestEl.checked);
+  const newFolderBtn = document.getElementById('chat-kb-new-folder-btn');
+  if (newFolderBtn) newFolderBtn.onclick = chatKbBrowserCreateFolder;
+  const digestAllBtn = document.getElementById('chat-kb-digest-all-btn');
+  if (digestAllBtn) digestAllBtn.onclick = chatKbBrowserDigestAll;
+}
+
+function chatKbBrowserSelectFolder(folderPath) {
+  if (!chatKbBrowserState) return;
+  chatKbBrowserState.selectedFolder = folderPath || '';
+  chatKbBrowserRefetch();
+}
+
+async function chatKbBrowserToggleAutoDigest(enabled) {
+  if (!chatKbBrowserState) return;
+  try {
+    await chatFetch(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/auto-digest`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoDigest: enabled }),
+      },
+    );
+    chatKbBrowserState.autoDigest = enabled;
+    await chatKbBrowserRefetch();
+  } catch (err) {
+    chatShowAlert('Could not update auto-digest: ' + err.message);
+    const el = document.getElementById('chat-kb-autodigest-toggle');
+    if (el) el.checked = !enabled;
+  }
+}
+
+async function chatKbBrowserCreateFolder() {
+  if (!chatKbBrowserState) return;
+  const parent = chatKbBrowserState.selectedFolder || '';
+  const parentLabel = parent || '(root)';
+  const name = await chatShowPrompt(`Folder name (created inside ${parentLabel}):`, { title: 'New Folder' });
+  if (!name || !name.trim()) return;
+  const folderPath = parent ? `${parent}/${name.trim()}` : name.trim();
+  try {
+    await chatFetch(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/folders`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folderPath }),
+      },
+    );
+    await chatKbBrowserRefetch();
+  } catch (err) {
+    chatShowAlert('Could not create folder: ' + err.message);
+  }
+}
+
+async function chatKbBrowserRenameFolder(fromPath) {
+  if (!chatKbBrowserState || !fromPath) return;
+  const toPath = await chatShowPrompt(`Rename folder "${fromPath}" to:`, { title: 'Rename Folder', defaultValue: fromPath });
+  if (!toPath || toPath === fromPath) return;
+  try {
+    await chatFetch(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/folders`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fromPath, toPath: toPath.trim() }),
+      },
+    );
+    // If the renamed folder was the selected one (or an ancestor),
+    // rebase the selection so we don't fetch a ghost path next tick.
+    if (
+      chatKbBrowserState.selectedFolder === fromPath ||
+      chatKbBrowserState.selectedFolder.startsWith(`${fromPath}/`)
+    ) {
+      chatKbBrowserState.selectedFolder =
+        chatKbBrowserState.selectedFolder.replace(fromPath, toPath.trim());
+    }
+    await chatKbBrowserRefetch();
+  } catch (err) {
+    chatShowAlert('Could not rename folder: ' + err.message);
+  }
+}
+
+async function chatKbBrowserDeleteFolder(folderPath) {
+  if (!chatKbBrowserState || !folderPath) return;
+  if (!await chatShowConfirm(`Delete folder "${folderPath}" and everything in it?`, { title: 'Delete Folder', confirmLabel: 'Delete', destructive: true })) return;
+  try {
+    await chatFetch(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/folders?folder=${encodeURIComponent(folderPath)}&cascade=true`,
+      { method: 'DELETE' },
+    );
+    // If we were looking at the deleted folder (or a descendant),
+    // fall back to root.
+    if (
+      chatKbBrowserState.selectedFolder === folderPath ||
+      chatKbBrowserState.selectedFolder.startsWith(`${folderPath}/`)
+    ) {
+      chatKbBrowserState.selectedFolder = '';
+    }
+    await chatKbBrowserRefetch();
+  } catch (err) {
+    chatShowAlert('Could not delete folder: ' + err.message);
+  }
+}
+
+async function chatKbBrowserDigestAll() {
+  if (!chatKbBrowserState) return;
+  // Derive guard from counters — isDigesting is computed in the template.
+  const counters = chatKbBrowserState.state?.counters || {};
+  if ((counters.rawByStatus?.digesting || 0) > 0) return;
+  if (!await chatShowConfirm('Run digestion for every pending file in this workspace?', { title: 'Digest All', confirmLabel: 'Digest All' })) return;
+  await chatFetch(
+    `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/digest-all`,
+    { method: 'POST' },
+  );
+  // The 202 fires immediately; refetch picks up the status change from
+  // the background work. The button auto-disables via isDigesting.
+  await chatKbBrowserRefetch();
+}
+
+// ── Entries tab ─────────────────────────────────────────────────────────────
+
+async function chatKbBrowserRefetchEntries() {
+  if (!chatKbBrowserState) return;
+  chatKbBrowserState.entries.loading = true;
+  try {
+    const url = chatApiUrl(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/entries`,
+    );
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`GET /kb/entries returned ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState) return;
+    chatKbBrowserState.entries.items = Array.isArray(data.entries) ? data.entries : [];
+  } catch (err) {
+    console.error('[kb] entries refetch failed:', err);
+  } finally {
+    if (chatKbBrowserState) {
+      chatKbBrowserState.entries.loading = false;
+      if (chatKbBrowserState.activeTab === 'entries') chatKbBrowserRenderTab();
+    }
+  }
+}
+
+function chatKbBrowserEntriesTab() {
+  const s = chatKbBrowserState.entries;
+  const items = Array.isArray(s.items) ? s.items : [];
+  if (s.loading && items.length === 0) {
+    return '<p class="chat-kb-empty">Loading entries…</p>';
+  }
+  if (items.length === 0) {
+    return '<p class="chat-kb-empty">No entries yet. Upload files and digest them to populate this list.</p>';
+  }
+  const rows = items.map((e) => {
+    const isSelected = e.entryId === s.selectedEntryId;
+    const tagBadges = (e.tags || [])
+      .slice(0, 6)
+      .map((t) => `<span class="chat-kb-entry-tag">${esc(t)}</span>`)
+      .join('');
+    return `
+      <li class="chat-kb-entry-row ${isSelected ? 'selected' : ''}" data-kb-entry-id="${esc(e.entryId)}">
+        <div class="chat-kb-entry-title">${esc(e.title || e.entryId)}</div>
+        <div class="chat-kb-entry-summary">${esc(e.summary || '')}</div>
+        <div class="chat-kb-entry-tags">${tagBadges}</div>
+      </li>
+    `;
+  }).join('');
+  const bodyHtml = s.selectedEntryId && s.entryBody
+    ? `<pre class="chat-kb-entry-body">${esc(s.entryBody)}</pre>`
+    : '<p class="chat-kb-empty">Click an entry to preview its body.</p>';
+  return `
+    <div class="chat-kb-entries-layout">
+      <ul class="chat-kb-entries-list">${rows}</ul>
+      <div class="chat-kb-entry-detail">${bodyHtml}</div>
+    </div>
+  `;
+}
+
+function chatKbBrowserWireEntriesTab() {
+  document.querySelectorAll('[data-kb-entry-id]').forEach((el) => {
+    el.onclick = () => chatKbBrowserOpenEntry(el.dataset.kbEntryId);
+  });
+}
+
+async function chatKbBrowserOpenEntry(entryId) {
+  if (!chatKbBrowserState || !entryId) return;
+  chatKbBrowserState.entries.selectedEntryId = entryId;
+  chatKbBrowserState.entries.entryBody = '';
+  chatKbBrowserRenderTab();
+  try {
+    const url = chatApiUrl(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/entries/${encodeURIComponent(entryId)}`,
+    );
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`GET /kb/entries/${entryId} returned ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState || chatKbBrowserState.entries.selectedEntryId !== entryId) return;
+    chatKbBrowserState.entries.entryBody = data.body || '';
+    chatKbBrowserRenderTab();
+  } catch (err) {
+    chatShowAlert('Could not load entry: ' + err.message);
+  }
 }
 
 async function chatKbUploadFile(file) {
@@ -1990,10 +2374,9 @@ async function chatKbUploadFile(file) {
   const btn = document.getElementById('chat-kb-upload-btn');
   if (btn) btn.disabled = true;
 
-  // Show progress UI. We intentionally grab the three elements once up
-  // front — the browser tab isn't re-rendered while an upload is in
-  // flight, so these references stay valid for the lifetime of the
-  // request.
+  // Grab the three progress elements once up front — the browser tab
+  // isn't re-rendered while an upload is in flight, so these references
+  // stay valid for the lifetime of the request.
   const progressEl = document.getElementById('chat-kb-upload-progress');
   const labelEl = document.getElementById('chat-kb-upload-progress-label');
   const fillEl = document.getElementById('chat-kb-upload-progress-fill');
@@ -2007,12 +2390,16 @@ async function chatKbUploadFile(file) {
   // fetch() can't report upload progress, so we fall back to
   // XMLHttpRequest just like `chatUploadSingleFile` does for
   // conversation file chips. We reuse the same CSRF + credentials setup.
+  let uploadedRawId = null;
   try {
     if (!state.csrfToken) await fetchCsrfToken();
-    await new Promise((resolve, reject) => {
+    uploadedRawId = await new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
       const fd = new FormData();
       fd.append('file', file);
+      if (chatKbBrowserState.selectedFolder) {
+        fd.append('folder', chatKbBrowserState.selectedFolder);
+      }
       xhr.open(
         'POST',
         chatApiUrl(`workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw`),
@@ -2028,11 +2415,6 @@ async function chatKbUploadFile(file) {
         }
       };
       xhr.upload.onload = () => {
-        // Bytes are all on the wire; server is now writing the raw file
-        // and enqueuing it for the ingest worker. Swap to an
-        // indeterminate "Processing…" state so the user knows something
-        // is still happening during the gap between upload-complete and
-        // the HTTP response.
         if (fillEl) {
           fillEl.style.width = '100%';
           fillEl.classList.add('indeterminate');
@@ -2046,7 +2428,12 @@ async function chatKbUploadFile(file) {
           return;
         }
         if (xhr.status >= 200 && xhr.status < 300) {
-          resolve();
+          let rawId = null;
+          try {
+            const body = JSON.parse(xhr.responseText);
+            rawId = body?.entry?.rawId || null;
+          } catch { /* ignore */ }
+          resolve(rawId);
           return;
         }
         let message = `HTTP ${xhr.status}`;
@@ -2062,35 +2449,73 @@ async function chatKbUploadFile(file) {
       xhr.onabort = () => reject(new Error('Upload aborted'));
       xhr.send(fd);
     });
+    // Start tracking ingestion progress so the progress bar survives the
+    // upcoming refetch render cycle (the template checks ingestingRawId).
+    if (uploadedRawId && chatKbBrowserState) {
+      chatKbBrowserState.ingestingRawId = uploadedRawId;
+      chatKbBrowserState.ingestingFilename = file.name;
+    }
+    // Refetch so the file appears in the list immediately. The template
+    // will render the progress bar in "Ingesting…" mode because
+    // ingestingRawId is set. chatKbDismissIngestionProgress (called at
+    // the end of refetch) will clear it if the raw already left ingesting.
     await chatKbBrowserRefetch();
   } catch (err) {
-    alert('Upload failed: ' + err.message);
+    chatShowAlert('Upload failed: ' + err.message);
+    chatKbHideUploadProgress();
   } finally {
     chatKbBrowserState.uploading = false;
     const btn2 = document.getElementById('chat-kb-upload-btn');
     if (btn2) btn2.disabled = false;
-    const progressEl2 = document.getElementById('chat-kb-upload-progress');
-    const fillEl2 = document.getElementById('chat-kb-upload-progress-fill');
-    if (progressEl2) progressEl2.style.display = 'none';
-    if (fillEl2) {
-      fillEl2.classList.remove('indeterminate');
-      fillEl2.style.width = '0%';
-    }
   }
 }
 
-async function chatKbDeleteRaw(rawId) {
+/** Clear ingestion tracking state. The next render cycle will hide the bar. */
+function chatKbHideUploadProgress() {
+  if (chatKbBrowserState) {
+    chatKbBrowserState.ingestingRawId = null;
+    chatKbBrowserState.ingestingFilename = null;
+  }
+}
+
+/**
+ * Called after every refetch — if we're tracking an ingesting rawId and
+ * it has left the `ingesting` status, clear tracking and re-render so
+ * the progress bar disappears from the template.
+ */
+function chatKbDismissIngestionProgress() {
+  if (!chatKbBrowserState?.ingestingRawId) return;
+  const rawId = chatKbBrowserState.ingestingRawId;
+  const raw = (chatKbBrowserState.state?.raw || []).find((r) => r.rawId === rawId);
+  // Dismiss if the raw has moved past ingesting OR disappeared from the
+  // current page (e.g. user navigated to a different folder).
+  if (!raw || raw.status !== 'ingesting') {
+    chatKbHideUploadProgress();
+  }
+}
+
+async function chatKbDeleteLocation(rawId, folderPath, filename) {
   if (!chatKbBrowserState || !rawId) return;
-  if (!confirm('Delete this file and all its digested entries?')) return;
+  if (!await chatShowConfirm(`Delete "${filename}" from this folder?\n\nIf it's the last location, the raw file and its entries will be removed.`, { title: 'Delete File', confirmLabel: 'Delete', destructive: true })) return;
   try {
-    await chatFetch(
-      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw/${encodeURIComponent(rawId)}`,
-      { method: 'DELETE' },
-    );
+    let url = `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw/${encodeURIComponent(rawId)}`;
+    if (filename) {
+      url += `?folder=${encodeURIComponent(folderPath || '')}&filename=${encodeURIComponent(filename)}`;
+    }
+    await chatFetch(url, { method: 'DELETE' });
     await chatKbBrowserRefetch();
   } catch (err) {
-    alert('Delete failed: ' + err.message);
+    chatShowAlert('Delete failed: ' + err.message);
   }
+}
+
+async function chatKbDigestRaw(rawId) {
+  if (!chatKbBrowserState || !rawId) return;
+  await chatFetch(
+    `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw/${encodeURIComponent(rawId)}/digest`,
+    { method: 'POST' },
+  );
+  await chatKbBrowserRefetch();
 }
 
 function chatKbFormatSize(bytes) {

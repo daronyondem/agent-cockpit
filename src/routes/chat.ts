@@ -14,7 +14,13 @@ import { detectPandoc } from '../services/knowledgeBase/pandoc';
 import {
   KbIngestionService,
   KbDisabledError,
+  KbLocationConflictError,
+  KbValidationError,
 } from '../services/knowledgeBase/ingestion';
+import {
+  KbDigestionService,
+  KbDigestDisabledError,
+} from '../services/knowledgeBase/digest';
 import type { Request, Response, NextFunction, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
@@ -243,11 +249,24 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
 
   // Knowledge Base ingestion orchestrator. Owns the per-workspace queue
   // that runs format handlers (pdf/docx/pptx/passthrough) and emits
-  // `kb_state_update` frames when state.json changes.
+  // `kb_state_update` frames when the DB changes.
   const kbIngestion = new KbIngestionService({
     chatService,
     emit: broadcastKbStateUpdate,
   });
+
+  // Knowledge Base digestion orchestrator. Runs the configured Digestion
+  // CLI in `runOneShot` mode against each raw file's converted text and
+  // writes the resulting entries back into the DB + `entries/` tree.
+  const kbDigestion = new KbDigestionService({
+    chatService,
+    backendRegistry,
+    emit: broadcastKbStateUpdate,
+  });
+  // Late-bind the circular ingestion ↔ digestion dependency so that
+  // files auto-digest on ingestion completion when the workspace has
+  // `kbAutoDigest=true`.
+  kbIngestion.setDigestTrigger(kbDigestion);
 
   // Memory MCP server — exposes `memory_note` tool to non-Claude CLIs via the
   // stdio stub in `src/services/memoryMcp/stub.cjs`.  The router is mounted
@@ -1122,16 +1141,29 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   });
 
   // ── Workspace Knowledge Base ────────────────────────────────────────────────
-  // GET returns the KB state (pipeline counters, raw/entry/synthesis lists)
-  // together with the per-workspace enable flag so the KB Browser can render
-  // a single consolidated view. 404 is reserved for "workspace doesn't exist";
-  // an enabled workspace with no files yet returns 200 with an empty state
-  // scaffold (entries/raw empty, synthesis.status = 'empty').
+  // GET returns the KB state snapshot (pipeline counters, folder tree, and a
+  // page of raw rows in the currently-focused folder) together with the
+  // per-workspace enable flag so the KB Browser can render a single
+  // consolidated view. 404 is reserved for "workspace doesn't exist"; an
+  // enabled workspace with no files yet returns 200 with an empty snapshot
+  // (counters = 0, folders = [root]).
+  //
+  // Query params:
+  //   - folder: virtual folder to scope the raw listing to (default root)
+  //   - limit:  page size for the raw listing (default 500)
+  //   - offset: page offset for the raw listing (default 0)
   router.get('/workspaces/:hash/kb', async (req: Request, res: Response) => {
     try {
       const hash = param(req, 'hash');
       const enabled = await chatService.getWorkspaceKbEnabled(hash);
-      const state = await chatService.getOrInitKbState(hash);
+      const folderParam = typeof req.query.folder === 'string' ? req.query.folder : undefined;
+      const limitParam = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+      const offsetParam = typeof req.query.offset === 'string' ? Number(req.query.offset) : undefined;
+      const state = await chatService.getKbStateSnapshot(hash, {
+        folderPath: folderParam,
+        limit: Number.isFinite(limitParam) ? limitParam : undefined,
+        offset: Number.isFinite(offsetParam) ? offsetParam : undefined,
+      });
       if (state === null) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ enabled, state });
     } catch (err: unknown) {
@@ -1207,7 +1239,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
 
         // Pre-flight format guards — done here (not in the handler) so the
         // user sees an actionable error immediately instead of a failed
-        // ingestion entry sitting in state.json.
+        // ingestion entry sitting in state.db.
         const lowerName = file.originalname.toLowerCase();
         if (lowerName.endsWith('.doc')) {
           return res.status(400).json({
@@ -1226,15 +1258,33 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
           }
         }
 
+        // Virtual folder path is an optional multipart field. Empty string
+        // or missing = root. Normalization + segment validation happens
+        // inside the orchestrator so the route doesn't duplicate the rules.
+        const body = (req as unknown as { body?: Record<string, string> }).body || {};
+        const folderPath =
+          typeof body.folder === 'string'
+            ? body.folder
+            : typeof (req.query.folder) === 'string'
+              ? (req.query.folder as string)
+              : '';
+
         // Multer gives us the raw bytes on `file.buffer` when using memoryStorage.
         const result = await kbIngestion.enqueueUpload(hash, {
           buffer: file.buffer,
           filename: file.originalname,
           mimeType: file.mimetype || 'application/octet-stream',
+          folderPath,
         });
         res.status(202).json(result);
       } catch (err: unknown) {
         if (err instanceof KbDisabledError) {
+          return res.status(400).json({ error: err.message });
+        }
+        if (err instanceof KbLocationConflictError) {
+          return res.status(409).json({ error: err.message });
+        }
+        if (err instanceof KbValidationError) {
           return res.status(400).json({ error: err.message });
         }
         res.status(500).json({ error: (err as Error).message });
@@ -1246,13 +1296,198 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     try {
       const hash = param(req, 'hash');
       const rawId = param(req, 'rawId');
-      const removed = await kbIngestion.deleteRaw(hash, rawId);
+      // `?folder=...&filename=...` scopes the delete to one location
+      // and respects ref-counting (other locations + raw row survive).
+      // Without those params we purge the raw file entirely.
+      const folderParam = typeof req.query.folder === 'string' ? req.query.folder : undefined;
+      const filenameParam = typeof req.query.filename === 'string' ? req.query.filename : undefined;
+      if (folderParam !== undefined && filenameParam) {
+        const removed = await kbIngestion.deleteLocation(hash, rawId, folderParam, filenameParam);
+        if (!removed) return res.status(404).json({ error: 'Location not found.' });
+        return res.json({ ok: true });
+      }
+      const removed = await kbIngestion.purgeRaw(hash, rawId);
       if (!removed) return res.status(404).json({ error: 'Raw file not found.' });
       res.json({ ok: true });
     } catch (err: unknown) {
       if (err instanceof KbDisabledError) {
         return res.status(400).json({ error: err.message });
       }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── KB auto-digest toggle ───────────────────────────────────────────────────
+  // Sets the per-workspace "auto-digest" flag. When true, newly-ingested
+  // files are automatically fed through the digestion CLI as soon as
+  // conversion completes. When false, the KB Browser exposes a "Digest
+  // All Pending" button instead. The flag lives on the workspace index.
+  router.put('/workspaces/:hash/kb/auto-digest', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { autoDigest } = req.body as { autoDigest?: boolean };
+      if (typeof autoDigest !== 'boolean') {
+        return res.status(400).json({ error: 'autoDigest must be a boolean' });
+      }
+      const hash = param(req, 'hash');
+      const result = await chatService.setWorkspaceKbAutoDigest(hash, autoDigest);
+      if (result === null) return res.status(404).json({ error: 'Workspace not found' });
+      res.json({ autoDigest: result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── KB digestion ────────────────────────────────────────────────────────────
+  // Trigger digestion for a single raw file (manual "Digest now" button).
+  // Fire-and-forget: returns 202 immediately; progress is streamed via
+  // `kb_state_update` WS frames. Errors land on the raw row's errorClass.
+  router.post(
+    '/workspaces/:hash/kb/raw/:rawId/digest',
+    csrfGuard,
+    async (req: Request, res: Response) => {
+      try {
+        const hash = param(req, 'hash');
+        const rawId = param(req, 'rawId');
+        kbDigestion.enqueueDigest(hash, rawId).catch((err) => {
+          console.error(`[kb] digest ${rawId} error:`, err);
+        });
+        res.status(202).json({ accepted: true });
+      } catch (err: unknown) {
+        if (err instanceof KbDigestDisabledError) {
+          return res.status(400).json({ error: err.message });
+        }
+        res.status(500).json({ error: (err as Error).message });
+      }
+    },
+  );
+
+  // Trigger digestion for every eligible raw file in the workspace
+  // (ingested + pending-delete). Fire-and-forget: returns 202 immediately.
+  // Fires `kb_state_update` frames with `batchProgress: {done, total}` as
+  // the run proceeds so the UI can show a progress bar.
+  router.post('/workspaces/:hash/kb/digest-all', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      kbDigestion.enqueueBatchDigest(hash).catch((err) => {
+        console.error('[kb] digest-all error:', err);
+      });
+      res.status(202).json({ accepted: true });
+    } catch (err: unknown) {
+      if (err instanceof KbDigestDisabledError) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── KB entries ──────────────────────────────────────────────────────────────
+  // GET /entries returns a paginated list of digested entries, optionally
+  // filtered by folder (via the joined raw_locations), tag, or rawId.
+  router.get('/workspaces/:hash/kb/entries', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const enabled = await chatService.getWorkspaceKbEnabled(hash);
+      if (!enabled) return res.json({ entries: [] });
+      const db = chatService.getKbDb(hash);
+      if (!db) return res.json({ entries: [] });
+
+      const folder = typeof req.query.folder === 'string' ? req.query.folder : undefined;
+      const tag = typeof req.query.tag === 'string' ? req.query.tag : undefined;
+      const rawId = typeof req.query.rawId === 'string' ? req.query.rawId : undefined;
+      const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
+      const offset = typeof req.query.offset === 'string' ? Number(req.query.offset) : undefined;
+
+      const entries = db.listEntries({
+        folderPath: folder,
+        tag,
+        rawId,
+        limit: Number.isFinite(limit) ? limit : undefined,
+        offset: Number.isFinite(offset) ? offset : undefined,
+      });
+      res.json({ entries });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /entries/:entryId returns a single entry's metadata + full body
+  // read from disk. The body is the rendered `entry.md` (YAML frontmatter
+  // + markdown) — the UI strips the frontmatter for preview.
+  router.get('/workspaces/:hash/kb/entries/:entryId', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const entryId = param(req, 'entryId');
+      if (!/^[a-zA-Z0-9_.-]+$/.test(entryId)) {
+        return res.status(400).json({ error: 'Invalid entryId.' });
+      }
+      const db = chatService.getKbDb(hash);
+      if (!db) return res.status(404).json({ error: 'KB not enabled' });
+      const entry = db.getEntry(entryId);
+      if (!entry) return res.status(404).json({ error: 'Entry not found' });
+      const entryPath = path.join(chatService.getKbEntriesDir(hash), entryId, 'entry.md');
+      let body = '';
+      try {
+        body = await fs.promises.readFile(entryPath, 'utf8');
+      } catch {
+        body = '';
+      }
+      res.json({ entry, body });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── KB folders ──────────────────────────────────────────────────────────────
+  // Create a virtual folder. Idempotent — re-creating an existing folder
+  // is a no-op and returns 200 with the normalized path.
+  router.post('/workspaces/:hash/kb/folders', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const { folderPath } = req.body as { folderPath?: string };
+      if (typeof folderPath !== 'string' || folderPath.trim() === '') {
+        return res.status(400).json({ error: 'folderPath is required.' });
+      }
+      const normalized = await kbIngestion.createFolder(hash, folderPath);
+      res.json({ folderPath: normalized });
+    } catch (err: unknown) {
+      if (err instanceof KbDisabledError) return res.status(400).json({ error: err.message });
+      if (err instanceof KbValidationError) return res.status(400).json({ error: err.message });
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Rename a folder subtree in-place. All files under the old path move
+  // to the new path via a single raw_locations update (no disk moves).
+  router.put('/workspaces/:hash/kb/folders', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const { fromPath, toPath } = req.body as { fromPath?: string; toPath?: string };
+      if (typeof fromPath !== 'string' || typeof toPath !== 'string') {
+        return res.status(400).json({ error: 'fromPath and toPath are required.' });
+      }
+      await kbIngestion.renameFolder(hash, fromPath, toPath);
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      if (err instanceof KbDisabledError) return res.status(400).json({ error: err.message });
+      if (err instanceof KbValidationError) return res.status(400).json({ error: err.message });
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Delete a folder subtree. `?cascade=true` removes every location
+  // under the subtree (following ref-counted raw delete rules). Without
+  // cascade the call errors if the subtree contains any files.
+  router.delete('/workspaces/:hash/kb/folders', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const folderPath = typeof req.query.folder === 'string' ? req.query.folder : undefined;
+      if (!folderPath) return res.status(400).json({ error: 'folder query parameter is required.' });
+      const cascade = req.query.cascade === 'true' || req.query.cascade === '1';
+      await kbIngestion.deleteFolder(hash, folderPath, { cascade });
+      res.json({ ok: true });
+    } catch (err: unknown) {
+      if (err instanceof KbDisabledError) return res.status(400).json({ error: err.message });
+      if (err instanceof KbValidationError) return res.status(400).json({ error: err.message });
       res.status(500).json({ error: (err as Error).message });
     }
   });
