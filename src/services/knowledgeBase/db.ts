@@ -37,7 +37,7 @@ import type {
 } from '../../types';
 
 /** Version of the DB's own schema. Bumped on destructive schema changes. */
-export const KB_DB_SCHEMA_VERSION = 1;
+export const KB_DB_SCHEMA_VERSION = 2;
 
 /** Default page size for folder listings. */
 export const DEFAULT_RAW_PAGE_SIZE = 500;
@@ -91,7 +91,8 @@ const SCHEMA_DDL = `
     summary        TEXT NOT NULL,
     schema_version INTEGER NOT NULL,
     stale_schema   INTEGER NOT NULL DEFAULT 0,
-    digested_at    TEXT NOT NULL
+    digested_at    TEXT NOT NULL,
+    needs_synthesis INTEGER NOT NULL DEFAULT 1
   );
   CREATE INDEX IF NOT EXISTS idx_entries_raw ON entries(raw_id);
 
@@ -101,6 +102,38 @@ const SCHEMA_DDL = `
     PRIMARY KEY (entry_id, tag)
   );
   CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
+
+  -- ── Synthesis (Dreaming) ──────────────────────────────────────────────────
+
+  CREATE TABLE IF NOT EXISTS synthesis_meta (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS synthesis_topics (
+    topic_id    TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    summary     TEXT,
+    content     TEXT,
+    updated_at  TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS synthesis_topic_entries (
+    topic_id TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
+    entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+    PRIMARY KEY (topic_id, entry_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_ste_entry ON synthesis_topic_entries(entry_id);
+
+  CREATE TABLE IF NOT EXISTS synthesis_connections (
+    source_topic TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
+    target_topic TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
+    relationship TEXT NOT NULL,
+    confidence   TEXT NOT NULL DEFAULT 'inferred',
+    evidence     TEXT,
+    PRIMARY KEY (source_topic, target_topic)
+  );
+  CREATE INDEX IF NOT EXISTS idx_conn_target ON synthesis_connections(target_topic);
 `;
 
 /** Raw DB row shape for the `raw` table. */
@@ -161,6 +194,57 @@ export interface InsertEntryParams {
 export interface RawError {
   errorClass: KbErrorClass;
   errorMessage: string;
+}
+
+// ── Synthesis types ─────────────────────────────────────────────────────────
+
+/** Parameters for inserting/updating a synthesis topic. */
+export interface UpsertTopicParams {
+  topicId: string;
+  title: string;
+  summary: string | null;
+  content: string | null;
+  updatedAt: string;
+}
+
+/** Parameters for inserting a synthesis connection. */
+export interface InsertConnectionParams {
+  sourceTopic: string;
+  targetTopic: string;
+  relationship: string;
+  confidence: string;
+  evidence: string | null;
+}
+
+/** DB row shape for synthesis_topics. */
+export interface SynthesisTopicRow {
+  topicId: string;
+  title: string;
+  summary: string | null;
+  content: string | null;
+  updatedAt: string;
+  entryCount: number;
+  connectionCount: number;
+}
+
+/** DB row shape for synthesis_connections. */
+export interface SynthesisConnectionRow {
+  sourceTopic: string;
+  targetTopic: string;
+  relationship: string;
+  confidence: string;
+  evidence: string | null;
+}
+
+/** Synthesis status snapshot for API responses. */
+export interface SynthesisSnapshot {
+  status: string;
+  lastRunAt: string | null;
+  lastRunError: string | null;
+  topicCount: number;
+  connectionCount: number;
+  needsSynthesisCount: number;
+  godNodes: string[];
 }
 
 /** One row in the raw_locations table, typed. */
@@ -812,6 +896,341 @@ export class KbDatabase {
     return this.entryExists(entryId);
   }
 
+  // ── Synthesis (Dreaming) ──────────────────────────────────────────────────
+
+  /** Get a synthesis_meta value by key, or null if missing. */
+  getSynthesisMeta(key: string): string | null {
+    const row = this.db
+      .prepare<unknown[], { value: string }>(
+        'SELECT value FROM synthesis_meta WHERE key = ?',
+      )
+      .get(key);
+    return row?.value ?? null;
+  }
+
+  /** Set a synthesis_meta value (upsert). */
+  setSynthesisMeta(key: string, value: string): void {
+    this.db
+      .prepare(
+        'INSERT INTO synthesis_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value',
+      )
+      .run(key, value);
+  }
+
+  /** Get the full synthesis status snapshot for API responses. */
+  getSynthesisSnapshot(): SynthesisSnapshot {
+    const status = this.getSynthesisMeta('status') ?? 'idle';
+    const lastRunAt = this.getSynthesisMeta('last_run_at');
+    const lastRunError = this.getSynthesisMeta('last_run_error');
+    const godNodesRaw = this.getSynthesisMeta('god_nodes');
+    const godNodes: string[] = godNodesRaw ? JSON.parse(godNodesRaw) : [];
+
+    const topicCountRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_topics')
+      .get();
+    const connCountRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_connections')
+      .get();
+    const needsRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM entries WHERE needs_synthesis = 1')
+      .get();
+
+    return {
+      status,
+      lastRunAt,
+      lastRunError,
+      topicCount: topicCountRow?.n ?? 0,
+      connectionCount: connCountRow?.n ?? 0,
+      needsSynthesisCount: needsRow?.n ?? 0,
+      godNodes,
+    };
+  }
+
+  /** Count entries that need synthesis. */
+  countNeedsSynthesis(): number {
+    const row = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM entries WHERE needs_synthesis = 1')
+      .get();
+    return row?.n ?? 0;
+  }
+
+  /** List entry IDs that need synthesis (for the dreaming pipeline). */
+  listNeedsSynthesisEntryIds(): string[] {
+    return this.db
+      .prepare<unknown[], { entry_id: string }>(
+        'SELECT entry_id FROM entries WHERE needs_synthesis = 1 ORDER BY entry_id',
+      )
+      .all()
+      .map((r) => r.entry_id);
+  }
+
+  /** Mark entries as no longer needing synthesis. */
+  clearNeedsSynthesis(entryIds: string[]): void {
+    if (entryIds.length === 0) return;
+    const placeholders = entryIds.map(() => '?').join(', ');
+    this.db
+      .prepare(`UPDATE entries SET needs_synthesis = 0 WHERE entry_id IN (${placeholders})`)
+      .run(...entryIds);
+  }
+
+  /** Mark all entries as needing synthesis (for full rebuild). */
+  markAllNeedsSynthesis(): void {
+    this.db.exec('UPDATE entries SET needs_synthesis = 1');
+  }
+
+  /**
+   * When entries are deleted, mark remaining entries that shared a topic
+   * with the deleted ones as needing synthesis. This ensures topics
+   * referencing deleted content get updated on the next dream run.
+   */
+  markCoTopicEntriesStale(deletedEntryIds: string[]): void {
+    if (deletedEntryIds.length === 0) return;
+    const placeholders = deletedEntryIds.map(() => '?').join(', ');
+    // Find all entries that share a topic with any of the deleted entries,
+    // excluding the deleted entries themselves.
+    this.db
+      .prepare(
+        `UPDATE entries SET needs_synthesis = 1
+         WHERE entry_id IN (
+           SELECT DISTINCT ste2.entry_id
+           FROM synthesis_topic_entries ste1
+           JOIN synthesis_topic_entries ste2 ON ste1.topic_id = ste2.topic_id
+           WHERE ste1.entry_id IN (${placeholders})
+             AND ste2.entry_id NOT IN (${placeholders})
+         )`,
+      )
+      .run(...deletedEntryIds, ...deletedEntryIds);
+  }
+
+  // ── Synthesis Topics ────────────────────────────────────────────────────
+
+  upsertTopic(params: UpsertTopicParams): void {
+    this.db
+      .prepare(
+        `INSERT INTO synthesis_topics (topic_id, title, summary, content, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(topic_id) DO UPDATE SET
+           title = excluded.title,
+           summary = excluded.summary,
+           content = excluded.content,
+           updated_at = excluded.updated_at`,
+      )
+      .run(params.topicId, params.title, params.summary, params.content, params.updatedAt);
+  }
+
+  deleteTopic(topicId: string): void {
+    // CASCADE deletes synthesis_topic_entries and synthesis_connections rows.
+    this.db
+      .prepare('DELETE FROM synthesis_topics WHERE topic_id = ?')
+      .run(topicId);
+  }
+
+  getTopic(topicId: string): SynthesisTopicRow | null {
+    const row = this.db
+      .prepare<
+        unknown[],
+        { topic_id: string; title: string; summary: string | null; content: string | null; updated_at: string }
+      >(
+        'SELECT topic_id, title, summary, content, updated_at FROM synthesis_topics WHERE topic_id = ?',
+      )
+      .get(topicId);
+    if (!row) return null;
+
+    const entryCount = this.db
+      .prepare<unknown[], { n: number }>(
+        'SELECT COUNT(*) AS n FROM synthesis_topic_entries WHERE topic_id = ?',
+      )
+      .get(topicId)?.n ?? 0;
+
+    const connectionCount = this.db
+      .prepare<unknown[], { n: number }>(
+        'SELECT COUNT(*) AS n FROM synthesis_connections WHERE source_topic = ? OR target_topic = ?',
+      )
+      .get(topicId, topicId)?.n ?? 0;
+
+    return {
+      topicId: row.topic_id,
+      title: row.title,
+      summary: row.summary,
+      content: row.content,
+      updatedAt: row.updated_at,
+      entryCount,
+      connectionCount,
+    };
+  }
+
+  /** List all topics with entry and connection counts. */
+  listTopics(): SynthesisTopicRow[] {
+    const rows = this.db
+      .prepare<
+        unknown[],
+        { topic_id: string; title: string; summary: string | null; content: string | null; updated_at: string; entry_count: number; conn_count: number }
+      >(
+        `SELECT
+           t.topic_id, t.title, t.summary, t.content, t.updated_at,
+           (SELECT COUNT(*) FROM synthesis_topic_entries WHERE topic_id = t.topic_id) AS entry_count,
+           (SELECT COUNT(*) FROM synthesis_connections WHERE source_topic = t.topic_id OR target_topic = t.topic_id) AS conn_count
+         FROM synthesis_topics t
+         ORDER BY t.title`,
+      )
+      .all();
+    return rows.map((r) => ({
+      topicId: r.topic_id,
+      title: r.title,
+      summary: r.summary,
+      content: r.content,
+      updatedAt: r.updated_at,
+      entryCount: r.entry_count,
+      connectionCount: r.conn_count,
+    }));
+  }
+
+  /** List all topics as lightweight summaries (for the all-topics.txt file). */
+  listTopicSummaries(): Array<{ topicId: string; title: string; summary: string | null }> {
+    return this.db
+      .prepare<unknown[], { topic_id: string; title: string; summary: string | null }>(
+        'SELECT topic_id, title, summary FROM synthesis_topics ORDER BY title',
+      )
+      .all()
+      .map((r) => ({ topicId: r.topic_id, title: r.title, summary: r.summary }));
+  }
+
+  // ── Synthesis Topic-Entry Membership ────────────────────────────────────
+
+  assignEntries(topicId: string, entryIds: string[]): void {
+    if (entryIds.length === 0) return;
+    const stmt = this.db.prepare(
+      'INSERT OR IGNORE INTO synthesis_topic_entries (topic_id, entry_id) VALUES (?, ?)',
+    );
+    for (const eid of entryIds) {
+      stmt.run(topicId, eid);
+    }
+  }
+
+  unassignEntries(topicId: string, entryIds: string[]): void {
+    if (entryIds.length === 0) return;
+    const stmt = this.db.prepare(
+      'DELETE FROM synthesis_topic_entries WHERE topic_id = ? AND entry_id = ?',
+    );
+    for (const eid of entryIds) {
+      stmt.run(topicId, eid);
+    }
+  }
+
+  /** List entry IDs assigned to a topic. */
+  listTopicEntryIds(topicId: string): string[] {
+    return this.db
+      .prepare<unknown[], { entry_id: string }>(
+        'SELECT entry_id FROM synthesis_topic_entries WHERE topic_id = ? ORDER BY entry_id',
+      )
+      .all(topicId)
+      .map((r) => r.entry_id);
+  }
+
+  /** List topics an entry belongs to. */
+  listEntryTopicIds(entryId: string): string[] {
+    return this.db
+      .prepare<unknown[], { topic_id: string }>(
+        'SELECT topic_id FROM synthesis_topic_entries WHERE entry_id = ? ORDER BY topic_id',
+      )
+      .all(entryId)
+      .map((r) => r.topic_id);
+  }
+
+  // ── Synthesis Connections ───────────────────────────────────────────────
+
+  upsertConnection(params: InsertConnectionParams): void {
+    this.db
+      .prepare(
+        `INSERT INTO synthesis_connections (source_topic, target_topic, relationship, confidence, evidence)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(source_topic, target_topic) DO UPDATE SET
+           relationship = excluded.relationship,
+           confidence = excluded.confidence,
+           evidence = excluded.evidence`,
+      )
+      .run(params.sourceTopic, params.targetTopic, params.relationship, params.confidence, params.evidence);
+  }
+
+  removeConnection(sourceTopic: string, targetTopic: string): void {
+    this.db
+      .prepare('DELETE FROM synthesis_connections WHERE source_topic = ? AND target_topic = ?')
+      .run(sourceTopic, targetTopic);
+  }
+
+  /** List connections for a topic (both directions). */
+  listConnectionsForTopic(topicId: string): SynthesisConnectionRow[] {
+    const rows = this.db
+      .prepare<
+        unknown[],
+        { source_topic: string; target_topic: string; relationship: string; confidence: string; evidence: string | null }
+      >(
+        `SELECT source_topic, target_topic, relationship, confidence, evidence
+         FROM synthesis_connections
+         WHERE source_topic = ? OR target_topic = ?
+         ORDER BY source_topic, target_topic`,
+      )
+      .all(topicId, topicId);
+    return rows.map((r) => ({
+      sourceTopic: r.source_topic,
+      targetTopic: r.target_topic,
+      relationship: r.relationship,
+      confidence: r.confidence,
+      evidence: r.evidence,
+    }));
+  }
+
+  /** List all connections (for connections.md generation). */
+  listAllConnections(): SynthesisConnectionRow[] {
+    const rows = this.db
+      .prepare<
+        unknown[],
+        { source_topic: string; target_topic: string; relationship: string; confidence: string; evidence: string | null }
+      >(
+        'SELECT source_topic, target_topic, relationship, confidence, evidence FROM synthesis_connections ORDER BY source_topic, target_topic',
+      )
+      .all();
+    return rows.map((r) => ({
+      sourceTopic: r.source_topic,
+      targetTopic: r.target_topic,
+      relationship: r.relationship,
+      confidence: r.confidence,
+      evidence: r.evidence,
+    }));
+  }
+
+  // ── Synthesis Bulk Operations ──────────────────────────────────────────
+
+  /** Wipe all synthesis data (for Re-Dream full rebuild). */
+  wipeSynthesis(): void {
+    this.transaction(() => {
+      this.db.exec('DELETE FROM synthesis_connections');
+      this.db.exec('DELETE FROM synthesis_topic_entries');
+      this.db.exec('DELETE FROM synthesis_topics');
+      this.setSynthesisMeta('last_run_at', '');
+      this.setSynthesisMeta('last_run_error', '');
+      this.setSynthesisMeta('god_nodes', '[]');
+    });
+  }
+
+  /**
+   * Detect god nodes: topics with disproportionately many entries or
+   * connections (> 3× average, minimum 10 entries). Returns topic IDs.
+   */
+  detectGodNodes(): string[] {
+    const topics = this.listTopics();
+    if (topics.length === 0) return [];
+
+    const avgEntries = topics.reduce((sum, t) => sum + t.entryCount, 0) / topics.length;
+    const avgConns = topics.reduce((sum, t) => sum + t.connectionCount, 0) / topics.length;
+    const entryThreshold = Math.max(avgEntries * 3, 10);
+    const connThreshold = Math.max(avgConns * 3, 3);
+
+    return topics
+      .filter((t) => t.entryCount > entryThreshold || t.connectionCount > connThreshold)
+      .map((t) => t.topicId);
+  }
+
   // ── Internals ────────────────────────────────────────────────────────────
 
   private _initSchema(): void {
@@ -830,6 +1249,49 @@ export class KbDatabase {
       insert.run('schema_version', String(KB_DB_SCHEMA_VERSION));
       insert.run('created_at', now);
     }
+
+    // ── V2 migration: add needs_synthesis column to existing entries table ──
+    this._migrateV2();
+
+    // Create the needs_synthesis partial index AFTER the V2 migration so that
+    // V1 databases already have the column by the time we reference it.
+    this.db.exec(
+      `CREATE INDEX IF NOT EXISTS idx_entries_needs_synthesis ON entries(needs_synthesis)
+         WHERE needs_synthesis = 1`,
+    );
+
+    // ── Seed synthesis_meta defaults ──
+    this.db.exec(
+      `INSERT OR IGNORE INTO synthesis_meta (key, value) VALUES ('status', 'idle')`,
+    );
+
+    // If the server was killed mid-dream the status stays 'running' in the DB.
+    // Nothing can actually be running right after construction, so reset it.
+    this.db
+      .prepare(`UPDATE synthesis_meta SET value = 'idle' WHERE key = 'status' AND value = 'running'`)
+      .run();
+  }
+
+  /**
+   * V2 migration: add `needs_synthesis` column to the entries table for
+   * databases created at schema V1. Safe to call on V2+ DBs (no-op).
+   */
+  private _migrateV2(): void {
+    const cols = this.db
+      .prepare<unknown[], { name: string }>('PRAGMA table_info(entries)')
+      .all();
+    const hasColumn = cols.some((c) => c.name === 'needs_synthesis');
+    if (hasColumn) return;
+    this.db.exec(
+      'ALTER TABLE entries ADD COLUMN needs_synthesis INTEGER NOT NULL DEFAULT 1',
+    );
+    // Existing entries that were already digested before dreaming existed
+    // should default to needing synthesis.
+    this.db.exec('UPDATE entries SET needs_synthesis = 1');
+    // Update schema_version in meta.
+    this.db
+      .prepare('UPDATE meta SET value = ? WHERE key = ?')
+      .run(String(KB_DB_SCHEMA_VERSION), 'schema_version');
   }
 
   private _ensureRootFolder(): void {

@@ -558,6 +558,7 @@ async function chatShowSettings(initialTab) {
     : (kbDreamLevels.includes('high') ? 'high' : kbDreamLevels[0] || '');
 
   const kbConvertSlides = Boolean(kb.convertSlidesToImages);
+  const kbDreamConcurrency = kb.dreamingConcurrency || 2;
 
   const html = `
     <div class="chat-settings-tabs">
@@ -716,6 +717,11 @@ async function chatShowSettings(initialTab) {
           <select class="chat-settings-select" id="chat-settings-kb-dream-effort">
             ${kbDreamLevels.map((lv) => `<option value="${esc(lv)}"${lv === kbDreamSelectedEffort ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`).join('')}
           </select>
+        </div>
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">Dreaming Concurrency</div>
+          <div class="chat-settings-desc">Maximum number of parallel CLI calls during dreaming. Higher values speed up large KBs at the cost of more concurrent resource usage.</div>
+          <input type="number" class="chat-settings-select" id="chat-settings-kb-dream-concurrency" min="1" max="10" value="${kbDreamConcurrency}" style="width:80px;" />
         </div>
         <div class="chat-settings-group">
           <label class="chat-settings-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -1066,6 +1072,11 @@ function chatSaveSettings() {
   if (kbDreamBackendEl?.value) knowledgeBase.dreamingCliBackend = kbDreamBackendEl.value;
   if (kbDreamModelEl?.value && kbDreamModelGroup?.style.display !== 'none') knowledgeBase.dreamingCliModel = kbDreamModelEl.value;
   if (kbDreamEffortEl?.value && kbDreamEffortGroup?.style.display !== 'none') knowledgeBase.dreamingCliEffort = kbDreamEffortEl.value;
+  const kbDreamConcurrencyEl = document.getElementById('chat-settings-kb-dream-concurrency');
+  if (kbDreamConcurrencyEl) {
+    const val = parseInt(kbDreamConcurrencyEl.value, 10);
+    if (val >= 1 && val <= 10) knowledgeBase.dreamingConcurrency = val;
+  }
   if (kbConvertSlidesEl) knowledgeBase.convertSlidesToImages = Boolean(kbConvertSlidesEl.checked);
 
   const settings = {
@@ -1732,8 +1743,68 @@ document.addEventListener('keydown', (e) => {
 // the standalone case where no conversation is active (and therefore no
 // WS is connected) for the viewed workspace.
 //
-// PR 2 ships only the Raw tab. Entries and Synthesis tabs land in PR 3/4
-// and are rendered as disabled placeholders so users see the roadmap.
+// PR 2 ships only the Raw tab. Entries tab landed in PR 3. Synthesis
+// tab in PR 4.
+
+// ── Dream banner ────────────────────────────────────────────────────────────
+// Shows in the chat input area when the active conversation's workspace has
+// entries awaiting synthesis, or when a dream run is in progress.
+
+function chatUpdateDreamBanner() {
+  const banner = document.getElementById('chat-dream-banner');
+  if (!banner) return;
+
+  const kb = state.chatActiveConv?.kb;
+  if (!kb || !kb.enabled) {
+    banner.style.display = 'none';
+    return;
+  }
+
+  if (kb.dreamingStatus === 'running') {
+    const prog = kb._dreamProgress;
+    banner.style.display = '';
+    banner.innerHTML = `
+      <span>Dreaming in progress</span>
+      ${chatKbDreamStepperHtml(prog)}
+    `;
+    return;
+  }
+
+  if (kb.dreamingNeeded && kb.pendingEntries > 0) {
+    banner.style.display = '';
+    banner.innerHTML = `
+      <span>${KB_ICON_DREAM} ${kb.pendingEntries} entr${kb.pendingEntries === 1 ? 'y' : 'ies'} awaiting synthesis</span>
+      <button class="chat-dream-banner-btn" onclick="chatTriggerDream()">Dream now</button>
+    `;
+    return;
+  }
+
+  banner.style.display = 'none';
+}
+
+async function chatTriggerDream(mode) {
+  const conv = state.chatActiveConv;
+  if (!conv?.workspaceHash) return;
+  const hash = conv.workspaceHash;
+  const endpoint = mode === 'redream'
+    ? `workspaces/${encodeURIComponent(hash)}/kb/redream`
+    : `workspaces/${encodeURIComponent(hash)}/kb/dream`;
+  try {
+    await chatFetch(endpoint, { method: 'POST' });
+    // Optimistically mark as running so the banner updates immediately.
+    if (conv.kb) {
+      conv.kb.dreamingStatus = 'running';
+      conv.kb._dreamProgress = null;
+    }
+    chatUpdateDreamBanner();
+  } catch (err) {
+    chatShowAlert('Failed to start dreaming: ' + err.message);
+  }
+}
+window.chatTriggerDream = chatTriggerDream;
+window.chatUpdateDreamBanner = chatUpdateDreamBanner;
+
+// ── KB Browser ──────────────────────────────────────────────────────────────
 
 /**
  * State for the currently-open KB browser view. `null` when the view is
@@ -1744,16 +1815,78 @@ let chatKbBrowserState = null;
 
 /** Expose the kb_state_update handler to streaming.js (wired via window). */
 window.chatHandleKbStateUpdate = function chatHandleKbStateUpdate(convId, event) {
-  if (!chatKbBrowserState) return;
-  // The event is conversation-scoped, so map back to workspace hash
-  // before deciding whether it's relevant to us. We rely on the global
-  // state's conversation list since we don't get the hash in the frame.
-  const conv = state.chatConversations.find((c) => c.id === convId);
-  // When the conversation has no workingDir hash yet (very rare race),
-  // fall back to refetching — safer than dropping the frame.
-  if (!conv || chatKbBrowserState.hash === conv.hash) {
-    chatKbBrowserRefetch();
+  // Update the dream banner if this event targets the active conversation.
+  if (convId === state.chatActiveConvId && state.chatActiveConv?.kb) {
+    if (event?.changed?.dreamProgress) {
+      state.chatActiveConv.kb.dreamingStatus = 'running';
+      state.chatActiveConv.kb._dreamProgress = event.changed.dreamProgress;
+    } else if (event?.changed?.synthesis) {
+      // Synthesis changed but no progress → dream finished or status reset.
+      // Refetch the conversation to get updated kb block.
+      chatFetch(`conversations/${convId}`).then(r => r.json()).then(conv => {
+        if (state.chatActiveConvId === convId) {
+          state.chatActiveConv = conv;
+          chatUpdateDreamBanner();
+        }
+      }).catch(() => {});
+      // Clear dream elapsed timer.
+      if (chatKbBrowserState?.synthesis) {
+        chatKbBrowserState.synthesis._dreamStepStart = null;
+      }
+    }
+    chatUpdateDreamBanner();
   }
+
+  // KB Browser: track substep/batch progress and refetch for matching workspace.
+  if (!chatKbBrowserState) return;
+  const conv = state.chatConversations.find((c) => c.id === convId);
+  if (conv && chatKbBrowserState.hash !== conv.workspaceHash) return;
+
+  // Track substep text per raw item.
+  if (event?.changed?.substep) {
+    const { rawId, text } = event.changed.substep;
+    chatKbBrowserState.substeps[rawId] = text;
+    // Record processing start time if not already set.
+    if (!chatKbBrowserState.processingStartTimes[rawId]) {
+      chatKbBrowserState.processingStartTimes[rawId] = Date.now();
+    }
+  }
+
+  // Track batch digest progress.
+  if (event?.changed?.batchProgress) {
+    chatKbBrowserState.batchProgress = event.changed.batchProgress;
+  }
+
+  // Track dream progress for the stepper.
+  if (event?.changed?.dreamProgress) {
+    const prev = chatKbBrowserState.synthesis._dreamProgress;
+    const next = event.changed.dreamProgress;
+    chatKbBrowserState.synthesis._dreamProgress = next;
+    chatKbBrowserState.synthesis._status = 'running';
+    // Reset step start time when the phase or done count changes.
+    if (!prev || prev.phase !== next.phase || prev.done !== next.done) {
+      chatKbBrowserState.synthesis._dreamStepStart = Date.now();
+    }
+  }
+
+  // Clear substep + timer when a raw item finishes processing.
+  if (event?.changed?.raw) {
+    for (const rawId of event.changed.raw) {
+      const kbState = chatKbBrowserState.state;
+      const rawRow = kbState?.raw?.find((r) => r.rawId === rawId);
+      if (rawRow && rawRow.status !== 'ingesting' && rawRow.status !== 'digesting') {
+        delete chatKbBrowserState.substeps[rawId];
+        delete chatKbBrowserState.processingStartTimes[rawId];
+      }
+    }
+    // Clear batch progress when last item finishes.
+    const bp = chatKbBrowserState.batchProgress;
+    if (bp && bp.done >= bp.total) {
+      chatKbBrowserState.batchProgress = null;
+    }
+  }
+
+  chatKbBrowserRefetch();
 };
 
 async function chatOpenKbBrowser(hash, label) {
@@ -1782,7 +1915,14 @@ async function chatOpenKbBrowser(hash, label) {
     pandocStatus: null,
     ingestingRawId: null,
     ingestingFilename: null,
+    /** Per-rawId substep text, e.g. { rawId: 'abc', text: 'Running CLI…' } */
+    substeps: {},
+    /** Per-rawId timestamps when a processing status started (for elapsed timer) */
+    processingStartTimes: {},
+    /** Batch digest progress: { done, total } or null */
+    batchProgress: null,
     entries: { loading: false, items: [], selectedEntryId: null, entryBody: '' },
+    synthesis: { loading: false, topics: [], connections: [], selectedTopicId: null, topicDetail: null },
   };
 
   // Initial render with a loading message; refetch populates it.
@@ -1832,6 +1972,7 @@ function chatKbBrowserChrome(label, loading) {
     <div class="chat-kb-tabs">
       <button class="chat-kb-tab ${active === 'raw' ? 'active' : ''}" data-kb-tab="raw">${KB_ICON_INGEST} Raw</button>
       <button class="chat-kb-tab ${active === 'entries' ? 'active' : ''}" data-kb-tab="entries">${KB_ICON_DIGEST} Entries</button>
+      <button class="chat-kb-tab ${active === 'synthesis' ? 'active' : ''}" data-kb-tab="synthesis">${KB_ICON_DREAM} Synthesis</button>
     </div>
     <div class="chat-kb-tab-content" id="chat-kb-tab-content">
       ${loading ? '<p class="chat-kb-empty">Loading…</p>' : ''}
@@ -1853,6 +1994,7 @@ function chatKbBrowserWireChrome() {
       });
       chatKbBrowserRenderTab();
       if (tab === 'entries') chatKbBrowserRefetchEntries();
+      if (tab === 'synthesis') chatKbBrowserRefetchSynthesis();
     };
   });
 }
@@ -1888,6 +2030,17 @@ async function chatKbBrowserRefetch() {
     chatKbBrowserState.enabled = Boolean(data.enabled);
     chatKbBrowserState.state = data.state || null;
     chatKbBrowserState.autoDigest = Boolean(data.state?.autoDigest);
+    // Track processing start times for items that are being ingested/digested.
+    const rawItems = data.state?.raw || [];
+    for (const raw of rawItems) {
+      const isProcessing = raw.status === 'ingesting' || raw.status === 'digesting';
+      if (isProcessing && !chatKbBrowserState.processingStartTimes[raw.rawId]) {
+        chatKbBrowserState.processingStartTimes[raw.rawId] = Date.now();
+      } else if (!isProcessing) {
+        delete chatKbBrowserState.processingStartTimes[raw.rawId];
+        delete chatKbBrowserState.substeps[raw.rawId];
+      }
+    }
     // Update counters in the chrome header without re-rendering the whole
     // chrome (that would drop the tab content and focus).
     const countersEl = document.getElementById('chat-kb-header-counters');
@@ -1934,7 +2087,10 @@ function chatKbBrowserRenderTab() {
   const savedEntriesListScroll = entriesListEl ? entriesListEl.scrollTop : 0;
   const savedEntryDetailScroll = entryDetailEl ? entryDetailEl.scrollTop : 0;
 
-  if (chatKbBrowserState.activeTab === 'entries') {
+  if (chatKbBrowserState.activeTab === 'synthesis') {
+    content.innerHTML = chatKbBrowserSynthesisTab();
+    chatKbBrowserWireSynthesisTab();
+  } else if (chatKbBrowserState.activeTab === 'entries') {
     content.innerHTML = chatKbBrowserEntriesTab();
     chatKbBrowserWireEntriesTab();
   } else {
@@ -1991,8 +2147,9 @@ function chatKbBrowserRawTab(kbState) {
       </label>
       <button class="chat-kb-toolbar-btn" id="chat-kb-new-folder-btn">+ Folder</button>
       <button class="chat-kb-toolbar-btn chat-kb-toolbar-btn-primary" id="chat-kb-digest-all-btn" ${digestAllDisabled ? 'disabled' : ''}>
-        ${KB_ICON_DIGEST} ${isDigesting ? 'Digesting…' : `Digest All Pending (${pendingCount})`}
+        ${KB_ICON_DIGEST} ${isDigesting ? 'Digesting\u2026' : `Digest All Pending (${pendingCount})`}
       </button>
+      ${chatKbBrowserState.batchProgress ? `<span class="chat-kb-batch-progress">${chatKbBrowserState.batchProgress.done} of ${chatKbBrowserState.batchProgress.total} done</span>` : ''}
     </div>
     <div class="chat-kb-raw-layout">
       <aside class="chat-kb-folder-tree">
@@ -2077,6 +2234,14 @@ function chatKbStatusIcon(status) {
   return '';
 }
 
+function chatKbFormatElapsed(ms) {
+  const secs = Math.floor(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const rem = secs % 60;
+  return `${mins}m ${rem < 10 ? '0' : ''}${rem}s`;
+}
+
 function chatKbBrowserRawRow(raw) {
   const size = chatKbFormatSize(raw.sizeBytes || 0);
   const when = raw.uploadedAt ? chatKbFormatRelative(raw.uploadedAt) : '';
@@ -2088,6 +2253,19 @@ function chatKbBrowserRawRow(raw) {
     ? `<button class="chat-kb-raw-digest" data-kb-digest="${esc(raw.rawId)}" title="Digest now">${KB_ICON_DIGEST}</button>`
     : '';
   const statusIcon = chatKbStatusIcon(raw.status);
+
+  // Substep + elapsed timer for items being processed.
+  let substepHtml = '';
+  const isProcessing = raw.status === 'ingesting' || raw.status === 'digesting';
+  if (isProcessing && chatKbBrowserState) {
+    const substepText = chatKbBrowserState.substeps[raw.rawId] || '';
+    const startTime = chatKbBrowserState.processingStartTimes[raw.rawId];
+    const elapsed = startTime ? chatKbFormatElapsed(Date.now() - startTime) : '';
+    if (substepText || elapsed) {
+      substepHtml = `<div class="chat-kb-raw-substep">${esc(substepText)}${elapsed ? `<span class="chat-kb-elapsed">${esc(elapsed)}</span>` : ''}</div>`;
+    }
+  }
+
   return `
     <li class="chat-kb-raw-row" data-kb-raw-id="${esc(raw.rawId)}">
       <span class="chat-kb-raw-filename" title="${esc(raw.filename)}">${esc(raw.filename)}</span>
@@ -2099,6 +2277,7 @@ function chatKbBrowserRawRow(raw) {
               data-kb-del-folder="${esc(raw.folderPath || '')}"
               data-kb-del-filename="${esc(raw.filename)}"
               title="Delete this location">×</button>
+      ${substepHtml}
       ${errorLine}
     </li>
   `;
@@ -2536,6 +2715,223 @@ function chatKbFormatRelative(iso) {
   const day = Math.floor(hr / 24);
   return `${day}d ago`;
 }
+
+// ── KB Browser: Synthesis tab ────────────────────────────────────────────────
+
+async function chatKbBrowserRefetchSynthesis() {
+  if (!chatKbBrowserState) return;
+  chatKbBrowserState.synthesis.loading = true;
+  try {
+    const url = chatApiUrl(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/synthesis`,
+    );
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`GET /kb/synthesis returned ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState) return;
+    chatKbBrowserState.synthesis.topics = Array.isArray(data.topics) ? data.topics : [];
+    chatKbBrowserState.synthesis.connections = Array.isArray(data.connections) ? data.connections : [];
+    chatKbBrowserState.synthesis._status = data.status;
+    chatKbBrowserState.synthesis._lastRunAt = data.lastRunAt;
+    chatKbBrowserState.synthesis._lastRunError = data.lastRunError;
+    chatKbBrowserState.synthesis._needsSynthesisCount = data.needsSynthesisCount || 0;
+  } catch (err) {
+    console.error('[kb] synthesis refetch failed:', err);
+  } finally {
+    if (chatKbBrowserState) {
+      chatKbBrowserState.synthesis.loading = false;
+      if (chatKbBrowserState.activeTab === 'synthesis') chatKbBrowserRenderTab();
+    }
+  }
+}
+
+function chatKbDreamStepperHtml(prog) {
+  if (!prog) {
+    return '<div class="chat-kb-dream-stepper"><span class="chat-kb-dream-step active"><span class="chat-dream-banner-spinner"></span> Starting\u2026</span></div>';
+  }
+  const stepStart = chatKbBrowserState?.synthesis?._dreamStepStart;
+  const elapsed = stepStart ? ` \u2014 ${chatKbFormatElapsed(Date.now() - stepStart)}` : '';
+  const discoveryDone = prog.phase === 'synthesis';
+  const discoveryActive = prog.phase === 'discovery';
+  const synthActive = prog.phase === 'synthesis';
+  const dClass = discoveryDone ? 'done' : discoveryActive ? 'active' : '';
+  const sClass = synthActive ? 'active' : '';
+  const dLabel = discoveryDone ? '\u2713 Discovery' : `Discovery ${prog.phase === 'discovery' ? `${prog.done}/${prog.total}` : ''}`;
+  const sLabel = synthActive ? `Synthesis ${prog.done}/${prog.total}` : 'Synthesis';
+  const activeElapsed = discoveryActive || synthActive ? elapsed : '';
+  return `<div class="chat-kb-dream-stepper"><span class="chat-kb-dream-step ${dClass}">${esc(dLabel)}</span><span class="chat-kb-dream-step-arrow"></span><span class="chat-kb-dream-step ${sClass}">${synthActive ? '<span class="chat-dream-banner-spinner"></span> ' : ''}${esc(sLabel)}</span>${activeElapsed ? `<span class="chat-kb-elapsed" style="color:var(--muted);opacity:0.7;font-variant-numeric:tabular-nums;font-size:12px;margin-left:8px;">${activeElapsed}</span>` : ''}</div>`;
+}
+
+function chatKbBrowserSynthesisTab() {
+  const s = chatKbBrowserState.synthesis;
+
+  // If a topic detail is selected, show that instead.
+  if (s.selectedTopicId && s.topicDetail) {
+    return chatKbBrowserTopicDetail(s.topicDetail);
+  }
+
+  const topics = Array.isArray(s.topics) ? s.topics : [];
+  if (s.loading && topics.length === 0) {
+    return '<p class="chat-kb-empty">Loading synthesis data…</p>';
+  }
+
+  // Action bar: Dream / Re-dream buttons + status
+  const pending = s._needsSynthesisCount || 0;
+  const isRunning = s._status === 'running';
+  const lastRun = s._lastRunAt ? chatKbFormatRelative(s._lastRunAt) : 'never';
+  const lastErr = s._lastRunError || '';
+  const hash = chatKbBrowserState.hash;
+
+  let statusHtml = `<span class="chat-kb-dream-status">Last run: ${esc(lastRun)}</span>`;
+  if (pending > 0) {
+    statusHtml += ` · <span class="chat-kb-dream-status">${pending} pending</span>`;
+  }
+  if (lastErr) {
+    statusHtml += ` · <span class="chat-kb-dream-status" style="color:var(--error);">${esc(lastErr)}</span>`;
+  }
+
+  // Pipeline stepper when running.
+  let stepperHtml = '';
+  if (isRunning) {
+    const prog = s._dreamProgress;
+    stepperHtml = chatKbDreamStepperHtml(prog);
+  }
+
+  const actionsHtml = `
+    <div class="chat-kb-synthesis-actions">
+      <button class="chat-kb-dream-btn" id="chat-kb-dream-btn"${isRunning ? ' disabled' : ''} data-dream-hash="${esc(hash)}">
+        ${isRunning ? '<span class="chat-dream-banner-spinner"></span> Dreaming\u2026' : `${KB_ICON_DREAM} Dream`}
+      </button>
+      <button class="chat-kb-dream-btn" id="chat-kb-redream-btn"${isRunning ? ' disabled' : ''} data-dream-hash="${esc(hash)}" style="opacity:0.7;">
+        Re-Dream (full rebuild)
+      </button>
+      ${statusHtml}
+      ${stepperHtml}
+    </div>
+  `;
+
+  if (topics.length === 0) {
+    return actionsHtml + '<p class="chat-kb-empty">No topics yet. Run a dream cycle to synthesize entries into topics.</p>';
+  }
+
+  const cards = topics.map((t) => {
+    const godBadge = t.isGodNode ? ' <span style="color:var(--warning);font-size:11px;" title="God node — unusually many entries/connections">&#9733;</span>' : '';
+    return `
+      <div class="chat-kb-topic-card" data-kb-topic-id="${esc(t.topicId)}">
+        <div class="chat-kb-topic-title">${esc(t.title)}${godBadge}</div>
+        <div class="chat-kb-topic-summary">${esc(t.summary || '')}</div>
+        <div class="chat-kb-topic-meta">${t.entryCount} entries · ${t.connectionCount} connections</div>
+      </div>
+    `;
+  }).join('');
+
+  return actionsHtml + `<div class="chat-kb-synthesis-grid">${cards}</div>`;
+}
+
+function chatKbBrowserWireSynthesisTab() {
+  // Back button in topic detail view.
+  const backBtn = document.getElementById('chat-kb-synth-back');
+  if (backBtn) {
+    backBtn.onclick = () => {
+      if (!chatKbBrowserState) return;
+      chatKbBrowserState.synthesis.selectedTopicId = null;
+      chatKbBrowserState.synthesis.topicDetail = null;
+      chatKbBrowserRenderTab();
+      chatKbBrowserWireSynthesisTab();
+    };
+    return; // In detail view — no other buttons to wire.
+  }
+  // Dream buttons
+  const dreamBtn = document.getElementById('chat-kb-dream-btn');
+  if (dreamBtn) {
+    dreamBtn.onclick = async () => {
+      const hash = dreamBtn.dataset.dreamHash;
+      if (!hash) return;
+      dreamBtn.disabled = true;
+      try {
+        await chatFetch(`workspaces/${encodeURIComponent(hash)}/kb/dream`, { method: 'POST' });
+        chatKbBrowserState.synthesis._status = 'running';
+        chatKbBrowserRenderTab();
+      } catch (err) { chatShowAlert('Dream failed: ' + err.message); }
+    };
+  }
+  const redreamBtn = document.getElementById('chat-kb-redream-btn');
+  if (redreamBtn) {
+    redreamBtn.onclick = async () => {
+      const hash = redreamBtn.dataset.dreamHash;
+      if (!hash) return;
+      if (!await chatShowConfirm('Re-Dream will wipe all topics and connections and rebuild from scratch. Continue?', { title: 'Re-Dream', confirmLabel: 'Re-Dream', destructive: true })) return;
+      redreamBtn.disabled = true;
+      try {
+        await chatFetch(`workspaces/${encodeURIComponent(hash)}/kb/redream`, { method: 'POST' });
+        chatKbBrowserState.synthesis._status = 'running';
+        chatKbBrowserRenderTab();
+      } catch (err) { chatShowAlert('Re-Dream failed: ' + err.message); }
+    };
+  }
+  // Topic cards
+  document.querySelectorAll('[data-kb-topic-id]').forEach((el) => {
+    el.onclick = () => chatKbBrowserOpenTopic(el.dataset.kbTopicId);
+  });
+}
+
+async function chatKbBrowserOpenTopic(topicId) {
+  if (!chatKbBrowserState || !topicId) return;
+  chatKbBrowserState.synthesis.selectedTopicId = topicId;
+  chatKbBrowserState.synthesis.topicDetail = null;
+  chatKbBrowserRenderTab();
+  try {
+    const url = chatApiUrl(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/synthesis/${encodeURIComponent(topicId)}`,
+    );
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`GET /kb/synthesis/${topicId} returned ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState || chatKbBrowserState.synthesis.selectedTopicId !== topicId) return;
+    chatKbBrowserState.synthesis.topicDetail = data;
+    chatKbBrowserRenderTab();
+  } catch (err) {
+    chatShowAlert('Could not load topic: ' + err.message);
+  }
+}
+
+function chatKbBrowserTopicDetail(detail) {
+  const godBadge = detail.isGodNode ? ' <span style="color:var(--warning);font-size:11px;" title="God node">&#9733; God Node</span>' : '';
+  const entries = Array.isArray(detail.entries) ? detail.entries : [];
+  const connections = Array.isArray(detail.connections) ? detail.connections : [];
+
+  const entryRows = entries.map((e) => `<li>${esc(e.title || e.entryId)}</li>`).join('');
+  const connRows = connections.map((c) => {
+    const other = c.sourceTopic === detail.topicId ? c.targetTopic : c.sourceTopic;
+    // Try to find the title for the other topic from the cached list.
+    const otherTopic = (chatKbBrowserState?.synthesis?.topics || []).find((t) => t.topicId === other);
+    const otherLabel = otherTopic ? otherTopic.title : other;
+    return `
+      <li>
+        <span class="chat-kb-conn-confidence">${esc(c.confidence)}</span>
+        <span>${esc(otherLabel)}</span>
+        <span class="chat-kb-conn-relationship">${esc(c.relationship)}</span>
+      </li>
+    `;
+  }).join('');
+
+  const contentHtml = detail.content
+    ? chatRenderMarkdown(detail.content)
+    : '<em>No content.</em>';
+
+  return `
+    <button class="chat-kb-topic-detail-back" id="chat-kb-synth-back">&larr; Back to topics</button>
+    <h3 style="margin:0 0 4px 0;">${esc(detail.title)}${godBadge}</h3>
+    <p style="color:var(--muted);font-size:13px;margin:0 0 12px 0;">${esc(detail.summary || '')}</p>
+    <div style="margin-bottom:16px;">${contentHtml}</div>
+    <h4 style="margin:0 0 6px 0;">Entries (${entries.length})</h4>
+    ${entryRows ? `<ul style="font-size:12px;margin:0 0 16px 0;">${entryRows}</ul>` : '<p class="chat-kb-empty">No entries assigned.</p>'}
+    <h4 style="margin:0 0 6px 0;">Connections (${connections.length})</h4>
+    ${connRows ? `<ul class="chat-kb-conn-list">${connRows}</ul>` : '<p class="chat-kb-empty">No connections.</p>'}
+  `;
+}
+
+window.chatKbBrowserOpenTopic = chatKbBrowserOpenTopic;
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 chatInit();

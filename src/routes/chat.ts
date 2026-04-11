@@ -21,6 +21,7 @@ import {
   KbDigestionService,
   KbDigestDisabledError,
 } from '../services/knowledgeBase/digest';
+import { KbDreamService } from '../services/knowledgeBase/dream';
 import type { Request, Response, NextFunction, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
@@ -268,6 +269,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // `kbAutoDigest=true`.
   kbIngestion.setDigestTrigger(kbDigestion);
 
+  // Knowledge Base dreaming orchestrator. Runs the configured Dreaming
+  // CLI to synthesize entries into a knowledge graph of topics and
+  // connections. Manual-only — triggered via POST /kb/dream or /kb/redream.
+  const kbDreaming = new KbDreamService({
+    chatService,
+    backendRegistry,
+    emit: broadcastKbStateUpdate,
+  });
+
   // Memory MCP server — exposes `memory_note` tool to non-Claude CLIs via the
   // stdio stub in `src/services/memoryMcp/stub.cjs`.  The router is mounted
   // at `/mcp/memory/notes` below; the `issue`/`revoke` helpers are used by
@@ -487,6 +497,25 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     try {
       const conv = await chatService.getConversation(param(req, 'id'));
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+
+      // Augment with KB status so the frontend can render the dreaming
+      // banner without a separate round-trip to GET /kb.
+      const kbEnabled = await chatService.getWorkspaceKbEnabled(conv.workspaceHash);
+      if (kbEnabled) {
+        const db = chatService.getKbDb(conv.workspaceHash);
+        if (db) {
+          const snapshot = db.getSynthesisSnapshot();
+          const counters = db.getCounters();
+          (conv as unknown as Record<string, unknown>).kb = {
+            enabled: true,
+            dreamingNeeded: snapshot.needsSynthesisCount > 0,
+            pendingEntries: snapshot.needsSynthesisCount,
+            dreamingStatus: kbDreaming.isRunning(conv.workspaceHash) ? 'running' : snapshot.status,
+            failedItems: counters.rawByStatus.failed,
+          };
+        }
+      }
+
       res.json(conv);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -1518,6 +1547,143 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         return res.status(404).json({ error: 'Raw file not found on disk.' });
       }
       res.sendFile(path.resolve(diskPath));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── KB Dreaming / Synthesis ────────────────────────────────────────────────
+
+  // Start an incremental dreaming run. Returns 202 immediately; the run
+  // progresses in the background with WS frames for progress.
+  router.post('/workspaces/:hash/kb/dream', csrfGuard, async (req: Request, res: Response) => {
+    const hash = param(req, 'hash');
+    try {
+      if (kbDreaming.isRunning(hash)) {
+        res.status(409).json({ error: 'A dreaming run is already in progress.' });
+        return;
+      }
+      const dreamDb = chatService.getKbDb(hash);
+      if (dreamDb && dreamDb.countNeedsSynthesis() === 0) {
+        res.status(400).json({ error: 'No entries pending synthesis. Upload and digest files first.' });
+        return;
+      }
+      // Fire and forget — the service manages its own status in the DB.
+      kbDreaming.dream(hash).catch((err) => {
+        console.error(`[kb:dream] incremental run failed for ${hash}:`, err);
+      });
+      res.status(202).json({ ok: true, mode: 'incremental' });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Wipe all synthesis and run a full rebuild.
+  router.post('/workspaces/:hash/kb/redream', csrfGuard, async (req: Request, res: Response) => {
+    const hash = param(req, 'hash');
+    try {
+      if (kbDreaming.isRunning(hash)) {
+        res.status(409).json({ error: 'A dreaming run is already in progress.' });
+        return;
+      }
+      const redreamDb = chatService.getKbDb(hash);
+      if (redreamDb && redreamDb.getCounters().entryCount === 0) {
+        res.status(400).json({ error: 'No entries to rebuild. Upload and digest files first.' });
+        return;
+      }
+      kbDreaming.redream(hash).catch((err) => {
+        console.error(`[kb:dream] full rebuild failed for ${hash}:`, err);
+      });
+      res.status(202).json({ ok: true, mode: 'full-rebuild' });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Synthesis state: topics, connections, status for the KB Browser synthesis tab.
+  router.get('/workspaces/:hash/kb/synthesis', async (req: Request, res: Response) => {
+    const hash = param(req, 'hash');
+    try {
+      const db = chatService.getKbDb(hash);
+      if (!db) {
+        res.status(404).json({ error: 'Knowledge Base not found.' });
+        return;
+      }
+      const snapshot = db.getSynthesisSnapshot();
+      const topics = db.listTopics();
+      const connections = db.listAllConnections();
+      const godNodes = new Set(snapshot.godNodes);
+
+      res.json({
+        status: snapshot.status,
+        lastRunAt: snapshot.lastRunAt,
+        lastRunError: snapshot.lastRunError,
+        topicCount: snapshot.topicCount,
+        connectionCount: snapshot.connectionCount,
+        needsSynthesisCount: snapshot.needsSynthesisCount,
+        godNodes: snapshot.godNodes,
+        topics: topics.map((t) => ({
+          topicId: t.topicId,
+          title: t.title,
+          summary: t.summary,
+          entryCount: t.entryCount,
+          connectionCount: t.connectionCount,
+          isGodNode: godNodes.has(t.topicId),
+        })),
+        connections: connections.map((c) => ({
+          sourceTopic: c.sourceTopic,
+          targetTopic: c.targetTopic,
+          relationship: c.relationship,
+          confidence: c.confidence,
+        })),
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Single topic detail: prose + entries + connections.
+  router.get('/workspaces/:hash/kb/synthesis/:topicId', async (req: Request, res: Response) => {
+    const hash = param(req, 'hash');
+    const topicId = param(req, 'topicId');
+    try {
+      const db = chatService.getKbDb(hash);
+      if (!db) {
+        res.status(404).json({ error: 'Knowledge Base not found.' });
+        return;
+      }
+      const topic = db.getTopic(topicId);
+      if (!topic) {
+        res.status(404).json({ error: `Topic "${topicId}" not found.` });
+        return;
+      }
+      const godNodesRaw = db.getSynthesisMeta('god_nodes');
+      const godNodes: string[] = godNodesRaw ? JSON.parse(godNodesRaw) : [];
+
+      const entryIds = db.listTopicEntryIds(topicId);
+      const entries = entryIds
+        .map((eid) => db.getEntry(eid))
+        .filter((e) => e !== null);
+
+      const connections = db.listConnectionsForTopic(topicId).map((c) => ({
+        sourceTopic: c.sourceTopic,
+        targetTopic: c.targetTopic,
+        relationship: c.relationship,
+        confidence: c.confidence,
+      }));
+
+      res.json({
+        topicId: topic.topicId,
+        title: topic.title,
+        summary: topic.summary,
+        content: topic.content,
+        updatedAt: topic.updatedAt,
+        entryCount: topic.entryCount,
+        connectionCount: topic.connectionCount,
+        isGodNode: godNodes.includes(topicId),
+        entries,
+        connections,
+      });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

@@ -86,9 +86,11 @@ agent-cockpit/
     │   │   │   ├── entries/<entryId>/  # Digestion output directory (one dir per entry)
     │   │   │   │   └── entry.md        # YAML frontmatter + markdown body
     │   │   │   ├── digest-debug/       # Failed digestion debug dumps: <rawId>-<iso>.txt
-    │   │   │   └── synthesis/          # Dreaming output — populated by PR 4
-    │   │   │       ├── manifest.json   # Artifact lineage
-    │   │   │       └── *.md            # Synthesis layer files
+    │   │   │   ├── synthesis/          # Dreaming output — materialized views from SQLite (regenerated after each dream run)
+    │   │   │   │   ├── index.md        # Topic index table with entry/connection counts
+    │   │   │   │   ├── connections.md  # Full connection graph table
+    │   │   │   │   └── topics/<id>.md  # Per-topic prose, related topics, entry list
+    │   │   │   └── _dream_tmp/         # Ephemeral staging files for dream prompts (auto-cleaned after run)
     │   │   └── {convId}/
     │   │       ├── session-1.json      # Archived session
     │   │       └── session-N.json      # Active session (updated every message)
@@ -247,6 +249,7 @@ Daily per-backend/model token usage records for global statistics:
     "dreamingCliBackend": "claude-code",
     "dreamingCliModel": "opus",
     "dreamingCliEffort": "high",
+    "dreamingConcurrency": 2,
     "convertSlidesToImages": false
   }
 }
