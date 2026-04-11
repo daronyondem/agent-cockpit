@@ -568,9 +568,12 @@ export class KbIngestionService {
     const convertedDir = path.join(this.chatService.getKbConvertedDir(hash), rawId);
     await fsp.rm(convertedDir, { recursive: true, force: true }).catch(() => undefined);
 
-    // 3) Delete entries on disk for this raw. We delete whole dirs
-    //    (<entriesDir>/<entryId>/) to keep it simple and self-cleaning.
+    // 3) Mark co-topic entries as needing synthesis before deleting, so
+    //    the dreaming pipeline can update topics that referenced this content.
     const removedEntryIds = db.deleteEntriesByRawId(rawId);
+    if (removedEntryIds.length > 0) {
+      db.markCoTopicEntriesStale(removedEntryIds);
+    }
     const entriesDir = this.chatService.getKbEntriesDir(hash);
     for (const entryId of removedEntryIds) {
       const dir = path.join(entriesDir, entryId);
@@ -620,6 +623,11 @@ export class KbIngestionService {
       const settings = await this.chatService.getSettings();
       const convertSlidesToImages = Boolean(settings.knowledgeBase?.convertSlidesToImages);
 
+      this._emitChange(hash, new Date().toISOString(), {
+        raw: [rawId],
+        substep: { rawId, text: 'Converting\u2026' },
+      });
+
       let result: HandlerResult | null = null;
       let errorMessage: string | null = null;
       try {
@@ -638,6 +646,10 @@ export class KbIngestionService {
       }
 
       if (result) {
+        this._emitChange(hash, new Date().toISOString(), {
+          raw: [rawId],
+          substep: { rawId, text: 'Storing\u2026' },
+        });
         try {
           await fsp.writeFile(path.join(outDir, 'text.md'), result.text, 'utf8');
           const meta = {

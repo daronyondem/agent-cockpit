@@ -639,3 +639,32 @@ Body for ${isA ? 'alpha' : 'beta'}.`;
     expect(results).toEqual([]);
   });
 });
+
+// ─── Substep emissions ──────────────────────────────────────────────────────
+
+describe('substep emissions during digestion', () => {
+  test('emits substep frames for CLI analysis and parsing phases', async () => {
+    const rawId = await seedRaw('Substep test body.', 'sub.md');
+    backend.runOneShotImpl = async () => `---
+title: Substep
+slug: substep
+summary: Testing substep emissions.
+tags: []
+---
+Substep body.`;
+    emitted.length = 0;
+    await digestion.enqueueDigest(hash, rawId);
+
+    const substepFrames = emitted
+      .filter((e) => e.frame.changed.substep !== undefined)
+      .map((e) => e.frame.changed.substep!);
+
+    // Should have at least 2 substep emissions: one for CLI analysis, one for parsing.
+    expect(substepFrames.length).toBeGreaterThanOrEqual(2);
+    expect(substepFrames.every((s) => s.rawId === rawId)).toBe(true);
+
+    const texts = substepFrames.map((s) => s.text);
+    expect(texts.some((t) => /CLI analysis/i.test(t) || /Running/i.test(t))).toBe(true);
+    expect(texts.some((t) => /Pars/i.test(t))).toBe(true);
+  });
+});

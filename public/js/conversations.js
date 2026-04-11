@@ -633,6 +633,8 @@ export async function chatSelectConversation(id) {
       backendSelect.value = state.chatActiveConv.backend;
     }
     populateModelSelect(state.chatActiveConv.model, state.chatActiveConv.effort);
+    // Update the dreaming banner based on the freshly-loaded kb block.
+    if (typeof window.chatUpdateDreamBanner === 'function') window.chatUpdateDreamBanner();
   } catch (err) {
     alert('Failed to load conversation: ' + err.message);
   }

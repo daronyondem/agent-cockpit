@@ -157,6 +157,17 @@ export interface Conversation {
   /** Backend-managed session ID from the active session, for resume/rehydration. */
   externalSessionId?: string | null;
   messageQueue?: string[];
+  /** KB status snapshot, populated when workspace has KB enabled. */
+  kb?: ConversationKbStatus;
+}
+
+/** KB status block on conversation responses (avoids extra round-trip for the dreaming banner). */
+export interface ConversationKbStatus {
+  enabled: boolean;
+  dreamingNeeded: boolean;
+  pendingEntries: number;
+  dreamingStatus: 'idle' | 'running' | 'failed';
+  failedItems: number;
 }
 
 export interface ConversationListItem {
@@ -217,6 +228,8 @@ export interface Settings {
     dreamingCliBackend?: string;
     dreamingCliModel?: string;
     dreamingCliEffort?: EffortLevel;
+    /** Max concurrent CLI calls during dreaming batches. Default 2. */
+    dreamingConcurrency?: number;
     /**
      * When true, PPTX ingestion shells out to LibreOffice to render each
      * slide as a PNG (better fidelity for decks that rely on visual
@@ -544,6 +557,51 @@ export interface KbState {
   updatedAt: string;
 }
 
+/** API response shape for `GET /kb/synthesis`. */
+export interface KbSynthesisState {
+  status: string;
+  lastRunAt: string | null;
+  lastRunError: string | null;
+  topicCount: number;
+  connectionCount: number;
+  needsSynthesisCount: number;
+  godNodes: string[];
+  topics: KbSynthesisTopicSummary[];
+  connections: KbSynthesisConnectionSummary[];
+}
+
+/** Topic summary for the synthesis tab graph view. */
+export interface KbSynthesisTopicSummary {
+  topicId: string;
+  title: string;
+  summary: string | null;
+  entryCount: number;
+  connectionCount: number;
+  isGodNode: boolean;
+}
+
+/** Connection summary for the synthesis tab graph view. */
+export interface KbSynthesisConnectionSummary {
+  sourceTopic: string;
+  targetTopic: string;
+  relationship: string;
+  confidence: string;
+}
+
+/** API response shape for `GET /kb/synthesis/:id`. */
+export interface KbSynthesisTopicDetail {
+  topicId: string;
+  title: string;
+  summary: string | null;
+  content: string | null;
+  updatedAt: string;
+  entryCount: number;
+  connectionCount: number;
+  isGodNode: boolean;
+  entries: KbEntry[];
+  connections: KbSynthesisConnectionSummary[];
+}
+
 /**
  * Lightweight notification emitted when KB state changes during an
  * active stream (or via an HTTP mutation). The full state is fetched
@@ -567,6 +625,9 @@ export interface KbStateUpdateEvent {
     folders?: boolean;
     synthesis?: boolean;
     batchProgress?: { done: number; total: number };
+    dreamProgress?: { phase: 'discovery' | 'synthesis'; done: number; total: number };
+    /** Per-raw substep text shown beneath the status badge during long operations. */
+    substep?: { rawId: string; text: string };
   };
 }
 

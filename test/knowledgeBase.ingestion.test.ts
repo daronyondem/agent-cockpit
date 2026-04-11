@@ -204,3 +204,29 @@ describe('deleteRaw', () => {
     await expect(ingestion.deleteRaw(hash, 'anything')).rejects.toBeInstanceOf(KbDisabledError);
   });
 });
+
+// ─── Substep emissions ──────────────────────────────────────────────────────
+
+describe('substep emissions during ingestion', () => {
+  test('emits substep frames for converting and storing phases', async () => {
+    emitted.length = 0;
+    const result = await ingestion.enqueueUpload(hash, {
+      buffer: Buffer.from('Substep test content'),
+      filename: 'substep.md',
+      mimeType: 'text/markdown',
+    });
+    await ingestion.waitForIdle(hash);
+
+    const substepFrames = emitted
+      .filter((e) => e.frame.changed.substep !== undefined)
+      .map((e) => e.frame.changed.substep!);
+
+    // Should have at least 2 substep emissions: one for converting, one for storing.
+    expect(substepFrames.length).toBeGreaterThanOrEqual(2);
+    expect(substepFrames.every((s) => s.rawId === result.entry.rawId)).toBe(true);
+
+    const texts = substepFrames.map((s) => s.text);
+    expect(texts.some((t) => /Convert/i.test(t))).toBe(true);
+    expect(texts.some((t) => /Stor/i.test(t))).toBe(true);
+  });
+});

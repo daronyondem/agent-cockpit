@@ -338,6 +338,11 @@ export class KbDigestionService {
       handlerMetadata: convertedMeta.metadata as Record<string, unknown> | undefined,
     });
 
+    this._emitChange(hash, new Date().toISOString(), {
+      raw: [rawId],
+      substep: { rawId, text: 'Running CLI analysis\u2026' },
+    });
+
     let rawOutput = '';
     const runOptions: RunOneShotOptions = {
       model: cliModel,
@@ -353,6 +358,11 @@ export class KbDigestionService {
       const klass: KbErrorClass = /timeout/i.test(message) ? 'timeout' : 'cli_error';
       return this._failRaw(hash, rawId, db, klass, message);
     }
+
+    this._emitChange(hash, new Date().toISOString(), {
+      raw: [rawId],
+      substep: { rawId, text: 'Parsing entries\u2026' },
+    });
 
     let parsed: ParsedEntry[];
     try {
@@ -370,8 +380,12 @@ export class KbDigestionService {
     }
 
     // Remove any stale entries for this raw before writing fresh ones
-    // (re-digest case). Delete disk dirs so we don't leak.
+    // (re-digest case). Mark co-topic entries as needing synthesis before
+    // deletion so the dreaming pipeline knows to update affected topics.
     const staleIds = db.deleteEntriesByRawId(rawId);
+    if (staleIds.length > 0) {
+      db.markCoTopicEntriesStale(staleIds);
+    }
     const entriesRoot = this.chatService.getKbEntriesDir(hash);
     for (const staleId of staleIds) {
       await fsp.rm(path.join(entriesRoot, staleId), { recursive: true, force: true }).catch(() => undefined);
@@ -438,8 +452,11 @@ export class KbDigestionService {
       { recursive: true, force: true },
     ).catch(() => undefined);
 
-    // 3) Delete entries on disk.
+    // 3) Mark co-topic entries stale, then delete entries on disk.
     const removedEntryIds = db.deleteEntriesByRawId(rawId);
+    if (removedEntryIds.length > 0) {
+      db.markCoTopicEntriesStale(removedEntryIds);
+    }
     const entriesDir = this.chatService.getKbEntriesDir(hash);
     for (const entryId of removedEntryIds) {
       await fsp.rm(path.join(entriesDir, entryId), { recursive: true, force: true }).catch(() => undefined);

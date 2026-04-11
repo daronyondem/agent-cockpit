@@ -602,3 +602,402 @@ describe('openKbDatabase migration', () => {
     }
   });
 });
+
+// ─── Synthesis tables (Phase 4 — Dreaming) ─────────────────────────────────
+
+describe('synthesis meta', () => {
+  test('get/set round-trips', () => {
+    db.setSynthesisMeta('status', 'running');
+    expect(db.getSynthesisMeta('status')).toBe('running');
+  });
+
+  test('returns null for missing keys', () => {
+    expect(db.getSynthesisMeta('nonexistent')).toBeNull();
+  });
+
+  test('overwrite existing key', () => {
+    db.setSynthesisMeta('status', 'running');
+    db.setSynthesisMeta('status', 'idle');
+    expect(db.getSynthesisMeta('status')).toBe('idle');
+  });
+});
+
+describe('synthesis topics CRUD', () => {
+  const now = new Date().toISOString();
+
+  test('upsertTopic + getTopic', () => {
+    db.upsertTopic({ topicId: 't1', title: 'Topic 1', summary: 'S', content: 'C', updatedAt: now });
+    const t = db.getTopic('t1');
+    expect(t).toBeTruthy();
+    expect(t!.title).toBe('Topic 1');
+    expect(t!.content).toBe('C');
+  });
+
+  test('upsertTopic updates existing topic', () => {
+    db.upsertTopic({ topicId: 't1', title: 'V1', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 't1', title: 'V2', summary: 'S2', content: 'C2', updatedAt: now });
+    const t = db.getTopic('t1');
+    expect(t!.title).toBe('V2');
+    expect(t!.content).toBe('C2');
+  });
+
+  test('deleteTopic removes topic', () => {
+    db.upsertTopic({ topicId: 't1', title: 'T', summary: 'S', content: 'C', updatedAt: now });
+    db.deleteTopic('t1');
+    expect(db.getTopic('t1')).toBeNull();
+  });
+
+  test('listTopics returns all', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    expect(db.listTopics()).toHaveLength(2);
+  });
+
+  test('listTopicSummaries returns id/title/summary only', () => {
+    db.upsertTopic({ topicId: 'x', title: 'X', summary: 'SX', content: 'CX', updatedAt: now });
+    const sums = db.listTopicSummaries();
+    expect(sums).toHaveLength(1);
+    expect(sums[0].topicId).toBe('x');
+    expect(sums[0].title).toBe('X');
+    expect(sums[0].summary).toBe('SX');
+  });
+});
+
+describe('entry-topic assignments', () => {
+  const now = new Date().toISOString();
+
+  beforeEach(() => {
+    db.upsertTopic({ topicId: 't1', title: 'T1', summary: 'S', content: 'C', updatedAt: now });
+    const { rawId: r1Id, sha256: r1Sha } = makeRawFile('needs-synth');
+    db.insertRaw({
+      rawId: r1Id, sha256: r1Sha, status: 'ingested', byteLength: 11,
+      mimeType: 'text/plain', handler: null, uploadedAt: now, metadata: null,
+    });
+    db.insertEntry({
+      entryId: 'e1', rawId: r1Id, title: 'E1', slug: 'e1', summary: '',
+      schemaVersion: 1, digestedAt: now, tags: [],
+    });
+    db.insertEntry({
+      entryId: 'e2', rawId: r1Id, title: 'E2', slug: 'e2', summary: '',
+      schemaVersion: 1, digestedAt: now, tags: [],
+    });
+  });
+
+  test('assignEntries + listTopicEntryIds', () => {
+    db.assignEntries('t1', ['e1', 'e2']);
+    const ids = db.listTopicEntryIds('t1');
+    expect(ids).toContain('e1');
+    expect(ids).toContain('e2');
+  });
+
+  test('unassignEntries removes membership', () => {
+    db.assignEntries('t1', ['e1', 'e2']);
+    db.unassignEntries('t1', ['e1']);
+    expect(db.listTopicEntryIds('t1')).toEqual(['e2']);
+  });
+
+  test('listEntryTopicIds returns topics for an entry', () => {
+    db.upsertTopic({ topicId: 't2', title: 'T2', summary: 'S', content: 'C', updatedAt: now });
+    db.assignEntries('t1', ['e1']);
+    db.assignEntries('t2', ['e1']);
+    const topics = db.listEntryTopicIds('e1');
+    expect(topics).toContain('t1');
+    expect(topics).toContain('t2');
+  });
+
+  test('duplicate assignment is idempotent', () => {
+    db.assignEntries('t1', ['e1']);
+    db.assignEntries('t1', ['e1']); // should not throw
+    expect(db.listTopicEntryIds('t1')).toEqual(['e1']);
+  });
+
+  test('topic entryCount is computed', () => {
+    db.assignEntries('t1', ['e1', 'e2']);
+    const t = db.getTopic('t1');
+    expect(t!.entryCount).toBe(2);
+  });
+});
+
+describe('connections', () => {
+  const now = new Date().toISOString();
+
+  beforeEach(() => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'c', title: 'C', summary: 'S', content: 'C', updatedAt: now });
+  });
+
+  test('upsertConnection + listConnectionsForTopic', () => {
+    db.upsertConnection({
+      sourceTopic: 'a', targetTopic: 'b', relationship: 'influences',
+      confidence: 'inferred', evidence: null,
+    });
+    const conns = db.listConnectionsForTopic('a');
+    expect(conns).toHaveLength(1);
+    expect(conns[0].relationship).toBe('influences');
+  });
+
+  test('removeConnection', () => {
+    db.upsertConnection({
+      sourceTopic: 'a', targetTopic: 'b', relationship: 'r',
+      confidence: 'inferred', evidence: null,
+    });
+    db.removeConnection('a', 'b');
+    expect(db.listConnectionsForTopic('a')).toHaveLength(0);
+  });
+
+  test('listAllConnections returns all', () => {
+    db.upsertConnection({
+      sourceTopic: 'a', targetTopic: 'b', relationship: 'r1',
+      confidence: 'inferred', evidence: null,
+    });
+    db.upsertConnection({
+      sourceTopic: 'b', targetTopic: 'c', relationship: 'r2',
+      confidence: 'extracted', evidence: null,
+    });
+    expect(db.listAllConnections()).toHaveLength(2);
+  });
+
+  test('topic connectionCount is computed', () => {
+    db.upsertConnection({
+      sourceTopic: 'a', targetTopic: 'b', relationship: 'r',
+      confidence: 'inferred', evidence: null,
+    });
+    db.upsertConnection({
+      sourceTopic: 'a', targetTopic: 'c', relationship: 'r',
+      confidence: 'inferred', evidence: null,
+    });
+    const t = db.getTopic('a');
+    expect(t!.connectionCount).toBe(2);
+  });
+
+  test('deleting a topic cascades its connections', () => {
+    db.upsertConnection({
+      sourceTopic: 'a', targetTopic: 'b', relationship: 'r',
+      confidence: 'inferred', evidence: null,
+    });
+    db.deleteTopic('a');
+    expect(db.listAllConnections()).toHaveLength(0);
+  });
+});
+
+describe('needs_synthesis column', () => {
+  const now = new Date().toISOString();
+
+  beforeEach(() => {
+    const { rawId: r1Id, sha256: r1Sha } = makeRawFile('needs-synth');
+    db.insertRaw({
+      rawId: r1Id, sha256: r1Sha, status: 'ingested', byteLength: 11,
+      mimeType: 'text/plain', handler: null, uploadedAt: now, metadata: null,
+    });
+    db.insertEntry({
+      entryId: 'e1', rawId: r1Id, title: 'E1', slug: 'e1', summary: '',
+      schemaVersion: 1, digestedAt: now, tags: [],
+    });
+    db.insertEntry({
+      entryId: 'e2', rawId: r1Id, title: 'E2', slug: 'e2', summary: '',
+      schemaVersion: 1, digestedAt: now, tags: [],
+    });
+  });
+
+  test('new entries default to needs_synthesis=1', () => {
+    expect(db.countNeedsSynthesis()).toBe(2);
+    expect(db.listNeedsSynthesisEntryIds()).toEqual(expect.arrayContaining(['e1', 'e2']));
+  });
+
+  test('clearNeedsSynthesis clears specific entries', () => {
+    db.clearNeedsSynthesis(['e1']);
+    expect(db.countNeedsSynthesis()).toBe(1);
+    expect(db.listNeedsSynthesisEntryIds()).toEqual(['e2']);
+  });
+
+  test('markAllNeedsSynthesis resets all to 1', () => {
+    db.clearNeedsSynthesis(['e1', 'e2']);
+    expect(db.countNeedsSynthesis()).toBe(0);
+    db.markAllNeedsSynthesis();
+    expect(db.countNeedsSynthesis()).toBe(2);
+  });
+
+  test('markCoTopicEntriesStale marks co-topic entries', () => {
+    db.upsertTopic({ topicId: 't1', title: 'T', summary: 'S', content: 'C', updatedAt: now });
+    db.assignEntries('t1', ['e1', 'e2']);
+    db.clearNeedsSynthesis(['e1', 'e2']);
+    // Mark e1 as "deleted" → e2 should become stale (shared topic).
+    // e1 itself is excluded (the method assumes it's being deleted).
+    db.markCoTopicEntriesStale(['e1']);
+    expect(db.countNeedsSynthesis()).toBe(1);
+    expect(db.listNeedsSynthesisEntryIds()).toEqual(['e2']);
+  });
+});
+
+describe('god-node detection', () => {
+  const now = new Date().toISOString();
+
+  test('detectGodNodes returns empty when no outliers', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    expect(db.detectGodNodes()).toEqual([]);
+  });
+
+  test('detectGodNodes flags high-entry-count topics', () => {
+    // Create topics with varying entry counts.
+    const { rawId: gRawId, sha256: gSha } = makeRawFile('god-raw');
+    db.insertRaw({
+      rawId: gRawId, sha256: gSha, status: 'ingested', byteLength: 7,
+      mimeType: 'text/plain', handler: null, uploadedAt: now, metadata: null,
+    });
+    // Create many entries for the "god" topic and few for others.
+    for (let i = 0; i < 30; i++) {
+      db.insertEntry({
+        entryId: `e${i}`, rawId: gRawId, title: `E${i}`, slug: `e${i}`, summary: '',
+        schemaVersion: 1, digestedAt: now, tags: [],
+      });
+    }
+    db.upsertTopic({ topicId: 'god', title: 'God', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'small1', title: 'S1', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'small2', title: 'S2', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'small3', title: 'S3', summary: 'S', content: 'C', updatedAt: now });
+    // 30 entries in "god", 2 in small1, 2 in small2, 2 in small3 → avg ~9, 3x = ~27 → 30 > 27
+    db.assignEntries('god', Array.from({ length: 30 }, (_, i) => `e${i}`));
+    db.assignEntries('small1', ['e0', 'e1']);
+    db.assignEntries('small2', ['e2', 'e3']);
+    db.assignEntries('small3', ['e4', 'e5']);
+
+    const gods = db.detectGodNodes();
+    expect(gods).toContain('god');
+    expect(gods).not.toContain('small1');
+  });
+});
+
+describe('wipeSynthesis', () => {
+  const now = new Date().toISOString();
+
+  test('removes all topics, connections, and meta', () => {
+    db.upsertTopic({ topicId: 't1', title: 'T', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 't2', title: 'T2', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertConnection({
+      sourceTopic: 't1', targetTopic: 't2', relationship: 'r',
+      confidence: 'inferred', evidence: null,
+    });
+    db.setSynthesisMeta('status', 'idle');
+
+    db.wipeSynthesis();
+
+    expect(db.listTopics()).toHaveLength(0);
+    expect(db.listAllConnections()).toHaveLength(0);
+    // wipeSynthesis resets last_run_at to empty, but preserves status key.
+    expect(db.getSynthesisMeta('last_run_at')).toBe('');
+  });
+});
+
+describe('V1→V2 migration index ordering', () => {
+  // Regression: the needs_synthesis partial index used to live in SCHEMA_DDL,
+  // which runs before _migrateV2(). On V1 databases the column doesn't exist
+  // yet, so CREATE INDEX failed and the DB couldn't open. The fix moves the
+  // index creation to _initSchema() AFTER _migrateV2().
+  test('opening a V1 database with entries succeeds and creates the index', () => {
+    // Build a V1-shaped DB manually: entries table WITHOUT needs_synthesis.
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+    const Database = require('better-sqlite3');
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta (key, value) VALUES ('schema_version', '1');
+      INSERT INTO meta (key, value) VALUES ('created_at', '2026-01-01T00:00:00Z');
+      CREATE TABLE raw (
+        raw_id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, status TEXT NOT NULL,
+        byte_length INTEGER NOT NULL, mime_type TEXT, handler TEXT,
+        uploaded_at TEXT NOT NULL, digested_at TEXT, error_class TEXT,
+        error_message TEXT, metadata_json TEXT
+      );
+      CREATE TABLE folders (folder_path TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+      INSERT INTO folders (folder_path, created_at) VALUES ('', '2026-01-01T00:00:00Z');
+      CREATE TABLE raw_locations (
+        raw_id TEXT NOT NULL, folder_path TEXT NOT NULL, filename TEXT NOT NULL,
+        uploaded_at TEXT NOT NULL, PRIMARY KEY (raw_id, folder_path, filename)
+      );
+      CREATE TABLE entries (
+        entry_id TEXT PRIMARY KEY, raw_id TEXT NOT NULL, title TEXT NOT NULL,
+        slug TEXT NOT NULL, summary TEXT NOT NULL, schema_version INTEGER NOT NULL,
+        stale_schema INTEGER NOT NULL DEFAULT 0, digested_at TEXT NOT NULL
+      );
+      CREATE TABLE entry_tags (
+        entry_id TEXT NOT NULL, tag TEXT NOT NULL, PRIMARY KEY (entry_id, tag)
+      );
+      CREATE TABLE synthesis_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE synthesis_topics (
+        topic_id TEXT PRIMARY KEY, title TEXT NOT NULL, summary TEXT,
+        content TEXT, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE synthesis_topic_entries (
+        topic_id TEXT NOT NULL, entry_id TEXT NOT NULL, PRIMARY KEY (topic_id, entry_id)
+      );
+      CREATE TABLE synthesis_connections (
+        source_topic TEXT NOT NULL, target_topic TEXT NOT NULL,
+        relationship TEXT NOT NULL, confidence TEXT NOT NULL DEFAULT 'inferred',
+        evidence TEXT, PRIMARY KEY (source_topic, target_topic)
+      );
+    `);
+    // Insert a raw + entry so needs_synthesis migration has rows to touch.
+    raw.exec(`
+      INSERT INTO raw (raw_id, sha256, status, byte_length, mime_type, handler, uploaded_at)
+        VALUES ('r1', 'abc123', 'digested', 10, 'text/plain', 'passthrough/text', '2026-01-01T00:00:00Z');
+      INSERT INTO entries (entry_id, raw_id, title, slug, summary, schema_version, digested_at)
+        VALUES ('r1-test', 'r1', 'Test', 'test', 'sum', 1, '2026-01-01T00:00:00Z');
+    `);
+    raw.close();
+
+    // Re-open via KbDatabase — this must NOT throw.
+    const migrated = new KbDatabase(dbPath);
+    try {
+      expect(migrated.getSchemaVersion()).toBe(KB_DB_SCHEMA_VERSION);
+      // The V2 column exists and the entry defaults to needs_synthesis=1.
+      expect(migrated.countNeedsSynthesis()).toBe(1);
+      // The index exists (verify by using it in a query).
+      expect(migrated.listNeedsSynthesisEntryIds()).toEqual(['r1-test']);
+    } finally {
+      migrated.close();
+    }
+  });
+});
+
+describe('stale running status recovery', () => {
+  test('reopening a DB with status=running resets it to idle', () => {
+    db.setSynthesisMeta('status', 'running');
+    expect(db.getSynthesisMeta('status')).toBe('running');
+    db.close();
+
+    // Re-open — simulates server restart.
+    db = new KbDatabase(dbPath);
+    expect(db.getSynthesisMeta('status')).toBe('idle');
+  });
+
+  test('does not touch idle or failed statuses on reopen', () => {
+    db.setSynthesisMeta('status', 'failed');
+    db.close();
+    db = new KbDatabase(dbPath);
+    expect(db.getSynthesisMeta('status')).toBe('failed');
+  });
+});
+
+describe('getSynthesisSnapshot', () => {
+  const now = new Date().toISOString();
+
+  test('returns comprehensive snapshot', () => {
+    db.upsertTopic({ topicId: 't1', title: 'T', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 't2', title: 'T2', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertConnection({
+      sourceTopic: 't1', targetTopic: 't2', relationship: 'r',
+      confidence: 'inferred', evidence: null,
+    });
+    db.setSynthesisMeta('status', 'idle');
+    db.setSynthesisMeta('last_run_at', now);
+
+    const snap = db.getSynthesisSnapshot();
+    expect(snap.topicCount).toBe(2);
+    expect(snap.connectionCount).toBe(1);
+    expect(snap.status).toBe('idle');
+    expect(snap.lastRunAt).toBe(now);
+  });
+});
