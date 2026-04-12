@@ -2,10 +2,12 @@
 
 // ─── KB Search MCP server tests ───────────────────────────────────────────
 
+import fs from 'fs';
 import express from 'express';
 import http from 'http';
 import { createKbSearchMcpServer } from '../src/services/kbSearchMcp';
 import type { KbSearchChatService } from '../src/services/kbSearchMcp';
+import * as embeddings from '../src/services/knowledgeBase/embeddings';
 
 // ── Test helpers ──────────────────────────────────────────────────────────
 
@@ -21,8 +23,8 @@ function makeMockChatService(overrides: Partial<KbSearchChatService> = {}): KbSe
 let server: http.Server;
 let baseUrl: string;
 
-function buildAndListen(chatService: KbSearchChatService) {
-  const mcp = createKbSearchMcpServer({ chatService });
+function buildAndListen(chatService: KbSearchChatService, kbIngestion?: any) {
+  const mcp = createKbSearchMcpServer({ chatService, kbIngestion });
   const app = express();
   app.use(express.json());
   app.use('/mcp', mcp.router);
@@ -86,7 +88,7 @@ afterEach(async () => {
 describe('KB Search MCP session lifecycle', () => {
   test('issueKbSearchSession returns token and mcpServers config', () => {
     const mcp = createKbSearchMcpServer({ chatService: makeMockChatService() });
-    const session = mcp.issueKbSearchSession('ws-abc');
+    const session = mcp.issueKbSearchSession('ws-abc', 'ws-abc');
     expect(session.token).toBeDefined();
     expect(typeof session.token).toBe('string');
     expect(session.token.length).toBeGreaterThan(0);
@@ -101,23 +103,30 @@ describe('KB Search MCP session lifecycle', () => {
     );
   });
 
-  test('issueKbSearchSession reuses token for same workspace', () => {
+  test('issueKbSearchSession reuses token for same session key', () => {
     const mcp = createKbSearchMcpServer({ chatService: makeMockChatService() });
-    const s1 = mcp.issueKbSearchSession('ws-abc');
-    const s2 = mcp.issueKbSearchSession('ws-abc');
+    const s1 = mcp.issueKbSearchSession('ws-abc', 'ws-abc');
+    const s2 = mcp.issueKbSearchSession('ws-abc', 'ws-abc');
     expect(s1.token).toBe(s2.token);
   });
 
-  test('issueKbSearchSession returns different tokens for different workspaces', () => {
+  test('issueKbSearchSession returns different tokens for different session keys', () => {
     const mcp = createKbSearchMcpServer({ chatService: makeMockChatService() });
-    const s1 = mcp.issueKbSearchSession('ws-abc');
-    const s2 = mcp.issueKbSearchSession('ws-def');
+    const s1 = mcp.issueKbSearchSession('ws-abc', 'ws-abc');
+    const s2 = mcp.issueKbSearchSession('ws-def', 'ws-def');
+    expect(s1.token).not.toBe(s2.token);
+  });
+
+  test('different session keys for same workspace get independent tokens', () => {
+    const mcp = createKbSearchMcpServer({ chatService: makeMockChatService() });
+    const s1 = mcp.issueKbSearchSession('conv-1', 'ws-abc');
+    const s2 = mcp.issueKbSearchSession('conv-2', 'ws-abc');
     expect(s1.token).not.toBe(s2.token);
   });
 
   test('revokeKbSearchSession invalidates the token', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-abc');
+    const session = mcp.issueKbSearchSession('ws-abc', 'ws-abc');
 
     // Token works before revocation.
     const r1 = await makeRequest(
@@ -178,7 +187,7 @@ describe('KB Search MCP auth', () => {
 describe('KB Search MCP tool dispatch', () => {
   test('rejects unknown tool', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
       { tool: 'nonexistent_tool', arguments: {} },
@@ -191,7 +200,7 @@ describe('KB Search MCP tool dispatch', () => {
 
   test('rejects missing tool field', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
       { arguments: {} },
@@ -220,7 +229,7 @@ describe('get_topic handler', () => {
     };
     const chatService = makeMockChatService({ getKbDb: jest.fn().mockReturnValue(mockDb) });
     const { mcp, close } = await buildAndListen(chatService);
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -241,7 +250,7 @@ describe('get_topic handler', () => {
 
   test('returns error for missing topic_id', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -258,7 +267,7 @@ describe('get_topic handler', () => {
     const mockDb = { getTopic: jest.fn().mockReturnValue(null) };
     const chatService = makeMockChatService({ getKbDb: jest.fn().mockReturnValue(mockDb) });
     const { mcp, close } = await buildAndListen(chatService);
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -273,7 +282,7 @@ describe('get_topic handler', () => {
 
   test('returns error when DB unavailable', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -292,7 +301,7 @@ describe('get_topic handler', () => {
 describe('search_topics handler', () => {
   test('returns empty array for empty query', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -307,7 +316,7 @@ describe('search_topics handler', () => {
 
   test('returns warning when no embedding config', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -327,7 +336,7 @@ describe('search_topics handler', () => {
 describe('search_entries handler', () => {
   test('returns empty array for empty query', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -342,7 +351,7 @@ describe('search_entries handler', () => {
 
   test('returns warning when no embedding config', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -362,7 +371,7 @@ describe('search_entries handler', () => {
 describe('find_similar_topics handler', () => {
   test('returns error when topic_id missing', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -377,7 +386,7 @@ describe('find_similar_topics handler', () => {
 
   test('returns warning when no embedding config', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -397,7 +406,7 @@ describe('find_similar_topics handler', () => {
 describe('find_unconnected_similar handler', () => {
   test('returns error when topic_id missing', async () => {
     const { mcp, close } = await buildAndListen(makeMockChatService());
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -419,7 +428,7 @@ describe('find_unconnected_similar handler', () => {
         getKbDb: jest.fn().mockReturnValue(mockDb) as any,
       }),
     );
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -454,7 +463,7 @@ describe('find_unconnected_similar handler', () => {
         getKbVectorStore: jest.fn().mockResolvedValue(mockStore) as any,
       }),
     );
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -489,7 +498,7 @@ describe('find_unconnected_similar handler', () => {
         getKbVectorStore: jest.fn().mockResolvedValue(mockStore) as any,
       }),
     );
-    const session = mcp.issueKbSearchSession('ws-test');
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
 
     const res = await makeRequest(
       'POST', '/mcp/kb-search/call',
@@ -500,6 +509,210 @@ describe('find_unconnected_similar handler', () => {
     expect(res.status).toBe(200);
     expect(res.body.topics).toHaveLength(1);
     expect(res.body.topics[0].topic_id).toBe('t1');
+    await close();
+  });
+});
+
+// ── kb_ingest handler ────────────────────────────────────────────────────
+
+describe('kb_ingest handler', () => {
+  test('returns error when file_path is missing', async () => {
+    const mockIngestion = { enqueueUpload: jest.fn() };
+    const { mcp, close } = await buildAndListen(makeMockChatService(), mockIngestion);
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
+
+    const res = await makeRequest(
+      'POST', '/mcp/kb-search/call',
+      { tool: 'kb_ingest', arguments: {} },
+      { 'x-kb-search-token': session.token },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.error).toMatch(/file_path is required/);
+    expect(mockIngestion.enqueueUpload).not.toHaveBeenCalled();
+    await close();
+  });
+
+  test('returns error when file does not exist', async () => {
+    const mockIngestion = { enqueueUpload: jest.fn() };
+    const { mcp, close } = await buildAndListen(makeMockChatService(), mockIngestion);
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
+
+    const res = await makeRequest(
+      'POST', '/mcp/kb-search/call',
+      { tool: 'kb_ingest', arguments: { file_path: '/tmp/nonexistent-file-xyz.pdf' } },
+      { 'x-kb-search-token': session.token },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.error).toMatch(/not found or not accessible/);
+    await close();
+  });
+
+  test('returns error when ingestion service not provided', async () => {
+    const { mcp, close } = await buildAndListen(makeMockChatService());
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
+
+    const res = await makeRequest(
+      'POST', '/mcp/kb-search/call',
+      { tool: 'kb_ingest', arguments: { file_path: '/tmp/test.txt' } },
+      { 'x-kb-search-token': session.token },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.error).toMatch(/not available/);
+    await close();
+  });
+
+  test('ingests a real file via enqueueUpload', async () => {
+    const tmpFile = '/tmp/kb-ingest-test-' + Date.now() + '.txt';
+    fs.writeFileSync(tmpFile, 'test content for ingestion');
+
+    const mockIngestion = {
+      enqueueUpload: jest.fn().mockResolvedValue({
+        entry: { rawId: 'abc123', filename: 'kb-ingest-test.txt' },
+        deduped: false,
+        addedLocation: true,
+      }),
+    };
+    const { mcp, close } = await buildAndListen(makeMockChatService(), mockIngestion);
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
+
+    const res = await makeRequest(
+      'POST', '/mcp/kb-search/call',
+      { tool: 'kb_ingest', arguments: { file_path: tmpFile } },
+      { 'x-kb-search-token': session.token },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.raw_id).toBe('abc123');
+    expect(mockIngestion.enqueueUpload).toHaveBeenCalledTimes(1);
+    const call = mockIngestion.enqueueUpload.mock.calls[0];
+    expect(call[0]).toBe('ws-test'); // workspace hash
+    expect(call[1].folderPath).toBe('conversation-documents');
+    expect(call[1].mimeType).toBe('text/plain');
+    expect(call[1].buffer).toBeInstanceOf(Buffer);
+
+    fs.rmSync(tmpFile, { force: true });
+    await close();
+  });
+
+  test('returns error when path is a directory', async () => {
+    const mockIngestion = { enqueueUpload: jest.fn() };
+    const { mcp, close } = await buildAndListen(makeMockChatService(), mockIngestion);
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
+
+    const res = await makeRequest(
+      'POST', '/mcp/kb-search/call',
+      { tool: 'kb_ingest', arguments: { file_path: '/tmp' } },
+      { 'x-kb-search-token': session.token },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.error).toMatch(/not a file/);
+    await close();
+  });
+});
+
+// ── Ollama fallback behavior ─────────────────────────────────────────────
+
+describe('Ollama fallback', () => {
+  test('search_topics falls back to keyword search when embedding fails', async () => {
+    const mockStore = {
+      keywordSearchTopics: jest.fn().mockResolvedValue([
+        { id: 't1', kind: 'topic', title: 'Topic 1', summary: 'S', score: 0.5 },
+      ]),
+      hybridSearchTopics: jest.fn(),
+    };
+
+    // Mock embedText to throw (simulates Ollama being down).
+    jest.spyOn(embeddings, 'embedText')
+      .mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+
+    const { mcp, close } = await buildAndListen(
+      makeMockChatService({
+        getWorkspaceKbEmbeddingConfig: jest.fn().mockResolvedValue({
+          model: 'nomic-embed-text', host: 'http://localhost:11434', dimensions: 768,
+        }) as any,
+        getKbVectorStore: jest.fn().mockResolvedValue(mockStore) as any,
+      }),
+    );
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
+
+    const res = await makeRequest(
+      'POST', '/mcp/kb-search/call',
+      { tool: 'search_topics', arguments: { query: 'test' } },
+      { 'x-kb-search-token': session.token },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.topics).toHaveLength(1);
+    expect(res.body.topics[0].topic_id).toBe('t1');
+    expect(mockStore.keywordSearchTopics).toHaveBeenCalledWith('test', 10);
+    await close();
+
+    jest.restoreAllMocks();
+  });
+
+  test('search_entries falls back to keyword search when embedding fails', async () => {
+    const mockStore = {
+      keywordSearchEntries: jest.fn().mockResolvedValue([
+        { id: 'e1', kind: 'entry', title: 'Entry 1', summary: 'S', score: 0.5 },
+      ]),
+      hybridSearchEntries: jest.fn(),
+    };
+
+    jest.spyOn(embeddings, 'embedText')
+      .mockRejectedValueOnce(new Error('connect ECONNREFUSED'));
+
+    const { mcp, close } = await buildAndListen(
+      makeMockChatService({
+        getWorkspaceKbEmbeddingConfig: jest.fn().mockResolvedValue({
+          model: 'nomic-embed-text', host: 'http://localhost:11434', dimensions: 768,
+        }) as any,
+        getKbVectorStore: jest.fn().mockResolvedValue(mockStore) as any,
+      }),
+    );
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
+
+    const res = await makeRequest(
+      'POST', '/mcp/kb-search/call',
+      { tool: 'search_entries', arguments: { query: 'test' } },
+      { 'x-kb-search-token': session.token },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.entries).toHaveLength(1);
+    expect(res.body.entries[0].entry_id).toBe('e1');
+    expect(mockStore.keywordSearchEntries).toHaveBeenCalledWith('test', 10);
+    await close();
+
+    jest.restoreAllMocks();
+  });
+
+  test('find_similar_topics returns empty when embeddings unavailable', async () => {
+    const mockStore = {
+      findSimilarTopics: jest.fn().mockRejectedValue(new Error('no embeddings')),
+    };
+    const { mcp, close } = await buildAndListen(
+      makeMockChatService({
+        getWorkspaceKbEmbeddingConfig: jest.fn().mockResolvedValue({
+          model: 'nomic-embed-text', host: 'http://localhost:11434', dimensions: 768,
+        }) as any,
+        getKbVectorStore: jest.fn().mockResolvedValue(mockStore) as any,
+      }),
+    );
+    const session = mcp.issueKbSearchSession('ws-test', 'ws-test');
+
+    const res = await makeRequest(
+      'POST', '/mcp/kb-search/call',
+      { tool: 'find_similar_topics', arguments: { topic_id: 'x' } },
+      { 'x-kb-search-token': session.token },
+    );
+
+    expect(res.status).toBe(200);
+    expect(res.body.topics).toEqual([]);
     await close();
   });
 });

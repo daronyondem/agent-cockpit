@@ -2,12 +2,13 @@
 /**
  * Agent Cockpit KB Search MCP stdio shim.
  *
- * Spawned by CLIs during dreaming as an MCP server.  Implements the
- * minimal MCP protocol subset (`initialize`, `tools/list`, `tools/call`)
- * and forwards search tool calls to the cockpit's HTTP endpoint.
+ * Spawned by CLIs during dreaming and conversation sessions as an MCP
+ * server.  Implements the minimal MCP protocol subset (`initialize`,
+ * `tools/list`, `tools/call`) and forwards tool calls to the cockpit's
+ * HTTP endpoint.
  *
  * Environment variables:
- *   KB_SEARCH_TOKEN    — per-dream-run bearer token issued by the cockpit
+ *   KB_SEARCH_TOKEN    — per-session bearer token issued by the cockpit
  *   KB_SEARCH_ENDPOINT — full URL, e.g.
  *                        http://127.0.0.1:3335/chat/api/chat/mcp/kb-search/call
  *
@@ -126,6 +127,23 @@ const TOOLS = [
         },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'kb_ingest',
+    description:
+      'Ingest a local file into the workspace knowledge base. The file is ' +
+      'copied into the KB raw storage under a "conversation-documents" folder ' +
+      'and queued for processing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        file_path: {
+          type: 'string',
+          description: 'Absolute path to the file on disk.',
+        },
+      },
+      required: ['file_path'],
     },
   },
 ];
