@@ -2,35 +2,46 @@
 //
 // Owns the "entries → synthesis" stage of the KB pipeline.
 //
-// Two-phase file-reference pipeline:
-//   Phase 1 (Discovery): batch entries against topic summaries to find matches
-//   Phase 2 (Synthesis): feed matched topics + entries to CLI for operations
+// Retrieval-based pipeline (Phase B + C):
+//   1. Routing: embed pending entries, hybrid-search for matching topics,
+//      classify by score (strong / borderline / no match).
+//   2. Verification: lightweight LLM call for borderline matches.
+//   3. Synthesis: CLI calls with MCP search tools for topic updates +
+//      new topic creation.
+//   4. Discovery: sweep for missing connections between topics using
+//      embedding similarity, shared entries, and transitive paths.
+//      LLM verifies candidates in batches.
 //
-// All prompts are lightweight instruction sheets pointing to files on disk.
-// The CLI reads files on demand using its own tools (allowTools: true).
+// The CLI receives pre-matched topic IDs and uses MCP tools
+// (search_topics, get_topic, find_similar_topics,
+// find_unconnected_similar, search_entries) to fetch content on demand.
 //
 // Two modes:
 //   - Incremental (default): processes only entries with needs_synthesis = 1
 //   - Full Rebuild (Re-Dream): wipes synthesis tables, marks all entries
-//     needs_synthesis = 1, then runs incremental
+//     needs_synthesis = 1, then runs the pipeline from scratch.
 //
 // Post-dream: regenerate markdown, detect god nodes, emit WS frames.
 
-import path from 'path';
 import type {
-  KbErrorClass,
   KbStateUpdateEvent,
+  McpServerConfig,
   Settings,
 } from '../../types';
 import type { BaseBackendAdapter, RunOneShotOptions } from '../backends/base';
 import type { BackendRegistry } from '../backends/registry';
 import type { KbDatabase } from './db';
-import { parseDreamOutput, applyOperations } from './dreamOps';
+import type { KbVectorStore } from './vectorStore';
 import {
-  regenerateSynthesisMarkdown,
-  generateDreamTmpFiles,
-  cleanupDreamTmp,
-} from './dreamMarkdown';
+  embedText,
+  embedBatch,
+  checkOllamaHealth,
+  resolveConfig,
+  type EmbeddingConfig,
+} from './embeddings';
+import { parseDreamOutput, applyOperations, type DreamOperation } from './dreamOps';
+import { regenerateSynthesisMarkdown } from './dreamMarkdown';
+import type { KbSearchMcpServer } from '../kbSearchMcp';
 
 // ── Prompt templates ────────────────────────────────────────────────────────
 
@@ -42,78 +53,8 @@ Use multiple agents to parallelize your work where possible. For example:
 - Delegate sub-tasks (reading files, evaluating matches) to separate agents.
 `.trim();
 
-function buildDiscoveryPrompt(
-  entryList: Array<{ entryId: string; title: string; entryPath: string }>,
-  topicCount: number,
-): string {
-  const entryLines = entryList
-    .map((e) => `- ${e.entryId}: "${e.title}" — read at ${e.entryPath}`)
-    .join('\n');
-  return `You are analyzing new knowledge base entries to find which existing topics they relate to.
-
-## New Entries
-${entryLines}
-
-## Existing Topics
-Full list at: _dream_tmp/all-topics.txt
-(${topicCount} topics, each line: ID | title | one-line summary)
-
-## Task
-Read each entry file. Scan the topic list. For each entry, identify which topics are
-relevant. An entry is relevant to a topic if it contains information that belongs in
-that topic, introduces facts that would change its content, or reveals connections.
-
-Return JSON only:
-{ "matches": [{ "entry_id": "...", "topic_id": "...", "reason": "one sentence" }] }
-
-If no matches found, return: { "matches": [] }
-
-${EXECUTION_STRATEGY}`;
-}
-
-function buildSynthesisPrompt(
-  matchedTopics: Array<{ topicId: string; title: string; slug: string }>,
-  entryList: Array<{ entryId: string; title: string; entryPath: string }>,
-  topicCount: number,
-  hasGodNodes: boolean,
-): string {
-  const topicLines = matchedTopics
-    .map((t) => `- ${t.topicId}: "${t.title}" — read full content at _dream_tmp/topic-${t.slug}-content.md`)
-    .join('\n');
-  const entryLines = entryList
-    .map((e) => `- ${e.entryId}: "${e.title}" — read at ${e.entryPath}`)
-    .join('\n');
-  const refLines = [
-    `- All topic titles: _dream_tmp/all-topics.txt`,
-    ...(hasGodNodes ? ['- God node warnings: _dream_tmp/god-nodes.txt'] : []),
-  ].join('\n');
-
-  return `You are updating a knowledge base synthesis layer.
-
-## Topics to Update
-${topicLines}
-
-## New Entries to Process
-${entryLines}
-
-## Reference Files
-${refLines}
-
-## Instructions
-1. Read each topic content file and each entry file.
-2. Assign each new entry to one or more topics.
-3. Rewrite topic content (prose) to incorporate new information.
-4. Add/update connections to other topics (see all-topics.txt for full list).
-5. If a topic is overly broad (see god-nodes.txt), consider splitting it.
-6. You may merge, split, rename, or delete topics if restructuring improves clarity.
-7. Every new entry must be assigned to at least one topic.
-
-Connection confidence:
-- "extracted": explicitly stated in entries
-- "inferred": logically follows from content
-- "speculative": plausible but uncertain
-
-Return a JSON object with an "operations" array. Available operations:
+const OPERATIONS_SPEC = `
+Available operations:
 - create_topic: { op, topic_id (slug), title, summary (one line), content (full markdown prose) }
 - update_topic: { op, topic_id, title?, summary?, content? }
 - merge_topics: { op, source_topic_ids[], into_topic_id, title, summary, content }
@@ -125,70 +66,300 @@ Return a JSON object with an "operations" array. Available operations:
 - update_connection: { op, source_topic, target_topic, relationship?, confidence? }
 - remove_connection: { op, source_topic, target_topic }
 
+Connection confidence levels:
+- "extracted": the entry explicitly states the relationship (e.g. "X depends on Y")
+- "inferred": you deduced the relationship from overlapping concepts, shared themes, or complementary content across topics — not explicitly stated in any single entry
+- "speculative": a weaker thematic connection worth noting but not strongly supported
+
+Most connections between topics that share concepts but don't explicitly reference each other should be "inferred", not "extracted". Reserve "extracted" for relationships that are directly stated in the source text.
+`.trim();
+
+const MCP_TOOLS_INSTRUCTION = `
+## KB Search Tools
+You have access to knowledge base search tools via the \`agent-cockpit-kb-search\` MCP server:
+- \`search_topics({ query, limit? })\` — hybrid search over all topics
+- \`get_topic({ topic_id })\` — retrieve full topic content, connections, and entries
+- \`find_similar_topics({ topic_id, limit? })\` — find topics by embedding similarity
+- \`find_unconnected_similar({ topic_id, limit? })\` — find similar topics that have NO existing connection to the given topic
+- \`search_entries({ query, limit? })\` — hybrid search over all entries
+
+Use these tools to discover connections and find related content beyond the
+pre-matched set provided below.
+`.trim();
+
+function buildRetrievalSynthesisPrompt(
+  entryList: Array<{ entryId: string; title: string; entryPath: string }>,
+  matchedTopicIds: string[],
+): string {
+  const entryLines = entryList
+    .map((e) => `- ${e.entryId}: "${e.title}" — read at ${e.entryPath}`)
+    .join('\n');
+  const topicLines = matchedTopicIds
+    .map((tid) => `- ${tid}`)
+    .join('\n');
+  return `You are updating a knowledge base synthesis layer.
+
+${MCP_TOOLS_INSTRUCTION}
+
+## Entries to Process
+${entryLines}
+
+## Pre-Matched Topics
+Use \`get_topic\` to retrieve the full content for each:
+${topicLines}
+
+## Instructions
+1. Read each entry file using your file-reading tools.
+2. For each pre-matched topic, use \`get_topic\` to retrieve its current content,
+   connections, and member entries.
+3. Rewrite topic content (prose) to incorporate new information from the entries.
+4. Use \`search_topics\` or \`find_similar_topics\` to discover connections to
+   other topics beyond the pre-matched set. When you find topics that share
+   concepts, themes, or complementary content, add "inferred" connections.
+5. You may create NEW topics if the entries contain information that doesn't
+   fit the pre-matched topics. Use \`search_topics\` to verify no similar topic
+   already exists before creating one.
+6. You may merge, split, rename, or delete topics if restructuring improves clarity.
+7. Every entry must be assigned to at least one topic.
+
+Return a JSON object with an "operations" array.
+
+${OPERATIONS_SPEC}
+
 Return JSON only, no other text.
 
 ${EXECUTION_STRATEGY}`;
 }
 
-function buildNewTopicsPrompt(
+function buildNewTopicCreationPrompt(
   entryList: Array<{ entryId: string; title: string; entryPath: string }>,
+  hasSearchTools: boolean,
 ): string {
   const entryLines = entryList
     .map((e) => `- ${e.entryId}: "${e.title}" — read at ${e.entryPath}`)
     .join('\n');
-  return `You are creating new topics in a knowledge base synthesis layer. These entries did not match any existing topic.
-
+  const toolBlock = hasSearchTools ? `\n${MCP_TOOLS_INSTRUCTION}\n` : '';
+  const searchInstruction = hasSearchTools
+    ? '4. Use `search_topics` to find connections to existing topics.\n5. Prefer fewer, broader topics over many single-entry topics.\n6. Every entry must be assigned to at least one topic.'
+    : '4. Prefer fewer, broader topics over many single-entry topics.\n5. Every entry must be assigned to at least one topic.';
+  return `You are creating new topics in a knowledge base synthesis layer.
+These entries did not match any existing topic.
+${toolBlock}
 ## Entries
 ${entryLines}
-
-## Existing Topics (for connection discovery)
-Full list at: _dream_tmp/all-topics.txt
 
 ## Instructions
 1. Read each entry file.
 2. Organize entries into new topics. Group related entries together.
 3. Write substantive synthesized prose for each topic — integrated knowledge articles,
    not summaries of individual entries.
-4. Look for connections to existing topics (see all-topics.txt).
-5. Prefer fewer, broader topics over many single-entry topics unless entries are
-   truly unrelated.
-6. Every entry must be assigned to at least one topic.
+${searchInstruction}
 
-Return a JSON object with an "operations" array. Available operations:
-create_topic, assign_entries, add_connection
+Return a JSON object with an "operations" array.
+
+Available operations:
+- create_topic: { op, topic_id (slug), title, summary (one line), content (full markdown prose) }
+- assign_entries: { op, topic_id, entry_ids[] }
+- add_connection: { op, source_topic, target_topic, relationship, confidence, evidence }
+
+Connection confidence levels:
+- "extracted": the entry explicitly states the relationship
+- "inferred": you deduced the relationship from overlapping concepts or shared themes — not explicitly stated
+- "speculative": a weaker thematic connection worth noting but not strongly supported
+
+Most cross-topic connections should be "inferred" unless the source text explicitly states the relationship.
 
 Return JSON only, no other text.
 
 ${EXECUTION_STRATEGY}`;
 }
 
-function buildFullRebuildPrompt(
-  entryList: Array<{ entryId: string; title: string; entryPath: string }>,
-  batchNumber: number,
-  totalBatches: number,
-  hasExistingTopics: boolean,
+function buildVerificationPrompt(
+  entries: Array<{ entryId: string; title: string; summary: string }>,
+  candidates: Array<{ topicId: string; title: string; summary: string; score: number }>,
 ): string {
-  const entryLines = entryList
-    .map((e) => `- ${e.entryId}: "${e.title}" — read at ${e.entryPath}`)
+  const entryLines = entries
+    .map((e) => `- ${e.entryId}: "${e.title}" — ${e.summary}`)
     .join('\n');
-  const existingBlock = hasExistingTopics
-    ? `\n## Topics Created in Prior Batches\nFull list at: _dream_tmp/all-topics.txt\nYou may assign entries to these existing topics or create new ones.\n`
-    : '';
-  return `You are building a knowledge base synthesis layer from scratch.
+  const topicLines = candidates
+    .map((t) => `- ${t.topicId}: "${t.title}" — ${t.summary} (score: ${t.score.toFixed(3)})`)
+    .join('\n');
+  return `You are verifying whether knowledge base entries belong to candidate topics.
+Each candidate was found via semantic search but the similarity is ambiguous.
 
-## Entries (batch ${batchNumber} of ${totalBatches})
+## Entries
 ${entryLines}
-${existingBlock}
-## Instructions
-1. Read each entry file.
-2. Discover topics and organize entries into them.
-3. Write rich synthesized prose for each topic.
-4. Establish connections between topics (within this batch and to prior-batch topics).
-5. Every entry must be assigned to at least one topic.
 
-Return a JSON object with an "operations" array. Return JSON only, no other text.
+## Candidate Topics
+${topicLines}
 
-${EXECUTION_STRATEGY}`;
+## Task
+For each entry–topic pair, decide: does the entry contain information that belongs
+in that topic, would change its content, or reveals meaningful connections?
+
+Return JSON only:
+{ "verified": [{ "entry_id": "...", "topic_id": "..." }],
+  "rejected": [{ "entry_id": "...", "topic_id": "..." }] }`;
+}
+
+// ── Connection Discovery types & prompt ────────────────────────────────────
+
+export interface DiscoveryCandidate {
+  topicA: string;
+  topicB: string;
+  embeddingSimilarity: number;
+  sharedEntryCount: number;
+  transitiveSignal: boolean;
+  transitivePath?: string;
+}
+
+function buildConnectionDiscoveryPrompt(
+  candidates: Array<{
+    topicA: { topicId: string; title: string; summary: string | null; content: string | null };
+    topicB: { topicId: string; title: string; summary: string | null; content: string | null };
+    connectionsA: Array<{ sourceTopic: string; targetTopic: string; relationship: string; confidence: string }>;
+    connectionsB: Array<{ sourceTopic: string; targetTopic: string; relationship: string; confidence: string }>;
+    entriesA: Array<{ entryId: string; title: string; summary: string }>;
+    entriesB: Array<{ entryId: string; title: string; summary: string }>;
+    sharedEntries: Array<{ entryId: string; title: string; summary: string }>;
+    signal: string;
+  }>,
+): string {
+  const candidateBlocks = candidates.map((c, i) => {
+    const connsA = c.connectionsA.length > 0
+      ? c.connectionsA.map((cn) => `  - ${cn.sourceTopic} → ${cn.targetTopic}: "${cn.relationship}" (${cn.confidence})`).join('\n')
+      : '  (none)';
+    const connsB = c.connectionsB.length > 0
+      ? c.connectionsB.map((cn) => `  - ${cn.sourceTopic} → ${cn.targetTopic}: "${cn.relationship}" (${cn.confidence})`).join('\n')
+      : '  (none)';
+    const entriesAStr = c.entriesA.length > 0
+      ? c.entriesA.map((e) => `  - ${e.entryId}: "${e.title}" — ${e.summary}`).join('\n')
+      : '  (none)';
+    const entriesBStr = c.entriesB.length > 0
+      ? c.entriesB.map((e) => `  - ${e.entryId}: "${e.title}" — ${e.summary}`).join('\n')
+      : '  (none)';
+    const sharedStr = c.sharedEntries.length > 0
+      ? c.sharedEntries.map((e) => `  - ${e.entryId}: "${e.title}" — ${e.summary}`).join('\n')
+      : '  (none)';
+
+    return `### Candidate ${i + 1}
+**Discovery signal:** ${c.signal}
+
+**Topic A: "${c.topicA.title}"** (${c.topicA.topicId})
+Summary: ${c.topicA.summary ?? '(none)'}
+Content:
+${c.topicA.content ?? '(none)'}
+
+Existing connections:
+${connsA}
+
+Assigned entries:
+${entriesAStr}
+
+**Topic B: "${c.topicB.title}"** (${c.topicB.topicId})
+Summary: ${c.topicB.summary ?? '(none)'}
+Content:
+${c.topicB.content ?? '(none)'}
+
+Existing connections:
+${connsB}
+
+Assigned entries:
+${entriesBStr}
+
+**Shared entries:**
+${sharedStr}`;
+  }).join('\n\n---\n\n');
+
+  return `You are evaluating candidate connections between knowledge base topics.
+Each candidate pair was flagged by automated analysis as potentially related
+but has no existing connection.
+
+## Candidates
+${candidateBlocks}
+
+## Task
+For each candidate, decide whether a meaningful connection exists between the two topics.
+If yes, provide the relationship label, confidence level, evidence, and direction
+(which topic is the source and which is the target).
+
+Connection confidence levels:
+- "extracted": the source text explicitly states the relationship
+- "inferred": you deduced the relationship from overlapping concepts, shared themes, or complementary content
+- "speculative": a weaker thematic connection worth noting but not strongly supported
+
+Return JSON only:
+{
+  "results": [
+    {
+      "topic_a": "...",
+      "topic_b": "...",
+      "accept": true/false,
+      "source_topic": "...",
+      "target_topic": "...",
+      "relationship": "...",
+      "confidence": "extracted|inferred|speculative",
+      "evidence": "..."
+    }
+  ]
+}`;
+}
+
+export interface DiscoveryParseResult {
+  accepted: Array<{
+    topicA: string;
+    topicB: string;
+    sourceTopic: string;
+    targetTopic: string;
+    relationship: string;
+    confidence: string;
+    evidence: string;
+  }>;
+  warnings: string[];
+}
+
+export function parseDiscoveryOutput(raw: string): DiscoveryParseResult {
+  const warnings: string[] = [];
+
+  const jsonStr = extractJsonFromOutput(raw);
+  if (!jsonStr) {
+    return { accepted: [], warnings: ['Discovery: no JSON found in output'] };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonStr);
+  } catch (err) {
+    return { accepted: [], warnings: [`Discovery JSON parse error: ${(err as Error).message}`] };
+  }
+
+  const obj = parsed as Record<string, unknown>;
+  if (!Array.isArray(obj?.results)) {
+    return { accepted: [], warnings: ['Discovery: missing "results" array'] };
+  }
+
+  const accepted: DiscoveryParseResult['accepted'] = [];
+  for (const r of obj.results) {
+    const item = r as Record<string, unknown>;
+    if (item?.accept !== true) continue;
+    if (
+      typeof item.source_topic === 'string' &&
+      typeof item.target_topic === 'string' &&
+      typeof item.relationship === 'string'
+    ) {
+      accepted.push({
+        topicA: String(item.topic_a ?? ''),
+        topicB: String(item.topic_b ?? ''),
+        sourceTopic: item.source_topic,
+        targetTopic: item.target_topic,
+        relationship: item.relationship,
+        confidence: typeof item.confidence === 'string' ? item.confidence : 'inferred',
+        evidence: typeof item.evidence === 'string' ? item.evidence : '',
+      });
+    }
+  }
+
+  return { accepted, warnings };
 }
 
 // ── Service types ───────────────────────────────────────────────────────────
@@ -201,6 +372,8 @@ export interface KbDreamChatService {
   getKbKnowledgeDir(hash: string): string;
   getKbEntriesDir(hash: string): string;
   getKbSynthesisDir(hash: string): string;
+  getWorkspaceKbEmbeddingConfig(hash: string): Promise<EmbeddingConfig | undefined>;
+  getKbVectorStore(hash: string, dimensions?: number): Promise<KbVectorStore | null>;
 }
 
 export type KbDreamEmitter = (hash: string, frame: KbStateUpdateEvent) => void;
@@ -209,6 +382,7 @@ export interface KbDreamOptions {
   chatService: KbDreamChatService;
   backendRegistry: BackendRegistry;
   emit?: KbDreamEmitter;
+  kbSearchMcp: KbSearchMcpServer;
 }
 
 export interface DreamResult {
@@ -220,10 +394,15 @@ export interface DreamResult {
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
-const DISCOVERY_BATCH_SIZE = 20;
 const SYNTHESIS_BATCH_SIZE = 10;
+const EMBED_BATCH_SIZE = 50;
 const DEFAULT_CONCURRENCY = 2;
+const DEFAULT_STRONG_THRESHOLD = 0.75;
+const DEFAULT_BORDERLINE_THRESHOLD = 0.45;
 const DREAM_TIMEOUT_MS = 20 * 60_000; // 20 minutes per CLI call
+const DISCOVERY_CANDIDATE_CAP = 50;
+const DISCOVERY_BATCH_SIZE = 5;
+const DISCOVERY_EMBEDDING_TOP_K = 10;
 
 // ── Service ─────────────────────────────────────────────────────────────────
 
@@ -231,6 +410,7 @@ export class KbDreamService {
   private readonly chatService: KbDreamChatService;
   private readonly backendRegistry: BackendRegistry;
   private readonly emit?: KbDreamEmitter;
+  private readonly kbSearchMcp: KbSearchMcpServer;
   /** Per-workspace lock — only one dream run at a time. */
   private readonly running = new Set<string>();
 
@@ -238,6 +418,7 @@ export class KbDreamService {
     this.chatService = opts.chatService;
     this.backendRegistry = opts.backendRegistry;
     this.emit = opts.emit;
+    this.kbSearchMcp = opts.kbSearchMcp;
   }
 
   /** Start an incremental dream run. */
@@ -268,23 +449,47 @@ export class KbDreamService {
     const db = this.chatService.getKbDb(hash);
     if (!db) throw new Error('Knowledge Base database not available.');
 
+    // Pre-flight: verify embedding infrastructure is available.
+    const embeddingCfg = await this.chatService.getWorkspaceKbEmbeddingConfig(hash);
+    if (embeddingCfg) {
+      try {
+        await checkOllamaHealth(embeddingCfg);
+      } catch {
+        console.warn(`[kb] dream: Ollama not reachable — retrieval routing will be skipped.`);
+      }
+    }
+
     this.running.add(hash);
-    db.setSynthesisMeta('status', 'running');
-    db.setSynthesisMeta('last_run_error', '');
-    this._emitSynthesisChange(hash);
 
     const result: DreamResult = { mode, processedEntries: 0, skippedBatches: 0, errors: [] };
 
     try {
+      db.setSynthesisMeta('status', 'running');
+      db.setSynthesisMeta('last_run_error', '');
+      this._emitSynthesisChange(hash);
+
+      // Issue a KB Search MCP session for the duration of this dream run.
+      const mcpSession = this.kbSearchMcp.issueKbSearchSession(hash);
       if (mode === 'full-rebuild') {
         db.wipeSynthesis();
         db.markAllNeedsSynthesis();
+        // Wipe vector store topic embeddings for clean rebuild.
+        if (embeddingCfg) {
+          const resolved = resolveConfig(embeddingCfg);
+          const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
+          if (store) {
+            await store.wipeAllEmbeddings();
+          }
+        }
       }
 
       const settings = await this.chatService.getSettings();
       const adapter = this._getAdapter(settings);
-      const runOptions = this._buildRunOptions(hash, settings);
+      const baseRunOptions = this._buildRunOptions(hash, settings);
+      const runOptionsWithMcp = { ...baseRunOptions, mcpServers: mcpSession.mcpServers };
       const concurrency = settings.knowledgeBase?.dreamingConcurrency ?? DEFAULT_CONCURRENCY;
+      const strongThreshold = settings.knowledgeBase?.dreamingStrongMatchThreshold ?? DEFAULT_STRONG_THRESHOLD;
+      const borderlineThreshold = settings.knowledgeBase?.dreamingBorderlineThreshold ?? DEFAULT_BORDERLINE_THRESHOLD;
 
       const staleEntryIds = db.listNeedsSynthesisEntryIds();
       if (staleEntryIds.length === 0) {
@@ -294,12 +499,7 @@ export class KbDreamService {
         return result;
       }
 
-      const knowledgeDir = this.chatService.getKbKnowledgeDir(hash);
-      const entriesDir = this.chatService.getKbEntriesDir(hash);
       const synthesisDir = this.chatService.getKbSynthesisDir(hash);
-
-      // Generate temp files for prompts.
-      generateDreamTmpFiles(db, knowledgeDir);
 
       // Build entry metadata list.
       const entryMeta = staleEntryIds.map((eid) => {
@@ -307,34 +507,58 @@ export class KbDreamService {
         return {
           entryId: eid,
           title: entry?.title ?? eid,
+          summary: entry?.summary ?? '',
           entryPath: `entries/${eid}/entry.md`,
         };
       });
 
-      const topicSummaries = db.listTopicSummaries();
-      const hasGodNodes = (db.getSynthesisMeta('god_nodes') ?? '[]') !== '[]';
+      // Check if topics exist for routing (if not, all go to new-topic path).
+      const topicCount = db.listTopicSummaries().length;
+      const hasEmbeddings = embeddingCfg && topicCount > 0;
 
-      if (mode === 'full-rebuild' || topicSummaries.length === 0) {
-        // Full rebuild: batch all entries, no discovery phase needed.
-        await this._runFullRebuild(
-          db, adapter, runOptions, entryMeta, knowledgeDir, concurrency, result,
+      if (hasEmbeddings) {
+        // Retrieval-based routing + synthesis.
+        await this._runWithRetrieval(
+          hash, db, adapter, baseRunOptions, runOptionsWithMcp, entryMeta,
+          embeddingCfg!, strongThreshold, borderlineThreshold, concurrency, result,
         );
       } else {
-        // Incremental: discovery → synthesis.
-        await this._runIncremental(
-          db, adapter, runOptions, entryMeta, topicSummaries, hasGodNodes,
-          knowledgeDir, concurrency, result,
+        // Cold start or no embeddings: all entries → new topic creation.
+        await this._runColdStart(
+          hash, db, adapter, baseRunOptions, runOptionsWithMcp, entryMeta,
+          embeddingCfg, concurrency, result,
         );
       }
 
-      // Post-dream: regenerate markdown, detect god nodes.
+      // Post-synthesis: regenerate markdown.
+      regenerateSynthesisMarkdown(db, synthesisDir);
+
+      // Final sweep: embed all topics and clean up stale embeddings.
+      try {
+        await this._embedTopics(hash, db);
+      } catch (err: unknown) {
+        console.warn(
+          `[kb] dream: topic embedding failed for ${hash}:`,
+          (err as Error).message,
+        );
+      }
+
+      // Phase 4: Connection Discovery — sweep for missing connections.
+      try {
+        await this._runConnectionDiscovery(hash, db, adapter, runOptionsWithMcp, result);
+      } catch (err: unknown) {
+        console.warn(
+          `[kb] dream: connection discovery failed for ${hash}:`,
+          (err as Error).message,
+        );
+        result.errors.push(`Connection discovery failed: ${(err as Error).message}`);
+      }
+
+      // Re-regenerate markdown after discovery may have added connections.
       regenerateSynthesisMarkdown(db, synthesisDir);
 
       const godNodes = db.detectGodNodes();
       db.setSynthesisMeta('god_nodes', JSON.stringify(godNodes));
-
-      // Refresh temp files for next run (in case topics changed).
-      cleanupDreamTmp(knowledgeDir);
 
       db.setSynthesisMeta('status', 'idle');
       db.setSynthesisMeta('last_run_at', new Date().toISOString());
@@ -348,102 +572,181 @@ export class KbDreamService {
       result.errors.push(msg);
     } finally {
       this.running.delete(hash);
-      cleanupDreamTmp(this.chatService.getKbKnowledgeDir(hash));
+      this.kbSearchMcp.revokeKbSearchSession(hash);
+      db.setSynthesisMeta('dream_progress', '');
       this._emitSynthesisChange(hash);
     }
 
     return result;
   }
 
-  // ── Incremental mode ──────────────────────────────────────────────────────
+  // ── Retrieval-based pipeline ──────────────────────────────────────────────
 
-  private async _runIncremental(
+  private async _runWithRetrieval(
+    hash: string,
     db: KbDatabase,
     adapter: BaseBackendAdapter,
-    runOptions: RunOneShotOptions,
-    entryMeta: Array<{ entryId: string; title: string; entryPath: string }>,
-    topicSummaries: Array<{ topicId: string; title: string; summary: string | null }>,
-    hasGodNodes: boolean,
-    knowledgeDir: string,
+    baseRunOptions: RunOneShotOptions,
+    runOptionsWithMcp: RunOneShotOptions,
+    entryMeta: Array<{ entryId: string; title: string; summary: string; entryPath: string }>,
+    embeddingCfg: EmbeddingConfig,
+    strongThreshold: number,
+    borderlineThreshold: number,
     concurrency: number,
     result: DreamResult,
   ): Promise<void> {
-    // Phase 1: Discovery — batch entries and find matching topics.
-    const batches = chunk(entryMeta, DISCOVERY_BATCH_SIZE);
-    const allMatches: Array<{ entry_id: string; topic_id: string }> = [];
-    let discoveryDone = 0;
+    const resolved = resolveConfig(embeddingCfg);
+    const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
+    if (!store) {
+      // Fall back to cold start if vector store is unavailable.
+      await this._runColdStart(
+        hash, db, adapter, baseRunOptions, runOptionsWithMcp, entryMeta,
+        embeddingCfg, concurrency, result,
+      );
+      return;
+    }
 
-    // Emit 0/N so the frontend exits "Starting…" immediately.
-    this._emitDreamProgress('discovery', 0, batches.length,
-      this._hashFromOptions(runOptions));
+    // ── Phase 1: Routing ──────────────────────────���───────────────────────
 
-    for (const batchGroup of chunk(batches, concurrency)) {
-      const promises = batchGroup.map(async (batch) => {
-        const prompt = buildDiscoveryPrompt(batch, topicSummaries.length);
-        return this._runCliWithRetry(adapter, prompt, runOptions);
-      });
+    this._emitDreamProgress('routing', 0, entryMeta.length, hash);
 
-      const results = await Promise.allSettled(promises);
-      for (const r of results) {
-        discoveryDone++;
-        this._emitDreamProgress('discovery', discoveryDone, batches.length,
-          this._hashFromOptions(runOptions));
-        if (r.status === 'fulfilled' && r.value) {
-          const parsed = parseDiscoveryOutput(r.value);
-          allMatches.push(...parsed.matches);
-          if (parsed.warnings.length > 0) {
-            result.errors.push(...parsed.warnings);
+    // Embed all pending entries in batches.
+    const texts = entryMeta.map((e) => `${e.title} — ${e.summary}`);
+    const embeddings: number[][] = [];
+    for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE) {
+      const slice = texts.slice(i, i + EMBED_BATCH_SIZE);
+      const results = await embedBatch(slice, embeddingCfg);
+      for (const r of results) embeddings.push(r.embedding);
+    }
+
+    // Search for matching topics per entry.
+    const synthesisGroups = new Map<string, string[]>(); // topicId → entryIds
+    const borderlineEntries: Array<{
+      entryId: string;
+      title: string;
+      summary: string;
+      candidates: Array<{ topicId: string; title: string; summary: string; score: number }>;
+    }> = [];
+    const unmatchedEntryIds: string[] = [];
+
+    for (let i = 0; i < entryMeta.length; i++) {
+      const entry = entryMeta[i];
+      const searchResults = await store.hybridSearchTopics(texts[i], embeddings[i], 10);
+      const topScore = searchResults.length > 0 ? searchResults[0].score : 0;
+
+      if (topScore >= strongThreshold) {
+        // Strong match — route to synthesis with all topics above borderline.
+        for (const r of searchResults) {
+          if (r.score >= borderlineThreshold) {
+            const existing = synthesisGroups.get(r.id) ?? [];
+            existing.push(entry.entryId);
+            synthesisGroups.set(r.id, existing);
           }
-        } else if (r.status === 'rejected') {
-          result.skippedBatches++;
-          result.errors.push(`Discovery batch failed: ${(r.reason as Error).message}`);
         }
+      } else if (topScore >= borderlineThreshold) {
+        // Borderline — needs LLM verification.
+        borderlineEntries.push({
+          entryId: entry.entryId,
+          title: entry.title,
+          summary: entry.summary,
+          candidates: searchResults
+            .filter((r) => r.score >= borderlineThreshold)
+            .map((r) => ({
+              topicId: r.id,
+              title: r.title,
+              summary: r.summary,
+              score: r.score,
+            })),
+        });
+      } else {
+        unmatchedEntryIds.push(entry.entryId);
+      }
+
+      this._emitDreamProgress('routing', i + 1, entryMeta.length, hash);
+    }
+
+    // ── Phase 2: Borderline verification ────────────────────────────────────
+
+    if (borderlineEntries.length > 0) {
+      const verifyBatches = chunk(borderlineEntries, SYNTHESIS_BATCH_SIZE);
+      let verifyDone = 0;
+      this._emitDreamProgress('verification', 0, verifyBatches.length, hash);
+
+      for (const batch of verifyBatches) {
+        try {
+          // Collect all unique candidate topics across the batch.
+          const allCandidates = new Map<string, { topicId: string; title: string; summary: string; score: number }>();
+          for (const be of batch) {
+            for (const c of be.candidates) {
+              if (!allCandidates.has(c.topicId)) allCandidates.set(c.topicId, c);
+            }
+          }
+          const entries = batch.map((be) => ({
+            entryId: be.entryId,
+            title: be.title,
+            summary: be.summary,
+          }));
+          const prompt = buildVerificationPrompt(entries, [...allCandidates.values()]);
+          const output = await this._runCliWithRetry(adapter, prompt, baseRunOptions);
+
+          if (output) {
+            const parsed = parseVerificationOutput(output);
+            for (const v of parsed.verified) {
+              const existing = synthesisGroups.get(v.topic_id) ?? [];
+              existing.push(v.entry_id);
+              synthesisGroups.set(v.topic_id, existing);
+            }
+            // Rejected entries go to unmatched.
+            const verifiedEntryIds = new Set(parsed.verified.map((v) => v.entry_id));
+            for (const be of batch) {
+              if (!verifiedEntryIds.has(be.entryId)) {
+                unmatchedEntryIds.push(be.entryId);
+              }
+            }
+            if (parsed.warnings.length > 0) result.errors.push(...parsed.warnings);
+          } else {
+            // CLI returned nothing — treat all as unmatched.
+            for (const be of batch) unmatchedEntryIds.push(be.entryId);
+          }
+        } catch (err) {
+          result.errors.push(`Verification batch failed: ${(err as Error).message}`);
+          for (const be of batch) unmatchedEntryIds.push(be.entryId);
+        }
+        verifyDone++;
+        this._emitDreamProgress('verification', verifyDone, verifyBatches.length, hash);
       }
     }
 
-    // Group entries by matched topic.
-    const matchedEntryIds = new Set(allMatches.map((m) => m.entry_id));
-    const unmatchedEntries = entryMeta.filter((e) => !matchedEntryIds.has(e.entryId));
-    const topicToEntries = new Map<string, string[]>();
-    for (const m of allMatches) {
-      const existing = topicToEntries.get(m.topic_id) ?? [];
-      existing.push(m.entry_id);
-      topicToEntries.set(m.topic_id, existing);
-    }
+    // ── Phase 3: Synthesis ──────────────────────────────────────────────────
 
-    // Phase 2a: Synthesis for matched entries.
-    const synthBatches = this._buildSynthesisBatches(
-      topicToEntries, entryMeta, topicSummaries,
-    );
+    const entryMap = new Map(entryMeta.map((e) => [e.entryId, e]));
+    const synthBatches = this._buildRetrievalSynthesisBatches(synthesisGroups, entryMap);
+    const totalSynthBatches = synthBatches.length + Math.ceil(unmatchedEntryIds.length / SYNTHESIS_BATCH_SIZE);
     let synthDone = 0;
-    const totalSynthBatches = synthBatches.length + (unmatchedEntries.length > 0 ? 1 : 0);
+    this._emitDreamProgress('synthesis', 0, totalSynthBatches, hash);
 
+    // Synthesis for matched entries.
     for (const batchGroup of chunk(synthBatches, concurrency)) {
       const promises = batchGroup.map(async (batch) => {
-        const prompt = buildSynthesisPrompt(
-          batch.topics, batch.entries, topicSummaries.length, hasGodNodes,
-        );
-        return this._runCliWithRetry(adapter, prompt, runOptions);
+        const prompt = buildRetrievalSynthesisPrompt(batch.entries, batch.topicIds);
+        return this._runCliWithRetry(adapter, prompt, runOptionsWithMcp);
       });
 
       const results = await Promise.allSettled(promises);
       for (let i = 0; i < results.length; i++) {
         synthDone++;
-        this._emitDreamProgress('synthesis', synthDone, totalSynthBatches,
-          this._hashFromOptions(runOptions));
+        this._emitDreamProgress('synthesis', synthDone, totalSynthBatches, hash);
         const r = results[i];
         if (r.status === 'fulfilled' && r.value) {
           const { operations, warnings } = parseDreamOutput(r.value);
           if (warnings.length > 0) result.errors.push(...warnings);
           const applyWarnings = applyOperations(db, operations);
           if (applyWarnings.length > 0) result.errors.push(...applyWarnings);
-          // Mark processed entries.
           const processedIds = batchGroup[i].entries.map((e) => e.entryId);
           db.clearNeedsSynthesis(processedIds);
           result.processedEntries += processedIds.length;
-          // Refresh all-topics.txt for subsequent batches.
-          generateDreamTmpFiles(db, this.chatService.getKbKnowledgeDir(
-            this._hashFromOptions(runOptions)));
+          // Embed affected topics so subsequent batches can find them.
+          await this._embedBatchTopics(hash, db, extractAffectedTopicIds(operations));
         } else if (r.status === 'rejected') {
           result.skippedBatches++;
           result.errors.push(`Synthesis batch failed: ${(r.reason as Error).message}`);
@@ -451,12 +754,16 @@ export class KbDreamService {
       }
     }
 
-    // Phase 2b: New topics for unmatched entries.
-    if (unmatchedEntries.length > 0) {
-      for (const batch of chunk(unmatchedEntries, SYNTHESIS_BATCH_SIZE)) {
+    // New topics for unmatched entries.
+    if (unmatchedEntryIds.length > 0) {
+      const unmatchedMeta = unmatchedEntryIds
+        .map((eid) => entryMap.get(eid))
+        .filter((e): e is NonNullable<typeof e> => e !== undefined);
+
+      for (const batch of chunk(unmatchedMeta, SYNTHESIS_BATCH_SIZE)) {
         try {
-          const prompt = buildNewTopicsPrompt(batch);
-          const output = await this._runCliWithRetry(adapter, prompt, runOptions);
+          const prompt = buildNewTopicCreationPrompt(batch, true);
+          const output = await this._runCliWithRetry(adapter, prompt, runOptionsWithMcp);
           if (output) {
             const { operations, warnings } = parseDreamOutput(output);
             if (warnings.length > 0) result.errors.push(...warnings);
@@ -464,28 +771,28 @@ export class KbDreamService {
             if (applyWarnings.length > 0) result.errors.push(...applyWarnings);
             db.clearNeedsSynthesis(batch.map((e) => e.entryId));
             result.processedEntries += batch.length;
-            generateDreamTmpFiles(db, this.chatService.getKbKnowledgeDir(
-              this._hashFromOptions(runOptions)));
+            await this._embedBatchTopics(hash, db, extractAffectedTopicIds(operations));
           }
         } catch (err) {
           result.skippedBatches++;
           result.errors.push(`New-topics batch failed: ${(err as Error).message}`);
         }
+        synthDone++;
+        this._emitDreamProgress('synthesis', synthDone, totalSynthBatches, hash);
       }
-      synthDone++;
-      this._emitDreamProgress('synthesis', synthDone, totalSynthBatches,
-        this._hashFromOptions(runOptions));
     }
   }
 
-  // ── Full rebuild mode ─────────────────────────────────────────────────────
+  // ── Cold start (no topics or no embeddings) ──────────────────────────────
 
-  private async _runFullRebuild(
+  private async _runColdStart(
+    hash: string,
     db: KbDatabase,
     adapter: BaseBackendAdapter,
-    runOptions: RunOneShotOptions,
-    entryMeta: Array<{ entryId: string; title: string; entryPath: string }>,
-    knowledgeDir: string,
+    baseRunOptions: RunOneShotOptions,
+    runOptionsWithMcp: RunOneShotOptions,
+    entryMeta: Array<{ entryId: string; title: string; summary: string; entryPath: string }>,
+    embeddingCfg: EmbeddingConfig | undefined,
     concurrency: number,
     result: DreamResult,
   ): Promise<void> {
@@ -503,15 +810,16 @@ export class KbDreamService {
     const batches = chunk(entriesWithTags, SYNTHESIS_BATCH_SIZE);
     let done = 0;
 
-    // Emit 0/N so the frontend exits "Starting…" immediately.
-    this._emitDreamProgress('synthesis', 0, batches.length,
-      this._hashFromOptions(runOptions));
+    this._emitDreamProgress('synthesis', 0, batches.length, hash);
 
     for (const batch of batches) {
       try {
-        const hasExisting = db.listTopicSummaries().length > 0;
-        const prompt = buildFullRebuildPrompt(batch, done + 1, batches.length, hasExisting);
-        const output = await this._runCliWithRetry(adapter, prompt, runOptions);
+        // First batch: no topics exist, no MCP tools useful.
+        // Subsequent batches: topics exist, use MCP for connection discovery.
+        const hasTopics = db.listTopicSummaries().length > 0;
+        const useOptions = hasTopics ? runOptionsWithMcp : baseRunOptions;
+        const prompt = buildNewTopicCreationPrompt(batch, hasTopics);
+        const output = await this._runCliWithRetry(adapter, prompt, useOptions);
         if (output) {
           const { operations, warnings } = parseDreamOutput(output);
           if (warnings.length > 0) result.errors.push(...warnings);
@@ -519,16 +827,189 @@ export class KbDreamService {
           if (applyWarnings.length > 0) result.errors.push(...applyWarnings);
           db.clearNeedsSynthesis(batch.map((e) => e.entryId));
           result.processedEntries += batch.length;
-          // Refresh all-topics.txt for subsequent batches.
-          generateDreamTmpFiles(db, knowledgeDir);
+          // Embed new topics so subsequent batches can search them.
+          await this._embedBatchTopics(hash, db, extractAffectedTopicIds(operations));
         }
       } catch (err) {
         result.skippedBatches++;
-        result.errors.push(`Rebuild batch ${done + 1}/${batches.length} failed: ${(err as Error).message}`);
+        result.errors.push(`Cold-start batch ${done + 1}/${batches.length} failed: ${(err as Error).message}`);
       }
       done++;
-      this._emitDreamProgress('synthesis', done, batches.length,
-        this._hashFromOptions(runOptions));
+      this._emitDreamProgress('synthesis', done, batches.length, hash);
+    }
+  }
+
+  // ── Connection Discovery (Phase 4) ──────────────────────────────────────
+
+  private async _runConnectionDiscovery(
+    hash: string,
+    db: KbDatabase,
+    adapter: BaseBackendAdapter,
+    runOptionsWithMcp: RunOneShotOptions,
+    result: DreamResult,
+  ): Promise<void> {
+    const embeddingCfg = await this.chatService.getWorkspaceKbEmbeddingConfig(hash);
+    if (!embeddingCfg) return;
+    const resolved = resolveConfig(embeddingCfg);
+    const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
+    if (!store) return;
+
+    const topics = db.listTopics();
+    if (topics.length < 2) return;
+
+    // ── Strategy 1: Embedding-based sweep ──────────────────────────────
+    const candidateMap = new Map<string, DiscoveryCandidate>();
+    const existingConns = db.listAllConnections();
+    const connSet = new Set<string>();
+    for (const c of existingConns) {
+      connSet.add(`${c.sourceTopic}|${c.targetTopic}`);
+      connSet.add(`${c.targetTopic}|${c.sourceTopic}`);
+    }
+
+    for (const topic of topics) {
+      try {
+        const similar = await store.findSimilarTopics(topic.topicId, DISCOVERY_EMBEDDING_TOP_K);
+        for (const s of similar) {
+          if (connSet.has(`${topic.topicId}|${s.id}`)) continue;
+          const key = [topic.topicId, s.id].sort().join('|');
+          const existing = candidateMap.get(key);
+          const score = Math.max(s.score, existing?.embeddingSimilarity ?? 0);
+          candidateMap.set(key, {
+            ...(existing ?? { topicA: key.split('|')[0], topicB: key.split('|')[1], sharedEntryCount: 0, transitiveSignal: false }),
+            embeddingSimilarity: score,
+          });
+        }
+      } catch {
+        // Skip topics without embeddings.
+      }
+    }
+
+    // ── Strategy 2: Entry-driven propagation ───────────────────────────
+    const sharedPairs = db.listTopicPairsBySharedEntries();
+    for (const pair of sharedPairs) {
+      const key = [pair.topicA, pair.topicB].sort().join('|');
+      const existing = candidateMap.get(key);
+      candidateMap.set(key, {
+        ...(existing ?? { topicA: key.split('|')[0], topicB: key.split('|')[1], embeddingSimilarity: 0, transitiveSignal: false }),
+        sharedEntryCount: pair.sharedEntryCount,
+      });
+    }
+
+    // ── Strategy 3: Transitive discovery (2-hop) ───────────────────────
+    const transitivePairs = db.listTransitiveCandidates();
+    for (const pair of transitivePairs) {
+      const key = [pair.topicA, pair.topicC].sort().join('|');
+      const existing = candidateMap.get(key);
+      candidateMap.set(key, {
+        ...(existing ?? { topicA: key.split('|')[0], topicB: key.split('|')[1], embeddingSimilarity: 0, sharedEntryCount: 0 }),
+        transitiveSignal: true,
+        transitivePath: `${pair.topicA} →"${pair.relAB}"→ ${pair.viaTopicB} →"${pair.relBC}"→ ${pair.topicC}`,
+      });
+    }
+
+    // ── Rank candidates ───────────────────────────────────────────────
+    const allCandidates = [...candidateMap.values()];
+    if (allCandidates.length === 0) return;
+
+    // Find max shared entry count for normalization.
+    const maxEntryCount = topics.reduce((max, t) => Math.max(max, t.entryCount), 1);
+
+    allCandidates.sort((a, b) => {
+      const scoreA = a.embeddingSimilarity * 0.5
+        + (a.sharedEntryCount / maxEntryCount) * 0.3
+        + (a.transitiveSignal ? 0.2 : 0);
+      const scoreB = b.embeddingSimilarity * 0.5
+        + (b.sharedEntryCount / maxEntryCount) * 0.3
+        + (b.transitiveSignal ? 0.2 : 0);
+      return scoreB - scoreA;
+    });
+
+    const topCandidates = allCandidates.slice(0, DISCOVERY_CANDIDATE_CAP);
+
+    // ── LLM verification in batches ──────────────────────────────────
+    const batches = chunk(topCandidates, DISCOVERY_BATCH_SIZE);
+    let done = 0;
+    this._emitDreamProgress('discovery', 0, batches.length, hash);
+
+    for (const batch of batches) {
+      try {
+        // Build rich context for each candidate.
+        const promptCandidates = batch.map((c) => {
+          const topicARow = db.getTopic(c.topicA);
+          const topicBRow = db.getTopic(c.topicB);
+          if (!topicARow || !topicBRow) return null;
+
+          const connectionsA = db.listConnectionsForTopic(c.topicA);
+          const connectionsB = db.listConnectionsForTopic(c.topicB);
+
+          const entryIdsA = db.listTopicEntryIds(c.topicA);
+          const entryIdsB = db.listTopicEntryIds(c.topicB);
+          const entriesA = entryIdsA.map((eid) => {
+            const entry = db.getEntry(eid);
+            return { entryId: eid, title: entry?.title ?? eid, summary: entry?.summary ?? '' };
+          });
+          const entriesB = entryIdsB.map((eid) => {
+            const entry = db.getEntry(eid);
+            return { entryId: eid, title: entry?.title ?? eid, summary: entry?.summary ?? '' };
+          });
+
+          const sharedIds = new Set(entryIdsA.filter((id) => entryIdsB.includes(id)));
+          const sharedEntries = [...sharedIds].map((eid) => {
+            const entry = db.getEntry(eid);
+            return { entryId: eid, title: entry?.title ?? eid, summary: entry?.summary ?? '' };
+          });
+
+          // Build signal description.
+          const signals: string[] = [];
+          if (c.embeddingSimilarity > 0) signals.push(`embedding similarity: ${c.embeddingSimilarity.toFixed(3)}`);
+          if (c.sharedEntryCount > 0) signals.push(`${c.sharedEntryCount} shared entries`);
+          if (c.transitiveSignal && c.transitivePath) signals.push(`transitive path: ${c.transitivePath}`);
+
+          return {
+            topicA: topicARow,
+            topicB: topicBRow,
+            connectionsA: connectionsA.map((cn) => ({
+              sourceTopic: cn.sourceTopic, targetTopic: cn.targetTopic,
+              relationship: cn.relationship, confidence: cn.confidence,
+            })),
+            connectionsB: connectionsB.map((cn) => ({
+              sourceTopic: cn.sourceTopic, targetTopic: cn.targetTopic,
+              relationship: cn.relationship, confidence: cn.confidence,
+            })),
+            entriesA,
+            entriesB,
+            sharedEntries,
+            signal: signals.join('; ') || 'composite score',
+          };
+        }).filter((c): c is NonNullable<typeof c> => c !== null);
+
+        if (promptCandidates.length === 0) {
+          done++;
+          this._emitDreamProgress('discovery', done, batches.length, hash);
+          continue;
+        }
+
+        const prompt = buildConnectionDiscoveryPrompt(promptCandidates);
+        const output = await this._runCliWithRetry(adapter, prompt, runOptionsWithMcp);
+
+        if (output) {
+          const { accepted, warnings } = parseDiscoveryOutput(output);
+          if (warnings.length > 0) result.errors.push(...warnings);
+          for (const conn of accepted) {
+            db.upsertConnection({
+              sourceTopic: conn.sourceTopic,
+              targetTopic: conn.targetTopic,
+              relationship: conn.relationship,
+              confidence: conn.confidence,
+              evidence: conn.evidence || null,
+            });
+          }
+        }
+      } catch (err) {
+        result.errors.push(`Discovery batch failed: ${(err as Error).message}`);
+      }
+      done++;
+      this._emitDreamProgress('discovery', done, batches.length, hash);
     }
   }
 
@@ -541,7 +1022,7 @@ export class KbDreamService {
   ): Promise<string | null> {
     try {
       return await adapter.runOneShot(prompt, options);
-    } catch (err) {
+    } catch {
       // Retry once.
       try {
         return await adapter.runOneShot(prompt, options);
@@ -579,41 +1060,29 @@ export class KbDreamService {
     } as RunOneShotOptions & { _workspaceHash: string };
   }
 
-  private _hashFromOptions(opts: RunOneShotOptions): string {
-    return (opts as RunOneShotOptions & { _workspaceHash?: string })._workspaceHash ?? '';
-  }
-
   // ── Synthesis batch builder ───────────────────────────────────────────────
 
-  private _buildSynthesisBatches(
-    topicToEntries: Map<string, string[]>,
-    entryMeta: Array<{ entryId: string; title: string; entryPath: string }>,
-    topicSummaries: Array<{ topicId: string; title: string; summary: string | null }>,
+  private _buildRetrievalSynthesisBatches(
+    synthesisGroups: Map<string, string[]>,
+    entryMap: Map<string, { entryId: string; title: string; summary: string; entryPath: string }>,
   ): Array<{
-    topics: Array<{ topicId: string; title: string; slug: string }>;
+    topicIds: string[];
     entries: Array<{ entryId: string; title: string; entryPath: string }>;
   }> {
-    const entryMap = new Map(entryMeta.map((e) => [e.entryId, e]));
-    const topicMap = new Map(topicSummaries.map((t) => [t.topicId, t]));
     const batches: Array<{
-      topics: Array<{ topicId: string; title: string; slug: string }>;
+      topicIds: string[];
       entries: Array<{ entryId: string; title: string; entryPath: string }>;
     }> = [];
 
     // Group entries that share topics together.
     const processedEntries = new Set<string>();
-    for (const [topicId, entryIds] of topicToEntries) {
+    for (const [topicId, entryIds] of synthesisGroups) {
       const unprocessed = entryIds.filter((eid) => !processedEntries.has(eid));
       if (unprocessed.length === 0) continue;
 
       for (const entryBatch of chunk(unprocessed, SYNTHESIS_BATCH_SIZE)) {
-        const topicInfo = topicMap.get(topicId);
         batches.push({
-          topics: [{
-            topicId,
-            title: topicInfo?.title ?? topicId,
-            slug: topicId,
-          }],
+          topicIds: [topicId],
           entries: entryBatch
             .map((eid) => entryMap.get(eid))
             .filter((e): e is NonNullable<typeof e> => e !== undefined),
@@ -636,58 +1105,148 @@ export class KbDreamService {
   }
 
   private _emitDreamProgress(
-    phase: 'discovery' | 'synthesis',
+    phase: 'routing' | 'verification' | 'synthesis' | 'discovery',
     done: number,
     total: number,
     hash: string,
   ): void {
+    // Persist progress so the REST endpoint can return it (WS may not be
+    // connected when the KB Browser is open without an active chat stream).
+    const db = this.chatService.getKbDb(hash);
+    if (db) {
+      db.setSynthesisMeta('dream_progress', JSON.stringify({ phase, done, total }));
+    }
     this.emit?.(hash, {
       type: 'kb_state_update',
       updatedAt: new Date().toISOString(),
       changed: { synthesis: true, dreamProgress: { phase, done, total } },
     });
   }
+
+  // ── Topic embedding helpers ───────────────────────────────────────────────
+
+  /**
+   * Embed specific topics after a synthesis batch completes.
+   * Makes newly created/updated topics immediately searchable.
+   */
+  private async _embedBatchTopics(
+    hash: string,
+    db: KbDatabase,
+    topicIds: string[],
+  ): Promise<void> {
+    if (topicIds.length === 0) return;
+    const cfg = await this.chatService.getWorkspaceKbEmbeddingConfig(hash);
+    if (!cfg) return;
+    const resolved = resolveConfig(cfg);
+    const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
+    if (!store) return;
+
+    // Filter to topics that still exist (some may have been deleted in the same batch).
+    const topics = topicIds
+      .map((tid) => db.getTopic(tid))
+      .filter((t): t is NonNullable<typeof t> => t !== null);
+
+    if (topics.length === 0) return;
+
+    try {
+      const texts = topics.map((t) => `${t.title} — ${t.summary ?? ''}`);
+      const results = await embedBatch(texts, cfg);
+      await store.setModel(resolved.model);
+      for (let i = 0; i < topics.length; i++) {
+        await store.upsertTopic(
+          topics[i].topicId,
+          topics[i].title,
+          topics[i].summary ?? '',
+          results[i].embedding,
+        );
+      }
+    } catch (err) {
+      console.warn(`[kb] dream: batch topic embedding failed:`, (err as Error).message);
+    }
+  }
+
+  /**
+   * Full sweep: embed all topics, clean up stale embeddings.
+   * Runs at the end of every dream run.
+   */
+  private async _embedTopics(hash: string, db: KbDatabase): Promise<void> {
+    const cfg = await this.chatService.getWorkspaceKbEmbeddingConfig(hash);
+    if (!cfg) return;
+
+    const resolved = resolveConfig(cfg);
+    const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
+    if (!store) return;
+
+    const topics = db.listTopicSummaries();
+    if (topics.length === 0) return;
+
+    const BATCH = 50;
+    const topicIds = topics.map((t) => t.topicId);
+    await store.setModel(resolved.model);
+
+    for (let i = 0; i < topics.length; i += BATCH) {
+      const slice = topics.slice(i, i + BATCH);
+      const texts = slice.map(
+        (t) => `${t.title} — ${t.summary ?? ''}`,
+      );
+      const results = await embedBatch(texts, cfg);
+      for (let j = 0; j < slice.length; j++) {
+        await store.upsertTopic(
+          slice[j].topicId,
+          slice[j].title,
+          slice[j].summary ?? '',
+          results[j].embedding,
+        );
+      }
+    }
+
+    // Remove embeddings for topics that were deleted during the dream.
+    const embeddedIds = await store.embeddedTopicIds();
+    const currentIds = new Set(topicIds);
+    for (const id of embeddedIds) {
+      if (!currentIds.has(id)) {
+        await store.deleteTopic(id);
+      }
+    }
+  }
 }
 
-// ── Discovery output parser ─────────────────────────────────────────────────
+// ── Verification output parser ─────────────────────────────────────────────
 
-interface DiscoveryParseResult {
-  matches: Array<{ entry_id: string; topic_id: string }>;
+interface VerificationParseResult {
+  verified: Array<{ entry_id: string; topic_id: string }>;
   warnings: string[];
 }
 
-function parseDiscoveryOutput(raw: string): DiscoveryParseResult {
+export function parseVerificationOutput(raw: string): VerificationParseResult {
   const warnings: string[] = [];
 
-  // Extract JSON from possibly noisy output.
   const jsonStr = extractJsonFromOutput(raw);
   if (!jsonStr) {
-    return { matches: [], warnings: ['Discovery: no JSON found in output'] };
+    return { verified: [], warnings: ['Verification: no JSON found in output'] };
   }
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(jsonStr);
   } catch (err) {
-    return { matches: [], warnings: [`Discovery JSON parse error: ${(err as Error).message}`] };
+    return { verified: [], warnings: [`Verification JSON parse error: ${(err as Error).message}`] };
   }
 
   const obj = parsed as Record<string, unknown>;
-  if (!Array.isArray(obj?.matches)) {
-    return { matches: [], warnings: ['Discovery: missing "matches" array'] };
+  if (!Array.isArray(obj?.verified)) {
+    return { verified: [], warnings: ['Verification: missing "verified" array'] };
   }
 
-  const matches: Array<{ entry_id: string; topic_id: string }> = [];
-  for (const m of obj.matches) {
-    const item = m as Record<string, unknown>;
+  const verified: Array<{ entry_id: string; topic_id: string }> = [];
+  for (const v of obj.verified) {
+    const item = v as Record<string, unknown>;
     if (typeof item?.entry_id === 'string' && typeof item?.topic_id === 'string') {
-      matches.push({ entry_id: item.entry_id, topic_id: item.topic_id });
-    } else {
-      warnings.push('Discovery: skipping match with missing entry_id or topic_id');
+      verified.push({ entry_id: item.entry_id, topic_id: item.topic_id });
     }
   }
 
-  return { matches, warnings };
+  return { verified, warnings };
 }
 
 function extractJsonFromOutput(raw: string): string | null {
@@ -712,7 +1271,28 @@ function extractJsonFromOutput(raw: string): string | null {
   return null;
 }
 
-// ── Utilities ───────────────────────────────────────────────────────────────
+// ── Helpers ────────────────────────────────────────────────────────────────
+
+/** Extract topic IDs affected by a set of operations. */
+export function extractAffectedTopicIds(operations: DreamOperation[]): string[] {
+  const ids = new Set<string>();
+  for (const op of operations) {
+    switch (op.op) {
+      case 'create_topic':
+      case 'update_topic':
+      case 'delete_topic':
+        ids.add(op.topic_id);
+        break;
+      case 'merge_topics':
+        ids.add(op.into_topic_id);
+        break;
+      case 'split_topic':
+        for (const sub of op.into) ids.add(sub.topic_id);
+        break;
+    }
+  }
+  return [...ids];
+}
 
 function chunk<T>(arr: T[], size: number): T[][] {
   const result: T[][] = [];

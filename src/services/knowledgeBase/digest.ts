@@ -39,6 +39,8 @@ import type {
 import type { BaseBackendAdapter, RunOneShotOptions } from '../backends/base';
 import type { BackendRegistry } from '../backends/registry';
 import type { KbDatabase } from './db';
+import type { KbVectorStore } from './vectorStore';
+import { embedBatch, resolveConfig, type EmbeddingConfig } from './embeddings';
 
 /** Version bumped whenever the entry frontmatter/format contract changes. */
 export const KB_ENTRY_SCHEMA_VERSION = 1;
@@ -54,6 +56,10 @@ export interface KbDigestChatService {
   getKbRawDir(hash: string): string;
   /** Absolute path of the workspace's `knowledge/` directory. */
   getKbKnowledgeDir(hash: string): string;
+  /** Per-workspace embedding configuration (Ollama model/host/dimensions). */
+  getWorkspaceKbEmbeddingConfig(hash: string): Promise<EmbeddingConfig | undefined>;
+  /** Get or create the PGLite vector store for a workspace. */
+  getKbVectorStore(hash: string, dimensions?: number): Promise<KbVectorStore | null>;
 }
 
 /** Emitter for kb_state_update frames — same shape as the ingestion emitter. */
@@ -427,8 +433,50 @@ export class KbDigestionService {
     db.updateRawStatus(rawId, 'digested');
     db.setRawDigestedAt(rawId, now);
 
+    // ── Embed new entries (best-effort — failures don't block digestion) ──
+    try {
+      await this._embedEntries(hash, parsed, writtenEntryIds);
+    } catch (err: unknown) {
+      console.warn(
+        `[kb] digest: embedding failed for raw ${rawId}:`,
+        (err as Error).message,
+      );
+    }
+
     this._emitChange(hash, now, { raw: [rawId], entries: writtenEntryIds });
     return { rawId, entryIds: writtenEntryIds, purged: false };
+  }
+
+  /**
+   * Embed newly-digested entries into the PGLite vector store.
+   * Skips silently when no embedding config is set or Ollama is unreachable.
+   */
+  private async _embedEntries(
+    hash: string,
+    parsed: ParsedEntry[],
+    entryIds: string[],
+  ): Promise<void> {
+    const cfg = await this.chatService.getWorkspaceKbEmbeddingConfig(hash);
+    if (!cfg) return; // embedding not configured for this workspace
+
+    const resolved = resolveConfig(cfg);
+    const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
+    if (!store) return;
+
+    // Build "title — summary" texts for batch embedding.
+    const texts = parsed.map((e) => `${e.title} — ${e.summary}`);
+    const results = await embedBatch(texts, cfg);
+
+    // Store model info and upsert each entry's embedding.
+    await store.setModel(resolved.model);
+    for (let i = 0; i < entryIds.length; i++) {
+      await store.upsertEntry(
+        entryIds[i],
+        parsed[i].title,
+        parsed[i].summary,
+        results[i].embedding,
+      );
+    }
   }
 
   /**

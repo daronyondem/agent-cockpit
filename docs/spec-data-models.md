@@ -90,6 +90,7 @@ agent-cockpit/
     │   │   │   │   ├── index.md        # Topic index table with entry/connection counts
     │   │   │   │   ├── connections.md  # Full connection graph table
     │   │   │   │   └── topics/<id>.md  # Per-topic prose, related topics, entry list
+    │   │   │   ├── vectors/            # PGLite database directory (pgvector embeddings for entries + topics)
     │   │   │   └── _dream_tmp/         # Ephemeral staging files for dream prompts (auto-cleaned after run)
     │   │   └── {convId}/
     │   │       ├── session-1.json      # Archived session
@@ -112,6 +113,12 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
   instructions: string,         // Per-workspace instructions (appended to system prompt on new sessions)
   memoryEnabled: boolean|undefined, // Opt-in per-workspace Memory feature. Defaults to false.
   kbEnabled: boolean|undefined,     // Opt-in per-workspace Knowledge Base feature. Defaults to false.
+  kbAutoDigest: boolean|undefined,  // Auto-digest new files after ingestion. Defaults to false.
+  kbEmbedding: {                    // Per-workspace embedding config (optional, Ollama-only)
+    model?: string,                 // Ollama model name. Default 'nomic-embed-text'.
+    ollamaHost?: string,            // Ollama server URL. Default 'http://localhost:11434'.
+    dimensions?: number,            // Embedding dimensions (must match model). Default 768.
+  } | undefined,
   conversations: [{
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
@@ -250,6 +257,8 @@ Daily per-backend/model token usage records for global statistics:
     "dreamingCliModel": "opus",
     "dreamingCliEffort": "high",
     "dreamingConcurrency": 2,
+    "dreamingStrongMatchThreshold": 0.75,
+    "dreamingBorderlineThreshold": 0.45,
     "convertSlidesToImages": false
   }
 }
@@ -261,4 +270,4 @@ The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the star
 
 The `memory` block configures the globally-shared **Memory CLI** used for `memory_note` MCP processing and post-session extraction (see Section 5 — Workspace Memory).
 
-The `knowledgeBase` block configures the globally-shared **Digestion CLI** and **Dreaming CLI** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). Both CLIs default to `defaultBackend` when unset. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime.
+The `knowledgeBase` block configures the globally-shared **Digestion CLI** and **Dreaming CLI** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). Both CLIs default to `defaultBackend` when unset. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.

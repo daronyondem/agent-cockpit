@@ -231,7 +231,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
    * server when Claude Code is the configured Memory CLI.
    */
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { model, effort, timeoutMs = 60000, workingDir, allowTools } = options;
+    const { model, effort, timeoutMs = 60000, workingDir, allowTools, mcpServers } = options;
     const args = ['--print', '-p', prompt];
     // Digestion / Dreaming need to read every file under the workspace
     // KB directory; they run with `allowTools: true` so Claude's
@@ -239,6 +239,10 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     // callers leave this off so a buggy prompt can't read the disk.
     if (allowTools) {
       args.push('--permission-mode', 'bypassPermissions');
+    }
+    // Wire MCP servers (e.g. KB Search tools during dreaming).
+    if (Array.isArray(mcpServers) && mcpServers.length > 0) {
+      args.push('--mcp-config', mcpServersToClaudeConfigJson(mcpServers));
     }
     if (model) args.push('--model', model);
     if (effort && model) {

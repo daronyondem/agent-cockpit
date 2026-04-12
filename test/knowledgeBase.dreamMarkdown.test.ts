@@ -7,11 +7,7 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { KbDatabase } from '../src/services/knowledgeBase/db';
-import {
-  regenerateSynthesisMarkdown,
-  generateDreamTmpFiles,
-  cleanupDreamTmp,
-} from '../src/services/knowledgeBase/dreamMarkdown';
+import { regenerateSynthesisMarkdown } from '../src/services/knowledgeBase/dreamMarkdown';
 
 let tmpDir: string;
 let rawDir: string;
@@ -131,74 +127,3 @@ describe('regenerateSynthesisMarkdown', () => {
   });
 });
 
-// ─── generateDreamTmpFiles ──────────────────────────────────────────────────
-
-describe('generateDreamTmpFiles', () => {
-  test('creates all-topics.txt', () => {
-    seedTopicsAndEntries();
-    generateDreamTmpFiles(db, knowledgeDir);
-
-    const topicsFile = path.join(knowledgeDir, '_dream_tmp', 'all-topics.txt');
-    expect(fs.existsSync(topicsFile)).toBe(true);
-    const content = fs.readFileSync(topicsFile, 'utf-8');
-    expect(content).toContain('topic-a');
-    expect(content).toContain('Topic A');
-  });
-
-  test('creates per-topic content files', () => {
-    seedTopicsAndEntries();
-    generateDreamTmpFiles(db, knowledgeDir);
-
-    const contentFile = path.join(knowledgeDir, '_dream_tmp', 'topic-topic-a-content.md');
-    expect(fs.existsSync(contentFile)).toBe(true);
-    const content = fs.readFileSync(contentFile, 'utf-8');
-    expect(content).toContain('# Topic A');
-    expect(content).toContain('Entry e1');
-  });
-
-  test('creates god-nodes.txt when god nodes exist', () => {
-    seedTopicsAndEntries();
-    db.setSynthesisMeta('god_nodes', JSON.stringify(['topic-a']));
-    generateDreamTmpFiles(db, knowledgeDir);
-
-    const godFile = path.join(knowledgeDir, '_dream_tmp', 'god-nodes.txt');
-    expect(fs.existsSync(godFile)).toBe(true);
-    const content = fs.readFileSync(godFile, 'utf-8');
-    expect(content).toContain('Topic A');
-    expect(content).toContain('splitting');
-  });
-
-  test('no god-nodes.txt when no god nodes', () => {
-    seedTopicsAndEntries();
-    generateDreamTmpFiles(db, knowledgeDir);
-
-    const godFile = path.join(knowledgeDir, '_dream_tmp', 'god-nodes.txt');
-    expect(fs.existsSync(godFile)).toBe(false);
-  });
-
-  test('handles empty DB gracefully', () => {
-    generateDreamTmpFiles(db, knowledgeDir);
-    const topicsFile = path.join(knowledgeDir, '_dream_tmp', 'all-topics.txt');
-    expect(fs.existsSync(topicsFile)).toBe(true);
-    const content = fs.readFileSync(topicsFile, 'utf-8');
-    expect(content).toContain('no topics yet');
-  });
-});
-
-// ─── cleanupDreamTmp ────────────────────────────────────────────────────────
-
-describe('cleanupDreamTmp', () => {
-  test('removes _dream_tmp directory', () => {
-    seedTopicsAndEntries();
-    generateDreamTmpFiles(db, knowledgeDir);
-    const tmpPath = path.join(knowledgeDir, '_dream_tmp');
-    expect(fs.existsSync(tmpPath)).toBe(true);
-
-    cleanupDreamTmp(knowledgeDir);
-    expect(fs.existsSync(tmpPath)).toBe(false);
-  });
-
-  test('no-op when _dream_tmp does not exist', () => {
-    cleanupDreamTmp(knowledgeDir);
-  });
-});

@@ -8,6 +8,7 @@
     "test": "node --experimental-vm-modules node_modules/.bin/jest"
   },
   "dependencies": {
+    "@electric-sql/pglite": "^0.4.4",
     "@napi-rs/canvas": "^0.1.97",
     "adm-zip": "^0.5.17",
     "better-sqlite3": "^12.8.0",

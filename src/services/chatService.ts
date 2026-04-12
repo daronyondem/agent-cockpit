@@ -29,6 +29,8 @@ import {
   normalizeFolderPath,
   KbDatabase,
 } from './knowledgeBase/db';
+import { KbVectorStore } from './knowledgeBase/vectorStore';
+import type { EmbeddingConfig } from './knowledgeBase/embeddings';
 
 /**
  * Schema version of the `state.json` envelope itself. Bumped only when
@@ -101,6 +103,8 @@ export class ChatService {
    * `closeKbDatabases()` on shutdown.
    */
   private _kbDbs: Map<string, KbDatabase> = new Map();
+  /** Per-workspace PGLite vector store cache. Mirrors `_kbDbs` lifecycle. */
+  private _kbVectorStores: Map<string, KbVectorStore> = new Map();
 
   constructor(appRoot: string, options: { defaultWorkspace?: string; backendRegistry?: BackendRegistry } = {}) {
     this.baseDir = path.join(appRoot, 'data', 'chat');
@@ -1397,6 +1401,75 @@ export class ChatService {
       }
     }
     this._kbDbs.clear();
+  }
+
+  /**
+   * Get or create a PGLite vector store for a workspace. Returns `null`
+   * when `hash` is falsy. The store is cached for the process lifetime
+   * just like `_kbDbs`.
+   */
+  async getKbVectorStore(hash: string, dimensions?: number): Promise<KbVectorStore | null> {
+    if (!hash) return null;
+    const cached = this._kbVectorStores.get(hash);
+    if (cached) return cached;
+    const knowledgeDir = this._knowledgeDir(hash);
+    fs.mkdirSync(knowledgeDir, { recursive: true });
+    const store = new KbVectorStore(knowledgeDir, dimensions);
+    await store.ready();
+    this._kbVectorStores.set(hash, store);
+    return store;
+  }
+
+  /** Close every cached vector store. Call during graceful shutdown. */
+  async closeKbVectorStores(): Promise<void> {
+    for (const [hash, store] of this._kbVectorStores.entries()) {
+      try {
+        await store.close();
+      } catch (err: unknown) {
+        console.warn(
+          `[kb] closeKbVectorStores: failed to close ${hash}:`,
+          (err as Error).message,
+        );
+      }
+    }
+    this._kbVectorStores.clear();
+  }
+
+  /** Per-workspace embedding config (stored on the workspace index). */
+  async getWorkspaceKbEmbeddingConfig(hash: string): Promise<EmbeddingConfig | undefined> {
+    const index = await this._readWorkspaceIndex(hash);
+    return index?.kbEmbedding ?? undefined;
+  }
+
+  async setWorkspaceKbEmbeddingConfig(
+    hash: string,
+    cfg: EmbeddingConfig,
+  ): Promise<EmbeddingConfig | null> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+
+    const oldCfg = index.kbEmbedding;
+    const modelChanged = (cfg.model ?? 'nomic-embed-text') !== (oldCfg?.model ?? 'nomic-embed-text');
+    const dimsChanged = (cfg.dimensions ?? 768) !== (oldCfg?.dimensions ?? 768);
+
+    index.kbEmbedding = {
+      model: cfg.model,
+      ollamaHost: cfg.ollamaHost,
+      dimensions: cfg.dimensions,
+    };
+    await this._writeWorkspaceIndex(hash, index);
+
+    // When model or dimensions change, wipe existing embeddings so they
+    // get regenerated on the next digest/dream cycle.
+    if ((modelChanged || dimsChanged) && this._kbVectorStores.has(hash)) {
+      try {
+        const store = this._kbVectorStores.get(hash)!;
+        await store.close();
+        this._kbVectorStores.delete(hash);
+      } catch { /* ignore close errors */ }
+    }
+
+    return index.kbEmbedding;
   }
 
   /**

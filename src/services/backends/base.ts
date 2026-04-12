@@ -1,5 +1,6 @@
 import type {
   BackendMetadata,
+  McpServerConfig,
   SendMessageOptions,
   SendMessageResult,
   Message,
@@ -25,6 +26,12 @@ export interface RunOneShotOptions {
    * `--permission-mode bypassPermissions` for Claude Code).
    */
   allowTools?: boolean;
+  /**
+   * MCP servers to expose to the CLI for this one-shot call.
+   * Used by the Dreaming orchestrator to provide KB search tools.
+   * Backends that don't support MCP in one-shot mode ignore this.
+   */
+  mcpServers?: McpServerConfig[];
 }
 
 /**

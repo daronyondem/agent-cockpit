@@ -138,6 +138,21 @@ export interface WorkspaceIndex {
    * files — users must click "Digest All Pending" for that.
    */
   kbAutoDigest?: boolean;
+  /**
+   * Per-workspace embedding configuration for the Knowledge Base vector
+   * search layer.  Ollama with nomic-embed-text is the only supported
+   * provider.  Changing the model after embeddings exist triggers a
+   * re-embed (existing vectors are wiped, entries/topics flagged
+   * `needs_embedding`).
+   */
+  kbEmbedding?: {
+    /** Ollama model name. Default `nomic-embed-text`. */
+    model?: string;
+    /** Ollama server URL. Default `http://localhost:11434`. */
+    ollamaHost?: string;
+    /** Embedding dimensions (must match the model). Default 768. */
+    dimensions?: number;
+  };
   conversations: ConversationEntry[];
 }
 
@@ -230,6 +245,10 @@ export interface Settings {
     dreamingCliEffort?: EffortLevel;
     /** Max concurrent CLI calls during dreaming batches. Default 2. */
     dreamingConcurrency?: number;
+    /** Cosine similarity score above which an entry→topic match skips LLM verification. Default 0.75. */
+    dreamingStrongMatchThreshold?: number;
+    /** Cosine similarity score below which an entry is routed to new-topic creation. Default 0.45. */
+    dreamingBorderlineThreshold?: number;
     /**
      * When true, PPTX ingestion shells out to LibreOffice to render each
      * slide as a PNG (better fidelity for decks that rely on visual
@@ -625,7 +644,7 @@ export interface KbStateUpdateEvent {
     folders?: boolean;
     synthesis?: boolean;
     batchProgress?: { done: number; total: number };
-    dreamProgress?: { phase: 'discovery' | 'synthesis'; done: number; total: number };
+    dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery'; done: number; total: number };
     /** Per-raw substep text shown beneath the status badge during long operations. */
     substep?: { rawId: string; text: string };
   };
