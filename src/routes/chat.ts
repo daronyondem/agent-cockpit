@@ -22,6 +22,8 @@ import {
   KbDigestDisabledError,
 } from '../services/knowledgeBase/digest';
 import { KbDreamService } from '../services/knowledgeBase/dream';
+import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
+import { createKbSearchMcpServer } from '../services/kbSearchMcp';
 import type { Request, Response, NextFunction, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
@@ -272,10 +274,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // Knowledge Base dreaming orchestrator. Runs the configured Dreaming
   // CLI to synthesize entries into a knowledge graph of topics and
   // connections. Manual-only — triggered via POST /kb/dream or /kb/redream.
+  // KB Search MCP server — exposes search tools to CLIs during dreaming.
+  const kbSearchMcp = createKbSearchMcpServer({ chatService });
+  router.use('/mcp', kbSearchMcp.router);
+
   const kbDreaming = new KbDreamService({
     chatService,
     backendRegistry,
     emit: broadcastKbStateUpdate,
+    kbSearchMcp,
   });
 
   // Memory MCP server — exposes `memory_note` tool to non-Claude CLIs via the
@@ -1366,6 +1373,56 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
+  // ── KB embedding config ─────────────────────────────────────────────────────
+
+  router.get('/workspaces/:hash/kb/embedding-config', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const cfg = await chatService.getWorkspaceKbEmbeddingConfig(hash);
+      res.json({ embeddingConfig: cfg ?? null });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.put('/workspaces/:hash/kb/embedding-config', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { model, ollamaHost, dimensions } = req.body as {
+        model?: string;
+        ollamaHost?: string;
+        dimensions?: number;
+      };
+      if (model !== undefined && typeof model !== 'string') {
+        return res.status(400).json({ error: 'model must be a string' });
+      }
+      if (ollamaHost !== undefined && typeof ollamaHost !== 'string') {
+        return res.status(400).json({ error: 'ollamaHost must be a string' });
+      }
+      if (dimensions !== undefined && (typeof dimensions !== 'number' || dimensions < 1)) {
+        return res.status(400).json({ error: 'dimensions must be a positive number' });
+      }
+      const hash = param(req, 'hash');
+      const result = await chatService.setWorkspaceKbEmbeddingConfig(hash, {
+        model, ollamaHost, dimensions,
+      });
+      if (result === null) return res.status(404).json({ error: 'Workspace not found' });
+      res.json({ embeddingConfig: result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/kb/embedding-health', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const cfg = await chatService.getWorkspaceKbEmbeddingConfig(hash);
+      const result = await checkOllamaHealth(cfg);
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── KB digestion ────────────────────────────────────────────────────────────
   // Trigger digestion for a single raw file (manual "Digest now" button).
   // Fire-and-forget: returns 202 immediately; progress is streamed via
@@ -1622,6 +1679,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         connectionCount: snapshot.connectionCount,
         needsSynthesisCount: snapshot.needsSynthesisCount,
         godNodes: snapshot.godNodes,
+        dreamProgress: snapshot.dreamProgress,
         topics: topics.map((t) => ({
           topicId: t.topicId,
           title: t.title,

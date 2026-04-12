@@ -792,6 +792,87 @@ describe('ClaudeCodeAdapter sendMessage', () => {
   });
 });
 
+// ── runOneShot MCP passthrough ─────────────────────────────────────────────
+
+describe('ClaudeCodeAdapter runOneShot', () => {
+  test('passes --mcp-config when mcpServers provided', async () => {
+    let capturedArgs: string[] | undefined;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        execFile: (_cmd: string, args: string[], _opts: any, cb: any) => {
+          capturedArgs = args;
+          cb(null, 'output text', '');
+        },
+        spawn: () => {
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          return proc;
+        },
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapter.runOneShot('test prompt', {
+        mcpServers: [
+          {
+            name: 'agent-cockpit-kb-search',
+            command: 'node',
+            args: ['/path/to/stub.cjs'],
+            env: [
+              { name: 'KB_SEARCH_TOKEN', value: 'tok-xyz' },
+              { name: 'KB_SEARCH_ENDPOINT', value: 'http://127.0.0.1:3335/x' },
+            ],
+          },
+        ],
+      });
+    });
+
+    expect(capturedArgs).toBeDefined();
+    const idx = capturedArgs!.indexOf('--mcp-config');
+    expect(idx).toBeGreaterThan(-1);
+    const configJson = capturedArgs![idx + 1];
+    const parsed = JSON.parse(configJson);
+    expect(parsed.mcpServers['agent-cockpit-kb-search']).toEqual({
+      command: 'node',
+      args: ['/path/to/stub.cjs'],
+      env: {
+        KB_SEARCH_TOKEN: 'tok-xyz',
+        KB_SEARCH_ENDPOINT: 'http://127.0.0.1:3335/x',
+      },
+    });
+  });
+
+  test('omits --mcp-config when mcpServers not provided', async () => {
+    let capturedArgs: string[] | undefined;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        execFile: (_cmd: string, args: string[], _opts: any, cb: any) => {
+          capturedArgs = args;
+          cb(null, 'output text', '');
+        },
+        spawn: () => {
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          return proc;
+        },
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapter.runOneShot('test prompt', {});
+    });
+
+    expect(capturedArgs).toBeDefined();
+    expect(capturedArgs).not.toContain('--mcp-config');
+  });
+});
+
 // ── mcpServersToClaudeConfigJson ───────────────────────────────────────────
 
 describe('mcpServersToClaudeConfigJson', () => {

@@ -245,6 +245,7 @@ export interface SynthesisSnapshot {
   connectionCount: number;
   needsSynthesisCount: number;
   godNodes: string[];
+  dreamProgress: { phase: string; done: number; total: number } | null;
 }
 
 /** One row in the raw_locations table, typed. */
@@ -924,6 +925,11 @@ export class KbDatabase {
     const lastRunError = this.getSynthesisMeta('last_run_error');
     const godNodesRaw = this.getSynthesisMeta('god_nodes');
     const godNodes: string[] = godNodesRaw ? JSON.parse(godNodesRaw) : [];
+    const dreamProgressRaw = this.getSynthesisMeta('dream_progress');
+    let dreamProgress: SynthesisSnapshot['dreamProgress'] = null;
+    if (dreamProgressRaw) {
+      try { dreamProgress = JSON.parse(dreamProgressRaw); } catch { /* ignore */ }
+    }
 
     const topicCountRow = this.db
       .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_topics')
@@ -943,6 +949,7 @@ export class KbDatabase {
       connectionCount: connCountRow?.n ?? 0,
       needsSynthesisCount: needsRow?.n ?? 0,
       godNodes,
+      dreamProgress,
     };
   }
 
@@ -1196,6 +1203,88 @@ export class KbDatabase {
       relationship: r.relationship,
       confidence: r.confidence,
       evidence: r.evidence,
+    }));
+  }
+
+  /**
+   * Find topic pairs that share assigned entries but have no existing
+   * connection (either direction). Returns pairs with shared entry count.
+   */
+  listTopicPairsBySharedEntries(): Array<{
+    topicA: string;
+    topicB: string;
+    sharedEntryCount: number;
+  }> {
+    const rows = this.db
+      .prepare<
+        unknown[],
+        { topic_a: string; topic_b: string; shared_count: number }
+      >(
+        `SELECT ste1.topic_id AS topic_a, ste2.topic_id AS topic_b,
+                COUNT(*) AS shared_count
+         FROM synthesis_topic_entries ste1
+         JOIN synthesis_topic_entries ste2
+           ON ste1.entry_id = ste2.entry_id AND ste1.topic_id < ste2.topic_id
+         WHERE NOT EXISTS (
+           SELECT 1 FROM synthesis_connections
+           WHERE (source_topic = ste1.topic_id AND target_topic = ste2.topic_id)
+              OR (source_topic = ste2.topic_id AND target_topic = ste1.topic_id)
+         )
+         GROUP BY ste1.topic_id, ste2.topic_id
+         ORDER BY shared_count DESC`,
+      )
+      .all();
+    return rows.map((r) => ({
+      topicA: r.topic_a,
+      topicB: r.topic_b,
+      sharedEntryCount: r.shared_count,
+    }));
+  }
+
+  /**
+   * Find 2-hop transitive connection candidates: pairs (A, C) where A→B
+   * and B→C exist (in either direction) but A↔C has no direct connection.
+   * Returns the intermediate topic and both relationship labels.
+   */
+  listTransitiveCandidates(): Array<{
+    topicA: string;
+    topicC: string;
+    viaTopicB: string;
+    relAB: string;
+    relBC: string;
+  }> {
+    const rows = this.db
+      .prepare<
+        unknown[],
+        { topic_a: string; topic_c: string; via_b: string; rel_ab: string; rel_bc: string }
+      >(
+        `WITH directed AS (
+           SELECT source_topic AS from_t, target_topic AS to_t, relationship
+           FROM synthesis_connections
+           UNION ALL
+           SELECT target_topic AS from_t, source_topic AS to_t, relationship
+           FROM synthesis_connections
+         )
+         SELECT d1.from_t AS topic_a, d2.to_t AS topic_c,
+                d1.to_t AS via_b, d1.relationship AS rel_ab, d2.relationship AS rel_bc
+         FROM directed d1
+         JOIN directed d2 ON d1.to_t = d2.from_t
+         WHERE d1.from_t < d2.to_t
+           AND d1.from_t != d2.to_t
+           AND NOT EXISTS (
+             SELECT 1 FROM synthesis_connections
+             WHERE (source_topic = d1.from_t AND target_topic = d2.to_t)
+                OR (source_topic = d2.to_t AND target_topic = d1.from_t)
+           )
+         GROUP BY d1.from_t, d2.to_t`,
+      )
+      .all();
+    return rows.map((r) => ({
+      topicA: r.topic_a,
+      topicC: r.topic_c,
+      viaTopicB: r.via_b,
+      relAB: r.rel_ab,
+      relBC: r.rel_bc,
     }));
   }
 

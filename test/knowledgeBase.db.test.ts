@@ -1001,3 +1001,140 @@ describe('getSynthesisSnapshot', () => {
     expect(snap.lastRunAt).toBe(now);
   });
 });
+
+// ─── Connection Discovery DB queries ────────────────────────────────────────
+
+describe('listTopicPairsBySharedEntries', () => {
+  const now = new Date().toISOString();
+
+  function setupRawAndEntry(entryId: string): void {
+    const { rawId, sha256 } = makeRawFile(`content-${entryId}`);
+    db.insertRaw({
+      rawId, sha256, status: 'digested', byteLength: 10,
+      mimeType: 'text/plain', handler: null, uploadedAt: now, metadata: null,
+    });
+    db.insertEntry({
+      entryId, rawId, title: entryId, slug: entryId,
+      summary: 'sum', schemaVersion: 1, digestedAt: now, tags: [],
+    });
+  }
+
+  test('returns empty when no shared entries', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    setupRawAndEntry('e1');
+    setupRawAndEntry('e2');
+    db.assignEntries('a', ['e1']);
+    db.assignEntries('b', ['e2']);
+    expect(db.listTopicPairsBySharedEntries()).toEqual([]);
+  });
+
+  test('finds topic pairs sharing entries', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    setupRawAndEntry('e1');
+    setupRawAndEntry('e2');
+    db.assignEntries('a', ['e1', 'e2']);
+    db.assignEntries('b', ['e1']);
+    const pairs = db.listTopicPairsBySharedEntries();
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].sharedEntryCount).toBe(1);
+  });
+
+  test('excludes pairs that already have a connection', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    setupRawAndEntry('e1');
+    db.assignEntries('a', ['e1']);
+    db.assignEntries('b', ['e1']);
+    db.upsertConnection({
+      sourceTopic: 'a', targetTopic: 'b', relationship: 'related',
+      confidence: 'inferred', evidence: null,
+    });
+    expect(db.listTopicPairsBySharedEntries()).toEqual([]);
+  });
+
+  test('excludes pairs connected in reverse direction', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    setupRawAndEntry('e1');
+    db.assignEntries('a', ['e1']);
+    db.assignEntries('b', ['e1']);
+    db.upsertConnection({
+      sourceTopic: 'b', targetTopic: 'a', relationship: 'related',
+      confidence: 'inferred', evidence: null,
+    });
+    expect(db.listTopicPairsBySharedEntries()).toEqual([]);
+  });
+
+  test('orders by shared entry count descending', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'c', title: 'C', summary: 'S', content: 'C', updatedAt: now });
+    setupRawAndEntry('e1');
+    setupRawAndEntry('e2');
+    setupRawAndEntry('e3');
+    db.assignEntries('a', ['e1', 'e2', 'e3']);
+    db.assignEntries('b', ['e1', 'e2', 'e3']); // 3 shared with a
+    db.assignEntries('c', ['e1']);                // 1 shared with a
+    const pairs = db.listTopicPairsBySharedEntries();
+    expect(pairs.length).toBeGreaterThanOrEqual(2);
+    expect(pairs[0].sharedEntryCount).toBeGreaterThanOrEqual(pairs[1].sharedEntryCount);
+  });
+});
+
+describe('listTransitiveCandidates', () => {
+  const now = new Date().toISOString();
+
+  test('returns empty when no transitive paths exist', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertConnection({
+      sourceTopic: 'a', targetTopic: 'b', relationship: 'related',
+      confidence: 'inferred', evidence: null,
+    });
+    // Only 2 topics, no 3rd node → no transitive candidates.
+    expect(db.listTransitiveCandidates()).toEqual([]);
+  });
+
+  test('finds 2-hop transitive candidates A→B→C', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'c', title: 'C', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertConnection({
+      sourceTopic: 'a', targetTopic: 'b', relationship: 'depends-on',
+      confidence: 'extracted', evidence: null,
+    });
+    db.upsertConnection({
+      sourceTopic: 'b', targetTopic: 'c', relationship: 'implements',
+      confidence: 'inferred', evidence: null,
+    });
+    const candidates = db.listTransitiveCandidates();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].topicA).toBe('a');
+    expect(candidates[0].topicC).toBe('c');
+    expect(candidates[0].viaTopicB).toBe('b');
+  });
+
+  test('excludes pairs that already have a direct connection', () => {
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'b', title: 'B', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'c', title: 'C', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertConnection({ sourceTopic: 'a', targetTopic: 'b', relationship: 'r1', confidence: 'inferred', evidence: null });
+    db.upsertConnection({ sourceTopic: 'b', targetTopic: 'c', relationship: 'r2', confidence: 'inferred', evidence: null });
+    db.upsertConnection({ sourceTopic: 'a', targetTopic: 'c', relationship: 'r3', confidence: 'inferred', evidence: null });
+    expect(db.listTransitiveCandidates()).toEqual([]);
+  });
+
+  test('returns relationship labels for the path', () => {
+    db.upsertTopic({ topicId: 'x', title: 'X', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'y', title: 'Y', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertTopic({ topicId: 'z', title: 'Z', summary: 'S', content: 'C', updatedAt: now });
+    db.upsertConnection({ sourceTopic: 'x', targetTopic: 'y', relationship: 'uses', confidence: 'extracted', evidence: null });
+    db.upsertConnection({ sourceTopic: 'y', targetTopic: 'z', relationship: 'extends', confidence: 'inferred', evidence: null });
+    const candidates = db.listTransitiveCandidates();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0].relAB).toBe('uses');
+    expect(candidates[0].relBC).toBe('extends');
+  });
+});
