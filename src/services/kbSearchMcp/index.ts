@@ -1,12 +1,13 @@
 // ── KB Search MCP Server ────────────────────────────────────────────────────
 //
-// Exposes search tools to CLIs during dreaming so the synthesis step can
-// dynamically search and fetch topic/entry data via MCP instead of reading
-// flat file dumps.
+// Exposes KB search and ingestion tools to CLIs during both dreaming and
+// conversation sessions via MCP.
 //
 // Architecture (same two-process pattern as Memory MCP):
-//   1. `issueKbSearchSession(hash)` mints a per-dream-run bearer token and
-//      returns an ACP-compatible `mcpServers` config pointing at `stub.cjs`.
+//   1. `issueKbSearchSession(sessionKey, hash)` mints a bearer token keyed
+//      by `sessionKey` (convId for conversations, workspace hash for
+//      dreaming) and returns an ACP-compatible `mcpServers` config pointing
+//      at `stub.cjs`.
 //   2. This router mounts `POST /mcp/kb-search/call` on the chat API.
 //      Each incoming call:
 //        - Authorizes via `X-KB-Search-Token`.
@@ -14,17 +15,21 @@
 //        - Returns results as JSON.
 //
 // Session lifecycle:
-//   - Issue at dream start, revoke in the finally block.
-//   - Each `runOneShot` CLI call spawns a fresh stub process that dies when
-//     the CLI exits.  The token outlives individual CLI invocations.
+//   - Dreaming: issue at dream start, revoke in the finally block.
+//   - Conversations: issue on first message send, revoke on session reset
+//     or conversation delete.
+//   - Each CLI call spawns a fresh stub process that dies when the CLI
+//     exits.  The token outlives individual CLI invocations.
 
 import crypto from 'crypto';
 import path from 'path';
+import { promises as fsp } from 'fs';
 import express, { type Request, type Response } from 'express';
 import type { McpServerConfig } from '../../types';
 import type { KbDatabase } from '../knowledgeBase/db';
 import type { KbVectorStore } from '../knowledgeBase/vectorStore';
 import { embedText, resolveConfig, type EmbeddingConfig } from '../knowledgeBase/embeddings';
+import type { KbIngestionService } from '../knowledgeBase/ingestion';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -43,8 +48,8 @@ export interface KbSearchChatService {
 
 export interface KbSearchMcpServer {
   router: express.Router;
-  issueKbSearchSession(hash: string): { token: string; mcpServers: McpServerConfig[] };
-  revokeKbSearchSession(hash: string): void;
+  issueKbSearchSession(sessionKey: string, hash: string): { token: string; mcpServers: McpServerConfig[] };
+  revokeKbSearchSession(sessionKey: string): void;
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -59,20 +64,21 @@ function mintToken(): string {
 
 interface CreateKbSearchMcpDeps {
   chatService: KbSearchChatService;
+  kbIngestion?: KbIngestionService;
 }
 
 export function createKbSearchMcpServer(
-  { chatService }: CreateKbSearchMcpDeps,
+  { chatService, kbIngestion }: CreateKbSearchMcpDeps,
 ): KbSearchMcpServer {
   const sessions = new Map<string, KbSearchSession>(); // token → session
-  const byWorkspace = new Map<string, string>(); // hash → token
+  const byKey = new Map<string, string>(); // sessionKey → token
 
-  function issueKbSearchSession(hash: string): {
+  function issueKbSearchSession(sessionKey: string, hash: string): {
     token: string;
     mcpServers: McpServerConfig[];
   } {
-    // Reuse existing token for this workspace if one is live.
-    const cachedToken = byWorkspace.get(hash);
+    // Reuse existing token for this session key if one is live.
+    const cachedToken = byKey.get(sessionKey);
     const cached = cachedToken ? sessions.get(cachedToken) : undefined;
     let token: string;
     if (cached) {
@@ -80,7 +86,7 @@ export function createKbSearchMcpServer(
     } else {
       token = mintToken();
       sessions.set(token, { token, workspaceHash: hash, createdAt: Date.now() });
-      byWorkspace.set(hash, token);
+      byKey.set(sessionKey, token);
     }
 
     const port = Number(process.env.PORT) || 3334;
@@ -102,11 +108,11 @@ export function createKbSearchMcpServer(
     };
   }
 
-  function revokeKbSearchSession(hash: string): void {
-    const token = byWorkspace.get(hash);
+  function revokeKbSearchSession(sessionKey: string): void {
+    const token = byKey.get(sessionKey);
     if (!token) return;
     sessions.delete(token);
-    byWorkspace.delete(hash);
+    byKey.delete(sessionKey);
   }
 
   // ── Tool handlers ───────────────────────────────────────────────────────
@@ -126,8 +132,15 @@ export function createKbSearchMcpServer(
     const store = await chatService.getKbVectorStore(hash, resolved.dimensions);
     if (!store) return { topics: [], warning: 'Vector store unavailable' };
 
-    const embedding = (await embedText(query, cfg)).embedding;
-    const results = await store.hybridSearchTopics(query, embedding, limit);
+    let results;
+    try {
+      const embedding = (await embedText(query, cfg)).embedding;
+      results = await store.hybridSearchTopics(query, embedding, limit);
+    } catch {
+      // Ollama unavailable — fall back to keyword-only search silently.
+      console.warn('[kbSearchMcp] Ollama embedding failed for search_topics, falling back to keyword search');
+      results = await store.keywordSearchTopics(query, limit);
+    }
     return {
       topics: results.map((r) => ({
         topic_id: r.id,
@@ -190,15 +203,21 @@ export function createKbSearchMcpServer(
     const store = await chatService.getKbVectorStore(hash, resolved.dimensions);
     if (!store) return { topics: [], warning: 'Vector store unavailable' };
 
-    const results = await store.findSimilarTopics(topicId, limit);
-    return {
-      topics: results.map((r) => ({
-        topic_id: r.id,
-        title: r.title,
-        summary: r.summary,
-        score: Math.round(r.score * 1000) / 1000,
-      })),
-    };
+    try {
+      const results = await store.findSimilarTopics(topicId, limit);
+      return {
+        topics: results.map((r) => ({
+          topic_id: r.id,
+          title: r.title,
+          summary: r.summary,
+          score: Math.round(r.score * 1000) / 1000,
+        })),
+      };
+    } catch {
+      // Pure embedding-based — no keyword fallback possible.
+      console.warn('[kbSearchMcp] findSimilarTopics failed (embeddings unavailable)');
+      return { topics: [] };
+    }
   }
 
   async function handleSearchEntries(
@@ -216,8 +235,15 @@ export function createKbSearchMcpServer(
     const store = await chatService.getKbVectorStore(hash, resolved.dimensions);
     if (!store) return { entries: [], warning: 'Vector store unavailable' };
 
-    const embedding = (await embedText(query, cfg)).embedding;
-    const results = await store.hybridSearchEntries(query, embedding, limit);
+    let results;
+    try {
+      const embedding = (await embedText(query, cfg)).embedding;
+      results = await store.hybridSearchEntries(query, embedding, limit);
+    } catch {
+      // Ollama unavailable — fall back to keyword-only search silently.
+      console.warn('[kbSearchMcp] Ollama embedding failed for search_entries, falling back to keyword search');
+      results = await store.keywordSearchEntries(query, limit);
+    }
     return {
       entries: results.map((r) => ({
         entry_id: r.id,
@@ -246,26 +272,115 @@ export function createKbSearchMcpServer(
     const store = await chatService.getKbVectorStore(hash, resolved.dimensions);
     if (!store) return { topics: [], warning: 'Vector store unavailable' };
 
-    const similar = await store.findSimilarTopics(topicId, limit + 20);
-    const existingConns = db.listConnectionsForTopic(topicId);
-    const connectedIds = new Set<string>();
-    for (const c of existingConns) {
-      connectedIds.add(c.sourceTopic);
-      connectedIds.add(c.targetTopic);
+    try {
+      const similar = await store.findSimilarTopics(topicId, limit + 20);
+      const existingConns = db.listConnectionsForTopic(topicId);
+      const connectedIds = new Set<string>();
+      for (const c of existingConns) {
+        connectedIds.add(c.sourceTopic);
+        connectedIds.add(c.targetTopic);
+      }
+
+      const unconnected = similar
+        .filter((r) => !connectedIds.has(r.id))
+        .slice(0, limit);
+
+      return {
+        topics: unconnected.map((r) => ({
+          topic_id: r.id,
+          title: r.title,
+          summary: r.summary,
+          score: Math.round(r.score * 1000) / 1000,
+        })),
+      };
+    } catch {
+      // Pure embedding-based — no keyword fallback possible.
+      console.warn('[kbSearchMcp] findUnconnectedSimilar failed (embeddings unavailable)');
+      return { topics: [] };
+    }
+  }
+
+  // ── Ingestion handler ──────────────────────────────────────────────────
+
+  /** MIME lookup by extension — covers the formats the ingestion pipeline supports. */
+  const EXT_TO_MIME: Record<string, string> = {
+    '.pdf': 'application/pdf',
+    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    '.txt': 'text/plain',
+    '.md': 'text/markdown',
+    '.json': 'application/json',
+    '.csv': 'text/csv',
+    '.html': 'text/html',
+    '.htm': 'text/html',
+    '.xml': 'text/xml',
+    '.yaml': 'text/yaml',
+    '.yml': 'text/yaml',
+    '.ts': 'text/plain',
+    '.js': 'text/plain',
+    '.py': 'text/plain',
+    '.rb': 'text/plain',
+    '.go': 'text/plain',
+    '.rs': 'text/plain',
+    '.java': 'text/plain',
+    '.c': 'text/plain',
+    '.cpp': 'text/plain',
+    '.h': 'text/plain',
+    '.sh': 'text/plain',
+    '.css': 'text/css',
+    '.svg': 'image/svg+xml',
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.gif': 'image/gif',
+    '.webp': 'image/webp',
+  };
+
+  async function handleKbIngest(
+    hash: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    if (!kbIngestion) return { error: 'Ingestion service not available' };
+
+    const filePath = String(args.file_path ?? '').trim();
+    if (!filePath) return { error: 'file_path is required' };
+
+    // Validate the file exists and is readable.
+    let stat;
+    try {
+      stat = await fsp.stat(filePath);
+    } catch {
+      return { error: `File not found or not accessible: ${filePath}` };
+    }
+    if (!stat.isFile()) return { error: `Path is not a file: ${filePath}` };
+
+    const filename = path.basename(filePath);
+    const ext = path.extname(filename).toLowerCase();
+    const mimeType = EXT_TO_MIME[ext] || 'application/octet-stream';
+
+    let buffer: Buffer;
+    try {
+      buffer = await fsp.readFile(filePath);
+    } catch (err: unknown) {
+      return { error: `Failed to read file: ${(err as Error).message}` };
     }
 
-    const unconnected = similar
-      .filter((r) => !connectedIds.has(r.id))
-      .slice(0, limit);
-
-    return {
-      topics: unconnected.map((r) => ({
-        topic_id: r.id,
-        title: r.title,
-        summary: r.summary,
-        score: Math.round(r.score * 1000) / 1000,
-      })),
-    };
+    try {
+      const result = await kbIngestion.enqueueUpload(hash, {
+        buffer,
+        filename,
+        mimeType,
+        folderPath: 'conversation-documents',
+      });
+      return {
+        ok: true,
+        raw_id: result.entry.rawId,
+        filename: result.entry.filename,
+        deduped: result.deduped,
+      };
+    } catch (err: unknown) {
+      return { error: `Ingestion failed: ${(err as Error).message}` };
+    }
   }
 
   // ── Router ────────────────────────────────────────────────────────────────
@@ -279,6 +394,7 @@ export function createKbSearchMcpServer(
     find_similar_topics: handleFindSimilarTopics,
     find_unconnected_similar: handleFindUnconnectedSimilar,
     search_entries: handleSearchEntries,
+    kb_ingest: handleKbIngest,
   };
 
   const router = express.Router();

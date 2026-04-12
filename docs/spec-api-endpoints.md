@@ -61,7 +61,7 @@ The queue is also included in the `GET /conversations/:id` response as `messageQ
 |--------|------|------|-------------|
 | GET | `/conversations/:id/sessions` | — | Session list with `isCurrent` flag and `summary`. |
 | GET | `/conversations/:id/sessions/:num/messages` | — | Messages for a specific session. `400`/`404` on error. |
-| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session, resets title to "New Chat", clears message queue. `409` if streaming. Clears any stale WebSocket event buffer for the conversation. After archiving, invokes `captureWorkspaceMemory(convId, endingBackend)` so the ending backend's native memory is mirrored to `workspaces/{hash}/memory/`, then runs post-session extraction via `memoryMcp.extractMemoryFromSession` for every backend (including Claude Code) — the Memory CLI scans the just-ended transcript and writes any new memory notes into `memory/files/notes/`. Both steps are best-effort — failures do not block the reset. Also calls `memoryMcp.revokeMemoryMcpSession(convId)` to rotate the MCP token for the next session. Returns `{ conversation, newSessionNumber, archivedSession }`. |
+| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session, resets title to "New Chat", clears message queue. `409` if streaming. Clears any stale WebSocket event buffer for the conversation. After archiving, invokes `captureWorkspaceMemory(convId, endingBackend)` so the ending backend's native memory is mirrored to `workspaces/{hash}/memory/`, then runs post-session extraction via `memoryMcp.extractMemoryFromSession` for every backend (including Claude Code) — the Memory CLI scans the just-ended transcript and writes any new memory notes into `memory/files/notes/`. Both steps are best-effort — failures do not block the reset. Also calls `memoryMcp.revokeMemoryMcpSession(convId)` and `kbSearchMcp.revokeKbSearchSession(convId)` to rotate the MCP tokens for the next session. Returns `{ conversation, newSessionNumber, archivedSession }`. |
 
 ## 3.6 Backends
 
@@ -229,10 +229,11 @@ Per-workspace instructions appended to the global system prompt on new sessions.
 1. Global system prompt (from `settings.json`)
 2. Workspace instructions (from workspace `index.json`)
 3. **Memory MCP addendum** — appended for every backend whenever `memoryEnabled` is true. Instructs the CLI to call `memory_note` via the `agent-cockpit-memory` MCP server for durable user/feedback/project/reference facts it encounters during the session. Claude Code gets this addendum too — its native `#` flow handles explicit saves, but `memory_note` captures incidental facts mentioned conversationally.
+4. **KB Tools addendum** — appended for every backend whenever `kbEnabled` is true. Teaches the CLI that KB search tools are available via the `agent-cockpit-kb-search` MCP server: `search_topics`, `search_entries`, `get_topic`, `find_similar_topics`, `find_unconnected_similar`, and `kb_ingest`. Includes the filesystem layout for direct reads (`entries/<entryId>/entry.md`, `synthesis/*.md`, `state.db`) and the intended workflow: use search tools to find relevant knowledge, then read entry files for full content. The absolute path to the workspace's `knowledge/` directory is interpolated at runtime.
 
 Concatenated with `\n\n` and passed as the backend's system prompt. Not sent on session resume.
 
-Memory content itself is **not** dumped into the system prompt. Instead, a short filesystem pointer is prepended to the user message on new sessions — see **Workspace Memory → Injection trigger** below.
+Memory content itself is **not** dumped into the system prompt. Instead, a short filesystem pointer is prepended to the user message on new sessions — see **Workspace Memory → Injection trigger** below. KB content is similarly not serialized into the system prompt — the CLI uses search tools (Layer 1) and file reads (Layer 2) for retrieval.
 
 ## 3.12 Version & Self-Update
 

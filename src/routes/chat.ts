@@ -274,8 +274,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   // Knowledge Base dreaming orchestrator. Runs the configured Dreaming
   // CLI to synthesize entries into a knowledge graph of topics and
   // connections. Manual-only — triggered via POST /kb/dream or /kb/redream.
-  // KB Search MCP server — exposes search tools to CLIs during dreaming.
-  const kbSearchMcp = createKbSearchMcpServer({ chatService });
+  // KB Search MCP server — exposes search and ingestion tools to CLIs
+  // during both dreaming and conversation sessions.
+  const kbSearchMcp = createKbSearchMcpServer({ chatService, kbIngestion });
   router.use('/mcp', kbSearchMcp.router);
 
   const kbDreaming = new KbDreamService({
@@ -568,6 +569,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
       memoryMcp.revokeMemoryMcpSession(convId);
+      kbSearchMcp.revokeKbSearchSession(convId);
       const ok = await chatService.deleteConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
@@ -772,9 +774,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         if (adapter) adapter.onSessionReset(convId);
       }
 
-      // Revoke any Memory MCP token issued for this conversation — a new
-      // one will be minted on the next non-Claude message for this workspace.
+      // Revoke any Memory / KB Search MCP tokens issued for this
+      // conversation — new ones will be minted on the next message send.
       memoryMcp.revokeMemoryMcpSession(convId);
+      kbSearchMcp.revokeKbSearchSession(convId);
 
       res.json(result);
     } catch (err: unknown) {
@@ -822,6 +825,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     // persist notes via `memory_note`. Kiro spawns it over ACP's
     // `mcpServers`; Claude Code spawns it via `--mcp-config`.
     const needsMemoryMcp = memoryEnabledForSend && !!wsHashForSend;
+    const kbEnabledForSend = wsHashForSend
+      ? await chatService.getWorkspaceKbEnabled(wsHashForSend)
+      : false;
+    const needsKbMcp = kbEnabledForSend && !!wsHashForSend;
 
     let cliMessage = content.trim();
     if (isNewSession) {
@@ -868,7 +875,32 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
             'Each call should capture ONE fact in natural language — do not batch unrelated facts. Pass the category in `type` when you know it. Keep notes terse. Do not call `memory_note` for ephemeral task state or things already visible in the current code.',
           ].join('\n')
         : '';
-      const parts = [globalPrompt, wsInstructions, memoryMcpAddendum].filter(Boolean);
+      const kbMcpAddendum = needsKbMcp
+        ? (() => {
+            const kbPath = path.resolve(chatService.getKbKnowledgeDir(wsHashForSend!));
+            return [
+              '# Knowledge Base',
+              'You have access to a workspace knowledge base via MCP tools (from the `agent-cockpit-kb-search` server) and the local filesystem.',
+              '',
+              '## Search tools (use these to find relevant knowledge)',
+              '- `search_topics(query)` — semantic + keyword search across all synthesized topics. Returns topic IDs, titles, summaries, and scores.',
+              '- `search_entries(query)` — semantic + keyword search across all digested entries. Returns entry IDs, titles, summaries, and scores.',
+              '- `get_topic(topic_id)` — full topic content, connections, and assigned entry list.',
+              '- `find_similar_topics(topic_id)` — topics with similar embeddings.',
+              '- `find_unconnected_similar(topic_id)` — similar topics with no existing connection.',
+              '- `kb_ingest(file_path)` — ingest a local file into the knowledge base.',
+              '',
+              '## Reading full content (use after search narrows results)',
+              `- Entries: \`${kbPath}/entries/<entryId>/entry.md\` — YAML frontmatter (title, tags, source) + digested markdown body.`,
+              `- Synthesis: \`${kbPath}/synthesis/*.md\` — cross-entry topic synthesis.`,
+              `- DB: \`${kbPath}/state.db\` — SQLite index of raw files, folders, and entries.`,
+              '',
+              '## Workflow',
+              'Use search tools first to find relevant topics and entries by semantic meaning, then read the entry files directly for full content. Search narrows the space; file reads give you depth.',
+            ].join('\n');
+          })()
+        : '';
+      const parts = [globalPrompt, wsInstructions, memoryMcpAddendum, kbMcpAddendum].filter(Boolean);
       systemPrompt = parts.join('\n\n');
     }
 
@@ -877,15 +909,19 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       return res.status(400).json({ error: `Unknown backend: ${backendId}` });
     }
 
-    // Mint a Memory MCP token + mcpServers config for all backends when
-    // Memory is enabled. Kiro consumes the array shape over ACP; Claude
-    // Code transforms it into `--mcp-config` JSON. The token is revoked
-    // on session reset.
+    // Mint MCP tokens for Memory and KB Search when their respective
+    // features are enabled. Both use the same pattern: session-scoped
+    // bearer tokens revoked on session reset or conversation delete.
     let mcpServers: import('../types').McpServerConfig[] | undefined;
     if (needsMemoryMcp && wsHashForSend) {
       const issued = memoryMcp.issueMemoryMcpSession(convId, wsHashForSend);
       mcpServers = issued.mcpServers;
       console.log(`[memoryMcp] Issued token for conv=${convId} backend=${backendId}`);
+    }
+    if (needsKbMcp && wsHashForSend) {
+      const kbIssued = kbSearchMcp.issueKbSearchSession(convId, wsHashForSend);
+      mcpServers = [...(mcpServers || []), ...kbIssued.mcpServers];
+      console.log(`[kbSearchMcp] Issued token for conv=${convId} backend=${backendId}`);
     }
 
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} backend=${backendId} workingDir=${conv.workingDir || 'default'}`);

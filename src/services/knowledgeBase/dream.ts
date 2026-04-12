@@ -469,7 +469,7 @@ export class KbDreamService {
       this._emitSynthesisChange(hash);
 
       // Issue a KB Search MCP session for the duration of this dream run.
-      const mcpSession = this.kbSearchMcp.issueKbSearchSession(hash);
+      const mcpSession = this.kbSearchMcp.issueKbSearchSession(hash, hash);
       if (mode === 'full-rebuild') {
         db.wipeSynthesis();
         db.markAllNeedsSynthesis();
