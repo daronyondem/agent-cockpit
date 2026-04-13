@@ -24,7 +24,7 @@ Agent Cockpit solves this by decoupling **your data** from **the AI provider**. 
 - **File and image uploads** — Drag and drop, paste from the clipboard, or use the attach button to send images and text files directly into chat, with inline previews, just like any modern chat interface.
 - **Pick your CLI, model, and effort** — Switch backends per-conversation, choose the model, and set the reasoning effort when the CLI supports it.
 - **Markdown export** — Download any conversation or individual session as a Markdown file with one click, so your history is usable outside Agent Cockpit too.
-- **Knowledge base (coming soon)** — Curate large sets of information beyond memory, to ground each workspace's agents with dedicated context that goes further than a memory file can.
+- **Knowledge base** — Upload PDFs, Word docs, PowerPoints, images, spreadsheets, and text files into a per-workspace knowledge base. Agent Cockpit automatically converts and analyzes each file, extracts structured entries, organizes them into topics, and discovers connections between ideas — building a personal knowledge graph your AI agents can search and reason over during conversations. Organize uploads into folders, let the system find patterns you missed, and give every future conversation deep, queryable context that goes far beyond what fits in a single prompt or memory file.
 
 ## Supported Backends
 
