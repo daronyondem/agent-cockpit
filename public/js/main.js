@@ -1,4 +1,4 @@
-import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, fetchCsrfToken, chatShowSessionExpired } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, ICON_KB, ICON_MEMORY, ICON_CANCEL, ICON_EDIT, ICON_DOWNLOAD, fetchCsrfToken, chatShowSessionExpired } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal, chatShowAlert, chatShowConfirm, chatShowPrompt } from './modal.js';
@@ -391,7 +391,7 @@ async function chatShowSessions() {
                 <strong>Session ${s.number}</strong> ${status}
               </div>
               <div style="display:flex;gap:6px;">
-                <button class="chat-header-btn chat-dl-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">Download</button>
+                <button class="chat-header-btn chat-dl-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">${ICON_DOWNLOAD} Download</button>
                 <button class="chat-header-btn chat-view-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">View</button>
               </div>
             </div>
@@ -563,8 +563,8 @@ async function chatShowSettings(initialTab) {
   const html = `
     <div class="chat-settings-tabs">
       <button class="chat-settings-tab active" data-tab="general">General</button>
-      <button class="chat-settings-tab" data-tab="memory">Memory</button>
-      <button class="chat-settings-tab" data-tab="kb">Knowledge Base</button>
+      <button class="chat-settings-tab" data-tab="memory">${ICON_MEMORY} Memory</button>
+      <button class="chat-settings-tab" data-tab="kb">${ICON_KB} Knowledge Base</button>
       <button class="chat-settings-tab" data-tab="usage">${ICON_STATS} Usage Stats</button>
       <button class="chat-settings-tab" data-tab="server">${ICON_SERVER} Server</button>
     </div>
@@ -1254,8 +1254,8 @@ async function chatShowWorkspaceSettings(hash, label) {
   const html = `
     <div class="chat-settings-tabs">
       <button class="chat-settings-tab active" data-tab="instructions">Instructions</button>
-      <button class="chat-settings-tab" data-tab="memory">Memory</button>
-      <button class="chat-settings-tab" data-tab="kb">Knowledge Base</button>
+      <button class="chat-settings-tab" data-tab="memory">${ICON_MEMORY} Memory</button>
+      <button class="chat-settings-tab" data-tab="kb">${ICON_KB} Knowledge Base</button>
     </div>
     <div class="chat-modal-body">
       <div class="chat-settings-tab-content" id="chat-ws-tab-instructions">
@@ -2012,7 +2012,7 @@ function chatKbBrowserChrome(label, loading) {
     <div class="chat-kb-header">
       <h2>Knowledge Base: ${esc(label || 'Workspace')}</h2>
       ${countersHtml}
-      <button class="chat-kb-header-close" id="chat-kb-close-btn">Close</button>
+      <button class="chat-kb-header-close" id="chat-kb-close-btn">${ICON_CANCEL} Close</button>
     </div>
     <div class="chat-kb-tabs">
       <button class="chat-kb-tab ${active === 'raw' ? 'active' : ''}" data-kb-tab="raw">${KB_ICON_INGEST} Raw</button>
@@ -2279,7 +2279,7 @@ function chatKbBrowserRenderFolderTree(folders, selectedFolder) {
     const label = p === '' ? '(root)' : p.split('/').pop();
     const isSelected = p === (selectedFolder || '');
     const controls = p !== '' ? `
-      <button class="chat-kb-folder-btn" data-kb-folder-rename="${esc(p)}" title="Rename">✎</button>
+      <button class="chat-kb-folder-btn" data-kb-folder-rename="${esc(p)}" title="Rename">${ICON_EDIT}</button>
       <button class="chat-kb-folder-btn chat-kb-folder-btn-del" data-kb-folder-delete="${esc(p)}" title="Delete">×</button>
     ` : '';
     return `
