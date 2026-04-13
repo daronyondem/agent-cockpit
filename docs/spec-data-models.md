@@ -273,94 +273,415 @@ The `memory` block configures the globally-shared **Memory CLI** used for `memor
 
 The `knowledgeBase` block configures the globally-shared **Digestion CLI** and **Dreaming CLI** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). Both CLIs default to `defaultBackend` when unset. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
 
-## KB SQLite Schema — Phase E (Reflection Layer) Additions
+## KB SQLite Schema (Complete)
 
-The following tables are added to the per-workspace `knowledge/state.db` alongside the existing schema (see `spec-backend-services.md` for the full KB SQLite layer documentation):
+Each workspace owns one `knowledge/state.db` (better-sqlite3, WAL mode, `foreign_keys = ON`). Schema version is tracked in the `meta` table and bumped on migrations. Current version: **3** (`KB_DB_SCHEMA_VERSION`).
 
-- **`synthesis_reflections`** — One row per reflection produced by the reflection phase of dreaming:
-  ```sql
-  reflection_id  TEXT PRIMARY KEY,
-  title          TEXT NOT NULL,
-  type           TEXT NOT NULL,       -- 'pattern' | 'contradiction' | 'gap' | 'trend' | 'insight'
-  summary        TEXT,
-  content        TEXT NOT NULL,
-  created_at     TEXT NOT NULL        -- ISO 8601
-  ```
-  `type` classifies the reflection. Valid values: `pattern` (recurring theme across entries), `contradiction` (conflicting claims between entries), `gap` (missing knowledge identified from the graph), `trend` (temporal or evolutionary pattern), `insight` (cross-cutting observation that doesn't fit the other categories).
+**Pragmas:** `journal_mode = WAL` (Write-Ahead Logging for concurrent reads), `foreign_keys = ON`.
 
-- **`synthesis_reflection_citations`** — Many-to-many junction linking reflections to the entries they cite:
-  ```sql
-  reflection_id  TEXT NOT NULL REFERENCES synthesis_reflections(reflection_id) ON DELETE CASCADE,
-  entry_id       TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+### Tables
+
+```sql
+-- Key/value store for DB metadata (schema version, creation timestamp)
+CREATE TABLE IF NOT EXISTS meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+-- One row per content-addressed raw file
+CREATE TABLE IF NOT EXISTS raw (
+  raw_id        TEXT PRIMARY KEY,   -- sha256[:16] of original bytes
+  sha256        TEXT NOT NULL,      -- full SHA-256 hex digest for dedupe
+  status        TEXT NOT NULL,      -- 'ingesting'|'ingested'|'digesting'|'digested'|'failed'|'pending-delete'
+  byte_length   INTEGER NOT NULL,
+  mime_type     TEXT,               -- e.g. 'application/pdf'
+  handler       TEXT,               -- handler tag: 'pdf/rasterized', 'docx/pandoc', 'pptx', 'passthrough'
+  uploaded_at   TEXT NOT NULL,      -- ISO 8601
+  digested_at   TEXT,               -- ISO 8601 (NULL until digested)
+  error_class   TEXT,               -- 'timeout'|'cli_error'|'malformed_output'|'schema_rejection'|'unknown'
+  error_message TEXT,               -- full error text for UI
+  metadata_json TEXT                -- JSON-stringified handler metadata (pageCount, slideCount, etc.)
+);
+CREATE INDEX IF NOT EXISTS idx_raw_status ON raw(status);
+CREATE INDEX IF NOT EXISTS idx_raw_sha256 ON raw(sha256);
+
+-- Virtual folder tree (root is empty string '')
+CREATE TABLE IF NOT EXISTS folders (
+  folder_path TEXT PRIMARY KEY,
+  created_at  TEXT NOT NULL         -- ISO 8601
+);
+
+-- Multi-location junction: same raw_id can appear in multiple folders
+CREATE TABLE IF NOT EXISTS raw_locations (
+  raw_id      TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
+  folder_path TEXT NOT NULL REFERENCES folders(folder_path) ON DELETE RESTRICT,
+  filename    TEXT NOT NULL,
+  uploaded_at TEXT NOT NULL,         -- ISO 8601, when this location was added
+  PRIMARY KEY (raw_id, folder_path, filename)
+);
+CREATE INDEX IF NOT EXISTS idx_raw_loc_folder   ON raw_locations(folder_path);
+CREATE INDEX IF NOT EXISTS idx_raw_loc_filename ON raw_locations(filename);
+
+-- Digested entry metadata (one or more entries per raw file)
+CREATE TABLE IF NOT EXISTS entries (
+  entry_id        TEXT PRIMARY KEY,    -- format: <rawId>-<slug>[-<n>]
+  raw_id          TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
+  title           TEXT NOT NULL,
+  slug            TEXT NOT NULL,       -- URL-safe, lowercase, max 80 chars
+  summary         TEXT NOT NULL,
+  schema_version  INTEGER NOT NULL,    -- KB_ENTRY_SCHEMA_VERSION (currently 1)
+  stale_schema    INTEGER NOT NULL DEFAULT 0,  -- 1 when entry schema < current version
+  digested_at     TEXT NOT NULL,       -- ISO 8601
+  needs_synthesis INTEGER NOT NULL DEFAULT 1   -- 1 = pending for next dream run
+);
+CREATE INDEX IF NOT EXISTS idx_entries_raw ON entries(raw_id);
+-- Partial index for fast lookup of entries needing synthesis:
+CREATE INDEX IF NOT EXISTS idx_entries_needs_synthesis ON entries(entry_id) WHERE needs_synthesis = 1;
+
+-- Entry tags (many-to-many, cascades on entry delete)
+CREATE TABLE IF NOT EXISTS entry_tags (
+  entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+  tag      TEXT NOT NULL,              -- lowercase, alphanumeric + hyphens, max 40 chars
+  PRIMARY KEY (entry_id, tag)
+);
+CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
+
+-- Dream run metadata key/value store
+CREATE TABLE IF NOT EXISTS synthesis_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+-- Keys: 'status' ('empty'|'fresh'|'stale'|'dreaming'), 'last_run_at', 'last_run_error', 'god_nodes' (JSON array), 'dream_progress' (JSON)
+
+-- One row per discovered topic
+CREATE TABLE IF NOT EXISTS synthesis_topics (
+  topic_id    TEXT PRIMARY KEY,        -- slug derived from topic title
+  title       TEXT NOT NULL,
+  summary     TEXT,
+  content     TEXT,                    -- full markdown prose (synthesized from entries)
+  updated_at  TEXT NOT NULL            -- ISO 8601
+);
+
+-- Entry-to-topic many-to-many junction
+CREATE TABLE IF NOT EXISTS synthesis_topic_entries (
+  topic_id TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
+  entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+  PRIMARY KEY (topic_id, entry_id)
+);
+CREATE INDEX IF NOT EXISTS idx_ste_entry ON synthesis_topic_entries(entry_id);
+
+-- Topic-to-topic connections (directed graph)
+CREATE TABLE IF NOT EXISTS synthesis_connections (
+  source_topic TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
+  target_topic TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
+  relationship TEXT NOT NULL,          -- human-readable label (e.g. "builds on", "contradicts")
+  confidence   TEXT NOT NULL DEFAULT 'inferred',  -- 'extracted'|'inferred'|'speculative'
+  evidence     TEXT,                   -- optional supporting text
+  PRIMARY KEY (source_topic, target_topic)
+);
+CREATE INDEX IF NOT EXISTS idx_conn_target ON synthesis_connections(target_topic);
+
+-- Reflections: cross-cluster insights from the Reflection phase
+CREATE TABLE IF NOT EXISTS synthesis_reflections (
+  reflection_id          TEXT PRIMARY KEY,
+  title                  TEXT NOT NULL,
+  type                   TEXT NOT NULL,     -- 'pattern'|'contradiction'|'gap'|'trend'|'insight'
+  summary                TEXT,
+  content                TEXT NOT NULL,     -- full markdown prose with inline [Entry: title](entry-id) citations
+  created_at             TEXT NOT NULL,     -- ISO 8601
+  original_citation_count INTEGER NOT NULL DEFAULT 0  -- citation count at creation time, for stale detection
+);
+
+-- Reflection-to-entry citation junction
+CREATE TABLE IF NOT EXISTS synthesis_reflection_citations (
+  reflection_id TEXT NOT NULL REFERENCES synthesis_reflections(reflection_id) ON DELETE CASCADE,
+  entry_id      TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
   PRIMARY KEY (reflection_id, entry_id)
-  ```
-  Index on `entry_id` for reverse lookups (finding all reflections that cite a given entry).
-
-## KB Synthesis Snapshot — Phase E Additions
-
-The `GET /workspaces/:hash/kb/synthesis` response (see `spec-api-endpoints.md`) is extended with two fields:
-
-```javascript
-{
-  // ... existing fields (status, lastRunAt, lastRunError, topicCount, connectionCount, needsSynthesisCount, godNodes[], topics[], connections[]) ...
-  reflectionCount: number,          // Total number of reflections in the workspace
-  staleReflectionCount: number,     // Reflections with stale citations (a reflection is stale if any cited entry was re-digested or deleted since the reflection was created)
-}
+);
+CREATE INDEX IF NOT EXISTS idx_src_entry ON synthesis_reflection_citations(entry_id);
 ```
 
-## KB TypeScript Types — Phase E Additions
+### Cascade Behavior
 
-New types added to `src/types/index.ts`:
+| Parent | Child | ON DELETE | Effect |
+|--------|-------|-----------|--------|
+| `raw` | `raw_locations` | CASCADE | Deleting raw removes all location rows |
+| `raw` | `entries` | CASCADE | Deleting raw removes all derived entries |
+| `folders` | `raw_locations` | RESTRICT | Cannot delete folder with locations (must empty first) |
+| `entries` | `entry_tags` | CASCADE | Deleting entry removes its tags |
+| `entries` | `synthesis_topic_entries` | CASCADE | Deleting entry removes its topic assignments (may orphan topics) |
+| `entries` | `synthesis_reflection_citations` | CASCADE | Deleting entry removes citation rows (may make reflections stale) |
+| `synthesis_topics` | `synthesis_topic_entries` | CASCADE | Deleting topic removes entry assignments |
+| `synthesis_topics` | `synthesis_connections` | CASCADE | Deleting topic removes its connections (both as source and target) |
+| `synthesis_reflections` | `synthesis_reflection_citations` | CASCADE | Deleting reflection removes its citations |
+
+**Orphan topic cleanup:** After entry cascade-deletes (e.g. raw file deletion), `_deleteOrphanTopics()` removes topics with zero remaining entry assignments: `DELETE FROM synthesis_topics WHERE topic_id NOT IN (SELECT DISTINCT topic_id FROM synthesis_topic_entries)`. This is called inside `deleteRaw()` transactions and at the start of the dream pipeline.
+
+**Stale reflection detection:** `listStaleReflectionIds()` identifies reflections that need regeneration using a GROUP BY/HAVING query that checks three conditions: (1) a cited entry was deleted (LEFT JOIN shows NULL), (2) a cited entry was re-digested after the reflection was created (`e.digested_at > r.created_at`), or (3) citations were lost via cascade (`COUNT(c.entry_id) < r.original_citation_count`). The `original_citation_count` column stores the citation count at insertion time so cascade-deleted citation rows can be detected.
+
+### Migrations
+
+Schema version is stored in `meta.schema_version`. Migrations are applied at DB open time by `_initSchema()`:
+
+- **V1 → V2** (`_migrateV2`): Adds `needs_synthesis INTEGER NOT NULL DEFAULT 1` column to `entries` table. All existing entries get `needs_synthesis = 1` (pending).
+- **V2 → V3** (`_migrateV3`): Adds `original_citation_count INTEGER NOT NULL DEFAULT 0` to `synthesis_reflections` table. Backfills existing reflections by counting their current citation rows.
+- **V1 → V3**: Runs V2 then V3 sequentially.
+
+### Legacy Migration (state.json → state.db)
+
+`openKbDatabase({ dbPath, legacyJsonPath, rawDir })` handles the one-shot migration from the Phase 1/2 JSON format:
+1. If `state.db` exists → open and return (idempotent).
+2. If `state.json` exists → open fresh DB, read legacy JSON, **re-hash every raw file from disk** (legacy format only kept the 16-char `rawId`; the DB needs the full `sha256`), insert `raw` + `raw_locations` rows, snap any `ingesting`/`digesting` row to `failed`, rename JSON to `state.json.migrated`.
+3. Otherwise → open fresh DB with empty schema + root folder.
+
+### PGLite Vector Store Schema
+
+Per-workspace PGLite database at `knowledge/vectors/` with pgvector extension:
+
+```sql
+-- Model/dimension tracking for mismatch detection
+CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+-- Keys: 'model', 'dimensions'
+
+-- Entry embeddings with full-text search
+CREATE TABLE IF NOT EXISTS entry_embeddings (
+  entry_id  TEXT PRIMARY KEY,
+  title     TEXT NOT NULL DEFAULT '',
+  summary   TEXT NOT NULL DEFAULT '',
+  embedding vector(N),                -- N = configured dimensions (default 768)
+  tsv       tsvector GENERATED ALWAYS AS (
+    setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
+    setweight(to_tsvector('english', coalesce(summary, '')), 'B')
+  ) STORED
+);
+CREATE INDEX entry_emb_idx ON entry_embeddings USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX entry_tsv_idx ON entry_embeddings USING GIN (tsv);
+
+-- Topic embeddings (same schema as entries)
+CREATE TABLE IF NOT EXISTS topic_embeddings (
+  topic_id  TEXT PRIMARY KEY,
+  title     TEXT NOT NULL DEFAULT '',
+  summary   TEXT NOT NULL DEFAULT '',
+  embedding vector(N),
+  tsv       tsvector GENERATED ALWAYS AS (...) STORED
+);
+CREATE INDEX topic_emb_idx ON topic_embeddings USING hnsw (embedding vector_cosine_ops);
+CREATE INDEX topic_tsv_idx ON topic_embeddings USING GIN (tsv);
+```
+
+Dimension mismatch handling: if configured dimensions differ from stored value, both embedding tables are dropped and recreated.
+
+## KB TypeScript Types
+
+Types defined in `src/types/index.ts`:
 
 ```typescript
-/** Summary shape returned by GET /workspaces/:hash/kb/reflections (list endpoint). */
+type KbRawStatus = 'ingesting' | 'ingested' | 'digesting' | 'digested' | 'failed' | 'pending-delete';
+type KbSynthesisStatus = 'empty' | 'fresh' | 'stale' | 'dreaming';
+type KbErrorClass = 'timeout' | 'cli_error' | 'malformed_output' | 'schema_rejection' | 'unknown';
+
+interface KbRawEntry {
+  rawId: string;
+  sha256: string;
+  filename: string;
+  folderPath: string;
+  mimeType: string;
+  sizeBytes: number;
+  handler?: string;
+  uploadedAt: string;
+  digestedAt: string | null;
+  status: KbRawStatus;
+  errorClass?: KbErrorClass | null;
+  errorMessage?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+interface KbFolder {
+  folderPath: string;
+  createdAt: string;
+}
+
+interface KbEntry {
+  entryId: string;
+  rawId: string;
+  title: string;
+  slug: string;
+  summary: string;
+  schemaVersion: number;
+  staleSchema?: boolean;
+  digestedAt: string;
+  tags: string[];    // denormalized from entry_tags join
+}
+
+interface KbCounters {
+  rawTotal: number;
+  rawByStatus: Record<KbRawStatus, number>;  // count per status
+  entryCount: number;
+  pendingCount: number;   // ingested + pending-delete
+  folderCount: number;
+}
+
+/** Full KB state snapshot returned by GET /workspaces/:hash/kb */
+interface KbState {
+  version: number;              // DB schema version
+  entrySchemaVersion: number;   // KB_ENTRY_SCHEMA_VERSION (currently 1)
+  autoDigest: boolean;
+  counters: KbCounters;
+  folders: KbFolder[];
+  raw: KbRawEntry[];            // one page of the focused folder
+  updatedAt: string;
+}
+
+/** Synthesis snapshot returned by GET /workspaces/:hash/kb/synthesis */
+interface KbSynthesisState {
+  status: KbSynthesisStatus;
+  lastRunAt: string | null;
+  lastRunError: string | null;
+  topicCount: number;
+  connectionCount: number;
+  needsSynthesisCount: number;
+  godNodes: string[];
+  dreamProgress: { phase: string; done: number; total: number } | null;
+  reflectionCount: number;
+  staleReflectionCount: number;
+  topics: KbSynthesisTopicSummary[];
+  connections: KbSynthesisConnectionSummary[];
+}
+
+interface KbSynthesisTopicSummary {
+  topicId: string;
+  title: string;
+  summary: string | null;
+  entryCount: number;
+  connectionCount: number;
+  isGodNode: boolean;
+}
+
+interface KbSynthesisConnectionSummary {
+  sourceTopic: string;
+  targetTopic: string;
+  relationship: string;
+  confidence: string;   // 'extracted'|'inferred'|'speculative'
+}
+
+/** Full topic detail returned by GET /workspaces/:hash/kb/synthesis/:topicId */
+interface KbSynthesisTopicDetail {
+  topicId: string;
+  title: string;
+  summary: string | null;
+  content: string | null;
+  updatedAt: string;
+  entryCount: number;
+  connectionCount: number;
+  isGodNode: boolean;
+  entries: KbEntry[];
+  connections: KbSynthesisConnectionSummary[];
+}
+
+/** Summary shape returned by GET /workspaces/:hash/kb/reflections */
 interface KbReflectionSummary {
   reflectionId: string;
   title: string;
   type: 'pattern' | 'contradiction' | 'gap' | 'trend' | 'insight';
   summary: string | null;
   citationCount: number;
-  createdAt: string;       // ISO 8601
-  isStale: boolean;        // true if any cited entry was re-digested or deleted after created_at
+  createdAt: string;
+  isStale: boolean;    // true if any cited entry was re-digested, deleted, or lost via cascade
 }
 
-/** Detail shape returned by GET /workspaces/:hash/kb/reflections/:reflectionId. */
+/** Detail shape returned by GET /workspaces/:hash/kb/reflections/:reflectionId */
 interface KbReflectionDetail {
   reflectionId: string;
   title: string;
   type: 'pattern' | 'contradiction' | 'gap' | 'trend' | 'insight';
   summary: string | null;
   content: string;
-  createdAt: string;       // ISO 8601
+  createdAt: string;
   citationCount: number;
-  citedEntries: KbEntry[]; // Full entry metadata for each cited entry
+  citedEntries: KbEntry[];
+}
+
+/** WebSocket frame emitted for KB state changes */
+interface KbStateUpdateEvent {
+  type: 'kb_state_update';
+  updatedAt: string;
+  changed: {
+    raw?: string[];
+    entries?: string[];
+    folders?: boolean;
+    synthesis?: boolean;
+    batchProgress?: { done: number; total: number };
+    dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'; done: number; total: number };
+    substep?: { rawId: string; text: string };
+  };
 }
 ```
 
-## DreamProgress Phase Type — Phase E Update
+## KB Constants
 
-The `dreamProgress` field emitted in `kb_state_update` WS frames now includes a fifth phase, `'reflection'`. The full phase union is:
+| Constant | Value | File | Purpose |
+|----------|-------|------|---------|
+| `KB_DB_SCHEMA_VERSION` | 3 | db.ts | Current SQLite schema version |
+| `KB_ENTRY_SCHEMA_VERSION` | 1 | digest.ts | Entry markdown format version |
+| `SYNTHESIS_BATCH_SIZE` | 10 | dream.ts | Entries per synthesis CLI batch |
+| `EMBED_BATCH_SIZE` | 50 | dream.ts | Texts per Ollama embedding call |
+| `DREAM_TIMEOUT_MS` | 1,200,000 (20 min) | dream.ts | Per-CLI-call timeout |
+| `DIGEST_TIMEOUT_MS` | 900,000 (15 min) | digest.ts | Per-CLI-call timeout |
+| `DISCOVERY_CANDIDATE_CAP` | 50 | dream.ts | Max connection candidates per run |
+| `DISCOVERY_BATCH_SIZE` | 5 | dream.ts | Candidates per discovery CLI batch |
+| `DISCOVERY_EMBEDDING_TOP_K` | 10 | dream.ts | Embedding similarity search limit |
+| `REFLECTION_CLUSTER_CAP` | 20 | dream.ts | Max clusters to reflect on per run |
+| `RRF_K` | 60 | vectorStore.ts | Reciprocal Rank Fusion constant |
+| `DEFAULT_STRONG_THRESHOLD` | 0.75 | dream.ts | Routing: strong match score |
+| `DEFAULT_BORDERLINE_THRESHOLD` | 0.45 | dream.ts | Routing: borderline match score |
+| Default embedding model | `nomic-embed-text` | embeddings.ts | Ollama model name |
+| Default embedding host | `http://localhost:11434` | embeddings.ts | Ollama server URL |
+| Default embedding dimensions | 768 | embeddings.ts | Vector size |
+| Folder path max | 4096 chars | db.ts | Total path length limit |
+| Folder segment max | 128 chars | db.ts | Per-segment length limit |
+| Slug max | 80 chars | digest.ts | Entry slug max length |
+| Tag max | 40 chars | digest.ts | Tag max length |
+| Upload size limit | 200 MB | chat.ts (multer) | Per-file upload cap |
+| God node entry threshold | max(avg × 3, 10) | db.ts | Entries to flag as god node |
+| God node connection threshold | max(avg × 3, 3) | db.ts | Connections to flag as god node |
 
-```typescript
-phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'
-```
+## KB Materialized Markdown Files
 
-The five-step pipeline stepper in the frontend (Synthesis tab and dream banner) renders: Routing → Verification → Synthesis → Discovery → Reflection.
+After each dream run, `regenerateSynthesisMarkdown()` wipes and recreates `knowledge/synthesis/`:
 
-## Reflection Markdown Files
+- **`synthesis/index.md`** — Topic index table: `| Topic | Entries | Connections |` with links to per-topic files.
+- **`synthesis/topics/<topicId>.md`** — Per-topic prose (`content`), `## Related Topics` with links and relationship/confidence labels, `## Entries` with links to `entries/<entryId>/entry.md`.
+- **`synthesis/connections.md`** — Full connection graph: `| Source | → | Target | Relationship | Confidence |`.
+- **`synthesis/reflections/<reflectionId>.md`** — Per-reflection with YAML frontmatter:
+  ```yaml
+  ---
+  title: "Reflection Title"
+  type: pattern
+  created_at: "2026-04-12T14:30:00.000Z"
+  cited_entries:
+    - entry-id-1
+    - entry-id-2
+  ---
+  ```
+  Body contains the full reflection `content` prose. The `reflections/` subdirectory is preserved during the main `synthesis/` wipe — reflection markdown is generated separately by `regenerateReflectionMarkdown()`.
 
-Each reflection is materialized to disk at `knowledge/synthesis/reflections/<reflection-id>.md` during `regenerateSynthesisMarkdown()`. Format:
+## KB Dream Operations
 
-```yaml
----
-title: "Reflection Title"
-type: pattern
-created_at: "2026-04-12T14:30:00.000Z"
-cited_entries:
-  - entry-id-1
-  - entry-id-2
-  - entry-id-3
----
-```
+The dreaming CLI returns `{ "operations": [...] }` JSON. 10 supported operation types (`VALID_OPS`):
 
-The markdown body follows the YAML frontmatter and contains the full reflection `content` prose. Files are regenerated (wiped and recreated) after each dream run, alongside the existing `index.md`, `topics/<id>.md`, and `connections.md` materialized views.
+| Operation | Required Fields | Behavior |
+|-----------|----------------|----------|
+| `create_topic` | `topic_id`, `title`, `summary`, `content` | Upsert topic row |
+| `update_topic` | `topic_id` + at least one of `title`, `summary`, `content` | Merge with existing fields |
+| `merge_topics` | `source_topic_ids[]` (≥2), `into_topic_id`, `title`, `content` | Collect entries from sources, delete sources, create merged topic, reassign entries |
+| `split_topic` | `source_topic_id`, `into[]` (≥2, each with `topic_id`, `title`, `content`) | Delete source, create new topics, reassign all source entries to all new topics, rewire connections |
+| `delete_topic` | `topic_id` | Cascade-delete topic + entries + connections |
+| `assign_entries` | `topic_id`, `entry_ids[]` (non-empty) | Insert topic-entry junction rows |
+| `unassign_entries` | `topic_id`, `entry_ids[]` (non-empty) | Delete topic-entry junction rows |
+| `add_connection` | `source_topic`, `target_topic`, `relationship` | Upsert connection (confidence defaults to `'inferred'`) |
+| `update_connection` | `source_topic`, `target_topic` | Update relationship/confidence (defaults: `'related'`/`'inferred'`) |
+| `remove_connection` | `source_topic`, `target_topic` | Delete connection row |
+
+Connection confidence levels: `extracted` (entry explicitly states relationship), `inferred` (deduced from overlapping concepts), `speculative` (weaker thematic connection). Most connections should be `inferred`.
+
+All operations are parsed by `parseDreamOutput()` (extracts JSON from potentially noisy CLI output, supports markdown fences and brace matching), validated by `validateOp()`, and applied transactionally by `applyOperations()` in `dreamOps.ts`.

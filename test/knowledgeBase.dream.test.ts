@@ -5,12 +5,31 @@
 // Tests for the exported helpers in dream.ts: extractAffectedTopicIds,
 // parseVerificationOutput.
 
+// Module mocks — hoisted by Jest so safe to declare before imports.
+jest.mock('../src/services/knowledgeBase/embeddings', () => ({
+  checkOllamaHealth: jest.fn().mockResolvedValue({ ok: true }),
+  resolveConfig: jest.fn().mockReturnValue({ model: 'test', ollamaHost: 'http://localhost:11434', dimensions: 768 }),
+  embedText: jest.fn().mockResolvedValue({ embedding: [] }),
+  embedBatch: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('../src/services/knowledgeBase/dreamMarkdown', () => ({
+  regenerateSynthesisMarkdown: jest.fn(),
+}));
+
+jest.mock('../src/services/knowledgeBase/dreamOps', () => ({
+  parseDreamOutput: jest.fn().mockReturnValue({ operations: [], warnings: [] }),
+  applyOperations: jest.fn().mockReturnValue([]),
+}));
+
 import {
   extractAffectedTopicIds,
   parseVerificationOutput,
   parseDiscoveryOutput,
   parseReflectionOutput,
   identifyTopicClusters,
+  buildReflectionPrompt,
+  KbDreamService,
 } from '../src/services/knowledgeBase/dream';
 import type { DreamOperation } from '../src/services/knowledgeBase/dreamOps';
 
@@ -413,5 +432,347 @@ describe('identifyTopicClusters', () => {
     expect(clusters).toHaveLength(1);
     expect(clusters[0].sort()).toEqual(['a', 'b']);
     // 'c' is a singleton — not in any cluster.
+  });
+});
+
+// ── buildReflectionPrompt ─────────────────────────────────────────────────
+
+describe('buildReflectionPrompt', () => {
+  const baseTopic = {
+    topicId: 'topic-a',
+    title: 'Auth Patterns',
+    summary: 'Patterns for authentication',
+    content: 'Full content here',
+    entryCount: 3,
+    connectionCount: 1,
+  };
+
+  test('returns a string containing the topic title and summary', () => {
+    const prompt = buildReflectionPrompt([baseTopic], [], []);
+    expect(typeof prompt).toBe('string');
+    expect(prompt).toContain('Auth Patterns');
+    expect(prompt).toContain('Patterns for authentication');
+    expect(prompt).toContain('topic-a');
+  });
+
+  test('includes entry count and connection count for each topic', () => {
+    const prompt = buildReflectionPrompt([baseTopic], [], []);
+    expect(prompt).toContain('Entries: 3');
+    expect(prompt).toContain('Connections: 1');
+  });
+
+  test('renders connection lines with arrow notation', () => {
+    const connections = [
+      { sourceTopic: 'topic-a', targetTopic: 'topic-b', relationship: 'depends on', confidence: 'inferred' },
+    ];
+    const prompt = buildReflectionPrompt([baseTopic], connections, []);
+    expect(prompt).toContain('topic-a → topic-b: depends on (inferred)');
+  });
+
+  test('shows "No internal connections." when connections array is empty', () => {
+    const prompt = buildReflectionPrompt([baseTopic], [], []);
+    expect(prompt).toContain('No internal connections.');
+  });
+
+  test('includes entry lines with id, title, and summary', () => {
+    const entries = [
+      { entryId: 'entry-1', title: 'OAuth Guide', summary: 'How to set up OAuth' },
+    ];
+    const prompt = buildReflectionPrompt([baseTopic], [], entries);
+    expect(prompt).toContain('entry-1: "OAuth Guide" — How to set up OAuth');
+  });
+
+  test('includes the task instruction and output format', () => {
+    const prompt = buildReflectionPrompt([baseTopic], [], []);
+    expect(prompt).toContain('You are a knowledge analyst');
+    expect(prompt).toContain('"reflections"');
+    expect(prompt).toContain('cited_entry_ids');
+  });
+
+  test('handles null summary and content in topics', () => {
+    const topic = { ...baseTopic, summary: null, content: null };
+    const prompt = buildReflectionPrompt([topic], [], []);
+    expect(prompt).toContain('Summary: none');
+  });
+
+  test('renders multiple topics and entries correctly', () => {
+    const topics = [
+      baseTopic,
+      { topicId: 'topic-b', title: 'DB Migrations', summary: 'Database migration patterns', content: null, entryCount: 5, connectionCount: 2 },
+    ];
+    const entries = [
+      { entryId: 'e1', title: 'Entry One', summary: 'First entry' },
+      { entryId: 'e2', title: 'Entry Two', summary: 'Second entry' },
+    ];
+    const connections = [
+      { sourceTopic: 'topic-a', targetTopic: 'topic-b', relationship: 'related to', confidence: 'extracted' },
+    ];
+    const prompt = buildReflectionPrompt(topics, connections, entries);
+    expect(prompt).toContain('Auth Patterns');
+    expect(prompt).toContain('DB Migrations');
+    expect(prompt).toContain('e1: "Entry One"');
+    expect(prompt).toContain('e2: "Entry Two"');
+    expect(prompt).toContain('topic-a → topic-b: related to (extracted)');
+  });
+});
+
+// ── KbDreamService ────────────────────────────────────────────────────────
+
+describe('KbDreamService', () => {
+  // Shared mock factories — each test gets fresh mocks via beforeEach.
+
+  function createMockDb() {
+    return {
+      setSynthesisMeta: jest.fn(),
+      listNeedsSynthesisEntryIds: jest.fn().mockReturnValue([]),
+      listTopicSummaries: jest.fn().mockReturnValue([]),
+      wipeSynthesis: jest.fn(),
+      markAllNeedsSynthesis: jest.fn(),
+      _deleteOrphanTopics: jest.fn(),
+      detectGodNodes: jest.fn().mockReturnValue([]),
+      listReflections: jest.fn().mockReturnValue([]),
+      getEntry: jest.fn().mockReturnValue({ title: 'Test', summary: 'Summary', tags: [] }),
+      clearNeedsSynthesis: jest.fn(),
+      listTopicConnections: jest.fn().mockReturnValue([]),
+    };
+  }
+
+  function createMockChatService(mockDb: ReturnType<typeof createMockDb>) {
+    return {
+      getWorkspaceKbEnabled: jest.fn().mockResolvedValue(true),
+      getKbDb: jest.fn().mockReturnValue(mockDb),
+      getSettings: jest.fn().mockResolvedValue({
+        knowledgeBase: { dreamingCliBackend: 'test-backend' },
+      }),
+      getKbKnowledgeDir: jest.fn().mockReturnValue('/tmp/kb'),
+      getKbEntriesDir: jest.fn().mockReturnValue('/tmp/kb/entries'),
+      getKbSynthesisDir: jest.fn().mockReturnValue('/tmp/kb/synthesis'),
+      getWorkspaceKbEmbeddingConfig: jest.fn().mockResolvedValue(undefined),
+      getKbVectorStore: jest.fn().mockResolvedValue(null),
+    };
+  }
+
+  function createMockKbSearchMcp() {
+    return {
+      issueKbSearchSession: jest.fn().mockReturnValue({ token: 'tok', mcpServers: [] }),
+      revokeKbSearchSession: jest.fn(),
+    };
+  }
+
+  function createMockAdapter() {
+    return {
+      metadata: { id: 'test-backend', name: 'Test' },
+      runOneShot: jest.fn().mockResolvedValue(null),
+    };
+  }
+
+  function createMockBackendRegistry(adapter: ReturnType<typeof createMockAdapter>) {
+    return {
+      get: jest.fn().mockReturnValue(adapter),
+    };
+  }
+
+  let mockDb: ReturnType<typeof createMockDb>;
+  let mockChatService: ReturnType<typeof createMockChatService>;
+  let mockKbSearchMcp: ReturnType<typeof createMockKbSearchMcp>;
+  let mockAdapter: ReturnType<typeof createMockAdapter>;
+  let mockBackendRegistry: ReturnType<typeof createMockBackendRegistry>;
+  let service: KbDreamService;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockDb = createMockDb();
+    mockChatService = createMockChatService(mockDb);
+    mockKbSearchMcp = createMockKbSearchMcp();
+    mockAdapter = createMockAdapter();
+    mockBackendRegistry = createMockBackendRegistry(mockAdapter);
+    service = new KbDreamService({
+      chatService: mockChatService as any,
+      backendRegistry: mockBackendRegistry as any,
+      kbSearchMcp: mockKbSearchMcp as any,
+    });
+  });
+
+  // ── isRunning ───────────────────────────────────────────────────────────
+
+  test('isRunning returns false initially', () => {
+    expect(service.isRunning('ws-hash')).toBe(false);
+  });
+
+  test('isRunning returns true during a run', async () => {
+    // Make the dream hang on getSettings so we can observe running state.
+    let resolveSettings!: (v: any) => void;
+    mockChatService.getSettings.mockReturnValue(
+      new Promise((resolve) => { resolveSettings = resolve; }),
+    );
+
+    const promise = service.dream('ws-hash');
+    // Yield to let _run reach past running.add but stall on getSettings.
+    await new Promise((r) => setImmediate(r));
+
+    expect(service.isRunning('ws-hash')).toBe(true);
+
+    // Unblock and let it finish (will throw because settings has no backend, but that's ok).
+    resolveSettings({ knowledgeBase: { dreamingCliBackend: 'test-backend' } });
+    await promise;
+
+    expect(service.isRunning('ws-hash')).toBe(false);
+  });
+
+  // ── dream: KB not enabled ──────────────────────────────────────────────
+
+  test('dream throws when KB is not enabled', async () => {
+    mockChatService.getWorkspaceKbEnabled.mockResolvedValue(false);
+    await expect(service.dream('ws-hash')).rejects.toThrow(
+      'Knowledge Base is not enabled for this workspace.',
+    );
+  });
+
+  // ── dream: already running ─────────────────────────────────────────────
+
+  test('dream throws when already running for the same workspace', async () => {
+    // First call will hang on getSettings.
+    let resolveSettings!: (v: any) => void;
+    mockChatService.getSettings.mockReturnValueOnce(
+      new Promise((resolve) => { resolveSettings = resolve; }),
+    );
+
+    const first = service.dream('ws-hash');
+    await new Promise((r) => setImmediate(r));
+
+    await expect(service.dream('ws-hash')).rejects.toThrow(
+      'A dreaming run is already in progress for this workspace.',
+    );
+
+    // Clean up the hanging promise.
+    resolveSettings({ knowledgeBase: { dreamingCliBackend: 'test-backend' } });
+    await first;
+  });
+
+  // ── dream: db not available ────────────────────────────────────────────
+
+  test('dream throws when KB database is not available', async () => {
+    mockChatService.getKbDb.mockReturnValue(null);
+    await expect(service.dream('ws-hash')).rejects.toThrow(
+      'Knowledge Base database not available.',
+    );
+  });
+
+  // ── dream: no stale entries → returns immediately ─────────────────────
+
+  test('dream with no stale entries returns 0 processed', async () => {
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue([]);
+
+    const result = await service.dream('ws-hash');
+
+    expect(result.mode).toBe('incremental');
+    expect(result.processedEntries).toBe(0);
+    expect(result.errors).toEqual([]);
+    expect(mockDb.setSynthesisMeta).toHaveBeenCalledWith('status', 'running');
+    expect(mockDb.setSynthesisMeta).toHaveBeenCalledWith('status', 'idle');
+    expect(mockDb._deleteOrphanTopics).toHaveBeenCalled();
+    expect(mockKbSearchMcp.revokeKbSearchSession).toHaveBeenCalledWith('ws-hash');
+  });
+
+  // ── redream: calls wipeSynthesis + markAllNeedsSynthesis ───────────────
+
+  test('redream calls wipeSynthesis and markAllNeedsSynthesis', async () => {
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue([]);
+
+    const result = await service.redream('ws-hash');
+
+    expect(result.mode).toBe('full-rebuild');
+    expect(mockDb.wipeSynthesis).toHaveBeenCalled();
+    expect(mockDb.markAllNeedsSynthesis).toHaveBeenCalled();
+  });
+
+  // ── dream: cold-start path with entries but no topics ─────────────────
+
+  test('dream triggers cold-start path when entries exist but no topics', async () => {
+    // Provide stale entries so the pipeline does not return early.
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
+    // No existing topics → cold start.
+    mockDb.listTopicSummaries.mockReturnValue([]);
+    // No embedding config → forces cold start branch.
+    mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue(undefined);
+
+    // The adapter.runOneShot will return a valid-looking output.
+    // The mocked parseDreamOutput (from jest.mock) returns { operations: [], warnings: [] }.
+    mockAdapter.runOneShot.mockResolvedValue('{"operations":[]}');
+
+    const result = await service.dream('ws-hash');
+
+    expect(result.processedEntries).toBe(1);
+    expect(mockAdapter.runOneShot).toHaveBeenCalled();
+    expect(mockDb.clearNeedsSynthesis).toHaveBeenCalledWith(['entry-1']);
+  });
+
+  // ── dream: running flag is cleared on error ───────────────────────────
+
+  test('running flag is cleared even when _run throws', async () => {
+    mockChatService.getKbDb.mockReturnValue(null);
+
+    try { await service.dream('ws-hash'); } catch { /* expected */ }
+
+    expect(service.isRunning('ws-hash')).toBe(false);
+  });
+
+  // ── dream: emits synthesis change events ──────────────────────────────
+
+  test('dream emits synthesis change events via emit callback', async () => {
+    const emitFn = jest.fn();
+    const serviceWithEmit = new KbDreamService({
+      chatService: mockChatService as any,
+      backendRegistry: mockBackendRegistry as any,
+      kbSearchMcp: mockKbSearchMcp as any,
+      emit: emitFn,
+    });
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue([]);
+
+    await serviceWithEmit.dream('ws-hash');
+
+    // Should have been called at least for the initial running and final idle transitions.
+    expect(emitFn).toHaveBeenCalled();
+    const calls = emitFn.mock.calls;
+    // Each call receives (hash, frame).
+    expect(calls[0][0]).toBe('ws-hash');
+    expect(calls[0][1].type).toBe('kb_state_update');
+  });
+
+  // ── dream: revokes MCP session in finally block ───────────────────────
+
+  test('dream revokes MCP session even if pipeline throws', async () => {
+    // Force an error inside the try block by making getSettings throw.
+    mockChatService.getSettings.mockRejectedValue(new Error('settings boom'));
+
+    const result = await service.dream('ws-hash');
+
+    // The error should be captured in result.errors.
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(mockKbSearchMcp.revokeKbSearchSession).toHaveBeenCalledWith('ws-hash');
+  });
+
+  // ── dream: no dreaming backend configured ─────────────────────────────
+
+  test('dream captures error when no dreaming CLI backend is configured', async () => {
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
+    mockChatService.getSettings.mockResolvedValue({ knowledgeBase: {} });
+
+    const result = await service.dream('ws-hash');
+
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain('No Dreaming CLI backend configured');
+  });
+
+  // ── dream: unregistered backend ───────────────────────────────────────
+
+  test('dream captures error when backend is not registered', async () => {
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
+    mockBackendRegistry.get.mockReturnValue(null);
+
+    const result = await service.dream('ws-hash');
+
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain('is not registered');
   });
 });
