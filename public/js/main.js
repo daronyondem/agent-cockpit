@@ -1960,6 +1960,7 @@ async function chatOpenKbBrowser(hash, label) {
     entries: { loading: false, items: [], selectedEntryId: null, entryBody: '' },
     synthesis: { loading: false, topics: [], connections: [], selectedTopicId: null, topicDetail: null },
     embedding: { config: null, loading: false, healthStatus: null },
+    reflections: { loading: false, items: [], selectedId: null, detail: null, typeFilter: 'all' },
   };
 
   // Initial render with a loading message; refetch populates it.
@@ -1976,7 +1977,9 @@ async function chatOpenKbBrowser(hash, label) {
     chatKbBrowserRefetch();
     // Also poll synthesis when the tab is active and a dream is running.
     // WS frames may not arrive if no conversation stream is active.
-    if (chatKbBrowserState.activeTab === 'synthesis' && chatKbBrowserState.synthesis?._status === 'running') {
+    const synthRunning = chatKbBrowserState.synthesis?._status === 'running';
+    const synthGrace = chatKbBrowserState.synthesis?._dreamTriggeredAt && (Date.now() - chatKbBrowserState.synthesis._dreamTriggeredAt < 15000);
+    if (chatKbBrowserState.activeTab === 'synthesis' && (synthRunning || synthGrace)) {
       chatKbBrowserRefetchSynthesis();
     }
   }, 1500);
@@ -2015,6 +2018,7 @@ function chatKbBrowserChrome(label, loading) {
       <button class="chat-kb-tab ${active === 'raw' ? 'active' : ''}" data-kb-tab="raw">${KB_ICON_INGEST} Raw</button>
       <button class="chat-kb-tab ${active === 'entries' ? 'active' : ''}" data-kb-tab="entries">${KB_ICON_DIGEST} Entries</button>
       <button class="chat-kb-tab ${active === 'synthesis' ? 'active' : ''}" data-kb-tab="synthesis">${KB_ICON_DREAM} Synthesis</button>
+      <button class="chat-kb-tab ${active === 'reflections' ? 'active' : ''}" data-kb-tab="reflections">&#128161; Reflections</button>
       <button class="chat-kb-tab ${active === 'settings' ? 'active' : ''}" data-kb-tab="settings">&#9881; Settings</button>
     </div>
     <div class="chat-kb-tab-content" id="chat-kb-tab-content">
@@ -2038,6 +2042,7 @@ function chatKbBrowserWireChrome() {
       chatKbBrowserRenderTab();
       if (tab === 'entries') chatKbBrowserRefetchEntries();
       if (tab === 'synthesis') chatKbBrowserRefetchSynthesis();
+      if (tab === 'reflections') chatKbBrowserRefetchReflections();
     };
   });
 }
@@ -2094,7 +2099,10 @@ async function chatKbBrowserRefetch() {
     // Skip full re-render for the synthesis tab when the D3 graph is live
     // or a dream is running — the separate synthesis poll handles targeted
     // stepper/status updates without destroying the graph simulation.
-    const skipRender = chatKbBrowserState.activeTab === 'synthesis' && (_kbGraphSim || chatKbBrowserState.synthesis?._status === 'running');
+    const synthIsActive = chatKbBrowserState.synthesis?._status === 'running' || (chatKbBrowserState.synthesis?._dreamTriggeredAt && (Date.now() - chatKbBrowserState.synthesis._dreamTriggeredAt < 15000));
+    const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis' && (_kbGraphSim || synthIsActive);
+    const skipReflections = chatKbBrowserState.activeTab === 'reflections';
+    const skipRender = skipSynthesis || skipReflections;
     if (!skipRender) {
       chatKbBrowserRenderTab();
     }
@@ -2139,6 +2147,9 @@ function chatKbBrowserRenderTab() {
   if (chatKbBrowserState.activeTab === 'settings') {
     content.innerHTML = chatKbBrowserSettingsTab();
     chatKbBrowserWireSettingsTab();
+  } else if (chatKbBrowserState.activeTab === 'reflections') {
+    content.innerHTML = chatKbBrowserReflectionsTab();
+    chatKbBrowserWireReflectionsTab();
   } else if (chatKbBrowserState.activeTab === 'synthesis') {
     content.innerHTML = chatKbBrowserSynthesisTab();
     chatKbBrowserWireSynthesisTab();
@@ -2783,11 +2794,20 @@ async function chatKbBrowserRefetchSynthesis() {
     if (!chatKbBrowserState) return;
     chatKbBrowserState.synthesis.topics = Array.isArray(data.topics) ? data.topics : [];
     chatKbBrowserState.synthesis.connections = Array.isArray(data.connections) ? data.connections : [];
-    chatKbBrowserState.synthesis._status = data.status;
+    // Grace period: when we just triggered a dream, the server may not yet
+    // report 'running'. Preserve the optimistic status for up to 15 seconds.
+    const triggered = chatKbBrowserState.synthesis._dreamTriggeredAt || 0;
+    const inGrace = triggered && (Date.now() - triggered < 15000);
+    if (data.status === 'running' || !inGrace) {
+      chatKbBrowserState.synthesis._status = data.status;
+    }
+    if (data.status === 'running' && triggered) {
+      chatKbBrowserState.synthesis._dreamTriggeredAt = null;
+    }
     chatKbBrowserState.synthesis._lastRunAt = data.lastRunAt;
     chatKbBrowserState.synthesis._lastRunError = data.lastRunError;
     chatKbBrowserState.synthesis._needsSynthesisCount = data.needsSynthesisCount || 0;
-    if (data.status !== 'running') {
+    if (data.status !== 'running' && !inGrace) {
       // Dream finished — clear progress state.
       chatKbBrowserState.synthesis._dreamProgress = null;
       chatKbBrowserState.synthesis._dreamStepStart = null;
@@ -2862,7 +2882,7 @@ function chatKbDreamStepperHtml(prog) {
   const stepStart = chatKbBrowserState?.synthesis?._dreamStepStart;
   const elapsed = stepStart ? ` \u2014 ${chatKbFormatElapsed(Date.now() - stepStart)}` : '';
   // Four phases: routing → verification → synthesis → discovery
-  const phases = ['routing', 'verification', 'synthesis', 'discovery'];
+  const phases = ['routing', 'verification', 'synthesis', 'discovery', 'reflection'];
   const currentIdx = phases.indexOf(prog.phase);
   const steps = phases.map((phase, idx) => {
     const label = phase.charAt(0).toUpperCase() + phase.slice(1);
@@ -3265,6 +3285,7 @@ function chatKbBrowserWireSynthesisTab() {
         chatKbBrowserState.synthesis._status = 'running';
         chatKbBrowserState.synthesis._dreamProgress = null;
         chatKbBrowserState.synthesis._dreamStepStart = null;
+        chatKbBrowserState.synthesis._dreamTriggeredAt = Date.now();
         chatKbBrowserRenderTab();
       } catch (err) { chatShowAlert('Dream failed: ' + err.message); }
     };
@@ -3281,12 +3302,198 @@ function chatKbBrowserWireSynthesisTab() {
         chatKbBrowserState.synthesis._status = 'running';
         chatKbBrowserState.synthesis._dreamProgress = null;
         chatKbBrowserState.synthesis._dreamStepStart = null;
+        chatKbBrowserState.synthesis._dreamTriggeredAt = Date.now();
         chatKbBrowserRenderTab();
       } catch (err) { chatShowAlert('Re-Dream failed: ' + err.message); }
     };
   }
   // Initialize D3 force graph
   chatKbGraphInit();
+}
+
+// ── KB Settings tab ─────────────────────────────────────────────────────────
+
+// ── KB Reflections tab ──────────────────────────────────────────────────────
+
+async function chatKbBrowserRefetchReflections() {
+  if (!chatKbBrowserState) return;
+  chatKbBrowserState.reflections.loading = true;
+  try {
+    const res = await fetch(chatApiUrl(`workspaces/${chatKbBrowserState.hash}/kb/reflections`), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState) return;
+    chatKbBrowserState.reflections.items = data.reflections || [];
+  } catch (err) {
+    console.warn('[kb] reflections fetch failed:', err);
+  } finally {
+    if (chatKbBrowserState) {
+      chatKbBrowserState.reflections.loading = false;
+      if (chatKbBrowserState.activeTab === 'reflections') chatKbBrowserRenderTab();
+    }
+  }
+}
+
+async function chatKbBrowserRefetchReflectionDetail(reflectionId) {
+  if (!chatKbBrowserState) return;
+  try {
+    const res = await fetch(chatApiUrl(`workspaces/${chatKbBrowserState.hash}/kb/reflections/${reflectionId}`), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState) return;
+    chatKbBrowserState.reflections.detail = data;
+    chatKbBrowserState.reflections.selectedId = reflectionId;
+    if (chatKbBrowserState.activeTab === 'reflections') chatKbBrowserRenderTab();
+  } catch (err) {
+    console.warn('[kb] reflection detail fetch failed:', err);
+  }
+}
+
+function chatKbBrowserReflectionsTab() {
+  const s = chatKbBrowserState.reflections;
+  const items = Array.isArray(s.items) ? s.items : [];
+
+  if (s.loading && items.length === 0) {
+    return '<p class="chat-kb-empty">Loading reflections\u2026</p>';
+  }
+  if (items.length === 0) {
+    return '<p class="chat-kb-empty">No reflections yet. Run Dream to generate cross-topic insights.</p>';
+  }
+
+  const staleCount = items.filter((r) => r.isStale).length;
+  const staleBanner = staleCount > 0
+    ? `<div class="chat-kb-reflections-stale-banner">${staleCount} reflection${staleCount > 1 ? 's are' : ' is'} stale \u2014 run Dream to refresh.</div>`
+    : '';
+
+  const typeBadgeClass = {
+    pattern: 'chat-kb-ref-type-pattern',
+    contradiction: 'chat-kb-ref-type-contradiction',
+    gap: 'chat-kb-ref-type-gap',
+    trend: 'chat-kb-ref-type-trend',
+    insight: 'chat-kb-ref-type-insight',
+  };
+
+  // Type filter
+  const activeFilter = s.typeFilter || 'all';
+  const allTypes = ['all', 'pattern', 'contradiction', 'gap', 'trend', 'insight'];
+  const filterOptions = allTypes.map((t) =>
+    `<option value="${t}"${t === activeFilter ? ' selected' : ''}>${t === 'all' ? 'All Types' : t.charAt(0).toUpperCase() + t.slice(1)}</option>`
+  ).join('');
+  const filterHtml = `<div class="chat-kb-reflections-toolbar">
+    <select class="chat-kb-reflections-type-filter" id="chat-kb-reflections-type-filter">${filterOptions}</select>
+    <span class="chat-kb-reflections-count">${items.length} reflection${items.length !== 1 ? 's' : ''}</span>
+  </div>`;
+
+  const filtered = activeFilter === 'all' ? items : items.filter((r) => r.type === activeFilter);
+
+  const listItems = filtered.map((r) => {
+    const selected = s.selectedId === r.reflectionId ? ' selected' : '';
+    const stale = r.isStale ? ' stale' : '';
+    const badgeCls = typeBadgeClass[r.type] || 'chat-kb-ref-type-insight';
+    return `<div class="chat-kb-reflection-item${selected}${stale}" data-ref-id="${esc(r.reflectionId)}">
+      <div class="chat-kb-reflection-item-header">
+        <span class="chat-kb-ref-type-badge ${badgeCls}">${esc(r.type)}</span>
+        ${r.isStale ? '<span class="chat-kb-ref-stale-badge">stale</span>' : ''}
+      </div>
+      <div class="chat-kb-reflection-item-title">${esc(r.title)}</div>
+      <div class="chat-kb-reflection-item-meta">${r.citationCount} citation${r.citationCount !== 1 ? 's' : ''}</div>
+    </div>`;
+  }).join('');
+
+  const emptyFiltered = filtered.length === 0
+    ? `<p class="chat-kb-empty" style="padding:12px;">No ${esc(activeFilter)} reflections.</p>`
+    : '';
+
+  let detailHtml = '<p class="chat-kb-empty">Select a reflection to view details.</p>';
+  if (s.detail && s.selectedId) {
+    const d = s.detail;
+    const citedList = (d.citedEntries || []).map((e) =>
+      `<li class="chat-kb-reflection-citation"><a class="chat-kb-ref-cited-entry-link" data-entry-id="${esc(e.entryId)}">${esc(e.title)}</a> <span class="chat-kb-reflection-citation-id">(${esc(e.entryId)})</span></li>`
+    ).join('');
+    detailHtml = `
+      <div class="chat-kb-reflection-detail-header">
+        <span class="chat-kb-ref-type-badge ${typeBadgeClass[d.type] || 'chat-kb-ref-type-insight'}">${esc(d.type)}</span>
+        <h3>${esc(d.title)}</h3>
+      </div>
+      ${d.summary ? `<p class="chat-kb-reflection-summary">${esc(d.summary)}</p>` : ''}
+      <div class="chat-kb-reflection-content">${chatKbRenderReflectionMarkdown(d.content)}</div>
+      ${citedList ? `<div class="chat-kb-reflection-citations"><h4>Cited Entries</h4><ul>${citedList}</ul></div>` : ''}
+    `;
+  }
+
+  return `
+    ${staleBanner}
+    ${filterHtml}
+    <div class="chat-kb-reflections-layout">
+      <div class="chat-kb-reflections-list">${listItems || emptyFiltered}</div>
+      <div class="chat-kb-reflection-detail">${detailHtml}</div>
+    </div>
+  `;
+}
+
+function chatKbBrowserWireReflectionsTab() {
+  // Wire type filter dropdown.
+  const filterEl = document.getElementById('chat-kb-reflections-type-filter');
+  if (filterEl) {
+    filterEl.onchange = () => {
+      if (!chatKbBrowserState) return;
+      chatKbBrowserState.reflections.typeFilter = filterEl.value;
+      chatKbBrowserRenderTab();
+    };
+  }
+  document.querySelectorAll('.chat-kb-reflection-item[data-ref-id]').forEach((el) => {
+    el.onclick = () => {
+      const refId = el.dataset.refId;
+      if (!refId || !chatKbBrowserState) return;
+      chatKbBrowserRefetchReflectionDetail(refId);
+    };
+  });
+  // Wire citation links (both inline and in cited entries list).
+  document.querySelectorAll('.chat-kb-ref-citation-link[data-entry-id], .chat-kb-ref-cited-entry-link[data-entry-id]').forEach((el) => {
+    el.onclick = (e) => {
+      e.preventDefault();
+      const entryId = el.dataset.entryId;
+      if (entryId) chatKbOpenEntryPopup(entryId);
+    };
+  });
+}
+
+async function chatKbOpenEntryPopup(entryId) {
+  if (!chatKbBrowserState || !entryId) return;
+  chatShowModal('Loading entry\u2026', '<div class="chat-modal-body"><p class="chat-kb-empty">Loading\u2026</p></div>');
+  try {
+    const url = chatApiUrl(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/entries/${encodeURIComponent(entryId)}`,
+    );
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const title = data.entry?.title || data.title || entryId;
+    const body = data.body || '(empty)';
+    const locations = data.locations || [];
+    let sourceHtml = '';
+    if (locations.length > 0) {
+      const locItems = locations.map((loc) => {
+        const folder = loc.folderPath || '/';
+        return `<span class="chat-kb-entry-popup-loc">${esc(folder)}/${esc(loc.filename)}</span>`;
+      }).join('');
+      sourceHtml = `<div class="chat-kb-entry-popup-source"><span class="chat-kb-entry-popup-source-label">Source:</span> ${locItems}</div>`;
+    }
+    chatShowModal(title, `
+      ${sourceHtml}
+      <div class="chat-modal-body" style="max-height:60vh;overflow-y:auto;padding:12px 16px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${esc(body)}</div>
+    `);
+  } catch (err) {
+    chatShowModal('Error', `<div class="chat-modal-body" style="padding:16px;"><p>Could not load entry: ${esc(err.message)}</p></div>`);
+  }
+}
+
+function chatKbRenderReflectionMarkdown(md) {
+  if (!md) return '';
+  return esc(md)
+    .replace(/\[Entry: ([^\]]+)\]\(([^)]+)\)/g, '<a class="chat-kb-ref-citation-link" data-entry-id="$2" title="$2">$1</a>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
 }
 
 // ── KB Settings tab ─────────────────────────────────────────────────────────

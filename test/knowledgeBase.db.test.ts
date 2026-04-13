@@ -1138,3 +1138,180 @@ describe('listTransitiveCandidates', () => {
     expect(candidates[0].relBC).toBe('extends');
   });
 });
+
+// ─── Synthesis Reflections ──────────────────────────────────────────────────
+
+describe('synthesis reflections', () => {
+  const now = new Date().toISOString();
+
+  function seedEntry(entryId: string, rawId: string, digestedAt: string = now): void {
+    const f = makeRawFile(`content for ${rawId}`);
+    try {
+      db.insertRaw({
+        rawId: f.rawId === rawId ? rawId : rawId,
+        sha256: f.sha256,
+        status: 'digested',
+        byteLength: 100,
+        mimeType: 'text/plain',
+        handler: 'passthrough',
+        uploadedAt: now,
+        metadata: null,
+      });
+    } catch {
+      // raw may already exist
+    }
+    db.addLocation({ rawId, folderPath: '', filename: `${rawId}.txt`, uploadedAt: now });
+    try {
+      db.insertEntry({
+        entryId,
+        rawId,
+        title: `Entry ${entryId}`,
+        slug: entryId,
+        summary: `Summary for ${entryId}`,
+        schemaVersion: 1,
+        digestedAt,
+        tags: [],
+      });
+    } catch {
+      // entry may already exist
+    }
+  }
+
+  test('insertReflection + listReflections returns inserted reflection', () => {
+    // Seed an entry for citation.
+    const rawFile = makeRawFile('test content');
+    db.insertRaw({ rawId: rawFile.rawId, sha256: rawFile.sha256, status: 'digested', byteLength: 12, mimeType: 'text/plain', handler: 'passthrough', uploadedAt: now, metadata: null });
+    db.addLocation({ rawId: rawFile.rawId, folderPath: '', filename: 'test.txt', uploadedAt: now });
+    db.insertEntry({ entryId: 'e1', rawId: rawFile.rawId, title: 'Entry 1', slug: 'e1', summary: 'S1', schemaVersion: 1, digestedAt: now, tags: [] });
+
+    db.insertReflection({
+      reflectionId: 'ref-1',
+      title: 'Test Pattern',
+      type: 'pattern',
+      summary: 'A test pattern',
+      content: 'Content referencing [Entry: Entry 1](e1)',
+      createdAt: now,
+      citedEntryIds: ['e1'],
+    });
+
+    const list = db.listReflections();
+    expect(list).toHaveLength(1);
+    expect(list[0].reflectionId).toBe('ref-1');
+    expect(list[0].title).toBe('Test Pattern');
+    expect(list[0].type).toBe('pattern');
+    expect(list[0].citationCount).toBe(1);
+  });
+
+  test('getReflection returns full detail with citedEntryIds', () => {
+    const rawFile = makeRawFile('test content 2');
+    db.insertRaw({ rawId: rawFile.rawId, sha256: rawFile.sha256, status: 'digested', byteLength: 14, mimeType: 'text/plain', handler: 'passthrough', uploadedAt: now, metadata: null });
+    db.addLocation({ rawId: rawFile.rawId, folderPath: '', filename: 'test2.txt', uploadedAt: now });
+    db.insertEntry({ entryId: 'e2', rawId: rawFile.rawId, title: 'Entry 2', slug: 'e2', summary: 'S2', schemaVersion: 1, digestedAt: now, tags: [] });
+
+    db.insertReflection({
+      reflectionId: 'ref-2',
+      title: 'Contradiction Found',
+      type: 'contradiction',
+      summary: null,
+      content: 'Some contradiction',
+      createdAt: now,
+      citedEntryIds: ['e2'],
+    });
+
+    const detail = db.getReflection('ref-2');
+    expect(detail).not.toBeNull();
+    expect(detail!.citedEntryIds).toEqual(['e2']);
+    expect(detail!.type).toBe('contradiction');
+  });
+
+  test('getReflection returns null for missing id', () => {
+    expect(db.getReflection('nonexistent')).toBeNull();
+  });
+
+  test('wipeReflections removes all reflections and citations', () => {
+    const rawFile = makeRawFile('test content 3');
+    db.insertRaw({ rawId: rawFile.rawId, sha256: rawFile.sha256, status: 'digested', byteLength: 14, mimeType: 'text/plain', handler: 'passthrough', uploadedAt: now, metadata: null });
+    db.addLocation({ rawId: rawFile.rawId, folderPath: '', filename: 'test3.txt', uploadedAt: now });
+    db.insertEntry({ entryId: 'e3', rawId: rawFile.rawId, title: 'Entry 3', slug: 'e3', summary: 'S3', schemaVersion: 1, digestedAt: now, tags: [] });
+
+    db.insertReflection({
+      reflectionId: 'ref-3',
+      title: 'Gap',
+      type: 'gap',
+      summary: null,
+      content: 'A gap',
+      createdAt: now,
+      citedEntryIds: ['e3'],
+    });
+    expect(db.listReflections()).toHaveLength(1);
+
+    db.wipeReflections();
+    expect(db.listReflections()).toHaveLength(0);
+  });
+
+  test('listStaleReflectionIds detects stale reflections when entry is re-digested', () => {
+    const oldTime = '2020-01-01T00:00:00.000Z';
+    const newTime = '2025-06-01T00:00:00.000Z';
+
+    const rawFile = makeRawFile('stale test');
+    db.insertRaw({ rawId: rawFile.rawId, sha256: rawFile.sha256, status: 'digested', byteLength: 10, mimeType: 'text/plain', handler: 'passthrough', uploadedAt: oldTime, metadata: null });
+    db.addLocation({ rawId: rawFile.rawId, folderPath: '', filename: 'stale.txt', uploadedAt: oldTime });
+    db.insertEntry({ entryId: 'e-stale', rawId: rawFile.rawId, title: 'Stale Entry', slug: 'stale', summary: 'S', schemaVersion: 1, digestedAt: newTime, tags: [] });
+
+    // Reflection created before the entry was re-digested.
+    db.insertReflection({
+      reflectionId: 'ref-stale',
+      title: 'Old Reflection',
+      type: 'insight',
+      summary: null,
+      content: 'Old content',
+      createdAt: oldTime,
+      citedEntryIds: ['e-stale'],
+    });
+
+    const stale = db.listStaleReflectionIds();
+    expect(stale).toContain('ref-stale');
+  });
+
+  test('deleteReflections removes specific reflections', () => {
+    const rawFile = makeRawFile('del test');
+    db.insertRaw({ rawId: rawFile.rawId, sha256: rawFile.sha256, status: 'digested', byteLength: 8, mimeType: 'text/plain', handler: 'passthrough', uploadedAt: now, metadata: null });
+    db.addLocation({ rawId: rawFile.rawId, folderPath: '', filename: 'del.txt', uploadedAt: now });
+    db.insertEntry({ entryId: 'e-del', rawId: rawFile.rawId, title: 'Del Entry', slug: 'del', summary: 'S', schemaVersion: 1, digestedAt: now, tags: [] });
+
+    db.insertReflection({ reflectionId: 'ref-a', title: 'A', type: 'pattern', summary: null, content: 'A', createdAt: now, citedEntryIds: ['e-del'] });
+    db.insertReflection({ reflectionId: 'ref-b', title: 'B', type: 'trend', summary: null, content: 'B', createdAt: now, citedEntryIds: ['e-del'] });
+    expect(db.listReflections()).toHaveLength(2);
+
+    db.deleteReflections(['ref-a']);
+    const remaining = db.listReflections();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].reflectionId).toBe('ref-b');
+  });
+
+  test('synthesis snapshot includes reflection counts', () => {
+    const rawFile = makeRawFile('snapshot test');
+    db.insertRaw({ rawId: rawFile.rawId, sha256: rawFile.sha256, status: 'digested', byteLength: 13, mimeType: 'text/plain', handler: 'passthrough', uploadedAt: now, metadata: null });
+    db.addLocation({ rawId: rawFile.rawId, folderPath: '', filename: 'snap.txt', uploadedAt: now });
+    db.insertEntry({ entryId: 'e-snap', rawId: rawFile.rawId, title: 'Snap Entry', slug: 'snap', summary: 'S', schemaVersion: 1, digestedAt: now, tags: [] });
+
+    db.insertReflection({ reflectionId: 'ref-snap', title: 'Snap', type: 'insight', summary: null, content: 'C', createdAt: now, citedEntryIds: ['e-snap'] });
+
+    const snapshot = db.getSynthesisSnapshot();
+    expect(snapshot.reflectionCount).toBe(1);
+    expect(snapshot.staleReflectionCount).toBe(0);
+  });
+
+  test('wipeSynthesis also wipes reflections', () => {
+    const rawFile = makeRawFile('wipe synth test');
+    db.insertRaw({ rawId: rawFile.rawId, sha256: rawFile.sha256, status: 'digested', byteLength: 15, mimeType: 'text/plain', handler: 'passthrough', uploadedAt: now, metadata: null });
+    db.addLocation({ rawId: rawFile.rawId, folderPath: '', filename: 'wipe.txt', uploadedAt: now });
+    db.insertEntry({ entryId: 'e-wipe', rawId: rawFile.rawId, title: 'Wipe Entry', slug: 'wipe', summary: 'S', schemaVersion: 1, digestedAt: now, tags: [] });
+
+    db.insertReflection({ reflectionId: 'ref-wipe', title: 'Wipe', type: 'pattern', summary: null, content: 'C', createdAt: now, citedEntryIds: ['e-wipe'] });
+    expect(db.listReflections()).toHaveLength(1);
+
+    db.wipeSynthesis();
+    expect(db.listReflections()).toHaveLength(0);
+  });
+});
