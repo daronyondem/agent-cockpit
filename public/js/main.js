@@ -1,4 +1,4 @@
-import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, ICON_KB, ICON_MEMORY, ICON_CANCEL, ICON_EDIT, ICON_DOWNLOAD, fetchCsrfToken, chatShowSessionExpired } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, ICON_KB, ICON_MEMORY, ICON_CANCEL, ICON_EDIT, ICON_DOWNLOAD, ICON_RESET, ICON_SETTINGS, ICON_REFLECTION, fetchCsrfToken, chatShowSessionExpired } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal, chatShowAlert, chatShowConfirm, chatShowPrompt } from './modal.js';
@@ -2018,8 +2018,8 @@ function chatKbBrowserChrome(label, loading) {
       <button class="chat-kb-tab ${active === 'raw' ? 'active' : ''}" data-kb-tab="raw">${KB_ICON_INGEST} Raw</button>
       <button class="chat-kb-tab ${active === 'entries' ? 'active' : ''}" data-kb-tab="entries">${KB_ICON_DIGEST} Entries</button>
       <button class="chat-kb-tab ${active === 'synthesis' ? 'active' : ''}" data-kb-tab="synthesis">${KB_ICON_DREAM} Synthesis</button>
-      <button class="chat-kb-tab ${active === 'reflections' ? 'active' : ''}" data-kb-tab="reflections">&#128161; Reflections</button>
-      <button class="chat-kb-tab ${active === 'settings' ? 'active' : ''}" data-kb-tab="settings">&#9881; Settings</button>
+      <button class="chat-kb-tab ${active === 'reflections' ? 'active' : ''}" data-kb-tab="reflections">${ICON_REFLECTION} Reflections</button>
+      <button class="chat-kb-tab ${active === 'settings' ? 'active' : ''}" data-kb-tab="settings">${ICON_SETTINGS} Settings</button>
     </div>
     <div class="chat-kb-tab-content" id="chat-kb-tab-content">
       ${loading ? '<p class="chat-kb-empty">Loading…</p>' : ''}

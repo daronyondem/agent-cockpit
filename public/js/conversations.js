@@ -1,4 +1,4 @@
-import { state, chatFetch, fetchCsrfToken, chatApiUrl, chatSyncQueueToServer } from './state.js';
+import { state, chatFetch, fetchCsrfToken, chatApiUrl, chatSyncQueueToServer, ICON_ARCHIVE } from './state.js';
 import { esc, chatFormatFileSize, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { chatRenderMessages, chatRenderMarkdown, chatAutoResize, chatScrollToBottom } from './rendering.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
@@ -317,7 +317,7 @@ function chatRenderArchiveToggle() {
   if (state.chatViewingArchive) {
     toggle.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M6 12L2 8l4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M2 8h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Back to conversations';
   } else {
-    toggle.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M1.5 5.5h13" stroke="currentColor" stroke-width="1.3"/><path d="M6 8.5h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg> Archive';
+    toggle.innerHTML = `${ICON_ARCHIVE} Archive`;
   }
 }
 
