@@ -494,6 +494,9 @@ export class KbDreamService {
       const strongThreshold = settings.knowledgeBase?.dreamingStrongMatchThreshold ?? DEFAULT_STRONG_THRESHOLD;
       const borderlineThreshold = settings.knowledgeBase?.dreamingBorderlineThreshold ?? DEFAULT_BORDERLINE_THRESHOLD;
 
+      // Clean up orphan topics (0 entries) left by cascade-deletes.
+      db._deleteOrphanTopics();
+
       const staleEntryIds = db.listNeedsSynthesisEntryIds();
       if (staleEntryIds.length === 0) {
         db.setSynthesisMeta('status', 'idle');
