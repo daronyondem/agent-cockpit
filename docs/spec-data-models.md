@@ -89,7 +89,8 @@ agent-cockpit/
     │   │   │   ├── synthesis/          # Dreaming output — materialized views from SQLite (regenerated after each dream run)
     │   │   │   │   ├── index.md        # Topic index table with entry/connection counts
     │   │   │   │   ├── connections.md  # Full connection graph table
-    │   │   │   │   └── topics/<id>.md  # Per-topic prose, related topics, entry list
+    │   │   │   │   ├── topics/<id>.md  # Per-topic prose, related topics, entry list
+    │   │   │   │   └── reflections/<reflection-id>.md  # Per-reflection markdown with YAML frontmatter + body
     │   │   │   ├── vectors/            # PGLite database directory (pgvector embeddings for entries + topics)
     │   │   │   └── _dream_tmp/         # Ephemeral staging files for dream prompts (auto-cleaned after run)
     │   │   └── {convId}/
@@ -271,3 +272,95 @@ The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the star
 The `memory` block configures the globally-shared **Memory CLI** used for `memory_note` MCP processing and post-session extraction (see Section 5 — Workspace Memory).
 
 The `knowledgeBase` block configures the globally-shared **Digestion CLI** and **Dreaming CLI** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). Both CLIs default to `defaultBackend` when unset. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
+
+## KB SQLite Schema — Phase E (Reflection Layer) Additions
+
+The following tables are added to the per-workspace `knowledge/state.db` alongside the existing schema (see `spec-backend-services.md` for the full KB SQLite layer documentation):
+
+- **`synthesis_reflections`** — One row per reflection produced by the reflection phase of dreaming:
+  ```sql
+  reflection_id  TEXT PRIMARY KEY,
+  title          TEXT NOT NULL,
+  type           TEXT NOT NULL,       -- 'pattern' | 'contradiction' | 'gap' | 'trend' | 'insight'
+  summary        TEXT,
+  content        TEXT NOT NULL,
+  created_at     TEXT NOT NULL        -- ISO 8601
+  ```
+  `type` classifies the reflection. Valid values: `pattern` (recurring theme across entries), `contradiction` (conflicting claims between entries), `gap` (missing knowledge identified from the graph), `trend` (temporal or evolutionary pattern), `insight` (cross-cutting observation that doesn't fit the other categories).
+
+- **`synthesis_reflection_citations`** — Many-to-many junction linking reflections to the entries they cite:
+  ```sql
+  reflection_id  TEXT NOT NULL REFERENCES synthesis_reflections(reflection_id) ON DELETE CASCADE,
+  entry_id       TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+  PRIMARY KEY (reflection_id, entry_id)
+  ```
+  Index on `entry_id` for reverse lookups (finding all reflections that cite a given entry).
+
+## KB Synthesis Snapshot — Phase E Additions
+
+The `GET /workspaces/:hash/kb/synthesis` response (see `spec-api-endpoints.md`) is extended with two fields:
+
+```javascript
+{
+  // ... existing fields (status, lastRunAt, lastRunError, topicCount, connectionCount, needsSynthesisCount, godNodes[], topics[], connections[]) ...
+  reflectionCount: number,          // Total number of reflections in the workspace
+  staleReflectionCount: number,     // Reflections with stale citations (a reflection is stale if any cited entry was re-digested or deleted since the reflection was created)
+}
+```
+
+## KB TypeScript Types — Phase E Additions
+
+New types added to `src/types/index.ts`:
+
+```typescript
+/** Summary shape returned by GET /workspaces/:hash/kb/reflections (list endpoint). */
+interface KbReflectionSummary {
+  reflectionId: string;
+  title: string;
+  type: 'pattern' | 'contradiction' | 'gap' | 'trend' | 'insight';
+  summary: string | null;
+  citationCount: number;
+  createdAt: string;       // ISO 8601
+  isStale: boolean;        // true if any cited entry was re-digested or deleted after created_at
+}
+
+/** Detail shape returned by GET /workspaces/:hash/kb/reflections/:reflectionId. */
+interface KbReflectionDetail {
+  reflectionId: string;
+  title: string;
+  type: 'pattern' | 'contradiction' | 'gap' | 'trend' | 'insight';
+  summary: string | null;
+  content: string;
+  createdAt: string;       // ISO 8601
+  citationCount: number;
+  citedEntries: KbEntry[]; // Full entry metadata for each cited entry
+}
+```
+
+## DreamProgress Phase Type — Phase E Update
+
+The `dreamProgress` field emitted in `kb_state_update` WS frames now includes a fifth phase, `'reflection'`. The full phase union is:
+
+```typescript
+phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'
+```
+
+The five-step pipeline stepper in the frontend (Synthesis tab and dream banner) renders: Routing → Verification → Synthesis → Discovery → Reflection.
+
+## Reflection Markdown Files
+
+Each reflection is materialized to disk at `knowledge/synthesis/reflections/<reflection-id>.md` during `regenerateSynthesisMarkdown()`. Format:
+
+```yaml
+---
+title: "Reflection Title"
+type: pattern
+created_at: "2026-04-12T14:30:00.000Z"
+cited_entries:
+  - entry-id-1
+  - entry-id-2
+  - entry-id-3
+---
+```
+
+The markdown body follows the YAML frontmatter and contains the full reflection `content` prose. Files are regenerated (wiped and recreated) after each dream run, alongside the existing `index.md`, `topics/<id>.md`, and `connections.md` materialized views.

@@ -134,6 +134,25 @@ const SCHEMA_DDL = `
     PRIMARY KEY (source_topic, target_topic)
   );
   CREATE INDEX IF NOT EXISTS idx_conn_target ON synthesis_connections(target_topic);
+
+  -- ── Reflections (Phase E) ─────────────────────────────────────────────────
+
+  CREATE TABLE IF NOT EXISTS synthesis_reflections (
+    reflection_id  TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    type           TEXT NOT NULL,
+    summary        TEXT,
+    content        TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    original_citation_count INTEGER NOT NULL DEFAULT 0
+  );
+
+  CREATE TABLE IF NOT EXISTS synthesis_reflection_citations (
+    reflection_id TEXT NOT NULL REFERENCES synthesis_reflections(reflection_id) ON DELETE CASCADE,
+    entry_id      TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+    PRIMARY KEY (reflection_id, entry_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_src_entry ON synthesis_reflection_citations(entry_id);
 `;
 
 /** Raw DB row shape for the `raw` table. */
@@ -236,6 +255,28 @@ export interface SynthesisConnectionRow {
   evidence: string | null;
 }
 
+/** DB row shape for synthesis_reflections. */
+export interface SynthesisReflectionRow {
+  reflectionId: string;
+  title: string;
+  type: string;
+  summary: string | null;
+  content: string;
+  createdAt: string;
+  citationCount: number;
+}
+
+/** Parameters for inserting a reflection. */
+export interface InsertReflectionParams {
+  reflectionId: string;
+  title: string;
+  type: string;
+  summary: string | null;
+  content: string;
+  createdAt: string;
+  citedEntryIds: string[];
+}
+
 /** Synthesis status snapshot for API responses. */
 export interface SynthesisSnapshot {
   status: string;
@@ -246,6 +287,8 @@ export interface SynthesisSnapshot {
   needsSynthesisCount: number;
   godNodes: string[];
   dreamProgress: { phase: string; done: number; total: number } | null;
+  reflectionCount: number;
+  staleReflectionCount: number;
 }
 
 /** One row in the raw_locations table, typed. */
@@ -547,7 +590,10 @@ export class KbDatabase {
         .all(rawId)
         .map((r) => r.entry_id);
       // raw cascades → entries + entry_tags; raw_locations cascades too.
+      // synthesis_topic_entries and synthesis_reflection_citations also
+      // cascade-delete, potentially leaving orphan topics.
       this.db.prepare('DELETE FROM raw WHERE raw_id = ?').run(rawId);
+      this._deleteOrphanTopics();
       return entries;
     });
   }
@@ -941,6 +987,11 @@ export class KbDatabase {
       .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM entries WHERE needs_synthesis = 1')
       .get();
 
+    const reflectionCountRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_reflections')
+      .get();
+    const staleReflectionCount = this._countStaleReflections();
+
     return {
       status,
       lastRunAt,
@@ -950,6 +1001,8 @@ export class KbDatabase {
       needsSynthesisCount: needsRow?.n ?? 0,
       godNodes,
       dreamProgress,
+      reflectionCount: reflectionCountRow?.n ?? 0,
+      staleReflectionCount,
     };
   }
 
@@ -1030,6 +1083,18 @@ export class KbDatabase {
     this.db
       .prepare('DELETE FROM synthesis_topics WHERE topic_id = ?')
       .run(topicId);
+  }
+
+  /**
+   * Delete topics that have zero entries assigned. Called after entry
+   * cascade-deletes (e.g. raw file deletion) to clean up orphans.
+   */
+  _deleteOrphanTopics(): void {
+    this.db.exec(
+      `DELETE FROM synthesis_topics WHERE topic_id NOT IN (
+         SELECT DISTINCT topic_id FROM synthesis_topic_entries
+       )`,
+    );
   }
 
   getTopic(topicId: string): SynthesisTopicRow | null {
@@ -1288,11 +1353,156 @@ export class KbDatabase {
     }));
   }
 
+  // ── Synthesis Reflections ──────────────────────────────────────────────
+
+  /** Insert a reflection with its citation links. */
+  insertReflection(params: InsertReflectionParams): void {
+    this.transaction(() => {
+      this.db
+        .prepare(
+          `INSERT INTO synthesis_reflections (reflection_id, title, type, summary, content, created_at, original_citation_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(params.reflectionId, params.title, params.type, params.summary, params.content, params.createdAt, params.citedEntryIds.length);
+      const insertCitation = this.db.prepare(
+        'INSERT OR IGNORE INTO synthesis_reflection_citations (reflection_id, entry_id) VALUES (?, ?)',
+      );
+      for (const eid of params.citedEntryIds) {
+        insertCitation.run(params.reflectionId, eid);
+      }
+    });
+  }
+
+  /** List all reflections with citation counts. */
+  listReflections(): SynthesisReflectionRow[] {
+    const rows = this.db
+      .prepare<
+        unknown[],
+        { reflection_id: string; title: string; type: string; summary: string | null; content: string; created_at: string; citation_count: number }
+      >(
+        `SELECT r.reflection_id, r.title, r.type, r.summary, r.content, r.created_at,
+                (SELECT COUNT(*) FROM synthesis_reflection_citations WHERE reflection_id = r.reflection_id) AS citation_count
+         FROM synthesis_reflections r
+         ORDER BY r.created_at DESC`,
+      )
+      .all();
+    return rows.map((r) => ({
+      reflectionId: r.reflection_id,
+      title: r.title,
+      type: r.type,
+      summary: r.summary,
+      content: r.content,
+      createdAt: r.created_at,
+      citationCount: r.citation_count,
+    }));
+  }
+
+  /** Get a single reflection with its cited entry IDs. */
+  getReflection(reflectionId: string): (SynthesisReflectionRow & { citedEntryIds: string[] }) | null {
+    const row = this.db
+      .prepare<
+        unknown[],
+        { reflection_id: string; title: string; type: string; summary: string | null; content: string; created_at: string }
+      >(
+        'SELECT reflection_id, title, type, summary, content, created_at FROM synthesis_reflections WHERE reflection_id = ?',
+      )
+      .get(reflectionId);
+    if (!row) return null;
+
+    const citationCount = this.db
+      .prepare<unknown[], { n: number }>(
+        'SELECT COUNT(*) AS n FROM synthesis_reflection_citations WHERE reflection_id = ?',
+      )
+      .get(reflectionId)?.n ?? 0;
+
+    const citedEntryIds = this.db
+      .prepare<unknown[], { entry_id: string }>(
+        'SELECT entry_id FROM synthesis_reflection_citations WHERE reflection_id = ? ORDER BY entry_id',
+      )
+      .all(reflectionId)
+      .map((r) => r.entry_id);
+
+    return {
+      reflectionId: row.reflection_id,
+      title: row.title,
+      type: row.type,
+      summary: row.summary,
+      content: row.content,
+      createdAt: row.created_at,
+      citationCount,
+      citedEntryIds,
+    };
+  }
+
+  /** Delete all reflections (called before regenerating). */
+  wipeReflections(): void {
+    this.transaction(() => {
+      this.db.exec('DELETE FROM synthesis_reflection_citations');
+      this.db.exec('DELETE FROM synthesis_reflections');
+    });
+  }
+
+  /**
+   * List IDs of stale reflections — reflections where any cited entry
+   * has been updated since the reflection was created, or where a cited
+   * entry has been deleted.
+   */
+  listStaleReflectionIds(): string[] {
+    const rows = this.db
+      .prepare<unknown[], { reflection_id: string }>(
+        `SELECT r.reflection_id
+         FROM synthesis_reflections r
+         LEFT JOIN synthesis_reflection_citations c ON c.reflection_id = r.reflection_id
+         LEFT JOIN entries e ON e.entry_id = c.entry_id
+         GROUP BY r.reflection_id
+         HAVING COUNT(CASE WHEN c.entry_id IS NOT NULL AND e.entry_id IS NULL THEN 1 END) > 0
+             OR COUNT(CASE WHEN e.digested_at > r.created_at THEN 1 END) > 0
+             OR COUNT(c.entry_id) < r.original_citation_count`,
+      )
+      .all();
+    return rows.map((r) => r.reflection_id);
+  }
+
+  /** Delete specific reflections by ID. */
+  deleteReflections(reflectionIds: string[]): void {
+    if (reflectionIds.length === 0) return;
+    const placeholders = reflectionIds.map(() => '?').join(', ');
+    this.transaction(() => {
+      this.db
+        .prepare(`DELETE FROM synthesis_reflection_citations WHERE reflection_id IN (${placeholders})`)
+        .run(...reflectionIds);
+      this.db
+        .prepare(`DELETE FROM synthesis_reflections WHERE reflection_id IN (${placeholders})`)
+        .run(...reflectionIds);
+    });
+  }
+
+  /** Count stale reflections. */
+  private _countStaleReflections(): number {
+    const row = this.db
+      .prepare<unknown[], { n: number }>(
+        `SELECT COUNT(*) AS n FROM (
+           SELECT r.reflection_id
+           FROM synthesis_reflections r
+           LEFT JOIN synthesis_reflection_citations c ON c.reflection_id = r.reflection_id
+           LEFT JOIN entries e ON e.entry_id = c.entry_id
+           GROUP BY r.reflection_id
+           HAVING COUNT(CASE WHEN c.entry_id IS NOT NULL AND e.entry_id IS NULL THEN 1 END) > 0
+               OR COUNT(CASE WHEN e.digested_at > r.created_at THEN 1 END) > 0
+               OR COUNT(c.entry_id) < r.original_citation_count
+         )`,
+      )
+      .get();
+    return row?.n ?? 0;
+  }
+
   // ── Synthesis Bulk Operations ──────────────────────────────────────────
 
   /** Wipe all synthesis data (for Re-Dream full rebuild). */
   wipeSynthesis(): void {
     this.transaction(() => {
+      this.db.exec('DELETE FROM synthesis_reflection_citations');
+      this.db.exec('DELETE FROM synthesis_reflections');
       this.db.exec('DELETE FROM synthesis_connections');
       this.db.exec('DELETE FROM synthesis_topic_entries');
       this.db.exec('DELETE FROM synthesis_topics');
@@ -1341,6 +1551,8 @@ export class KbDatabase {
 
     // ── V2 migration: add needs_synthesis column to existing entries table ──
     this._migrateV2();
+    // ── V3 migration: add original_citation_count to synthesis_reflections ──
+    this._migrateV3();
 
     // Create the needs_synthesis partial index AFTER the V2 migration so that
     // V1 databases already have the column by the time we reference it.
@@ -1381,6 +1593,28 @@ export class KbDatabase {
     this.db
       .prepare('UPDATE meta SET value = ? WHERE key = ?')
       .run(String(KB_DB_SCHEMA_VERSION), 'schema_version');
+  }
+
+  /**
+   * V3 migration: add `original_citation_count` column to synthesis_reflections
+   * so stale detection works when cited entries are cascade-deleted.
+   */
+  private _migrateV3(): void {
+    const cols = this.db
+      .prepare<unknown[], { name: string }>('PRAGMA table_info(synthesis_reflections)')
+      .all();
+    if (cols.length === 0) return; // table doesn't exist yet (fresh DB, DDL runs later via SCHEMA_DDL)
+    const hasColumn = cols.some((c) => c.name === 'original_citation_count');
+    if (hasColumn) return;
+    this.db.exec(
+      'ALTER TABLE synthesis_reflections ADD COLUMN original_citation_count INTEGER NOT NULL DEFAULT 0',
+    );
+    // Backfill from current citation counts.
+    this.db.exec(
+      `UPDATE synthesis_reflections SET original_citation_count = (
+         SELECT COUNT(*) FROM synthesis_reflection_citations WHERE reflection_id = synthesis_reflections.reflection_id
+       )`,
+    );
   }
 
   private _ensureRootFolder(): void {

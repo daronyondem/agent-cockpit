@@ -22,12 +22,20 @@ export function regenerateSynthesisMarkdown(
   synthesisDir: string,
 ): void {
   const topicsDir = path.join(synthesisDir, 'topics');
+  const reflectionsDir = path.join(synthesisDir, 'reflections');
 
-  // Wipe and recreate the directory.
-  if (fs.existsSync(synthesisDir)) {
-    fs.rmSync(synthesisDir, { recursive: true, force: true });
+  // Wipe topics and top-level files, but preserve the reflections/ directory
+  // (reflection markdown is regenerated separately after Phase 5).
+  if (fs.existsSync(topicsDir)) {
+    fs.rmSync(topicsDir, { recursive: true, force: true });
+  }
+  for (const file of ['index.md', 'connections.md']) {
+    const fp = path.join(synthesisDir, file);
+    if (fs.existsSync(fp)) fs.unlinkSync(fp);
   }
   fs.mkdirSync(topicsDir, { recursive: true });
+  // Ensure reflections dir exists (may have been wiped by a full rebuild).
+  fs.mkdirSync(reflectionsDir, { recursive: true });
 
   const topics = db.listTopics();
   const connections = db.listAllConnections();

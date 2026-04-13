@@ -893,6 +893,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
               '## Reading full content (use after search narrows results)',
               `- Entries: \`${kbPath}/entries/<entryId>/entry.md\` — YAML frontmatter (title, tags, source) + digested markdown body.`,
               `- Synthesis: \`${kbPath}/synthesis/*.md\` — cross-entry topic synthesis.`,
+              `- Reflections: \`${kbPath}/synthesis/reflections/*.md\` — cross-topic insights, patterns, contradictions, and gaps (generated during dreaming).`,
               `- DB: \`${kbPath}/state.db\` — SQLite index of raw files, folders, and entries.`,
               '',
               '## Workflow',
@@ -1553,7 +1554,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       } catch {
         body = '';
       }
-      res.json({ entry, body });
+      const locations = entry.rawId ? db.listLocations(entry.rawId) : [];
+      res.json({ entry, body, locations });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -1716,6 +1718,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         needsSynthesisCount: snapshot.needsSynthesisCount,
         godNodes: snapshot.godNodes,
         dreamProgress: snapshot.dreamProgress,
+        reflectionCount: snapshot.reflectionCount,
+        staleReflectionCount: snapshot.staleReflectionCount,
         topics: topics.map((t) => ({
           topicId: t.topicId,
           title: t.title,
@@ -1777,6 +1781,71 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         isGodNode: godNodes.includes(topicId),
         entries,
         connections,
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── KB Reflections ──────────────────────────────────────────────────────
+
+  // List all reflections with stale detection.
+  router.get('/workspaces/:hash/kb/reflections', async (req: Request, res: Response) => {
+    const hash = param(req, 'hash');
+    try {
+      const db = chatService.getKbDb(hash);
+      if (!db) {
+        res.status(404).json({ error: 'Knowledge Base not found.' });
+        return;
+      }
+      const reflections = db.listReflections();
+      const staleIds = new Set(db.listStaleReflectionIds());
+
+      res.json({
+        reflections: reflections.map((r) => ({
+          reflectionId: r.reflectionId,
+          title: r.title,
+          type: r.type,
+          summary: r.summary,
+          citationCount: r.citationCount,
+          createdAt: r.createdAt,
+          isStale: staleIds.has(r.reflectionId),
+        })),
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Single reflection detail: full content + cited entries.
+  router.get('/workspaces/:hash/kb/reflections/:reflectionId', async (req: Request, res: Response) => {
+    const hash = param(req, 'hash');
+    const reflectionId = param(req, 'reflectionId');
+    try {
+      const db = chatService.getKbDb(hash);
+      if (!db) {
+        res.status(404).json({ error: 'Knowledge Base not found.' });
+        return;
+      }
+      const detail = db.getReflection(reflectionId);
+      if (!detail) {
+        res.status(404).json({ error: `Reflection "${reflectionId}" not found.` });
+        return;
+      }
+      // Resolve cited entry metadata.
+      const citedEntries = detail.citedEntryIds
+        .map((eid) => db.getEntry(eid))
+        .filter((e) => e !== null);
+
+      res.json({
+        reflectionId: detail.reflectionId,
+        title: detail.title,
+        type: detail.type,
+        summary: detail.summary,
+        content: detail.content,
+        createdAt: detail.createdAt,
+        citationCount: detail.citationCount,
+        citedEntries,
       });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });

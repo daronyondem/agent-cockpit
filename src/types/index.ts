@@ -621,6 +621,29 @@ export interface KbSynthesisTopicDetail {
   connections: KbSynthesisConnectionSummary[];
 }
 
+/** API response shape for `GET /kb/reflections` list items. */
+export interface KbReflectionSummary {
+  reflectionId: string;
+  title: string;
+  type: string;
+  summary: string | null;
+  citationCount: number;
+  createdAt: string;
+  isStale: boolean;
+}
+
+/** API response shape for `GET /kb/reflections/:id`. */
+export interface KbReflectionDetail {
+  reflectionId: string;
+  title: string;
+  type: string;
+  summary: string | null;
+  content: string;
+  createdAt: string;
+  citationCount: number;
+  citedEntries: KbEntry[];
+}
+
 /**
  * Lightweight notification emitted when KB state changes during an
  * active stream (or via an HTTP mutation). The full state is fetched
@@ -644,7 +667,7 @@ export interface KbStateUpdateEvent {
     folders?: boolean;
     synthesis?: boolean;
     batchProgress?: { done: number; total: number };
-    dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery'; done: number; total: number };
+    dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'; done: number; total: number };
     /** Per-raw substep text shown beneath the status badge during long operations. */
     substep?: { rawId: string; text: string };
   };

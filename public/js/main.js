@@ -1,4 +1,4 @@
-import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, fetchCsrfToken, chatShowSessionExpired } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, ICON_KB, ICON_MEMORY, ICON_CANCEL, ICON_EDIT, ICON_DOWNLOAD, ICON_RESET, ICON_SETTINGS, ICON_REFLECTION, ICON_USER, ICON_FILE_UPLOAD, ICON_TOKEN, fetchCsrfToken, chatShowSessionExpired } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal, chatShowAlert, chatShowConfirm, chatShowPrompt } from './modal.js';
@@ -391,7 +391,7 @@ async function chatShowSessions() {
                 <strong>Session ${s.number}</strong> ${status}
               </div>
               <div style="display:flex;gap:6px;">
-                <button class="chat-header-btn chat-dl-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">Download</button>
+                <button class="chat-header-btn chat-dl-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">${ICON_DOWNLOAD} Download</button>
                 <button class="chat-header-btn chat-view-session-btn" data-session="${s.number}" style="font-size:11px;padding:2px 10px;cursor:pointer;">View</button>
               </div>
             </div>
@@ -451,8 +451,8 @@ function chatViewSession(sessionNumber) {
       for (const msg of sessionMsgs) {
         const isUser = msg.role === 'user';
         const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
-        const avatar = isUser ? '\u{1F464}' : (backendIcon || DEFAULT_BACKEND_ICON);
-        const avatarClass = !isUser && backendIcon ? ' chat-msg-avatar-svg' : '';
+        const avatar = isUser ? ICON_USER : (backendIcon || DEFAULT_BACKEND_ICON);
+        const avatarClass = isUser ? ' chat-msg-avatar-svg' : (!isUser && backendIcon ? ' chat-msg-avatar-svg' : '');
         const roleLabel = isUser ? 'You' : 'Assistant';
         const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
         const rendered = chatRenderMarkdown(msg.content);
@@ -563,10 +563,10 @@ async function chatShowSettings(initialTab) {
   const html = `
     <div class="chat-settings-tabs">
       <button class="chat-settings-tab active" data-tab="general">General</button>
-      <button class="chat-settings-tab" data-tab="memory">Memory</button>
-      <button class="chat-settings-tab" data-tab="kb">Knowledge Base</button>
-      <button class="chat-settings-tab" data-tab="usage">Usage Stats</button>
-      <button class="chat-settings-tab" data-tab="server">Server</button>
+      <button class="chat-settings-tab" data-tab="memory">${ICON_MEMORY} Memory</button>
+      <button class="chat-settings-tab" data-tab="kb">${ICON_KB} Knowledge Base</button>
+      <button class="chat-settings-tab" data-tab="usage">${ICON_STATS} Usage Stats</button>
+      <button class="chat-settings-tab" data-tab="server">${ICON_SERVER} Server</button>
     </div>
     <div class="chat-modal-body">
       <div class="chat-settings-tab-content" id="chat-tab-general">
@@ -586,13 +586,13 @@ async function chatShowSettings(initialTab) {
           </select>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">Default Backend</div>
+          <div class="chat-settings-label">${ICON_CLI} Default Backend CLI</div>
           <select class="chat-settings-select" id="chat-settings-backend" onchange="chatSettingsBackendChanged()">
             ${state.CHAT_BACKENDS.map(b => `<option value="${b.id}"${s.defaultBackend === b.id ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
         </div>
         <div class="chat-settings-group" id="chat-settings-model-group"${(() => { const models = state.BACKEND_MODELS[s.defaultBackend]; return (!models || models.length === 0) ? ' style="display:none;"' : ''; })()}>
-          <div class="chat-settings-label">Default Model</div>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Default Model</div>
           <select class="chat-settings-select" id="chat-settings-model" onchange="chatSettingsModelChanged()">
             ${(() => { const models = state.BACKEND_MODELS[s.defaultBackend] || []; return models.map(m => `<option value="${m.id}"${s.defaultModel === m.id ? ' selected' : (m.default && !s.defaultModel ? ' selected' : '')}>${esc(m.label)}</option>`).join(''); })()}
           </select>
@@ -635,13 +635,13 @@ async function chatShowSettings(initialTab) {
           </div>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">Memory CLI</div>
+          <div class="chat-settings-label">${ICON_CLI} Memory CLI</div>
           <select class="chat-settings-select" id="chat-settings-memory-backend" onchange="chatSettingsMemoryBackendChanged()">
             ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === memBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
         </div>
         <div class="chat-settings-group" id="chat-settings-memory-model-group"${memModels.length === 0 ? ' style="display:none;"' : ''}>
-          <div class="chat-settings-label">Memory Model</div>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Memory Model</div>
           <select class="chat-settings-select" id="chat-settings-memory-model" onchange="chatSettingsMemoryModelChanged()">
             ${memModels.map((m) => `<option value="${esc(m.id)}"${m.id === memSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
           </select>
@@ -681,13 +681,13 @@ async function chatShowSettings(initialTab) {
           </div>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">${KB_ICON_DIGEST} Digestion CLI</div>
+          <div class="chat-settings-label">${ICON_CLI} Digestion CLI</div>
           <select class="chat-settings-select" id="chat-settings-kb-digest-backend" onchange="chatSettingsKbDigestBackendChanged()">
             ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbDigestBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
         </div>
         <div class="chat-settings-group" id="chat-settings-kb-digest-model-group"${kbDigestModels.length === 0 ? ' style="display:none;"' : ''}>
-          <div class="chat-settings-label">Digestion Model</div>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Digestion Model</div>
           <select class="chat-settings-select" id="chat-settings-kb-digest-model" onchange="chatSettingsKbDigestModelChanged()">
             ${kbDigestModels.map((m) => `<option value="${esc(m.id)}"${m.id === kbDigestSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
           </select>
@@ -700,13 +700,13 @@ async function chatShowSettings(initialTab) {
           </select>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">${KB_ICON_DREAM} Dreaming CLI</div>
+          <div class="chat-settings-label">${ICON_CLI} Dreaming CLI</div>
           <select class="chat-settings-select" id="chat-settings-kb-dream-backend" onchange="chatSettingsKbDreamBackendChanged()">
             ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbDreamBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
         </div>
         <div class="chat-settings-group" id="chat-settings-kb-dream-model-group"${kbDreamModels.length === 0 ? ' style="display:none;"' : ''}>
-          <div class="chat-settings-label">Dreaming Model</div>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Dreaming Model</div>
           <select class="chat-settings-select" id="chat-settings-kb-dream-model" onchange="chatSettingsKbDreamModelChanged()">
             ${kbDreamModels.map((m) => `<option value="${esc(m.id)}"${m.id === kbDreamSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
           </select>
@@ -757,7 +757,7 @@ async function chatShowSettings(initialTab) {
       </div>
       <div class="chat-settings-tab-content" id="chat-tab-server" style="display:none;">
         <div class="chat-settings-group">
-          <div class="chat-settings-label">Restart Server</div>
+          <div class="chat-settings-label">${ICON_SERVER} Restart Server</div>
           <div class="chat-settings-desc">
             Restart the Agent Cockpit process via pm2. Use this after installing
             external binaries (like <code>pandoc</code> or <code>libreoffice</code>)
@@ -1254,8 +1254,8 @@ async function chatShowWorkspaceSettings(hash, label) {
   const html = `
     <div class="chat-settings-tabs">
       <button class="chat-settings-tab active" data-tab="instructions">Instructions</button>
-      <button class="chat-settings-tab" data-tab="memory">Memory</button>
-      <button class="chat-settings-tab" data-tab="kb">Knowledge Base</button>
+      <button class="chat-settings-tab" data-tab="memory">${ICON_MEMORY} Memory</button>
+      <button class="chat-settings-tab" data-tab="kb">${ICON_KB} Knowledge Base</button>
     </div>
     <div class="chat-modal-body">
       <div class="chat-settings-tab-content" id="chat-ws-tab-instructions">
@@ -1960,6 +1960,7 @@ async function chatOpenKbBrowser(hash, label) {
     entries: { loading: false, items: [], selectedEntryId: null, entryBody: '' },
     synthesis: { loading: false, topics: [], connections: [], selectedTopicId: null, topicDetail: null },
     embedding: { config: null, loading: false, healthStatus: null },
+    reflections: { loading: false, items: [], selectedId: null, detail: null, typeFilter: 'all' },
   };
 
   // Initial render with a loading message; refetch populates it.
@@ -1976,7 +1977,9 @@ async function chatOpenKbBrowser(hash, label) {
     chatKbBrowserRefetch();
     // Also poll synthesis when the tab is active and a dream is running.
     // WS frames may not arrive if no conversation stream is active.
-    if (chatKbBrowserState.activeTab === 'synthesis' && chatKbBrowserState.synthesis?._status === 'running') {
+    const synthRunning = chatKbBrowserState.synthesis?._status === 'running';
+    const synthGrace = chatKbBrowserState.synthesis?._dreamTriggeredAt && (Date.now() - chatKbBrowserState.synthesis._dreamTriggeredAt < 15000);
+    if (chatKbBrowserState.activeTab === 'synthesis' && (synthRunning || synthGrace)) {
       chatKbBrowserRefetchSynthesis();
     }
   }, 1500);
@@ -2009,13 +2012,14 @@ function chatKbBrowserChrome(label, loading) {
     <div class="chat-kb-header">
       <h2>Knowledge Base: ${esc(label || 'Workspace')}</h2>
       ${countersHtml}
-      <button class="chat-kb-header-close" id="chat-kb-close-btn">Close</button>
+      <button class="chat-kb-header-close" id="chat-kb-close-btn">${ICON_CANCEL} Close</button>
     </div>
     <div class="chat-kb-tabs">
       <button class="chat-kb-tab ${active === 'raw' ? 'active' : ''}" data-kb-tab="raw">${KB_ICON_INGEST} Raw</button>
       <button class="chat-kb-tab ${active === 'entries' ? 'active' : ''}" data-kb-tab="entries">${KB_ICON_DIGEST} Entries</button>
       <button class="chat-kb-tab ${active === 'synthesis' ? 'active' : ''}" data-kb-tab="synthesis">${KB_ICON_DREAM} Synthesis</button>
-      <button class="chat-kb-tab ${active === 'settings' ? 'active' : ''}" data-kb-tab="settings">&#9881; Settings</button>
+      <button class="chat-kb-tab ${active === 'reflections' ? 'active' : ''}" data-kb-tab="reflections">${ICON_REFLECTION} Reflections</button>
+      <button class="chat-kb-tab ${active === 'settings' ? 'active' : ''}" data-kb-tab="settings">${ICON_SETTINGS} Settings</button>
     </div>
     <div class="chat-kb-tab-content" id="chat-kb-tab-content">
       ${loading ? '<p class="chat-kb-empty">Loading…</p>' : ''}
@@ -2038,6 +2042,7 @@ function chatKbBrowserWireChrome() {
       chatKbBrowserRenderTab();
       if (tab === 'entries') chatKbBrowserRefetchEntries();
       if (tab === 'synthesis') chatKbBrowserRefetchSynthesis();
+      if (tab === 'reflections') chatKbBrowserRefetchReflections();
     };
   });
 }
@@ -2094,7 +2099,10 @@ async function chatKbBrowserRefetch() {
     // Skip full re-render for the synthesis tab when the D3 graph is live
     // or a dream is running — the separate synthesis poll handles targeted
     // stepper/status updates without destroying the graph simulation.
-    const skipRender = chatKbBrowserState.activeTab === 'synthesis' && (_kbGraphSim || chatKbBrowserState.synthesis?._status === 'running');
+    const synthIsActive = chatKbBrowserState.synthesis?._status === 'running' || (chatKbBrowserState.synthesis?._dreamTriggeredAt && (Date.now() - chatKbBrowserState.synthesis._dreamTriggeredAt < 15000));
+    const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis' && (_kbGraphSim || synthIsActive);
+    const skipReflections = chatKbBrowserState.activeTab === 'reflections';
+    const skipRender = skipSynthesis || skipReflections;
     if (!skipRender) {
       chatKbBrowserRenderTab();
     }
@@ -2139,6 +2147,9 @@ function chatKbBrowserRenderTab() {
   if (chatKbBrowserState.activeTab === 'settings') {
     content.innerHTML = chatKbBrowserSettingsTab();
     chatKbBrowserWireSettingsTab();
+  } else if (chatKbBrowserState.activeTab === 'reflections') {
+    content.innerHTML = chatKbBrowserReflectionsTab();
+    chatKbBrowserWireReflectionsTab();
   } else if (chatKbBrowserState.activeTab === 'synthesis') {
     content.innerHTML = chatKbBrowserSynthesisTab();
     chatKbBrowserWireSynthesisTab();
@@ -2214,7 +2225,7 @@ function chatKbBrowserRawTab(kbState) {
             Drop a file here, or click the button. Uploads go to
             <strong>${esc(selectedFolder || '(root)')}</strong>.
           </div>
-          <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">Upload file</button>
+          <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">${ICON_FILE_UPLOAD} Upload file</button>
           <input type="file" id="chat-kb-upload-input" style="display:none;" />
         </div>
         <div class="chat-kb-upload-progress" id="chat-kb-upload-progress"
@@ -2268,7 +2279,7 @@ function chatKbBrowserRenderFolderTree(folders, selectedFolder) {
     const label = p === '' ? '(root)' : p.split('/').pop();
     const isSelected = p === (selectedFolder || '');
     const controls = p !== '' ? `
-      <button class="chat-kb-folder-btn" data-kb-folder-rename="${esc(p)}" title="Rename">✎</button>
+      <button class="chat-kb-folder-btn" data-kb-folder-rename="${esc(p)}" title="Rename">${ICON_EDIT}</button>
       <button class="chat-kb-folder-btn chat-kb-folder-btn-del" data-kb-folder-delete="${esc(p)}" title="Delete">×</button>
     ` : '';
     return `
@@ -2783,11 +2794,20 @@ async function chatKbBrowserRefetchSynthesis() {
     if (!chatKbBrowserState) return;
     chatKbBrowserState.synthesis.topics = Array.isArray(data.topics) ? data.topics : [];
     chatKbBrowserState.synthesis.connections = Array.isArray(data.connections) ? data.connections : [];
-    chatKbBrowserState.synthesis._status = data.status;
+    // Grace period: when we just triggered a dream, the server may not yet
+    // report 'running'. Preserve the optimistic status for up to 15 seconds.
+    const triggered = chatKbBrowserState.synthesis._dreamTriggeredAt || 0;
+    const inGrace = triggered && (Date.now() - triggered < 15000);
+    if (data.status === 'running' || !inGrace) {
+      chatKbBrowserState.synthesis._status = data.status;
+    }
+    if (data.status === 'running' && triggered) {
+      chatKbBrowserState.synthesis._dreamTriggeredAt = null;
+    }
     chatKbBrowserState.synthesis._lastRunAt = data.lastRunAt;
     chatKbBrowserState.synthesis._lastRunError = data.lastRunError;
     chatKbBrowserState.synthesis._needsSynthesisCount = data.needsSynthesisCount || 0;
-    if (data.status !== 'running') {
+    if (data.status !== 'running' && !inGrace) {
       // Dream finished — clear progress state.
       chatKbBrowserState.synthesis._dreamProgress = null;
       chatKbBrowserState.synthesis._dreamStepStart = null;
@@ -2862,7 +2882,7 @@ function chatKbDreamStepperHtml(prog) {
   const stepStart = chatKbBrowserState?.synthesis?._dreamStepStart;
   const elapsed = stepStart ? ` \u2014 ${chatKbFormatElapsed(Date.now() - stepStart)}` : '';
   // Four phases: routing → verification → synthesis → discovery
-  const phases = ['routing', 'verification', 'synthesis', 'discovery'];
+  const phases = ['routing', 'verification', 'synthesis', 'discovery', 'reflection'];
   const currentIdx = phases.indexOf(prog.phase);
   const steps = phases.map((phase, idx) => {
     const label = phase.charAt(0).toUpperCase() + phase.slice(1);
@@ -3265,6 +3285,7 @@ function chatKbBrowserWireSynthesisTab() {
         chatKbBrowserState.synthesis._status = 'running';
         chatKbBrowserState.synthesis._dreamProgress = null;
         chatKbBrowserState.synthesis._dreamStepStart = null;
+        chatKbBrowserState.synthesis._dreamTriggeredAt = Date.now();
         chatKbBrowserRenderTab();
       } catch (err) { chatShowAlert('Dream failed: ' + err.message); }
     };
@@ -3281,12 +3302,206 @@ function chatKbBrowserWireSynthesisTab() {
         chatKbBrowserState.synthesis._status = 'running';
         chatKbBrowserState.synthesis._dreamProgress = null;
         chatKbBrowserState.synthesis._dreamStepStart = null;
+        chatKbBrowserState.synthesis._dreamTriggeredAt = Date.now();
         chatKbBrowserRenderTab();
       } catch (err) { chatShowAlert('Re-Dream failed: ' + err.message); }
     };
   }
   // Initialize D3 force graph
   chatKbGraphInit();
+}
+
+// ── KB Settings tab ─────────────────────────────────────────────────────────
+
+// ── KB Reflections tab ──────────────────────────────────────────────────────
+
+async function chatKbBrowserRefetchReflections() {
+  if (!chatKbBrowserState) return;
+  chatKbBrowserState.reflections.loading = true;
+  try {
+    const res = await fetch(chatApiUrl(`workspaces/${chatKbBrowserState.hash}/kb/reflections`), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState) return;
+    chatKbBrowserState.reflections.items = data.reflections || [];
+  } catch (err) {
+    console.warn('[kb] reflections fetch failed:', err);
+  } finally {
+    if (chatKbBrowserState) {
+      chatKbBrowserState.reflections.loading = false;
+      if (chatKbBrowserState.activeTab === 'reflections') chatKbBrowserRenderTab();
+    }
+  }
+}
+
+async function chatKbBrowserRefetchReflectionDetail(reflectionId) {
+  if (!chatKbBrowserState) return;
+  try {
+    const res = await fetch(chatApiUrl(`workspaces/${chatKbBrowserState.hash}/kb/reflections/${reflectionId}`), { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState) return;
+    chatKbBrowserState.reflections.detail = data;
+    chatKbBrowserState.reflections.selectedId = reflectionId;
+    if (chatKbBrowserState.activeTab === 'reflections') chatKbBrowserRenderTab();
+  } catch (err) {
+    console.warn('[kb] reflection detail fetch failed:', err);
+  }
+}
+
+function chatKbBrowserReflectionsTab() {
+  const s = chatKbBrowserState.reflections;
+  const items = Array.isArray(s.items) ? s.items : [];
+
+  if (s.loading && items.length === 0) {
+    return '<p class="chat-kb-empty">Loading reflections\u2026</p>';
+  }
+  if (items.length === 0) {
+    return '<p class="chat-kb-empty">No reflections yet. Run Dream to generate cross-topic insights.</p>';
+  }
+
+  const staleCount = items.filter((r) => r.isStale).length;
+  const staleBanner = staleCount > 0
+    ? `<div class="chat-kb-reflections-stale-banner">${ICON_STALE} ${staleCount} reflection${staleCount > 1 ? 's are' : ' is'} stale \u2014 run Dream to refresh.</div>`
+    : '';
+
+  const typeBadgeClass = {
+    pattern: 'chat-kb-ref-type-pattern',
+    contradiction: 'chat-kb-ref-type-contradiction',
+    gap: 'chat-kb-ref-type-gap',
+    trend: 'chat-kb-ref-type-trend',
+    insight: 'chat-kb-ref-type-insight',
+  };
+  const typeIcon = {
+    pattern: KB_REF_ICON_PATTERN,
+    contradiction: KB_REF_ICON_CONTRADICTION,
+    gap: KB_REF_ICON_GAP,
+    trend: KB_REF_ICON_TREND,
+    insight: KB_REF_ICON_INSIGHT,
+  };
+
+  // Type filter
+  const activeFilter = s.typeFilter || 'all';
+  const allTypes = ['all', 'pattern', 'contradiction', 'gap', 'trend', 'insight'];
+  const filterOptions = allTypes.map((t) =>
+    `<option value="${t}"${t === activeFilter ? ' selected' : ''}>${t === 'all' ? 'All Types' : t.charAt(0).toUpperCase() + t.slice(1)}</option>`
+  ).join('');
+  const filterHtml = `<div class="chat-kb-reflections-toolbar">
+    <select class="chat-kb-reflections-type-filter" id="chat-kb-reflections-type-filter">${filterOptions}</select>
+    <span class="chat-kb-reflections-count">${items.length} reflection${items.length !== 1 ? 's' : ''}</span>
+  </div>`;
+
+  const filtered = activeFilter === 'all' ? items : items.filter((r) => r.type === activeFilter);
+
+  const listItems = filtered.map((r) => {
+    const selected = s.selectedId === r.reflectionId ? ' selected' : '';
+    const stale = r.isStale ? ' stale' : '';
+    const badgeCls = typeBadgeClass[r.type] || 'chat-kb-ref-type-insight';
+    const icon = typeIcon[r.type] || typeIcon.insight;
+    return `<div class="chat-kb-reflection-item${selected}${stale}" data-ref-id="${esc(r.reflectionId)}">
+      <div class="chat-kb-reflection-item-header">
+        <span class="chat-kb-ref-type-badge ${badgeCls}">${icon} ${esc(r.type)}</span>
+        ${r.isStale ? `<span class="chat-kb-ref-stale-badge">${ICON_STALE} stale</span>` : ''}
+      </div>
+      <div class="chat-kb-reflection-item-title">${esc(r.title)}</div>
+      <div class="chat-kb-reflection-item-meta">${r.citationCount} citation${r.citationCount !== 1 ? 's' : ''}</div>
+    </div>`;
+  }).join('');
+
+  const emptyFiltered = filtered.length === 0
+    ? `<p class="chat-kb-empty" style="padding:12px;">No ${esc(activeFilter)} reflections.</p>`
+    : '';
+
+  let detailHtml = '<p class="chat-kb-empty">Select a reflection to view details.</p>';
+  if (s.detail && s.selectedId) {
+    const d = s.detail;
+    const citedList = (d.citedEntries || []).map((e) =>
+      `<li class="chat-kb-reflection-citation"><a class="chat-kb-ref-cited-entry-link" data-entry-id="${esc(e.entryId)}">${esc(e.title)}</a> <span class="chat-kb-reflection-citation-id">(${esc(e.entryId)})</span></li>`
+    ).join('');
+    detailHtml = `
+      <div class="chat-kb-reflection-detail-header">
+        <span class="chat-kb-ref-type-badge ${typeBadgeClass[d.type] || 'chat-kb-ref-type-insight'}">${typeIcon[d.type] || typeIcon.insight} ${esc(d.type)}</span>
+        <h3>${esc(d.title)}</h3>
+      </div>
+      ${d.summary ? `<p class="chat-kb-reflection-summary">${esc(d.summary)}</p>` : ''}
+      <div class="chat-kb-reflection-content">${chatKbRenderReflectionMarkdown(d.content)}</div>
+      ${citedList ? `<div class="chat-kb-reflection-citations"><h4>Cited Entries</h4><ul>${citedList}</ul></div>` : ''}
+    `;
+  }
+
+  return `
+    ${staleBanner}
+    ${filterHtml}
+    <div class="chat-kb-reflections-layout">
+      <div class="chat-kb-reflections-list">${listItems || emptyFiltered}</div>
+      <div class="chat-kb-reflection-detail">${detailHtml}</div>
+    </div>
+  `;
+}
+
+function chatKbBrowserWireReflectionsTab() {
+  // Wire type filter dropdown.
+  const filterEl = document.getElementById('chat-kb-reflections-type-filter');
+  if (filterEl) {
+    filterEl.onchange = () => {
+      if (!chatKbBrowserState) return;
+      chatKbBrowserState.reflections.typeFilter = filterEl.value;
+      chatKbBrowserRenderTab();
+    };
+  }
+  document.querySelectorAll('.chat-kb-reflection-item[data-ref-id]').forEach((el) => {
+    el.onclick = () => {
+      const refId = el.dataset.refId;
+      if (!refId || !chatKbBrowserState) return;
+      chatKbBrowserRefetchReflectionDetail(refId);
+    };
+  });
+  // Wire citation links (both inline and in cited entries list).
+  document.querySelectorAll('.chat-kb-ref-citation-link[data-entry-id], .chat-kb-ref-cited-entry-link[data-entry-id]').forEach((el) => {
+    el.onclick = (e) => {
+      e.preventDefault();
+      const entryId = el.dataset.entryId;
+      if (entryId) chatKbOpenEntryPopup(entryId);
+    };
+  });
+}
+
+async function chatKbOpenEntryPopup(entryId) {
+  if (!chatKbBrowserState || !entryId) return;
+  chatShowModal('Loading entry\u2026', '<div class="chat-modal-body"><p class="chat-kb-empty">Loading\u2026</p></div>');
+  try {
+    const url = chatApiUrl(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/entries/${encodeURIComponent(entryId)}`,
+    );
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    const title = data.entry?.title || data.title || entryId;
+    const body = data.body || '(empty)';
+    const locations = data.locations || [];
+    let sourceHtml = '';
+    if (locations.length > 0) {
+      const locItems = locations.map((loc) => {
+        const folder = loc.folderPath || '/';
+        return `<span class="chat-kb-entry-popup-loc">${esc(folder)}/${esc(loc.filename)}</span>`;
+      }).join('');
+      sourceHtml = `<div class="chat-kb-entry-popup-source"><span class="chat-kb-entry-popup-source-label">Source:</span> ${locItems}</div>`;
+    }
+    chatShowModal(title, `
+      ${sourceHtml}
+      <div class="chat-modal-body" style="max-height:60vh;overflow-y:auto;padding:12px 16px;font-size:13px;line-height:1.6;white-space:pre-wrap;">${esc(body)}</div>
+    `);
+  } catch (err) {
+    chatShowModal('Error', `<div class="chat-modal-body" style="padding:16px;"><p>Could not load entry: ${esc(err.message)}</p></div>`);
+  }
+}
+
+function chatKbRenderReflectionMarkdown(md) {
+  if (!md) return '';
+  return esc(md)
+    .replace(/\[Entry: ([^\]]+)\]\(([^)]+)\)/g, '<a class="chat-kb-ref-citation-link" data-entry-id="$2" title="$2">$1</a>')
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\n/g, '<br>');
 }
 
 // ── KB Settings tab ─────────────────────────────────────────────────────────

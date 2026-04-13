@@ -9,6 +9,8 @@ import {
   extractAffectedTopicIds,
   parseVerificationOutput,
   parseDiscoveryOutput,
+  parseReflectionOutput,
+  identifyTopicClusters,
 } from '../src/services/knowledgeBase/dream';
 import type { DreamOperation } from '../src/services/knowledgeBase/dreamOps';
 
@@ -276,5 +278,140 @@ describe('parseDiscoveryOutput', () => {
     const result = parseDiscoveryOutput(raw);
     expect(result.accepted).toEqual([]);
     expect(result.warnings).toHaveLength(0);
+  });
+});
+
+// ── parseReflectionOutput ────────────────────────────────────────────────
+
+describe('parseReflectionOutput', () => {
+  test('parses valid reflections', () => {
+    const raw = JSON.stringify({
+      reflections: [
+        {
+          title: 'Pattern A',
+          type: 'pattern',
+          summary: 'A summary',
+          content: 'Content with [Entry: Foo](entry-1)',
+          cited_entry_ids: ['entry-1'],
+        },
+      ],
+    });
+    const result = parseReflectionOutput(raw);
+    expect(result.reflections).toHaveLength(1);
+    expect(result.reflections[0].title).toBe('Pattern A');
+    expect(result.reflections[0].type).toBe('pattern');
+    expect(result.reflections[0].cited_entry_ids).toEqual(['entry-1']);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  test('returns warning when no JSON found', () => {
+    const result = parseReflectionOutput('no json here');
+    expect(result.reflections).toHaveLength(0);
+    expect(result.warnings[0]).toContain('no JSON');
+  });
+
+  test('returns warning for missing reflections array', () => {
+    const result = parseReflectionOutput(JSON.stringify({ other: 'data' }));
+    expect(result.reflections).toHaveLength(0);
+    expect(result.warnings[0]).toContain('missing "reflections" array');
+  });
+
+  test('defaults invalid type to insight', () => {
+    const raw = JSON.stringify({
+      reflections: [
+        { title: 'X', type: 'unknown_type', content: 'C', cited_entry_ids: ['e1'] },
+      ],
+    });
+    const result = parseReflectionOutput(raw);
+    expect(result.reflections[0].type).toBe('insight');
+  });
+
+  test('skips reflections without cited_entry_ids', () => {
+    const raw = JSON.stringify({
+      reflections: [
+        { title: 'No Citations', type: 'pattern', content: 'C', cited_entry_ids: [] },
+      ],
+    });
+    const result = parseReflectionOutput(raw);
+    expect(result.reflections).toHaveLength(0);
+    expect(result.warnings[0]).toContain('no valid cited_entry_ids');
+  });
+
+  test('skips items missing title or content', () => {
+    const raw = JSON.stringify({
+      reflections: [
+        { type: 'pattern', content: 'C', cited_entry_ids: ['e1'] },
+        { title: 'T', type: 'pattern', cited_entry_ids: ['e1'] },
+      ],
+    });
+    const result = parseReflectionOutput(raw);
+    expect(result.reflections).toHaveLength(0);
+    expect(result.warnings).toHaveLength(2);
+  });
+
+  test('handles markdown fenced JSON', () => {
+    const raw = '```json\n' + JSON.stringify({
+      reflections: [
+        { title: 'Fenced', type: 'trend', summary: '', content: 'C', cited_entry_ids: ['e1'] },
+      ],
+    }) + '\n```';
+    const result = parseReflectionOutput(raw);
+    expect(result.reflections).toHaveLength(1);
+    expect(result.reflections[0].title).toBe('Fenced');
+  });
+
+  test('returns empty reflections for empty array', () => {
+    const result = parseReflectionOutput(JSON.stringify({ reflections: [] }));
+    expect(result.reflections).toHaveLength(0);
+    expect(result.warnings).toHaveLength(0);
+  });
+});
+
+// ── identifyTopicClusters ────────────────────────────────────────────────
+
+describe('identifyTopicClusters', () => {
+  test('returns empty for empty input', () => {
+    expect(identifyTopicClusters([], [])).toEqual([]);
+  });
+
+  test('returns empty when all topics are singletons', () => {
+    const clusters = identifyTopicClusters(['a', 'b', 'c'], []);
+    expect(clusters).toEqual([]);
+  });
+
+  test('identifies a single connected component', () => {
+    const clusters = identifyTopicClusters(
+      ['a', 'b', 'c'],
+      [
+        { sourceTopic: 'a', targetTopic: 'b' },
+        { sourceTopic: 'b', targetTopic: 'c' },
+      ],
+    );
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].sort()).toEqual(['a', 'b', 'c']);
+  });
+
+  test('identifies two separate clusters', () => {
+    const clusters = identifyTopicClusters(
+      ['a', 'b', 'c', 'd'],
+      [
+        { sourceTopic: 'a', targetTopic: 'b' },
+        { sourceTopic: 'c', targetTopic: 'd' },
+      ],
+    );
+    expect(clusters).toHaveLength(2);
+    const sorted = clusters.map((c) => c.sort()).sort((a, b) => a[0].localeCompare(b[0]));
+    expect(sorted[0]).toEqual(['a', 'b']);
+    expect(sorted[1]).toEqual(['c', 'd']);
+  });
+
+  test('excludes singletons from clusters', () => {
+    const clusters = identifyTopicClusters(
+      ['a', 'b', 'c'],
+      [{ sourceTopic: 'a', targetTopic: 'b' }],
+    );
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].sort()).toEqual(['a', 'b']);
+    // 'c' is a singleton — not in any cluster.
   });
 });
