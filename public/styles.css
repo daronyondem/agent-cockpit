@@ -607,6 +607,12 @@
     overflow: hidden;
     padding: 0;
   }
+  .chat-msg.user .chat-msg-avatar-svg {
+    background: var(--accent-chat) !important;
+    border-radius: 50% !important;
+    padding: 4px;
+    color: white;
+  }
 
   .chat-msg-avatar-svg svg {
     width: 28px;

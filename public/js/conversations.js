@@ -789,7 +789,7 @@ export function chatUpdateUsageDisplay() {
     }
 
     el.title = tooltipLines.join('\n');
-    el.innerHTML = `<span class="chat-usage-tokens">${ICON_TOKEN} ${creditsStr} credits</span>`
+    el.innerHTML = `<span class="chat-usage-tokens">${ICON_TOKEN} ${creditsStr}</span>`
       + (contextPct > 0 ? `<span class="chat-usage-cost">${contextStr}% context</span>` : '');
     el.style.display = '';
     return;
@@ -823,7 +823,7 @@ export function chatUpdateUsageDisplay() {
   }
 
   el.title = tooltipLines.join('\n');
-  el.innerHTML = `<span class="chat-usage-tokens">${ICON_TOKEN} ${chatFormatTokenCount(sessionTokens)} tokens</span>`
+  el.innerHTML = `<span class="chat-usage-tokens">${ICON_TOKEN} ${chatFormatTokenCount(sessionTokens)}</span>`
     + (displayUsage.costUsd > 0 ? `<span class="chat-usage-cost">${chatFormatCost(displayUsage.costUsd)}</span>` : '');
   el.style.display = '';
 }
