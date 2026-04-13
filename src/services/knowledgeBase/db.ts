@@ -138,12 +138,13 @@ const SCHEMA_DDL = `
   -- ── Reflections (Phase E) ─────────────────────────────────────────────────
 
   CREATE TABLE IF NOT EXISTS synthesis_reflections (
-    reflection_id TEXT PRIMARY KEY,
-    title         TEXT NOT NULL,
-    type          TEXT NOT NULL,
-    summary       TEXT,
-    content       TEXT NOT NULL,
-    created_at    TEXT NOT NULL
+    reflection_id  TEXT PRIMARY KEY,
+    title          TEXT NOT NULL,
+    type           TEXT NOT NULL,
+    summary        TEXT,
+    content        TEXT NOT NULL,
+    created_at     TEXT NOT NULL,
+    original_citation_count INTEGER NOT NULL DEFAULT 0
   );
 
   CREATE TABLE IF NOT EXISTS synthesis_reflection_citations (
@@ -1344,10 +1345,10 @@ export class KbDatabase {
     this.transaction(() => {
       this.db
         .prepare(
-          `INSERT INTO synthesis_reflections (reflection_id, title, type, summary, content, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO synthesis_reflections (reflection_id, title, type, summary, content, created_at, original_citation_count)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
         )
-        .run(params.reflectionId, params.title, params.type, params.summary, params.content, params.createdAt);
+        .run(params.reflectionId, params.title, params.type, params.summary, params.content, params.createdAt, params.citedEntryIds.length);
       const insertCitation = this.db.prepare(
         'INSERT OR IGNORE INTO synthesis_reflection_citations (reflection_id, entry_id) VALUES (?, ?)',
       );
@@ -1434,12 +1435,14 @@ export class KbDatabase {
   listStaleReflectionIds(): string[] {
     const rows = this.db
       .prepare<unknown[], { reflection_id: string }>(
-        `SELECT DISTINCT r.reflection_id
+        `SELECT r.reflection_id
          FROM synthesis_reflections r
-         JOIN synthesis_reflection_citations c ON c.reflection_id = r.reflection_id
+         LEFT JOIN synthesis_reflection_citations c ON c.reflection_id = r.reflection_id
          LEFT JOIN entries e ON e.entry_id = c.entry_id
-         WHERE e.entry_id IS NULL
-            OR e.digested_at > r.created_at`,
+         GROUP BY r.reflection_id
+         HAVING COUNT(CASE WHEN c.entry_id IS NOT NULL AND e.entry_id IS NULL THEN 1 END) > 0
+             OR COUNT(CASE WHEN e.digested_at > r.created_at THEN 1 END) > 0
+             OR COUNT(c.entry_id) < r.original_citation_count`,
       )
       .all();
     return rows.map((r) => r.reflection_id);
@@ -1463,12 +1466,16 @@ export class KbDatabase {
   private _countStaleReflections(): number {
     const row = this.db
       .prepare<unknown[], { n: number }>(
-        `SELECT COUNT(DISTINCT r.reflection_id) AS n
-         FROM synthesis_reflections r
-         JOIN synthesis_reflection_citations c ON c.reflection_id = r.reflection_id
-         LEFT JOIN entries e ON e.entry_id = c.entry_id
-         WHERE e.entry_id IS NULL
-            OR e.digested_at > r.created_at`,
+        `SELECT COUNT(*) AS n FROM (
+           SELECT r.reflection_id
+           FROM synthesis_reflections r
+           LEFT JOIN synthesis_reflection_citations c ON c.reflection_id = r.reflection_id
+           LEFT JOIN entries e ON e.entry_id = c.entry_id
+           GROUP BY r.reflection_id
+           HAVING COUNT(CASE WHEN c.entry_id IS NOT NULL AND e.entry_id IS NULL THEN 1 END) > 0
+               OR COUNT(CASE WHEN e.digested_at > r.created_at THEN 1 END) > 0
+               OR COUNT(c.entry_id) < r.original_citation_count
+         )`,
       )
       .get();
     return row?.n ?? 0;
@@ -1529,6 +1536,8 @@ export class KbDatabase {
 
     // ── V2 migration: add needs_synthesis column to existing entries table ──
     this._migrateV2();
+    // ── V3 migration: add original_citation_count to synthesis_reflections ──
+    this._migrateV3();
 
     // Create the needs_synthesis partial index AFTER the V2 migration so that
     // V1 databases already have the column by the time we reference it.
@@ -1569,6 +1578,28 @@ export class KbDatabase {
     this.db
       .prepare('UPDATE meta SET value = ? WHERE key = ?')
       .run(String(KB_DB_SCHEMA_VERSION), 'schema_version');
+  }
+
+  /**
+   * V3 migration: add `original_citation_count` column to synthesis_reflections
+   * so stale detection works when cited entries are cascade-deleted.
+   */
+  private _migrateV3(): void {
+    const cols = this.db
+      .prepare<unknown[], { name: string }>('PRAGMA table_info(synthesis_reflections)')
+      .all();
+    if (cols.length === 0) return; // table doesn't exist yet (fresh DB, DDL runs later via SCHEMA_DDL)
+    const hasColumn = cols.some((c) => c.name === 'original_citation_count');
+    if (hasColumn) return;
+    this.db.exec(
+      'ALTER TABLE synthesis_reflections ADD COLUMN original_citation_count INTEGER NOT NULL DEFAULT 0',
+    );
+    // Backfill from current citation counts.
+    this.db.exec(
+      `UPDATE synthesis_reflections SET original_citation_count = (
+         SELECT COUNT(*) FROM synthesis_reflection_citations WHERE reflection_id = synthesis_reflections.reflection_id
+       )`,
+    );
   }
 
   private _ensureRootFolder(): void {
