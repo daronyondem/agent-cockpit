@@ -727,7 +727,7 @@ describe('POST /mcp/memory/notes — edge cases', () => {
       backendRegistry: registry,
       getWsFns: () => ({
         isConnected: (convId: string) => convId === 'conv-post-ws',
-        send: (convId: string, payload: any) => { wsSendCalls.push({ convId, payload }); },
+        send: (convId: string, payload: any) => { wsSendCalls.push({ convId, payload }); return true; },
       }),
     });
 
