@@ -3389,13 +3389,20 @@
     margin-top: 2px;
   }
   .chat-kb-ref-type-badge {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
     font-size: 10px;
     padding: 1px 6px;
     border-radius: 4px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
+  }
+  .chat-kb-ref-type-badge .kb-ref-icon {
+    width: 12px;
+    height: 12px;
+    flex-shrink: 0;
   }
   .chat-kb-ref-type-pattern { background: rgba(99, 102, 241, 0.15); color: #818cf8; }
   .chat-kb-ref-type-contradiction { background: rgba(239, 68, 68, 0.15); color: #f87171; }

@@ -1,4 +1,4 @@
-import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, fetchCsrfToken, chatShowSessionExpired } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, fetchCsrfToken, chatShowSessionExpired } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal, chatShowAlert, chatShowConfirm, chatShowPrompt } from './modal.js';
@@ -3372,6 +3372,13 @@ function chatKbBrowserReflectionsTab() {
     trend: 'chat-kb-ref-type-trend',
     insight: 'chat-kb-ref-type-insight',
   };
+  const typeIcon = {
+    pattern: KB_REF_ICON_PATTERN,
+    contradiction: KB_REF_ICON_CONTRADICTION,
+    gap: KB_REF_ICON_GAP,
+    trend: KB_REF_ICON_TREND,
+    insight: KB_REF_ICON_INSIGHT,
+  };
 
   // Type filter
   const activeFilter = s.typeFilter || 'all';
@@ -3390,9 +3397,10 @@ function chatKbBrowserReflectionsTab() {
     const selected = s.selectedId === r.reflectionId ? ' selected' : '';
     const stale = r.isStale ? ' stale' : '';
     const badgeCls = typeBadgeClass[r.type] || 'chat-kb-ref-type-insight';
+    const icon = typeIcon[r.type] || typeIcon.insight;
     return `<div class="chat-kb-reflection-item${selected}${stale}" data-ref-id="${esc(r.reflectionId)}">
       <div class="chat-kb-reflection-item-header">
-        <span class="chat-kb-ref-type-badge ${badgeCls}">${esc(r.type)}</span>
+        <span class="chat-kb-ref-type-badge ${badgeCls}">${icon} ${esc(r.type)}</span>
         ${r.isStale ? '<span class="chat-kb-ref-stale-badge">stale</span>' : ''}
       </div>
       <div class="chat-kb-reflection-item-title">${esc(r.title)}</div>
@@ -3412,7 +3420,7 @@ function chatKbBrowserReflectionsTab() {
     ).join('');
     detailHtml = `
       <div class="chat-kb-reflection-detail-header">
-        <span class="chat-kb-ref-type-badge ${typeBadgeClass[d.type] || 'chat-kb-ref-type-insight'}">${esc(d.type)}</span>
+        <span class="chat-kb-ref-type-badge ${typeBadgeClass[d.type] || 'chat-kb-ref-type-insight'}">${typeIcon[d.type] || typeIcon.insight} ${esc(d.type)}</span>
         <h3>${esc(d.title)}</h3>
       </div>
       ${d.summary ? `<p class="chat-kb-reflection-summary">${esc(d.summary)}</p>` : ''}
