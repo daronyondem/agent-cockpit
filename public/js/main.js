@@ -1,4 +1,4 @@
-import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, fetchCsrfToken, chatShowSessionExpired } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, fetchCsrfToken, chatShowSessionExpired } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal, chatShowAlert, chatShowConfirm, chatShowPrompt } from './modal.js';
@@ -565,8 +565,8 @@ async function chatShowSettings(initialTab) {
       <button class="chat-settings-tab active" data-tab="general">General</button>
       <button class="chat-settings-tab" data-tab="memory">Memory</button>
       <button class="chat-settings-tab" data-tab="kb">Knowledge Base</button>
-      <button class="chat-settings-tab" data-tab="usage">Usage Stats</button>
-      <button class="chat-settings-tab" data-tab="server">Server</button>
+      <button class="chat-settings-tab" data-tab="usage">${ICON_STATS} Usage Stats</button>
+      <button class="chat-settings-tab" data-tab="server">${ICON_SERVER} Server</button>
     </div>
     <div class="chat-modal-body">
       <div class="chat-settings-tab-content" id="chat-tab-general">
@@ -586,13 +586,13 @@ async function chatShowSettings(initialTab) {
           </select>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">Default Backend</div>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Default Backend</div>
           <select class="chat-settings-select" id="chat-settings-backend" onchange="chatSettingsBackendChanged()">
             ${state.CHAT_BACKENDS.map(b => `<option value="${b.id}"${s.defaultBackend === b.id ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
         </div>
         <div class="chat-settings-group" id="chat-settings-model-group"${(() => { const models = state.BACKEND_MODELS[s.defaultBackend]; return (!models || models.length === 0) ? ' style="display:none;"' : ''; })()}>
-          <div class="chat-settings-label">Default Model</div>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Default Model</div>
           <select class="chat-settings-select" id="chat-settings-model" onchange="chatSettingsModelChanged()">
             ${(() => { const models = state.BACKEND_MODELS[s.defaultBackend] || []; return models.map(m => `<option value="${m.id}"${s.defaultModel === m.id ? ' selected' : (m.default && !s.defaultModel ? ' selected' : '')}>${esc(m.label)}</option>`).join(''); })()}
           </select>
@@ -681,13 +681,13 @@ async function chatShowSettings(initialTab) {
           </div>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">${KB_ICON_DIGEST} Digestion CLI</div>
+          <div class="chat-settings-label">${ICON_CLI} Digestion CLI</div>
           <select class="chat-settings-select" id="chat-settings-kb-digest-backend" onchange="chatSettingsKbDigestBackendChanged()">
             ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbDigestBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
         </div>
         <div class="chat-settings-group" id="chat-settings-kb-digest-model-group"${kbDigestModels.length === 0 ? ' style="display:none;"' : ''}>
-          <div class="chat-settings-label">Digestion Model</div>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Digestion Model</div>
           <select class="chat-settings-select" id="chat-settings-kb-digest-model" onchange="chatSettingsKbDigestModelChanged()">
             ${kbDigestModels.map((m) => `<option value="${esc(m.id)}"${m.id === kbDigestSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
           </select>
@@ -700,13 +700,13 @@ async function chatShowSettings(initialTab) {
           </select>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">${KB_ICON_DREAM} Dreaming CLI</div>
+          <div class="chat-settings-label">${ICON_CLI} Dreaming CLI</div>
           <select class="chat-settings-select" id="chat-settings-kb-dream-backend" onchange="chatSettingsKbDreamBackendChanged()">
             ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbDreamBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
         </div>
         <div class="chat-settings-group" id="chat-settings-kb-dream-model-group"${kbDreamModels.length === 0 ? ' style="display:none;"' : ''}>
-          <div class="chat-settings-label">Dreaming Model</div>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Dreaming Model</div>
           <select class="chat-settings-select" id="chat-settings-kb-dream-model" onchange="chatSettingsKbDreamModelChanged()">
             ${kbDreamModels.map((m) => `<option value="${esc(m.id)}"${m.id === kbDreamSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
           </select>
@@ -757,7 +757,7 @@ async function chatShowSettings(initialTab) {
       </div>
       <div class="chat-settings-tab-content" id="chat-tab-server" style="display:none;">
         <div class="chat-settings-group">
-          <div class="chat-settings-label">Restart Server</div>
+          <div class="chat-settings-label">${ICON_SERVER} Restart Server</div>
           <div class="chat-settings-desc">
             Restart the Agent Cockpit process via pm2. Use this after installing
             external binaries (like <code>pandoc</code> or <code>libreoffice</code>)
@@ -3362,7 +3362,7 @@ function chatKbBrowserReflectionsTab() {
 
   const staleCount = items.filter((r) => r.isStale).length;
   const staleBanner = staleCount > 0
-    ? `<div class="chat-kb-reflections-stale-banner">${staleCount} reflection${staleCount > 1 ? 's are' : ' is'} stale \u2014 run Dream to refresh.</div>`
+    ? `<div class="chat-kb-reflections-stale-banner">${ICON_STALE} ${staleCount} reflection${staleCount > 1 ? 's are' : ' is'} stale \u2014 run Dream to refresh.</div>`
     : '';
 
   const typeBadgeClass = {
@@ -3401,7 +3401,7 @@ function chatKbBrowserReflectionsTab() {
     return `<div class="chat-kb-reflection-item${selected}${stale}" data-ref-id="${esc(r.reflectionId)}">
       <div class="chat-kb-reflection-item-header">
         <span class="chat-kb-ref-type-badge ${badgeCls}">${icon} ${esc(r.type)}</span>
-        ${r.isStale ? '<span class="chat-kb-ref-stale-badge">stale</span>' : ''}
+        ${r.isStale ? `<span class="chat-kb-ref-stale-badge">${ICON_STALE} stale</span>` : ''}
       </div>
       <div class="chat-kb-reflection-item-title">${esc(r.title)}</div>
       <div class="chat-kb-reflection-item-meta">${r.citationCount} citation${r.citationCount !== 1 ? 's' : ''}</div>
