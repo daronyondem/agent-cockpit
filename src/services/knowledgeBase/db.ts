@@ -590,7 +590,10 @@ export class KbDatabase {
         .all(rawId)
         .map((r) => r.entry_id);
       // raw cascades → entries + entry_tags; raw_locations cascades too.
+      // synthesis_topic_entries and synthesis_reflection_citations also
+      // cascade-delete, potentially leaving orphan topics.
       this.db.prepare('DELETE FROM raw WHERE raw_id = ?').run(rawId);
+      this._deleteOrphanTopics();
       return entries;
     });
   }
@@ -1080,6 +1083,18 @@ export class KbDatabase {
     this.db
       .prepare('DELETE FROM synthesis_topics WHERE topic_id = ?')
       .run(topicId);
+  }
+
+  /**
+   * Delete topics that have zero entries assigned. Called after entry
+   * cascade-deletes (e.g. raw file deletion) to clean up orphans.
+   */
+  _deleteOrphanTopics(): void {
+    this.db.exec(
+      `DELETE FROM synthesis_topics WHERE topic_id NOT IN (
+         SELECT DISTINCT topic_id FROM synthesis_topic_entries
+       )`,
+    );
   }
 
   getTopic(topicId: string): SynthesisTopicRow | null {
