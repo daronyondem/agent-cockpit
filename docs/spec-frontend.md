@@ -18,7 +18,7 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 ## Conversation Management
 
 - **New conversation:** folder picker modal (via `/browse` API) → user selects directory → POST creates conversation with the user's `defaultBackend` and `defaultModel` from settings
-- **Sidebar list:** grouped by workspace (last 2 path segments of `workingDir`), sorted by `updatedAt` desc. Groups are collapsible (state in localStorage). Each group header has a pencil icon for workspace instructions.
+- **Sidebar list:** grouped by workspace (last 2 path segments of `workingDir`), sorted by `updatedAt` desc. Groups are collapsible (state in localStorage). Each group header has a gear icon (`ICON_SETTINGS`) for workspace settings.
 - **Context menu:** right-click on conversation items for rename/archive/delete (active view) or restore/delete (archive view)
 - **Archive:** conversations can be archived via context menu. Archived conversations are hidden from the main sidebar but all files (sessions, artifacts) remain on disk. A toggle at the bottom of the sidebar switches between active and archived views. Archived conversations can be browsed, searched, restored, or permanently deleted.
 - **Search:** debounced, case-insensitive search across titles, last messages, and full content. Respects active/archive view filter.
@@ -43,9 +43,9 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 - **Plan approval:** renders plan as markdown with approve/reject buttons → sends `{ type: 'input', text: 'yes'|'no' }` via WebSocket
 - **User questions:** renders question text + option buttons → sends answer via WebSocket `input` frame
 - **Auto title update:** handles `title_updated` event by updating the active conversation title, the header, and the sidebar list in-place (no full reload needed).
-- **Usage display:** a small indicator in the conversation header shows **session-level** token count and USD cost. Updated in real-time when `usage` events arrive during streaming. Displays on hover a tooltip with session input/output/cache token breakdown and cost, plus conversation-level totals. Hidden when no usage data exists (e.g. new conversation). For **Kiro** conversations, shows credits consumed and context usage percentage instead of tokens/cost.
+- **Usage display:** a small indicator in the conversation header shows **session-level** token count (with `ICON_TOKEN`) and USD cost. Updated in real-time when `usage` events arrive during streaming. Displays on hover a tooltip with session input/output/cache token breakdown and cost, plus conversation-level totals. Hidden when no usage data exists (e.g. new conversation). For **Kiro** conversations, shows credits consumed and context usage percentage instead of tokens/cost. The token icon replaces the text label — no "tokens" or "credits" word in the display.
 - **Stream cleanup:** `chatCleanupStreamState()` accepts `{ force }` option. The `finally` block uses `force: true` to ensure cleanup even when a pending interaction was never resolved. Interaction response handlers also use forced cleanup when the stream has already ended.
-- **Send button state:** shows stop (■) when streaming with no text input, send (↑) when idle or when streaming with text input (to queue). Disabled during uploads or session resets.
+- **Send button state:** shows `ICON_STOP` (octagon) when streaming with no text input, `ICON_SEND` (paper plane) when idle or when streaming with text input (to queue). Toggled via `innerHTML`. Disabled during uploads or session resets.
 - **Message queue:** Users can compose and submit messages while the CLI is actively responding. Queued messages are stored client-side in `chatMessageQueue` (Map of convId → array of `{ id, content, inFlight }`) and **persisted server-side** as `messageQueue` (array of content strings) on the conversation entry. On every queue mutation (add, edit, delete, shift, clear), a sequential coalescing PUT syncs the current state to the server — at most one PUT in flight at a time, with a follow-up if mutations occur during the request. Queued messages appear inline in the chat after the streaming bubble, styled as user messages with reduced opacity and an accent left border. Each shows a "Queued" badge and has Edit and Delete buttons. In-flight messages show "Sending..." and cannot be edited or deleted. When a response completes successfully, the next queued message is automatically sent (FIFO). Queue has three states: **Active** (streaming, auto-execute on completion), **Paused** (error, banner with Resume/Clear), and **Suspended** (restored from server after page load). The `chatQueuePaused` Set tracks paused conversations; `chatQueueSuspended` tracks restored conversations. On loading a conversation with a non-empty persisted queue and no active stream, the queue is restored into client state and marked suspended. A banner reads "N queued messages from a previous session" with Resume and Clear buttons. Suspended queues do not auto-execute — the user must explicitly resume. Queue is automatically cleared on session reset and archive.
 
 ## File Handling
@@ -97,7 +97,7 @@ Tabbed layout with five tabs:
 
 ## Workspace Settings Modal
 
-Triggered by the pencil icon on workspace group headers. Multi-tab modal:
+Triggered by the gear icon (`ICON_SETTINGS`) on workspace group headers. Multi-tab modal:
 
 - **Instructions tab:** per-workspace instructions textarea; fetches/saves via the workspace instructions API.
 - **Memory tab:** enable/disable toggle (persists immediately to `WorkspaceIndex.memoryEnabled`), plus a read-only browser of the workspace memory snapshot grouped by type (User / Feedback / Project / Reference / Other). Each entry has an inline delete icon that calls `DELETE /workspaces/:hash/memory/entries/:relpath`. Below the browser is a **Clear all memory** button that calls `DELETE /workspaces/:hash/memory/entries` (bulk) after a confirmation dialog — wipes every entry for the workspace but leaves the enabled flag untouched.
@@ -107,6 +107,41 @@ Triggered by the pencil icon on workspace group headers. Multi-tab modal:
 
 The **KB Browser** is a full-screen panel that swaps into the main chat area (hiding the active conversation) when the user clicks the **KB** icon on a workspace-group header in the sidebar. It is implemented inline in `public/js/main.js` — look for the `chatKbBrowser*` functions.
 
+- **State shape:** `chatKbBrowserState` is a module-scoped variable (null when closed, initialized on open):
+  ```javascript
+  {
+    hash: string,                    // workspace hash
+    label: string,                   // workspace label for display
+    activeTab: string,               // 'raw'|'entries'|'synthesis'|'reflections'|'settings'
+    enabled: boolean,                // KB enabled for this workspace
+    autoDigest: boolean,             // auto-digest toggle state
+    state: KbState|null,             // full KB state from server
+    pollTimer: number|null,          // interval ID for 1500ms polling
+    uploading: boolean,              // true while file XHR in flight (blocks re-renders)
+    selectedFolder: string,          // currently selected folder path ('' = root)
+    pandocStatus: object|null,       // { available, binaryPath, version } | null
+    ingestingRawId: string|null,     // rawId being uploaded/processed
+    ingestingFilename: string|null,  // filename being uploaded
+    substeps: object,                // Map rawId → substep text ("Converting…", "Parsing…")
+    processingStartTimes: object,    // Map rawId → Date.now() when processing began (for elapsed timer)
+    selectedEntryId: string|null,    // currently selected entry in Entries tab
+    entryDetail: object|null,        // fetched entry detail for right panel
+    entries: object[]|null,          // entries list from GET /kb/entries
+    synthesis: object|null,          // synthesis snapshot from GET /kb/synthesis
+    graphInstance: object|null,      // D3 force simulation reference
+    selectedTopicId: string|null,    // clicked topic in graph
+    topicDetail: object|null,        // fetched topic detail for panel
+    embedding: object|null,         // cached embedding config from GET /kb/embedding-config
+    reflections: {                   // Reflections tab state
+      loading: boolean,
+      items: KbReflectionSummary[]|null,
+      selectedId: string|null,
+      detail: KbReflectionDetail|null,
+      typeFilter: string,            // 'all'|'pattern'|'contradiction'|'gap'|'trend'|'insight'
+    },
+    _dreamTriggeredAt: number|null,  // timestamp for 15-second grace period after Dream/Re-Dream click
+  }
+  ```
 - **Entry point:** `chatKbBrowser.chat-conv-group-kb-btn` click handler (wired in `chatWireEvents`) reads `data-kb-hash` and `data-kb-label` off the button and calls `chatOpenKbBrowser(hash, label)`. The button is only rendered for workspace groups that have a real hash **and** whose `workspaceKbEnabled` flag is `true` (so the "ungrouped" placeholder never gets one, and workspaces with KB disabled in settings don't advertise an entry point). The flag is sourced from `ConversationListItem.workspaceKbEnabled` in the sidebar payload; toggling KB on/off via the settings modal calls `chatLoadConversations()` so the sidebar button appears/disappears without a page reload.
 - **Layout:** A `<div class="chat-kb-browser">` sibling of `#chat-messages` with a header (workspace label + KB counter pills + close button), a tab row (**Raw** / **Entries** / **Synthesis** / **Reflections** / **Settings** — all five wired), and a tab-specific body. Opening the browser hides `#chat-messages` and the input area; closing restores them.
 - **Header counters:** The header renders pills for `raw: N`, `entries: N`, and `pending: N` sourced from `state.counters` on every refetch. Counter text updates in place during polling so the user sees counts tick up as uploads/digests complete without scrolling or tab-switching.
@@ -165,6 +200,23 @@ The **KB Browser** is a full-screen panel that swaps into the main chat area (hi
 ## Theme System
 
 CSS custom properties on `:root` (light) and `[data-theme="dark"]`. Theme applied by setting `data-theme` on `<html>`. Persisted to `localStorage` under `agent-cockpit-theme`. Synced from server settings on init. Listens for system theme changes when set to "system".
+
+## SVG Icon System
+
+All UI icons are inline SVGs using `stroke="currentColor"` for automatic theme compatibility. No icon font or sprite sheet — icons are defined as JavaScript string constants in `public/js/state.js` and imported into whichever module renders them. Source SVG files are also stored in `public/icons/` for reference, but are not loaded at runtime.
+
+**Icon constants** follow the naming pattern `ICON_<NAME>` (e.g. `ICON_SETTINGS`, `ICON_SEND`, `ICON_USER`). Each constant is a complete `<svg>` string with `class="kb-icon" width="14" height="14" viewBox="0 0 24 24"` and `stroke="currentColor"` so they inherit the parent element's text color. KB pipeline icons use the `KB_ICON_` prefix; reflection type icons use the `KB_REF_ICON_` prefix.
+
+**Static HTML elements** (in `index.html`) that cannot use JS constants embed the same SVG markup directly inline — e.g. the sidebar buttons (New Chat, Sessions, Settings, Sign Out, Reset), the attach button, and the initial send button.
+
+**Dynamic elements** rendered via JS template literals reference the constants — e.g. `${ICON_SETTINGS}` in a button's innerHTML. Elements that toggle icons (send ↔ stop button) use `el.innerHTML = ICON_SEND` / `el.innerHTML = ICON_STOP` rather than `textContent`.
+
+**User avatar** uses `ICON_USER` with a special CSS override: `.chat-msg.user .chat-msg-avatar-svg` restores the blue circle background (`var(--accent-chat)`) and white color so the avatar remains visible on both light and dark themes. Other avatar SVGs (backend icons) render without a background circle.
+
+**Current icon inventory** (all in `state.js`):
+- **KB pipeline:** `KB_ICON_INGEST`, `KB_ICON_DIGEST`, `KB_ICON_DREAM`
+- **Reflection types:** `KB_REF_ICON_PATTERN`, `KB_REF_ICON_CONTRADICTION`, `KB_REF_ICON_GAP`, `KB_REF_ICON_TREND`, `KB_REF_ICON_INSIGHT`
+- **General UI:** `ICON_STALE`, `ICON_AI_MODEL`, `ICON_CLI`, `ICON_SERVER`, `ICON_STATS`, `ICON_KB`, `ICON_MEMORY`, `ICON_CANCEL`, `ICON_EDIT`, `ICON_DOWNLOAD`, `ICON_RESET`, `ICON_SIGNOUT`, `ICON_ARCHIVE`, `ICON_SETTINGS`, `ICON_REFLECTION`, `ICON_ATTACHMENT`, `ICON_SEND`, `ICON_STOP`, `ICON_WORKSPACE`, `ICON_TOKEN`, `ICON_USER`, `ICON_FILE_UPLOAD`
 
 ## Keyboard Shortcuts
 
