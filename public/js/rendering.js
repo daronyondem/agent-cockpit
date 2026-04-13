@@ -1,4 +1,4 @@
-import { state, IMAGE_EXTENSIONS, PARALLEL_THRESHOLD_MS, DEFAULT_BACKEND_ICON, chatApiUrl } from './state.js';
+import { state, IMAGE_EXTENSIONS, PARALLEL_THRESHOLD_MS, DEFAULT_BACKEND_ICON, ICON_USER, chatApiUrl } from './state.js';
 import { esc, escWithCode, chatFormatTimestamp, chatFormatElapsed, chatFormatElapsedShort } from './utils.js';
 import { getBackendIcon, getBackendCapabilities } from './backends.js';
 import { chatOpenMemoryPanel } from './memory.js';
@@ -87,8 +87,8 @@ export function chatRenderMessages() {
 
     const isUser = msg.role === 'user';
     const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
-    const avatar = isUser ? '\u{1F464}' : (backendIcon || DEFAULT_BACKEND_ICON);
-    const avatarClass = !isUser && backendIcon ? ' chat-msg-avatar-svg' : '';
+    const avatar = isUser ? ICON_USER : (backendIcon || DEFAULT_BACKEND_ICON);
+    const avatarClass = isUser ? ' chat-msg-avatar-svg' : (!isUser && backendIcon ? ' chat-msg-avatar-svg' : '');
     const roleLabel = isUser ? 'You' : 'Assistant';
     const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
     const rendered = chatRenderMarkdown(msg.content);

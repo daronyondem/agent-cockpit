@@ -1,4 +1,4 @@
-import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, ICON_KB, ICON_MEMORY, ICON_CANCEL, ICON_EDIT, ICON_DOWNLOAD, ICON_RESET, ICON_SETTINGS, ICON_REFLECTION, fetchCsrfToken, chatShowSessionExpired } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, ICON_KB, ICON_MEMORY, ICON_CANCEL, ICON_EDIT, ICON_DOWNLOAD, ICON_RESET, ICON_SETTINGS, ICON_REFLECTION, ICON_USER, ICON_FILE_UPLOAD, ICON_TOKEN, fetchCsrfToken, chatShowSessionExpired } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal, chatShowAlert, chatShowConfirm, chatShowPrompt } from './modal.js';
@@ -451,8 +451,8 @@ function chatViewSession(sessionNumber) {
       for (const msg of sessionMsgs) {
         const isUser = msg.role === 'user';
         const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
-        const avatar = isUser ? '\u{1F464}' : (backendIcon || DEFAULT_BACKEND_ICON);
-        const avatarClass = !isUser && backendIcon ? ' chat-msg-avatar-svg' : '';
+        const avatar = isUser ? ICON_USER : (backendIcon || DEFAULT_BACKEND_ICON);
+        const avatarClass = isUser ? ' chat-msg-avatar-svg' : (!isUser && backendIcon ? ' chat-msg-avatar-svg' : '');
         const roleLabel = isUser ? 'You' : 'Assistant';
         const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
         const rendered = chatRenderMarkdown(msg.content);
@@ -586,7 +586,7 @@ async function chatShowSettings(initialTab) {
           </select>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">${ICON_AI_MODEL} Default Backend</div>
+          <div class="chat-settings-label">${ICON_CLI} Default Backend CLI</div>
           <select class="chat-settings-select" id="chat-settings-backend" onchange="chatSettingsBackendChanged()">
             ${state.CHAT_BACKENDS.map(b => `<option value="${b.id}"${s.defaultBackend === b.id ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
@@ -635,13 +635,13 @@ async function chatShowSettings(initialTab) {
           </div>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">Memory CLI</div>
+          <div class="chat-settings-label">${ICON_CLI} Memory CLI</div>
           <select class="chat-settings-select" id="chat-settings-memory-backend" onchange="chatSettingsMemoryBackendChanged()">
             ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === memBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
           </select>
         </div>
         <div class="chat-settings-group" id="chat-settings-memory-model-group"${memModels.length === 0 ? ' style="display:none;"' : ''}>
-          <div class="chat-settings-label">Memory Model</div>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Memory Model</div>
           <select class="chat-settings-select" id="chat-settings-memory-model" onchange="chatSettingsMemoryModelChanged()">
             ${memModels.map((m) => `<option value="${esc(m.id)}"${m.id === memSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
           </select>
@@ -2225,7 +2225,7 @@ function chatKbBrowserRawTab(kbState) {
             Drop a file here, or click the button. Uploads go to
             <strong>${esc(selectedFolder || '(root)')}</strong>.
           </div>
-          <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">Upload file</button>
+          <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">${ICON_FILE_UPLOAD} Upload file</button>
           <input type="file" id="chat-kb-upload-input" style="display:none;" />
         </div>
         <div class="chat-kb-upload-progress" id="chat-kb-upload-progress"
