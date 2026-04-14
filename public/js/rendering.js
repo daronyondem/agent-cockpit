@@ -483,8 +483,49 @@ export function chatRenderUploadedFiles(html) {
 
 // ── Markdown / code ──────────────────────────────────────────────────────────
 
+// ── File delivery markers ───────────────────────────────────────────────────
+// The CLI outputs <!-- FILE_DELIVERY:/path/to/file --> when the user asks for
+// a deliverable file. We extract these markers before markdown parsing (since
+// marked strips HTML comments) and replace them with file card HTML.
+
+const FILE_DELIVERY_RE = /<!--\s*FILE_DELIVERY:(.*?)\s*-->/g;
+
+const FILE_CARD_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+
+function chatExtractFileDeliveries(text) {
+  const files = [];
+  const cleaned = text.replace(FILE_DELIVERY_RE, (_, filePath) => {
+    files.push(filePath.trim());
+    return ''; // remove marker from text
+  });
+  return { cleaned, files };
+}
+
+function chatRenderFileCards(files) {
+  if (!files.length) return '';
+  const wsHash = state.chatActiveConv?.workspaceHash || '';
+  return files.map(filePath => {
+    const filename = filePath.split('/').pop() || filePath;
+    const viewUrl = chatApiUrl(`workspaces/${wsHash}/files?path=${encodeURIComponent(filePath)}&mode=view`);
+    const downloadUrl = chatApiUrl(`workspaces/${wsHash}/files?path=${encodeURIComponent(filePath)}&mode=download`);
+    return `<div class="chat-file-card" data-file-path="${esc(filePath)}">
+      <div class="chat-file-card-icon">${FILE_CARD_ICON}</div>
+      <div class="chat-file-card-name" title="${esc(filePath)}">${esc(filename)}</div>
+      <div class="chat-file-card-actions">
+        <button class="chat-file-card-btn chat-file-card-view" data-view-url="${esc(viewUrl)}" data-filename="${esc(filename)}" data-file-path="${esc(filePath)}" onclick="chatOpenFileViewer(this)">View</button>
+        <a class="chat-file-card-btn chat-file-card-download" href="${esc(downloadUrl)}" download="${esc(filename)}">Download</a>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 export function chatRenderMarkdown(text) {
   if (!text) return '';
+
+  // Extract FILE_DELIVERY markers before markdown parsing
+  const { cleaned, files } = chatExtractFileDeliveries(text);
+  const fileCardsHtml = chatRenderFileCards(files);
+
   if (typeof marked !== 'undefined') {
     const renderer = new marked.Renderer();
     const origCode = renderer.code;
@@ -509,11 +550,11 @@ export function chatRenderMarkdown(text) {
         ${collapsible ? '<div class="chat-code-expand" onclick="chatToggleCodeBlock(this)">Show more</div>' : ''}
       </div>`;
     };
-    let html = marked.parse(text, { renderer, breaks: true });
-    return chatRenderUploadedFiles(html);
+    let html = marked.parse(cleaned, { renderer, breaks: true });
+    return chatRenderUploadedFiles(html) + fileCardsHtml;
   }
-  let html = esc(text).replace(/\n/g, '<br>');
-  return chatRenderUploadedFiles(html);
+  let html = esc(cleaned).replace(/\n/g, '<br>');
+  return chatRenderUploadedFiles(html) + fileCardsHtml;
 }
 
 // ── Lightbox ─────────────────────────────────────────────────────────────────
@@ -862,4 +903,41 @@ export function chatStartActivityTimer(convId) {
       chatUpdateStreamingContent(st.streamingMsgEl, st);
     }
   }, 1000);
+}
+
+// ── File viewer panel ───────────────────────────────────────────────────────
+
+export async function chatOpenFileViewer(btn) {
+  const viewUrl = btn.dataset.viewUrl;
+  const filename = btn.dataset.filename;
+  const panel = document.getElementById('chat-file-viewer');
+  const titleEl = document.getElementById('chat-file-viewer-title');
+  const contentEl = document.getElementById('chat-file-viewer-content');
+  if (!panel || !titleEl || !contentEl) return;
+
+  titleEl.textContent = filename;
+  contentEl.textContent = 'Loading...';
+  panel.classList.add('active');
+
+  try {
+    const res = await fetch(viewUrl, { credentials: 'same-origin' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      contentEl.textContent = `Error: ${err.error || res.statusText}`;
+      return;
+    }
+    const data = await res.json();
+    const lang = data.language || '';
+    contentEl.innerHTML = `<pre><code class="${lang ? 'language-' + esc(lang) : ''}">${esc(data.content)}</code></pre>`;
+    if (typeof hljs !== 'undefined') {
+      contentEl.querySelectorAll('pre code').forEach(el => hljs.highlightElement(el));
+    }
+  } catch (err) {
+    contentEl.textContent = `Error: ${err.message}`;
+  }
+}
+
+export function chatCloseFileViewer() {
+  const panel = document.getElementById('chat-file-viewer');
+  if (panel) panel.classList.remove('active');
 }

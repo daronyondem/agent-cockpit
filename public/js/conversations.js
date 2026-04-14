@@ -1,6 +1,6 @@
 import { state, chatFetch, fetchCsrfToken, chatApiUrl, chatSyncQueueToServer, ICON_ARCHIVE, ICON_SETTINGS, ICON_SEND, ICON_STOP, ICON_WORKSPACE, ICON_TOKEN, ICON_USER } from './state.js';
 import { esc, chatFormatFileSize, chatFormatTokenCount, chatFormatCost } from './utils.js';
-import { chatRenderMessages, chatRenderMarkdown, chatAutoResize, chatScrollToBottom } from './rendering.js';
+import { chatRenderMessages, chatRenderMarkdown, chatAutoResize, chatScrollToBottom, chatCloseFileViewer } from './rendering.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
 import { populateModelSelect } from './backends.js';
 
@@ -597,6 +597,7 @@ export function chatRestoreDraft(convId) {
 
 export async function chatSelectConversation(id) {
   if (id === state.chatActiveConvId) return;
+  chatCloseFileViewer();
   chatSaveDraft();
   for (const entry of state.chatPendingFiles) {
     if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();

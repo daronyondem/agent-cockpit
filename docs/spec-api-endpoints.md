@@ -227,11 +227,14 @@ Per-workspace instructions appended to the global system prompt on new sessions.
 | GET | `/workspaces/:hash/kb/reflections` | — | List all reflections. Returns `{ reflections: [{ reflectionId, title, type, summary, citationCount, createdAt, isStale }] }`. Stale detection: a reflection is stale if any cited entry was re-digested or deleted since the reflection was created. |
 | GET | `/workspaces/:hash/kb/reflections/:reflectionId` | — | Single reflection detail. Returns `{ reflectionId, title, type, summary, content, createdAt, citationCount, citedEntries: KbEntry[] }`. `404` if not found. |
 
+| GET | `/workspaces/:hash/files` | — | Serves a file from the workspace's working directory for the file delivery feature. Required query param `path` (absolute file path). Optional `mode`: `view` returns `{ content, filename, language }` JSON (capped at 2 MB), `download` (default) streams the file with `Content-Disposition: attachment`. Path traversal protection: resolved path must be under the workspace root. `400` if path missing or not a file. `403` if path is outside workspace. `404` if file or workspace not found. `413` if file exceeds 2 MB in view mode. |
+
 **System prompt composition on new sessions:**
 1. Global system prompt (from `settings.json`)
 2. Workspace instructions (from workspace `index.json`)
 3. **Memory MCP addendum** — appended for every backend whenever `memoryEnabled` is true. Instructs the CLI to call `memory_note` via the `agent-cockpit-memory` MCP server for durable user/feedback/project/reference facts it encounters during the session. Claude Code gets this addendum too — its native `#` flow handles explicit saves, but `memory_note` captures incidental facts mentioned conversationally.
 4. **KB Tools addendum** — appended for every backend whenever `kbEnabled` is true. Teaches the CLI that KB search tools are available via the `agent-cockpit-kb-search` MCP server: `search_topics`, `search_entries`, `get_topic`, `find_similar_topics`, `find_unconnected_similar`, and `kb_ingest`. Includes the filesystem layout for direct reads (`entries/<entryId>/entry.md`, `synthesis/*.md`, `synthesis/reflections/*.md`, `state.db`) and the intended workflow: use search tools to find relevant knowledge, then read entry files for full content. The absolute path to the workspace's `knowledge/` directory is interpolated at runtime.
+5. **File delivery addendum** — always appended on new sessions. Instructs the CLI to output `<!-- FILE_DELIVERY:/absolute/path --> ` markers when the user explicitly asks for a downloadable file. The marker is stripped by the frontend and replaced with a file card (View + Download buttons). Not used for normal coding file operations.
 
 Concatenated with `\n\n` and passed as the backend's system prompt. Not sent on session resume.
 

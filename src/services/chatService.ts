@@ -824,6 +824,11 @@ export class ChatService {
     return this._convWorkspaceMap.get(convId) || null;
   }
 
+  async getWorkspacePath(hash: string): Promise<string | null> {
+    const index = await this._readWorkspaceIndex(hash);
+    return index?.workspacePath || null;
+  }
+
   // ── Workspace Memory ───────────────────────────────────────────────────────
   //
   // Memory is stored per-workspace under `memory/` with this layout:
