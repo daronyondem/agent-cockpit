@@ -89,6 +89,16 @@
       </div>
     </div>
   </div>
+  <!-- File viewer panel — slides in from the right when the user clicks
+       "View" on a file delivery card. Closed via the X button or when
+       switching conversations. -->
+  <div class="chat-file-viewer" id="chat-file-viewer">
+    <div class="chat-file-viewer-header">
+      <span class="chat-file-viewer-title" id="chat-file-viewer-title"></span>
+      <button class="chat-file-viewer-close" onclick="chatCloseFileViewer()" title="Close">&times;</button>
+    </div>
+    <div class="chat-file-viewer-content" id="chat-file-viewer-content"></div>
+  </div>
 </div>
 
 <!-- Lightbox overlay for full-size images -->

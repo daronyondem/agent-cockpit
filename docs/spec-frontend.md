@@ -59,6 +59,14 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 - At send time: completed file paths embedded as `[Uploaded files: /path/to/file1, ...]`
 - **Inline images:** `chatRenderUploadedFiles()` replaces `[Uploaded files: ...]` with `<img>` tags for image extensions (`.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.svg`, `.bmp`). Click opens lightbox overlay.
 
+## File Delivery
+
+- **Trigger:** The CLI outputs `<!-- FILE_DELIVERY:/path/to/file -->` markers when the user explicitly requests a deliverable file (e.g. "give me a CSV", "create a report"). The system prompt instructs all backends to use this marker only for user-requested deliverables, not for routine file edits.
+- **Marker extraction:** `chatExtractFileDeliveries(text)` runs as a pre-processing step before markdown rendering. Strips all `FILE_DELIVERY` HTML comments from the text and returns the list of file paths. Runs in both streaming and static message rendering paths (via `chatRenderMarkdown`).
+- **File cards:** `chatRenderFileCards(files)` renders inline cards for each delivered file, showing a file icon, filename, and two buttons: **View** (opens the side panel) and **Download** (direct browser download via `Content-Disposition: attachment`). Both buttons hit `GET /workspaces/:hash/files?path=...&mode=view|download`.
+- **Viewer panel:** A right-side panel (`.chat-file-viewer`) that slides in when the user clicks View. Shows the file's text content with syntax highlighting (via highlight.js). Capped at 2 MB on the server side. Closed via the X button or automatically on conversation switch. On mobile (≤768px), the panel overlays the full chat area.
+- **Multi-file support:** Multiple `FILE_DELIVERY` markers in one message render multiple file cards. The View panel swaps content when opening a different file.
+
 ## Draft Persistence
 
 - `chatSaveDraft()` / `chatRestoreDraft()` — per-conversation drafts stored in `chatDraftState` Map keyed by convId (or `'__new__'` for unsaved conversations)

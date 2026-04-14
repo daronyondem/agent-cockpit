@@ -1077,10 +1077,11 @@ describe('System prompt passthrough', () => {
       backend: 'claude-code',
     });
 
-    expect(mockBackend._lastOptions!.systemPrompt).toBe('You are a pirate');
+    expect(mockBackend._lastOptions!.systemPrompt).toContain('You are a pirate');
+    expect(mockBackend._lastOptions!.systemPrompt).toContain('FILE_DELIVERY');
   });
 
-  test('passes empty systemPrompt when none configured', async () => {
+  test('passes file delivery addendum when no other prompt configured', async () => {
     const conv = await chatService.createConversation('Test');
     mockBackend.setMockEvents([
       { type: 'text', content: 'Hi', streaming: true },
@@ -1092,7 +1093,7 @@ describe('System prompt passthrough', () => {
       backend: 'claude-code',
     });
 
-    expect(mockBackend._lastOptions!.systemPrompt).toBe('');
+    expect(mockBackend._lastOptions!.systemPrompt).toContain('FILE_DELIVERY');
   });
 
   test('does not pass systemPrompt on subsequent messages', async () => {
@@ -1650,7 +1651,8 @@ describe('Workspace instructions in system prompt', () => {
       backend: 'claude-code',
     });
 
-    expect(mockBackend._lastOptions!.systemPrompt).toBe('Only workspace');
+    expect(mockBackend._lastOptions!.systemPrompt).toContain('Only workspace');
+    expect(mockBackend._lastOptions!.systemPrompt).toContain('FILE_DELIVERY');
   });
 
   test('does not include workspace instructions on subsequent messages', async () => {
@@ -3353,5 +3355,75 @@ describe('POST /conversations/:id/reset', () => {
     const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}`);
     expect(getRes.status).toBe(200);
     expect(getRes.body.messages).toHaveLength(0);
+  });
+});
+
+// ── File delivery endpoint ──────────────────────────────────────────────────
+
+describe('GET /api/chat/workspaces/:hash/files', () => {
+  test('downloads a file from workspace directory', async () => {
+    const wsDir = path.join(tmpDir, 'ws-file-dl');
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(path.join(wsDir, 'report.csv'), 'a,b,c\n1,2,3\n');
+
+    const conv = await chatService.createConversation('Test', wsDir);
+    const hash = conv.workspaceHash;
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/files?path=${encodeURIComponent(path.join(wsDir, 'report.csv'))}&mode=download`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('report.csv');
+  });
+
+  test('views a file as JSON', async () => {
+    const wsDir = path.join(tmpDir, 'ws-file-view');
+    fs.mkdirSync(wsDir, { recursive: true });
+    fs.writeFileSync(path.join(wsDir, 'data.json'), '{"hello":"world"}');
+
+    const conv = await chatService.createConversation('Test', wsDir);
+    const hash = conv.workspaceHash;
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/files?path=${encodeURIComponent(path.join(wsDir, 'data.json'))}&mode=view`);
+    expect(res.status).toBe(200);
+    expect(res.body.filename).toBe('data.json');
+    expect(res.body.content).toBe('{"hello":"world"}');
+    expect(res.body.language).toBe('json');
+  });
+
+  test('rejects path traversal', async () => {
+    const wsDir = path.join(tmpDir, 'ws-file-traversal');
+    fs.mkdirSync(wsDir, { recursive: true });
+
+    const conv = await chatService.createConversation('Test', wsDir);
+    const hash = conv.workspaceHash;
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/files?path=${encodeURIComponent('/etc/passwd')}`);
+    expect(res.status).toBe(403);
+  });
+
+  test('returns 400 when path is missing', async () => {
+    const wsDir = path.join(tmpDir, 'ws-file-noparam');
+    fs.mkdirSync(wsDir, { recursive: true });
+
+    const conv = await chatService.createConversation('Test', wsDir);
+    const hash = conv.workspaceHash;
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/files`);
+    expect(res.status).toBe(400);
+  });
+
+  test('returns 404 for nonexistent file', async () => {
+    const wsDir = path.join(tmpDir, 'ws-file-missing');
+    fs.mkdirSync(wsDir, { recursive: true });
+
+    const conv = await chatService.createConversation('Test', wsDir);
+    const hash = conv.workspaceHash;
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/files?path=${encodeURIComponent(path.join(wsDir, 'nope.txt'))}`);
+    expect(res.status).toBe(404);
+  });
+
+  test('returns 404 for unknown workspace', async () => {
+    const res = await makeRequest('GET', `/api/chat/workspaces/0000000000000000/files?path=/tmp/foo`);
+    expect(res.status).toBe(404);
   });
 });

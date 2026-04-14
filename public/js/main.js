@@ -8,6 +8,7 @@ import {
   chatRenderMessages, chatAutoResize, chatRenderMarkdown, chatHighlightCode,
   chatScrollToBottom, chatOpenLightbox, chatCloseLightbox, chatCopyCode,
   chatToggleCodeBlock, chatRenderThinkingBlock, chatRenderToolActivityBlock,
+  chatOpenFileViewer, chatCloseFileViewer,
   setRenderingCallbacks,
 } from './rendering.js';
 import {
@@ -41,6 +42,8 @@ window.chatCopyCode = chatCopyCode;
 window.chatToggleCodeBlock = chatToggleCodeBlock;
 window.chatOpenLightbox = chatOpenLightbox;
 window.chatCloseLightbox = chatCloseLightbox;
+window.chatOpenFileViewer = chatOpenFileViewer;
+window.chatCloseFileViewer = chatCloseFileViewer;
 window.chatResumeQueue = chatResumeQueue;
 window.chatResumeSuspendedQueue = chatResumeSuspendedQueue;
 window.chatClearQueue = chatClearQueue;

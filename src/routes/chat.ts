@@ -901,7 +901,17 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
             ].join('\n');
           })()
         : '';
-      const parts = [globalPrompt, wsInstructions, memoryMcpAddendum, kbMcpAddendum].filter(Boolean);
+      const fileDeliveryAddendum = [
+        '# File delivery',
+        'When the user explicitly asks you to create, generate, or give them a downloadable file (e.g. "give me a CSV", "create a report file", "export this as JSON"), follow these steps:',
+        '1. Create the file in the current working directory.',
+        '2. After creating the file, output a reference on its own line using this exact format:',
+        '   <!-- FILE_DELIVERY:/absolute/path/to/file.ext -->',
+        '3. You may include multiple FILE_DELIVERY markers if the user asks for multiple files.',
+        '',
+        'Do NOT use FILE_DELIVERY for files you create as part of normal coding tasks (editing source code, config files, etc.). Only use it when the user explicitly wants a deliverable file to download.',
+      ].join('\n');
+      const parts = [globalPrompt, wsInstructions, memoryMcpAddendum, kbMcpAddendum, fileDeliveryAddendum].filter(Boolean);
       systemPrompt = parts.join('\n\n');
     }
 
@@ -1105,6 +1115,68 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
       const result = await chatService.setWorkspaceInstructions(param(req, 'hash'), instructions);
       if (result === null) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ instructions: result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Workspace file delivery ─────────────────────────────────────────────────
+  // Serves files from the workspace's working directory for the file delivery
+  // feature. The CLI outputs <!-- FILE_DELIVERY:/path --> markers when the user
+  // asks for a deliverable file; the UI renders download/view buttons that hit
+  // this endpoint.
+  //
+  // ?mode=download → Content-Disposition: attachment (browser downloads the file)
+  // ?mode=view     → returns { content, filename, language } JSON for the viewer panel
+  router.get('/workspaces/:hash/files', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const filePath = req.query.path as string | undefined;
+      const mode = (req.query.mode as string) || 'download';
+
+      if (!filePath) {
+        return res.status(400).json({ error: 'path query parameter is required' });
+      }
+
+      const workspacePath = await chatService.getWorkspacePath(hash);
+      if (!workspacePath) {
+        return res.status(404).json({ error: 'Workspace not found' });
+      }
+
+      // Path traversal protection: resolved path must be under the workspace root
+      const resolved = path.resolve(filePath);
+      const wsRoot = path.resolve(workspacePath);
+      if (!resolved.startsWith(wsRoot + path.sep) && resolved !== wsRoot) {
+        return res.status(403).json({ error: 'Access denied: path is outside workspace' });
+      }
+
+      // Check file exists and is a regular file
+      let stat: fs.Stats;
+      try {
+        stat = fs.statSync(resolved);
+      } catch {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      if (!stat.isFile()) {
+        return res.status(400).json({ error: 'Path is not a file' });
+      }
+
+      const filename = path.basename(resolved);
+
+      if (mode === 'view') {
+        // Cap viewable file size at 2 MB to avoid flooding the browser
+        if (stat.size > 2 * 1024 * 1024) {
+          return res.status(413).json({ error: 'File too large to view (max 2 MB). Use download instead.' });
+        }
+        const content = fs.readFileSync(resolved, 'utf8');
+        const ext = path.extname(filename).replace('.', '');
+        return res.json({ content, filename, language: ext });
+      }
+
+      // Download mode
+      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '\\"')}"`);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      fs.createReadStream(resolved).pipe(res);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
