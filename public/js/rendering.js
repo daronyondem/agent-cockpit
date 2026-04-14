@@ -113,7 +113,7 @@ export function chatRenderMessages() {
     const timeLabel = msg.timestamp ? `<span class="chat-msg-time">${chatFormatTimestamp(msg.timestamp)}${elapsedLabel}</span>` : '';
 
     html += `
-      <div class="chat-msg ${esc(msg.role)}" data-msg-id="${esc(msg.id)}">
+      <div class="chat-msg ${esc(msg.role)}" data-msg-id="${esc(msg.id)}" data-raw-content="${esc(msg.content || '')}">
         <div class="chat-msg-wrapper">
           <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
           <div class="chat-msg-body">
@@ -121,6 +121,7 @@ export function chatRenderMessages() {
             <div class="chat-msg-content">${thinkingHtml}${toolActivityHtml}${rendered}</div>
             <div class="chat-msg-actions">
               <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
+              <button class="chat-msg-action" data-action="copy-md" title="Copy Markdown">Copy MD</button>
             </div>
           </div>
         </div>
@@ -570,9 +571,19 @@ export function chatWireMessageActions(container) {
       const action = btn.dataset.action;
       const msgEl = btn.closest('.chat-msg');
 
-      if (action === 'copy-msg') {
-        const content = msgEl.querySelector('.chat-msg-content');
-        if (content) navigator.clipboard.writeText(content.textContent);
+      if (action === 'copy-msg' || action === 'copy-md') {
+        let text;
+        if (action === 'copy-md') {
+          text = msgEl.dataset.rawContent || '';
+        } else {
+          const content = msgEl.querySelector('.chat-msg-content');
+          text = content ? content.textContent : '';
+        }
+        navigator.clipboard.writeText(text).then(() => {
+          const orig = btn.textContent;
+          btn.textContent = 'Copied!';
+          setTimeout(() => btn.textContent = orig, 1500);
+        });
       }
     };
   });
