@@ -306,12 +306,20 @@ export function chatHandleStreamEvent(targetConvId, event) {
     state.chatReconnectAttempts.delete(targetConvId);
     console.log(`[ws] Replay complete for conv=${targetConvId}`);
     if (isStillActive) {
-      chatUpdateStreamingContent(st.streamingMsgEl, st);
+      if (st.pendingInteraction) {
+        if (st.pendingInteraction.type === 'planApproval') {
+          chatShowPlanApproval(st.streamingMsgEl, targetConvId, st.pendingInteraction.planContent);
+        } else if (st.pendingInteraction.type === 'userQuestion') {
+          chatShowUserQuestion(st.streamingMsgEl, targetConvId, st.pendingInteraction.event);
+        }
+      } else {
+        chatUpdateStreamingContent(st.streamingMsgEl, st);
+      }
     }
     return;
   } else if (event.type === 'thinking') {
     st.assistantThinking += event.content;
-    if (isStillActive) {
+    if (isStillActive && !st.pendingInteraction) {
       chatUpdateStreamingContent(st.streamingMsgEl, st);
     }
   } else if (event.type === 'tool_outcomes') {
@@ -323,7 +331,7 @@ export function chatHandleStreamEvent(targetConvId, event) {
         match.status = outcome.status;
       }
     }
-    if (isStillActive) {
+    if (isStillActive && !st.pendingInteraction) {
       chatUpdateStreamingContent(st.streamingMsgEl, st);
     }
   } else if (event.type === 'turn_complete') {

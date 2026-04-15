@@ -911,6 +911,7 @@ export function chatStartActivityTimer(convId) {
       stRef.activityTimerInterval = null;
       return;
     }
+    if (st.pendingInteraction) return;
     if (st.activeTools.length > 0 || st.activeAgents.length > 0) {
       chatUpdateStreamingContent(st.streamingMsgEl, st);
     }
