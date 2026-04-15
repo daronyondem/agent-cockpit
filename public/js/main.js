@@ -2797,6 +2797,57 @@ function chatKbFormatRelative(iso) {
 
 // ── KB Browser: Synthesis tab ────────────────────────────────────────────────
 
+const KB_GRAPH_GOD_COLOR = '#ffcc00';
+const KB_GRAPH_CLUSTER_COLORS = [
+  '#4fd1ff',
+  '#7cf29a',
+  '#ff8a5b',
+  '#c084fc',
+  '#ff5da2',
+  '#ffd166',
+  '#2dd4bf',
+  '#60a5fa',
+  '#f97316',
+  '#a3e635',
+];
+const KB_GRAPH_LINK_COLORS = {
+  extracted: '#7df9ff',
+  inferred: '#5b8cff',
+  speculative: '#ff6b9a',
+};
+
+function chatKbGraphLegendHtml() {
+  const clusterDots = KB_GRAPH_CLUSTER_COLORS.slice(0, 4)
+    .map((color) => `<span class="chat-kb-graph-legend-swatch" style="background:${color};"></span>`)
+    .join('');
+
+  return `
+    <div class="chat-kb-graph-legend" aria-label="Graph color legend">
+      <span class="chat-kb-graph-legend-title">Legend</span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-swatch" style="background:${KB_GRAPH_GOD_COLOR};"></span>
+        God node
+      </span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-swatch-group">${clusterDots}</span>
+        Topic clusters
+      </span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-line" style="background:${KB_GRAPH_LINK_COLORS.extracted};color:${KB_GRAPH_LINK_COLORS.extracted};"></span>
+        Extracted link
+      </span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-line" style="background:${KB_GRAPH_LINK_COLORS.inferred};color:${KB_GRAPH_LINK_COLORS.inferred};"></span>
+        Inferred link
+      </span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-line" style="background:${KB_GRAPH_LINK_COLORS.speculative};color:${KB_GRAPH_LINK_COLORS.speculative};"></span>
+        Speculative link
+      </span>
+    </div>
+  `;
+}
+
 async function chatKbBrowserRefetchSynthesis() {
   if (!chatKbBrowserState) return;
   chatKbBrowserState.synthesis.loading = true;
@@ -2964,12 +3015,13 @@ function chatKbBrowserSynthesisTab() {
       <input type="text" id="chat-kb-graph-search" class="chat-kb-graph-search" placeholder="Search topics\u2026" />
     </div>
   `;
+  const legendHtml = chatKbGraphLegendHtml();
 
   if (topics.length === 0) {
     return actionsHtml + '<p class="chat-kb-empty">No topics yet. Run a dream cycle to synthesize entries into topics.</p>';
   }
 
-  return actionsHtml + `
+  return actionsHtml + legendHtml + `
     <div class="chat-kb-graph-layout">
       <div id="chat-kb-graph-container" class="chat-kb-graph-container"></div>
       <div id="chat-kb-graph-panel" class="chat-kb-graph-panel">
@@ -2981,6 +3033,8 @@ function chatKbBrowserSynthesisTab() {
 // ── 3D Force Graph (three.js + 3d-force-graph + bloom) ────────────────────
 
 let _kbForceGraph = null; // ForceGraph3D instance reference
+let _kbGraphLabelLayer = null;
+let _kbGraphLabelRaf = null;
 const BLOOM_PASS_LOCAL_URL = './vendor/three-addons/postprocessing/UnrealBloomPass.js';
 
 // Lazy-load helpers — only loaded when the Synthesis graph tab opens.
@@ -3022,6 +3076,14 @@ function _loadThree() {
 }
 
 function _chatKbDestroyGraph() {
+  if (_kbGraphLabelRaf != null) {
+    cancelAnimationFrame(_kbGraphLabelRaf);
+    _kbGraphLabelRaf = null;
+  }
+  if (_kbGraphLabelLayer?.parentNode) {
+    _kbGraphLabelLayer.parentNode.removeChild(_kbGraphLabelLayer);
+  }
+  _kbGraphLabelLayer = null;
   if (!_kbForceGraph) return;
   try { _kbForceGraph.pauseAnimation(); } catch (_) { /* ok */ }
   try { _kbForceGraph._destructor?.(); } catch (_) { /* ok */ }
@@ -3091,6 +3153,25 @@ function _chatKbComputeTopicClusters(nodes, links) {
   return nodeToCluster;
 }
 
+function _chatKbTopicLabelText(title) {
+  const clean = String(title || '').trim();
+  if (clean.length <= 28) return clean;
+  return `${clean.slice(0, 27)}...`;
+}
+
+function _chatKbTopicLabelYOffset(node, maxEntries) {
+  return 8 + (6 * (node.entryCount / maxEntries));
+}
+
+function _chatKbMakeTopicLabelEl(node, nodeColor) {
+  const el = document.createElement('div');
+  el.className = 'chat-kb-graph-node-label';
+  el.textContent = _chatKbTopicLabelText(node.title);
+  el.style.borderColor = node.isGodNode ? 'rgba(255, 212, 88, 0.58)' : `${nodeColor}aa`;
+  el.style.color = node.isGodNode ? '#fff4c2' : '#eef3ff';
+  return el;
+}
+
 async function chatKbGraphInit() {
   const container = document.getElementById('chat-kb-graph-container');
   if (!container) return;
@@ -3147,24 +3228,9 @@ async function chatKbGraphInit() {
   }
 
   // Colors — bright for bloom glow.
-  const GOD_COLOR = '#ffcc00';
-  const CLUSTER_COLORS = [
-    '#4fd1ff',
-    '#7cf29a',
-    '#ff8a5b',
-    '#c084fc',
-    '#ff5da2',
-    '#ffd166',
-    '#2dd4bf',
-    '#60a5fa',
-    '#f97316',
-    '#a3e635',
-  ];
-  const LINK_COLORS = {
-    extracted: '#7df9ff',
-    inferred: '#5b8cff',
-    speculative: '#ff6b9a',
-  };
+  const GOD_COLOR = KB_GRAPH_GOD_COLOR;
+  const CLUSTER_COLORS = KB_GRAPH_CLUSTER_COLORS;
+  const LINK_COLORS = KB_GRAPH_LINK_COLORS;
   const DIM_COLOR = 'rgba(30, 30, 50, 0.15)';
   const DIM_LINK_COLOR = 'rgba(70, 84, 118, 0.18)';
 
@@ -3186,11 +3252,64 @@ async function chatKbGraphInit() {
     return LINK_COLORS[link.confidence] || LINK_COLORS.inferred;
   }
 
+  const topicLabelEls = new Map();
+  let searchMatchIds = null;
+  let labelZoomThreshold = 220;
+
+  function shouldShowTopicLabels() {
+    const controls = graph.controls?.();
+    const target = controls?.target || { x: 0, y: 0, z: 0 };
+    const cameraPos = graph.camera().position;
+    return Math.hypot(
+      cameraPos.x - (target.x || 0),
+      cameraPos.y - (target.y || 0),
+      cameraPos.z - (target.z || 0),
+    ) <= labelZoomThreshold;
+  }
+
+  function updateTopicLabels() {
+    if (_kbForceGraph !== graph || _kbGraphLabelLayer == null) return;
+    const showLabels = shouldShowTopicLabels();
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    for (const node of nodes) {
+      const el = topicLabelEls.get(node.id);
+      if (!el) continue;
+      const matchesSearch = !searchMatchIds || searchMatchIds.has(node.id);
+      if (!showLabels || !matchesSearch || node.x == null || node.y == null) {
+        el.style.display = 'none';
+        continue;
+      }
+      const coords = graph.graph2ScreenCoords(
+        node.x,
+        node.y + _chatKbTopicLabelYOffset(node, maxEntries),
+        node.z || 0,
+      );
+      if (!coords || !Number.isFinite(coords.x) || !Number.isFinite(coords.y)
+        || coords.x < -140 || coords.x > width + 140
+        || coords.y < -60 || coords.y > height + 60) {
+        el.style.display = 'none';
+        continue;
+      }
+      el.style.display = '';
+      el.style.transform = `translate(-50%, -50%) translate(${coords.x}px, ${coords.y}px)`;
+    }
+  }
+
+  function tickTopicLabels() {
+    if (_kbForceGraph !== graph || chatKbBrowserState?.activeTab !== 'synthesis') {
+      _kbGraphLabelRaf = null;
+      return;
+    }
+    updateTopicLabels();
+    _kbGraphLabelRaf = requestAnimationFrame(tickTopicLabels);
+  }
+
   // Create the 3D force graph (UMD build requires `new`, same as official example).
   const graph = new ForceGraph3D(container, {
     rendererConfig: { antialias: true, alpha: false },
   })
-    .backgroundColor('#000008')
+    .backgroundColor('#03040f')
     .width(container.clientWidth)
     .height(container.clientHeight)
     .graphData({ nodes, links })
@@ -3221,6 +3340,18 @@ async function chatKbGraphInit() {
 
   _kbForceGraph = graph;
 
+  const labelLayer = document.createElement('div');
+  labelLayer.className = 'chat-kb-graph-label-layer';
+  _kbGraphLabelLayer = labelLayer;
+  container.appendChild(labelLayer);
+  for (const node of nodes) {
+    const el = _chatKbMakeTopicLabelEl(node, nodeBaseColor(node));
+    topicLabelEls.set(node.id, el);
+    labelLayer.appendChild(el);
+  }
+  if (_kbGraphLabelRaf != null) cancelAnimationFrame(_kbGraphLabelRaf);
+  _kbGraphLabelRaf = requestAnimationFrame(tickTopicLabels);
+
   // Tune d3-force parameters.
   graph.d3Force('charge').strength(-300);
   graph.d3Force('link').distance(120);
@@ -3238,12 +3369,15 @@ async function chatKbGraphInit() {
       const d = Math.hypot((n.x || 0) - cx, (n.y || 0) - cy, (n.z || 0) - cz);
       if (d > maxR) maxR = d;
     }
+    labelZoomThreshold = Math.max(160, Math.min(320, maxR * 1.35));
     const dist = Math.max(maxR * 2.5, 200);
     graph.cameraPosition({ x: cx, y: cy, z: cz + dist }, { x: cx, y: cy, z: cz }, duration);
   }
   setTimeout(() => centerGraph(0), 300);
   setTimeout(() => centerGraph(600), 2000);
-  graph.onEngineStop(() => centerGraph(600));
+  graph.onEngineStop(() => {
+    centerGraph(600);
+  });
 
   // Match the upstream bloom example as closely as possible: one
   // UnrealBloomPass appended to the existing post-processing composer.
@@ -3254,9 +3388,9 @@ async function chatKbGraphInit() {
     }
     const composer = graph.postProcessingComposer();
     const bloomPass = new UnrealBloomPass();
-    bloomPass.strength = 4;
-    bloomPass.radius = 1;
-    bloomPass.threshold = 0;
+    bloomPass.strength = 2;
+    bloomPass.radius = 0.85;
+    bloomPass.threshold = 0.35;
     composer.addPass(bloomPass);
     console.log('[kb-graph] Bloom pass added.');
   } catch (err) {
@@ -3269,30 +3403,33 @@ async function chatKbGraphInit() {
     searchInput.oninput = () => {
       const q = searchInput.value.toLowerCase().trim();
       if (!q) {
+        searchMatchIds = null;
         graph
           .nodeColor((d) => nodeBaseColor(d))
           .linkColor((d) => linkBaseColor(d))
           .linkOpacity((d) => edgeOpacity(d.confidence));
+        updateTopicLabels();
         return;
       }
-      const matchIds = new Set(
+      searchMatchIds = new Set(
         nodes.filter((n) => n.title.toLowerCase().includes(q)).map((n) => n.id),
       );
       graph
         .nodeColor((d) => {
-          if (!matchIds.has(d.id)) return DIM_COLOR;
+          if (!searchMatchIds.has(d.id)) return DIM_COLOR;
           return nodeBaseColor(d);
         })
         .linkColor((d) =>
-          matchIds.has(d.source.id || d.source) || matchIds.has(d.target.id || d.target)
+          searchMatchIds.has(d.source.id || d.source) || searchMatchIds.has(d.target.id || d.target)
             ? linkBaseColor(d) : DIM_LINK_COLOR)
         .linkOpacity((d) =>
-          matchIds.has(d.source.id || d.source) || matchIds.has(d.target.id || d.target)
+          searchMatchIds.has(d.source.id || d.source) || searchMatchIds.has(d.target.id || d.target)
             ? edgeOpacity(d.confidence) : 0.03);
+      updateTopicLabels();
 
       // Fly camera to first match.
-      if (matchIds.size > 0) {
-        const firstMatch = nodes.find((n) => matchIds.has(n.id));
+      if (searchMatchIds.size > 0) {
+        const firstMatch = nodes.find((n) => searchMatchIds.has(n.id));
         if (firstMatch && firstMatch.x != null) {
           const distance = 120;
           const distRatio = 1 + distance / Math.hypot(firstMatch.x, firstMatch.y, firstMatch.z || 0);

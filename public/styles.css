@@ -3309,6 +3309,76 @@
     overflow: hidden;
   }
   .chat-kb-graph-container canvas { display: block; }
+  .chat-kb-graph-label-layer {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    overflow: hidden;
+    z-index: 3;
+  }
+  .chat-kb-graph-node-label {
+    position: absolute;
+    left: 0;
+    top: 0;
+    display: none;
+    padding: 6px 11px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.24);
+    background: rgba(7, 9, 24, 0.88);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: 0.01em;
+    white-space: nowrap;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.32);
+    backdrop-filter: blur(4px);
+    user-select: none;
+  }
+  .chat-kb-graph-legend {
+    display: flex;
+    align-items: center;
+    gap: 10px 14px;
+    flex-wrap: wrap;
+    margin: 0 0 10px 0;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  .chat-kb-graph-legend-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .chat-kb-graph-legend-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    font-size: 12px;
+    white-space: nowrap;
+  }
+  .chat-kb-graph-legend-swatch-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+  }
+  .chat-kb-graph-legend-swatch {
+    width: 10px;
+    height: 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.12);
+    flex-shrink: 0;
+  }
+  .chat-kb-graph-legend-line {
+    width: 18px;
+    height: 3px;
+    border-radius: 999px;
+    box-shadow: 0 0 12px currentColor;
+    flex-shrink: 0;
+  }
   .chat-kb-graph-panel {
     width: 280px;
     flex-shrink: 0;
