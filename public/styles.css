@@ -3303,12 +3303,12 @@
     position: relative;
     flex: 1;
     min-height: 0;
-    background: var(--bg);
+    background: #0a0b10;
     border: 1px solid var(--border);
     border-radius: 8px 0 0 8px;
     overflow: hidden;
   }
-  .chat-kb-graph-container svg { display: block; }
+  .chat-kb-graph-container canvas { display: block; }
   .chat-kb-graph-panel {
     width: 280px;
     flex-shrink: 0;

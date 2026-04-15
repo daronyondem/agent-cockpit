@@ -170,9 +170,12 @@ DELETE /conversations/:id/upload/:filename  [CSRF]
 Path traversal guard. Returns `{ ok: true }`. `404`/`400` on error.
 
 ```
-GET /conversations/:id/files/:filename
+GET /conversations/:id/files/:filename[?mode=view|download]
 ```
-Serves file via `res.sendFile()`. Path traversal guard. No CSRF (used by `<img>` tags).
+Path traversal guard. No CSRF (used by `<img>` tags and file badge cards).
+- **No mode (default):** Serves file directly via `res.sendFile()` (legacy, used by inline images).
+- **`?mode=view`:** Returns `{ content, filename, language }` JSON for the viewer panel. Capped at 2 MB.
+- **`?mode=download`:** Streams file with `Content-Disposition: attachment` header for browser download.
 
 ## 3.9 Settings
 

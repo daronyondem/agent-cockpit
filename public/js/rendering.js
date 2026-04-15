@@ -451,6 +451,8 @@ export function chatRenderSessionOverview(messages) {
 
 // ── File / image rendering ───────────────────────────────────────────────────
 
+const FILE_CARD_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+
 export function chatRenderUploadedFiles(html) {
   return html.replace(/<p>\s*\[Uploaded files?:\s*([^\]]+)\]\s*<\/p>|(\[Uploaded files?:\s*([^\]]+)\])/g, (match, pInner, bare, bareInner) => {
     const pathList = pInner || bareInner;
@@ -472,7 +474,19 @@ export function chatRenderUploadedFiles(html) {
     }
     let result = '';
     if (nonImages.length) {
-      result += `<p>[Uploaded files: ${nonImages.join(', ')}]</p>`;
+      const convId = state.chatActiveConvId;
+      result += nonImages.map(filename => {
+        const viewUrl = chatApiUrl(`conversations/${encodeURIComponent(convId)}/files/${encodeURIComponent(filename)}?mode=view`);
+        const downloadUrl = chatApiUrl(`conversations/${encodeURIComponent(convId)}/files/${encodeURIComponent(filename)}?mode=download`);
+        return `<div class="chat-file-card" data-file-path="${esc(filename)}">
+      <div class="chat-file-card-icon">${FILE_CARD_ICON}</div>
+      <div class="chat-file-card-name" title="${esc(filename)}">${esc(filename)}</div>
+      <div class="chat-file-card-actions">
+        <button class="chat-file-card-btn chat-file-card-view" data-view-url="${esc(viewUrl)}" data-filename="${esc(filename)}" data-file-path="${esc(filename)}" onclick="chatOpenFileViewer(this)">View</button>
+        <a class="chat-file-card-btn chat-file-card-download" href="${esc(downloadUrl)}" download="${esc(filename)}">Download</a>
+      </div>
+    </div>`;
+      }).join('');
     }
     if (parts.length) {
       result += parts.join('');
@@ -489,8 +503,6 @@ export function chatRenderUploadedFiles(html) {
 // marked strips HTML comments) and replace them with file card HTML.
 
 const FILE_DELIVERY_RE = /<!--\s*FILE_DELIVERY:(.*?)\s*-->/g;
-
-const FILE_CARD_ICON = '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
 
 function chatExtractFileDeliveries(text) {
   const files = [];

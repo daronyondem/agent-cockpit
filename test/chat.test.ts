@@ -1405,6 +1405,31 @@ describe('GET /conversations/:id/files/:filename', () => {
     const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/files/a%2Fb.png`);
     expect(res.status).toBe(200);
   });
+
+  test('mode=view returns JSON with content and language', async () => {
+    const conv = await chatService.createConversation('Test');
+    const artifactDir = path.join(tmpDir, 'data', 'chat', 'artifacts', conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(artifactDir, 'notes.txt'), 'hello world');
+
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/files/notes.txt?mode=view`);
+    expect(res.status).toBe(200);
+    expect(res.body.content).toBe('hello world');
+    expect(res.body.filename).toBe('notes.txt');
+    expect(res.body.language).toBe('txt');
+  });
+
+  test('mode=download returns file with Content-Disposition', async () => {
+    const conv = await chatService.createConversation('Test');
+    const artifactDir = path.join(tmpDir, 'data', 'chat', 'artifacts', conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    fs.writeFileSync(path.join(artifactDir, 'doc.txt'), 'download me');
+
+    const res = await makeRequest('GET', `/api/chat/conversations/${conv.id}/files/doc.txt?mode=download`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('attachment');
+    expect(res.headers['content-disposition']).toContain('doc.txt');
+  });
 });
 
 // ── POST /mkdir ─────────────────────────────────────────────────────────────

@@ -1066,6 +1066,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   });
 
   // Serve uploaded files
+  // ?mode=view     → returns { content, filename, language } JSON for the viewer panel
+  // ?mode=download → Content-Disposition: attachment (browser downloads the file)
+  // (no mode)      → serves the file directly (legacy / images)
   router.get('/conversations/:id/files/:filename', async (req: Request, res: Response) => {
     const safe = param(req, 'filename').replace(/[\/\\]/g, '_');
     const filePath = path.join(chatService.artifactsDir, param(req, 'id'), safe);
@@ -1074,10 +1077,29 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
     try {
       await fs.promises.access(filePath);
-      res.sendFile(path.resolve(filePath));
     } catch {
-      res.status(404).json({ error: 'File not found' });
+      return res.status(404).json({ error: 'File not found' });
     }
+    const mode = (req.query.mode as string) || '';
+    if (mode === 'view') {
+      try {
+        const stat = await fs.promises.stat(filePath);
+        if (stat.size > 2 * 1024 * 1024) {
+          return res.status(413).json({ error: 'File too large to view (max 2 MB). Use download instead.' });
+        }
+        const content = await fs.promises.readFile(filePath, 'utf8');
+        const ext = path.extname(safe).replace('.', '');
+        return res.json({ content, filename: safe, language: ext });
+      } catch (err: unknown) {
+        return res.status(500).json({ error: (err as Error).message });
+      }
+    }
+    if (mode === 'download') {
+      res.setHeader('Content-Disposition', `attachment; filename="${safe.replace(/"/g, '\\"')}"`);
+      res.setHeader('Content-Type', 'application/octet-stream');
+      return fs.createReadStream(filePath).pipe(res);
+    }
+    res.sendFile(path.resolve(filePath));
   });
 
   router.delete('/conversations/:id/upload/:filename', csrfGuard, async (req: Request, res: Response) => {

@@ -2099,11 +2099,11 @@ async function chatKbBrowserRefetch() {
     if (countersEl && counters) {
       countersEl.textContent = `${counters.rawTotal} files · ${counters.entryCount} entries · ${counters.folderCount} folders`;
     }
-    // Skip full re-render for the synthesis tab when the D3 graph is live
+    // Skip full re-render for the synthesis tab when the 3D graph is live
     // or a dream is running — the separate synthesis poll handles targeted
-    // stepper/status updates without destroying the graph simulation.
+    // stepper/status updates without destroying the graph instance.
     const synthIsActive = chatKbBrowserState.synthesis?._status === 'running' || (chatKbBrowserState.synthesis?._dreamTriggeredAt && (Date.now() - chatKbBrowserState.synthesis._dreamTriggeredAt < 15000));
-    const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis' && (_kbGraphSim || synthIsActive);
+    const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis' && (_kbForceGraph || synthIsActive);
     const skipReflections = chatKbBrowserState.activeTab === 'reflections';
     const skipRender = skipSynthesis || skipReflections;
     if (!skipRender) {
@@ -2963,23 +2963,64 @@ function chatKbBrowserSynthesisTab() {
     </div>`;
 }
 
-// ── D3 Force Graph ─────────────────────────────────────────────────────────
+// ── 3D Force Graph (three.js + 3d-force-graph + bloom) ────────────────────
 
-let _kbGraphSim = null; // D3 simulation reference
+let _kbForceGraph = null; // ForceGraph3D instance reference
 
-function chatKbGraphInit() {
+// Lazy-load helpers — only loaded when the Synthesis graph tab opens.
+// UMD script for graph + native ESM import for bloom (same pattern as official example).
+let _fg3dScriptPromise = null;
+function _loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Failed to load ' + src));
+    document.head.appendChild(s);
+  });
+}
+function _loadForceGraph3D() {
+  if (window.ForceGraph3D) return Promise.resolve(window.ForceGraph3D);
+  if (_fg3dScriptPromise) return _fg3dScriptPromise;
+  _fg3dScriptPromise = _loadScript('js/vendor/3d-force-graph.min.js')
+    .then(() => window.ForceGraph3D);
+  return _fg3dScriptPromise;
+}
+let _bloomPromise = null;
+function _loadBloom() {
+  if (_bloomPromise) return _bloomPromise;
+  _bloomPromise = import('./vendor/three-addons/postprocessing/UnrealBloomPass.js');
+  return _bloomPromise;
+}
+
+
+async function chatKbGraphInit() {
   const container = document.getElementById('chat-kb-graph-container');
-  if (!container || typeof d3 === 'undefined') return;
+  if (!container) return;
 
   const s = chatKbBrowserState.synthesis;
   const topics = Array.isArray(s.topics) ? s.topics : [];
   const connections = Array.isArray(s.connections) ? s.connections : [];
   if (topics.length === 0) return;
 
-  // Stop any prior simulation.
-  if (_kbGraphSim) { _kbGraphSim.stop(); _kbGraphSim = null; }
+  // Tear down prior instance.
+  if (_kbForceGraph) {
+    try { _kbForceGraph.pauseAnimation(); } catch (_) { /* ok */ }
+    _kbForceGraph = null;
+  }
+  container.innerHTML = '';
 
-  // Build nodes + links.
+  // Lazy-load graph (UMD) and bloom (native ESM via importmap).
+  let ForceGraph3D;
+  try {
+    ForceGraph3D = await _loadForceGraph3D();
+  } catch (err) {
+    console.error('[kb-graph] Failed to load 3d-force-graph:', err);
+    container.innerHTML = '<p style="color:var(--muted);padding:24px;">Failed to load graph.</p>';
+    return;
+  }
+
+  // Build nodes + links (same data model).
   const topicMap = new Map(topics.map((t) => [t.topicId, t]));
   const nodes = topics.map((t) => ({
     id: t.topicId,
@@ -2997,193 +3038,87 @@ function chatKbGraphInit() {
       confidence: c.confidence || 'inferred',
     }));
 
-  // Dimensions.
-  const rect = container.getBoundingClientRect();
-  const width = rect.width || 800;
-  const height = rect.height || 500;
-
-  // Clear container.
-  container.innerHTML = '';
-
-  const svg = d3.select(container)
-    .append('svg')
-    .attr('width', '100%')
-    .attr('height', '100%')
-    .attr('viewBox', [0, 0, width, height]);
-
-  // Zoom group.
-  const g = svg.append('g');
-
-  // Read computed theme colors from CSS custom properties.
-  const cs = getComputedStyle(document.documentElement);
-  const themeText = cs.getPropertyValue('--text').trim() || '#e4e6eb';
-  const themeMuted = cs.getPropertyValue('--muted').trim() || '#8b8fa5';
-  const themeBorder = cs.getPropertyValue('--border').trim() || '#2e3242';
-
-  // Arrow markers for directed edges.
-  const defs = svg.append('defs');
-  ['extracted', 'inferred', 'speculative'].forEach((conf) => {
-    defs.append('marker')
-      .attr('id', `arrow-${conf}`)
-      .attr('viewBox', '0 -4 8 8')
-      .attr('refX', 20)
-      .attr('refY', 0)
-      .attr('markerWidth', 5)
-      .attr('markerHeight', 5)
-      .attr('orient', 'auto')
-      .append('path')
-      .attr('d', 'M0,-3L6,0L0,3')
-      .attr('fill', conf === 'extracted' ? themeMuted : themeBorder);
-  });
-
-  // Edge styles by confidence.
-  function edgeDash(conf) {
-    if (conf === 'extracted') return 'none';
-    if (conf === 'inferred') return '6,3';
-    return '2,3';
-  }
-  function edgeOpacity(conf) {
-    if (conf === 'extracted') return 0.45;
-    if (conf === 'inferred') return 0.3;
-    return 0.15;
-  }
-
-  // Links.
-  const link = g.append('g')
-    .selectAll('line')
-    .data(links)
-    .join('line')
-    .attr('stroke', themeMuted)
-    .attr('stroke-width', 1)
-    .attr('stroke-dasharray', (d) => edgeDash(d.confidence))
-    .attr('stroke-opacity', (d) => edgeOpacity(d.confidence))
-    .attr('marker-end', (d) => `url(#arrow-${d.confidence})`);
-
-  // Node sizing: min 16, scale by entryCount.
+  // Node sizing: smaller spheres for bloom glow look.
   const maxEntries = Math.max(1, ...nodes.map((n) => n.entryCount));
-  function nodeRadius(d) {
-    return 16 + 12 * (d.entryCount / maxEntries);
+
+  // Edge opacity by confidence.
+  function edgeOpacity(conf) {
+    if (conf === 'extracted') return 0.6;
+    if (conf === 'inferred') return 0.4;
+    return 0.2;
   }
 
-  // Node groups.
-  const node = g.append('g')
-    .selectAll('g')
-    .data(nodes)
-    .join('g')
-    .attr('class', 'chat-kb-graph-node')
-    .call(d3.drag()
-      .on('start', dragStarted)
-      .on('drag', dragged)
-      .on('end', dragEnded));
+  // Colors — bright for bloom glow.
+  const GOD_COLOR = '#ffcc00';
+  const REG_COLOR = '#4499ff';
+  const DIM_COLOR = 'rgba(30, 30, 50, 0.15)';
 
-  // Node circles.
-  node.append('circle')
-    .attr('r', nodeRadius)
-    .attr('fill', (d) => d.isGodNode ? 'rgba(234, 179, 8, 0.10)' : 'rgba(148, 163, 184, 0.08)')
-    .attr('stroke', (d) => d.isGodNode ? 'rgba(234, 179, 8, 0.50)' : 'rgba(148, 163, 184, 0.35)')
-    .attr('stroke-width', 1);
-
-  // Node entry count (single number — hover/click for full title).
-  node.append('text')
-    .text((d) => d.entryCount)
-    .attr('text-anchor', 'middle')
-    .attr('dy', 4)
-    .attr('font-size', 11)
-    .attr('font-weight', 500)
-    .attr('fill', (d) => d.isGodNode ? 'rgba(234, 179, 8, 0.85)' : themeMuted)
-    .style('pointer-events', 'none');
-
-  // Zoom-based short labels — appear when zoomed past 1.5x.
-  const zoomLabel = g.append('g')
-    .selectAll('text')
-    .data(nodes)
-    .join('text')
-    .text((d) => {
-      const words = d.title.split(/\s+/);
-      return words.length <= 2 ? d.title : words.slice(0, 2).join(' ') + '\u2026';
+  // Create the 3D force graph (UMD build requires `new`, same as official example).
+  const graph = new ForceGraph3D(container)
+    .backgroundColor('#000008')
+    .width(container.clientWidth)
+    .height(container.clientHeight)
+    .graphData({ nodes, links })
+    // Nodes — default spheres (MeshLambertMaterial blooms well).
+    .nodeVal((d) => 4 + 6 * (d.entryCount / maxEntries))
+    .nodeColor((d) => d.isGodNode ? GOD_COLOR : REG_COLOR)
+    .nodeLabel((d) => `${d.title}\n${d.entryCount} entries \u00b7 ${d.connectionCount} connections`)
+    .nodeOpacity(1.0)
+    // Links — bright so they glow with bloom.
+    .linkColor(() => '#6688cc')
+    .linkOpacity((d) => edgeOpacity(d.confidence))
+    .linkWidth((d) => d.confidence === 'extracted' ? 1.2 : 0.5)
+    .linkDirectionalArrowLength((d) => d.confidence === 'extracted' ? 3 : 1.5)
+    .linkDirectionalArrowRelPos(1)
+    .linkDirectionalParticles((d) => d.confidence === 'extracted' ? 2 : 0)
+    .linkDirectionalParticleWidth(1.2)
+    // Interaction.
+    .enableNodeDrag(true)
+    .onNodeClick((node) => {
+      chatKbGraphShowPanel(node);
     })
-    .attr('text-anchor', 'middle')
-    .attr('dy', (d) => nodeRadius(d) + 13)
-    .attr('font-size', 9)
-    .attr('fill', themeMuted)
-    .attr('opacity', 0)
-    .style('pointer-events', 'none');
-
-  // Update zoom handler to show/hide labels.
-  let _currentZoomScale = 1;
-  const zoomBehavior = d3.zoom()
-    .scaleExtent([0.1, 4])
-    .on('zoom', (event) => {
-      g.attr('transform', event.transform);
-      const prev = _currentZoomScale >= 1.5;
-      _currentZoomScale = event.transform.k;
-      const now = _currentZoomScale >= 1.5;
-      if (prev !== now) zoomLabel.attr('opacity', now ? 0.85 : 0);
-    });
-  svg.call(zoomBehavior);
-
-  // Track selected node for highlight.
-  let _selectedNodeId = null;
-  function updateNodeHighlight() {
-    node.select('circle')
-      .attr('stroke', (d) => {
-        if (d.id === _selectedNodeId) return 'var(--accent-chat)';
-        return d.isGodNode ? 'rgba(234, 179, 8, 0.50)' : 'rgba(148, 163, 184, 0.35)';
-      })
-      .attr('stroke-width', (d) => d.id === _selectedNodeId ? 2 : 1);
-  }
-
-  // Click → detail panel.
-  node.on('click', (event, d) => {
-    event.stopPropagation();
-    _selectedNodeId = d.id;
-    updateNodeHighlight();
-    chatKbGraphShowPanel(d);
-  });
-
-  // Click background → clear panel + selection.
-  svg.on('click', () => {
-    _selectedNodeId = null;
-    updateNodeHighlight();
-    chatKbGraphClearPanel();
-  });
-
-  // Tooltip on hover.
-  node.append('title').text((d) => `${d.title}\n${d.entryCount} entries \u00b7 ${d.connectionCount} connections`);
-
-  // Force simulation.
-  const sim = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id((d) => d.id).distance(120))
-    .force('charge', d3.forceManyBody().strength(-300))
-    .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collision', d3.forceCollide().radius((d) => nodeRadius(d) + 8))
-    .on('tick', () => {
-      link
-        .attr('x1', (d) => d.source.x)
-        .attr('y1', (d) => d.source.y)
-        .attr('x2', (d) => d.target.x)
-        .attr('y2', (d) => d.target.y);
-      node.attr('transform', (d) => `translate(${d.x},${d.y})`);
-      zoomLabel.attr('x', (d) => d.x).attr('y', (d) => d.y);
+    .onBackgroundClick(() => {
+      chatKbGraphClearPanel();
     });
 
-  _kbGraphSim = sim;
+  // Tune d3-force parameters.
+  graph.d3Force('charge').strength(-300);
+  graph.d3Force('link').distance(120);
 
-  // Drag handlers.
-  function dragStarted(event, d) {
-    if (!event.active) sim.alphaTarget(0.3).restart();
-    d.fx = d.x;
-    d.fy = d.y;
+  // Center the camera on the graph.
+  // zoomToFit is unreliable, so manually compute centroid + bounding sphere and set camera.
+  function centerGraph(duration) {
+    const gd = graph.graphData().nodes;
+    if (gd.length === 0 || gd[0].x == null) return;
+    let cx = 0, cy = 0, cz = 0;
+    for (const n of gd) { cx += n.x || 0; cy += n.y || 0; cz += n.z || 0; }
+    cx /= gd.length; cy /= gd.length; cz /= gd.length;
+    let maxR = 0;
+    for (const n of gd) {
+      const d = Math.hypot((n.x || 0) - cx, (n.y || 0) - cy, (n.z || 0) - cz);
+      if (d > maxR) maxR = d;
+    }
+    const dist = Math.max(maxR * 2.5, 200);
+    graph.cameraPosition({ x: cx, y: cy, z: cz + dist }, { x: cx, y: cy, z: cz }, duration);
   }
-  function dragged(event, d) {
-    d.fx = event.x;
-    d.fy = event.y;
+  setTimeout(() => centerGraph(0), 300);
+  setTimeout(() => centerGraph(600), 2000);
+  graph.onEngineStop(() => centerGraph(600));
+
+  // Add bloom post-processing (UnrealBloomPass via native ESM, same pattern as official example).
+  try {
+    const { UnrealBloomPass } = await _loadBloom();
+    const bloomPass = new UnrealBloomPass();
+    bloomPass.strength = 3;
+    bloomPass.radius = 1;
+    bloomPass.threshold = 0;
+    graph.postProcessingComposer().addPass(bloomPass);
+    console.log('[kb-graph] Bloom pass added.');
+  } catch (err) {
+    console.warn('[kb-graph] Bloom pass failed:', err);
   }
-  function dragEnded(event, d) {
-    if (!event.active) sim.alphaTarget(0);
-    d.fx = null;
-    d.fy = null;
-  }
+
+  _kbForceGraph = graph;
 
   // Search-to-focus.
   const searchInput = document.getElementById('chat-kb-graph-search');
@@ -3191,22 +3126,33 @@ function chatKbGraphInit() {
     searchInput.oninput = () => {
       const q = searchInput.value.toLowerCase().trim();
       if (!q) {
-        node.attr('opacity', 1);
-        link.attr('stroke-opacity', (d) => edgeOpacity(d.confidence));
+        graph
+          .nodeColor((d) => d.isGodNode ? GOD_COLOR : REG_COLOR)
+          .linkOpacity((d) => edgeOpacity(d.confidence));
         return;
       }
-      const matchIds = new Set(nodes.filter((n) => n.title.toLowerCase().includes(q)).map((n) => n.id));
-      node.attr('opacity', (d) => matchIds.has(d.id) ? 1 : 0.15);
-      link.attr('stroke-opacity', (d) =>
-        matchIds.has(d.source.id || d.source) || matchIds.has(d.target.id || d.target) ? edgeOpacity(d.confidence) : 0.03);
+      const matchIds = new Set(
+        nodes.filter((n) => n.title.toLowerCase().includes(q)).map((n) => n.id),
+      );
+      graph
+        .nodeColor((d) => {
+          if (!matchIds.has(d.id)) return DIM_COLOR;
+          return d.isGodNode ? GOD_COLOR : REG_COLOR;
+        })
+        .linkOpacity((d) =>
+          matchIds.has(d.source.id || d.source) || matchIds.has(d.target.id || d.target)
+            ? edgeOpacity(d.confidence) : 0.03);
 
-      // Zoom to first match.
+      // Fly camera to first match.
       if (matchIds.size > 0) {
         const firstMatch = nodes.find((n) => matchIds.has(n.id));
         if (firstMatch && firstMatch.x != null) {
-          svg.transition().duration(400).call(
-            zoomBehavior.transform,
-            d3.zoomIdentity.translate(width / 2 - firstMatch.x, height / 2 - firstMatch.y),
+          const distance = 120;
+          const distRatio = 1 + distance / Math.hypot(firstMatch.x, firstMatch.y, firstMatch.z || 0);
+          graph.cameraPosition(
+            { x: firstMatch.x * distRatio, y: firstMatch.y * distRatio, z: (firstMatch.z || 0) * distRatio },
+            firstMatch,
+            1000,
           );
         }
       }
@@ -3310,8 +3256,8 @@ function chatKbBrowserWireSynthesisTab() {
       } catch (err) { chatShowAlert('Re-Dream failed: ' + err.message); }
     };
   }
-  // Initialize D3 force graph
-  chatKbGraphInit();
+  // Initialize 3D force graph (async — lazy-loads dependencies on first call).
+  chatKbGraphInit().catch((err) => console.error('[kb-graph] init failed:', err));
 }
 
 // ── KB Settings tab ─────────────────────────────────────────────────────────
