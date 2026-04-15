@@ -260,6 +260,7 @@ export async function chatSendMessage() {
     const finalSt = state.chatStreamingState.get(targetConvId);
     const hadError = finalSt?._hadError;
     state.chatStreamingConvs.delete(targetConvId);
+    console.log(`[plan-debug] finally block: hasSt=${!!finalSt} pending=${!!finalSt?.pendingInteraction} hadError=${hadError}`);
 
     if (finalSt?.pendingInteraction) {
       // Stream ended while plan approval / user question is pending.
@@ -292,8 +293,11 @@ export async function chatSendMessage() {
 
 export function chatHandleStreamEvent(targetConvId, event) {
   const st = state.chatStreamingState.get(targetConvId);
-  if (!st) return;
+  if (!st) { console.warn('[plan-debug] no streaming state for', targetConvId, event.type); return; }
   const isStillActive = (state.chatActiveConvId === targetConvId);
+  if (event.type === 'tool_activity' || event.type === 'done' || event.type === 'assistant_message' || event.type === 'turn_complete') {
+    console.log(`[plan-debug] event=${event.type} active=${isStillActive} pending=${!!st.pendingInteraction} planMode=${event.isPlanMode || ''} planAction=${event.planAction || ''} hasContent=${!!(event.planContent)}`);
+  }
 
   if (isStillActive && (!st.streamingMsgEl || !st.streamingMsgEl.isConnected)) {
     st.streamingMsgEl = chatAppendStreamingMessage();
@@ -463,6 +467,7 @@ export function chatHandleStreamEvent(targetConvId, event) {
 // ── Plan approval ────────────────────────────────────────────────────────────
 
 export function chatShowPlanApproval(msgEl, convId, planContent) {
+  console.log(`[plan-debug] chatShowPlanApproval called convId=${convId} msgEl=${!!msgEl} connected=${msgEl?.isConnected} contentLen=${(planContent || '').length}`);
   if (!msgEl) return;
   const contentEl = msgEl.querySelector('.chat-msg-content');
   if (!contentEl) return;
@@ -482,8 +487,10 @@ export function chatShowPlanApproval(msgEl, convId, planContent) {
     btn.onclick = async () => {
       const action = btn.dataset.action;
       const text = action === 'approve' ? 'yes' : 'no';
+      console.log(`[plan-debug] plan button clicked: action=${action} convId=${convId}`);
       try {
         let sent = chatWsSend(convId, { type: 'input', text });
+        console.log(`[plan-debug] chatWsSend returned: ${sent}`);
         if (!sent) {
           // WS closed — attempt reconnect and retry
           const ws = chatConnectWs(convId);
