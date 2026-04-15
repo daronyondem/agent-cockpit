@@ -73,6 +73,7 @@ export function attachWebSocket(
   const wss = new WebSocketServer({ noServer: true });
   const activeWebSockets = new Map<string, WebSocket>();
   const convBuffers = new Map<string, ConvBuffer>();
+  let shuttingDown = false;
 
   // ── Keepalive: 30s ping/pong (well under Cloudflare's 100s idle timeout) ──
   const PING_INTERVAL = 30_000;
@@ -270,7 +271,9 @@ export function attachWebSocket(
     });
 
     ws.on('close', () => {
-      console.log(`[ws] Disconnected for conv=${convId}`);
+      if (!shuttingDown) {
+        console.log(`[ws] Disconnected for conv=${convId}`);
+      }
       if (activeWebSockets.get(convId) === ws) {
         activeWebSockets.delete(convId);
       }
@@ -351,6 +354,7 @@ export function attachWebSocket(
   }
 
   function shutdown() {
+    shuttingDown = true;
     clearInterval(pingInterval);
     for (const [convId, ws] of activeWebSockets) {
       console.log(`[ws-shutdown] Closing WS for conv=${convId}`);

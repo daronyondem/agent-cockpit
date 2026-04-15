@@ -1,4 +1,4 @@
-import { state, chatFetch, chatApiUrl, fetchCsrfToken, chatSyncQueueToServer, chatShowSessionExpired } from './state.js';
+import { state, chatFetch, chatSyncQueueToServer } from './state.js';
 import { esc, escWithCode } from './utils.js';
 import {
   chatRenderMessages, chatRenderMarkdown, chatAutoResize, chatScrollToBottom,
@@ -100,64 +100,28 @@ export function chatCleanupStreamState(convId, { force = false } = {}) {
 
 // ── Sending messages ─────────────────────────────────────────────────────────
 
-export async function chatSendMessage() {
-  const textarea = document.getElementById('chat-textarea');
-  const hasText = textarea && textarea.value.trim();
-  const completedFiles = state.chatPendingFiles.filter(e => e.status === 'done');
-  const hasFiles = completedFiles.length > 0;
-  if ((!hasText && !hasFiles) || state.chatResettingConvs.has(state.chatActiveConvId)) return;
-  if (state.chatPendingFiles.some(e => e.status === 'uploading')) return;
-
-  let content = textarea ? textarea.value.trim() : '';
-  if (textarea) { textarea.value = ''; chatAutoResize(textarea); }
-
-  if (hasFiles) {
-    const paths = completedFiles.map(e => e.result.path).join(', ');
-    content = content
-      ? content + '\n\n[Uploaded files: ' + paths + ']'
-      : '[Uploaded files: ' + paths + ']';
-  }
-  state.chatPendingFiles = [];
-  chatRenderFileChips();
-  const sendBtn = document.getElementById('chat-send-btn');
-  if (sendBtn) sendBtn.disabled = true;
-
-  if (!state.chatActiveConvId) {
-    state.chatDraftState.delete('__new__');
-    try {
-      const body = state.chatPendingWorkingDir ? { workingDir: state.chatPendingWorkingDir } : {};
-      state.chatPendingWorkingDir = null;
-      const res = await chatFetch('conversations', { method: 'POST', body });
-      const conv = await res.json();
-      state.chatActiveConvId = conv.id;
-      state.chatActiveConv = conv;
-      chatLoadConversations();
-      chatUpdateHeader();
-    } catch (err) {
-      alert('Failed to create conversation: ' + err.message);
-      return;
-    }
-  }
-
-  if (state.chatStreamingConvs.has(state.chatActiveConvId)) {
-    const queue = state.chatMessageQueue.get(state.chatActiveConvId) || [];
+async function chatStartMessageRequest(targetConvId, content, { allowQueue = true } = {}) {
+  if (!targetConvId || !content) return;
+  if (allowQueue && state.chatStreamingConvs.has(targetConvId)) {
+    const queue = state.chatMessageQueue.get(targetConvId) || [];
     queue.push({ id: ++state.chatQueueIdCounter, content, inFlight: false });
-    state.chatMessageQueue.set(state.chatActiveConvId, queue);
-    state.chatQueuePaused.delete(state.chatActiveConvId);
+    state.chatMessageQueue.set(targetConvId, queue);
+    state.chatQueuePaused.delete(targetConvId);
     chatRenderQueuedMessages();
     chatUpdateSendButtonState();
     chatScrollToBottom();
-    chatSyncQueueToServer(state.chatActiveConvId);
+    chatSyncQueueToServer(targetConvId);
     return;
   }
 
-  state.chatDraftState.delete(state.chatActiveConvId);
+  if (state.chatActiveConvId === targetConvId) {
+    state.chatDraftState.delete(targetConvId);
+  }
   const backend = document.getElementById('chat-backend-select')?.value || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
   const modelSelect = document.getElementById('chat-model-select');
   const model = (modelSelect && modelSelect.style.display !== 'none') ? modelSelect.value : undefined;
   const effortSelect = document.getElementById('chat-effort-select');
   const effort = (effortSelect && effortSelect.style.display !== 'none') ? effortSelect.value : undefined;
-  const targetConvId = state.chatActiveConvId;
 
   // Persist selected backend (and model/effort) as the default for new conversations.
   // defaultEffort only persists when the chosen model matches defaultModel, so
@@ -210,27 +174,10 @@ export async function chatSendMessage() {
       });
     }
 
-    if (!state.csrfToken) await fetchCsrfToken();
-    const response = await fetch(chatApiUrl(`conversations/${targetConvId}/message`), {
+    const response = await chatFetch(`conversations/${targetConvId}/message`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-csrf-token': state.csrfToken || '',
-      },
-      credentials: 'same-origin',
-      body: JSON.stringify({ content, backend, model, effort }),
+      body: { content, backend, model, effort },
     });
-
-    if (response.status === 401) {
-      chatShowSessionExpired();
-      throw new Error('Session expired');
-    }
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      throw new Error(err.error || response.statusText);
-    }
-
     const postResult = await response.json();
 
     if (state.chatActiveConv && state.chatActiveConvId === targetConvId && postResult.userMessage) {
@@ -287,6 +234,74 @@ export async function chatSendMessage() {
       }
     }
   }
+}
+
+async function chatSendInteractionAsMessage(convId, text) {
+  if (state.chatActiveConvId !== convId || !state.chatActiveConv) {
+    throw new Error('Open the conversation before responding');
+  }
+  state.chatStreamingConvs.delete(convId);
+  chatCleanupStreamState(convId, { force: true });
+  const sendBtn = document.getElementById('chat-send-btn');
+  if (sendBtn) sendBtn.disabled = true;
+  await chatStartMessageRequest(convId, text, { allowQueue: false });
+}
+
+async function chatDeliverInteractionResponse(convId, text) {
+  const response = await chatFetch(`conversations/${convId}/input`, {
+    method: 'POST',
+    body: { text, streamActive: state.chatStreamingConvs.has(convId) },
+  });
+  const result = await response.json().catch(() => ({}));
+  return result.mode === 'stdin' ? 'stdin' : 'message';
+}
+
+function chatClearPendingInteraction(convId) {
+  state.chatPendingInteractions.delete(convId);
+  const st = state.chatStreamingState.get(convId);
+  if (st) st.pendingInteraction = null;
+}
+
+export async function chatSendMessage() {
+  const textarea = document.getElementById('chat-textarea');
+  const hasText = textarea && textarea.value.trim();
+  const completedFiles = state.chatPendingFiles.filter(e => e.status === 'done');
+  const hasFiles = completedFiles.length > 0;
+  if ((!hasText && !hasFiles) || state.chatResettingConvs.has(state.chatActiveConvId)) return;
+  if (state.chatPendingFiles.some(e => e.status === 'uploading')) return;
+
+  let content = textarea ? textarea.value.trim() : '';
+  if (textarea) { textarea.value = ''; chatAutoResize(textarea); }
+
+  if (hasFiles) {
+    const paths = completedFiles.map(e => e.result.path).join(', ');
+    content = content
+      ? content + '\n\n[Uploaded files: ' + paths + ']'
+      : '[Uploaded files: ' + paths + ']';
+  }
+  state.chatPendingFiles = [];
+  chatRenderFileChips();
+  const sendBtn = document.getElementById('chat-send-btn');
+  if (sendBtn) sendBtn.disabled = true;
+
+  if (!state.chatActiveConvId) {
+    state.chatDraftState.delete('__new__');
+    try {
+      const body = state.chatPendingWorkingDir ? { workingDir: state.chatPendingWorkingDir } : {};
+      state.chatPendingWorkingDir = null;
+      const res = await chatFetch('conversations', { method: 'POST', body });
+      const conv = await res.json();
+      state.chatActiveConvId = conv.id;
+      state.chatActiveConv = conv;
+      chatLoadConversations();
+      chatUpdateHeader();
+    } catch (err) {
+      alert('Failed to create conversation: ' + err.message);
+      return;
+    }
+  }
+
+  await chatStartMessageRequest(state.chatActiveConvId, content);
 }
 
 // ── Stream event handling ────────────────────────────────────────────────────
@@ -489,33 +504,22 @@ export function chatShowPlanApproval(msgEl, convId, planContent) {
       const text = action === 'approve' ? 'yes' : 'no';
       console.log(`[plan-debug] plan button clicked: action=${action} convId=${convId}`);
       try {
-        let sent = chatWsSend(convId, { type: 'input', text });
-        console.log(`[plan-debug] chatWsSend returned: ${sent}`);
-        if (!sent) {
-          // WS closed — attempt reconnect and retry
-          const ws = chatConnectWs(convId);
-          if (ws.readyState !== WebSocket.OPEN) {
-            await new Promise((resolve, reject) => {
-              const timeout = setTimeout(() => reject(new Error('Reconnect timeout')), 5000);
-              ws.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
-              ws.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Reconnect failed')); }, { once: true });
-            });
-          }
-          sent = chatWsSend(convId, { type: 'input', text });
-          if (!sent) throw new Error('Connection lost — please try again');
-        }
-        contentEl.innerHTML = `${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
-        chatHighlightCode(contentEl);
-        state.chatPendingInteractions.delete(convId);
-        const approvalState = state.chatStreamingState.get(convId);
-        if (approvalState) {
-          approvalState.pendingInteraction = null;
-          if (!state.chatStreamingConvs.has(convId)) {
-            chatCleanupStreamState(convId, { force: true });
-          }
+        const mode = await chatDeliverInteractionResponse(convId, text);
+        console.log(`[plan-debug] interaction delivery mode=${mode}`);
+        if (mode === 'stdin') {
+          contentEl.innerHTML = `${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
+          chatHighlightCode(contentEl);
+          chatClearPendingInteraction(convId);
+        } else {
+          chatClearPendingInteraction(convId);
+          await chatSendInteractionAsMessage(convId, text);
         }
       } catch (err) {
-        contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
+        if (contentEl.isConnected) {
+          contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
+        } else if (state.chatActiveConvId === convId) {
+          chatAppendError(`Failed to send response: ${err.message}`);
+        }
       }
     };
   });
@@ -573,30 +577,20 @@ export function chatShowUserQuestion(msgEl, convId, event) {
     if (!text) return;
     submitBtn.disabled = true;
     try {
-      let sent = chatWsSend(convId, { type: 'input', text });
-      if (!sent) {
-        const ws = chatConnectWs(convId);
-        if (ws.readyState !== WebSocket.OPEN) {
-          await new Promise((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error('Reconnect timeout')), 5000);
-            ws.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
-            ws.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Reconnect failed')); }, { once: true });
-          });
-        }
-        sent = chatWsSend(convId, { type: 'input', text });
-        if (!sent) throw new Error('Connection lost — please try again');
-      }
-      contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Answered: ${esc(text)}</div>`;
-      state.chatPendingInteractions.delete(convId);
-      const questionState = state.chatStreamingState.get(convId);
-      if (questionState) {
-        questionState.pendingInteraction = null;
-        if (!state.chatStreamingConvs.has(convId)) {
-          chatCleanupStreamState(convId, { force: true });
-        }
+      const mode = await chatDeliverInteractionResponse(convId, text);
+      if (mode === 'stdin') {
+        contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Answered: ${esc(text)}</div>`;
+        chatClearPendingInteraction(convId);
+      } else {
+        chatClearPendingInteraction(convId);
+        await chatSendInteractionAsMessage(convId, text);
       }
     } catch (err) {
-      contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
+      if (contentEl.isConnected) {
+        contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
+      } else if (state.chatActiveConvId === convId) {
+        chatAppendError(`Failed to send response: ${err.message}`);
+      }
     }
   };
 

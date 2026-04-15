@@ -147,8 +147,14 @@ export async function processStream(
         }
         const { type: _t, planContent: _pc, ...rest } = event;
         const restAny = rest as Record<string, unknown>;
-        if (restAny.isPlanMode && restAny.planAction === 'exit' && pendingPlanContent) {
-          restAny.planContent = pendingPlanContent;
+        if (restAny.isPlanMode && restAny.planAction === 'exit') {
+          const fallbackPlanContent = pendingPlanContent
+            || fullResponse.trim()
+            || resultText?.trim()
+            || '';
+          if (fallbackPlanContent) {
+            restAny.planContent = fallbackPlanContent;
+          }
         }
         if (restAny.isAgent && restAny.id) {
           console.log(`[chat] AGENT ${restAny.id} parentAgentId=${restAny.parentAgentId || 'none'}`);
@@ -1037,6 +1043,27 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
 
     res.json({ userMessage: userMsg, streamReady: true });
+  });
+
+  router.post('/conversations/:id/input', csrfGuard, async (req: Request, res: Response) => {
+    const convId = param(req, 'id');
+    const { text, streamActive } = req.body as { text?: string; streamActive?: boolean };
+
+    if (!text || typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'Input text required' });
+    }
+
+    const conv = await chatService.getConversation(convId);
+    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+
+    const entry = activeStreams.get(convId);
+    if (streamActive && entry?.sendInput) {
+      console.log(`[chat] Delivering interaction input via active stream for conv=${convId}`);
+      entry.sendInput(text.trim());
+      return res.json({ mode: 'stdin' });
+    }
+
+    return res.json({ mode: 'message' });
   });
 
   // ── File upload ─────────────────────────────────────────────────────────────

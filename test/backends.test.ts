@@ -232,6 +232,46 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     await sleep(500);
   }, 10000);
 
+  test('suppresses pure "no stdin data received" exits in streaming mode', async () => {
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: () => {
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => {
+            proc.stderr.emit('data', Buffer.from('no stdin data received\n'));
+            proc.emit('close', 1, null);
+          }, 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-stdin-timeout',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef!) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(events.some(e => e.type === 'error')).toBe(false);
+    expect(events[events.length - 1].type).toBe('done');
+  });
+
   test('passes --model flag when model option is set', async () => {
     let capturedArgs: string[] | undefined;
     let streamRef: AsyncGenerator<any>;
