@@ -1992,6 +1992,7 @@ function chatCloseKbBrowser() {
   if (chatKbBrowserState?.pollTimer) {
     clearInterval(chatKbBrowserState.pollTimer);
   }
+  _chatKbDestroyGraph();
   chatKbBrowserState = null;
   const messagesEl = document.getElementById('chat-messages');
   const browserEl = document.getElementById('chat-kb-browser');
@@ -2063,7 +2064,11 @@ async function chatKbBrowserLoadPandocStatus() {
     // Treat a fetch failure the same as "unknown" — don't block the UI on it.
     chatKbBrowserState.pandocStatus = null;
   }
-  chatKbBrowserRenderTab();
+  const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis' && _kbForceGraph;
+  const skipReflections = chatKbBrowserState.activeTab === 'reflections';
+  if (!skipSynthesis && !skipReflections) {
+    chatKbBrowserRenderTab();
+  }
 }
 
 async function chatKbBrowserRefetch() {
@@ -2103,7 +2108,8 @@ async function chatKbBrowserRefetch() {
     // or a dream is running — the separate synthesis poll handles targeted
     // stepper/status updates without destroying the graph instance.
     const synthIsActive = chatKbBrowserState.synthesis?._status === 'running' || (chatKbBrowserState.synthesis?._dreamTriggeredAt && (Date.now() - chatKbBrowserState.synthesis._dreamTriggeredAt < 15000));
-    const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis' && (_kbForceGraph || synthIsActive);
+    const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis'
+      && (_kbForceGraph || synthIsActive);
     const skipReflections = chatKbBrowserState.activeTab === 'reflections';
     const skipRender = skipSynthesis || skipReflections;
     if (!skipRender) {
@@ -2118,6 +2124,13 @@ async function chatKbBrowserRefetch() {
 function chatKbBrowserRenderTab() {
   const content = document.getElementById('chat-kb-tab-content');
   if (!content || !chatKbBrowserState) return;
+
+  if (chatKbBrowserState.activeTab !== 'synthesis') {
+    _chatKbDestroyGraph();
+  } else if (_kbForceGraph) {
+    chatKbSynthesisInPlaceUpdate();
+    return;
+  }
 
   // While an XHR upload is in flight the progress bar DOM elements are
   // referenced directly by the upload callbacks. Re-rendering via innerHTML
@@ -2833,7 +2846,9 @@ async function chatKbBrowserRefetchSynthesis() {
         // Fall back to a full re-render when the DOM elements aren't present
         // (e.g. first render, or status just changed to/from running).
         if (!chatKbSynthesisInPlaceUpdate()) {
-          chatKbBrowserRenderTab();
+          if (!_kbForceGraph) {
+            chatKbBrowserRenderTab();
+          }
         }
       }
     }
@@ -2966,9 +2981,10 @@ function chatKbBrowserSynthesisTab() {
 // ── 3D Force Graph (three.js + 3d-force-graph + bloom) ────────────────────
 
 let _kbForceGraph = null; // ForceGraph3D instance reference
+const BLOOM_PASS_LOCAL_URL = './vendor/three-addons/postprocessing/UnrealBloomPass.js';
 
 // Lazy-load helpers — only loaded when the Synthesis graph tab opens.
-// UMD script for graph + native ESM import for bloom (same pattern as official example).
+// UMD script for graph + native ESM post-processing imports.
 let _fg3dScriptPromise = null;
 function _loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -2982,17 +2998,98 @@ function _loadScript(src) {
 function _loadForceGraph3D() {
   if (window.ForceGraph3D) return Promise.resolve(window.ForceGraph3D);
   if (_fg3dScriptPromise) return _fg3dScriptPromise;
-  _fg3dScriptPromise = _loadScript('js/vendor/3d-force-graph.min.js')
+  _fg3dScriptPromise = _loadThree()
+    .then((THREE) => {
+      // ForceGraph3D will reuse window.THREE when it is present, which keeps
+      // the graph renderer and the bloom pass on the same Three.js instance.
+      window.THREE = THREE;
+      return _loadScript('js/vendor/3d-force-graph.min.js');
+    })
     .then(() => window.ForceGraph3D);
   return _fg3dScriptPromise;
 }
 let _bloomPromise = null;
 function _loadBloom() {
   if (_bloomPromise) return _bloomPromise;
-  _bloomPromise = import('./vendor/three-addons/postprocessing/UnrealBloomPass.js');
+  _bloomPromise = import(BLOOM_PASS_LOCAL_URL);
   return _bloomPromise;
 }
+let _threePromise = null;
+function _loadThree() {
+  if (_threePromise) return _threePromise;
+  _threePromise = import('three');
+  return _threePromise;
+}
 
+function _chatKbDestroyGraph() {
+  if (!_kbForceGraph) return;
+  try { _kbForceGraph.pauseAnimation(); } catch (_) { /* ok */ }
+  try { _kbForceGraph._destructor?.(); } catch (_) { /* ok */ }
+  _kbForceGraph = null;
+}
+
+function _chatKbComputeTopicClusters(nodes, links) {
+  const adjacency = new Map(nodes.map((n) => [n.id, new Set()]));
+  for (const link of links) {
+    adjacency.get(link.source)?.add(link.target);
+    adjacency.get(link.target)?.add(link.source);
+  }
+
+  const labels = new Map(nodes.map((n) => [n.id, n.id]));
+  const order = [...nodes]
+    .sort((a, b) => {
+      const degDelta = (adjacency.get(b.id)?.size || 0) - (adjacency.get(a.id)?.size || 0);
+      if (degDelta !== 0) return degDelta;
+      return a.id.localeCompare(b.id);
+    })
+    .map((n) => n.id);
+
+  for (let i = 0; i < 12; i++) {
+    let changed = false;
+    for (const id of order) {
+      const neighbors = adjacency.get(id);
+      if (!neighbors || neighbors.size === 0) continue;
+      const counts = new Map();
+      for (const neighborId of neighbors) {
+        const label = labels.get(neighborId);
+        counts.set(label, (counts.get(label) || 0) + 1);
+      }
+      const nextLabel = [...counts.entries()]
+        .sort((a, b) => {
+          const countDelta = b[1] - a[1];
+          if (countDelta !== 0) return countDelta;
+          return String(a[0]).localeCompare(String(b[0]));
+        })[0]?.[0];
+      if (nextLabel && nextLabel !== labels.get(id)) {
+        labels.set(id, nextLabel);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  const clusterMembers = new Map();
+  for (const node of nodes) {
+    const label = labels.get(node.id) || node.id;
+    if (!clusterMembers.has(label)) clusterMembers.set(label, []);
+    clusterMembers.get(label).push(node.id);
+  }
+
+  const sortedClusters = [...clusterMembers.entries()]
+    .sort((a, b) => {
+      const sizeDelta = b[1].length - a[1].length;
+      if (sizeDelta !== 0) return sizeDelta;
+      return String(a[0]).localeCompare(String(b[0]));
+    });
+
+  const nodeToCluster = new Map();
+  sortedClusters.forEach(([label, members], idx) => {
+    for (const nodeId of members) {
+      nodeToCluster.set(nodeId, `cluster-${idx}-${label}`);
+    }
+  });
+  return nodeToCluster;
+}
 
 async function chatKbGraphInit() {
   const container = document.getElementById('chat-kb-graph-container');
@@ -3004,13 +3101,10 @@ async function chatKbGraphInit() {
   if (topics.length === 0) return;
 
   // Tear down prior instance.
-  if (_kbForceGraph) {
-    try { _kbForceGraph.pauseAnimation(); } catch (_) { /* ok */ }
-    _kbForceGraph = null;
-  }
+  _chatKbDestroyGraph();
   container.innerHTML = '';
 
-  // Lazy-load graph (UMD) and bloom (native ESM via importmap).
+  // Lazy-load graph (UMD) and post-processing (native ESM).
   let ForceGraph3D;
   try {
     ForceGraph3D = await _loadForceGraph3D();
@@ -3036,10 +3130,14 @@ async function chatKbGraphInit() {
       target: c.targetTopic,
       relationship: c.relationship || '',
       confidence: c.confidence || 'inferred',
-    }));
+  }));
 
   // Node sizing: smaller spheres for bloom glow look.
   const maxEntries = Math.max(1, ...nodes.map((n) => n.entryCount));
+  const nodeClusters = _chatKbComputeTopicClusters(nodes, links);
+  nodes.forEach((node) => {
+    node.clusterId = nodeClusters.get(node.id) || null;
+  });
 
   // Edge opacity by confidence.
   function edgeOpacity(conf) {
@@ -3050,28 +3148,63 @@ async function chatKbGraphInit() {
 
   // Colors — bright for bloom glow.
   const GOD_COLOR = '#ffcc00';
-  const REG_COLOR = '#4499ff';
+  const CLUSTER_COLORS = [
+    '#4fd1ff',
+    '#7cf29a',
+    '#ff8a5b',
+    '#c084fc',
+    '#ff5da2',
+    '#ffd166',
+    '#2dd4bf',
+    '#60a5fa',
+    '#f97316',
+    '#a3e635',
+  ];
+  const LINK_COLORS = {
+    extracted: '#7df9ff',
+    inferred: '#5b8cff',
+    speculative: '#ff6b9a',
+  };
   const DIM_COLOR = 'rgba(30, 30, 50, 0.15)';
+  const DIM_LINK_COLOR = 'rgba(70, 84, 118, 0.18)';
+
+  function clusterColor(clusterId) {
+    if (!clusterId) return CLUSTER_COLORS[0];
+    let hash = 0;
+    for (let i = 0; i < clusterId.length; i++) {
+      hash = ((hash * 31) + clusterId.charCodeAt(i)) >>> 0;
+    }
+    return CLUSTER_COLORS[hash % CLUSTER_COLORS.length];
+  }
+
+  function nodeBaseColor(node) {
+    if (node.isGodNode) return GOD_COLOR;
+    return clusterColor(node.clusterId);
+  }
+
+  function linkBaseColor(link) {
+    return LINK_COLORS[link.confidence] || LINK_COLORS.inferred;
+  }
 
   // Create the 3D force graph (UMD build requires `new`, same as official example).
-  const graph = new ForceGraph3D(container)
+  const graph = new ForceGraph3D(container, {
+    rendererConfig: { antialias: true, alpha: false },
+  })
     .backgroundColor('#000008')
     .width(container.clientWidth)
     .height(container.clientHeight)
     .graphData({ nodes, links })
     // Nodes — default spheres (MeshLambertMaterial blooms well).
     .nodeVal((d) => 4 + 6 * (d.entryCount / maxEntries))
-    .nodeColor((d) => d.isGodNode ? GOD_COLOR : REG_COLOR)
+    .nodeColor((d) => nodeBaseColor(d))
     .nodeLabel((d) => `${d.title}\n${d.entryCount} entries \u00b7 ${d.connectionCount} connections`)
     .nodeOpacity(1.0)
     // Links — bright so they glow with bloom.
-    .linkColor(() => '#6688cc')
+    .linkColor((d) => linkBaseColor(d))
     .linkOpacity((d) => edgeOpacity(d.confidence))
     .linkWidth((d) => d.confidence === 'extracted' ? 1.2 : 0.5)
-    .linkDirectionalArrowLength((d) => d.confidence === 'extracted' ? 3 : 1.5)
-    .linkDirectionalArrowRelPos(1)
-    .linkDirectionalParticles((d) => d.confidence === 'extracted' ? 2 : 0)
-    .linkDirectionalParticleWidth(1.2)
+    .linkDirectionalArrowLength(0)
+    .linkDirectionalParticles(0)
     // Interaction.
     .enableNodeDrag(true)
     .onNodeClick((node) => {
@@ -3080,6 +3213,13 @@ async function chatKbGraphInit() {
     .onBackgroundClick(() => {
       chatKbGraphClearPanel();
     });
+
+  if (chatKbBrowserState?.activeTab !== 'synthesis' || container !== document.getElementById('chat-kb-graph-container')) {
+    try { graph._destructor?.(); } catch (_) { /* ok */ }
+    return;
+  }
+
+  _kbForceGraph = graph;
 
   // Tune d3-force parameters.
   graph.d3Force('charge').strength(-300);
@@ -3105,20 +3245,23 @@ async function chatKbGraphInit() {
   setTimeout(() => centerGraph(600), 2000);
   graph.onEngineStop(() => centerGraph(600));
 
-  // Add bloom post-processing (UnrealBloomPass via native ESM, same pattern as official example).
+  // Match the upstream bloom example as closely as possible: one
+  // UnrealBloomPass appended to the existing post-processing composer.
   try {
     const { UnrealBloomPass } = await _loadBloom();
+    if (_kbForceGraph !== graph || container !== document.getElementById('chat-kb-graph-container')) {
+      return;
+    }
+    const composer = graph.postProcessingComposer();
     const bloomPass = new UnrealBloomPass();
-    bloomPass.strength = 3;
+    bloomPass.strength = 4;
     bloomPass.radius = 1;
     bloomPass.threshold = 0;
-    graph.postProcessingComposer().addPass(bloomPass);
+    composer.addPass(bloomPass);
     console.log('[kb-graph] Bloom pass added.');
   } catch (err) {
     console.warn('[kb-graph] Bloom pass failed:', err);
   }
-
-  _kbForceGraph = graph;
 
   // Search-to-focus.
   const searchInput = document.getElementById('chat-kb-graph-search');
@@ -3127,7 +3270,8 @@ async function chatKbGraphInit() {
       const q = searchInput.value.toLowerCase().trim();
       if (!q) {
         graph
-          .nodeColor((d) => d.isGodNode ? GOD_COLOR : REG_COLOR)
+          .nodeColor((d) => nodeBaseColor(d))
+          .linkColor((d) => linkBaseColor(d))
           .linkOpacity((d) => edgeOpacity(d.confidence));
         return;
       }
@@ -3137,8 +3281,11 @@ async function chatKbGraphInit() {
       graph
         .nodeColor((d) => {
           if (!matchIds.has(d.id)) return DIM_COLOR;
-          return d.isGodNode ? GOD_COLOR : REG_COLOR;
+          return nodeBaseColor(d);
         })
+        .linkColor((d) =>
+          matchIds.has(d.source.id || d.source) || matchIds.has(d.target.id || d.target)
+            ? linkBaseColor(d) : DIM_LINK_COLOR)
         .linkOpacity((d) =>
           matchIds.has(d.source.id || d.source) || matchIds.has(d.target.id || d.target)
             ? edgeOpacity(d.confidence) : 0.03);
