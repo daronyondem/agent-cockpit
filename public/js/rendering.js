@@ -135,16 +135,21 @@ export function chatRenderMessages() {
 
   // Restore streaming UI if this conversation has an active stream
   const streamState = state.chatStreamingState.get(state.chatActiveConvId);
-  if (streamState) {
-    const msgEl = chatAppendStreamingMessage();
-    streamState.streamingMsgEl = msgEl;
-    chatStartElapsedTimer(state.chatActiveConvId);
+  const pendingInteraction = streamState?.pendingInteraction
+    || state.chatPendingInteractions.get(state.chatActiveConvId);
 
-    if (streamState.pendingInteraction) {
-      if (streamState.pendingInteraction.type === 'planApproval') {
-        if (_showPlanApproval) _showPlanApproval(msgEl, state.chatActiveConvId, streamState.pendingInteraction.planContent);
-      } else if (streamState.pendingInteraction.type === 'userQuestion') {
-        if (_showUserQuestion) _showUserQuestion(msgEl, state.chatActiveConvId, streamState.pendingInteraction.event);
+  if (streamState || pendingInteraction) {
+    const msgEl = chatAppendStreamingMessage();
+    if (streamState) {
+      streamState.streamingMsgEl = msgEl;
+      chatStartElapsedTimer(state.chatActiveConvId);
+    }
+
+    if (pendingInteraction) {
+      if (pendingInteraction.type === 'planApproval') {
+        if (_showPlanApproval) _showPlanApproval(msgEl, state.chatActiveConvId, pendingInteraction.planContent);
+      } else if (pendingInteraction.type === 'userQuestion') {
+        if (_showUserQuestion) _showUserQuestion(msgEl, state.chatActiveConvId, pendingInteraction.event);
       }
     } else {
       chatUpdateStreamingContent(msgEl, streamState);
@@ -152,7 +157,6 @@ export function chatRenderMessages() {
         chatStartActivityTimer(state.chatActiveConvId);
       }
     }
-    // else: default typing dots shown by chatAppendStreamingMessage
   }
 
   // Render queued messages after all real messages and streaming bubble

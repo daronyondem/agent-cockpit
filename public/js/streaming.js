@@ -308,6 +308,7 @@ export function chatHandleStreamEvent(targetConvId, event) {
     st.agentHistory = [];
     st.planModeActive = false;
     st.pendingInteraction = null;
+    state.chatPendingInteractions.delete(targetConvId);
     st._replaying = true;
     if (isStillActive && state.chatActiveConv) {
       chatRenderMessages();
@@ -373,8 +374,10 @@ export function chatHandleStreamEvent(targetConvId, event) {
     if (event.isPlanMode && event.planAction === 'exit') {
       const planContent = event.planContent || st.assistantContent;
       st.pendingInteraction = { type: 'planApproval', planContent };
+      state.chatPendingInteractions.set(targetConvId, st.pendingInteraction);
     } else if (event.isQuestion) {
       st.pendingInteraction = { type: 'userQuestion', event };
+      state.chatPendingInteractions.set(targetConvId, st.pendingInteraction);
     }
     if (isStillActive) {
       if (event.isPlanMode && event.planAction === 'exit') {
@@ -438,6 +441,7 @@ export function chatHandleStreamEvent(targetConvId, event) {
     }
   } else if (event.type === 'error') {
     st.pendingInteraction = null;
+    state.chatPendingInteractions.delete(targetConvId);
     chatArchiveActiveState(st);
     st.planModeActive = false;
     st._hadError = true;
@@ -481,6 +485,7 @@ export function chatShowPlanApproval(msgEl, convId, planContent) {
         chatWsSend(convId, { type: 'input', text });
         contentEl.innerHTML = `${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
         chatHighlightCode(contentEl);
+        state.chatPendingInteractions.delete(convId);
         const approvalState = state.chatStreamingState.get(convId);
         if (approvalState) {
           approvalState.pendingInteraction = null;
@@ -549,6 +554,7 @@ export function chatShowUserQuestion(msgEl, convId, event) {
     try {
       chatWsSend(convId, { type: 'input', text });
       contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Answered: ${esc(text)}</div>`;
+      state.chatPendingInteractions.delete(convId);
       const questionState = state.chatStreamingState.get(convId);
       if (questionState) {
         questionState.pendingInteraction = null;
