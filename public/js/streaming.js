@@ -260,17 +260,29 @@ export async function chatSendMessage() {
     const finalSt = state.chatStreamingState.get(targetConvId);
     const hadError = finalSt?._hadError;
     state.chatStreamingConvs.delete(targetConvId);
-    chatCleanupStreamState(targetConvId, { force: true });
-    chatDisconnectWs(targetConvId);
-    chatUpdateSendButtonState();
-    chatRenderConvList();
-    chatLoadConversations();
 
-    if (hadError && state.chatMessageQueue.has(targetConvId)) {
-      state.chatQueuePaused.add(targetConvId);
-      chatRenderQueuedMessages();
+    if (finalSt?.pendingInteraction) {
+      // Stream ended while plan approval / user question is pending.
+      // Preserve the streaming state and message element so the user
+      // can still interact.  The interaction handler will force-clean
+      // when the user responds (it checks !chatStreamingConvs.has).
+      chatDisconnectWs(targetConvId);
+      chatUpdateSendButtonState();
+      chatRenderConvList();
+      chatLoadConversations();
     } else {
-      chatProcessNextQueuedMessage(targetConvId);
+      chatCleanupStreamState(targetConvId, { force: true });
+      chatDisconnectWs(targetConvId);
+      chatUpdateSendButtonState();
+      chatRenderConvList();
+      chatLoadConversations();
+
+      if (hadError && state.chatMessageQueue.has(targetConvId)) {
+        state.chatQueuePaused.add(targetConvId);
+        chatRenderQueuedMessages();
+      } else {
+        chatProcessNextQueuedMessage(targetConvId);
+      }
     }
   }
 }
@@ -467,6 +479,8 @@ export function chatShowPlanApproval(msgEl, convId, planContent) {
       const text = action === 'approve' ? 'yes' : 'no';
       try {
         chatWsSend(convId, { type: 'input', text });
+        contentEl.innerHTML = `${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
+        chatHighlightCode(contentEl);
         const approvalState = state.chatStreamingState.get(convId);
         if (approvalState) {
           approvalState.pendingInteraction = null;
@@ -474,8 +488,6 @@ export function chatShowPlanApproval(msgEl, convId, planContent) {
             chatCleanupStreamState(convId, { force: true });
           }
         }
-        contentEl.innerHTML = `${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
-        chatHighlightCode(contentEl);
       } catch (err) {
         contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
       }
@@ -536,6 +548,7 @@ export function chatShowUserQuestion(msgEl, convId, event) {
     submitBtn.disabled = true;
     try {
       chatWsSend(convId, { type: 'input', text });
+      contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Answered: ${esc(text)}</div>`;
       const questionState = state.chatStreamingState.get(convId);
       if (questionState) {
         questionState.pendingInteraction = null;
@@ -543,7 +556,6 @@ export function chatShowUserQuestion(msgEl, convId, event) {
           chatCleanupStreamState(convId, { force: true });
         }
       }
-      contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Answered: ${esc(text)}</div>`;
     } catch (err) {
       contentEl.innerHTML = `<div style="font-size:12px;color:var(--danger);">Failed to send response: ${esc(err.message)}</div>`;
     }
