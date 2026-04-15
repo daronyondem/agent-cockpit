@@ -1992,6 +1992,7 @@ function chatCloseKbBrowser() {
   if (chatKbBrowserState?.pollTimer) {
     clearInterval(chatKbBrowserState.pollTimer);
   }
+  _chatKbDestroyGraph();
   chatKbBrowserState = null;
   const messagesEl = document.getElementById('chat-messages');
   const browserEl = document.getElementById('chat-kb-browser');
@@ -2063,7 +2064,11 @@ async function chatKbBrowserLoadPandocStatus() {
     // Treat a fetch failure the same as "unknown" — don't block the UI on it.
     chatKbBrowserState.pandocStatus = null;
   }
-  chatKbBrowserRenderTab();
+  const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis' && _kbForceGraph;
+  const skipReflections = chatKbBrowserState.activeTab === 'reflections';
+  if (!skipSynthesis && !skipReflections) {
+    chatKbBrowserRenderTab();
+  }
 }
 
 async function chatKbBrowserRefetch() {
@@ -2099,11 +2104,12 @@ async function chatKbBrowserRefetch() {
     if (countersEl && counters) {
       countersEl.textContent = `${counters.rawTotal} files · ${counters.entryCount} entries · ${counters.folderCount} folders`;
     }
-    // Skip full re-render for the synthesis tab when the D3 graph is live
+    // Skip full re-render for the synthesis tab when the 3D graph is live
     // or a dream is running — the separate synthesis poll handles targeted
-    // stepper/status updates without destroying the graph simulation.
+    // stepper/status updates without destroying the graph instance.
     const synthIsActive = chatKbBrowserState.synthesis?._status === 'running' || (chatKbBrowserState.synthesis?._dreamTriggeredAt && (Date.now() - chatKbBrowserState.synthesis._dreamTriggeredAt < 15000));
-    const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis' && (_kbGraphSim || synthIsActive);
+    const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis'
+      && (_kbForceGraph || synthIsActive);
     const skipReflections = chatKbBrowserState.activeTab === 'reflections';
     const skipRender = skipSynthesis || skipReflections;
     if (!skipRender) {
@@ -2118,6 +2124,13 @@ async function chatKbBrowserRefetch() {
 function chatKbBrowserRenderTab() {
   const content = document.getElementById('chat-kb-tab-content');
   if (!content || !chatKbBrowserState) return;
+
+  if (chatKbBrowserState.activeTab !== 'synthesis') {
+    _chatKbDestroyGraph();
+  } else if (_kbForceGraph) {
+    chatKbSynthesisInPlaceUpdate();
+    return;
+  }
 
   // While an XHR upload is in flight the progress bar DOM elements are
   // referenced directly by the upload callbacks. Re-rendering via innerHTML
@@ -2784,6 +2797,57 @@ function chatKbFormatRelative(iso) {
 
 // ── KB Browser: Synthesis tab ────────────────────────────────────────────────
 
+const KB_GRAPH_GOD_COLOR = '#ffcc00';
+const KB_GRAPH_CLUSTER_COLORS = [
+  '#4fd1ff',
+  '#7cf29a',
+  '#ff8a5b',
+  '#c084fc',
+  '#ff5da2',
+  '#ffd166',
+  '#2dd4bf',
+  '#60a5fa',
+  '#f97316',
+  '#a3e635',
+];
+const KB_GRAPH_LINK_COLORS = {
+  extracted: '#7df9ff',
+  inferred: '#5b8cff',
+  speculative: '#ff6b9a',
+};
+
+function chatKbGraphLegendHtml() {
+  const clusterDots = KB_GRAPH_CLUSTER_COLORS.slice(0, 4)
+    .map((color) => `<span class="chat-kb-graph-legend-swatch" style="background:${color};"></span>`)
+    .join('');
+
+  return `
+    <div class="chat-kb-graph-legend" aria-label="Graph color legend">
+      <span class="chat-kb-graph-legend-title">Legend</span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-swatch" style="background:${KB_GRAPH_GOD_COLOR};"></span>
+        God node
+      </span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-swatch-group">${clusterDots}</span>
+        Topic clusters
+      </span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-line" style="background:${KB_GRAPH_LINK_COLORS.extracted};color:${KB_GRAPH_LINK_COLORS.extracted};"></span>
+        Extracted link
+      </span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-line" style="background:${KB_GRAPH_LINK_COLORS.inferred};color:${KB_GRAPH_LINK_COLORS.inferred};"></span>
+        Inferred link
+      </span>
+      <span class="chat-kb-graph-legend-item">
+        <span class="chat-kb-graph-legend-line" style="background:${KB_GRAPH_LINK_COLORS.speculative};color:${KB_GRAPH_LINK_COLORS.speculative};"></span>
+        Speculative link
+      </span>
+    </div>
+  `;
+}
+
 async function chatKbBrowserRefetchSynthesis() {
   if (!chatKbBrowserState) return;
   chatKbBrowserState.synthesis.loading = true;
@@ -2833,7 +2897,9 @@ async function chatKbBrowserRefetchSynthesis() {
         // Fall back to a full re-render when the DOM elements aren't present
         // (e.g. first render, or status just changed to/from running).
         if (!chatKbSynthesisInPlaceUpdate()) {
-          chatKbBrowserRenderTab();
+          if (!_kbForceGraph) {
+            chatKbBrowserRenderTab();
+          }
         }
       }
     }
@@ -2949,12 +3015,13 @@ function chatKbBrowserSynthesisTab() {
       <input type="text" id="chat-kb-graph-search" class="chat-kb-graph-search" placeholder="Search topics\u2026" />
     </div>
   `;
+  const legendHtml = chatKbGraphLegendHtml();
 
   if (topics.length === 0) {
     return actionsHtml + '<p class="chat-kb-empty">No topics yet. Run a dream cycle to synthesize entries into topics.</p>';
   }
 
-  return actionsHtml + `
+  return actionsHtml + legendHtml + `
     <div class="chat-kb-graph-layout">
       <div id="chat-kb-graph-container" class="chat-kb-graph-container"></div>
       <div id="chat-kb-graph-panel" class="chat-kb-graph-panel">
@@ -2963,23 +3030,172 @@ function chatKbBrowserSynthesisTab() {
     </div>`;
 }
 
-// ── D3 Force Graph ─────────────────────────────────────────────────────────
+// ── 3D Force Graph (three.js + 3d-force-graph + bloom) ────────────────────
 
-let _kbGraphSim = null; // D3 simulation reference
+let _kbForceGraph = null; // ForceGraph3D instance reference
+let _kbGraphLabelLayer = null;
+let _kbGraphLabelRaf = null;
+const BLOOM_PASS_LOCAL_URL = './vendor/three-addons/postprocessing/UnrealBloomPass.js';
 
-function chatKbGraphInit() {
+// Lazy-load helpers — only loaded when the Synthesis graph tab opens.
+// UMD script for graph + native ESM post-processing imports.
+let _fg3dScriptPromise = null;
+function _loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('Failed to load ' + src));
+    document.head.appendChild(s);
+  });
+}
+function _loadForceGraph3D() {
+  if (window.ForceGraph3D) return Promise.resolve(window.ForceGraph3D);
+  if (_fg3dScriptPromise) return _fg3dScriptPromise;
+  _fg3dScriptPromise = _loadThree()
+    .then((THREE) => {
+      // ForceGraph3D will reuse window.THREE when it is present, which keeps
+      // the graph renderer and the bloom pass on the same Three.js instance.
+      window.THREE = THREE;
+      return _loadScript('js/vendor/3d-force-graph.min.js');
+    })
+    .then(() => window.ForceGraph3D);
+  return _fg3dScriptPromise;
+}
+let _bloomPromise = null;
+function _loadBloom() {
+  if (_bloomPromise) return _bloomPromise;
+  _bloomPromise = import(BLOOM_PASS_LOCAL_URL);
+  return _bloomPromise;
+}
+let _threePromise = null;
+function _loadThree() {
+  if (_threePromise) return _threePromise;
+  _threePromise = import('three');
+  return _threePromise;
+}
+
+function _chatKbDestroyGraph() {
+  if (_kbGraphLabelRaf != null) {
+    cancelAnimationFrame(_kbGraphLabelRaf);
+    _kbGraphLabelRaf = null;
+  }
+  if (_kbGraphLabelLayer?.parentNode) {
+    _kbGraphLabelLayer.parentNode.removeChild(_kbGraphLabelLayer);
+  }
+  _kbGraphLabelLayer = null;
+  if (!_kbForceGraph) return;
+  try { _kbForceGraph.pauseAnimation(); } catch (_) { /* ok */ }
+  try { _kbForceGraph._destructor?.(); } catch (_) { /* ok */ }
+  _kbForceGraph = null;
+}
+
+function _chatKbComputeTopicClusters(nodes, links) {
+  const adjacency = new Map(nodes.map((n) => [n.id, new Set()]));
+  for (const link of links) {
+    adjacency.get(link.source)?.add(link.target);
+    adjacency.get(link.target)?.add(link.source);
+  }
+
+  const labels = new Map(nodes.map((n) => [n.id, n.id]));
+  const order = [...nodes]
+    .sort((a, b) => {
+      const degDelta = (adjacency.get(b.id)?.size || 0) - (adjacency.get(a.id)?.size || 0);
+      if (degDelta !== 0) return degDelta;
+      return a.id.localeCompare(b.id);
+    })
+    .map((n) => n.id);
+
+  for (let i = 0; i < 12; i++) {
+    let changed = false;
+    for (const id of order) {
+      const neighbors = adjacency.get(id);
+      if (!neighbors || neighbors.size === 0) continue;
+      const counts = new Map();
+      for (const neighborId of neighbors) {
+        const label = labels.get(neighborId);
+        counts.set(label, (counts.get(label) || 0) + 1);
+      }
+      const nextLabel = [...counts.entries()]
+        .sort((a, b) => {
+          const countDelta = b[1] - a[1];
+          if (countDelta !== 0) return countDelta;
+          return String(a[0]).localeCompare(String(b[0]));
+        })[0]?.[0];
+      if (nextLabel && nextLabel !== labels.get(id)) {
+        labels.set(id, nextLabel);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+
+  const clusterMembers = new Map();
+  for (const node of nodes) {
+    const label = labels.get(node.id) || node.id;
+    if (!clusterMembers.has(label)) clusterMembers.set(label, []);
+    clusterMembers.get(label).push(node.id);
+  }
+
+  const sortedClusters = [...clusterMembers.entries()]
+    .sort((a, b) => {
+      const sizeDelta = b[1].length - a[1].length;
+      if (sizeDelta !== 0) return sizeDelta;
+      return String(a[0]).localeCompare(String(b[0]));
+    });
+
+  const nodeToCluster = new Map();
+  sortedClusters.forEach(([label, members], idx) => {
+    for (const nodeId of members) {
+      nodeToCluster.set(nodeId, `cluster-${idx}-${label}`);
+    }
+  });
+  return nodeToCluster;
+}
+
+function _chatKbTopicLabelText(title) {
+  const clean = String(title || '').trim();
+  if (clean.length <= 28) return clean;
+  return `${clean.slice(0, 27)}...`;
+}
+
+function _chatKbTopicLabelYOffset(node, maxEntries) {
+  return 8 + (6 * (node.entryCount / maxEntries));
+}
+
+function _chatKbMakeTopicLabelEl(node, nodeColor) {
+  const el = document.createElement('div');
+  el.className = 'chat-kb-graph-node-label';
+  el.textContent = _chatKbTopicLabelText(node.title);
+  el.style.borderColor = node.isGodNode ? 'rgba(255, 212, 88, 0.58)' : `${nodeColor}aa`;
+  el.style.color = node.isGodNode ? '#fff4c2' : '#eef3ff';
+  return el;
+}
+
+async function chatKbGraphInit() {
   const container = document.getElementById('chat-kb-graph-container');
-  if (!container || typeof d3 === 'undefined') return;
+  if (!container) return;
 
   const s = chatKbBrowserState.synthesis;
   const topics = Array.isArray(s.topics) ? s.topics : [];
   const connections = Array.isArray(s.connections) ? s.connections : [];
   if (topics.length === 0) return;
 
-  // Stop any prior simulation.
-  if (_kbGraphSim) { _kbGraphSim.stop(); _kbGraphSim = null; }
+  // Tear down prior instance.
+  _chatKbDestroyGraph();
+  container.innerHTML = '';
 
-  // Build nodes + links.
+  // Lazy-load graph (UMD) and post-processing (native ESM).
+  let ForceGraph3D;
+  try {
+    ForceGraph3D = await _loadForceGraph3D();
+  } catch (err) {
+    console.error('[kb-graph] Failed to load 3d-force-graph:', err);
+    container.innerHTML = '<p style="color:var(--muted);padding:24px;">Failed to load graph.</p>';
+    return;
+  }
+
+  // Build nodes + links (same data model).
   const topicMap = new Map(topics.map((t) => [t.topicId, t]));
   const nodes = topics.map((t) => ({
     id: t.topicId,
@@ -2995,194 +3211,190 @@ function chatKbGraphInit() {
       target: c.targetTopic,
       relationship: c.relationship || '',
       confidence: c.confidence || 'inferred',
-    }));
+  }));
 
-  // Dimensions.
-  const rect = container.getBoundingClientRect();
-  const width = rect.width || 800;
-  const height = rect.height || 500;
-
-  // Clear container.
-  container.innerHTML = '';
-
-  const svg = d3.select(container)
-    .append('svg')
-    .attr('width', '100%')
-    .attr('height', '100%')
-    .attr('viewBox', [0, 0, width, height]);
-
-  // Zoom group.
-  const g = svg.append('g');
-
-  // Read computed theme colors from CSS custom properties.
-  const cs = getComputedStyle(document.documentElement);
-  const themeText = cs.getPropertyValue('--text').trim() || '#e4e6eb';
-  const themeMuted = cs.getPropertyValue('--muted').trim() || '#8b8fa5';
-  const themeBorder = cs.getPropertyValue('--border').trim() || '#2e3242';
-
-  // Arrow markers for directed edges.
-  const defs = svg.append('defs');
-  ['extracted', 'inferred', 'speculative'].forEach((conf) => {
-    defs.append('marker')
-      .attr('id', `arrow-${conf}`)
-      .attr('viewBox', '0 -4 8 8')
-      .attr('refX', 20)
-      .attr('refY', 0)
-      .attr('markerWidth', 5)
-      .attr('markerHeight', 5)
-      .attr('orient', 'auto')
-      .append('path')
-      .attr('d', 'M0,-3L6,0L0,3')
-      .attr('fill', conf === 'extracted' ? themeMuted : themeBorder);
-  });
-
-  // Edge styles by confidence.
-  function edgeDash(conf) {
-    if (conf === 'extracted') return 'none';
-    if (conf === 'inferred') return '6,3';
-    return '2,3';
-  }
-  function edgeOpacity(conf) {
-    if (conf === 'extracted') return 0.45;
-    if (conf === 'inferred') return 0.3;
-    return 0.15;
-  }
-
-  // Links.
-  const link = g.append('g')
-    .selectAll('line')
-    .data(links)
-    .join('line')
-    .attr('stroke', themeMuted)
-    .attr('stroke-width', 1)
-    .attr('stroke-dasharray', (d) => edgeDash(d.confidence))
-    .attr('stroke-opacity', (d) => edgeOpacity(d.confidence))
-    .attr('marker-end', (d) => `url(#arrow-${d.confidence})`);
-
-  // Node sizing: min 16, scale by entryCount.
+  // Node sizing: smaller spheres for bloom glow look.
   const maxEntries = Math.max(1, ...nodes.map((n) => n.entryCount));
-  function nodeRadius(d) {
-    return 16 + 12 * (d.entryCount / maxEntries);
+  const nodeClusters = _chatKbComputeTopicClusters(nodes, links);
+  nodes.forEach((node) => {
+    node.clusterId = nodeClusters.get(node.id) || null;
+  });
+
+  // Edge opacity by confidence.
+  function edgeOpacity(conf) {
+    if (conf === 'extracted') return 0.6;
+    if (conf === 'inferred') return 0.4;
+    return 0.2;
   }
 
-  // Node groups.
-  const node = g.append('g')
-    .selectAll('g')
-    .data(nodes)
-    .join('g')
-    .attr('class', 'chat-kb-graph-node')
-    .call(d3.drag()
-      .on('start', dragStarted)
-      .on('drag', dragged)
-      .on('end', dragEnded));
+  // Colors — bright for bloom glow.
+  const GOD_COLOR = KB_GRAPH_GOD_COLOR;
+  const CLUSTER_COLORS = KB_GRAPH_CLUSTER_COLORS;
+  const LINK_COLORS = KB_GRAPH_LINK_COLORS;
+  const DIM_COLOR = 'rgba(30, 30, 50, 0.15)';
+  const DIM_LINK_COLOR = 'rgba(70, 84, 118, 0.18)';
 
-  // Node circles.
-  node.append('circle')
-    .attr('r', nodeRadius)
-    .attr('fill', (d) => d.isGodNode ? 'rgba(234, 179, 8, 0.10)' : 'rgba(148, 163, 184, 0.08)')
-    .attr('stroke', (d) => d.isGodNode ? 'rgba(234, 179, 8, 0.50)' : 'rgba(148, 163, 184, 0.35)')
-    .attr('stroke-width', 1);
+  function clusterColor(clusterId) {
+    if (!clusterId) return CLUSTER_COLORS[0];
+    let hash = 0;
+    for (let i = 0; i < clusterId.length; i++) {
+      hash = ((hash * 31) + clusterId.charCodeAt(i)) >>> 0;
+    }
+    return CLUSTER_COLORS[hash % CLUSTER_COLORS.length];
+  }
 
-  // Node entry count (single number — hover/click for full title).
-  node.append('text')
-    .text((d) => d.entryCount)
-    .attr('text-anchor', 'middle')
-    .attr('dy', 4)
-    .attr('font-size', 11)
-    .attr('font-weight', 500)
-    .attr('fill', (d) => d.isGodNode ? 'rgba(234, 179, 8, 0.85)' : themeMuted)
-    .style('pointer-events', 'none');
+  function nodeBaseColor(node) {
+    if (node.isGodNode) return GOD_COLOR;
+    return clusterColor(node.clusterId);
+  }
 
-  // Zoom-based short labels — appear when zoomed past 1.5x.
-  const zoomLabel = g.append('g')
-    .selectAll('text')
-    .data(nodes)
-    .join('text')
-    .text((d) => {
-      const words = d.title.split(/\s+/);
-      return words.length <= 2 ? d.title : words.slice(0, 2).join(' ') + '\u2026';
+  function linkBaseColor(link) {
+    return LINK_COLORS[link.confidence] || LINK_COLORS.inferred;
+  }
+
+  const topicLabelEls = new Map();
+  let searchMatchIds = null;
+  let labelZoomThreshold = 220;
+
+  function shouldShowTopicLabels() {
+    const controls = graph.controls?.();
+    const target = controls?.target || { x: 0, y: 0, z: 0 };
+    const cameraPos = graph.camera().position;
+    return Math.hypot(
+      cameraPos.x - (target.x || 0),
+      cameraPos.y - (target.y || 0),
+      cameraPos.z - (target.z || 0),
+    ) <= labelZoomThreshold;
+  }
+
+  function updateTopicLabels() {
+    if (_kbForceGraph !== graph || _kbGraphLabelLayer == null) return;
+    const showLabels = shouldShowTopicLabels();
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    for (const node of nodes) {
+      const el = topicLabelEls.get(node.id);
+      if (!el) continue;
+      const matchesSearch = !searchMatchIds || searchMatchIds.has(node.id);
+      if (!showLabels || !matchesSearch || node.x == null || node.y == null) {
+        el.style.display = 'none';
+        continue;
+      }
+      const coords = graph.graph2ScreenCoords(
+        node.x,
+        node.y + _chatKbTopicLabelYOffset(node, maxEntries),
+        node.z || 0,
+      );
+      if (!coords || !Number.isFinite(coords.x) || !Number.isFinite(coords.y)
+        || coords.x < -140 || coords.x > width + 140
+        || coords.y < -60 || coords.y > height + 60) {
+        el.style.display = 'none';
+        continue;
+      }
+      el.style.display = '';
+      el.style.transform = `translate(-50%, -50%) translate(${coords.x}px, ${coords.y}px)`;
+    }
+  }
+
+  function tickTopicLabels() {
+    if (_kbForceGraph !== graph || chatKbBrowserState?.activeTab !== 'synthesis') {
+      _kbGraphLabelRaf = null;
+      return;
+    }
+    updateTopicLabels();
+    _kbGraphLabelRaf = requestAnimationFrame(tickTopicLabels);
+  }
+
+  // Create the 3D force graph (UMD build requires `new`, same as official example).
+  const graph = new ForceGraph3D(container, {
+    rendererConfig: { antialias: true, alpha: false },
+  })
+    .backgroundColor('#03040f')
+    .width(container.clientWidth)
+    .height(container.clientHeight)
+    .graphData({ nodes, links })
+    // Nodes — default spheres (MeshLambertMaterial blooms well).
+    .nodeVal((d) => 4 + 6 * (d.entryCount / maxEntries))
+    .nodeColor((d) => nodeBaseColor(d))
+    .nodeLabel((d) => `${d.title}\n${d.entryCount} entries \u00b7 ${d.connectionCount} connections`)
+    .nodeOpacity(1.0)
+    // Links — bright so they glow with bloom.
+    .linkColor((d) => linkBaseColor(d))
+    .linkOpacity((d) => edgeOpacity(d.confidence))
+    .linkWidth((d) => d.confidence === 'extracted' ? 1.2 : 0.5)
+    .linkDirectionalArrowLength(0)
+    .linkDirectionalParticles(0)
+    // Interaction.
+    .enableNodeDrag(true)
+    .onNodeClick((node) => {
+      chatKbGraphShowPanel(node);
     })
-    .attr('text-anchor', 'middle')
-    .attr('dy', (d) => nodeRadius(d) + 13)
-    .attr('font-size', 9)
-    .attr('fill', themeMuted)
-    .attr('opacity', 0)
-    .style('pointer-events', 'none');
-
-  // Update zoom handler to show/hide labels.
-  let _currentZoomScale = 1;
-  const zoomBehavior = d3.zoom()
-    .scaleExtent([0.1, 4])
-    .on('zoom', (event) => {
-      g.attr('transform', event.transform);
-      const prev = _currentZoomScale >= 1.5;
-      _currentZoomScale = event.transform.k;
-      const now = _currentZoomScale >= 1.5;
-      if (prev !== now) zoomLabel.attr('opacity', now ? 0.85 : 0);
-    });
-  svg.call(zoomBehavior);
-
-  // Track selected node for highlight.
-  let _selectedNodeId = null;
-  function updateNodeHighlight() {
-    node.select('circle')
-      .attr('stroke', (d) => {
-        if (d.id === _selectedNodeId) return 'var(--accent-chat)';
-        return d.isGodNode ? 'rgba(234, 179, 8, 0.50)' : 'rgba(148, 163, 184, 0.35)';
-      })
-      .attr('stroke-width', (d) => d.id === _selectedNodeId ? 2 : 1);
-  }
-
-  // Click → detail panel.
-  node.on('click', (event, d) => {
-    event.stopPropagation();
-    _selectedNodeId = d.id;
-    updateNodeHighlight();
-    chatKbGraphShowPanel(d);
-  });
-
-  // Click background → clear panel + selection.
-  svg.on('click', () => {
-    _selectedNodeId = null;
-    updateNodeHighlight();
-    chatKbGraphClearPanel();
-  });
-
-  // Tooltip on hover.
-  node.append('title').text((d) => `${d.title}\n${d.entryCount} entries \u00b7 ${d.connectionCount} connections`);
-
-  // Force simulation.
-  const sim = d3.forceSimulation(nodes)
-    .force('link', d3.forceLink(links).id((d) => d.id).distance(120))
-    .force('charge', d3.forceManyBody().strength(-300))
-    .force('center', d3.forceCenter(width / 2, height / 2))
-    .force('collision', d3.forceCollide().radius((d) => nodeRadius(d) + 8))
-    .on('tick', () => {
-      link
-        .attr('x1', (d) => d.source.x)
-        .attr('y1', (d) => d.source.y)
-        .attr('x2', (d) => d.target.x)
-        .attr('y2', (d) => d.target.y);
-      node.attr('transform', (d) => `translate(${d.x},${d.y})`);
-      zoomLabel.attr('x', (d) => d.x).attr('y', (d) => d.y);
+    .onBackgroundClick(() => {
+      chatKbGraphClearPanel();
     });
 
-  _kbGraphSim = sim;
+  if (chatKbBrowserState?.activeTab !== 'synthesis' || container !== document.getElementById('chat-kb-graph-container')) {
+    try { graph._destructor?.(); } catch (_) { /* ok */ }
+    return;
+  }
 
-  // Drag handlers.
-  function dragStarted(event, d) {
-    if (!event.active) sim.alphaTarget(0.3).restart();
-    d.fx = d.x;
-    d.fy = d.y;
+  _kbForceGraph = graph;
+
+  const labelLayer = document.createElement('div');
+  labelLayer.className = 'chat-kb-graph-label-layer';
+  _kbGraphLabelLayer = labelLayer;
+  container.appendChild(labelLayer);
+  for (const node of nodes) {
+    const el = _chatKbMakeTopicLabelEl(node, nodeBaseColor(node));
+    topicLabelEls.set(node.id, el);
+    labelLayer.appendChild(el);
   }
-  function dragged(event, d) {
-    d.fx = event.x;
-    d.fy = event.y;
+  if (_kbGraphLabelRaf != null) cancelAnimationFrame(_kbGraphLabelRaf);
+  _kbGraphLabelRaf = requestAnimationFrame(tickTopicLabels);
+
+  // Tune d3-force parameters.
+  graph.d3Force('charge').strength(-300);
+  graph.d3Force('link').distance(120);
+
+  // Center the camera on the graph.
+  // zoomToFit is unreliable, so manually compute centroid + bounding sphere and set camera.
+  function centerGraph(duration) {
+    const gd = graph.graphData().nodes;
+    if (gd.length === 0 || gd[0].x == null) return;
+    let cx = 0, cy = 0, cz = 0;
+    for (const n of gd) { cx += n.x || 0; cy += n.y || 0; cz += n.z || 0; }
+    cx /= gd.length; cy /= gd.length; cz /= gd.length;
+    let maxR = 0;
+    for (const n of gd) {
+      const d = Math.hypot((n.x || 0) - cx, (n.y || 0) - cy, (n.z || 0) - cz);
+      if (d > maxR) maxR = d;
+    }
+    labelZoomThreshold = Math.max(160, Math.min(320, maxR * 1.35));
+    const dist = Math.max(maxR * 2.5, 200);
+    graph.cameraPosition({ x: cx, y: cy, z: cz + dist }, { x: cx, y: cy, z: cz }, duration);
   }
-  function dragEnded(event, d) {
-    if (!event.active) sim.alphaTarget(0);
-    d.fx = null;
-    d.fy = null;
+  setTimeout(() => centerGraph(0), 300);
+  setTimeout(() => centerGraph(600), 2000);
+  graph.onEngineStop(() => {
+    centerGraph(600);
+  });
+
+  // Match the upstream bloom example as closely as possible: one
+  // UnrealBloomPass appended to the existing post-processing composer.
+  try {
+    const { UnrealBloomPass } = await _loadBloom();
+    if (_kbForceGraph !== graph || container !== document.getElementById('chat-kb-graph-container')) {
+      return;
+    }
+    const composer = graph.postProcessingComposer();
+    const bloomPass = new UnrealBloomPass();
+    bloomPass.strength = 2;
+    bloomPass.radius = 0.85;
+    bloomPass.threshold = 0.35;
+    composer.addPass(bloomPass);
+    console.log('[kb-graph] Bloom pass added.');
+  } catch (err) {
+    console.warn('[kb-graph] Bloom pass failed:', err);
   }
 
   // Search-to-focus.
@@ -3191,22 +3403,40 @@ function chatKbGraphInit() {
     searchInput.oninput = () => {
       const q = searchInput.value.toLowerCase().trim();
       if (!q) {
-        node.attr('opacity', 1);
-        link.attr('stroke-opacity', (d) => edgeOpacity(d.confidence));
+        searchMatchIds = null;
+        graph
+          .nodeColor((d) => nodeBaseColor(d))
+          .linkColor((d) => linkBaseColor(d))
+          .linkOpacity((d) => edgeOpacity(d.confidence));
+        updateTopicLabels();
         return;
       }
-      const matchIds = new Set(nodes.filter((n) => n.title.toLowerCase().includes(q)).map((n) => n.id));
-      node.attr('opacity', (d) => matchIds.has(d.id) ? 1 : 0.15);
-      link.attr('stroke-opacity', (d) =>
-        matchIds.has(d.source.id || d.source) || matchIds.has(d.target.id || d.target) ? edgeOpacity(d.confidence) : 0.03);
+      searchMatchIds = new Set(
+        nodes.filter((n) => n.title.toLowerCase().includes(q)).map((n) => n.id),
+      );
+      graph
+        .nodeColor((d) => {
+          if (!searchMatchIds.has(d.id)) return DIM_COLOR;
+          return nodeBaseColor(d);
+        })
+        .linkColor((d) =>
+          searchMatchIds.has(d.source.id || d.source) || searchMatchIds.has(d.target.id || d.target)
+            ? linkBaseColor(d) : DIM_LINK_COLOR)
+        .linkOpacity((d) =>
+          searchMatchIds.has(d.source.id || d.source) || searchMatchIds.has(d.target.id || d.target)
+            ? edgeOpacity(d.confidence) : 0.03);
+      updateTopicLabels();
 
-      // Zoom to first match.
-      if (matchIds.size > 0) {
-        const firstMatch = nodes.find((n) => matchIds.has(n.id));
+      // Fly camera to first match.
+      if (searchMatchIds.size > 0) {
+        const firstMatch = nodes.find((n) => searchMatchIds.has(n.id));
         if (firstMatch && firstMatch.x != null) {
-          svg.transition().duration(400).call(
-            zoomBehavior.transform,
-            d3.zoomIdentity.translate(width / 2 - firstMatch.x, height / 2 - firstMatch.y),
+          const distance = 120;
+          const distRatio = 1 + distance / Math.hypot(firstMatch.x, firstMatch.y, firstMatch.z || 0);
+          graph.cameraPosition(
+            { x: firstMatch.x * distRatio, y: firstMatch.y * distRatio, z: (firstMatch.z || 0) * distRatio },
+            firstMatch,
+            1000,
           );
         }
       }
@@ -3310,8 +3540,8 @@ function chatKbBrowserWireSynthesisTab() {
       } catch (err) { chatShowAlert('Re-Dream failed: ' + err.message); }
     };
   }
-  // Initialize D3 force graph
-  chatKbGraphInit();
+  // Initialize 3D force graph (async — lazy-loads dependencies on first call).
+  chatKbGraphInit().catch((err) => console.error('[kb-graph] init failed:', err));
 }
 
 // ── KB Settings tab ─────────────────────────────────────────────────────────
