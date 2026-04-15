@@ -746,6 +746,7 @@ export function chatRenderStreamingItem(item) {
 
 export function chatUpdateStreamingContent(msgEl, st) {
   if (!msgEl) return;
+  if (st.pendingInteraction) return; // Guard: never overwrite pending plan/question UI
   const contentEl = msgEl.querySelector('.chat-msg-content');
   if (!contentEl) return;
 

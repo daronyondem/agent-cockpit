@@ -87,8 +87,8 @@ export function chatClearQueue() {
 export function chatCleanupStreamState(convId, { force = false } = {}) {
   const st = state.chatStreamingState.get(convId);
   if (!st) return;
-  if (st.elapsedTimerInterval) clearInterval(st.elapsedTimerInterval);
-  if (st.activityTimerInterval) clearInterval(st.activityTimerInterval);
+  if (st.elapsedTimerInterval) { clearInterval(st.elapsedTimerInterval); st.elapsedTimerInterval = null; }
+  if (st.activityTimerInterval) { clearInterval(st.activityTimerInterval); st.activityTimerInterval = null; }
   if (st.pendingInteraction && !force) {
     return;
   }
