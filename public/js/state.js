@@ -10,6 +10,7 @@ export const state = {
   chatStreamingConvs: new Set(),
   chatResettingConvs: new Set(),
   chatStreamingState: new Map(), // convId -> { assistantContent, assistantThinking, activeTools, activeAgents, planModeActive, pendingInteraction, streamingMsgEl }
+  chatPendingInteractions: new Map(), // convId -> { type, planContent?, event? } — survives streaming state cleanup for conversation switches
   chatAbortController: null,
   chatSidebarCollapsed: false,
   chatViewingArchive: false,

@@ -325,6 +325,30 @@ describe('Tool activity forwarding', () => {
     expect(planEvents[1].planAction).toBe('exit');
   });
 
+  test('attaches fallback planContent from accumulated text on plan exit', async () => {
+    const conv = await chatService.createConversation('Plan Content');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: '## Proposed plan\n\n1. First step\n2. Second step' } as StreamEvent,
+      { type: 'tool_activity', tool: 'ExitPlanMode', isPlanMode: true, planAction: 'exit', description: 'Plan ready for approval' },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'plan',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    const exitEvent = events.find((e: any) => e.type === 'tool_activity' && e.isPlanMode && e.planAction === 'exit');
+    expect(exitEvent).toBeDefined();
+    expect(exitEvent.planContent).toContain('## Proposed plan');
+    expect(exitEvent.planContent).toContain('1. First step');
+  });
+
   test('forwards isQuestion flag and questions via WebSocket', async () => {
     const conv = await chatService.createConversation('Test');
     const questions = [{ question: 'Which approach?', options: [{ label: 'A' }] }];
@@ -1939,6 +1963,104 @@ describe('WebSocket streaming', () => {
     expect(mockBackend._sendInputCalls).toContain('yes');
 
     // Unblock to clean up
+    unblock!();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    ws.close();
+  });
+
+  test('delivers interaction input via HTTP when a stream is active', async () => {
+    const conv = await chatService.createConversation('HTTP Input');
+
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      const self = this;
+      async function* createStream() {
+        yield { type: 'text', content: 'waiting', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => {},
+        sendInput: (text: string) => { (self as any)._sendInputCalls.push(text); },
+      };
+    };
+
+    const ws = await connectWs(conv.id);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test input',
+      backend: 'claude-code',
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const res = await makeRequest('POST', `/api/chat/conversations/${conv.id}/input`, {
+      text: 'yes',
+      streamActive: true,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.mode).toBe('stdin');
+    expect(mockBackend._sendInputCalls).toContain('yes');
+
+    unblock!();
+    await new Promise(resolve => setTimeout(resolve, 50));
+    ws.close();
+  });
+
+  test('interaction input endpoint requests message fallback when no active stream exists', async () => {
+    const conv = await chatService.createConversation('HTTP Input Fallback');
+
+    const res = await makeRequest('POST', `/api/chat/conversations/${conv.id}/input`, {
+      text: 'yes',
+      streamActive: false,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.mode).toBe('message');
+  });
+
+  test('interaction input endpoint prefers message fallback when client stream is inactive', async () => {
+    const conv = await chatService.createConversation('HTTP Input Race');
+
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      const self = this;
+      async function* createStream() {
+        yield { type: 'text', content: 'waiting', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => {},
+        sendInput: (text: string) => { (self as any)._sendInputCalls.push(text); },
+      };
+    };
+
+    const ws = await connectWs(conv.id);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test input',
+      backend: 'claude-code',
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const res = await makeRequest('POST', `/api/chat/conversations/${conv.id}/input`, {
+      text: 'yes',
+      streamActive: false,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.mode).toBe('message');
+    expect(mockBackend._sendInputCalls).not.toContain('yes');
+
     unblock!();
     await new Promise(resolve => setTimeout(resolve, 50));
     ws.close();

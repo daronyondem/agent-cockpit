@@ -32,6 +32,14 @@ export { sanitizeSystemPrompt, isApiError, shortenPath, extractToolDetails, extr
 
 const CLAUDE_CODE_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" rx="128" fill="#D37D5B"/><path d="M256 220L285 85L305 92L275 225L380 145L395 165L285 245L440 265L435 290L285 275L390 380L365 400L265 295L295 440L265 445L245 295L180 420L155 405L230 280L100 340L90 315L225 260L70 250L75 225L225 235L110 145L130 130L235 215L170 85L195 80L245 210L256 220Z" fill="#F9EDE6"/></svg>';
 
+function filterStdinWarning(stderr: string): string {
+  return String(stderr || '')
+    .split('\n')
+    .filter(l => !l.includes('no stdin data received'))
+    .join('\n')
+    .trim();
+}
+
 // ── Adapter ─────────────────────────────────────────────────────────────────
 
 interface StreamState {
@@ -259,11 +267,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
         (err, stdout, stderr) => {
           if (err) {
             // Filter the stdin warning — it's not the real error.
-            const filtered = (stderr || '')
-              .split('\n')
-              .filter(l => !l.includes('no stdin data received'))
-              .join('\n')
-              .trim();
+            const filtered = filterStdinWarning(stderr || '');
             // Build a concise error message — don't echo the full command
             // (it contains the entire prompt and is useless in error output).
             const execErr = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string; signal?: string };
@@ -538,7 +542,11 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           }
         }
         if (code !== 0 && code !== null) {
-          textQueue.push({ type: 'error', error: stderrOutput || `Process exited with code ${code}` });
+          const filteredStderr = filterStdinWarning(stderrOutput);
+          const stdinTimedOut = !filteredStderr && stderrOutput.includes('no stdin data received');
+          if (!stdinTimedOut) {
+            textQueue.push({ type: 'error', error: filteredStderr || `Process exited with code ${code}` });
+          }
         }
         textQueue.push({ type: 'done' });
         if (resolveWait) {
