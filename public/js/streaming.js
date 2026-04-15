@@ -264,9 +264,10 @@ export async function chatSendMessage() {
     if (finalSt?.pendingInteraction) {
       // Stream ended while plan approval / user question is pending.
       // Preserve the streaming state and message element so the user
-      // can still interact.  The interaction handler will force-clean
-      // when the user responds (it checks !chatStreamingConvs.has).
-      chatDisconnectWs(targetConvId);
+      // can still interact.  Keep the WS open so the interaction
+      // handler can send the user's response back to the server.
+      // The normal finally-block flow will handle WS cleanup when the
+      // CLI finishes after the user responds.
       chatUpdateSendButtonState();
       chatRenderConvList();
       chatLoadConversations();
@@ -482,7 +483,20 @@ export function chatShowPlanApproval(msgEl, convId, planContent) {
       const action = btn.dataset.action;
       const text = action === 'approve' ? 'yes' : 'no';
       try {
-        chatWsSend(convId, { type: 'input', text });
+        let sent = chatWsSend(convId, { type: 'input', text });
+        if (!sent) {
+          // WS closed — attempt reconnect and retry
+          const ws = chatConnectWs(convId);
+          if (ws.readyState !== WebSocket.OPEN) {
+            await new Promise((resolve, reject) => {
+              const timeout = setTimeout(() => reject(new Error('Reconnect timeout')), 5000);
+              ws.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
+              ws.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Reconnect failed')); }, { once: true });
+            });
+          }
+          sent = chatWsSend(convId, { type: 'input', text });
+          if (!sent) throw new Error('Connection lost — please try again');
+        }
         contentEl.innerHTML = `${planHtml ? `<div class="chat-plan-approval-content">${planHtml}</div>` : ''}<div style="font-size:12px;color:var(--muted);font-style:italic;">Plan ${action === 'approve' ? 'approved' : 'rejected'}.</div>`;
         chatHighlightCode(contentEl);
         state.chatPendingInteractions.delete(convId);
@@ -552,7 +566,19 @@ export function chatShowUserQuestion(msgEl, convId, event) {
     if (!text) return;
     submitBtn.disabled = true;
     try {
-      chatWsSend(convId, { type: 'input', text });
+      let sent = chatWsSend(convId, { type: 'input', text });
+      if (!sent) {
+        const ws = chatConnectWs(convId);
+        if (ws.readyState !== WebSocket.OPEN) {
+          await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Reconnect timeout')), 5000);
+            ws.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
+            ws.addEventListener('error', () => { clearTimeout(timeout); reject(new Error('Reconnect failed')); }, { once: true });
+          });
+        }
+        sent = chatWsSend(convId, { type: 'input', text });
+        if (!sent) throw new Error('Connection lost — please try again');
+      }
       contentEl.innerHTML = `<div style="font-size:12px;color:var(--muted);font-style:italic;">Answered: ${esc(text)}</div>`;
       state.chatPendingInteractions.delete(convId);
       const questionState = state.chatStreamingState.get(convId);
