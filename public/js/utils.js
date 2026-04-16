@@ -58,3 +58,14 @@ export function chatFormatCost(usd) {
   if (usd < 1) return '$' + usd.toFixed(3);
   return '$' + usd.toFixed(2);
 }
+
+export function chatFormatEta(remainingBytes, bytesPerSec) {
+  if (!bytesPerSec || bytesPerSec <= 0) return '';
+  const secs = Math.ceil(remainingBytes / bytesPerSec);
+  if (secs < 60) return `~${secs}s remaining`;
+  const mins = Math.floor(secs / 60);
+  const rem = secs % 60;
+  if (mins < 60) return `~${mins}m ${rem}s remaining`;
+  const hrs = Math.floor(mins / 60);
+  return `~${hrs}h ${mins % 60}m remaining`;
+}
