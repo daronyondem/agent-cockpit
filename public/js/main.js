@@ -1,5 +1,5 @@
 import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, ICON_KB, ICON_MEMORY, ICON_CANCEL, ICON_EDIT, ICON_DOWNLOAD, ICON_RESET, ICON_SETTINGS, ICON_REFLECTION, ICON_USER, ICON_FILE_UPLOAD, ICON_TOKEN, fetchCsrfToken, chatShowSessionExpired } from './state.js';
-import { esc, chatFormatTokenCount, chatFormatCost } from './utils.js';
+import { esc, chatFormatTokenCount, chatFormatCost, chatFormatEta } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal, chatShowAlert, chatShowConfirm, chatShowPrompt } from './modal.js';
 import { loadBackends, getBackendIcon, getBackendCapabilities, populateModelSelect, populateEffortSelect } from './backends.js';
@@ -1952,14 +1952,26 @@ async function chatOpenKbBrowser(hash, label) {
     uploading: false,
     selectedFolder: '',
     pandocStatus: null,
-    ingestingRawId: null,
-    ingestingFilename: null,
     /** Per-rawId substep text, e.g. { rawId: 'abc', text: 'Running CLI…' } */
     substeps: {},
     /** Per-rawId timestamps when a processing status started (for elapsed timer) */
     processingStartTimes: {},
     /** Batch digest progress: { done, total } or null */
     batchProgress: null,
+    /** Upload queue for multi-file / folder batch uploads */
+    uploadQueue: {
+      items: [],            // { file, folderPath, status, error, retries, xhr }
+      concurrency: 3,
+      activeCount: 0,
+      paused: false,
+      totalBytes: 0,
+      uploadedBytes: 0,
+      uploadedCount: 0,
+      skippedCount: 0,      // deduped
+      failedCount: 0,
+      startTime: null,
+      fileProgress: new Map(),  // index -> { loaded, total }
+    },
     entries: { loading: false, items: [], selectedEntryId: null, entryBody: '' },
     synthesis: { loading: false, topics: [], connections: [], selectedTopicId: null, topicDetail: null },
     embedding: { config: null, loading: false, healthStatus: null },
@@ -1973,13 +1985,16 @@ async function chatOpenKbBrowser(hash, label) {
   await chatKbBrowserRefetch();
 
   // Periodic refetch catches ingestion/digestion progress even when the
-  // WS isn't carrying updates for this workspace. 1500ms is snappy enough
-  // for the inline state badges.
+  // WS isn't carrying updates for this workspace. Normal interval is 1500ms;
+  // during active batch uploads we slow to 3000ms to reduce DOM thrash.
+  chatKbBrowserState._lastPollTick = 0;
   chatKbBrowserState.pollTimer = setInterval(() => {
     if (!chatKbBrowserState) return;
+    const now = Date.now();
+    const interval = chatKbQueueActive() ? 3000 : 1500;
+    if (now - chatKbBrowserState._lastPollTick < interval) return;
+    chatKbBrowserState._lastPollTick = now;
     chatKbBrowserRefetch();
-    // Also poll synthesis when the tab is active and a dream is running.
-    // WS frames may not arrive if no conversation stream is active.
     const synthRunning = chatKbBrowserState.synthesis?._status === 'running';
     const synthGrace = chatKbBrowserState.synthesis?._dreamTriggeredAt && (Date.now() - chatKbBrowserState.synthesis._dreamTriggeredAt < 15000);
     if (chatKbBrowserState.activeTab === 'synthesis' && (synthRunning || synthGrace)) {
@@ -1988,7 +2003,17 @@ async function chatOpenKbBrowser(hash, label) {
   }, 1500);
 }
 
-function chatCloseKbBrowser() {
+async function chatCloseKbBrowser() {
+  if (chatKbQueueActive()) {
+    if (!await chatShowConfirm('An upload batch is in progress. Close the KB browser? In-flight uploads will be cancelled.', { title: 'Close KB Browser', confirmLabel: 'Close', destructive: true })) return;
+    // Abort in-flight XHRs silently (no confirm dialog from chatKbCancelQueue)
+    const q = chatKbBrowserState?.uploadQueue;
+    if (q) {
+      for (const item of q.items) {
+        if (item.status === 'uploading' && item.xhr) { item.xhr.abort(); item.xhr = null; }
+      }
+    }
+  }
   if (chatKbBrowserState?.pollTimer) {
     clearInterval(chatKbBrowserState.pollTimer);
   }
@@ -2115,7 +2140,6 @@ async function chatKbBrowserRefetch() {
     if (!skipRender) {
       chatKbBrowserRenderTab();
     }
-    chatKbDismissIngestionProgress();
   } catch (err) {
     console.error('[kb] refetch failed:', err);
   }
@@ -2132,12 +2156,9 @@ function chatKbBrowserRenderTab() {
     return;
   }
 
-  // While an XHR upload is in flight the progress bar DOM elements are
-  // referenced directly by the upload callbacks. Re-rendering via innerHTML
-  // would orphan those references and the progress bar would vanish. Skip
-  // re-renders entirely until the upload settles — the post-upload refetch
-  // will trigger a fresh render.
-  if (chatKbBrowserState.uploading) return;
+  // During batch uploads, skip full re-renders of the raw tab — the batch
+  // progress panel updates itself directly. Other tabs can still re-render.
+  if (chatKbBrowserState.uploading && chatKbBrowserState.activeTab === 'raw') return;
 
   if (!chatKbBrowserState.enabled) {
     content.innerHTML = `
@@ -2175,6 +2196,8 @@ function chatKbBrowserRenderTab() {
   } else {
     content.innerHTML = chatKbBrowserRawTab(chatKbBrowserState.state);
     chatKbBrowserWireRawTab();
+    // Re-populate the batch progress panel after the raw tab innerHTML swap
+    if (chatKbQueueHasItems()) chatKbRenderBatchProgress();
   }
 
   // Restore scroll positions.
@@ -2238,24 +2261,15 @@ function chatKbBrowserRawTab(kbState) {
         <div class="chat-kb-breadcrumb">${crumb}</div>
         <div class="chat-kb-upload" id="chat-kb-upload-zone">
           <div class="chat-kb-upload-hint">
-            Drop a file here, or click the button. Uploads go to
+            Drop files or folders here, or use the buttons. Uploads go to
             <strong>${esc(selectedFolder || '(root)')}</strong>.
           </div>
-          <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">${ICON_FILE_UPLOAD} Upload file</button>
-          <input type="file" id="chat-kb-upload-input" style="display:none;" />
+          <button class="chat-kb-upload-btn" id="chat-kb-upload-btn">${ICON_FILE_UPLOAD} Upload Files</button>
+          <button class="chat-kb-upload-btn chat-kb-upload-btn-folder" id="chat-kb-upload-folder-btn">${ICON_FILE_UPLOAD} Upload Folder</button>
+          <input type="file" id="chat-kb-upload-input" multiple style="display:none;" />
+          <input type="file" id="chat-kb-upload-folder-input" webkitdirectory style="display:none;" />
         </div>
-        <div class="chat-kb-upload-progress" id="chat-kb-upload-progress"
-             style="display:${chatKbBrowserState.ingestingRawId ? '' : 'none'};">
-          <div class="chat-kb-upload-progress-label" id="chat-kb-upload-progress-label">${
-            chatKbBrowserState.ingestingRawId
-              ? `${KB_ICON_INGEST} Ingesting ${esc(chatKbBrowserState.ingestingFilename || '')}…`
-              : ''
-          }</div>
-          <div class="chat-kb-upload-progress-bar">
-            <div class="chat-kb-upload-progress-fill${chatKbBrowserState.ingestingRawId ? ' indeterminate' : ''}"
-                 id="chat-kb-upload-progress-fill" style="width:${chatKbBrowserState.ingestingRawId ? '100%' : '0%'};"></div>
-          </div>
-        </div>
+        <div id="chat-kb-batch-progress"></div>
         <ul class="chat-kb-raw-list">
           ${rows}
         </ul>
@@ -2366,12 +2380,28 @@ function chatKbBrowserWireRawTab() {
   const zone = document.getElementById('chat-kb-upload-zone');
   const btn = document.getElementById('chat-kb-upload-btn');
   const input = document.getElementById('chat-kb-upload-input');
+  const folderBtn = document.getElementById('chat-kb-upload-folder-btn');
+  const folderInput = document.getElementById('chat-kb-upload-folder-input');
+  const selectedFolder = chatKbBrowserState?.selectedFolder || '';
   if (btn && input) {
     btn.onclick = () => input.click();
     input.onchange = () => {
-      const f = input.files && input.files[0];
-      if (f) chatKbUploadFile(f);
+      if (!input.files || input.files.length === 0) return;
+      const items = Array.from(input.files).map((f) => ({ file: f, folderPath: selectedFolder }));
+      chatKbEnqueueFiles(items);
       input.value = '';
+    };
+  }
+  if (folderBtn && folderInput) {
+    folderBtn.onclick = () => folderInput.click();
+    folderInput.onchange = () => {
+      if (!folderInput.files || folderInput.files.length === 0) return;
+      const items = Array.from(folderInput.files).map((f) => ({
+        file: f,
+        folderPath: kbBuildFolderPath(selectedFolder, f.webkitRelativePath || f.name),
+      }));
+      chatKbEnqueueFiles(items);
+      folderInput.value = '';
     };
   }
   if (zone) {
@@ -2380,11 +2410,27 @@ function chatKbBrowserWireRawTab() {
       zone.classList.add('dragging');
     });
     zone.addEventListener('dragleave', () => zone.classList.remove('dragging'));
-    zone.addEventListener('drop', (e) => {
+    zone.addEventListener('drop', async (e) => {
       e.preventDefault();
       zone.classList.remove('dragging');
-      const f = e.dataTransfer?.files?.[0];
-      if (f) chatKbUploadFile(f);
+      const dataTransferItems = e.dataTransfer?.items;
+      if (dataTransferItems && dataTransferItems.length > 0 && dataTransferItems[0].webkitGetAsEntry) {
+        // Use FileSystemEntry API for folder-aware drops
+        const entries = [];
+        for (let i = 0; i < dataTransferItems.length; i++) {
+          const entry = dataTransferItems[i].webkitGetAsEntry();
+          if (entry) entries.push(entry);
+        }
+        const items = await chatKbCollectEntries(entries, selectedFolder);
+        if (items.length > 0) chatKbEnqueueFiles(items);
+      } else {
+        // Fallback: plain file list (no folder structure)
+        const files = e.dataTransfer?.files;
+        if (files && files.length > 0) {
+          const items = Array.from(files).map((f) => ({ file: f, folderPath: selectedFolder }));
+          chatKbEnqueueFiles(items);
+        }
+      }
     });
   }
   document.querySelectorAll('.chat-kb-raw-delete').forEach((el) => {
@@ -2626,132 +2672,6 @@ async function chatKbBrowserOpenEntry(entryId) {
   }
 }
 
-async function chatKbUploadFile(file) {
-  if (!chatKbBrowserState || chatKbBrowserState.uploading) return;
-  chatKbBrowserState.uploading = true;
-  const btn = document.getElementById('chat-kb-upload-btn');
-  if (btn) btn.disabled = true;
-
-  // Grab the three progress elements once up front — the browser tab
-  // isn't re-rendered while an upload is in flight, so these references
-  // stay valid for the lifetime of the request.
-  const progressEl = document.getElementById('chat-kb-upload-progress');
-  const labelEl = document.getElementById('chat-kb-upload-progress-label');
-  const fillEl = document.getElementById('chat-kb-upload-progress-fill');
-  if (progressEl) progressEl.style.display = '';
-  if (fillEl) {
-    fillEl.classList.remove('indeterminate');
-    fillEl.style.width = '0%';
-  }
-  if (labelEl) labelEl.textContent = `Uploading ${file.name}…`;
-
-  // fetch() can't report upload progress, so we fall back to
-  // XMLHttpRequest just like `chatUploadSingleFile` does for
-  // conversation file chips. We reuse the same CSRF + credentials setup.
-  let uploadedRawId = null;
-  try {
-    if (!state.csrfToken) await fetchCsrfToken();
-    uploadedRawId = await new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      const fd = new FormData();
-      fd.append('file', file);
-      if (chatKbBrowserState.selectedFolder) {
-        fd.append('folder', chatKbBrowserState.selectedFolder);
-      }
-      xhr.open(
-        'POST',
-        chatApiUrl(`workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw`),
-      );
-      xhr.setRequestHeader('x-csrf-token', state.csrfToken || '');
-      xhr.withCredentials = true;
-      xhr.upload.onprogress = (e) => {
-        if (!e.lengthComputable) return;
-        const pct = Math.round((e.loaded / e.total) * 100);
-        if (fillEl) fillEl.style.width = `${pct}%`;
-        if (labelEl) {
-          labelEl.textContent = `Uploading ${file.name} — ${pct}% (${chatKbFormatSize(e.loaded)} / ${chatKbFormatSize(e.total)})`;
-        }
-      };
-      xhr.upload.onload = () => {
-        if (fillEl) {
-          fillEl.style.width = '100%';
-          fillEl.classList.add('indeterminate');
-        }
-        if (labelEl) labelEl.textContent = `Processing ${file.name}…`;
-      };
-      xhr.onload = () => {
-        if (xhr.status === 401) {
-          chatShowSessionExpired();
-          reject(new Error('Session expired'));
-          return;
-        }
-        if (xhr.status >= 200 && xhr.status < 300) {
-          let rawId = null;
-          try {
-            const body = JSON.parse(xhr.responseText);
-            rawId = body?.entry?.rawId || null;
-          } catch { /* ignore */ }
-          resolve(rawId);
-          return;
-        }
-        let message = `HTTP ${xhr.status}`;
-        try {
-          const body = JSON.parse(xhr.responseText);
-          if (body && body.error) message = body.error;
-        } catch {
-          // Response wasn't JSON — keep the HTTP status fallback.
-        }
-        reject(new Error(message));
-      };
-      xhr.onerror = () => reject(new Error('Network error'));
-      xhr.onabort = () => reject(new Error('Upload aborted'));
-      xhr.send(fd);
-    });
-    // Start tracking ingestion progress so the progress bar survives the
-    // upcoming refetch render cycle (the template checks ingestingRawId).
-    if (uploadedRawId && chatKbBrowserState) {
-      chatKbBrowserState.ingestingRawId = uploadedRawId;
-      chatKbBrowserState.ingestingFilename = file.name;
-    }
-    // Refetch so the file appears in the list immediately. The template
-    // will render the progress bar in "Ingesting…" mode because
-    // ingestingRawId is set. chatKbDismissIngestionProgress (called at
-    // the end of refetch) will clear it if the raw already left ingesting.
-    await chatKbBrowserRefetch();
-  } catch (err) {
-    chatShowAlert('Upload failed: ' + err.message);
-    chatKbHideUploadProgress();
-  } finally {
-    chatKbBrowserState.uploading = false;
-    const btn2 = document.getElementById('chat-kb-upload-btn');
-    if (btn2) btn2.disabled = false;
-  }
-}
-
-/** Clear ingestion tracking state. The next render cycle will hide the bar. */
-function chatKbHideUploadProgress() {
-  if (chatKbBrowserState) {
-    chatKbBrowserState.ingestingRawId = null;
-    chatKbBrowserState.ingestingFilename = null;
-  }
-}
-
-/**
- * Called after every refetch — if we're tracking an ingesting rawId and
- * it has left the `ingesting` status, clear tracking and re-render so
- * the progress bar disappears from the template.
- */
-function chatKbDismissIngestionProgress() {
-  if (!chatKbBrowserState?.ingestingRawId) return;
-  const rawId = chatKbBrowserState.ingestingRawId;
-  const raw = (chatKbBrowserState.state?.raw || []).find((r) => r.rawId === rawId);
-  // Dismiss if the raw has moved past ingesting OR disappeared from the
-  // current page (e.g. user navigated to a different folder).
-  if (!raw || raw.status !== 'ingesting') {
-    chatKbHideUploadProgress();
-  }
-}
-
 async function chatKbDeleteLocation(rawId, folderPath, filename) {
   if (!chatKbBrowserState || !rawId) return;
   if (!await chatShowConfirm(`Delete "${filename}" from this folder?\n\nIf it's the last location, the raw file and its entries will be removed.`, { title: 'Delete File', confirmLabel: 'Delete', destructive: true })) return;
@@ -2793,6 +2713,414 @@ function chatKbFormatRelative(iso) {
   if (hr < 24) return `${hr}h ago`;
   const day = Math.floor(hr / 24);
   return `${day}d ago`;
+}
+
+// ── KB Browser: Upload queue engine ─────────────────────────────────────────
+
+/**
+ * Recursively walk FileSystemEntry objects from drag-and-drop,
+ * collecting { file, folderPath } items preserving directory structure.
+ * Chrome caps readEntries() at 100 items per call, so we loop until empty.
+ */
+async function chatKbCollectEntries(entries, baseFolderPath) {
+  const results = [];
+  async function walk(entry, currentPath) {
+    if (entry.isFile) {
+      const file = await new Promise((res, rej) => entry.file(res, rej));
+      results.push({ file, folderPath: currentPath });
+    } else if (entry.isDirectory) {
+      const dirPath = currentPath ? `${currentPath}/${entry.name}` : entry.name;
+      const reader = entry.createReader();
+      let batch;
+      do {
+        batch = await new Promise((res, rej) => reader.readEntries(res, rej));
+        for (const child of batch) {
+          await walk(child, dirPath);
+        }
+      } while (batch.length > 0);
+    }
+  }
+  for (const entry of entries) {
+    await walk(entry, baseFolderPath);
+  }
+  return results;
+}
+
+/** Build the correct folder path for a file that has webkitRelativePath. */
+function kbBuildFolderPath(selectedFolder, relativePath) {
+  const lastSlash = relativePath.lastIndexOf('/');
+  const relDir = lastSlash > 0 ? relativePath.substring(0, lastSlash) : '';
+  return selectedFolder && relDir
+    ? `${selectedFolder}/${relDir}`
+    : (relDir || selectedFolder);
+}
+
+/** beforeunload guard — warns user when queue has active items. */
+function _chatKbBeforeUnload(e) {
+  if (chatKbQueueActive()) {
+    e.preventDefault();
+    e.returnValue = '';
+  }
+}
+
+/** OS-generated junk files that should never be uploaded. */
+const KB_UPLOAD_SKIP_FILES = new Set([
+  'thumbs.db', 'desktop.ini', '.ds_store', '._ds_store',
+  '.thumbs', 'ehthumbs.db', 'ehthumbs_vista.db',
+  '.spotlight-v100', '.trashes', '.fseventsd',
+  '.icon\r', // macOS custom folder icon
+]);
+
+/** Push items into the queue and start draining. */
+function chatKbEnqueueFiles(items) {
+  const q = chatKbBrowserState?.uploadQueue;
+  if (!q || items.length === 0) return;
+  let skipped = 0;
+  for (const item of items) {
+    const name = item.file.name.toLowerCase();
+    if (KB_UPLOAD_SKIP_FILES.has(name) || name.startsWith('._')) {
+      skipped++;
+      continue;
+    }
+    q.items.push({ file: item.file, folderPath: item.folderPath, status: 'queued', error: null, retries: 0, xhr: null });
+    q.totalBytes += item.file.size;
+  }
+  if (q.items.length === 0) {
+    if (skipped > 0) chatShowAlert(`Skipped ${skipped} system file(s) (Thumbs.db, .DS_Store, etc.).`);
+    return;
+  }
+  if (!q.startTime) q.startTime = Date.now();
+  chatKbBrowserState.uploading = true;
+  window.addEventListener('beforeunload', _chatKbBeforeUnload);
+  chatKbRenderBatchProgress();
+  chatKbDrainQueue();
+}
+
+/** Dispatch up to concurrency parallel uploads. */
+function chatKbDrainQueue() {
+  const q = chatKbBrowserState?.uploadQueue;
+  if (!q || q.paused) return;
+  while (q.activeCount < q.concurrency) {
+    const idx = q.items.findIndex((it) => it.status === 'queued');
+    if (idx === -1) break;
+    q.items[idx].status = 'uploading';
+    q.activeCount++;
+    chatKbUploadQueueItem(idx);
+  }
+  // If nothing active and nothing queued, the batch is done.
+  if (q.activeCount === 0 && !q.items.some((it) => it.status === 'queued')) {
+    chatKbFinishBatch();
+  }
+}
+
+/** Upload a single queued item via XHR. */
+async function chatKbUploadQueueItem(index) {
+  const q = chatKbBrowserState?.uploadQueue;
+  if (!q) return;
+  const item = q.items[index];
+  if (!item) return;
+
+  try {
+    if (!state.csrfToken) await fetchCsrfToken();
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      item.xhr = xhr;
+      const fd = new FormData();
+      fd.append('file', item.file);
+      if (item.folderPath) fd.append('folder', item.folderPath);
+
+      xhr.open('POST', chatApiUrl(`workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/raw`));
+      xhr.setRequestHeader('x-csrf-token', state.csrfToken || '');
+      xhr.withCredentials = true;
+
+      xhr.upload.onprogress = (e) => {
+        if (!e.lengthComputable || !chatKbBrowserState?.uploadQueue) return;
+        chatKbBrowserState.uploadQueue.fileProgress.set(index, { loaded: e.loaded, total: e.total });
+        chatKbThrottledProgressRender();
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 401) {
+          chatShowSessionExpired();
+          chatKbPauseQueue();
+          reject(new Error('Session expired'));
+          return;
+        }
+        if (xhr.status >= 200 && xhr.status < 300) {
+          let deduped = false;
+          try {
+            const body = JSON.parse(xhr.responseText);
+            deduped = body?.deduped === true && body?.addedLocation === false;
+          } catch { /* ignore */ }
+          resolve(deduped ? 'deduped' : 'done');
+          return;
+        }
+        // Non-retryable client errors
+        if (xhr.status >= 400 && xhr.status < 500) {
+          let msg = `HTTP ${xhr.status}`;
+          try { const b = JSON.parse(xhr.responseText); if (b?.error) msg = b.error; } catch { /* */ }
+          reject(new Error(msg));
+          return;
+        }
+        // Server error — retryable
+        reject(new Error(`HTTP ${xhr.status}`));
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.onabort = () => reject(new Error('Upload aborted'));
+      xhr.send(fd);
+    }).then((result) => {
+      item.status = result === 'deduped' ? 'deduped' : 'done';
+      item.xhr = null;
+      q.activeCount--;
+      q.fileProgress.delete(index);
+      q.uploadedBytes += item.file.size;
+      if (result === 'deduped') {
+        q.skippedCount++;
+      } else {
+        q.uploadedCount++;
+      }
+    });
+  } catch (err) {
+    item.xhr = null;
+    q.activeCount--;
+    q.fileProgress.delete(index);
+    const isRetryable = !err.message.startsWith('HTTP 4') && err.message !== 'Session expired' && err.message !== 'Upload aborted';
+    if (isRetryable && item.retries < 2) {
+      item.retries++;
+      const delay = item.retries === 1 ? 1000 : 3000;
+      item.status = 'queued';
+      setTimeout(() => { if (chatKbBrowserState?.uploadQueue) chatKbDrainQueue(); }, delay);
+    } else {
+      item.status = 'error';
+      item.error = err.message;
+      q.failedCount++;
+      q.uploadedBytes += item.file.size; // count toward progress even if failed
+    }
+  }
+  chatKbRenderBatchProgress();
+  chatKbDrainQueue();
+}
+
+function chatKbPauseQueue() {
+  const q = chatKbBrowserState?.uploadQueue;
+  if (!q) return;
+  q.paused = true;
+  chatKbRenderBatchProgress();
+}
+
+function chatKbResumeQueue() {
+  const q = chatKbBrowserState?.uploadQueue;
+  if (!q) return;
+  q.paused = false;
+  chatKbRenderBatchProgress();
+  chatKbDrainQueue();
+}
+
+async function chatKbCancelQueue() {
+  const q = chatKbBrowserState?.uploadQueue;
+  if (!q) return;
+  if (!await chatShowConfirm('Cancel the remaining uploads? Files already uploaded will stay in the KB.', { title: 'Cancel Upload', confirmLabel: 'Cancel Uploads', destructive: true })) return;
+  // Abort in-flight XHRs
+  for (const item of q.items) {
+    if (item.status === 'uploading' && item.xhr) {
+      item.xhr.abort();
+      item.xhr = null;
+      item.status = 'cancelled';
+    } else if (item.status === 'queued') {
+      item.status = 'cancelled';
+    }
+  }
+  q.activeCount = 0;
+  chatKbFinishBatch();
+}
+
+function chatKbRetryFailed() {
+  const q = chatKbBrowserState?.uploadQueue;
+  if (!q) return;
+  let requeued = 0;
+  for (const item of q.items) {
+    if (item.status === 'error') {
+      item.status = 'queued';
+      item.error = null;
+      item.retries = 0;
+      q.failedCount--;
+      q.uploadedBytes -= item.file.size;
+      requeued++;
+    }
+  }
+  if (requeued > 0) chatKbDrainQueue();
+}
+
+function chatKbFinishBatch() {
+  if (!chatKbBrowserState) return;
+  chatKbBrowserState.uploading = false;
+  window.removeEventListener('beforeunload', _chatKbBeforeUnload);
+  const q = chatKbBrowserState.uploadQueue;
+  // Auto-dismiss on full success (no failures) after a brief flash so the
+  // user sees 100%. If there are failures, keep the panel for Retry.
+  if (q && q.failedCount === 0) {
+    chatKbRenderBatchProgress();
+    setTimeout(() => chatKbResetQueue(), 1500);
+  } else {
+    chatKbRenderBatchProgress();
+  }
+  chatKbBrowserRefetch();
+}
+
+/** Returns true if the queue has active or queued items. */
+function chatKbQueueActive() {
+  const q = chatKbBrowserState?.uploadQueue;
+  if (!q) return false;
+  return q.items.some((it) => it.status === 'queued' || it.status === 'uploading');
+}
+
+/** Returns true if the queue has any items at all (active batch or finished). */
+function chatKbQueueHasItems() {
+  const q = chatKbBrowserState?.uploadQueue;
+  return q && q.items.length > 0;
+}
+
+/** Resets the queue to empty state for the next batch. */
+function chatKbResetQueue() {
+  if (!chatKbBrowserState) return;
+  window.removeEventListener('beforeunload', _chatKbBeforeUnload);
+  chatKbBrowserState.uploadQueue = {
+    items: [],
+    concurrency: 3,
+    activeCount: 0,
+    paused: false,
+    totalBytes: 0,
+    uploadedBytes: 0,
+    uploadedCount: 0,
+    skippedCount: 0,
+    failedCount: 0,
+    startTime: null,
+    fileProgress: new Map(),
+  };
+  chatKbBrowserState.uploading = false;
+  chatKbBrowserRenderTab();
+}
+
+// ── KB Browser: Batch progress UI ───────────────────────────────────────────
+
+let _kbProgressRafPending = false;
+function chatKbThrottledProgressRender() {
+  if (_kbProgressRafPending) return;
+  _kbProgressRafPending = true;
+  requestAnimationFrame(() => {
+    _kbProgressRafPending = false;
+    chatKbRenderBatchProgress();
+  });
+}
+
+function chatKbRenderBatchProgress() {
+  const container = document.getElementById('chat-kb-batch-progress');
+  if (!container || !chatKbBrowserState) return;
+  const q = chatKbBrowserState.uploadQueue;
+  if (!q || q.items.length === 0) {
+    container.style.display = 'none';
+    container.innerHTML = '';
+    return;
+  }
+  container.style.display = '';
+
+  // Compute aggregate bytes including per-file XHR progress
+  let currentBytes = q.uploadedBytes;
+  for (const [, fp] of q.fileProgress) {
+    currentBytes += fp.loaded;
+  }
+  const pct = q.totalBytes > 0 ? Math.round((currentBytes / q.totalBytes) * 100) : 0;
+  const totalFiles = q.items.length;
+  const completedFiles = q.uploadedCount + q.skippedCount + q.failedCount;
+
+  // ETA calculation (after 10 files)
+  let etaText = '';
+  if (completedFiles >= 10 && q.startTime && q.totalBytes > 0) {
+    const elapsed = Date.now() - q.startTime;
+    const rate = currentBytes / (elapsed / 1000); // bytes/sec
+    const remaining = q.totalBytes - currentBytes;
+    etaText = chatFormatEta(remaining, rate);
+  }
+
+  const isActive = chatKbQueueActive();
+  const statusParts = [];
+  if (isActive) statusParts.push(`${q.activeCount} active`);
+  if (q.failedCount > 0) statusParts.push(`${q.failedCount} failed`);
+  if (q.skippedCount > 0) statusParts.push(`${q.skippedCount} deduped`);
+  const statusText = statusParts.length > 0 ? ` — ${statusParts.join(', ')}` : '';
+
+  // Build detail rows: in-flight + last 10 completed + failed pinned at top
+  const failedItems = [];
+  const activeItems = [];
+  const recentDone = [];
+  for (let i = 0; i < q.items.length; i++) {
+    const it = q.items[i];
+    if (it.status === 'error') failedItems.push({ ...it, _idx: i });
+    else if (it.status === 'uploading') activeItems.push({ ...it, _idx: i });
+    else if (it.status === 'done' || it.status === 'deduped') recentDone.push({ ...it, _idx: i });
+  }
+  // Only show last 10 completed
+  const recentSlice = recentDone.slice(-10).reverse();
+  // Cap total detail rows at 30
+  const detailRows = [...failedItems, ...activeItems, ...recentSlice].slice(0, 30);
+
+  const detailHtml = detailRows.map((it) => {
+    let icon = '';
+    let extra = '';
+    if (it.status === 'uploading') {
+      const fp = q.fileProgress.get(it._idx);
+      const filePct = fp && fp.total > 0 ? Math.round((fp.loaded / fp.total) * 100) : 0;
+      icon = `<span class="chat-kb-q-icon uploading">↑</span>`;
+      extra = `<span class="chat-kb-q-pct">${filePct}%</span>`;
+    } else if (it.status === 'done') {
+      icon = `<span class="chat-kb-q-icon done">✓</span>`;
+    } else if (it.status === 'deduped') {
+      icon = `<span class="chat-kb-q-icon deduped">≡</span>`;
+      extra = `<span class="chat-kb-q-deduped">Already in KB</span>`;
+    } else if (it.status === 'error') {
+      icon = `<span class="chat-kb-q-icon error">✗</span>`;
+      extra = `<span class="chat-kb-q-error">${esc(it.error || 'Failed')}</span>`;
+    }
+    return `<div class="chat-kb-q-row">${icon}<span class="chat-kb-q-name" title="${esc(it.file.name)}">${esc(it.file.name)}</span>${extra}</div>`;
+  }).join('');
+
+  const doneLabel = isActive
+    ? `Uploading ${completedFiles} of ${totalFiles} files`
+    : `Upload complete — ${q.uploadedCount} uploaded${q.skippedCount ? `, ${q.skippedCount} deduped` : ''}${q.failedCount ? `, ${q.failedCount} failed` : ''}`;
+
+  container.innerHTML = `
+    <div class="chat-kb-batch-summary">
+      <div class="chat-kb-batch-text">
+        ${doneLabel}${isActive ? ` (${chatKbFormatSize(currentBytes)} of ${chatKbFormatSize(q.totalBytes)})${statusText}` : ''}
+      </div>
+      ${etaText ? `<div class="chat-kb-batch-eta">${esc(etaText)}</div>` : ''}
+      <div class="chat-kb-upload-progress-bar">
+        <div class="chat-kb-upload-progress-fill" style="width:${pct}%;"></div>
+      </div>
+      <div class="chat-kb-batch-actions">
+        ${isActive ? `
+          <button class="chat-kb-batch-btn" id="chat-kb-q-pause">${q.paused ? '▶ Resume' : '⏸ Pause'}</button>
+          <button class="chat-kb-batch-btn chat-kb-batch-btn-danger" id="chat-kb-q-cancel">✗ Cancel</button>
+        ` : ''}
+        ${!isActive && q.failedCount > 0 ? `<button class="chat-kb-batch-btn" id="chat-kb-q-retry">Retry Failed (${q.failedCount})</button>` : ''}
+        ${!isActive ? `<button class="chat-kb-batch-btn" id="chat-kb-q-dismiss">Dismiss</button>` : ''}
+      </div>
+    </div>
+    <details class="chat-kb-batch-detail">
+      <summary>Details (${detailRows.length} items)</summary>
+      <div class="chat-kb-batch-detail-list">${detailHtml}</div>
+    </details>
+  `;
+
+  // Wire batch action buttons
+  const pauseBtn = document.getElementById('chat-kb-q-pause');
+  if (pauseBtn) pauseBtn.onclick = () => q.paused ? chatKbResumeQueue() : chatKbPauseQueue();
+  const cancelBtn = document.getElementById('chat-kb-q-cancel');
+  if (cancelBtn) cancelBtn.onclick = chatKbCancelQueue;
+  const retryBtn = document.getElementById('chat-kb-q-retry');
+  if (retryBtn) retryBtn.onclick = chatKbRetryFailed;
+  const dismissBtn = document.getElementById('chat-kb-q-dismiss');
+  if (dismissBtn) dismissBtn.onclick = chatKbResetQueue;
 }
 
 // ── KB Browser: Synthesis tab ────────────────────────────────────────────────
