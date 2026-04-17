@@ -2,6 +2,9 @@
   "name": "agent-cockpit",
   "version": "0.1.99",
   "private": true,
+  "engines": {
+    "node": ">=22"
+  },
   "scripts": {
     "start": "tsx server.ts",
     "typecheck": "tsc --noEmit",
