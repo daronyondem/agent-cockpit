@@ -480,12 +480,14 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
 **Model selection:** After session setup (`session/new` or `session/load`), calls `session/set_model({ sessionId, modelId })` if `options.model` is set. Non-fatal — continues with default model on failure. Model can be changed mid-session without process restart (unlike Claude Code).
 
 **ACP process lifecycle:** Lazy spawn + idle timeout + transparent recovery.
-- First message → spawn `kiro-cli acp` → `initialize` handshake → `session/new(cwd)` → `[session/set_model]` → `session/prompt`
+- First message → spawn `kiro-cli acp` → `initialize` handshake → `session/new(cwd)` → **yield `external_session` stream event** → `[session/set_model]` → `session/prompt`
 - Subsequent messages → reuse process → `[session/set_model]` → `session/prompt`
 - Idle timeout (configurable via `KIRO_ACP_IDLE_TIMEOUT_MS` env var, default 10 min) → kill process
-- Next message after timeout → respawn → `initialize` → `session/load(sessionId, cwd)` → `session/prompt`
+- Next message after timeout → respawn → `initialize` → `session/load(sessionId, cwd)` → **drain replayed notifications** → `session/prompt`
 
-**Session mapping:** Agent Cockpit session IDs map to Kiro ACP session IDs via in-memory `sessionMap`. Persisted via `externalSessionId` on `SessionEntry` for server restart resilience.
+**`session/load` replay handling:** Per the ACP spec, `session/load` streams the full prior session history as `session/update` notifications before returning. The adapter's `AcpClient.notificationQueue` buffers these alongside any future notifications, and the notification consumer loop doesn't start until after `session/prompt` is sent. To prevent the replayed `agent_message_chunk` frames from being consumed as text for the current turn (which would concatenate every prior assistant response into the new reply), `AcpClient.drainNotifications()` is called immediately after the `session/load` promise resolves. The drain count is logged.
+
+**Session mapping:** Agent Cockpit session IDs map to Kiro ACP session IDs via in-memory `sessionMap`. Immediately after `session/new` returns, the adapter also yields an `external_session` `StreamEvent` carrying the Kiro session ID. `processStream` consumes that event and calls `chatService.setExternalSessionId(convId, id)`, which writes it to the active `SessionEntry.externalSessionId` on disk. On the next turn after a cockpit server restart, `SendMessageOptions.externalSessionId` carries the persisted ID back into the adapter; the rehydrate branch puts it into the fresh in-memory `sessionMap` and uses it for `session/load`. Without this, the in-memory map would be empty on restart and the adapter would reject the next turn with `"No Kiro session ID available for this conversation"`.
 
 **Tool name normalization:** Kiro uses lowercase tool names (`read`, `shell`, `delegate`, etc.). The adapter normalizes to Agent Cockpit display names (Read, Bash, Agent, etc.) via `extractKiroToolDetails()`.
 

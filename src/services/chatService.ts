@@ -458,6 +458,26 @@ export class ChatService {
     await this._writeWorkspaceIndex(hash, index);
   }
 
+  /**
+   * Persist a backend-managed session ID onto the active `SessionEntry`.
+   * Called by `processStream` when an adapter emits an `external_session`
+   * event (e.g. Kiro's ACP session ID after `session/new`). Stored on the
+   * active session so `SendMessageOptions.externalSessionId` can rehydrate
+   * the backend's in-memory session map after a cockpit server restart.
+   * Vendor-agnostic — any backend that manages its own session IDs uses
+   * the same field.
+   */
+  async setExternalSessionId(convId: string, externalSessionId: string): Promise<void> {
+    const result = await this._getConvFromIndex(convId);
+    if (!result) return;
+    const { hash, index, convEntry } = result;
+    const activeSession = convEntry.sessions.find(s => s.active);
+    if (!activeSession) return;
+    if (activeSession.externalSessionId === externalSessionId) return;
+    activeSession.externalSessionId = externalSessionId;
+    await this._writeWorkspaceIndex(hash, index);
+  }
+
   async updateConversationModel(convId: string, model: string | null): Promise<void> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return;

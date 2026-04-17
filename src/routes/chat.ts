@@ -234,6 +234,15 @@ export async function processStream(
         }
       } else if (event.type === 'result') {
         resultText = event.content;
+      } else if (event.type === 'external_session') {
+        // Vendor-agnostic: any backend that obtains its own session ID emits
+        // this so we can persist it onto the active SessionEntry and rehydrate
+        // after a cockpit server restart. Not forwarded to the frontend.
+        try {
+          await chatService.setExternalSessionId(convId, event.sessionId);
+        } catch (err: unknown) {
+          console.warn(`[chat] Failed to persist externalSessionId for conv=${convId}:`, (err as Error).message);
+        }
       } else if (event.type === 'usage') {
         const skipLedger = backend === 'kiro';
         const updated = await chatService.addUsage(convId, event.usage, backend, event.model, { skipLedger });

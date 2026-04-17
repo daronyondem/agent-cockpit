@@ -372,6 +372,20 @@ export interface DoneEvent {
 }
 
 /**
+ * Emitted by a backend adapter as soon as it obtains a backend-managed
+ * session ID that the cockpit needs to persist on the active `SessionEntry`
+ * so the session can be resumed after a cockpit server restart. Vendor-
+ * agnostic: any backend that manages its own session IDs (ACP-based CLIs
+ * like Kiro, hosted API sessions, etc.) can emit this. `processStream`
+ * forwards it to `chatService.setExternalSessionId(convId, sessionId)`.
+ * Not forwarded to the frontend — it is a server-side persistence signal.
+ */
+export interface ExternalSessionEvent {
+  type: 'external_session';
+  sessionId: string;
+}
+
+/**
  * Fired when the real-time MemoryWatcher re-captures workspace memory
  * during an active stream. Lightweight payload — the frontend uses this
  * only as a trigger to show a "memory updated" pill and to refresh the
@@ -398,6 +412,7 @@ export type StreamEvent =
   | UsageEvent
   | ErrorEvent
   | DoneEvent
+  | ExternalSessionEvent
   | MemoryUpdateEvent
   | KbStateUpdateEvent;
 
