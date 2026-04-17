@@ -58,7 +58,6 @@ export async function processStream(
   let fullResponse = '';
   let thinkingText = '';
   let resultText: string | null = null;
-  let hasStreamingDeltas = false;
   let pendingPlanContent = '';
   let titleUpdateTriggered = false;
   let titleUpdatePromise: Promise<void> | null = null;
@@ -110,15 +109,10 @@ export async function processStream(
 
       if (event.type === 'text') {
         fullResponse += event.content;
-        if (event.streaming) {
-          hasStreamingDeltas = true;
-          emit({ type: 'text', content: event.content });
-        }
+        emit({ type: 'text', content: event.content });
       } else if (event.type === 'thinking') {
         thinkingText += event.content;
-        if (event.streaming) {
-          emit({ type: 'thinking', content: event.content });
-        }
+        emit({ type: 'thinking', content: event.content });
       } else if (event.type === 'tool_outcomes') {
         for (const outcome of (event.outcomes || [])) {
           const match = toolActivityAccumulator.find(t => t.id === outcome.toolUseId);
@@ -130,7 +124,7 @@ export async function processStream(
         emit({ type: 'tool_outcomes', outcomes: event.outcomes });
       } else if (event.type === 'turn_boundary') {
         const turnToolActivity = computeToolDurations(toolActivityAccumulator);
-        if (hasStreamingDeltas && fullResponse.trim()) {
+        if (fullResponse.trim()) {
           console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}, tools=${turnToolActivity.length}`);
           const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, turnToolActivity.length > 0 ? turnToolActivity : undefined);
           if (intermediateMsg) emit({ type: 'assistant_message', message: intermediateMsg });
@@ -139,7 +133,6 @@ export async function processStream(
         emit({ type: 'turn_complete' });
         fullResponse = '';
         thinkingText = '';
-        hasStreamingDeltas = false;
         toolActivityAccumulator = [];
       } else if (event.type === 'tool_activity') {
         if (event.isPlanFile && event.planContent) {
@@ -186,7 +179,7 @@ export async function processStream(
         const apiErrPattern = /^API Error:\s*\d{3}\s/;
         const finalToolActivity = computeToolDurations(toolActivityAccumulator);
         const finalToolActivityArg = finalToolActivity.length > 0 ? finalToolActivity : undefined;
-        if (hasStreamingDeltas && fullResponse.trim()) {
+        if (fullResponse.trim()) {
           if (apiErrPattern.test(fullResponse.trim())) {
             console.log(`[chat] Stream done for conv=${convId}, detected API error in text — not saving as message`);
             emit({ type: 'error', error: fullResponse.trim() });

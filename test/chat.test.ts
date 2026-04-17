@@ -735,13 +735,18 @@ describe('Turn boundary intermediate messages', () => {
     expect(assistantMessages[0].message.content).toBe('Final');
   });
 
-  test('does not save intermediate message for non-streaming text', async () => {
+  test('saves intermediate message for whole-block text without streaming flag', async () => {
+    // Claude Code CLI emits text via whole-block `assistant` events with no
+    // `streaming: true` flag. Prior to the fix these were silently discarded
+    // at turn_boundary, losing any pre-tool-call content. Now they must be
+    // saved just like delta text.
     const conv = await chatService.createConversation('Test');
 
     mockBackend.setMockEvents([
-      { type: 'text', content: 'Replayed history' }, // No streaming: true flag
+      { type: 'text', content: 'Whole-block pre-tool content' } as StreamEvent,
+      { type: 'tool_activity', tool: 'Read', description: 'Reading file', id: 'tool_1' },
       { type: 'turn_boundary' },
-      { type: 'text', content: 'New content', streaming: true },
+      { type: 'text', content: 'Post-tool content' } as StreamEvent,
       { type: 'done' },
     ] as StreamEvent[]);
 
@@ -756,9 +761,63 @@ describe('Turn boundary intermediate messages', () => {
     const events = await eventsPromise;
 
     const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
-    // Only the final "New content" should be saved (replayed text is not streaming)
-    expect(assistantMessages).toHaveLength(1);
-    expect(assistantMessages[0].message.content).toBe('New content');
+    expect(assistantMessages).toHaveLength(2);
+    expect(assistantMessages[0].message.content).toBe('Whole-block pre-tool content');
+    expect(assistantMessages[0].message.toolActivity).toHaveLength(1);
+    expect(assistantMessages[0].message.toolActivity![0].tool).toBe('Read');
+    expect(assistantMessages[1].message.content).toBe('Post-tool content');
+
+    // Verify persisted to disk — this is the regression the bug caused.
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
+    expect(assistantMsgs).toHaveLength(2);
+    expect(assistantMsgs[0].content).toBe('Whole-block pre-tool content');
+    expect(assistantMsgs[1].content).toBe('Post-tool content');
+  });
+
+  test('forwards whole-block text to WebSocket regardless of streaming flag', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Whole block' } as StreamEvent,
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    const textFrames = events.filter((e: any) => e.type === 'text');
+    expect(textFrames).toHaveLength(1);
+    expect(textFrames[0].content).toBe('Whole block');
+  });
+
+  test('forwards whole-block thinking to WebSocket regardless of streaming flag', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'thinking', content: 'Whole-block reasoning' } as StreamEvent,
+      { type: 'text', content: 'Answer' } as StreamEvent,
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    const thinkingFrames = events.filter((e: any) => e.type === 'thinking');
+    expect(thinkingFrames).toHaveLength(1);
+    expect(thinkingFrames[0].content).toBe('Whole-block reasoning');
   });
 
   test('saves result text as final message when no streaming deltas', async () => {

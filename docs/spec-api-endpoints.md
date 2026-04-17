@@ -105,8 +105,8 @@ ws(s)://host/api/chat/conversations/:id/ws
 
 | Type | Fields | Description |
 |------|--------|-------------|
-| `text` | `content`, `streaming` | Text delta from assistant |
-| `thinking` | `content`, `streaming` | Extended thinking delta |
+| `text` | `content`, `streaming?` | Text from assistant. The optional `streaming` flag (set by the backend) indicates a CLI delta vs a whole-block segment, but the chat router treats both identically: every `text` event is forwarded to the client and accumulated into the in-flight assistant message. |
+| `thinking` | `content`, `streaming?` | Extended thinking from assistant. Handled the same as `text`: the `streaming` flag is informational only — every `thinking` event is forwarded and accumulated regardless of the flag. |
 | `tool_activity` | `tool`, `description`, `id`, + enriched fields | Tool use notification (see enriched fields below). Events are accumulated per-turn and persisted as `toolActivity` on the saved assistant message (excluding `isPlanMode` and `isQuestion` meta-events). |
 | `tool_outcomes` | `outcomes` | Array of tool result outcomes extracted from CLI `user` events. Each outcome: `{ toolUseId, isError, outcome, status }`. Merged into `toolActivity` accumulator for persistence and forwarded to frontend for live display. |
 | `turn_boundary` | — | Marks boundary between assistant turns (internal — not forwarded to client). Triggers persistence of accumulated `toolActivity` on the intermediate message. |
@@ -134,7 +134,7 @@ ws(s)://host/api/chat/conversations/:id/ws
 | `questions` | AskUserQuestion | Array of question objects with options |
 | `isPlanFile` | Write tool | `true` when writing to `.claude/plans/` |
 
-**Turn boundary behavior:** On `turn_boundary`, accumulated streaming content (text + thinking) is saved as an intermediate assistant message, and a `turn_complete` event is always sent to the client (even when there is no text to save). This allows the frontend to clear stale tool activity spinners when tools finish executing. On stream completion, final content is saved and `assistant_message` + `done` events are sent.
+**Turn boundary behavior:** On `turn_boundary`, the accumulated `fullResponse` (text) is persisted as an intermediate assistant message whenever it is non-empty — regardless of whether any delta events carried `streaming: true`. This is load-bearing: the Claude Code adapter emits text via whole-block `assistant` events without the `streaming` flag (it never passes `--include-partial-messages`), so gating the save on delta-style streaming would silently drop every pre-tool-call segment. Any accumulated `thinking` and per-turn `toolActivity` are persisted on the same intermediate message. A `turn_complete` event is always sent to the client (even when there is no text to save), so the frontend can clear stale tool activity spinners when tools finish executing. On stream completion (`done`), if `fullResponse` is non-empty it is saved as the final assistant message; otherwise the optional `result` event content is used as the fallback body. In both cases `assistant_message` + `done` events are sent.
 
 **Auto title update:** When a new session starts after a reset (session number > 1) and the first assistant message is saved, the server asynchronously generates a new conversation title via `generateTitle()` on the backend adapter. A `title_updated` event is sent with the new title. The title update fires only once per session (on the first assistant message) and does not block the stream.
 
