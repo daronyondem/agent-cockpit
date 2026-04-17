@@ -144,9 +144,30 @@ The **KB Browser** is a full-screen panel that swaps into the main chat area (hi
       startTime: number|null,        // Date.now() when first item was enqueued
       fileProgress: Map,             // index → { loaded, total } for in-flight XHR progress
     },
-    selectedEntryId: string|null,    // currently selected entry in Entries tab
-    entryDetail: object|null,        // fetched entry detail for right panel
-    entries: object[]|null,          // entries list from GET /kb/entries
+    entries: {                       // Entries tab state
+      loading: boolean,
+      items: KbEntry[],              // current page from GET /kb/entries
+      total: number,                 // total match count (pre-pagination)
+      selectedEntryId: string|null,  // row selected on the left
+      entryBody: string,             // fetched body for the right panel
+      filters: {
+        search: string,              // title substring
+        tags: string[],              // AND-selected tag list
+        uploadedPreset: string,      // 'all'|'today'|'7d'|'30d'|'90d'|'custom'
+        uploadedFrom: string,        // '' or 'YYYY-MM-DD' (only when preset='custom')
+        uploadedTo: string,
+        digestedPreset: string,
+        digestedFrom: string,
+        digestedTo: string,
+      },
+      page: number,                  // 1-indexed
+      pageSize: number,              // default 50, selector: 25/50/100
+      allTags: Array<{tag,count}>,   // one-shot fetch from GET /kb/tags
+      allTagsLoaded: boolean,
+      tagPickerOpen: boolean,
+      tagPickerQuery: string,        // in-dropdown tag search
+      searchDebounceTimer: number|null,
+    },
     synthesis: object|null,          // synthesis snapshot from GET /kb/synthesis
     graphInstance: object|null,      // ForceGraph3D instance reference
     selectedTopicId: string|null,    // clicked topic in graph
@@ -179,8 +200,17 @@ The **KB Browser** is a full-screen panel that swaps into the main chat area (hi
   - **Batch progress UI** — rendered in a `<div id="chat-kb-batch-progress">` container between the upload zone and file list. When the queue is active, shows: (1) an overall progress bar (`uploadedBytes / totalBytes`), (2) summary text ("Uploading 342 of 10,000 files (1.2 GB of 4.8 GB) — 3 active, 12 failed"), (3) ETA after 10 files complete (via `chatFormatEta` from `utils.js`), (4) Pause/Resume and Cancel buttons. When the batch is idle (completed), shows Retry Failed (if any) and Dismiss buttons. An expandable `<details>` panel shows per-file detail rows: failed items pinned at top with error message, in-flight items with per-file XHR progress percentage, and last 10 completed items (showing "Already in KB" for deduped). Max 30 DOM rows at any time (sliding window). Render throttling via `requestAnimationFrame` debounce prevents more than ~60 updates/sec during rapid XHR progress events.
   - **Guards:** A `beforeunload` listener warns when the queue has active/queued items (browser's native "are you sure?" dialog). `chatCloseKbBrowser()` shows a confirm dialog if the queue is active before closing and aborting in-flight XHRs. Concurrency is hardcoded at 3 (max 5), leaving room for WS + polling among the browser's ~6 connections per origin. No cross-session resume — `File` handles aren't serializable; re-running a folder upload after refresh deduplicates automatically via SHA256.
   - **File list** — each row renders filename, size, relative upload time, the colored status badge (`ingesting | ingested | digesting | digested | failed | pending-delete`), a **Download** anchor (`GET /kb/raw/:rawId`), a **Digest now** button (shown only for `ingested | pending-delete | failed` rows — POSTs to `POST /kb/raw/:rawId/digest`), and a per-location **Delete** button that sends `DELETE /kb/raw/:rawId?folder=<folder>&filename=<name>`. **Status badge colors:** `ingested` = green (`#7fd4a6` on `#1f3e32`), `digested` = blue (`#82b1ff` on `#1a2f4a`), `ingesting`/`digesting` = purple pulse. **Processing progress:** when a raw item is in `ingesting` or `digesting` state, a substep line appears beneath the row showing: (1) the current substep text from `kb_state_update` `substep` frames (e.g. "Converting…", "Running CLI analysis…", "Parsing entries…") and (2) an elapsed-time counter that ticks from when the processing started (e.g. "3m 42s"). Start times are tracked in `chatKbBrowserState.processingStartTimes[rawId]` and cleared when the status changes. Failed rows expand to show the `errorClass` + `errorMessage` from the state entry. Pending-delete rows render a muted italic treatment to distinguish them from normal ingested rows. While `chatKbBrowserState.uploading` is true (batch queue has active items), `chatKbBrowserRenderTab()` returns early for the Raw tab so poll timer and WS frames cannot replace innerHTML and orphan the live batch progress DOM. Scroll position is preserved across re-renders by saving/restoring `scrollTop` on the `.chat-kb-browser` container (the actual overflow parent), not on `.chat-kb-raw-main`.
-- **Entries tab:** Two-column layout — a list of every digested entry on the left, a detail pane on the right. Scroll position is preserved across re-renders by saving/restoring `scrollTop` on the inner scrollable elements (`.chat-kb-entries-list` and `.chat-kb-entry-detail`), not just the outer `#chat-kb-browser` container.
-  - **List** — `GET /kb/entries?folder=<selectedFolder>` returns title + summary + tags + `rawId`. Rows are ordered by title. Clicking a row calls `GET /kb/entries/:entryId` to populate the detail pane.
+- **Entries tab:** Two-column layout — a filtered+paginated list of digested entries on the left (with a filter bar above and pagination controls below), a detail pane on the right. Scroll position is preserved across re-renders by saving/restoring `scrollTop` on the inner scrollable elements (`.chat-kb-entries-list` and `.chat-kb-entry-detail`), not just the outer `#chat-kb-browser` container.
+  - **State:** `chatKbBrowserState.entries = { loading, items, total, selectedEntryId, entryBody, filters, page, pageSize, allTags, allTagsLoaded, tagPickerOpen, tagPickerQuery, searchDebounceTimer }`. `filters = { search, tags[], uploadedPreset, uploadedFrom, uploadedTo, digestedPreset, digestedFrom, digestedTo }`. `pageSize` defaults to `50` and the selector offers `25 / 50 / 100`.
+  - **Filter bar** (`chatKbBrowserEntriesToolbar`): Four filter controls, all combining with AND semantics.
+    - **Title search** — `<input type="search">` bound to `filters.search`, debounced **300 ms** via `setTimeout` stored on `entries.searchDebounceTimer`. Each change resets `page` to `1`.
+    - **Tag picker** — a `Tags (N)` button opens a dropdown (`.chat-kb-tag-dropdown`) populated from `GET /kb/tags` (fetched once per browser open, cached on `entries.allTags`). The dropdown includes an in-list search input (`entries.tagPickerQuery`) so long tag lists remain navigable. Selected tags render as removable chips below the filter rows (the `×` button clears the chip). **Multi-tag semantics are AND** — an entry must carry every selected tag — and a small hint line in the dropdown reminds the user. Outside-click closes the dropdown (wired on each render while `tagPickerOpen` is true).
+    - **Uploaded date** — `<select>` with presets `All time / Today / Last 7 days / Last 30 days / Last 90 days / Custom…`. Presets resolve to ISO bounds at refetch time via `chatKbBrowserResolveDateRange(preset, from, to)`. Picking `Custom…` reveals two `<input type="date">` pickers; the `from` input is floored to 00:00:00 and the `to` input is widened to 23:59:59.999 so the full day is inclusive. Filters against the joined `raw.uploaded_at` column server-side.
+    - **Digested date** — same preset set; filters against `entries.digested_at` server-side.
+    - **Clear filters** — shown only when any filter is active. Resets `filters` to defaults, clears `tagPickerOpen`/`tagPickerQuery`, snaps `page` to 1, refetches.
+  - **List refetch** (`chatKbBrowserRefetchEntries`): Builds a query string via `chatKbBrowserBuildEntriesQuery` (search, tags as csv, uploadedFrom/To, digestedFrom/To, limit, offset) and hits `GET /kb/entries?<qs>`. Response is `{ entries, total }`. If `page > ceil(total / pageSize)` (filter change narrowed results past current page), the refetch snaps `page` back to 1 and re-fetches once. Empty-state copy distinguishes "No entries yet" (no filters active) from "No entries match these filters" (filters active).
+  - **List rendering** — each row shows title + summary + tags (max 6 tag badges). Rows are still ordered by title server-side. Clicking a row calls `GET /kb/entries/:entryId` to populate the detail pane.
+  - **Pagination** (`chatKbBrowserEntriesPagination`): Below the list. `← Prev` / `Next →` buttons (disabled at edges), a center info span (`N–M of T · Page P of Q`), and a `Page size` `<select>` (25 / 50 / 100). Changing page size or page triggers a refetch. The page state lives on `chatKbBrowserState.entries.page` and survives tab switches inside the same browser session.
   - **Detail pane** — renders the entry title, summary, tags, and the full `entry.md` body. YAML frontmatter is stripped client-side before rendering so the user only sees the prose. A "parent raw" link below the title jumps back to the Raw tab and scrolls to the source row.
   - **Folder filter** — the Entries tab honors the same `selectedFolder` state the Raw tab uses, so clicking a folder in the Raw tree and then switching to Entries shows only the entries whose parent raw has a location in that folder (via the `raw_locations` join inside `listEntries`).
 - **Delete semantics:** Per-location deletes on the Raw tab hit `DELETE /kb/raw/:rawId?folder=<f>&filename=<n>` and respect ref-counting — deleting the last location of a raw file always fully purges it (bytes + converted + entries + DB row), regardless of auto-digest setting. Folder-cascade deletes follow the same rule.

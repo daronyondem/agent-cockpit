@@ -1972,7 +1972,30 @@ async function chatOpenKbBrowser(hash, label) {
       startTime: null,
       fileProgress: new Map(),  // index -> { loaded, total }
     },
-    entries: { loading: false, items: [], selectedEntryId: null, entryBody: '' },
+    entries: {
+      loading: false,
+      items: [],
+      total: 0,
+      selectedEntryId: null,
+      entryBody: '',
+      filters: {
+        search: '',
+        tags: [],
+        uploadedPreset: 'all',
+        uploadedFrom: '',
+        uploadedTo: '',
+        digestedPreset: 'all',
+        digestedFrom: '',
+        digestedTo: '',
+      },
+      page: 1,
+      pageSize: 50,
+      allTags: [],
+      allTagsLoaded: false,
+      tagPickerOpen: false,
+      tagPickerQuery: '',
+      searchDebounceTimer: null,
+    },
     synthesis: { loading: false, topics: [], connections: [], selectedTopicId: null, topicDetail: null },
     embedding: { config: null, loading: false, healthStatus: null },
     reflections: { loading: false, items: [], selectedId: null, detail: null, typeFilter: 'all' },
@@ -2136,7 +2159,14 @@ async function chatKbBrowserRefetch() {
     const skipSynthesis = chatKbBrowserState.activeTab === 'synthesis'
       && (_kbForceGraph || synthIsActive);
     const skipReflections = chatKbBrowserState.activeTab === 'reflections';
-    const skipRender = skipSynthesis || skipReflections;
+    // Skip the entries tab re-render on the poll cadence. The raw/folder
+    // poll carries no data that belongs to the entries list, and re-running
+    // the innerHTML swap mid-interaction tears down native <select> menus
+    // that the user may have open (preset dropdowns) and interrupts typing
+    // rhythm. Explicit filter/page changes already call refetchEntries +
+    // render on their own path.
+    const skipEntries = chatKbBrowserState.activeTab === 'entries';
+    const skipRender = skipSynthesis || skipReflections || skipEntries;
     if (!skipRender) {
       chatKbBrowserRenderTab();
     }
@@ -2181,6 +2211,19 @@ function chatKbBrowserRenderTab() {
   const savedEntriesListScroll = entriesListEl ? entriesListEl.scrollTop : 0;
   const savedEntryDetailScroll = entryDetailEl ? entryDetailEl.scrollTop : 0;
 
+  // Preserve keyboard focus + caret position on text inputs inside the
+  // tab content. The innerHTML swap destroys live input elements, so
+  // without this the user can't keep typing during the 1500ms polling
+  // cadence — their focus jumps away every time a poll completes.
+  const focused = document.activeElement;
+  const savedFocus = focused && content.contains(focused) && focused.id
+    ? {
+        id: focused.id,
+        selectionStart: typeof focused.selectionStart === 'number' ? focused.selectionStart : null,
+        selectionEnd: typeof focused.selectionEnd === 'number' ? focused.selectionEnd : null,
+      }
+    : null;
+
   if (chatKbBrowserState.activeTab === 'settings') {
     content.innerHTML = chatKbBrowserSettingsTab();
     chatKbBrowserWireSettingsTab();
@@ -2206,6 +2249,21 @@ function chatKbBrowserRenderTab() {
   const newEntryDetailEl = content.querySelector('.chat-kb-entry-detail');
   if (newEntriesListEl && savedEntriesListScroll) newEntriesListEl.scrollTop = savedEntriesListScroll;
   if (newEntryDetailEl && savedEntryDetailScroll) newEntryDetailEl.scrollTop = savedEntryDetailScroll;
+
+  // Restore focus + caret on the same id so text input survives the swap.
+  if (savedFocus) {
+    const again = document.getElementById(savedFocus.id);
+    if (again && typeof again.focus === 'function') {
+      again.focus();
+      if (savedFocus.selectionStart !== null && typeof again.setSelectionRange === 'function') {
+        try {
+          again.setSelectionRange(savedFocus.selectionStart, savedFocus.selectionEnd);
+        } catch {
+          /* some input types (e.g. type=date) disallow setSelectionRange */
+        }
+      }
+    }
+  }
 }
 
 function chatKbBrowserRawTab(kbState) {
@@ -2590,18 +2648,98 @@ async function chatKbBrowserDigestAll() {
 
 // ── Entries tab ─────────────────────────────────────────────────────────────
 
+/**
+ * Translate a preset key into an [from, to] pair of ISO timestamps used
+ * by the entries filter API. Presets cover the past N days (anchored to
+ * "now") and map directly to the backend's inclusive range filters.
+ * Custom presets pass the user-entered `<input type="date">` values
+ * straight through (widening the `to` bound to 23:59:59 so the entire
+ * selected day is included).
+ */
+function chatKbBrowserResolveDateRange(preset, fromDate, toDate) {
+  const now = new Date();
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).toISOString();
+  const daysAgo = (n) => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - n);
+    return startOfDay(d);
+  };
+  switch (preset) {
+    case 'today':
+      return { from: startOfDay(now), to: '' };
+    case '7d':
+      return { from: daysAgo(7), to: '' };
+    case '30d':
+      return { from: daysAgo(30), to: '' };
+    case '90d':
+      return { from: daysAgo(90), to: '' };
+    case 'custom': {
+      const from = fromDate ? new Date(fromDate + 'T00:00:00').toISOString() : '';
+      const to = toDate ? new Date(toDate + 'T23:59:59.999').toISOString() : '';
+      return { from, to };
+    }
+    case 'all':
+    default:
+      return { from: '', to: '' };
+  }
+}
+
+function chatKbBrowserBuildEntriesQuery() {
+  const s = chatKbBrowserState.entries;
+  const f = s.filters;
+  const qs = new URLSearchParams();
+  if (f.search && f.search.trim() !== '') qs.set('search', f.search.trim());
+  if (Array.isArray(f.tags) && f.tags.length > 0) qs.set('tags', f.tags.join(','));
+  const uploaded = chatKbBrowserResolveDateRange(f.uploadedPreset, f.uploadedFrom, f.uploadedTo);
+  if (uploaded.from) qs.set('uploadedFrom', uploaded.from);
+  if (uploaded.to) qs.set('uploadedTo', uploaded.to);
+  const digested = chatKbBrowserResolveDateRange(f.digestedPreset, f.digestedFrom, f.digestedTo);
+  if (digested.from) qs.set('digestedFrom', digested.from);
+  if (digested.to) qs.set('digestedTo', digested.to);
+  qs.set('limit', String(s.pageSize));
+  qs.set('offset', String((s.page - 1) * s.pageSize));
+  return qs.toString();
+}
+
+async function chatKbBrowserLoadAllTags() {
+  if (!chatKbBrowserState || chatKbBrowserState.entries.allTagsLoaded) return;
+  try {
+    const url = chatApiUrl(
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/tags`,
+    );
+    const res = await fetch(url, { credentials: 'same-origin' });
+    if (!res.ok) throw new Error(`GET /kb/tags returned ${res.status}`);
+    const data = await res.json();
+    if (!chatKbBrowserState) return;
+    chatKbBrowserState.entries.allTags = Array.isArray(data.tags) ? data.tags : [];
+    chatKbBrowserState.entries.allTagsLoaded = true;
+  } catch (err) {
+    console.error('[kb] tags fetch failed:', err);
+  }
+}
+
 async function chatKbBrowserRefetchEntries() {
   if (!chatKbBrowserState) return;
   chatKbBrowserState.entries.loading = true;
   try {
+    const qs = chatKbBrowserBuildEntriesQuery();
     const url = chatApiUrl(
-      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/entries`,
+      `workspaces/${encodeURIComponent(chatKbBrowserState.hash)}/kb/entries?${qs}`,
     );
     const res = await fetch(url, { credentials: 'same-origin' });
     if (!res.ok) throw new Error(`GET /kb/entries returned ${res.status}`);
     const data = await res.json();
     if (!chatKbBrowserState) return;
     chatKbBrowserState.entries.items = Array.isArray(data.entries) ? data.entries : [];
+    chatKbBrowserState.entries.total = typeof data.total === 'number' ? data.total : 0;
+    // If the current page exceeds the available pages (e.g. after a
+    // filter change narrows results), snap back to page 1 and refetch.
+    const maxPage = Math.max(1, Math.ceil(chatKbBrowserState.entries.total / chatKbBrowserState.entries.pageSize));
+    if (chatKbBrowserState.entries.page > maxPage) {
+      chatKbBrowserState.entries.page = 1;
+      chatKbBrowserState.entries.loading = false;
+      return chatKbBrowserRefetchEntries();
+    }
   } catch (err) {
     console.error('[kb] entries refetch failed:', err);
   } finally {
@@ -2614,42 +2752,348 @@ async function chatKbBrowserRefetchEntries() {
 
 function chatKbBrowserEntriesTab() {
   const s = chatKbBrowserState.entries;
+  const toolbar = chatKbBrowserEntriesToolbar();
   const items = Array.isArray(s.items) ? s.items : [];
+  const hasFilters = chatKbBrowserEntriesHasActiveFilters();
+
+  let listHtml;
   if (s.loading && items.length === 0) {
-    return '<p class="chat-kb-empty">Loading entries…</p>';
+    listHtml = '<p class="chat-kb-empty">Loading entries…</p>';
+  } else if (items.length === 0) {
+    listHtml = hasFilters
+      ? '<p class="chat-kb-empty">No entries match these filters.</p>'
+      : '<p class="chat-kb-empty">No entries yet. Upload files and digest them to populate this list.</p>';
+  } else {
+    const rows = items.map((e) => {
+      const isSelected = e.entryId === s.selectedEntryId;
+      const tagBadges = (e.tags || [])
+        .slice(0, 6)
+        .map((t) => `<span class="chat-kb-entry-tag">${esc(t)}</span>`)
+        .join('');
+      return `
+        <li class="chat-kb-entry-row ${isSelected ? 'selected' : ''}" data-kb-entry-id="${esc(e.entryId)}">
+          <div class="chat-kb-entry-title">${esc(e.title || e.entryId)}</div>
+          <div class="chat-kb-entry-summary">${esc(e.summary || '')}</div>
+          <div class="chat-kb-entry-tags">${tagBadges}</div>
+        </li>
+      `;
+    }).join('');
+    listHtml = `<ul class="chat-kb-entries-list">${rows}</ul>`;
   }
-  if (items.length === 0) {
-    return '<p class="chat-kb-empty">No entries yet. Upload files and digest them to populate this list.</p>';
-  }
-  const rows = items.map((e) => {
-    const isSelected = e.entryId === s.selectedEntryId;
-    const tagBadges = (e.tags || [])
-      .slice(0, 6)
-      .map((t) => `<span class="chat-kb-entry-tag">${esc(t)}</span>`)
-      .join('');
-    return `
-      <li class="chat-kb-entry-row ${isSelected ? 'selected' : ''}" data-kb-entry-id="${esc(e.entryId)}">
-        <div class="chat-kb-entry-title">${esc(e.title || e.entryId)}</div>
-        <div class="chat-kb-entry-summary">${esc(e.summary || '')}</div>
-        <div class="chat-kb-entry-tags">${tagBadges}</div>
-      </li>
-    `;
-  }).join('');
+
+  const pagination = chatKbBrowserEntriesPagination();
   const bodyHtml = s.selectedEntryId && s.entryBody
     ? `<pre class="chat-kb-entry-body">${esc(s.entryBody)}</pre>`
     : '<p class="chat-kb-empty">Click an entry to preview its body.</p>';
   return `
+    ${toolbar}
     <div class="chat-kb-entries-layout">
-      <ul class="chat-kb-entries-list">${rows}</ul>
+      <div class="chat-kb-entries-column">
+        ${listHtml}
+        ${pagination}
+      </div>
       <div class="chat-kb-entry-detail">${bodyHtml}</div>
     </div>
   `;
 }
 
+function chatKbBrowserEntriesHasActiveFilters() {
+  const f = chatKbBrowserState.entries.filters;
+  return (
+    (f.search && f.search.trim() !== '') ||
+    (Array.isArray(f.tags) && f.tags.length > 0) ||
+    (f.uploadedPreset && f.uploadedPreset !== 'all') ||
+    (f.digestedPreset && f.digestedPreset !== 'all')
+  );
+}
+
+function chatKbBrowserEntriesToolbar() {
+  const s = chatKbBrowserState.entries;
+  const f = s.filters;
+  const presetOptions = [
+    ['all', 'All time'],
+    ['today', 'Today'],
+    ['7d', 'Last 7 days'],
+    ['30d', 'Last 30 days'],
+    ['90d', 'Last 90 days'],
+    ['custom', 'Custom…'],
+  ];
+  const renderPresetSelect = (id, value) => {
+    const opts = presetOptions
+      .map(([v, label]) => `<option value="${v}" ${v === value ? 'selected' : ''}>${label}</option>`)
+      .join('');
+    return `<select class="chat-kb-filter-select" id="${id}">${opts}</select>`;
+  };
+  const renderCustom = (prefix, from, to, preset) => {
+    if (preset !== 'custom') return '';
+    return `
+      <input type="date" class="chat-kb-filter-date" id="${prefix}-from" value="${esc(from)}" aria-label="From date" />
+      <span class="chat-kb-filter-dash">–</span>
+      <input type="date" class="chat-kb-filter-date" id="${prefix}-to" value="${esc(to)}" aria-label="To date" />
+    `;
+  };
+
+  const selectedChips = (f.tags || [])
+    .map((t) => `<span class="chat-kb-tag-chip" data-tag="${esc(t)}">${esc(t)}<button type="button" class="chat-kb-tag-chip-x" data-remove-tag="${esc(t)}" aria-label="Remove tag">×</button></span>`)
+    .join('');
+  const dropdown = chatKbBrowserEntriesTagDropdown();
+  const clearBtn = chatKbBrowserEntriesHasActiveFilters()
+    ? '<button type="button" class="chat-kb-filter-clear" id="chat-kb-filter-clear">Clear filters</button>'
+    : '';
+
+  return `
+    <div class="chat-kb-filter-bar">
+      <div class="chat-kb-filter-row">
+        <input type="search" class="chat-kb-filter-search" id="chat-kb-filter-search"
+               placeholder="Search by title…" value="${esc(f.search)}" />
+        <div class="chat-kb-filter-tags-wrap">
+          <button type="button" class="chat-kb-filter-tags-btn" id="chat-kb-filter-tags-btn"
+                  aria-haspopup="listbox" aria-expanded="${s.tagPickerOpen}">
+            ${f.tags.length > 0 ? `Tags (${f.tags.length})` : 'Tags'} ▾
+          </button>
+          ${dropdown}
+        </div>
+        ${clearBtn}
+      </div>
+      <div class="chat-kb-filter-row">
+        <label class="chat-kb-filter-label">Uploaded:</label>
+        ${renderPresetSelect('chat-kb-filter-uploaded', f.uploadedPreset)}
+        ${renderCustom('chat-kb-filter-uploaded', f.uploadedFrom, f.uploadedTo, f.uploadedPreset)}
+        <label class="chat-kb-filter-label">Digested:</label>
+        ${renderPresetSelect('chat-kb-filter-digested', f.digestedPreset)}
+        ${renderCustom('chat-kb-filter-digested', f.digestedFrom, f.digestedTo, f.digestedPreset)}
+      </div>
+      ${selectedChips ? `<div class="chat-kb-filter-chips">${selectedChips}</div>` : ''}
+    </div>
+  `;
+}
+
+function chatKbBrowserEntriesTagDropdown() {
+  const s = chatKbBrowserState.entries;
+  if (!s.tagPickerOpen) return '';
+  const q = (s.tagPickerQuery || '').toLowerCase();
+  const selected = new Set(s.tags = s.tags || []);
+  // Source of truth for selection is filters.tags.
+  selected.clear();
+  for (const t of s.filters.tags) selected.add(t);
+  const matching = (s.allTags || [])
+    .filter((t) => !q || t.tag.toLowerCase().includes(q))
+    .slice(0, 100);
+  const rows = matching.length === 0
+    ? '<div class="chat-kb-tag-empty">No tags match.</div>'
+    : matching.map((t) => {
+        const on = selected.has(t.tag);
+        return `
+          <label class="chat-kb-tag-option ${on ? 'on' : ''}">
+            <input type="checkbox" data-tag-toggle="${esc(t.tag)}" ${on ? 'checked' : ''} />
+            <span class="chat-kb-tag-option-name">${esc(t.tag)}</span>
+            <span class="chat-kb-tag-option-count">${t.count}</span>
+          </label>
+        `;
+      }).join('');
+  return `
+    <div class="chat-kb-tag-dropdown" id="chat-kb-tag-dropdown">
+      <input type="search" class="chat-kb-tag-search" id="chat-kb-tag-search"
+             placeholder="Find a tag…" value="${esc(s.tagPickerQuery)}" />
+      <div class="chat-kb-tag-list">${rows}</div>
+      <div class="chat-kb-tag-hint">All selected tags must be present (AND).</div>
+    </div>
+  `;
+}
+
+function chatKbBrowserEntriesPagination() {
+  const s = chatKbBrowserState.entries;
+  const total = s.total || 0;
+  const pageSize = s.pageSize;
+  const maxPage = Math.max(1, Math.ceil(total / pageSize));
+  const page = Math.min(s.page, maxPage);
+  const start = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const end = Math.min(page * pageSize, total);
+  const sizes = [25, 50, 100].map((n) =>
+    `<option value="${n}" ${n === pageSize ? 'selected' : ''}>${n}</option>`
+  ).join('');
+  return `
+    <div class="chat-kb-pagination">
+      <button type="button" id="chat-kb-page-prev" ${page <= 1 ? 'disabled' : ''}>← Prev</button>
+      <span class="chat-kb-pagination-info">
+        ${total === 0 ? '0 entries' : `${start}–${end} of ${total}`}
+        · Page ${page} of ${maxPage}
+      </span>
+      <button type="button" id="chat-kb-page-next" ${page >= maxPage ? 'disabled' : ''}>Next →</button>
+      <label class="chat-kb-pagination-size">
+        Page size
+        <select id="chat-kb-page-size">${sizes}</select>
+      </label>
+    </div>
+  `;
+}
+
 function chatKbBrowserWireEntriesTab() {
+  // Kick off tags fetch once per browser open.
+  if (!chatKbBrowserState.entries.allTagsLoaded) {
+    chatKbBrowserLoadAllTags().then(() => {
+      if (chatKbBrowserState && chatKbBrowserState.activeTab === 'entries') {
+        chatKbBrowserRenderTab();
+      }
+    });
+  }
+
   document.querySelectorAll('[data-kb-entry-id]').forEach((el) => {
     el.onclick = () => chatKbBrowserOpenEntry(el.dataset.kbEntryId);
   });
+
+  const searchEl = document.getElementById('chat-kb-filter-search');
+  if (searchEl) {
+    searchEl.oninput = (e) => {
+      chatKbBrowserState.entries.filters.search = e.target.value;
+      if (chatKbBrowserState.entries.searchDebounceTimer) {
+        clearTimeout(chatKbBrowserState.entries.searchDebounceTimer);
+      }
+      chatKbBrowserState.entries.searchDebounceTimer = setTimeout(() => {
+        chatKbBrowserState.entries.page = 1;
+        chatKbBrowserRefetchEntries();
+      }, 300);
+    };
+  }
+
+  const clearBtn = document.getElementById('chat-kb-filter-clear');
+  if (clearBtn) {
+    clearBtn.onclick = () => {
+      const f = chatKbBrowserState.entries.filters;
+      f.search = '';
+      f.tags = [];
+      f.uploadedPreset = 'all';
+      f.uploadedFrom = '';
+      f.uploadedTo = '';
+      f.digestedPreset = 'all';
+      f.digestedFrom = '';
+      f.digestedTo = '';
+      chatKbBrowserState.entries.tagPickerOpen = false;
+      chatKbBrowserState.entries.tagPickerQuery = '';
+      chatKbBrowserState.entries.page = 1;
+      chatKbBrowserRefetchEntries();
+    };
+  }
+
+  const wirePreset = (selectId, presetKey, fromKey, toKey) => {
+    const sel = document.getElementById(selectId);
+    if (sel) {
+      sel.onchange = (e) => {
+        chatKbBrowserState.entries.filters[presetKey] = e.target.value;
+        if (e.target.value !== 'custom') {
+          chatKbBrowserState.entries.filters[fromKey] = '';
+          chatKbBrowserState.entries.filters[toKey] = '';
+        }
+        chatKbBrowserState.entries.page = 1;
+        // Re-render first so the custom date inputs appear, then fetch.
+        chatKbBrowserRenderTab();
+        if (e.target.value !== 'custom') chatKbBrowserRefetchEntries();
+      };
+    }
+    const fromEl = document.getElementById(selectId + '-from');
+    if (fromEl) {
+      fromEl.onchange = (e) => {
+        chatKbBrowserState.entries.filters[fromKey] = e.target.value;
+        chatKbBrowserState.entries.page = 1;
+        chatKbBrowserRefetchEntries();
+      };
+    }
+    const toEl = document.getElementById(selectId + '-to');
+    if (toEl) {
+      toEl.onchange = (e) => {
+        chatKbBrowserState.entries.filters[toKey] = e.target.value;
+        chatKbBrowserState.entries.page = 1;
+        chatKbBrowserRefetchEntries();
+      };
+    }
+  };
+  wirePreset('chat-kb-filter-uploaded', 'uploadedPreset', 'uploadedFrom', 'uploadedTo');
+  wirePreset('chat-kb-filter-digested', 'digestedPreset', 'digestedFrom', 'digestedTo');
+
+  const tagsBtn = document.getElementById('chat-kb-filter-tags-btn');
+  if (tagsBtn) {
+    tagsBtn.onclick = (e) => {
+      e.stopPropagation();
+      chatKbBrowserState.entries.tagPickerOpen = !chatKbBrowserState.entries.tagPickerOpen;
+      chatKbBrowserRenderTab();
+    };
+  }
+
+  const dropdown = document.getElementById('chat-kb-tag-dropdown');
+  if (dropdown) {
+    dropdown.onclick = (e) => e.stopPropagation();
+    const tagSearch = document.getElementById('chat-kb-tag-search');
+    if (tagSearch) {
+      tagSearch.oninput = (e) => {
+        chatKbBrowserState.entries.tagPickerQuery = e.target.value;
+        chatKbBrowserRenderTab();
+      };
+    }
+    dropdown.querySelectorAll('[data-tag-toggle]').forEach((cb) => {
+      cb.onchange = (e) => {
+        const tag = e.target.getAttribute('data-tag-toggle');
+        const tags = chatKbBrowserState.entries.filters.tags;
+        const idx = tags.indexOf(tag);
+        if (e.target.checked && idx < 0) tags.push(tag);
+        if (!e.target.checked && idx >= 0) tags.splice(idx, 1);
+        chatKbBrowserState.entries.page = 1;
+        chatKbBrowserRefetchEntries();
+      };
+    });
+  }
+
+  document.querySelectorAll('[data-remove-tag]').forEach((btn) => {
+    btn.onclick = () => {
+      const tag = btn.getAttribute('data-remove-tag');
+      const tags = chatKbBrowserState.entries.filters.tags;
+      const idx = tags.indexOf(tag);
+      if (idx >= 0) tags.splice(idx, 1);
+      chatKbBrowserState.entries.page = 1;
+      chatKbBrowserRefetchEntries();
+    };
+  });
+
+  // Outside-click closes the tag dropdown. Register once per render.
+  if (chatKbBrowserState.entries.tagPickerOpen) {
+    const handler = (e) => {
+      const wrap = document.querySelector('.chat-kb-filter-tags-wrap');
+      if (wrap && !wrap.contains(e.target)) {
+        chatKbBrowserState.entries.tagPickerOpen = false;
+        document.removeEventListener('click', handler);
+        chatKbBrowserRenderTab();
+      }
+    };
+    document.addEventListener('click', handler);
+  }
+
+  const prevBtn = document.getElementById('chat-kb-page-prev');
+  if (prevBtn) {
+    prevBtn.onclick = () => {
+      if (chatKbBrowserState.entries.page > 1) {
+        chatKbBrowserState.entries.page -= 1;
+        chatKbBrowserRefetchEntries();
+      }
+    };
+  }
+  const nextBtn = document.getElementById('chat-kb-page-next');
+  if (nextBtn) {
+    nextBtn.onclick = () => {
+      const total = chatKbBrowserState.entries.total || 0;
+      const maxPage = Math.max(1, Math.ceil(total / chatKbBrowserState.entries.pageSize));
+      if (chatKbBrowserState.entries.page < maxPage) {
+        chatKbBrowserState.entries.page += 1;
+        chatKbBrowserRefetchEntries();
+      }
+    };
+  }
+  const sizeEl = document.getElementById('chat-kb-page-size');
+  if (sizeEl) {
+    sizeEl.onchange = (e) => {
+      chatKbBrowserState.entries.pageSize = Number(e.target.value) || 50;
+      chatKbBrowserState.entries.page = 1;
+      chatKbBrowserRefetchEntries();
+    };
+  }
 }
 
 async function chatKbBrowserOpenEntry(entryId) {

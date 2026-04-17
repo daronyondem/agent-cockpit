@@ -466,6 +466,159 @@ describe('entry CRUD + tag filtering', () => {
     expect(db.listEntries({ folderPath: 'other' }).length).toBe(0);
   });
 
+  test('listEntries title search is case-insensitive and matches substrings', () => {
+    seedRawWithEntries();
+    expect(db.listEntries({ search: 'alpha' }).map((e) => e.title)).toEqual(['Alpha']);
+    expect(db.listEntries({ search: 'ALP' }).map((e) => e.title)).toEqual(['Alpha']);
+    expect(db.listEntries({ search: 'a' }).map((e) => e.title).sort()).toEqual(['Alpha', 'Beta']);
+    expect(db.listEntries({ search: 'zz' }).length).toBe(0);
+    // Empty / whitespace-only search is treated as no filter.
+    expect(db.listEntries({ search: '' }).length).toBe(2);
+    expect(db.listEntries({ search: '   ' }).length).toBe(2);
+  });
+
+  test('listEntries title search escapes LIKE wildcards so they match literally', () => {
+    const { rawId, sha256 } = makeRawFile('literal wildcards');
+    db.insertRaw({
+      rawId,
+      sha256,
+      status: 'digested',
+      byteLength: 17,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.insertEntry({
+      entryId: `${rawId}-pct`,
+      rawId,
+      title: 'Title with 50% off',
+      slug: 'pct',
+      summary: '',
+      schemaVersion: 1,
+      digestedAt: '2026-01-02T00:00:00Z',
+      tags: [],
+    });
+    db.insertEntry({
+      entryId: `${rawId}-noise`,
+      rawId,
+      title: 'No percent here',
+      slug: 'noise',
+      summary: '',
+      schemaVersion: 1,
+      digestedAt: '2026-01-02T00:00:00Z',
+      tags: [],
+    });
+    expect(db.listEntries({ search: '50%' }).map((e) => e.title)).toEqual(['Title with 50% off']);
+    expect(db.listEntries({ search: '%' }).map((e) => e.title)).toEqual(['Title with 50% off']);
+  });
+
+  test('listEntries multi-tag filter uses AND semantics', () => {
+    seedRawWithEntries();
+    // Both seeded entries have `shared`; only alpha has `core`.
+    expect(db.listEntries({ tags: ['shared'] }).length).toBe(2);
+    expect(db.listEntries({ tags: ['shared', 'core'] }).map((e) => e.title)).toEqual(['Alpha']);
+    // Unknown tag in the AND set → zero matches.
+    expect(db.listEntries({ tags: ['shared', 'ghost'] }).length).toBe(0);
+    // Duplicates in the requested list are harmless.
+    expect(db.listEntries({ tags: ['shared', 'shared'] }).length).toBe(2);
+    // Empty / whitespace-only strings are ignored.
+    expect(db.listEntries({ tags: ['', '  '] }).length).toBe(2);
+    // Legacy single-tag merges with multi-tag list under AND.
+    expect(db.listEntries({ tag: 'shared', tags: ['core'] }).map((e) => e.title)).toEqual(['Alpha']);
+  });
+
+  test('listEntries filters by digested and uploaded date ranges', () => {
+    const { rawId: rawOld, sha256: shaOld } = makeRawFile('old source');
+    db.insertRaw({
+      rawId: rawOld,
+      sha256: shaOld,
+      status: 'digested',
+      byteLength: 11,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.insertEntry({
+      entryId: `${rawOld}-e`,
+      rawId: rawOld,
+      title: 'Old entry',
+      slug: 'old',
+      summary: '',
+      schemaVersion: 1,
+      digestedAt: '2026-01-05T00:00:00Z',
+      tags: [],
+    });
+    const { rawId: rawNew, sha256: shaNew } = makeRawFile('new source');
+    db.insertRaw({
+      rawId: rawNew,
+      sha256: shaNew,
+      status: 'digested',
+      byteLength: 11,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-03-01T00:00:00Z',
+      metadata: null,
+    });
+    db.insertEntry({
+      entryId: `${rawNew}-e`,
+      rawId: rawNew,
+      title: 'New entry',
+      slug: 'new',
+      summary: '',
+      schemaVersion: 1,
+      digestedAt: '2026-03-05T00:00:00Z',
+      tags: [],
+    });
+
+    // Digested range picks up the old entry only.
+    expect(
+      db.listEntries({ digestedFrom: '2026-01-01T00:00:00Z', digestedTo: '2026-02-01T00:00:00Z' })
+        .map((e) => e.title),
+    ).toEqual(['Old entry']);
+    // Uploaded range picks up the new entry only (raw.uploaded_at join).
+    expect(
+      db.listEntries({ uploadedFrom: '2026-02-01T00:00:00Z' }).map((e) => e.title),
+    ).toEqual(['New entry']);
+    // Combined: must satisfy both ranges, so both entries fall out.
+    expect(
+      db.listEntries({
+        uploadedFrom: '2026-02-01T00:00:00Z',
+        digestedTo: '2026-02-01T00:00:00Z',
+      }).length,
+    ).toBe(0);
+  });
+
+  test('countEntries mirrors listEntries filter results without pagination', () => {
+    seedRawWithEntries();
+    expect(db.countEntries()).toBe(2);
+    expect(db.countEntries({ tag: 'core' })).toBe(1);
+    expect(db.countEntries({ search: 'beta' })).toBe(1);
+    expect(db.countEntries({ tags: ['shared', 'core'] })).toBe(1);
+    // Pagination is ignored by countEntries even when passed via listEntries.
+    expect(db.listEntries({ limit: 1 }).length).toBe(1);
+    expect(db.countEntries()).toBe(2);
+  });
+
+  test('listEntries honors limit and offset for pagination', () => {
+    seedRawWithEntries();
+    // Ordered by title → Alpha, Beta.
+    expect(db.listEntries({ limit: 1, offset: 0 }).map((e) => e.title)).toEqual(['Alpha']);
+    expect(db.listEntries({ limit: 1, offset: 1 }).map((e) => e.title)).toEqual(['Beta']);
+    expect(db.listEntries({ limit: 1, offset: 2 }).length).toBe(0);
+  });
+
+  test('listAllTags returns distinct tags ordered by usage then name', () => {
+    seedRawWithEntries();
+    const tags = db.listAllTags();
+    // `shared` appears on both entries (count 2), `core` on one (count 1).
+    expect(tags).toEqual([
+      { tag: 'shared', count: 2 },
+      { tag: 'core', count: 1 },
+    ]);
+  });
+
   test('deleteEntriesByRawId cascades to entry_tags', () => {
     const rawId = seedRawWithEntries();
     const removed = db.deleteEntriesByRawId(rawId);
