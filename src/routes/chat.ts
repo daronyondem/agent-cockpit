@@ -24,7 +24,7 @@ import {
 import { KbDreamService } from '../services/knowledgeBase/dream';
 import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
-import type { Request, Response, NextFunction, ActiveStreamEntry, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
+import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
@@ -72,6 +72,42 @@ export async function processStream(
     status?: string;
     startTime: number;
   }> = [];
+  // Ordered interleaving of text / thinking / tool blocks as they arrive
+  // from the CLI stream. Parallel to the flat `fullResponse` / `thinkingText`
+  // / `toolActivityAccumulator` buckets, but preserves the source ordering
+  // that those flat accumulators lose. Persisted as `Message.contentBlocks`.
+  let blocks: ContentBlock[] = [];
+
+  function appendTextBlock(content: string): void {
+    if (!content) return;
+    const last = blocks[blocks.length - 1];
+    if (last && last.type === 'text') {
+      last.content += content;
+    } else {
+      blocks.push({ type: 'text', content });
+    }
+  }
+
+  function appendThinkingBlock(content: string): void {
+    if (!content) return;
+    const last = blocks[blocks.length - 1];
+    if (last && last.type === 'thinking') {
+      last.content += content;
+    } else {
+      blocks.push({ type: 'thinking', content });
+    }
+  }
+
+  function patchToolBlock(id: string | null | undefined, outcome: string | undefined, status: string | undefined): void {
+    if (!id) return;
+    for (const b of blocks) {
+      if (b.type === 'tool' && b.activity.id === id) {
+        if (outcome !== undefined) b.activity.outcome = outcome || undefined;
+        if (status !== undefined) b.activity.status = status || undefined;
+        return;
+      }
+    }
+  }
 
   function computeToolDurations(activities: typeof toolActivityAccumulator): ToolActivity[] {
     if (!activities.length) return [];
@@ -85,6 +121,22 @@ export async function processStream(
       if (t.outcome) { toolEntry.outcome = t.outcome; }
       if (t.status) { toolEntry.status = t.status; }
       return toolEntry;
+    });
+  }
+
+  // Merge the duration-computed tool activities (in order) back into the
+  // ordered `blocks` array, returning a fresh ContentBlock[] suitable for
+  // persistence. Text / thinking blocks pass through unchanged; each tool
+  // block gets replaced with the next entry from `finalTools`, which
+  // matches the order tools were pushed onto the accumulator.
+  function finalizeBlocks(finalTools: ToolActivity[]): ContentBlock[] {
+    let ti = 0;
+    return blocks.map(b => {
+      if (b.type === 'tool') {
+        const next = finalTools[ti++];
+        return { type: 'tool', activity: next || b.activity };
+      }
+      return { ...b };
     });
   }
 
@@ -109,9 +161,11 @@ export async function processStream(
 
       if (event.type === 'text') {
         fullResponse += event.content;
+        appendTextBlock(event.content);
         emit({ type: 'text', content: event.content });
       } else if (event.type === 'thinking') {
         thinkingText += event.content;
+        appendThinkingBlock(event.content);
         emit({ type: 'thinking', content: event.content });
       } else if (event.type === 'tool_outcomes') {
         for (const outcome of (event.outcomes || [])) {
@@ -120,13 +174,15 @@ export async function processStream(
             match.outcome = outcome.outcome || undefined;
             match.status = outcome.status || undefined;
           }
+          patchToolBlock(outcome.toolUseId, outcome.outcome || undefined, outcome.status || undefined);
         }
         emit({ type: 'tool_outcomes', outcomes: event.outcomes });
       } else if (event.type === 'turn_boundary') {
         const turnToolActivity = computeToolDurations(toolActivityAccumulator);
         if (fullResponse.trim()) {
-          console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}, tools=${turnToolActivity.length}`);
-          const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, turnToolActivity.length > 0 ? turnToolActivity : undefined, 'progress');
+          const turnBlocks = finalizeBlocks(turnToolActivity);
+          console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}, tools=${turnToolActivity.length}, blocks=${turnBlocks.length}`);
+          const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, turnToolActivity.length > 0 ? turnToolActivity : undefined, 'progress', turnBlocks.length > 0 ? turnBlocks : undefined);
           if (intermediateMsg) emit({ type: 'assistant_message', message: intermediateMsg });
           maybeUpdateTitle();
         }
@@ -134,6 +190,7 @@ export async function processStream(
         fullResponse = '';
         thinkingText = '';
         toolActivityAccumulator = [];
+        blocks = [];
       } else if (event.type === 'tool_activity') {
         if (event.isPlanFile && event.planContent) {
           pendingPlanContent = event.planContent;
@@ -154,6 +211,7 @@ export async function processStream(
         }
         emit({ type: 'tool_activity', ...rest } as WsServerFrame);
         if (!event.isPlanMode && !event.isQuestion) {
+          const startTime = Date.now();
           toolActivityAccumulator.push({
             tool: rest.tool,
             description: rest.description || '',
@@ -161,8 +219,18 @@ export async function processStream(
             isAgent: rest.isAgent || undefined,
             subagentType: rest.subagentType || undefined,
             parentAgentId: rest.parentAgentId || undefined,
-            startTime: Date.now(),
+            startTime,
           });
+          const blockActivity: ToolActivity = {
+            tool: rest.tool,
+            description: rest.description || '',
+            id: rest.id || null,
+            duration: null,
+            startTime,
+          };
+          if (rest.isAgent) { blockActivity.isAgent = true; if (rest.subagentType) blockActivity.subagentType = rest.subagentType; }
+          if (rest.parentAgentId) blockActivity.parentAgentId = rest.parentAgentId;
+          blocks.push({ type: 'tool', activity: blockActivity });
         }
       } else if (event.type === 'result') {
         resultText = event.content;
@@ -179,25 +247,35 @@ export async function processStream(
         const apiErrPattern = /^API Error:\s*\d{3}\s/;
         const finalToolActivity = computeToolDurations(toolActivityAccumulator);
         const finalToolActivityArg = finalToolActivity.length > 0 ? finalToolActivity : undefined;
+        const finalBlocks = finalizeBlocks(finalToolActivity);
+        const finalBlocksArg = finalBlocks.length > 0 ? finalBlocks : undefined;
         if (fullResponse.trim()) {
           if (apiErrPattern.test(fullResponse.trim())) {
             console.log(`[chat] Stream done for conv=${convId}, detected API error in text — not saving as message`);
             emit({ type: 'error', error: fullResponse.trim() });
           } else {
-            console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}, tools=${finalToolActivity.length}`);
-            const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, finalToolActivityArg, 'final');
+            console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}, tools=${finalToolActivity.length}, blocks=${finalBlocks.length}`);
+            const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, finalToolActivityArg, 'final', finalBlocksArg);
             if (assistantMsg) emit({ type: 'assistant_message', message: assistantMsg });
             maybeUpdateTitle();
           }
         } else if (resultText && resultText.trim()) {
-          console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}, tools=${finalToolActivity.length}`);
-          const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null, finalToolActivityArg, 'final');
+          console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}, tools=${finalToolActivity.length}, blocks=${finalBlocks.length}`);
+          // `resultText` is set by backends that emit a final `result` event
+          // instead of streaming text deltas. There are no text blocks in
+          // `blocks` in that case, so synthesize one so contentBlocks still
+          // reflects the saved content faithfully.
+          const resultBlocks: ContentBlock[] = finalBlocks.length > 0
+            ? [...finalBlocks, { type: 'text', content: resultText.trim() }]
+            : [{ type: 'text', content: resultText.trim() }];
+          const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null, finalToolActivityArg, 'final', resultBlocks);
           if (assistantMsg) emit({ type: 'assistant_message', message: assistantMsg });
           maybeUpdateTitle();
         } else {
           console.log(`[chat] Stream done for conv=${convId}, no content to save`);
         }
         toolActivityAccumulator = [];
+        blocks = [];
         if (titleUpdatePromise) await titleUpdatePromise;
         emit({ type: 'done' });
       }

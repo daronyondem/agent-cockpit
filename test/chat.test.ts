@@ -642,6 +642,188 @@ describe('Tool activity Phase 3 features', () => {
   });
 });
 
+// ── Ordered contentBlocks persistence ───────────────────────────────────────
+
+describe('ContentBlocks ordering', () => {
+  test('preserves interleaved text / tool order in contentBlocks', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Let me read the file. ', streaming: true },
+      { type: 'tool_activity', tool: 'Read', description: 'Reading `app.js`', id: 't1' },
+      { type: 'text', content: 'Now let me search. ', streaming: true },
+      { type: 'tool_activity', tool: 'Grep', description: 'Searching for `foo`', id: 't2' },
+      { type: 'text', content: 'Step 1: refactor.', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test', backend: 'claude-code',
+    });
+    await eventsPromise;
+
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
+    const msg = assistantMsgs[0];
+
+    // Legacy fields preserved for back-compat
+    expect(msg.content).toBe('Let me read the file. Now let me search. Step 1: refactor.');
+    expect(msg.toolActivity).toHaveLength(2);
+
+    // New ordered field reflects source ordering
+    expect(msg.contentBlocks).toBeDefined();
+    expect(msg.contentBlocks).toHaveLength(5);
+    expect(msg.contentBlocks![0]).toEqual({ type: 'text', content: 'Let me read the file. ' });
+    expect(msg.contentBlocks![1].type).toBe('tool');
+    expect((msg.contentBlocks![1] as any).activity.tool).toBe('Read');
+    expect(msg.contentBlocks![2]).toEqual({ type: 'text', content: 'Now let me search. ' });
+    expect(msg.contentBlocks![3].type).toBe('tool');
+    expect((msg.contentBlocks![3] as any).activity.tool).toBe('Grep');
+    expect(msg.contentBlocks![4]).toEqual({ type: 'text', content: 'Step 1: refactor.' });
+  });
+
+  test('merges adjacent text chunks into one text block', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Hello ', streaming: true },
+      { type: 'text', content: 'world. ', streaming: true },
+      { type: 'tool_activity', tool: 'Read', description: 'Reading `x`', id: 't1' },
+      { type: 'text', content: 'Done ', streaming: true },
+      { type: 'text', content: 'now.', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test', backend: 'claude-code',
+    });
+    await eventsPromise;
+
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const msg = loaded.messages.filter((m: any) => m.role === 'assistant')[0];
+    expect(msg.contentBlocks).toHaveLength(3);
+    expect(msg.contentBlocks![0]).toEqual({ type: 'text', content: 'Hello world. ' });
+    expect(msg.contentBlocks![1].type).toBe('tool');
+    expect(msg.contentBlocks![2]).toEqual({ type: 'text', content: 'Done now.' });
+  });
+
+  test('includes thinking as an ordered block', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'thinking', content: 'Considering the problem. ', streaming: true },
+      { type: 'text', content: 'Here is my answer. ', streaming: true },
+      { type: 'tool_activity', tool: 'Read', description: 'Reading `f`', id: 't1' },
+      { type: 'text', content: 'Done.', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test', backend: 'claude-code',
+    });
+    await eventsPromise;
+
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const msg = loaded.messages.filter((m: any) => m.role === 'assistant')[0];
+    expect(msg.contentBlocks).toBeDefined();
+    expect(msg.contentBlocks![0]).toEqual({ type: 'thinking', content: 'Considering the problem. ' });
+    expect(msg.contentBlocks![1]).toEqual({ type: 'text', content: 'Here is my answer. ' });
+    expect(msg.contentBlocks![2].type).toBe('tool');
+    expect(msg.contentBlocks![3]).toEqual({ type: 'text', content: 'Done.' });
+    // Legacy `thinking` field still populated for back-compat
+    expect(msg.thinking).toBe('Considering the problem.');
+  });
+
+  test('tool outcomes patch the corresponding tool block', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'Bash', description: 'Running tests', id: 't1' },
+      { type: 'text', content: 'Tests ran.', streaming: true },
+      { type: 'tool_outcomes', outcomes: [{ toolUseId: 't1', outcome: 'exit 0', status: 'success' }] },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test', backend: 'claude-code',
+    });
+    await eventsPromise;
+
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const msg = loaded.messages.filter((m: any) => m.role === 'assistant')[0];
+    const toolBlock = (msg.contentBlocks || []).find((b: any) => b.type === 'tool') as any;
+    expect(toolBlock).toBeDefined();
+    expect(toolBlock.activity.outcome).toBe('exit 0');
+    expect(toolBlock.activity.status).toBe('success');
+  });
+
+  test('intermediate message at turn_boundary has its own contentBlocks', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'First ', streaming: true },
+      { type: 'tool_activity', tool: 'Read', description: 'Reading `a`', id: 't1' },
+      { type: 'text', content: 'segment.', streaming: true },
+      { type: 'turn_boundary' },
+      { type: 'tool_activity', tool: 'Bash', description: 'Running', id: 't2' },
+      { type: 'text', content: 'Second segment.', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test', backend: 'claude-code',
+    });
+    await eventsPromise;
+
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const msgs = loaded.messages.filter((m: any) => m.role === 'assistant');
+    expect(msgs).toHaveLength(2);
+
+    expect(msgs[0].contentBlocks).toHaveLength(3);
+    expect(msgs[0].contentBlocks![0]).toEqual({ type: 'text', content: 'First ' });
+    expect(msgs[0].contentBlocks![1].type).toBe('tool');
+    expect((msgs[0].contentBlocks![1] as any).activity.tool).toBe('Read');
+    expect(msgs[0].contentBlocks![2]).toEqual({ type: 'text', content: 'segment.' });
+
+    expect(msgs[1].contentBlocks).toHaveLength(2);
+    expect(msgs[1].contentBlocks![0].type).toBe('tool');
+    expect((msgs[1].contentBlocks![0] as any).activity.tool).toBe('Bash');
+    expect(msgs[1].contentBlocks![1]).toEqual({ type: 'text', content: 'Second segment.' });
+  });
+
+  test('omits contentBlocks when assistant message has no blocks', async () => {
+    const conv = await chatService.createConversation('Test');
+
+    // No text, no tools — just a plan mode event which is skipped from
+    // the accumulator, and a done. Nothing should be saved.
+    mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'EnterPlanMode', isPlanMode: true, planAction: 'enter' },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test', backend: 'claude-code',
+    });
+    await eventsPromise;
+
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
+    expect(assistantMsgs).toHaveLength(0);
+  });
+});
+
 // ── Turn boundary intermediate message saving ───────────────────────────────
 
 describe('Turn boundary intermediate messages', () => {

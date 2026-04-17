@@ -189,7 +189,12 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
                                 //   frontend treats absent as 'final' for back-compat.
                                 //   Consumed by the chat renderer to collapse consecutive
                                 //   progress messages into a single timeline card.
-  toolActivity?: [{             // Tool/agent activity log (assistant only, omitted if empty)
+  toolActivity?: [{             // Tool/agent activity log (assistant only, omitted if empty).
+                                //   Derived view of the tool blocks in `contentBlocks` when
+                                //   that field is present; retained at top-level for
+                                //   back-compat with session overview aggregation, search,
+                                //   exports, and legacy messages written before
+                                //   `contentBlocks` existed.
     tool: string,               // Tool name: 'Read', 'Write', 'Bash', 'Agent', etc.
     description: string,        // Human-readable description
     id: string|null,            // Block ID from CLI event
@@ -200,9 +205,51 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
     startTime: number,          // Unix timestamp ms when event was received
     outcome?: string,           // Short outcome summary (e.g. 'exit 0', '4 matches', 'not found')
     status?: string             // 'success' | 'error' | 'warning' (derived from tool result)
-  }]
+  }],
+  contentBlocks?: ContentBlock[] // Assistant only. Ordered interleaving of text, thinking,
+                                //   and tool blocks as the CLI emitted them, so the renderer
+                                //   can display "text → tool → text → tool" in source order
+                                //   instead of grouping all tools before all text. When
+                                //   present this field is authoritative; `content`,
+                                //   `thinking`, and `toolActivity` are derived views kept
+                                //   for back-compat. Absent on legacy messages written
+                                //   before this field existed (the renderer falls back to
+                                //   the legacy fields in that case). See ContentBlock below.
 }
 ```
+
+### ContentBlock
+
+Discriminated union representing a single ordered block in an assistant
+message. Each streaming event from the backend produces (or merges into)
+one block:
+
+```javascript
+// Text deltas — adjacent text events are merged into the tail text block.
+{ type: 'text',     content: string }
+
+// Extended thinking deltas — adjacent thinking events merge similarly.
+{ type: 'thinking', content: string }
+
+// A single tool invocation. `activity` is the same ToolActivity shape as
+// the derived top-level `toolActivity[]` array, including duration and
+// outcome patches applied from `tool_outcomes` stream events.
+{ type: 'tool',     activity: ToolActivity }
+```
+
+Ordering rules:
+
+- Blocks are appended in the order the backend emits events. Both the
+  Claude Code adapter and the Kiro adapter yield `text` / `thinking` /
+  `tool_activity` / `tool_outcomes` stream events in native source order.
+- Consecutive `text` events collapse into one `text` block (same for
+  `thinking`). This keeps the block list compact while preserving the
+  interleaving relative to tools.
+- `tool_activity` events for plan-mode enter/exit and user-question
+  prompts are **not** persisted as tool blocks (matching the existing
+  `toolActivity[]` filtering behavior).
+- `tool_outcomes` patches the matching tool block in place by
+  `activity.id`, updating `outcome` and `status`.
 
 ## API Response: getConversation
 

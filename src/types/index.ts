@@ -48,6 +48,21 @@ export interface ToolActivity {
 
 // ── Messages ─────────────────────────────────────────────────────────────────
 
+/**
+ * Ordered content block on an assistant message. Preserves the interleaving
+ * of text, thinking, and tool activity as the CLI emits it so the renderer
+ * can show "text → tool → text → tool" in source order instead of grouping
+ * all tools and all text into separate buckets.
+ *
+ * When `contentBlocks` is present on a Message it is authoritative; the
+ * legacy `content`, `thinking`, and `toolActivity` fields are derived views
+ * kept for back-compat with session files written before this field existed.
+ */
+export type ContentBlock =
+  | { type: 'text'; content: string }
+  | { type: 'thinking'; content: string }
+  | { type: 'tool'; activity: ToolActivity };
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -56,6 +71,12 @@ export interface Message {
   timestamp: string;
   thinking?: string;
   toolActivity?: ToolActivity[];
+  /**
+   * Ordered interleaving of text / thinking / tool blocks as they arrived
+   * from the backend. Assistant messages only. Absent on older messages
+   * — the renderer falls back to `content` + `toolActivity` when missing.
+   */
+  contentBlocks?: ContentBlock[];
   /**
    * Assistant messages only. `progress` = intermediate segment saved at a
    * `turn_boundary` (agent still has more tool work to do). `final` = last

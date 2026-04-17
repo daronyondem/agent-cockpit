@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import type { BackendRegistry } from './backends/registry';
 import { parseFrontmatter as parseMemoryFrontmatter } from './backends/claudeCode';
 import type {
+  ContentBlock,
   Message,
   ToolActivity,
   Usage,
@@ -489,6 +490,7 @@ export class ChatService {
     thinking?: string | null,
     toolActivity?: ToolActivity[],
     turn?: 'progress' | 'final',
+    contentBlocks?: ContentBlock[],
   ): Promise<Message | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
@@ -508,6 +510,10 @@ export class ChatService {
 
     if (toolActivity && toolActivity.length > 0) {
       msg.toolActivity = toolActivity;
+    }
+
+    if (contentBlocks && contentBlocks.length > 0 && role === 'assistant') {
+      msg.contentBlocks = contentBlocks;
     }
 
     if (turn && role === 'assistant') {
