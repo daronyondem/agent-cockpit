@@ -88,10 +88,12 @@ export function chatRenderMessages() {
     }
 
     // Collapse a run of consecutive assistant progress messages (saved at
-    // `turn_boundary` — agent still has tool work to do) into one timeline
-    // card so the chat doesn't balloon into a stack of near-identical bubbles.
-    // The final message of the agent run (`turn === 'final'` or legacy
-    // messages with `turn` absent) still renders as its own full card.
+    // `turn_boundary` — agent still has tool work to do) into a compact
+    // breadcrumb pill. When the run is immediately followed by a final
+    // assistant message, the breadcrumb is rendered *inside* that final
+    // message's content (above its Thinking + body) so the whole turn is
+    // one visual block. Otherwise (stream interrupted, still streaming) the
+    // breadcrumb renders standalone as a normal feed item.
     if (msg.role === 'assistant' && msg.turn === 'progress') {
       const groupStart = mi;
       let mj = mi;
@@ -102,7 +104,20 @@ export function chatRenderMessages() {
         if (m.backend !== msg.backend) break;
         mj++;
       }
-      html += chatRenderProgressGroup(currentSessionMsgs.slice(groupStart, mj), currentSessionMsgs, groupStart);
+      const progressRun = currentSessionMsgs.slice(groupStart, mj);
+      const next = currentSessionMsgs[mj];
+      const mergesIntoFinal = next
+        && next.kind !== 'memory_update'
+        && next.role === 'assistant'
+        && next.turn !== 'progress'
+        && next.backend === msg.backend;
+      if (mergesIntoFinal) {
+        const breadcrumbHtml = chatRenderProgressBreadcrumb(progressRun, currentSessionMsgs, groupStart);
+        html += chatRenderSingleMessage(next, mj, currentSessionMsgs, breadcrumbHtml);
+        mi = mj + 1;
+        continue;
+      }
+      html += chatRenderProgressBreadcrumb(progressRun, currentSessionMsgs, groupStart);
       mi = mj;
       continue;
     }
@@ -149,7 +164,7 @@ export function chatRenderMessages() {
 
 // ── Single message card (user/assistant-final/system) ───────────────────────
 
-function chatRenderSingleMessage(msg, mi, currentSessionMsgs) {
+function chatRenderSingleMessage(msg, mi, currentSessionMsgs, prependHtml = '') {
   const isUser = msg.role === 'user';
   const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
   const avatar = isUser ? ICON_USER : (backendIcon || DEFAULT_BACKEND_ICON);
@@ -183,7 +198,7 @@ function chatRenderSingleMessage(msg, mi, currentSessionMsgs) {
         <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
         <div class="chat-msg-body">
           <div class="chat-msg-role">${roleLabel} ${backendLabel}${timeLabel}</div>
-          <div class="chat-msg-content">${thinkingHtml}${toolActivityHtml}${rendered}</div>
+          <div class="chat-msg-content">${prependHtml}${thinkingHtml}${toolActivityHtml}${rendered}</div>
           <div class="chat-msg-actions">
             <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
             <button class="chat-msg-action" data-action="copy-md" title="Copy Markdown">Copy MD</button>
@@ -201,7 +216,7 @@ function chatRenderSingleMessage(msg, mi, currentSessionMsgs) {
 // role header, no action buttons. Expands to reveal a vertical timeline of
 // the individual rows (thinking, activity chip, prose body).
 
-function chatRenderProgressGroup(groupMsgs, currentSessionMsgs, groupStartIdx) {
+function chatRenderProgressBreadcrumb(groupMsgs, currentSessionMsgs, groupStartIdx) {
   if (!groupMsgs.length) return '';
   const first = groupMsgs[0];
   const last = groupMsgs[groupMsgs.length - 1];

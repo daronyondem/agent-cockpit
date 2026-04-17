@@ -1058,9 +1058,19 @@
      minimal vertical space when collapsed; expands to reveal a vertical
      timeline of the individual rows. No avatar / header / actions. */
   .chat-progress-breadcrumb {
-    margin: 4px 0 8px 52px;  /* align with assistant message body (avatar column) */
+    /* When attached inside a final assistant message's `.chat-msg-content`,
+       the parent already provides the avatar column offset — no extra left
+       margin needed. Takes the full content width so it matches the chat
+       surface. Falls back to the same placement when rendered standalone
+       (progress run with no following final, e.g. session interrupted). */
+    margin: 0 0 10px;
     font-size: 12px;
     color: var(--muted);
+  }
+  /* When standalone (not wrapped in `.chat-msg-content`), pad left to clear
+     the avatar column so the pill aligns with assistant message bodies. */
+  #chat-messages > .chat-progress-breadcrumb {
+    margin: 4px 0 8px 52px;
   }
   .chat-progress-breadcrumb-summary {
     display: flex;
