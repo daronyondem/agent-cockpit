@@ -2428,18 +2428,23 @@ function chatKbBrowserRawRow(raw) {
   const canDigest = raw.status === 'ingested' || raw.status === 'pending-delete' || raw.status === 'failed';
   const digestBtn = canDigest
     ? `<button class="chat-kb-raw-digest" data-kb-digest="${esc(raw.rawId)}" title="Digest now">${KB_ICON_DIGEST}</button>`
-    : '';
+    : `<button class="chat-kb-raw-digest chat-kb-raw-digest--hidden" aria-hidden="true" tabindex="-1">${KB_ICON_DIGEST}</button>`;
   const statusIcon = chatKbStatusIcon(raw.status);
 
-  // Substep + elapsed timer for items being processed.
+  // Substep line wraps below; elapsed timer stays inline on the main row
+  // so processing rows keep the same height as idle rows.
   let substepHtml = '';
+  let elapsedHtml = '';
   const isProcessing = raw.status === 'ingesting' || raw.status === 'digesting';
   if (isProcessing && chatKbBrowserState) {
     const substepText = chatKbBrowserState.substeps[raw.rawId] || '';
     const startTime = chatKbBrowserState.processingStartTimes[raw.rawId];
     const elapsed = startTime ? chatKbFormatElapsed(Date.now() - startTime) : '';
-    if (substepText || elapsed) {
-      substepHtml = `<div class="chat-kb-raw-substep">${esc(substepText)}${elapsed ? `<span class="chat-kb-elapsed">${esc(elapsed)}</span>` : ''}</div>`;
+    if (elapsed) {
+      elapsedHtml = `<span class="chat-kb-raw-elapsed">${esc(elapsed)}</span>`;
+    }
+    if (substepText) {
+      substepHtml = `<div class="chat-kb-raw-substep">${esc(substepText)}</div>`;
     }
   }
 
@@ -2447,6 +2452,7 @@ function chatKbBrowserRawRow(raw) {
     <li class="chat-kb-raw-row" data-kb-raw-id="${esc(raw.rawId)}">
       <span class="chat-kb-raw-filename" title="${esc(raw.filename)}">${esc(raw.filename)}</span>
       <span class="chat-kb-raw-meta">${esc(size)} · ${esc(when)}</span>
+      ${elapsedHtml}
       <span class="chat-kb-raw-status ${esc(raw.status)}">${statusIcon} ${esc(raw.status)}</span>
       ${digestBtn}
       <button class="chat-kb-raw-delete"

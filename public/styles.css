@@ -3165,6 +3165,7 @@
   }
   .chat-kb-raw-row {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 10px;
     padding: 10px 12px;
@@ -3213,7 +3214,11 @@
     letter-spacing: 0.03em;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
     gap: 4px;
+    flex: 0 0 auto;
+    min-width: 140px;
+    box-sizing: border-box;
   }
   .chat-kb-raw-status.ingesting { background: #2e3a52; color: #9fb8e5; }
   .chat-kb-raw-status.ingested  { background: #1f3e32; color: #7fd4a6; }
@@ -3234,6 +3239,14 @@
     opacity: 0.7;
     font-variant-numeric: tabular-nums;
   }
+  .chat-kb-raw-elapsed {
+    flex: 0 0 auto;
+    color: var(--muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    opacity: 0.75;
+  }
   .chat-kb-raw-error {
     flex: 1 1 100%;
     color: #e89a9a;
@@ -3246,8 +3259,12 @@
     color: var(--muted);
     cursor: pointer;
     font-size: 16px;
-    padding: 4px 8px;
+    padding: 4px 0;
     border-radius: 4px;
+    flex: 0 0 auto;
+    width: 32px;
+    text-align: center;
+    box-sizing: border-box;
   }
   .chat-kb-raw-delete:hover { color: #e89a9a; background: var(--surface2); }
   .chat-kb-empty {
@@ -3391,12 +3408,20 @@
     color: var(--muted);
     cursor: pointer;
     font-size: 14px;
-    padding: 4px 8px;
+    padding: 4px 0;
     border-radius: 4px;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    width: 32px;
+    box-sizing: border-box;
   }
   .chat-kb-raw-digest:hover { color: var(--accent, #4a9eff); background: var(--surface2); }
+  .chat-kb-raw-digest--hidden {
+    visibility: hidden;
+    pointer-events: none;
+  }
   .chat-kb-raw-status.digesting { background: #3a2f52; color: #b89fe5; }
   .chat-kb-raw-status.pending-delete { background: #4a3a2a; color: #e5c185; }
   /* Entries tab */
