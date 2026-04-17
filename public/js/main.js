@@ -1911,6 +1911,23 @@ window.chatHandleKbStateUpdate = function chatHandleKbStateUpdate(convId, event)
     chatKbBrowserState.batchProgress = event.changed.batchProgress;
   }
 
+  // Track digestion session entity count (fires for both single and batch
+  // digests). `active: true` frames update the live counter shown beside
+  // the batch progress text. An `active: false` frame is emitted exactly
+  // once when the digestion queue drains — capture the final count into
+  // `digestComplete` so we can render a dismissable summary banner.
+  if (event?.changed?.digestion) {
+    const d = event.changed.digestion;
+    if (d.active) {
+      chatKbBrowserState.digestion = { entriesCreated: d.entriesCreated };
+    } else {
+      chatKbBrowserState.digestion = null;
+      if (d.entriesCreated > 0) {
+        chatKbBrowserState.digestComplete = { entriesCreated: d.entriesCreated };
+      }
+    }
+  }
+
   // Track dream progress for the stepper.
   if (event?.changed?.dreamProgress) {
     const prev = chatKbBrowserState.synthesis._dreamProgress;
@@ -1984,6 +2001,10 @@ async function chatOpenKbBrowser(hash, label) {
     processingStartTimes: {},
     /** Batch digest progress: { done, total } or null */
     batchProgress: null,
+    /** Active digestion session counter: { entriesCreated } or null. */
+    digestion: null,
+    /** Completion banner state: { entriesCreated } or null. Dismissable via close button. */
+    digestComplete: null,
     /** Upload queue for multi-file / folder batch uploads */
     uploadQueue: {
       items: [],            // { file, folderPath, status, error, retries, xhr }
@@ -2324,8 +2345,26 @@ function chatKbBrowserRawTab(kbState) {
   const selectedFolder = chatKbBrowserState.selectedFolder || '';
   const crumb = chatKbBrowserFormatBreadcrumb(selectedFolder);
 
+  const bp = chatKbBrowserState.batchProgress;
+  const activeEntries = chatKbBrowserState.digestion?.entriesCreated || 0;
+  const progressText = bp
+    ? `${bp.done} of ${bp.total} done${activeEntries > 0 ? ` · ${activeEntries} entit${activeEntries === 1 ? 'y' : 'ies'} created` : ''}`
+    : activeEntries > 0
+      ? `${activeEntries} entit${activeEntries === 1 ? 'y' : 'ies'} created`
+      : '';
+  const complete = chatKbBrowserState.digestComplete;
+  const completeBanner = complete
+    ? `
+      <div class="chat-kb-digest-complete-banner">
+        <span>${KB_ICON_DIGEST} Digestion complete — ${complete.entriesCreated} entit${complete.entriesCreated === 1 ? 'y' : 'ies'} created</span>
+        <button class="chat-kb-digest-complete-close" id="chat-kb-digest-complete-close" title="Dismiss">×</button>
+      </div>
+    `
+    : '';
+
   return `
     ${pandocBanner}
+    ${completeBanner}
     <div class="chat-kb-toolbar">
       <label class="chat-kb-toolbar-switch">
         <input type="checkbox" id="chat-kb-autodigest-toggle" ${autoDigestOn ? 'checked' : ''} />
@@ -2335,7 +2374,7 @@ function chatKbBrowserRawTab(kbState) {
       <button class="chat-kb-toolbar-btn chat-kb-toolbar-btn-primary" id="chat-kb-digest-all-btn" ${digestAllDisabled ? 'disabled' : ''}>
         ${KB_ICON_DIGEST} ${isDigesting ? 'Digesting\u2026' : `Digest All Pending (${pendingCount})`}
       </button>
-      ${chatKbBrowserState.batchProgress ? `<span class="chat-kb-batch-progress">${chatKbBrowserState.batchProgress.done} of ${chatKbBrowserState.batchProgress.total} done</span>` : ''}
+      ${progressText ? `<span class="chat-kb-batch-progress">${progressText}</span>` : ''}
     </div>
     <div class="chat-kb-raw-layout">
       <aside class="chat-kb-folder-tree">
@@ -2563,6 +2602,14 @@ function chatKbBrowserWireRawTab() {
   if (newFolderBtn) newFolderBtn.onclick = chatKbBrowserCreateFolder;
   const digestAllBtn = document.getElementById('chat-kb-digest-all-btn');
   if (digestAllBtn) digestAllBtn.onclick = chatKbBrowserDigestAll;
+  const digestCompleteClose = document.getElementById('chat-kb-digest-complete-close');
+  if (digestCompleteClose) {
+    digestCompleteClose.onclick = () => {
+      if (!chatKbBrowserState) return;
+      chatKbBrowserState.digestComplete = null;
+      chatKbBrowserRenderTab();
+    };
+  }
 }
 
 function chatKbBrowserSelectFolder(folderPath) {

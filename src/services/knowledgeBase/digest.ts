@@ -125,6 +125,14 @@ export class KbDigestionService {
   private readonly emit?: KbDigestEmitter;
   /** Per-workspace FIFO promise chain, keyed by workspace hash. */
   private readonly queues = new Map<string, Promise<unknown>>();
+  /**
+   * Per-workspace digestion session. Present while at least one digest
+   * task is pending or in flight; cleared when the last task settles.
+   * `entriesCreated` accumulates across every settled task (single and
+   * batch). `pending` tracks in-flight + queued tasks so we know when
+   * the queue has drained.
+   */
+  private readonly sessions = new Map<string, { entriesCreated: number; pending: number }>();
 
   constructor(opts: KbDigestionOptions) {
     this.chatService = opts.chatService;
@@ -149,7 +157,14 @@ export class KbDigestionService {
   async enqueueDigest(hash: string, rawId: string): Promise<DigestResult> {
     const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
     if (!enabled) throw new KbDigestDisabledError(hash);
-    return this._enqueue(hash, async () => this._runDigest(hash, rawId));
+    this._trackPending(hash, 1);
+    try {
+      const result = await this._enqueue(hash, async () => this._runDigest(hash, rawId));
+      this._recordEntriesCreated(hash, result.entryIds.length);
+      return result;
+    } finally {
+      this._trackPending(hash, -1);
+    }
   }
 
   /**
@@ -173,20 +188,32 @@ export class KbDigestionService {
     const all = [...pending, ...ingested];
     if (all.length === 0) return [];
 
+    this._trackPending(hash, all.length);
     const results: DigestResult[] = [];
     let done = 0;
-    for (const rawId of all) {
-      // Chain every digest onto the shared per-workspace queue so it
-      // runs serially even when other callers enqueue in parallel.
-      // eslint-disable-next-line no-await-in-loop
-      const r = await this._enqueue(hash, async () => this._runDigest(hash, rawId));
-      results.push(r);
-      done += 1;
-      this._emitChange(hash, new Date().toISOString(), {
-        raw: [rawId],
-        entries: r.entryIds,
-        batchProgress: { done, total: all.length },
-      });
+    let processed = 0;
+    try {
+      for (const rawId of all) {
+        // Chain every digest onto the shared per-workspace queue so it
+        // runs serially even when other callers enqueue in parallel.
+        // eslint-disable-next-line no-await-in-loop
+        const r = await this._enqueue(hash, async () => this._runDigest(hash, rawId));
+        results.push(r);
+        done += 1;
+        this._recordEntriesCreated(hash, r.entryIds.length);
+        this._emitChange(hash, new Date().toISOString(), {
+          raw: [rawId],
+          entries: r.entryIds,
+          batchProgress: { done, total: all.length },
+        });
+        this._trackPending(hash, -1);
+        processed += 1;
+      }
+    } catch (err) {
+      // _runDigest never throws — this only fires if the queue promise
+      // itself rejects. Balance the pending count so the session closes.
+      this._trackPending(hash, -(all.length - processed));
+      throw err;
     }
     return results;
   }
@@ -204,6 +231,42 @@ export class KbDigestionService {
   }
 
   // ── Internals ────────────────────────────────────────────────────────────
+
+  /**
+   * Adjust the per-workspace pending task count. When the count drops
+   * to zero, emit a single `digestion: { active: false, entriesCreated }`
+   * frame and clear the session. The next enqueue starts a fresh
+   * counter from zero.
+   */
+  private _trackPending(hash: string, delta: number): void {
+    let session = this.sessions.get(hash);
+    if (!session) {
+      session = { entriesCreated: 0, pending: 0 };
+      this.sessions.set(hash, session);
+    }
+    session.pending += delta;
+    if (session.pending <= 0) {
+      const total = session.entriesCreated;
+      this.sessions.delete(hash);
+      this._emitChange(hash, new Date().toISOString(), {
+        digestion: { active: false, entriesCreated: total },
+      });
+    }
+  }
+
+  /**
+   * Bump the active session's entry counter and emit a progress frame
+   * so the UI can render a live count-up during digestion.
+   */
+  private _recordEntriesCreated(hash: string, count: number): void {
+    if (count <= 0) return;
+    const session = this.sessions.get(hash);
+    if (!session) return;
+    session.entriesCreated += count;
+    this._emitChange(hash, new Date().toISOString(), {
+      digestion: { active: true, entriesCreated: session.entriesCreated },
+    });
+  }
 
   private _enqueue<T>(hash: string, task: () => Promise<T>): Promise<T> {
     const prev = this.queues.get(hash) ?? Promise.resolve();

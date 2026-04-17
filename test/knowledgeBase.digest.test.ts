@@ -640,6 +640,119 @@ Body for ${isA ? 'alpha' : 'beta'}.`;
   });
 });
 
+// ─── Digestion session counter ──────────────────────────────────────────────
+
+describe('digestion session counter', () => {
+  test('single digest emits active:true then active:false with entry count', async () => {
+    const rawId = await seedRaw('Session test body.', 'session.md');
+    backend.runOneShotImpl = async () => `---
+title: One
+slug: one
+summary: First.
+tags: []
+---
+First body.
+---
+title: Two
+slug: two
+summary: Second.
+tags: []
+---
+Second body.`;
+    emitted.length = 0;
+    await digestion.enqueueDigest(hash, rawId);
+
+    const digestionFrames = emitted
+      .map((e) => e.frame.changed.digestion)
+      .filter((d): d is { active: boolean; entriesCreated: number } => d !== undefined);
+
+    expect(digestionFrames).toEqual([
+      { active: true, entriesCreated: 2 },
+      { active: false, entriesCreated: 2 },
+    ]);
+  });
+
+  test('batch digest accumulates entries across raws and closes once', async () => {
+    const rawA = await seedRaw('alpha body', 'a.md');
+    const rawB = await seedRaw('beta body', 'b.md');
+    backend.runOneShotImpl = async (prompt) => {
+      const isA = prompt.includes('a.md');
+      return `---
+title: ${isA ? 'Alpha' : 'Beta'}
+slug: ${isA ? 'alpha' : 'beta'}
+summary: ${isA ? 'A.' : 'B.'}
+tags: []
+---
+Body for ${isA ? 'alpha' : 'beta'}.`;
+    };
+    emitted.length = 0;
+    await digestion.enqueueBatchDigest(hash);
+
+    const digestionFrames = emitted
+      .map((e) => e.frame.changed.digestion)
+      .filter((d): d is { active: boolean; entriesCreated: number } => d !== undefined);
+
+    // Two active:true frames (one per raw) followed by exactly one active:false.
+    const active = digestionFrames.filter((d) => d.active);
+    const complete = digestionFrames.filter((d) => !d.active);
+    expect(active.map((d) => d.entriesCreated)).toEqual([1, 2]);
+    expect(complete).toEqual([{ active: false, entriesCreated: 2 }]);
+    // rawA, rawB were present — prevents TS/lint unused var complaints.
+    expect(rawA).toBeTruthy();
+    expect(rawB).toBeTruthy();
+  });
+
+  test('counter resets after completion so a second run starts at zero', async () => {
+    const rawId = await seedRaw('first round', 'first.md');
+    backend.runOneShotImpl = async () => `---
+title: First
+slug: first
+summary: One.
+tags: []
+---
+Body one.`;
+    await digestion.enqueueDigest(hash, rawId);
+
+    const rawId2 = await seedRaw('second round', 'second.md');
+    backend.runOneShotImpl = async () => `---
+title: Second
+slug: second
+summary: Two.
+tags: []
+---
+Body two.`;
+    emitted.length = 0;
+    await digestion.enqueueDigest(hash, rawId2);
+
+    const digestionFrames = emitted
+      .map((e) => e.frame.changed.digestion)
+      .filter((d): d is { active: boolean; entriesCreated: number } => d !== undefined);
+
+    expect(digestionFrames).toEqual([
+      { active: true, entriesCreated: 1 },
+      { active: false, entriesCreated: 1 },
+    ]);
+  });
+
+  test('failed digest still closes the session with zero entries', async () => {
+    const rawId = await seedRaw('will fail', 'fail.md');
+    backend.runOneShotImpl = async () => 'not parseable output';
+    emitted.length = 0;
+    const result = await digestion.enqueueDigest(hash, rawId);
+    expect(result.error).toBeDefined();
+
+    const digestionFrames = emitted
+      .map((e) => e.frame.changed.digestion)
+      .filter((d): d is { active: boolean; entriesCreated: number } => d !== undefined);
+
+    // No entries were created, so we only emit the final active:false frame
+    // with a zero count — no intermediate "active:true" progress frame.
+    expect(digestionFrames).toEqual([
+      { active: false, entriesCreated: 0 },
+    ]);
+  });
+});
+
 // ─── Substep emissions ──────────────────────────────────────────────────────
 
 describe('substep emissions during digestion', () => {

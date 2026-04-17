@@ -711,6 +711,16 @@ export interface KbStateUpdateEvent {
     folders?: boolean;
     synthesis?: boolean;
     batchProgress?: { done: number; total: number };
+    /**
+     * Per-workspace digestion-session counter. Fires on every entry-
+     * creating settle (single or batch) with `active: true` and the
+     * cumulative `entriesCreated`. Fires exactly once with
+     * `active: false` when the digestion queue drains to zero, so the
+     * frontend can flip from a live count-up to a dismissable
+     * "Digestion complete" summary. The session resets on the next
+     * enqueue.
+     */
+    digestion?: { active: boolean; entriesCreated: number };
     dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'; done: number; total: number };
     /** Emitted when a cooperative stop has been requested for an in-progress dream run. */
     stopping?: boolean;
