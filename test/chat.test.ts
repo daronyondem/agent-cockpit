@@ -669,12 +669,16 @@ describe('Turn boundary intermediate messages', () => {
     const assistantMessages = events.filter((e: any) => e.type === 'assistant_message');
     expect(assistantMessages).toHaveLength(2);
     expect(assistantMessages[0].message.content).toBe('First response');
+    expect(assistantMessages[0].message.turn).toBe('progress');
     expect(assistantMessages[1].message.content).toBe('Second response');
+    expect(assistantMessages[1].message.turn).toBe('final');
 
     // Verify persisted to disk
     const loaded = (await chatService.getConversation(conv.id))!;
     const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
     expect(assistantMsgs).toHaveLength(2);
+    expect(assistantMsgs[0].turn).toBe('progress');
+    expect(assistantMsgs[1].turn).toBe('final');
   });
 
   test('saves thinking with intermediate message', async () => {

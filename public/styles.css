@@ -1053,6 +1053,122 @@
     margin: 2px 0;
   }
 
+  /* Progress-group breadcrumb — a one-line collapsible pill that stands in
+     for a run of consecutive `turn: 'progress'` assistant messages. Takes
+     minimal vertical space when collapsed; expands to reveal a vertical
+     timeline of the individual rows. No avatar / header / actions. */
+  .chat-progress-breadcrumb {
+    /* When attached inside a final assistant message's `.chat-msg-content`,
+       the parent already provides the avatar column offset — no extra left
+       margin needed. Takes the full content width so it matches the chat
+       surface. Falls back to the same placement when rendered standalone
+       (progress run with no following final, e.g. session interrupted). */
+    margin: 0 0 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  /* When standalone (not wrapped in `.chat-msg-content`), pad left to clear
+     the avatar column so the pill aligns with assistant message bodies. */
+  #chat-messages > .chat-progress-breadcrumb {
+    margin: 4px 0 8px 52px;
+  }
+  .chat-progress-breadcrumb-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    line-height: 1.3;
+    min-width: 0;
+  }
+  .chat-progress-breadcrumb-summary::-webkit-details-marker { display: none; }
+  .chat-progress-breadcrumb-caret {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+    transition: transform 0.15s;
+    flex-shrink: 0;
+  }
+  .chat-progress-breadcrumb[open] > .chat-progress-breadcrumb-summary .chat-progress-breadcrumb-caret {
+    transform: rotate(90deg);
+  }
+  .chat-progress-breadcrumb-label {
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .chat-progress-breadcrumb-elapsed {
+    flex-shrink: 0;
+    opacity: 0.75;
+  }
+  .chat-progress-breadcrumb-preview {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.75;
+    font-style: italic;
+  }
+  .chat-progress-breadcrumb-body {
+    margin-top: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface2);
+  }
+  .chat-progress-timeline {
+    position: relative;
+    margin: 0;
+    padding: 0 0 0 14px;
+    border-left: 2px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .chat-progress-row {
+    position: relative;
+    display: flex;
+    gap: 10px;
+  }
+  .chat-progress-row-marker {
+    position: absolute;
+    left: -20px;
+    top: 6px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    flex-shrink: 0;
+  }
+  .chat-progress-row-content {
+    flex: 1;
+    min-width: 0;
+  }
+  .chat-progress-row-time {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .chat-progress-row-text {
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--fg);
+  }
+  .chat-progress-row-text p:first-child { margin-top: 0; }
+  .chat-progress-row-text p:last-child { margin-bottom: 0; }
+  .chat-progress-row .chat-activity-block {
+    margin: 0 0 6px;
+  }
+
   /* Tool outcome badges */
   .chat-outcome-badge {
     font-size: 10px;

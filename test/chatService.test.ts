@@ -608,6 +608,32 @@ describe('addMessage', () => {
     expect(msg!.toolActivity).toBeUndefined();
   });
 
+  test('tags assistant message with turn kind and persists it', async () => {
+    const conv = await service.createConversation();
+    const progress = await service.addMessage(conv.id, 'assistant', 'working…', 'claude-code', null, undefined, 'progress');
+    const final = await service.addMessage(conv.id, 'assistant', 'done', 'claude-code', null, undefined, 'final');
+    expect(progress!.turn).toBe('progress');
+    expect(final!.turn).toBe('final');
+
+    const service2 = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+    await service2.initialize();
+    const loaded = await service2.getConversation(conv.id);
+    expect(loaded!.messages[0].turn).toBe('progress');
+    expect(loaded!.messages[1].turn).toBe('final');
+  });
+
+  test('omits turn when not provided', async () => {
+    const conv = await service.createConversation();
+    const msg = await service.addMessage(conv.id, 'assistant', 'legacy', 'claude-code');
+    expect(msg!.turn).toBeUndefined();
+  });
+
+  test('ignores turn for non-assistant roles', async () => {
+    const conv = await service.createConversation();
+    const msg = await service.addMessage(conv.id, 'user', 'hi', 'claude-code', null, undefined, 'progress');
+    expect(msg!.turn).toBeUndefined();
+  });
+
   test('preserves parentAgentId on tool activity entries', async () => {
     const conv = await service.createConversation();
     const activity = [

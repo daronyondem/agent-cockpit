@@ -181,6 +181,14 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
   backend: string,              // Backend that generated the response
   timestamp: string,            // ISO 8601
   thinking?: string,            // Extended thinking (assistant only, omitted if empty)
+  turn?: string,                // Assistant only. 'progress' for intermediate segments saved
+                                //   at a stream `turn_boundary` (agent still has more tool
+                                //   work to do); 'final' for the last segment saved at
+                                //   `done`. Absent on user/system messages and on legacy
+                                //   assistant messages written before this field existed —
+                                //   frontend treats absent as 'final' for back-compat.
+                                //   Consumed by the chat renderer to collapse consecutive
+                                //   progress messages into a single timeline card.
   toolActivity?: [{             // Tool/agent activity log (assistant only, omitted if empty)
     tool: string,               // Tool name: 'Read', 'Write', 'Bash', 'Agent', etc.
     description: string,        // Human-readable description

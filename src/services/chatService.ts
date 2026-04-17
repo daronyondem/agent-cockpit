@@ -488,6 +488,7 @@ export class ChatService {
     backend: string,
     thinking?: string | null,
     toolActivity?: ToolActivity[],
+    turn?: 'progress' | 'final',
   ): Promise<Message | null> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
@@ -507,6 +508,10 @@ export class ChatService {
 
     if (toolActivity && toolActivity.length > 0) {
       msg.toolActivity = toolActivity;
+    }
+
+    if (turn && role === 'assistant') {
+      msg.turn = turn;
     }
 
     const activeSession = convEntry.sessions.find(s => s.active);

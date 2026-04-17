@@ -70,11 +70,19 @@ export function chatRenderMessages() {
   // Messages are already just the current session (archived sessions live in separate files)
   const currentSessionMsgs = state.chatActiveConv.messages;
 
+  // If a stream is live for this conversation, the streaming bubble itself
+  // stands in for the "upcoming final message" — so a trailing progress run
+  // with no persisted final should nest inside the streaming bubble's content
+  // (handled in chatUpdateStreamingContent) instead of rendering as a
+  // standalone feed sibling. Detect here so the feed walk can skip it.
+  const hasActiveStream = state.chatStreamingState.has(state.chatActiveConvId);
+
   let html = '';
 
   // Session activity overview removed — not needed in current UI
 
-  for (let mi = 0; mi < currentSessionMsgs.length; mi++) {
+  let mi = 0;
+  while (mi < currentSessionMsgs.length) {
     const msg = currentSessionMsgs[mi];
 
     // Synthetic memory_update bubble — uses the Agent Cockpit logo as the
@@ -82,51 +90,52 @@ export function chatRenderMessages() {
     // chatAppendMemoryUpdateMessage in streaming.js.
     if (msg.kind === 'memory_update') {
       html += chatRenderMemoryUpdateMessage(msg);
+      mi++;
       continue;
     }
 
-    const isUser = msg.role === 'user';
-    const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
-    const avatar = isUser ? ICON_USER : (backendIcon || DEFAULT_BACKEND_ICON);
-    const avatarClass = isUser ? ' chat-msg-avatar-svg' : (!isUser && backendIcon ? ' chat-msg-avatar-svg' : '');
-    const roleLabel = isUser ? 'You' : 'Assistant';
-    const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
-    const rendered = chatRenderMarkdown(msg.content);
-    const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
-    const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
-    const toolActivityHtml = !isUser && msg.toolActivity ? chatRenderToolActivityBlock(msg.toolActivity) : '';
-
-    // Elapsed time for assistant messages (time since preceding user message)
-    let elapsedLabel = '';
-    if (!isUser && msg.timestamp) {
-      for (let j = mi - 1; j >= 0; j--) {
-        if (currentSessionMsgs[j].role === 'user' && currentSessionMsgs[j].timestamp) {
-          const delta = new Date(msg.timestamp) - new Date(currentSessionMsgs[j].timestamp);
-          if (delta > 0 && delta < 3600000) {
-            elapsedLabel = `<span class="chat-msg-elapsed">${chatFormatElapsed(delta)}</span>`;
-          }
-          break;
-        }
+    // Collapse a run of consecutive assistant progress messages (saved at
+    // `turn_boundary` — agent still has tool work to do) into a compact
+    // breadcrumb pill. When the run is immediately followed by a final
+    // assistant message, the breadcrumb is rendered *inside* that final
+    // message's content (above its Thinking + body) so the whole turn is
+    // one visual block. Otherwise (stream interrupted, still streaming) the
+    // breadcrumb renders standalone as a normal feed item.
+    if (msg.role === 'assistant' && msg.turn === 'progress') {
+      const groupStart = mi;
+      let mj = mi;
+      while (mj < currentSessionMsgs.length) {
+        const m = currentSessionMsgs[mj];
+        if (m.kind === 'memory_update') break;
+        if (m.role !== 'assistant' || m.turn !== 'progress') break;
+        if (m.backend !== msg.backend) break;
+        mj++;
       }
+      const progressRun = currentSessionMsgs.slice(groupStart, mj);
+      const next = currentSessionMsgs[mj];
+      const mergesIntoFinal = next
+        && next.kind !== 'memory_update'
+        && next.role === 'assistant'
+        && next.turn !== 'progress'
+        && next.backend === msg.backend;
+      if (mergesIntoFinal) {
+        const breadcrumbHtml = chatRenderProgressBreadcrumb(progressRun, currentSessionMsgs, groupStart);
+        html += chatRenderSingleMessage(next, mj, currentSessionMsgs, breadcrumbHtml);
+        mi = mj + 1;
+        continue;
+      }
+      // Trailing progress run with no persisted final. If a stream is live,
+      // the streaming bubble will render the breadcrumb inside its own
+      // content area — skip the standalone feed item here.
+      if (!hasActiveStream) {
+        html += chatRenderProgressBreadcrumb(progressRun, currentSessionMsgs, groupStart);
+      }
+      mi = mj;
+      continue;
     }
 
-    const timeLabel = msg.timestamp ? `<span class="chat-msg-time">${chatFormatTimestamp(msg.timestamp)}${elapsedLabel}</span>` : '';
-
-    html += `
-      <div class="chat-msg ${esc(msg.role)}" data-msg-id="${esc(msg.id)}" data-raw-content="${esc(msg.content || '')}">
-        <div class="chat-msg-wrapper">
-          <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
-          <div class="chat-msg-body">
-            <div class="chat-msg-role">${roleLabel} ${backendLabel}${timeLabel}</div>
-            <div class="chat-msg-content">${thinkingHtml}${toolActivityHtml}${rendered}</div>
-            <div class="chat-msg-actions">
-              <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
-              <button class="chat-msg-action" data-action="copy-md" title="Copy Markdown">Copy MD</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
+    html += chatRenderSingleMessage(msg, mi, currentSessionMsgs);
+    mi++;
   }
 
   container.innerHTML = html;
@@ -163,6 +172,147 @@ export function chatRenderMessages() {
   if (_renderQueuedMessages) _renderQueuedMessages();
 
   chatScrollToBottom();
+}
+
+// ── Single message card (user/assistant-final/system) ───────────────────────
+
+function chatRenderSingleMessage(msg, mi, currentSessionMsgs, prependHtml = '') {
+  const isUser = msg.role === 'user';
+  const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
+  const avatar = isUser ? ICON_USER : (backendIcon || DEFAULT_BACKEND_ICON);
+  const avatarClass = isUser ? ' chat-msg-avatar-svg' : (!isUser && backendIcon ? ' chat-msg-avatar-svg' : '');
+  const roleLabel = isUser ? 'You' : 'Assistant';
+  const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
+  const rendered = chatRenderMarkdown(msg.content);
+  const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
+  const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
+  const toolActivityHtml = !isUser && msg.toolActivity ? chatRenderToolActivityBlock(msg.toolActivity) : '';
+
+  // Elapsed time for assistant messages (time since preceding user message)
+  let elapsedLabel = '';
+  if (!isUser && msg.timestamp) {
+    for (let j = mi - 1; j >= 0; j--) {
+      if (currentSessionMsgs[j].role === 'user' && currentSessionMsgs[j].timestamp) {
+        const delta = new Date(msg.timestamp) - new Date(currentSessionMsgs[j].timestamp);
+        if (delta > 0 && delta < 3600000) {
+          elapsedLabel = `<span class="chat-msg-elapsed">${chatFormatElapsed(delta)}</span>`;
+        }
+        break;
+      }
+    }
+  }
+
+  const timeLabel = msg.timestamp ? `<span class="chat-msg-time">${chatFormatTimestamp(msg.timestamp)}${elapsedLabel}</span>` : '';
+
+  return `
+    <div class="chat-msg ${esc(msg.role)}" data-msg-id="${esc(msg.id)}" data-raw-content="${esc(msg.content || '')}">
+      <div class="chat-msg-wrapper">
+        <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
+        <div class="chat-msg-body">
+          <div class="chat-msg-role">${roleLabel} ${backendLabel}${timeLabel}</div>
+          <div class="chat-msg-content">${prependHtml}${thinkingHtml}${toolActivityHtml}${rendered}</div>
+          <div class="chat-msg-actions">
+            <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
+            <button class="chat-msg-action" data-action="copy-md" title="Copy Markdown">Copy MD</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Trailing progress breadcrumb for the streaming bubble ──────────────────
+// Finds the run of trailing `turn: 'progress'` assistant messages at the end
+// of the session (no intervening user/memory_update, matching backend) and
+// returns the rendered breadcrumb HTML. The streaming bubble uses this so
+// past progress steps stay visible under the Assistant header while the
+// agent works on the next segment.
+
+function chatBuildTrailingProgressBreadcrumb(msgs) {
+  if (!msgs || !msgs.length) return '';
+  let end = msgs.length;
+  let start = end;
+  for (let i = end - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.kind === 'memory_update') break;
+    if (m.role !== 'assistant' || m.turn !== 'progress') break;
+    start = i;
+  }
+  if (start === end) return '';
+  // Same-backend guard: breadcrumb only covers the contiguous tail sharing
+  // the same backend as the very last progress message.
+  const backend = msgs[end - 1].backend;
+  while (start < end && msgs[start].backend !== backend) start++;
+  if (start >= end) return '';
+  return chatRenderProgressBreadcrumb(msgs.slice(start, end), msgs, start);
+}
+
+// ── Progress group (consecutive progress messages as one compact breadcrumb) ─
+// Intermediate assistant turns are chatter — interesting to expand when the
+// user cares, but otherwise should take as little vertical space as possible.
+// Render the whole run as a single one-line <details> pill: no avatar, no
+// role header, no action buttons. Expands to reveal a vertical timeline of
+// the individual rows (thinking, activity chip, prose body).
+
+function chatRenderProgressBreadcrumb(groupMsgs, currentSessionMsgs, groupStartIdx) {
+  if (!groupMsgs.length) return '';
+  const first = groupMsgs[0];
+  const last = groupMsgs[groupMsgs.length - 1];
+  const caps = first.backend ? getBackendCapabilities(first.backend) : {};
+
+  // Elapsed from preceding user message to the last progress row so the
+  // breadcrumb keeps climbing as more rows land in the same turn.
+  let elapsedText = '';
+  if (last.timestamp) {
+    for (let j = groupStartIdx - 1; j >= 0; j--) {
+      if (currentSessionMsgs[j].role === 'user' && currentSessionMsgs[j].timestamp) {
+        const delta = new Date(last.timestamp) - new Date(currentSessionMsgs[j].timestamp);
+        if (delta > 0 && delta < 3600000) {
+          elapsedText = chatFormatElapsed(delta);
+        }
+        break;
+      }
+    }
+  }
+
+  // Preview: first line of the last progress row's text, truncated, so the
+  // collapsed breadcrumb gives some hint of what the agent is doing.
+  const previewSrc = (last.content || '').split('\n').find(line => line.trim()) || '';
+  const previewTrimmed = previewSrc.length > 90 ? previewSrc.slice(0, 87) + '\u2026' : previewSrc;
+
+  let rowsHtml = '';
+  for (const m of groupMsgs) {
+    const rowTime = m.timestamp ? chatFormatTimestamp(m.timestamp) : '';
+    const rowActivity = m.toolActivity ? chatRenderToolActivityBlock(m.toolActivity) : '';
+    const rowThinking = m.thinking && caps.thinking !== false ? chatRenderThinkingBlock(m.thinking, false) : '';
+    const rowBody = chatRenderMarkdown(m.content);
+    rowsHtml += `
+      <div class="chat-progress-row" data-msg-id="${esc(m.id)}">
+        <div class="chat-progress-row-marker"></div>
+        <div class="chat-progress-row-content">
+          ${rowTime ? `<div class="chat-progress-row-time">${rowTime}</div>` : ''}
+          ${rowThinking}${rowActivity}
+          <div class="chat-progress-row-text">${rowBody}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  const stepLabel = `${groupMsgs.length} step${groupMsgs.length !== 1 ? 's' : ''}`;
+
+  return `
+    <details class="chat-progress-breadcrumb">
+      <summary class="chat-progress-breadcrumb-summary">
+        <span class="chat-progress-breadcrumb-caret" aria-hidden="true"></span>
+        <span class="chat-progress-breadcrumb-label">${stepLabel}</span>
+        ${elapsedText ? `<span class="chat-progress-breadcrumb-elapsed">${esc(elapsedText)}</span>` : ''}
+        ${previewTrimmed ? `<span class="chat-progress-breadcrumb-preview">${esc(previewTrimmed)}</span>` : ''}
+      </summary>
+      <div class="chat-progress-breadcrumb-body">
+        <div class="chat-progress-timeline">${rowsHtml}</div>
+      </div>
+    </details>
+  `;
 }
 
 // ── Memory update inline message ─────────────────────────────────────────────
@@ -751,6 +901,14 @@ export function chatUpdateStreamingContent(msgEl, st) {
   if (!contentEl) return;
 
   let html = '';
+
+  // 0. Trailing progress breadcrumb — shows the agent's past `turn_boundary`
+  // segments (collapsed by default) under the Assistant header so the whole
+  // turn stays in one card while the agent is still working.
+  if (state.chatActiveConv && state.chatActiveConv.messages) {
+    const breadcrumbHtml = chatBuildTrailingProgressBreadcrumb(state.chatActiveConv.messages);
+    if (breadcrumbHtml) html += breadcrumbHtml;
+  }
 
   // 1. Thinking block
   if (st.assistantThinking) {
