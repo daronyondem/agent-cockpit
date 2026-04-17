@@ -671,6 +671,21 @@ interface KbStateUpdateEvent {
     substep?: { rawId: string; text: string };
   };
 }
+
+/**
+ * Server-internal stream event emitted by a backend adapter when it obtains
+ * a backend-managed session ID that needs to be persisted. Vendor-agnostic —
+ * any backend (ACP-based CLIs like Kiro, hosted API sessions, etc.) can emit
+ * this when their remote-side session is first created. Consumed by
+ * `processStream`, which forwards it to
+ * `chatService.setExternalSessionId(convId, sessionId)` so the ID lands on
+ * `SessionEntry.externalSessionId` on disk. **Not forwarded to the frontend
+ * WebSocket** — it is purely a server-to-server persistence signal.
+ */
+interface ExternalSessionEvent {
+  type: 'external_session';
+  sessionId: string;  // Backend-managed session ID; opaque to the cockpit
+}
 ```
 
 ## KB Constants

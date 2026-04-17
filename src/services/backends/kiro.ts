@@ -293,6 +293,12 @@ class AcpClient {
     return this.notificationQueue.length > 0;
   }
 
+  drainNotifications(): number {
+    const count = this.notificationQueue.length;
+    this.notificationQueue = [];
+    return count;
+  }
+
   takeRequestNotification(): JsonRpcNotification | null {
     // Look for session/request_permission messages (they have an id from Kiro's side
     // but arrive as method calls we need to respond to)
@@ -601,6 +607,10 @@ export class KiroAdapter extends BaseBackendAdapter {
           this.cachedModels = result.models.availableModels;
         }
         console.log(`[kiro] Created new session: ${kiroSessionId} for cockpit session ${sessionId}`);
+        // Signal processStream to persist the Kiro session ID onto the
+        // cockpit's SessionEntry.externalSessionId so we can rehydrate
+        // after a cockpit server restart (in-memory sessionMap is wiped).
+        yield { type: 'external_session', sessionId: kiroSessionId };
       } else if (!kiroSessionId && externalSessionId) {
         // Rehydrate from persisted externalSessionId (server restart scenario)
         kiroSessionId = externalSessionId;
@@ -618,7 +628,12 @@ export class KiroAdapter extends BaseBackendAdapter {
       if (acpEntry && acpEntry.loadedSessionId !== kiroSessionId) {
         if (!isNewSession) {
           await client.request('session/load', { sessionId: kiroSessionId, cwd, mcpServers: mcpServersForAcp });
-          console.log(`[kiro] Loaded session: ${kiroSessionId}`);
+          // `session/load` replays the full session history as `session/update`
+          // notifications before returning. Drain them so they don't leak into
+          // the next `session/prompt`'s stream (which would concatenate prior
+          // assistant turns into the current response).
+          const drained = client.drainNotifications();
+          console.log(`[kiro] Loaded session: ${kiroSessionId} (drained ${drained} replayed notifications)`);
         }
         acpEntry.loadedSessionId = kiroSessionId;
       }

@@ -1443,6 +1443,82 @@ describe('sendMessage options passthrough', () => {
     expect(mockBackend._lastOptions!.externalSessionId).toBeNull();
   });
 
+  test('external_session stream event persists sessionId on active SessionEntry', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ext-persist-test');
+    mockBackend.setMockEvents([
+      { type: 'external_session', sessionId: 'backend-sess-xyz' },
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+    await eventsPromise;
+
+    const crypto = require('crypto');
+    const hash = crypto.createHash('sha256').update('/tmp/ext-persist-test').digest('hex').substring(0, 16);
+    const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const activeSession = index.conversations[0].sessions.find((s: any) => s.active);
+    expect(activeSession.externalSessionId).toBe('backend-sess-xyz');
+  });
+
+  test('external_session frame is not forwarded to the frontend WebSocket', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ext-no-leak');
+    mockBackend.setMockEvents([
+      { type: 'external_session', sessionId: 'backend-sess-hidden' },
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Hello',
+      backend: 'claude-code',
+    });
+    const events = await eventsPromise;
+
+    expect(events.find((e: any) => e.type === 'external_session')).toBeUndefined();
+  });
+
+  test('persisted externalSessionId flows back to the adapter on the next send', async () => {
+    const conv = await chatService.createConversation('Test', '/tmp/ext-roundtrip');
+    mockBackend.setMockEvents([
+      { type: 'external_session', sessionId: 'backend-sess-rt' },
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws1 = await connectWs(conv.id);
+    const eventsPromise1 = readWsEvents(ws1);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'First',
+      backend: 'claude-code',
+    });
+    await eventsPromise1;
+
+    // Second send — adapter should now see the ID that was persisted from the
+    // first send's external_session event.
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Ok', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+    const ws2 = await connectWs(conv.id);
+    const eventsPromise2 = readWsEvents(ws2);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Second',
+      backend: 'claude-code',
+    });
+    await eventsPromise2;
+
+    expect(mockBackend._lastOptions!.externalSessionId).toBe('backend-sess-rt');
+  });
+
   test('passes model to backend adapter', async () => {
     const conv = await chatService.createConversation('Test');
     mockBackend.setMockEvents([
