@@ -1992,6 +1992,12 @@ async function chatOpenKbBrowser(hash, label) {
     pollTimer: null,
     uploading: false,
     selectedFolder: '',
+    /**
+     * Folder paths whose children are hidden in the tree view. Empty by
+     * default (everything expanded). Held in-memory only — closing and
+     * reopening the KB browser resets to fully expanded.
+     */
+    collapsedFolderPaths: new Set(),
     pandocStatus: null,
     /** Per-rawId substep text, e.g. { rawId: 'abc', text: 'Running CLI…' } */
     substeps: {},
@@ -2262,8 +2268,10 @@ function chatKbBrowserRenderTab() {
   const savedBrowserScroll = browserEl ? browserEl.scrollTop : 0;
   const entriesListEl = content.querySelector('.chat-kb-entries-list');
   const entryDetailEl = content.querySelector('.chat-kb-entry-detail');
+  const folderTreeEl = content.querySelector('.chat-kb-folder-tree');
   const savedEntriesListScroll = entriesListEl ? entriesListEl.scrollTop : 0;
   const savedEntryDetailScroll = entryDetailEl ? entryDetailEl.scrollTop : 0;
+  const savedFolderTreeScroll = folderTreeEl ? folderTreeEl.scrollTop : 0;
 
   // Preserve keyboard focus + caret position on text inputs inside the
   // tab content. The innerHTML swap destroys live input elements, so
@@ -2301,8 +2309,10 @@ function chatKbBrowserRenderTab() {
   if (browserEl && savedBrowserScroll) browserEl.scrollTop = savedBrowserScroll;
   const newEntriesListEl = content.querySelector('.chat-kb-entries-list');
   const newEntryDetailEl = content.querySelector('.chat-kb-entry-detail');
+  const newFolderTreeEl = content.querySelector('.chat-kb-folder-tree');
   if (newEntriesListEl && savedEntriesListScroll) newEntriesListEl.scrollTop = savedEntriesListScroll;
   if (newEntryDetailEl && savedEntryDetailScroll) newEntryDetailEl.scrollTop = savedEntryDetailScroll;
+  if (newFolderTreeEl && savedFolderTreeScroll) newFolderTreeEl.scrollTop = savedFolderTreeScroll;
 
   // Restore focus + caret on the same id so text input survives the swap.
   if (savedFocus) {
@@ -2434,16 +2444,46 @@ function chatKbBrowserRenderFolderTree(folders, selectedFolder) {
     }
   }
   const sorted = Array.from(allPaths).sort();
+
+  // Set of paths that have at least one child path. Used to decide which
+  // rows render an interactive chevron vs. a fixed-width spacer.
+  const hasChildren = new Set();
+  for (const p of sorted) {
+    if (!p) continue;
+    const parts = p.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      hasChildren.add(parts.slice(0, i).join('/'));
+    }
+  }
+
+  const collapsed = chatKbBrowserState?.collapsedFolderPaths || new Set();
+
   return sorted.map((p) => {
+    // Hide rows whose any proper ancestor is collapsed. Root cannot be
+    // collapsed (no chevron), so it's always visible.
+    if (p) {
+      const parts = p.split('/');
+      let hidden = false;
+      for (let i = 1; i < parts.length; i++) {
+        if (collapsed.has(parts.slice(0, i).join('/'))) { hidden = true; break; }
+      }
+      if (hidden) return '';
+    }
+
     const depth = p ? p.split('/').length : 0;
     const label = p === '' ? '(root)' : p.split('/').pop();
     const isSelected = p === (selectedFolder || '');
+    const isExpanded = !collapsed.has(p);
+    const chevron = (p !== '' && hasChildren.has(p))
+      ? `<button class="chat-kb-folder-chevron${isExpanded ? ' expanded' : ''}" data-kb-folder-toggle="${esc(p)}" title="${isExpanded ? 'Collapse' : 'Expand'}" aria-expanded="${isExpanded ? 'true' : 'false'}">▸</button>`
+      : '<span class="chat-kb-folder-chevron-spacer" aria-hidden="true"></span>';
     const controls = p !== '' ? `
       <button class="chat-kb-folder-btn" data-kb-folder-rename="${esc(p)}" title="Rename">${ICON_EDIT}</button>
       <button class="chat-kb-folder-btn chat-kb-folder-btn-del" data-kb-folder-delete="${esc(p)}" title="Delete">×</button>
     ` : '';
     return `
       <div class="chat-kb-folder-row ${isSelected ? 'selected' : ''}" data-kb-folder-select="${esc(p)}" style="padding-left: ${6 + depth * 14}px;">
+        ${chevron}
         <span class="chat-kb-folder-label" title="${esc(p || 'root')}">${esc(label)}</span>
         ${controls}
       </div>
@@ -2606,8 +2646,14 @@ function chatKbBrowserWireRawTab() {
   });
   document.querySelectorAll('[data-kb-folder-select]').forEach((el) => {
     el.onclick = (e) => {
-      if (e.target.closest('[data-kb-folder-rename],[data-kb-folder-delete]')) return;
+      if (e.target.closest('[data-kb-folder-rename],[data-kb-folder-delete],[data-kb-folder-toggle]')) return;
       chatKbBrowserSelectFolder(el.dataset.kbFolderSelect || '');
+    };
+  });
+  document.querySelectorAll('[data-kb-folder-toggle]').forEach((el) => {
+    el.onclick = (e) => {
+      e.stopPropagation();
+      chatKbBrowserToggleFolderCollapse(el.dataset.kbFolderToggle || '');
     };
   });
   document.querySelectorAll('[data-kb-folder-rename]').forEach((el) => {
@@ -2646,8 +2692,26 @@ function chatKbBrowserWireRawTab() {
 
 function chatKbBrowserSelectFolder(folderPath) {
   if (!chatKbBrowserState) return;
-  chatKbBrowserState.selectedFolder = folderPath || '';
+  const path = folderPath || '';
+  chatKbBrowserState.selectedFolder = path;
+  // Auto-expand every ancestor so the selected folder is always visible
+  // in the tree, even if the user had collapsed an ancestor earlier.
+  if (path) {
+    const parts = path.split('/');
+    for (let i = 1; i < parts.length; i++) {
+      chatKbBrowserState.collapsedFolderPaths.delete(parts.slice(0, i).join('/'));
+    }
+  }
   chatKbBrowserRefetch();
+}
+
+function chatKbBrowserToggleFolderCollapse(folderPath) {
+  if (!chatKbBrowserState) return;
+  const path = folderPath || '';
+  if (!path) return; // root has no chevron and cannot be collapsed
+  const set = chatKbBrowserState.collapsedFolderPaths;
+  if (set.has(path)) set.delete(path); else set.add(path);
+  chatKbBrowserRenderTab();
 }
 
 async function chatKbBrowserToggleAutoDigest(enabled) {

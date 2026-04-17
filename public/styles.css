@@ -3377,6 +3377,30 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .chat-kb-folder-chevron {
+    flex: 0 0 auto;
+    width: 14px;
+    height: 14px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--muted);
+    font-size: 10px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.12s ease;
+  }
+  .chat-kb-folder-chevron.expanded { transform: rotate(90deg); }
+  .chat-kb-folder-chevron:hover { color: var(--text); }
+  .chat-kb-folder-chevron-spacer {
+    flex: 0 0 auto;
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+  }
   .chat-kb-folder-btn {
     background: transparent;
     border: none;
