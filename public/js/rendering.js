@@ -185,8 +185,16 @@ function chatRenderSingleMessage(msg, mi, currentSessionMsgs, prependHtml = '') 
   const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
   const rendered = chatRenderMarkdown(msg.content);
   const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
-  const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
-  const toolActivityHtml = !isUser && msg.toolActivity ? chatRenderToolActivityBlock(msg.toolActivity) : '';
+  // When the assistant message carries `contentBlocks` (new format), that
+  // ordered interleaving is authoritative: render text / thinking / tool
+  // blocks in source order and skip the legacy tools-before-text layout.
+  // Old messages without contentBlocks fall back to the previous path so
+  // existing session files render unchanged.
+  const hasOrderedBlocks = !isUser && Array.isArray(msg.contentBlocks) && msg.contentBlocks.length > 0;
+  const orderedBlocksHtml = hasOrderedBlocks ? chatRenderContentBlocks(msg.contentBlocks, { caps }) : '';
+  const thinkingHtml = !hasOrderedBlocks && msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
+  const toolActivityHtml = !hasOrderedBlocks && !isUser && msg.toolActivity ? chatRenderToolActivityBlock(msg.toolActivity) : '';
+  const bodyHtml = hasOrderedBlocks ? orderedBlocksHtml : `${thinkingHtml}${toolActivityHtml}${rendered}`;
 
   // Elapsed time for assistant messages (time since preceding user message)
   let elapsedLabel = '';
@@ -210,7 +218,7 @@ function chatRenderSingleMessage(msg, mi, currentSessionMsgs, prependHtml = '') 
         <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
         <div class="chat-msg-body">
           <div class="chat-msg-role">${roleLabel} ${backendLabel}${timeLabel}</div>
-          <div class="chat-msg-content">${prependHtml}${thinkingHtml}${toolActivityHtml}${rendered}</div>
+          <div class="chat-msg-content">${prependHtml}${bodyHtml}</div>
           <div class="chat-msg-actions">
             <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
             <button class="chat-msg-action" data-action="copy-md" title="Copy Markdown">Copy MD</button>
@@ -283,16 +291,22 @@ function chatRenderProgressBreadcrumb(groupMsgs, currentSessionMsgs, groupStartI
   let rowsHtml = '';
   for (const m of groupMsgs) {
     const rowTime = m.timestamp ? chatFormatTimestamp(m.timestamp) : '';
-    const rowActivity = m.toolActivity ? chatRenderToolActivityBlock(m.toolActivity) : '';
-    const rowThinking = m.thinking && caps.thinking !== false ? chatRenderThinkingBlock(m.thinking, false) : '';
-    const rowBody = chatRenderMarkdown(m.content);
+    const hasOrderedBlocks = Array.isArray(m.contentBlocks) && m.contentBlocks.length > 0;
+    let rowInnerHtml;
+    if (hasOrderedBlocks) {
+      rowInnerHtml = chatRenderContentBlocks(m.contentBlocks, { caps, textWrapClass: 'chat-progress-row-text' });
+    } else {
+      const rowActivity = m.toolActivity ? chatRenderToolActivityBlock(m.toolActivity) : '';
+      const rowThinking = m.thinking && caps.thinking !== false ? chatRenderThinkingBlock(m.thinking, false) : '';
+      const rowBody = chatRenderMarkdown(m.content);
+      rowInnerHtml = `${rowThinking}${rowActivity}<div class="chat-progress-row-text">${rowBody}</div>`;
+    }
     rowsHtml += `
       <div class="chat-progress-row" data-msg-id="${esc(m.id)}">
         <div class="chat-progress-row-marker"></div>
         <div class="chat-progress-row-content">
           ${rowTime ? `<div class="chat-progress-row-time">${rowTime}</div>` : ''}
-          ${rowThinking}${rowActivity}
-          <div class="chat-progress-row-text">${rowBody}</div>
+          ${rowInnerHtml}
         </div>
       </div>
     `;
@@ -469,6 +483,45 @@ export function chatRenderCompletedItem(t) {
   const desc = t.description ? escWithCode(t.description) : esc(t.tool || 'Tool');
   const elapsed = t.duration ? chatFormatElapsedShort(t.duration) : '';
   return `<div class="chat-activity-history-item">${checkHtml} <span class="chat-activity-history-desc">${desc}</span>${outcomeBadge}${elapsed ? `<span class="chat-activity-elapsed">${elapsed}</span>` : ''}</div>`;
+}
+
+// Renders an ordered list of ContentBlock objects (text / thinking / tool)
+// in their original source order, preserving the interleaving the CLI
+// emitted. Consecutive tool blocks are rendered as a single activity block
+// so agent nesting and parallel grouping still apply within each run.
+//
+// `opts.textWrapClass` — if set, each rendered text block is wrapped in a
+// <div class="..."> so progress-breadcrumb rows can keep their existing
+// `chat-progress-row-text` typography.
+export function chatRenderContentBlocks(blocks, opts) {
+  if (!Array.isArray(blocks) || blocks.length === 0) return '';
+  const { caps = {}, textWrapClass = null } = opts || {};
+  let html = '';
+  let i = 0;
+  while (i < blocks.length) {
+    const block = blocks[i];
+    if (!block || typeof block !== 'object') { i++; continue; }
+    if (block.type === 'text') {
+      const rendered = chatRenderMarkdown(block.content || '');
+      html += textWrapClass ? `<div class="${textWrapClass}">${rendered}</div>` : rendered;
+      i++;
+    } else if (block.type === 'thinking') {
+      if (caps.thinking !== false && block.content) {
+        html += chatRenderThinkingBlock(block.content, false);
+      }
+      i++;
+    } else if (block.type === 'tool') {
+      const run = [];
+      while (i < blocks.length && blocks[i] && blocks[i].type === 'tool') {
+        if (blocks[i].activity) run.push(blocks[i].activity);
+        i++;
+      }
+      if (run.length > 0) html += chatRenderToolActivityBlock(run);
+    } else {
+      i++;
+    }
+  }
+  return html;
 }
 
 export function chatRenderToolActivityBlock(toolActivity) {
