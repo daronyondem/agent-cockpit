@@ -1560,7 +1560,9 @@ export function parseReflectionOutput(raw: string): ReflectionParseResult {
   for (const r of obj.reflections) {
     const item = r as Record<string, unknown>;
     if (typeof item?.title !== 'string' || typeof item?.content !== 'string') {
-      warnings.push('Reflection: skipped item with missing title or content');
+      const keys = item ? Object.keys(item).join(', ') : 'null';
+      const snippet = JSON.stringify(item).slice(0, 300);
+      warnings.push(`Reflection: skipped item with missing title or content (keys: ${keys}; data: ${snippet})`);
       continue;
     }
     const type = VALID_TYPES.has(item.type as string) ? (item.type as string) : 'insight';
