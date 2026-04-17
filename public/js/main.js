@@ -26,6 +26,7 @@ import {
   chatShowPlanApproval, chatShowUserQuestion,
 } from './streaming.js';
 import { chatInitTabIndicator } from './tab-indicator.js';
+import { chatOpenFileExplorer, chatCloseFileExplorer } from './fileExplorer.js';
 
 // ── Wire late-binding callbacks ──────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ window.chatSaveWorkspaceInstructions = chatSaveWorkspaceInstructions;
 window.chatCloseModal = chatCloseModal;
 window.chatShowFolderPicker = chatShowFolderPicker;
 window.chatViewSession = chatViewSession;
+window.chatCloseFileExplorer = chatCloseFileExplorer;
 
 // ── Initialization ───────────────────────────────────────────────────────────
 
@@ -122,6 +124,12 @@ function chatWireEvents() {
       if (kbBtn) {
         e.stopPropagation();
         chatOpenKbBrowser(kbBtn.dataset.kbHash, kbBtn.dataset.kbLabel);
+        return;
+      }
+      const feBtn = e.target.closest('.chat-conv-group-explorer-btn');
+      if (feBtn) {
+        e.stopPropagation();
+        chatOpenFileExplorer(feBtn.dataset.feHash, feBtn.dataset.feLabel);
         return;
       }
       const groupHeader = e.target.closest('.chat-conv-group-header');

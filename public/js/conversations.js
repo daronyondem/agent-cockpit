@@ -1,4 +1,4 @@
-import { state, chatFetch, fetchCsrfToken, chatApiUrl, chatSyncQueueToServer, ICON_ARCHIVE, ICON_SETTINGS, ICON_SEND, ICON_STOP, ICON_WORKSPACE, ICON_TOKEN, ICON_USER } from './state.js';
+import { state, chatFetch, fetchCsrfToken, chatApiUrl, chatSyncQueueToServer, ICON_ARCHIVE, ICON_SETTINGS, ICON_SEND, ICON_STOP, ICON_WORKSPACE, ICON_TOKEN, ICON_USER, ICON_FOLDER } from './state.js';
 import { esc, chatFormatFileSize, chatFormatTokenCount, chatFormatCost } from './utils.js';
 import { chatRenderMessages, chatRenderMarkdown, chatAutoResize, chatScrollToBottom, chatCloseFileViewer } from './rendering.js';
 import { chatShowModal, chatCloseModal } from './modal.js';
@@ -277,6 +277,7 @@ export function chatRenderConvList() {
         <span class="chat-conv-group-label">${esc(label)}</span>
         ${isCollapsed ? `<span class="chat-conv-group-count">${count}</span>` : ''}
         ${group.hash && group.kbEnabled ? `<button class="chat-conv-group-kb-btn" data-kb-hash="${esc(group.hash)}" data-kb-label="${esc(label)}" title="Open Knowledge Base"><svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M3 3.5C3 2.67 3.67 2 4.5 2H12v11H4.5C3.67 13 3 12.33 3 11.5v-8z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M3 11.5c0-.83.67-1.5 1.5-1.5H12" stroke="currentColor" stroke-width="1.3"/><path d="M6 5h4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg></button>` : ''}
+        ${group.hash ? `<button class="chat-conv-group-explorer-btn" data-fe-hash="${esc(group.hash)}" data-fe-label="${esc(label)}" title="Open file explorer">${ICON_FOLDER}</button>` : ''}
         ${group.hash ? `<button class="chat-conv-group-instructions-btn" data-ws-hash="${esc(group.hash)}" data-ws-label="${esc(label)}" title="Workspace settings">${ICON_SETTINGS}</button>` : ''}
       </div>`;
     if (!isCollapsed) {

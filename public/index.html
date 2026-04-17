@@ -62,6 +62,13 @@
       chrome (header + input) can be hidden or repurposed consistently.
     -->
     <div class="chat-kb-browser" id="chat-kb-browser" style="display:none;"></div>
+    <!--
+      File Explorer view — full-screen split-pane (tree left, preview right)
+      that swaps with `chat-messages` when the user clicks the folder button
+      on a workspace group header. Populated by chatOpenFileExplorer
+      in fileExplorer.js. Hidden by default.
+    -->
+    <div class="chat-file-explorer" id="chat-file-explorer" style="display:none;"></div>
     <div class="chat-input-area">
       <div class="chat-input-wrapper">
         <div id="chat-dream-banner" class="chat-dream-banner" style="display:none;"></div>

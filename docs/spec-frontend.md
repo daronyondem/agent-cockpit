@@ -286,6 +286,49 @@ The **KB Browser** is a full-screen panel that swaps into the main chat area (hi
   - **Save** button — fires `PUT /workspaces/:hash/kb/embedding-config` with the form values. Alerts on success/failure via `chatShowAlert`.
   - Config is fetched from `GET /workspaces/:hash/kb/embedding-config` on first tab activation and cached in `chatKbBrowserState.embedding`. Requires [Ollama](https://ollama.com) running locally. A description paragraph links to the Ollama website.
 
+## File Explorer
+
+The **File Explorer** is a full-screen split-pane view for browsing, previewing, and managing the files in a workspace's working directory. Implemented as a standalone ES module (`public/js/fileExplorer.js`) exporting `chatOpenFileExplorer(hash, label)` and `chatCloseFileExplorer()`. Swaps into the main chat area on open by hiding `#chat-messages` and the chat input wrapper, identical to the KB Browser pattern.
+
+- **Entry point:** A hover-visible folder icon button (`.chat-conv-group-explorer-btn`) rendered in every workspace-group header in the sidebar, next to the KB button. Uses the same opacity-0 → 1 on parent hover behavior as the group settings gear — the button is invisible until the user hovers the group header row, which keeps the sidebar clean. Rendered only when `group.hash` is present (skipped for the "Ungrouped" placeholder). Click dispatches `chatOpenFileExplorer(hash, label)` from `main.js`'s event-delegation router. The button icon is `ICON_FOLDER`.
+- **State shape:** `feState` is a module-scoped object (null-free, always initialized on open):
+  ```javascript
+  {
+    hash: string,                    // workspace hash
+    label: string,                   // workspace label for header
+    currentFolder: string,           // selected folder rel path ('' = root)
+    entries: Entry[],                // rows currently rendered in the tree pane (from the tree endpoint)
+    selected: { path, type } | null, // the selected row for preview
+    preview: {                       // preview pane state
+      kind: 'text'|'markdown'|'image'|'oversize-text'|'oversize-image'|'unsupported'|null,
+      filename, language, content, size, mtime, src
+    } | null,
+    expanded: Set<string>,           // dir paths whose children are expanded in-place in the tree
+    children: Map<string, Entry[]>,  // cache of `path → entries` populated by lazy tree fetches
+    uploads: Array<UploadItem>,      // in-flight / completed XHR upload rows
+  }
+  ```
+- **Layout:** A `<div id="chat-file-explorer" class="chat-file-explorer">` sibling of `#chat-messages`. Header row shows the workspace label and a close button. Body is a CSS grid with two columns: a **tree pane** (`.chat-fe-tree-pane`, `minmax(260px, 2fr)`) and a **preview pane** (`.chat-fe-preview-pane`, `minmax(320px, 3fr)`).
+- **Tree pane:**
+  - Toolbar with **Up**, **Refresh**, **New Folder**, **New File**, and **Upload** buttons (in that order). The New Folder button prompts for a name, validates client-side (rejects `/`, `\`, `.`, `..`, and empty names before round-tripping), then hits `POST /explorer/mkdir` with `{ parent: <upload target folder>, name }`. The New File button prompts with `untitled.md` as the default; the client trims, applies the same `/`, `\`, `.`, `..`, empty-name guards, auto-appends `.md` when the typed name has no `.` (so users can type bare names but any extension is still accepted), then hits `POST /explorer/file` with `{ parent, name }`. On success the new file is auto-selected, its preview is fetched, and the pane is flipped straight into **Edit** mode so the user lands in the editor ready to type. On 409 the UI surfaces the server's conflict message via the standard alert modal. The "upload target folder" used by Upload, New Folder, and New File is the currently-selected directory row when one is selected, else the current breadcrumb folder.
+  - Breadcrumb row showing the current folder path as clickable segments; clicking an ancestor snaps `currentFolder` back.
+  - Lazy-loaded directory tree. Expanding a folder row calls `_expandFolder(rel)` which hits `GET /explorer/tree?path=<rel>` and caches the result in `feState.children`. Collapse just removes the path from `feState.expanded` without dropping the cache. Hidden files (names starting with `.`) are **always** rendered — explicit product requirement.
+  - Row interactions: single-click selects and populates the preview pane; double-click on a directory expands it. Hover-revealed **Rename**, **Download** (files only), and **Delete** buttons on every row. Rename/Delete fire the `PATCH /explorer/rename` and `DELETE /explorer/entry` endpoints; on 409 conflict for rename, the user is prompted to confirm overwrite, which retries with `overwrite: true`.
+  - Drag-and-drop source/target: the pane itself accepts dropped files via `_onDragOver` / `_onDrop`, and directory rows accept drops via `_onRowDragOver` / `_onRowDrop` so users can pick a specific destination folder by dropping onto it. While a drag is active over the pane, `.chat-fe-tree-pane.drag-over` adds an accent border; a row drop target paints `.chat-fe-row.drop-target` as a dashed outline.
+  - Upload panel pinned to the bottom of the tree pane (`.chat-fe-upload-panel`). Each `UploadItem` renders a filename, a progress bar (driven by the XHR `upload.onprogress` event), and a status line (queued / uploading / complete / error / conflict-prompt). Uploads run with **concurrency 3** — additional items wait in `queued` state until a slot frees. On 409 the row surfaces an inline "Overwrite?" prompt; confirming re-POSTs with `?overwrite=true`.
+- **Preview pane:**
+  - `preview.kind === 'text'` renders the file as a syntax-highlighted `<pre><code>` block via highlight.js using `preview.language` inferred from extension. Fetched via `GET /explorer/preview?path=<rel>&mode=view`.
+  - `preview.kind === 'markdown'` renders via marked with the same text source.
+  - `preview.kind === 'image'` renders an `<img src="/api/chat/workspaces/:hash/explorer/preview?path=<rel>&mode=raw">` inside `.chat-fe-preview-image-wrap`. A client-side **25 MB** size guard (read from the entry's `size` before issuing the fetch) demotes oversized images to `oversize-image` and shows a download-only stub.
+  - `preview.kind === 'oversize-text'` appears when the server responded with `413` (file > 5 MB cap) or the entry's own size exceeds the same cap — shown as a message + Download button.
+  - `preview.kind === 'unsupported'` covers binary files outside the supported preview set. Shows filename, size, and a Download button.
+  - The preview header always shows filename, size, and mtime; an explicit **Download** button sits next to the filename and hits `?mode=download`.
+  - **Editor mode** — when `kind` is `text` or `markdown` and the content has loaded, the header exposes an **Edit** button. Clicking it flips `preview.editing = true` and swaps the `<pre>`/markdown body for a full-height `<textarea.chat-fe-preview-editor>` seeded from `preview.content` into a `preview.draft` field (updated live on `input`). The header swaps the **Edit** button for **Save** + **Cancel**. **Save** issues `PUT /explorer/file` with `{ path, content: draft }`, shows the button in a disabled "Saving…" state while the request is in flight, then on success updates `preview.content`/`preview.size`, clears `editing`/`draft`, and reloads the current folder so the tree's size/mtime column reflects the new bytes. Save failures surface the server error via the alert modal and keep the editor open. **Cancel** prompts for confirmation via `chatShowConfirm` when `draft !== content`, then exits edit mode. Markdown files render as markdown in view mode and as raw source in the textarea during edit — the textarea uses monospace + `white-space: pre` + `tab-size: 2`.
+- **Upload UX details:** Multiple files can be selected from the file picker or dropped onto the pane. For each `File`, a fresh `UploadItem` is pushed to `feState.uploads` and enqueued; the drain loop (`_runUploadQueue`) keeps at most 3 XHRs in flight at a time. On any XHR `progress` event, the per-item bar updates; on `load` (HTTP 200) the row is marked complete, the tree pane refreshes the affected folder, and the queue advances. On HTTP 409 the row transitions to a prompt state and is excluded from the active-count until the user resolves it (overwrite or cancel).
+- **Cleanup:** `chatCloseFileExplorer()` aborts any in-flight upload XHRs, re-shows `#chat-messages` and the input area, and clears `feState`. Also invoked on sign-out and on workspace deletion. Exposed on `window` so the close-button `onclick` in the static header markup can call it.
+
+The related `ICON_FOLDER`, `ICON_FOLDER_OPEN`, `ICON_FILE`, and `ICON_TRASH` SVG constants are defined in `public/js/state.js` alongside the other `ICON_*` constants.
+
 ## Theme System
 
 CSS custom properties on `:root` (light) and `[data-theme="dark"]`. Theme applied by setting `data-theme` on `<html>`. Persisted to `localStorage` under `agent-cockpit-theme`. Synced from server settings on init. Listens for system theme changes when set to "system".
@@ -305,7 +348,7 @@ All UI icons are inline SVGs using `stroke="currentColor"` for automatic theme c
 **Current icon inventory** (all in `state.js`):
 - **KB pipeline:** `KB_ICON_INGEST`, `KB_ICON_DIGEST`, `KB_ICON_DREAM`
 - **Reflection types:** `KB_REF_ICON_PATTERN`, `KB_REF_ICON_CONTRADICTION`, `KB_REF_ICON_GAP`, `KB_REF_ICON_TREND`, `KB_REF_ICON_INSIGHT`
-- **General UI:** `ICON_STALE`, `ICON_AI_MODEL`, `ICON_CLI`, `ICON_SERVER`, `ICON_STATS`, `ICON_KB`, `ICON_MEMORY`, `ICON_CANCEL`, `ICON_EDIT`, `ICON_DOWNLOAD`, `ICON_RESET`, `ICON_SIGNOUT`, `ICON_ARCHIVE`, `ICON_SETTINGS`, `ICON_REFLECTION`, `ICON_ATTACHMENT`, `ICON_SEND`, `ICON_STOP`, `ICON_WORKSPACE`, `ICON_TOKEN`, `ICON_USER`, `ICON_FILE_UPLOAD`
+- **General UI:** `ICON_STALE`, `ICON_AI_MODEL`, `ICON_CLI`, `ICON_SERVER`, `ICON_STATS`, `ICON_KB`, `ICON_MEMORY`, `ICON_CANCEL`, `ICON_EDIT`, `ICON_DOWNLOAD`, `ICON_RESET`, `ICON_SIGNOUT`, `ICON_ARCHIVE`, `ICON_SETTINGS`, `ICON_REFLECTION`, `ICON_ATTACHMENT`, `ICON_SEND`, `ICON_STOP`, `ICON_WORKSPACE`, `ICON_TOKEN`, `ICON_USER`, `ICON_FILE_UPLOAD`, `ICON_FOLDER`, `ICON_FOLDER_OPEN`, `ICON_FILE`, `ICON_TRASH`
 
 ## Keyboard Shortcuts
 
