@@ -21,10 +21,12 @@
 // next successful retry, at which point they're cleared.
 //
 // Concurrency: like ingestion, all per-workspace work is serialized via
-// a FIFO promise chain — one raw at a time per workspace. The batch
-// runner (`enqueueBatchDigest`) simply chains every eligible rawId onto
-// the workspace queue in order and emits a `batchProgress` frame after
-// each one settles.
+// a FIFO promise chain — one raw at a time per workspace. Every enqueue
+// (single, batch, or auto-digest) bumps a shared per-workspace
+// `digest_session` counter and emits a `digestProgress` frame after
+// each one settles, so the toolbar shows unified `done / total — ~ETA`
+// across all three entry points. The session is persisted to the KB DB
+// so a browser reload mid-digest rehydrates the progress indicator.
 //
 // Cross-file dedup is NOT handled here — that lives in Phase 4
 // (Dreaming). Each digest run is self-contained for a single raw file.
@@ -32,6 +34,7 @@
 import path from 'path';
 import { promises as fsp } from 'fs';
 import type {
+  KbDigestProgress,
   KbErrorClass,
   KbStateUpdateEvent,
   Settings,
@@ -44,6 +47,36 @@ import { embedBatch, resolveConfig, type EmbeddingConfig } from './embeddings';
 
 /** Version bumped whenever the entry frontmatter/format contract changes. */
 export const KB_ENTRY_SCHEMA_VERSION = 1;
+
+/**
+ * Build a `KbDigestProgress` snapshot from raw counters. Shared between
+ * the live in-memory path (frame emissions from the orchestrator) and
+ * the persisted path (`GET /kb` rehydrating after a browser reload) so
+ * the ETA rules stay consistent.
+ *
+ * ETA is withheld until `done >= 2` — the first-task duration is a
+ * noisy sample (CLI warm-up, filesystem cache) and would otherwise
+ * produce wild ETA swings the moment the second sample lands.
+ */
+export function computeDigestProgress(counters: {
+  total: number;
+  done: number;
+  totalElapsedMs: number;
+}): KbDigestProgress {
+  const avgMsPerItem = counters.done > 0
+    ? Math.round(counters.totalElapsedMs / counters.done)
+    : 0;
+  const snapshot: KbDigestProgress = {
+    done: counters.done,
+    total: counters.total,
+    avgMsPerItem,
+  };
+  if (counters.done >= 2 && avgMsPerItem > 0) {
+    const remaining = Math.max(0, counters.total - counters.done);
+    snapshot.etaMs = remaining * avgMsPerItem;
+  }
+  return snapshot;
+}
 
 /** Subset of chatService the digestion orchestrator depends on. */
 export interface KbDigestChatService {
@@ -128,11 +161,33 @@ export class KbDigestionService {
   /**
    * Per-workspace digestion session. Present while at least one digest
    * task is pending or in flight; cleared when the last task settles.
-   * `entriesCreated` accumulates across every settled task (single and
-   * batch). `pending` tracks in-flight + queued tasks so we know when
-   * the queue has drained.
+   *
+   * Counters:
+   * - `entriesCreated` — running total of entries written this session.
+   * - `pending` — in-flight + queued tasks, used to detect queue drain.
+   * - `total` — cumulative tasks enqueued this session (bumps mid-session
+   *   when auto-digest or manual enqueues arrive while the queue is busy).
+   * - `done` — cumulative tasks completed. Drives the `done / total`
+   *   numerator the UI renders.
+   * - `totalElapsedMs` — sum of per-file digestion durations; avg is
+   *   `totalElapsedMs / done` once `done > 0`.
+   * - `startedAt` — ISO timestamp the session opened. Useful for
+   *   diagnostics; not currently surfaced to the UI.
+   *
+   * Mirrored to the KB DB's `digest_session` row on every counter bump
+   * so a mid-flight browser reload can rehydrate the toolbar progress.
    */
-  private readonly sessions = new Map<string, { entriesCreated: number; pending: number }>();
+  private readonly sessions = new Map<
+    string,
+    {
+      entriesCreated: number;
+      pending: number;
+      total: number;
+      done: number;
+      totalElapsedMs: number;
+      startedAt: string;
+    }
+  >();
 
   constructor(opts: KbDigestionOptions) {
     this.chatService = opts.chatService;
@@ -159,7 +214,9 @@ export class KbDigestionService {
     if (!enabled) throw new KbDigestDisabledError(hash);
     this._trackPending(hash, 1);
     try {
+      const startedAt = Date.now();
       const result = await this._enqueue(hash, async () => this._runDigest(hash, rawId));
+      this._recordTaskDone(hash, Date.now() - startedAt);
       this._recordEntriesCreated(hash, result.entryIds.length);
       return result;
     } finally {
@@ -169,9 +226,9 @@ export class KbDigestionService {
 
   /**
    * Queue every eligible raw file in the workspace for digestion. Runs
-   * in the order the DB returns them, emitting a `batchProgress: {done,
-   * total}` frame after each one settles so the UI's "Digest All
-   * Pending" button can show live progress.
+   * in the order the DB returns them, emitting a `digestProgress` frame
+   * after each one settles so the UI's toolbar can show live
+   * `done / total — ~ETA` progress.
    *
    * Eligible = `status ∈ {ingested, pending-delete}`. Pending-delete
    * raws are purged (not digested) — the user already deleted the last
@@ -190,21 +247,20 @@ export class KbDigestionService {
 
     this._trackPending(hash, all.length);
     const results: DigestResult[] = [];
-    let done = 0;
     let processed = 0;
     try {
       for (const rawId of all) {
         // Chain every digest onto the shared per-workspace queue so it
         // runs serially even when other callers enqueue in parallel.
+        const startedAt = Date.now();
         // eslint-disable-next-line no-await-in-loop
         const r = await this._enqueue(hash, async () => this._runDigest(hash, rawId));
         results.push(r);
-        done += 1;
+        this._recordTaskDone(hash, Date.now() - startedAt);
         this._recordEntriesCreated(hash, r.entryIds.length);
         this._emitChange(hash, new Date().toISOString(), {
           raw: [rawId],
           entries: r.entryIds,
-          batchProgress: { done, total: all.length },
         });
         this._trackPending(hash, -1);
         processed += 1;
@@ -233,25 +289,57 @@ export class KbDigestionService {
   // ── Internals ────────────────────────────────────────────────────────────
 
   /**
-   * Adjust the per-workspace pending task count. When the count drops
-   * to zero, emit a single `digestion: { active: false, entriesCreated }`
-   * frame and clear the session. The next enqueue starts a fresh
-   * counter from zero.
+   * Adjust the per-workspace pending task count. Opens a fresh session
+   * on the first positive delta into an idle queue; bumps the `total`
+   * counter by that delta so mid-session enqueues (e.g. auto-digest
+   * arrivals during an active batch) extend the progress bar. When the
+   * count drops to zero, emits a final `digestion: { active: false, … }`
+   * frame, a `digestProgress: null` signal, and clears both in-memory
+   * and persisted session state.
    */
   private _trackPending(hash: string, delta: number): void {
     let session = this.sessions.get(hash);
     if (!session) {
-      session = { entriesCreated: 0, pending: 0 };
+      if (delta <= 0) return; // no-op: closing an already-closed session
+      session = {
+        entriesCreated: 0,
+        pending: 0,
+        total: 0,
+        done: 0,
+        totalElapsedMs: 0,
+        startedAt: new Date().toISOString(),
+      };
       this.sessions.set(hash, session);
     }
     session.pending += delta;
+    if (delta > 0) {
+      session.total += delta;
+      this._persistSession(hash, session);
+      this._emitProgress(hash, session);
+    }
     if (session.pending <= 0) {
       const total = session.entriesCreated;
       this.sessions.delete(hash);
+      this._clearPersistedSession(hash);
       this._emitChange(hash, new Date().toISOString(), {
         digestion: { active: false, entriesCreated: total },
+        digestProgress: null,
       });
     }
+  }
+
+  /**
+   * Record a settled digest task's wall-clock duration. Bumps `done` and
+   * accumulates `totalElapsedMs` so the progress frame carries a stable
+   * rolling `avgMsPerItem` (and, once `done >= 2`, an `etaMs`).
+   */
+  private _recordTaskDone(hash: string, elapsedMs: number): void {
+    const session = this.sessions.get(hash);
+    if (!session) return;
+    session.done += 1;
+    session.totalElapsedMs += Math.max(0, elapsedMs);
+    this._persistSession(hash, session);
+    this._emitProgress(hash, session);
   }
 
   /**
@@ -266,6 +354,66 @@ export class KbDigestionService {
     this._emitChange(hash, new Date().toISOString(), {
       digestion: { active: true, entriesCreated: session.entriesCreated },
     });
+  }
+
+  /** Write the current session state to the KB DB (best-effort; swallows DB errors). */
+  private _persistSession(
+    hash: string,
+    session: {
+      total: number;
+      done: number;
+      totalElapsedMs: number;
+      startedAt: string;
+    },
+  ): void {
+    try {
+      const db = this.chatService.getKbDb(hash);
+      db?.upsertDigestSession({
+        total: session.total,
+        done: session.done,
+        totalElapsedMs: session.totalElapsedMs,
+        startedAt: session.startedAt,
+      });
+    } catch (err: unknown) {
+      console.warn(
+        `[kb:digest] failed to persist session for ${hash}:`,
+        (err as Error).message,
+      );
+    }
+  }
+
+  /** Remove the persisted session row when the queue drains. */
+  private _clearPersistedSession(hash: string): void {
+    try {
+      const db = this.chatService.getKbDb(hash);
+      db?.clearDigestSession();
+    } catch (err: unknown) {
+      console.warn(
+        `[kb:digest] failed to clear session for ${hash}:`,
+        (err as Error).message,
+      );
+    }
+  }
+
+  /** Emit a `digestProgress` frame for the current session. */
+  private _emitProgress(
+    hash: string,
+    session: { total: number; done: number; totalElapsedMs: number },
+  ): void {
+    this._emitChange(hash, new Date().toISOString(), {
+      digestProgress: computeDigestProgress(session),
+    });
+  }
+
+  /**
+   * Read the current session progress snapshot for a workspace. Returns
+   * `null` when the queue is idle. Used by `chatService.getKbStateSnapshot`
+   * so `GET /kb` can rehydrate the toolbar after a browser reload.
+   */
+  getSessionProgress(hash: string): KbDigestProgress | null {
+    const session = this.sessions.get(hash);
+    if (!session) return null;
+    return computeDigestProgress(session);
   }
 
   private _enqueue<T>(hash: string, task: () => Promise<T>): Promise<T> {

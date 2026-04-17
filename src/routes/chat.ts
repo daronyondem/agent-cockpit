@@ -1688,8 +1688,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
 
   // Trigger digestion for every eligible raw file in the workspace
   // (ingested + pending-delete). Fire-and-forget: returns 202 immediately.
-  // Fires `kb_state_update` frames with `batchProgress: {done, total}` as
-  // the run proceeds so the UI can show a progress bar.
+  // The digestion orchestrator emits `kb_state_update` frames with
+  // `digestProgress: { done, total, avgMsPerItem, etaMs? }` as the run
+  // proceeds (unified across batch, single-file, and auto-digest runs)
+  // so the toolbar can render live `N / M — ~X min remaining`.
   router.post('/workspaces/:hash/kb/digest-all', csrfGuard, async (req: Request, res: Response) => {
     try {
       const hash = param(req, 'hash');

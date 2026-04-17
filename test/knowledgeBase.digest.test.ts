@@ -605,7 +605,7 @@ Second body.`;
 // ─── Batch digestion ─────────────────────────────────────────────────────────
 
 describe('enqueueBatchDigest', () => {
-  test('digests every ingested raw and emits batchProgress frames', async () => {
+  test('digests every ingested raw and emits digestProgress frames', async () => {
     const rawA = await seedRaw('alpha body', 'a.md');
     const rawB = await seedRaw('beta body', 'b.md');
     backend.runOneShotImpl = async (prompt) => {
@@ -628,15 +628,194 @@ Body for ${isA ? 'alpha' : 'beta'}.`;
     expect(db.getRawById(rawB)?.status).toBe('digested');
 
     const progressFrames = emitted
-      .map((e) => e.frame.changed.batchProgress)
+      .map((e) => e.frame.changed.digestProgress)
       .filter((p) => p !== undefined);
-    expect(progressFrames.length).toBeGreaterThanOrEqual(2);
-    expect(progressFrames[progressFrames.length - 1]).toEqual({ done: 2, total: 2 });
+    // Expect at least: one enqueue-time snapshot, two done-bump snapshots,
+    // and a final null on drain.
+    expect(progressFrames.length).toBeGreaterThanOrEqual(3);
+    const lastNonNull = [...progressFrames].reverse().find((p) => p !== null);
+    expect(lastNonNull).toMatchObject({ done: 2, total: 2 });
+    expect(progressFrames[progressFrames.length - 1]).toBeNull();
   });
 
   test('returns empty array when nothing is eligible', async () => {
     const results = await digestion.enqueueBatchDigest(hash);
     expect(results).toEqual([]);
+  });
+});
+
+// ─── digestProgress aggregate ───────────────────────────────────────────────
+
+describe('digestProgress aggregate progress', () => {
+  function extractProgressFrames(
+    frames: Array<{ hash: string; frame: KbStateUpdateEvent }>,
+  ) {
+    return frames
+      .filter((e) => 'digestProgress' in e.frame.changed)
+      .map((e) => e.frame.changed.digestProgress);
+  }
+
+  test('single enqueueDigest bumps total and emits progress', async () => {
+    const rawId = await seedRaw('single body', 'single.md');
+    backend.runOneShotImpl = async () => `---
+title: Solo
+slug: solo
+summary: Only one.
+tags: []
+---
+Body.`;
+    emitted.length = 0;
+    await digestion.enqueueDigest(hash, rawId);
+
+    const progress = extractProgressFrames(emitted);
+    // First snapshot on enqueue: total=1, done=0.
+    const first = progress.find((p) => p !== null);
+    expect(first).toMatchObject({ total: 1, done: 0 });
+    // Final null signal on drain.
+    expect(progress[progress.length - 1]).toBeNull();
+    // Penultimate non-null snapshot: done === total === 1.
+    const lastNonNull = [...progress].reverse().find((p) => p !== null);
+    expect(lastNonNull).toMatchObject({ done: 1, total: 1 });
+  });
+
+  test('etaMs is absent at done < 2 and present once done >= 2', async () => {
+    const rawA = await seedRaw('alpha', 'a.md');
+    const rawB = await seedRaw('beta', 'b.md');
+    backend.runOneShotImpl = async (prompt) => {
+      const isA = prompt.includes('a.md');
+      // Add a small artificial delay so avgMsPerItem > 0 rounds non-zero.
+      await new Promise((r) => setTimeout(r, 15));
+      return `---
+title: ${isA ? 'A' : 'B'}
+slug: ${isA ? 'a' : 'b'}
+summary: .
+tags: []
+---
+Body.`;
+    };
+    emitted.length = 0;
+    await digestion.enqueueBatchDigest(hash);
+
+    const progress = extractProgressFrames(emitted);
+    const nonNull = progress.filter((p): p is NonNullable<typeof p> => p != null);
+    // No snapshot should carry etaMs while done < 2.
+    for (const snap of nonNull) {
+      if (snap.done < 2) expect(snap.etaMs).toBeUndefined();
+    }
+    // Once done === 2 (and avgMsPerItem > 0) the final snapshot reports
+    // etaMs — for a fully-drained session remaining is 0, so etaMs is 0.
+    const doneAtTwo = nonNull.filter((s) => s.done === 2);
+    expect(doneAtTwo.length).toBeGreaterThan(0);
+    const last = doneAtTwo[doneAtTwo.length - 1];
+    expect(last.etaMs).toBeDefined();
+    expect(last.etaMs).toBe(0);
+    expect(last.avgMsPerItem).toBeGreaterThan(0);
+    // rawA, rawB present — prevents unused-var lint complaints.
+    expect(rawA && rawB).toBeTruthy();
+  });
+
+  test('mid-session enqueue bumps total without resetting avg', async () => {
+    const rawA = await seedRaw('alpha', 'a.md');
+    let rawBId: string | null = null;
+    let firstDone = false;
+
+    backend.runOneShotImpl = async (prompt) => {
+      const isA = prompt.includes('a.md');
+      // When the first (alpha) digest is mid-flight, stage a second raw
+      // and enqueue it so the still-open session sees the bump.
+      if (isA && !firstDone) {
+        firstDone = true;
+      }
+      await new Promise((r) => setTimeout(r, 10));
+      return `---
+title: ${isA ? 'A' : 'B'}
+slug: ${isA ? 'a' : 'b'}
+summary: .
+tags: []
+---
+Body.`;
+    };
+
+    emitted.length = 0;
+    // Kick off the first digest; while it's running we'll queue a second.
+    const firstPromise = digestion.enqueueDigest(hash, rawA);
+    // Let the runOneShot handler start; then enqueue a second raw.
+    await new Promise((r) => setTimeout(r, 5));
+    rawBId = await seedRaw('beta', 'b.md');
+    const secondPromise = digestion.enqueueDigest(hash, rawBId);
+    await Promise.all([firstPromise, secondPromise]);
+
+    const progress = extractProgressFrames(emitted);
+    const nonNull = progress.filter((p): p is NonNullable<typeof p> => p != null);
+    // Total should grow from 1 to 2 as the second enqueue lands.
+    const maxTotal = Math.max(...nonNull.map((p) => p.total));
+    expect(maxTotal).toBe(2);
+    // avgMsPerItem must never reset to 0 once we've had a done sample.
+    // Walk the snapshots and assert it only monotonically reflects new samples.
+    const samples = nonNull.filter((p) => p.done >= 1).map((p) => p.avgMsPerItem);
+    for (const v of samples) expect(v).toBeGreaterThan(0);
+    // Final non-null snapshot: done === total === 2.
+    const lastNonNull = nonNull[nonNull.length - 1];
+    expect(lastNonNull).toMatchObject({ done: 2, total: 2 });
+    // Drain signal fires exactly once at the very end.
+    expect(progress[progress.length - 1]).toBeNull();
+  });
+
+  test('GET /kb returns digestProgress mid-session and null after drain', async () => {
+    const rawA = await seedRaw('alpha', 'a.md');
+    backend.runOneShotImpl = async () => {
+      // Long enough that we can read the snapshot mid-flight.
+      await new Promise((r) => setTimeout(r, 50));
+      return `---
+title: A
+slug: a
+summary: .
+tags: []
+---
+Body.`;
+    };
+    const runPromise = digestion.enqueueDigest(hash, rawA);
+    // Snapshot while the digest is in flight — enqueue already persisted
+    // the session row, so GET /kb should surface it.
+    await new Promise((r) => setTimeout(r, 10));
+    const midSnapshot = await chatService.getKbStateSnapshot(hash);
+    expect(midSnapshot?.digestProgress).not.toBeNull();
+    expect(midSnapshot?.digestProgress?.total).toBe(1);
+
+    await runPromise;
+    const afterSnapshot = await chatService.getKbStateSnapshot(hash);
+    expect(afterSnapshot?.digestProgress).toBeNull();
+  });
+
+  test('crash recovery clears persisted digest_session on new KbDatabase', async () => {
+    const db = chatService.getKbDb(hash)!;
+    // Simulate a crash-frozen session row.
+    db.upsertDigestSession({
+      total: 5,
+      done: 2,
+      totalElapsedMs: 10_000,
+      startedAt: new Date().toISOString(),
+    });
+    expect(db.getDigestSession()).not.toBeNull();
+
+    // Build the path by asking the service for a fresh DB handle after
+    // closing caches. Re-opening the DB at the same path should trigger
+    // _recoverFromCrash and wipe the stale session row.
+    chatService.closeKbDatabases?.();
+    const reopened = chatService.getKbDb(hash)!;
+    expect(reopened.getDigestSession()).toBeNull();
+  });
+
+  test('crash recovery flips stuck "digesting" raws back to "ingested"', async () => {
+    const rawId = await seedRaw('will stick', 'stuck.md');
+    const db = chatService.getKbDb(hash)!;
+    // Simulate a worker that died mid-digest.
+    db.updateRawStatus(rawId, 'digesting');
+    expect(db.getRawById(rawId)?.status).toBe('digesting');
+
+    chatService.closeKbDatabases?.();
+    const reopened = chatService.getKbDb(hash)!;
+    expect(reopened.getRawById(rawId)?.status).toBe('ingested');
   });
 });
 

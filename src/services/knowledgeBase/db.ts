@@ -153,6 +153,20 @@ const SCHEMA_DDL = `
     PRIMARY KEY (reflection_id, entry_id)
   );
   CREATE INDEX IF NOT EXISTS idx_src_entry ON synthesis_reflection_citations(entry_id);
+
+  -- ── Digestion session (issue #148) ────────────────────────────────────────
+  -- Singleton row (id = 1) tracking aggregate digest-queue progress so a
+  -- mid-flight page reload can rehydrate the toolbar progress + ETA.
+  -- Present only while the per-workspace queue is busy; deleted when the
+  -- last task settles. total_elapsed_ms sums per-file digestion durations
+  -- (avg = total_elapsed_ms / done).
+  CREATE TABLE IF NOT EXISTS digest_session (
+    id                INTEGER PRIMARY KEY CHECK (id = 1),
+    total             INTEGER NOT NULL,
+    done              INTEGER NOT NULL,
+    total_elapsed_ms  INTEGER NOT NULL,
+    started_at        TEXT NOT NULL
+  );
 `;
 
 /** Raw DB row shape for the `raw` table. */
@@ -300,6 +314,18 @@ export interface LocationRow {
 }
 
 /**
+ * Singleton row persisted in `digest_session` so that mid-flight reloads
+ * can rehydrate the workspace-level digestion progress (issue #148).
+ * Present only while the per-workspace queue is busy.
+ */
+export interface DigestSessionRow {
+  total: number;
+  done: number;
+  totalElapsedMs: number;
+  startedAt: string;
+}
+
+/**
  * Filter options shared by `listEntries` and `countEntries`. All fields
  * are optional and combine with AND semantics (the multi-tag list is
  * itself an AND match — an entry must carry every listed tag).
@@ -342,6 +368,7 @@ export class KbDatabase {
     this.db.pragma('foreign_keys = ON');
     this._initSchema();
     this._ensureRootFolder();
+    this._recoverFromCrash();
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
@@ -1639,6 +1666,56 @@ export class KbDatabase {
       .map((t) => t.topicId);
   }
 
+  // ── Digestion session (issue #148) ───────────────────────────────────────
+
+  /**
+   * Read the persisted digestion-session snapshot, or `null` if the queue
+   * is idle. The digestion orchestrator rehydrates its in-memory session
+   * from this row on first access after a server restart.
+   */
+  getDigestSession(): DigestSessionRow | null {
+    const row = this.db
+      .prepare<
+        unknown[],
+        {
+          total: number;
+          done: number;
+          total_elapsed_ms: number;
+          started_at: string;
+        }
+      >(
+        'SELECT total, done, total_elapsed_ms, started_at FROM digest_session WHERE id = 1',
+      )
+      .get();
+    if (!row) return null;
+    return {
+      total: row.total,
+      done: row.done,
+      totalElapsedMs: row.total_elapsed_ms,
+      startedAt: row.started_at,
+    };
+  }
+
+  /** Upsert the singleton digestion-session row. Called on every counter bump. */
+  upsertDigestSession(row: DigestSessionRow): void {
+    this.db
+      .prepare(
+        `INSERT INTO digest_session (id, total, done, total_elapsed_ms, started_at)
+         VALUES (1, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           total = excluded.total,
+           done = excluded.done,
+           total_elapsed_ms = excluded.total_elapsed_ms,
+           started_at = excluded.started_at`,
+      )
+      .run(row.total, row.done, row.totalElapsedMs, row.startedAt);
+  }
+
+  /** Delete the digestion-session row when the queue drains. */
+  clearDigestSession(): void {
+    this.db.prepare('DELETE FROM digest_session').run();
+  }
+
   // ── Internals ────────────────────────────────────────────────────────────
 
   private _initSchema(): void {
@@ -1724,6 +1801,21 @@ export class KbDatabase {
          SELECT COUNT(*) FROM synthesis_reflection_citations WHERE reflection_id = synthesis_reflections.reflection_id
        )`,
     );
+  }
+
+  /**
+   * One-shot crash recovery on DB open. The digestion orchestrator lives in
+   * memory, so nothing can actually be digesting at the moment we open the
+   * DB — any `status='digesting'` row is a left-over from a server crash.
+   * Flip those back to `ingested` so the user can retry them, and clear
+   * any stale `digest_session` row (the worker that would have finished
+   * it is gone).
+   */
+  private _recoverFromCrash(): void {
+    this.db
+      .prepare("UPDATE raw SET status = 'ingested' WHERE status = 'digesting'")
+      .run();
+    this.db.prepare('DELETE FROM digest_session').run();
   }
 
   private _ensureRootFolder(): void {
