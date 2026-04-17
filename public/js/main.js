@@ -16,7 +16,8 @@ import {
   chatSelectConversation, chatShowContextMenu, chatCloseContextMenu,
   chatSetGroupCollapsed, chatGetCollapsedGroups,
   chatAddPendingFiles, chatShowDropOverlay, chatShowFolderPicker,
-  chatUpdateSendButtonState, chatSaveDraft, chatRenderFileChips,
+  chatUpdateSendButtonState, chatSaveDraft, chatRestoreDraft, chatRenderFileChips,
+  chatHydrateDraftsFromStorage,
   chatUpdateHeader, chatUpdateUsageDisplay,
   chatRenderQueuedMessages, chatDeleteQueuedMessage, chatEditQueuedMessage,
 } from './conversations.js';
@@ -80,6 +81,11 @@ function chatInit() {
   state.chatInitialized = true;
   chatInitTabIndicator();
   chatWireEvents();
+  // Pull any drafts persisted under chat:draft:* keys into chatDraftState,
+  // then paint the __new__ draft onto the welcome-screen textarea if present.
+  // Conversation drafts are restored on demand by chatSelectConversation.
+  chatHydrateDraftsFromStorage();
+  chatRestoreDraft(null);
   loadBackends();
   chatLoadConversations();
 

@@ -15,10 +15,7 @@ export async function chatEnsureConversation() {
       state.chatPendingWorkingDir = null;
       const res = await chatFetch('conversations', { method: 'POST', body });
       const conv = await res.json();
-      if (state.chatDraftState.has('__new__')) {
-        state.chatDraftState.set(conv.id, state.chatDraftState.get('__new__'));
-        state.chatDraftState.delete('__new__');
-      }
+      chatMigrateDraft('__new__', conv.id);
       state.chatActiveConvId = conv.id;
       state.chatActiveConv = conv;
       chatLoadConversations();
@@ -561,16 +558,114 @@ export function chatUpdateSendButtonState() {
 }
 
 // ── Draft management ─────────────────────────────────────────────────────────
+// Drafts live in two places: `state.chatDraftState` (in-memory Map, source of
+// truth for this tab) and `localStorage` under `chat:draft:<key>` (mirror so
+// drafts survive the sign-in-redirect page reload). Only completed uploads are
+// persisted — in-progress File bytes can't be serialized.
+
+const DRAFT_STORAGE_PREFIX = 'chat:draft:';
+
+function chatDraftStorageKey(key) {
+  return DRAFT_STORAGE_PREFIX + key;
+}
+
+function chatSerializeDraftFiles(pendingFiles) {
+  return (pendingFiles || [])
+    .filter(e => e.status === 'done' && e.result && e.result.path)
+    .map(e => ({
+      path: e.result.path,
+      name: e.result.name || e.file?.name || '',
+      size: e.file?.size || 0,
+    }));
+}
+
+function chatDeserializeDraftFiles(persistedFiles) {
+  return (persistedFiles || []).map(pf => ({
+    // type is intentionally omitted so the chip renderer's `f.type &&
+    // f.type.startsWith('image/')` guard skips URL.createObjectURL on the
+    // reconstructed (non-Blob) file.
+    file: { name: pf.name || '', size: pf.size || 0 },
+    status: 'done',
+    progress: 100,
+    result: { path: pf.path, name: pf.name || '' },
+    xhr: null,
+    restored: true,
+  }));
+}
+
+function chatWriteDraftToStorage(key, draft) {
+  try {
+    const payload = JSON.stringify({
+      text: draft.text || '',
+      files: chatSerializeDraftFiles(draft.pendingFiles),
+    });
+    localStorage.setItem(chatDraftStorageKey(key), payload);
+  } catch {
+    // Quota exceeded or localStorage unavailable — in-memory draft still works.
+  }
+}
+
+function chatRemoveDraftFromStorage(key) {
+  try {
+    localStorage.removeItem(chatDraftStorageKey(key));
+  } catch {}
+}
+
+export function chatDeleteDraft(key) {
+  const k = key || '__new__';
+  state.chatDraftState.delete(k);
+  chatRemoveDraftFromStorage(k);
+}
+
+export function chatMigrateDraft(fromKey, toKey) {
+  if (!state.chatDraftState.has(fromKey)) return;
+  state.chatDraftState.set(toKey, state.chatDraftState.get(fromKey));
+  state.chatDraftState.delete(fromKey);
+  try {
+    const raw = localStorage.getItem(chatDraftStorageKey(fromKey));
+    if (raw !== null) {
+      localStorage.setItem(chatDraftStorageKey(toKey), raw);
+      localStorage.removeItem(chatDraftStorageKey(fromKey));
+    }
+  } catch {}
+}
+
+export function chatHydrateDraftsFromStorage() {
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(DRAFT_STORAGE_PREFIX)) keys.push(k);
+    }
+    for (const storageKey of keys) {
+      try {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) continue;
+        const parsed = JSON.parse(raw);
+        const convKey = storageKey.slice(DRAFT_STORAGE_PREFIX.length);
+        state.chatDraftState.set(convKey, {
+          text: parsed.text || '',
+          pendingFiles: chatDeserializeDraftFiles(parsed.files),
+        });
+      } catch {
+        // Corrupted entry — drop it so it can't poison future hydrations.
+        try { localStorage.removeItem(storageKey); } catch {}
+      }
+    }
+  } catch {}
+}
 
 export function chatSaveDraft() {
   const key = state.chatActiveConvId || '__new__';
   const textarea = document.getElementById('chat-textarea');
   const text = textarea ? textarea.value : '';
   if (!text && !state.chatPendingFiles.length) {
-    state.chatDraftState.delete(key);
+    chatDeleteDraft(key);
     return;
   }
-  state.chatDraftState.set(key, { text, pendingFiles: state.chatPendingFiles });
+  const draft = { text, pendingFiles: state.chatPendingFiles };
+  state.chatDraftState.set(key, draft);
+  chatWriteDraftToStorage(key, draft);
 }
 
 export function chatRestoreDraft(convId) {
@@ -660,7 +755,7 @@ export async function chatDeleteConversation(id) {
   if (!confirm('Delete this conversation? This cannot be undone.')) return;
   try {
     await chatFetch(`conversations/${id}`, { method: 'DELETE' });
-    state.chatDraftState.delete(id);
+    chatDeleteDraft(id);
     if (state.chatActiveConvId === id) {
       for (const entry of state.chatPendingFiles) {
         if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();
@@ -682,7 +777,7 @@ export async function chatDeleteConversation(id) {
 export async function chatArchiveConversation(id) {
   try {
     await chatFetch(`conversations/${id}/archive`, { method: 'PATCH' });
-    state.chatDraftState.delete(id);
+    chatDeleteDraft(id);
     if (state.chatActiveConvId === id) {
       for (const entry of state.chatPendingFiles) {
         if (entry.status === 'uploading' && entry.xhr) entry.xhr.abort();

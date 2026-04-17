@@ -97,11 +97,25 @@ Implemented in `public/js/tab-indicator.js`. Overlays a colored dot-badge on the
 
 ## Draft Persistence
 
-- `chatSaveDraft()` / `chatRestoreDraft()` — per-conversation drafts stored in `chatDraftState` Map keyed by convId (or `'__new__'` for unsaved conversations)
-- Drafts include textarea text + pending files
-- Saved on conversation switch/blur, restored on switch/select
-- `'__new__'` key migrated to real convId on conversation creation
-- Cleared on message send
+- **In-memory layer:** `state.chatDraftState` is a `Map` keyed by convId (or `'__new__'` for the welcome-screen buffer) that holds `{ text, pendingFiles }`. Source of truth inside a single tab.
+- **localStorage mirror:** every draft is also written under `chat:draft:<convId|__new__>` so drafts survive the sign-in-redirect page reload triggered by the session-expired overlay. The persisted shape is `{ text, files: [{ path, name, size }] }` — only completed uploads are serialized. In-progress `File` bytes cannot be persisted and are dropped.
+- **Helpers (`public/js/conversations.js`):**
+  - `chatSaveDraft()` — mirrors the textarea + `state.chatPendingFiles` into both layers under the active convId (or `'__new__'`). Empty drafts trigger `chatDeleteDraft` rather than writing `{ text: '', files: [] }`.
+  - `chatRestoreDraft(convId)` — reads from `state.chatDraftState` and paints the textarea + pending-files UI. Clears both when no draft is present.
+  - `chatDeleteDraft(key)` — removes the draft from both layers. Used by `chatDeleteConversation`, `chatArchiveConversation`, the empty-draft branch of `chatSaveDraft`, and the success paths of `chatSendMessage` / `chatStartMessageRequest`.
+  - `chatMigrateDraft(fromKey, toKey)` — moves a draft between keys in both layers. Invoked by `chatEnsureConversation` when a `'__new__'` draft is promoted to a real convId after an upload-triggered conversation creation.
+  - `chatHydrateDraftsFromStorage()` — called once from `chatInit` on boot. Iterates `localStorage` for `chat:draft:*` entries, rebuilds `state.chatDraftState`, and reconstructs file-entry objects with `{ name, size }` (type is intentionally omitted so the chip renderer's `f.type &&` guard skips `URL.createObjectURL` on the non-`Blob` restored file). Corrupted entries are dropped.
+- **Save sites:**
+  - On conversation switch — `chatSelectConversation` (saves the outgoing conv's draft before loading the new one).
+  - On opening the folder picker for a new conversation — `chatCreateConversationWithDir`.
+  - At the start of `chatSendMessage` — immediately before the textarea is cleared, so the draft reaches localStorage even if the function throws synchronously before the fetch's catch runs.
+- **Restore sites:**
+  - On conversation switch — `chatSelectConversation`.
+  - After folder-picker creation — `chatCreateConversationWithDir` (restores any `'__new__'` draft migrated to the new convId).
+  - On boot — `chatInit` calls `chatHydrateDraftsFromStorage()` then `chatRestoreDraft(null)` to paint the welcome-screen textarea with any pre-reload `'__new__'` draft.
+  - On failed send — `chatSendMessage` installs a `restoreFailedSend()` closure that repaints the captured `originalText` + `originalFiles` into the UI and calls `chatSaveDraft()` again. Wired into both the conversation-create catch block and `chatStartMessageRequest`'s `onSendFailed` callback.
+- **Clear-on-send ordering:** the per-conv delete in `chatStartMessageRequest` runs **after** `await response.json()` succeeds, not before the POST. The `'__new__'` delete in `chatSendMessage` runs after the conversation-create POST succeeds. This keeps the draft intact when the message POST returns 401 (session expired mid-send) so the overlay's "your draft is preserved" promise holds.
+- **Session-expired overlay:** `chatShowSessionExpired` (in `public/js/state.js`) still reads "You have been signed out. Your draft message is preserved — sign in to continue." The claim is now backed by the localStorage mirror + the delete-after-success ordering.
 
 ## Session Management
 
