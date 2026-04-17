@@ -1053,15 +1053,65 @@
     margin: 2px 0;
   }
 
-  /* Progress-group timeline — consecutive `turn: 'progress'` assistant
-     messages collapsed into a single card with a vertical timeline. */
-  .chat-progress-count {
-    font-size: 11px;
+  /* Progress-group breadcrumb — a one-line collapsible pill that stands in
+     for a run of consecutive `turn: 'progress'` assistant messages. Takes
+     minimal vertical space when collapsed; expands to reveal a vertical
+     timeline of the individual rows. No avatar / header / actions. */
+  .chat-progress-breadcrumb {
+    margin: 4px 0 8px 52px;  /* align with assistant message body (avatar column) */
+    font-size: 12px;
     color: var(--muted);
-    font-weight: 500;
-    margin-left: 6px;
-    padding: 1px 6px;
-    border-radius: 10px;
+  }
+  .chat-progress-breadcrumb-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    user-select: none;
+    list-style: none;
+    line-height: 1.3;
+    min-width: 0;
+  }
+  .chat-progress-breadcrumb-summary::-webkit-details-marker { display: none; }
+  .chat-progress-breadcrumb-caret {
+    display: inline-block;
+    width: 0;
+    height: 0;
+    border-left: 4px solid currentColor;
+    border-top: 3px solid transparent;
+    border-bottom: 3px solid transparent;
+    transition: transform 0.15s;
+    flex-shrink: 0;
+  }
+  .chat-progress-breadcrumb[open] > .chat-progress-breadcrumb-summary .chat-progress-breadcrumb-caret {
+    transform: rotate(90deg);
+  }
+  .chat-progress-breadcrumb-label {
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .chat-progress-breadcrumb-elapsed {
+    flex-shrink: 0;
+    opacity: 0.75;
+  }
+  .chat-progress-breadcrumb-preview {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    opacity: 0.75;
+    font-style: italic;
+  }
+  .chat-progress-breadcrumb-body {
+    margin-top: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
     background: var(--surface2);
   }
   .chat-progress-timeline {
@@ -1099,8 +1149,9 @@
     margin-bottom: 4px;
   }
   .chat-progress-row-text {
-    font-size: 14px;
+    font-size: 13px;
     line-height: 1.45;
+    color: var(--fg);
   }
   .chat-progress-row-text p:first-child { margin-top: 0; }
   .chat-progress-row-text p:last-child { margin-bottom: 0; }

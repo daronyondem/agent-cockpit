@@ -194,36 +194,38 @@ function chatRenderSingleMessage(msg, mi, currentSessionMsgs) {
   `;
 }
 
-// ── Progress group (consecutive progress messages as one timeline card) ─────
+// ── Progress group (consecutive progress messages as one compact breadcrumb) ─
+// Intermediate assistant turns are chatter — interesting to expand when the
+// user cares, but otherwise should take as little vertical space as possible.
+// Render the whole run as a single one-line <details> pill: no avatar, no
+// role header, no action buttons. Expands to reveal a vertical timeline of
+// the individual rows (thinking, activity chip, prose body).
 
 function chatRenderProgressGroup(groupMsgs, currentSessionMsgs, groupStartIdx) {
   if (!groupMsgs.length) return '';
   const first = groupMsgs[0];
   const last = groupMsgs[groupMsgs.length - 1];
-  const backendIcon = first.backend ? getBackendIcon(first.backend) : null;
-  const avatar = backendIcon || DEFAULT_BACKEND_ICON;
-  const avatarClass = backendIcon ? ' chat-msg-avatar-svg' : '';
-  const backendLabel = first.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === first.backend)?.label || first.backend)}</span>` : '';
+  const caps = first.backend ? getBackendCapabilities(first.backend) : {};
 
-  // Elapsed from preceding user message to the *last* progress row — mirrors
-  // single-message behavior so the header elapsed keeps climbing as more
-  // progress rows land in the same turn.
-  let elapsedLabel = '';
+  // Elapsed from preceding user message to the last progress row so the
+  // breadcrumb keeps climbing as more rows land in the same turn.
+  let elapsedText = '';
   if (last.timestamp) {
     for (let j = groupStartIdx - 1; j >= 0; j--) {
       if (currentSessionMsgs[j].role === 'user' && currentSessionMsgs[j].timestamp) {
         const delta = new Date(last.timestamp) - new Date(currentSessionMsgs[j].timestamp);
         if (delta > 0 && delta < 3600000) {
-          elapsedLabel = `<span class="chat-msg-elapsed">${chatFormatElapsed(delta)}</span>`;
+          elapsedText = chatFormatElapsed(delta);
         }
         break;
       }
     }
   }
-  const timeLabel = first.timestamp ? `<span class="chat-msg-time">${chatFormatTimestamp(first.timestamp)}${elapsedLabel}</span>` : '';
 
-  const caps = first.backend ? getBackendCapabilities(first.backend) : {};
-  const rawCombined = groupMsgs.map(m => m.content || '').join('\n\n');
+  // Preview: first line of the last progress row's text, truncated, so the
+  // collapsed breadcrumb gives some hint of what the agent is doing.
+  const previewSrc = (last.content || '').split('\n').find(line => line.trim()) || '';
+  const previewTrimmed = previewSrc.length > 90 ? previewSrc.slice(0, 87) + '\u2026' : previewSrc;
 
   let rowsHtml = '';
   for (const m of groupMsgs) {
@@ -243,22 +245,20 @@ function chatRenderProgressGroup(groupMsgs, currentSessionMsgs, groupStartIdx) {
     `;
   }
 
+  const stepLabel = `${groupMsgs.length} step${groupMsgs.length !== 1 ? 's' : ''}`;
+
   return `
-    <div class="chat-msg assistant chat-msg-progress-group" data-raw-content="${esc(rawCombined)}">
-      <div class="chat-msg-wrapper">
-        <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
-        <div class="chat-msg-body">
-          <div class="chat-msg-role">Assistant ${backendLabel}${timeLabel} <span class="chat-progress-count">${groupMsgs.length} step${groupMsgs.length !== 1 ? 's' : ''}</span></div>
-          <div class="chat-msg-content">
-            <div class="chat-progress-timeline">${rowsHtml}</div>
-          </div>
-          <div class="chat-msg-actions">
-            <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
-            <button class="chat-msg-action" data-action="copy-md" title="Copy Markdown">Copy MD</button>
-          </div>
-        </div>
+    <details class="chat-progress-breadcrumb">
+      <summary class="chat-progress-breadcrumb-summary">
+        <span class="chat-progress-breadcrumb-caret" aria-hidden="true"></span>
+        <span class="chat-progress-breadcrumb-label">${stepLabel}</span>
+        ${elapsedText ? `<span class="chat-progress-breadcrumb-elapsed">${esc(elapsedText)}</span>` : ''}
+        ${previewTrimmed ? `<span class="chat-progress-breadcrumb-preview">${esc(previewTrimmed)}</span>` : ''}
+      </summary>
+      <div class="chat-progress-breadcrumb-body">
+        <div class="chat-progress-timeline">${rowsHtml}</div>
       </div>
-    </div>
+    </details>
   `;
 }
 
