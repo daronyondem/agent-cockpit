@@ -1618,30 +1618,68 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   });
 
   // ── KB entries ──────────────────────────────────────────────────────────────
-  // GET /entries returns a paginated list of digested entries, optionally
-  // filtered by folder (via the joined raw_locations), tag, or rawId.
+  // GET /entries returns a paginated list of digested entries with
+  // filtering by title substring (`search`), folder, tag(s), rawId, and
+  // date ranges on uploaded (raw.uploaded_at) and digested
+  // (entries.digested_at) timestamps. Multi-tag filtering uses AND
+  // semantics — an entry must carry every tag in the `tags` csv. The
+  // response includes a `total` count (pre-pagination) so the UI can
+  // render pagination controls.
   router.get('/workspaces/:hash/kb/entries', async (req: Request, res: Response) => {
     try {
       const hash = param(req, 'hash');
       const enabled = await chatService.getWorkspaceKbEnabled(hash);
-      if (!enabled) return res.json({ entries: [] });
+      if (!enabled) return res.json({ entries: [], total: 0 });
       const db = chatService.getKbDb(hash);
-      if (!db) return res.json({ entries: [] });
+      if (!db) return res.json({ entries: [], total: 0 });
 
       const folder = typeof req.query.folder === 'string' ? req.query.folder : undefined;
       const tag = typeof req.query.tag === 'string' ? req.query.tag : undefined;
+      const tags = typeof req.query.tags === 'string'
+        ? req.query.tags.split(',').map((t) => t.trim()).filter((t) => t.length > 0)
+        : undefined;
       const rawId = typeof req.query.rawId === 'string' ? req.query.rawId : undefined;
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      const uploadedFrom = typeof req.query.uploadedFrom === 'string' ? req.query.uploadedFrom : undefined;
+      const uploadedTo = typeof req.query.uploadedTo === 'string' ? req.query.uploadedTo : undefined;
+      const digestedFrom = typeof req.query.digestedFrom === 'string' ? req.query.digestedFrom : undefined;
+      const digestedTo = typeof req.query.digestedTo === 'string' ? req.query.digestedTo : undefined;
       const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
       const offset = typeof req.query.offset === 'string' ? Number(req.query.offset) : undefined;
 
-      const entries = db.listEntries({
+      const filter = {
         folderPath: folder,
         tag,
+        tags,
         rawId,
+        search,
+        uploadedFrom,
+        uploadedTo,
+        digestedFrom,
+        digestedTo,
+      };
+      const entries = db.listEntries({
+        ...filter,
         limit: Number.isFinite(limit) ? limit : undefined,
         offset: Number.isFinite(offset) ? offset : undefined,
       });
-      res.json({ entries });
+      const total = db.countEntries(filter);
+      res.json({ entries, total });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // GET /tags returns every distinct tag in the KB with its entry count,
+  // ordered most-used first. Feeds the entries-tab tag picker.
+  router.get('/workspaces/:hash/kb/tags', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const enabled = await chatService.getWorkspaceKbEnabled(hash);
+      if (!enabled) return res.json({ tags: [] });
+      const db = chatService.getKbDb(hash);
+      if (!db) return res.json({ tags: [] });
+      res.json({ tags: db.listAllTags() });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

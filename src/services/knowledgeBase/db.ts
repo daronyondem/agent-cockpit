@@ -300,6 +300,30 @@ export interface LocationRow {
 }
 
 /**
+ * Filter options shared by `listEntries` and `countEntries`. All fields
+ * are optional and combine with AND semantics (the multi-tag list is
+ * itself an AND match — an entry must carry every listed tag).
+ */
+export interface ListEntriesFilter {
+  folderPath?: string;
+  /** Legacy single-tag filter. Merged into `tags` when both are supplied. */
+  tag?: string;
+  /** Multi-tag filter with AND semantics (entry must have all tags). */
+  tags?: string[];
+  rawId?: string;
+  /** Case-insensitive substring match against entry title. */
+  search?: string;
+  /** ISO-8601 lower bound on `raw.uploaded_at` (inclusive). */
+  uploadedFrom?: string;
+  /** ISO-8601 upper bound on `raw.uploaded_at` (inclusive). */
+  uploadedTo?: string;
+  /** ISO-8601 lower bound on `entries.digested_at` (inclusive). */
+  digestedFrom?: string;
+  /** ISO-8601 upper bound on `entries.digested_at` (inclusive). */
+  digestedTo?: string;
+}
+
+/**
  * Wrapper over a per-workspace SQLite database. Owns one `Database`
  * handle and a set of prepared statements. All methods are synchronous
  * (better-sqlite3 style) — async wouldn't help because the DB lives on
@@ -866,46 +890,23 @@ export class KbDatabase {
 
   /**
    * List entries, optionally scoped by folder (via raw_locations join),
-   * tag, or rawId. Results are ordered by title for a stable UI. The
-   * tags array on each entry is populated via a secondary query — not
-   * a JOIN — because multi-tag entries would otherwise duplicate rows.
+   * tag(s), rawId, title substring, uploaded date range (from the joined
+   * `raw` row), or digested date range. Results are ordered by title
+   * for a stable UI. The tags array on each entry is populated via a
+   * secondary query — not a JOIN — because multi-tag entries would
+   * otherwise duplicate rows. Multi-tag filtering uses AND semantics:
+   * an entry must carry every tag in `opts.tags` (legacy single `tag`
+   * is merged in).
    */
-  listEntries(
-    opts: {
-      folderPath?: string;
-      tag?: string;
-      rawId?: string;
-      limit?: number;
-      offset?: number;
-    } = {},
-  ): KbEntry[] {
+  listEntries(opts: ListEntriesFilter & { limit?: number; offset?: number } = {}): KbEntry[] {
     const limit = opts.limit ?? DEFAULT_RAW_PAGE_SIZE;
     const offset = opts.offset ?? 0;
-
-    const clauses: string[] = [];
-    const params: Array<string | number> = [];
-    let query = `SELECT DISTINCT e.entry_id, e.raw_id, e.title, e.slug, e.summary, e.schema_version, e.stale_schema, e.digested_at
-                 FROM entries e`;
-    if (opts.folderPath !== undefined) {
-      query += ' JOIN raw_locations l ON l.raw_id = e.raw_id';
-      clauses.push('l.folder_path = ?');
-      params.push(normalizeFolderPath(opts.folderPath));
-    }
-    if (opts.tag !== undefined) {
-      query += ' JOIN entry_tags t ON t.entry_id = e.entry_id';
-      clauses.push('t.tag = ?');
-      params.push(opts.tag);
-    }
-    if (opts.rawId !== undefined) {
-      clauses.push('e.raw_id = ?');
-      params.push(opts.rawId);
-    }
-    if (clauses.length > 0) {
-      query += ' WHERE ' + clauses.join(' AND ');
-    }
-    query += ' ORDER BY e.title LIMIT ? OFFSET ?';
-    params.push(limit, offset);
-
+    const { joinSql, whereSql, havingSql, params } = this._buildEntryFilter(opts);
+    const query = `SELECT e.entry_id, e.raw_id, e.title, e.slug, e.summary, e.schema_version, e.stale_schema, e.digested_at
+                   FROM entries e${joinSql}${whereSql}
+                   GROUP BY e.entry_id${havingSql}
+                   ORDER BY e.title
+                   LIMIT ? OFFSET ?`;
     const rows = this.db
       .prepare<
         unknown[],
@@ -920,7 +921,7 @@ export class KbDatabase {
           digested_at: string;
         }
       >(query)
-      .all(...params);
+      .all(...params, limit, offset);
     return rows.map((r) => ({
       entryId: r.entry_id,
       rawId: r.raw_id,
@@ -932,6 +933,114 @@ export class KbDatabase {
       digestedAt: r.digested_at,
       tags: this._listTagsForEntry(r.entry_id),
     }));
+  }
+
+  /**
+   * Count entries matching the same filter options as `listEntries`,
+   * without LIMIT/OFFSET. Used by the UI to render page counts.
+   */
+  countEntries(opts: ListEntriesFilter = {}): number {
+    const { joinSql, whereSql, havingSql, params } = this._buildEntryFilter(opts);
+    const query = `SELECT COUNT(*) AS n FROM (
+                     SELECT e.entry_id FROM entries e${joinSql}${whereSql}
+                     GROUP BY e.entry_id${havingSql}
+                   ) AS t`;
+    const row = this.db.prepare<unknown[], { n: number }>(query).get(...params);
+    return row?.n ?? 0;
+  }
+
+  /**
+   * Build the JOIN / WHERE / HAVING fragments shared by `listEntries`
+   * and `countEntries`. Keeping both on the same builder guarantees the
+   * filter set stays consistent — the pagination total can never
+   * disagree with the page contents.
+   */
+  private _buildEntryFilter(opts: ListEntriesFilter): {
+    joinSql: string;
+    whereSql: string;
+    havingSql: string;
+    params: Array<string | number>;
+  } {
+    const joins: string[] = [];
+    const clauses: string[] = [];
+    const params: Array<string | number> = [];
+    let havingSql = '';
+
+    if (opts.folderPath !== undefined) {
+      joins.push('JOIN raw_locations l ON l.raw_id = e.raw_id');
+      clauses.push('l.folder_path = ?');
+      params.push(normalizeFolderPath(opts.folderPath));
+    }
+
+    // Merge legacy single `tag` into multi-tag list, de-dupe, AND-match.
+    const tagList: string[] = [];
+    if (opts.tag !== undefined && opts.tag !== '') tagList.push(opts.tag);
+    if (Array.isArray(opts.tags)) {
+      for (const t of opts.tags) {
+        if (typeof t === 'string' && t.trim() !== '') tagList.push(t.trim());
+      }
+    }
+    const uniqueTags = Array.from(new Set(tagList));
+    if (uniqueTags.length > 0) {
+      joins.push('JOIN entry_tags et ON et.entry_id = e.entry_id');
+      clauses.push(`et.tag IN (${uniqueTags.map(() => '?').join(',')})`);
+      params.push(...uniqueTags);
+      havingSql = ` HAVING COUNT(DISTINCT et.tag) = ${uniqueTags.length}`;
+    }
+
+    if (opts.rawId !== undefined) {
+      clauses.push('e.raw_id = ?');
+      params.push(opts.rawId);
+    }
+
+    if (opts.search !== undefined && opts.search.trim() !== '') {
+      clauses.push("e.title LIKE ? ESCAPE '\\' COLLATE NOCASE");
+      params.push('%' + opts.search.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%');
+    }
+
+    if (opts.digestedFrom !== undefined && opts.digestedFrom !== '') {
+      clauses.push('e.digested_at >= ?');
+      params.push(opts.digestedFrom);
+    }
+    if (opts.digestedTo !== undefined && opts.digestedTo !== '') {
+      clauses.push('e.digested_at <= ?');
+      params.push(opts.digestedTo);
+    }
+
+    const hasUploadedFilter =
+      (opts.uploadedFrom !== undefined && opts.uploadedFrom !== '') ||
+      (opts.uploadedTo !== undefined && opts.uploadedTo !== '');
+    if (hasUploadedFilter) {
+      joins.push('JOIN raw r ON r.raw_id = e.raw_id');
+      if (opts.uploadedFrom !== undefined && opts.uploadedFrom !== '') {
+        clauses.push('r.uploaded_at >= ?');
+        params.push(opts.uploadedFrom);
+      }
+      if (opts.uploadedTo !== undefined && opts.uploadedTo !== '') {
+        clauses.push('r.uploaded_at <= ?');
+        params.push(opts.uploadedTo);
+      }
+    }
+
+    return {
+      joinSql: joins.length ? ' ' + joins.join(' ') : '',
+      whereSql: clauses.length ? ' WHERE ' + clauses.join(' AND ') : '',
+      havingSql,
+      params,
+    };
+  }
+
+  /**
+   * List every distinct tag in use across the KB with its entry count.
+   * Feeds the entries-tab tag picker. Ordered by most-used first, then
+   * alphabetically, so common tags surface at the top.
+   */
+  listAllTags(): Array<{ tag: string; count: number }> {
+    return this.db
+      .prepare<unknown[], { tag: string; count: number }>(
+        'SELECT tag, COUNT(*) AS count FROM entry_tags GROUP BY tag ORDER BY count DESC, tag ASC',
+      )
+      .all();
   }
 
   /**
