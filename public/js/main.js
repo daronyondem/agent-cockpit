@@ -25,6 +25,7 @@ import {
   chatResumeQueue, chatResumeSuspendedQueue, chatClearQueue, chatHandleStreamEvent,
   chatShowPlanApproval, chatShowUserQuestion,
 } from './streaming.js';
+import { chatInitTabIndicator } from './tab-indicator.js';
 
 // ── Wire late-binding callbacks ──────────────────────────────────────────────
 
@@ -75,6 +76,7 @@ function chatInit() {
     return;
   }
   state.chatInitialized = true;
+  chatInitTabIndicator();
   chatWireEvents();
   loadBackends();
   chatLoadConversations();

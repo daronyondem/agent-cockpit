@@ -14,6 +14,7 @@ import {
 } from './conversations.js';
 import { loadBackends, populateModelSelect } from './backends.js';
 import { chatOpenMemoryPanel } from './memory.js';
+import { chatTabOnStreamChange } from './tab-indicator.js';
 
 // ── Queue processing ─────────────────────────────────────────────────────────
 
@@ -164,6 +165,7 @@ async function chatStartMessageRequest(targetConvId, content, { allowQueue = tru
   });
   chatRenderConvList();
   chatUpdateSendButtonState();
+  chatTabOnStreamChange();
 
   try {
     const ws = chatConnectWs(targetConvId);
@@ -225,6 +227,7 @@ async function chatStartMessageRequest(targetConvId, content, { allowQueue = tru
       chatUpdateSendButtonState();
       chatRenderConvList();
       chatLoadConversations();
+      chatTabOnStreamChange({ error: !!hadError });
 
       if (hadError && state.chatMessageQueue.has(targetConvId)) {
         state.chatQueuePaused.add(targetConvId);

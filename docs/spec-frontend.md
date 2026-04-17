@@ -54,6 +54,28 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 - **Message queue:** Users can compose and submit messages while the CLI is actively responding. Queued messages are stored client-side in `chatMessageQueue` (Map of convId → array of `{ id, content, inFlight }`) and **persisted server-side** as `messageQueue` (array of content strings) on the conversation entry. On every queue mutation (add, edit, delete, shift, clear), a sequential coalescing PUT syncs the current state to the server — at most one PUT in flight at a time, with a follow-up if mutations occur during the request. Queued messages appear inline in the chat after the streaming bubble, styled as user messages with reduced opacity and an accent left border. Each shows a "Queued" badge and has Edit and Delete buttons. In-flight messages show "Sending..." and cannot be edited or deleted. When a response completes successfully, the next queued message is automatically sent (FIFO). Queue has three states: **Active** (streaming, auto-execute on completion), **Paused** (error, banner with Resume/Clear), and **Suspended** (restored from server after page load). The `chatQueuePaused` Set tracks paused conversations; `chatQueueSuspended` tracks restored conversations. On loading a conversation with a non-empty persisted queue and no active stream, the queue is restored into client state and marked suspended. A banner reads "N queued messages from a previous session" with Resume and Clear buttons. Suspended queues do not auto-execute — the user must explicitly resume. Queue is automatically cleared on session reset and archive.
 - **Per-message actions:** Each rendered message has a `.chat-msg-actions` row (visible on hover) with two buttons: **Copy** (copies the rendered plain text via `content.textContent`) and **Copy MD** (copies the original markdown source from the `data-raw-content` attribute on the `.chat-msg` element). Both buttons show a "Copied!" confirmation for 1.5 seconds after clicking.
 
+## Browser Tab Status Indicator
+
+Implemented in `public/js/tab-indicator.js`. Overlays a colored dot-badge on the favicon so users can monitor task progress while working in other tabs. `document.title` is never modified — the signal lives entirely on the favicon. Four states:
+
+| State | Favicon dot color | Condition |
+|-------|-------------------|-----------|
+| `idle` | (no dot — base favicon) | No conversations streaming |
+| `running` | Blue `#3b82f6` | Any conversation is streaming (`state.chatStreamingConvs.size > 0`) |
+| `done` | Green `#22c55e` | Last stream ended successfully **while the tab was hidden** |
+| `error` | Red `#ef4444` | Last stream ended with an error **while the tab was hidden** |
+
+- **Any-conversation semantics:** A single indicator reflects the aggregate — if multiple conversations stream concurrently, the indicator is `running` until all finish.
+- **Hidden-only completion:** If the tab is visible when a stream ends, the indicator returns directly to `idle` — the user already sees the completion in the UI, so no notification is needed. `done` and `error` are purely passive-notification states.
+- **Error flag sticky across concurrent streams:** If any of multiple concurrent streams errors, the error flag persists; the indicator stays `running` until the *last* stream ends, at which point (if still hidden) it shows `error`. The flag is cleared once consumed.
+- **Auto-clear on focus:** A `visibilitychange` listener clears `done` / `error` back to `idle` when the tab becomes visible. `running` is unaffected by visibility changes.
+- **Pending interactions do not end the run:** When a stream ends with `pendingInteraction` set (plan approval / user question), the tab indicator is **not** updated — the task is logically still active, awaiting user input, so the `running` state persists.
+- **Favicon rendering:** The base SVG is loaded once, drawn onto a 64×64 canvas, and overlaid with a colored dot (22% radius, bottom-right, white halo for contrast). The result is exported as a PNG data URL and assigned to `<link rel="icon">.href`. Reverting to `idle` restores the original `favicon.svg` href.
+- **Hook points:**
+  - `chatStartMessageRequest()` in `streaming.js` calls `chatTabOnStreamChange()` immediately after adding to `chatStreamingConvs`.
+  - The `finally` block in `chatStartMessageRequest()` calls `chatTabOnStreamChange({ error: !!hadError })` in the non-pending-interaction path, after deleting from `chatStreamingConvs`.
+- **Initialization:** `chatInitTabIndicator()` is called from `chatInit()` in `main.js`. Wires the visibility listener and preloads the base favicon image. Idempotent.
+
 ## File Handling
 
 - Files upload **immediately on attach** (not at send time) via XHR with per-file progress tracking
