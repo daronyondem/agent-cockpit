@@ -126,7 +126,7 @@ export async function processStream(
         const turnToolActivity = computeToolDurations(toolActivityAccumulator);
         if (fullResponse.trim()) {
           console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}, tools=${turnToolActivity.length}`);
-          const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, turnToolActivity.length > 0 ? turnToolActivity : undefined);
+          const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, turnToolActivity.length > 0 ? turnToolActivity : undefined, 'progress');
           if (intermediateMsg) emit({ type: 'assistant_message', message: intermediateMsg });
           maybeUpdateTitle();
         }
@@ -185,13 +185,13 @@ export async function processStream(
             emit({ type: 'error', error: fullResponse.trim() });
           } else {
             console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}, tools=${finalToolActivity.length}`);
-            const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, finalToolActivityArg);
+            const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, finalToolActivityArg, 'final');
             if (assistantMsg) emit({ type: 'assistant_message', message: assistantMsg });
             maybeUpdateTitle();
           }
         } else if (resultText && resultText.trim()) {
           console.log(`[chat] Stream done for conv=${convId}, saving result len=${resultText.trim().length}, tools=${finalToolActivity.length}`);
-          const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null, finalToolActivityArg);
+          const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null, finalToolActivityArg, 'final');
           if (assistantMsg) emit({ type: 'assistant_message', message: assistantMsg });
           maybeUpdateTitle();
         } else {

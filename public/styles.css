@@ -1053,6 +1053,61 @@
     margin: 2px 0;
   }
 
+  /* Progress-group timeline — consecutive `turn: 'progress'` assistant
+     messages collapsed into a single card with a vertical timeline. */
+  .chat-progress-count {
+    font-size: 11px;
+    color: var(--muted);
+    font-weight: 500;
+    margin-left: 6px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    background: var(--surface2);
+  }
+  .chat-progress-timeline {
+    position: relative;
+    margin: 0;
+    padding: 0 0 0 14px;
+    border-left: 2px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .chat-progress-row {
+    position: relative;
+    display: flex;
+    gap: 10px;
+  }
+  .chat-progress-row-marker {
+    position: absolute;
+    left: -20px;
+    top: 6px;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--surface);
+    border: 2px solid var(--border);
+    flex-shrink: 0;
+  }
+  .chat-progress-row-content {
+    flex: 1;
+    min-width: 0;
+  }
+  .chat-progress-row-time {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .chat-progress-row-text {
+    font-size: 14px;
+    line-height: 1.45;
+  }
+  .chat-progress-row-text p:first-child { margin-top: 0; }
+  .chat-progress-row-text p:last-child { margin-bottom: 0; }
+  .chat-progress-row .chat-activity-block {
+    margin: 0 0 6px;
+  }
+
   /* Tool outcome badges */
   .chat-outcome-badge {
     font-size: 10px;

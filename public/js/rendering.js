@@ -74,7 +74,8 @@ export function chatRenderMessages() {
 
   // Session activity overview removed — not needed in current UI
 
-  for (let mi = 0; mi < currentSessionMsgs.length; mi++) {
+  let mi = 0;
+  while (mi < currentSessionMsgs.length) {
     const msg = currentSessionMsgs[mi];
 
     // Synthetic memory_update bubble — uses the Agent Cockpit logo as the
@@ -82,51 +83,32 @@ export function chatRenderMessages() {
     // chatAppendMemoryUpdateMessage in streaming.js.
     if (msg.kind === 'memory_update') {
       html += chatRenderMemoryUpdateMessage(msg);
+      mi++;
       continue;
     }
 
-    const isUser = msg.role === 'user';
-    const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
-    const avatar = isUser ? ICON_USER : (backendIcon || DEFAULT_BACKEND_ICON);
-    const avatarClass = isUser ? ' chat-msg-avatar-svg' : (!isUser && backendIcon ? ' chat-msg-avatar-svg' : '');
-    const roleLabel = isUser ? 'You' : 'Assistant';
-    const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
-    const rendered = chatRenderMarkdown(msg.content);
-    const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
-    const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
-    const toolActivityHtml = !isUser && msg.toolActivity ? chatRenderToolActivityBlock(msg.toolActivity) : '';
-
-    // Elapsed time for assistant messages (time since preceding user message)
-    let elapsedLabel = '';
-    if (!isUser && msg.timestamp) {
-      for (let j = mi - 1; j >= 0; j--) {
-        if (currentSessionMsgs[j].role === 'user' && currentSessionMsgs[j].timestamp) {
-          const delta = new Date(msg.timestamp) - new Date(currentSessionMsgs[j].timestamp);
-          if (delta > 0 && delta < 3600000) {
-            elapsedLabel = `<span class="chat-msg-elapsed">${chatFormatElapsed(delta)}</span>`;
-          }
-          break;
-        }
+    // Collapse a run of consecutive assistant progress messages (saved at
+    // `turn_boundary` — agent still has tool work to do) into one timeline
+    // card so the chat doesn't balloon into a stack of near-identical bubbles.
+    // The final message of the agent run (`turn === 'final'` or legacy
+    // messages with `turn` absent) still renders as its own full card.
+    if (msg.role === 'assistant' && msg.turn === 'progress') {
+      const groupStart = mi;
+      let mj = mi;
+      while (mj < currentSessionMsgs.length) {
+        const m = currentSessionMsgs[mj];
+        if (m.kind === 'memory_update') break;
+        if (m.role !== 'assistant' || m.turn !== 'progress') break;
+        if (m.backend !== msg.backend) break;
+        mj++;
       }
+      html += chatRenderProgressGroup(currentSessionMsgs.slice(groupStart, mj), currentSessionMsgs, groupStart);
+      mi = mj;
+      continue;
     }
 
-    const timeLabel = msg.timestamp ? `<span class="chat-msg-time">${chatFormatTimestamp(msg.timestamp)}${elapsedLabel}</span>` : '';
-
-    html += `
-      <div class="chat-msg ${esc(msg.role)}" data-msg-id="${esc(msg.id)}" data-raw-content="${esc(msg.content || '')}">
-        <div class="chat-msg-wrapper">
-          <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
-          <div class="chat-msg-body">
-            <div class="chat-msg-role">${roleLabel} ${backendLabel}${timeLabel}</div>
-            <div class="chat-msg-content">${thinkingHtml}${toolActivityHtml}${rendered}</div>
-            <div class="chat-msg-actions">
-              <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
-              <button class="chat-msg-action" data-action="copy-md" title="Copy Markdown">Copy MD</button>
-            </div>
-          </div>
-        </div>
-      </div>
-    `;
+    html += chatRenderSingleMessage(msg, mi, currentSessionMsgs);
+    mi++;
   }
 
   container.innerHTML = html;
@@ -163,6 +145,121 @@ export function chatRenderMessages() {
   if (_renderQueuedMessages) _renderQueuedMessages();
 
   chatScrollToBottom();
+}
+
+// ── Single message card (user/assistant-final/system) ───────────────────────
+
+function chatRenderSingleMessage(msg, mi, currentSessionMsgs) {
+  const isUser = msg.role === 'user';
+  const backendIcon = !isUser && msg.backend ? getBackendIcon(msg.backend) : null;
+  const avatar = isUser ? ICON_USER : (backendIcon || DEFAULT_BACKEND_ICON);
+  const avatarClass = isUser ? ' chat-msg-avatar-svg' : (!isUser && backendIcon ? ' chat-msg-avatar-svg' : '');
+  const roleLabel = isUser ? 'You' : 'Assistant';
+  const backendLabel = msg.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === msg.backend)?.label || msg.backend)}</span>` : '';
+  const rendered = chatRenderMarkdown(msg.content);
+  const caps = msg.backend ? getBackendCapabilities(msg.backend) : {};
+  const thinkingHtml = msg.thinking && caps.thinking !== false ? chatRenderThinkingBlock(msg.thinking, false) : '';
+  const toolActivityHtml = !isUser && msg.toolActivity ? chatRenderToolActivityBlock(msg.toolActivity) : '';
+
+  // Elapsed time for assistant messages (time since preceding user message)
+  let elapsedLabel = '';
+  if (!isUser && msg.timestamp) {
+    for (let j = mi - 1; j >= 0; j--) {
+      if (currentSessionMsgs[j].role === 'user' && currentSessionMsgs[j].timestamp) {
+        const delta = new Date(msg.timestamp) - new Date(currentSessionMsgs[j].timestamp);
+        if (delta > 0 && delta < 3600000) {
+          elapsedLabel = `<span class="chat-msg-elapsed">${chatFormatElapsed(delta)}</span>`;
+        }
+        break;
+      }
+    }
+  }
+
+  const timeLabel = msg.timestamp ? `<span class="chat-msg-time">${chatFormatTimestamp(msg.timestamp)}${elapsedLabel}</span>` : '';
+
+  return `
+    <div class="chat-msg ${esc(msg.role)}" data-msg-id="${esc(msg.id)}" data-raw-content="${esc(msg.content || '')}">
+      <div class="chat-msg-wrapper">
+        <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
+        <div class="chat-msg-body">
+          <div class="chat-msg-role">${roleLabel} ${backendLabel}${timeLabel}</div>
+          <div class="chat-msg-content">${thinkingHtml}${toolActivityHtml}${rendered}</div>
+          <div class="chat-msg-actions">
+            <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
+            <button class="chat-msg-action" data-action="copy-md" title="Copy Markdown">Copy MD</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Progress group (consecutive progress messages as one timeline card) ─────
+
+function chatRenderProgressGroup(groupMsgs, currentSessionMsgs, groupStartIdx) {
+  if (!groupMsgs.length) return '';
+  const first = groupMsgs[0];
+  const last = groupMsgs[groupMsgs.length - 1];
+  const backendIcon = first.backend ? getBackendIcon(first.backend) : null;
+  const avatar = backendIcon || DEFAULT_BACKEND_ICON;
+  const avatarClass = backendIcon ? ' chat-msg-avatar-svg' : '';
+  const backendLabel = first.backend ? `<span class="chat-msg-model">${esc(state.CHAT_BACKENDS.find(b => b.id === first.backend)?.label || first.backend)}</span>` : '';
+
+  // Elapsed from preceding user message to the *last* progress row — mirrors
+  // single-message behavior so the header elapsed keeps climbing as more
+  // progress rows land in the same turn.
+  let elapsedLabel = '';
+  if (last.timestamp) {
+    for (let j = groupStartIdx - 1; j >= 0; j--) {
+      if (currentSessionMsgs[j].role === 'user' && currentSessionMsgs[j].timestamp) {
+        const delta = new Date(last.timestamp) - new Date(currentSessionMsgs[j].timestamp);
+        if (delta > 0 && delta < 3600000) {
+          elapsedLabel = `<span class="chat-msg-elapsed">${chatFormatElapsed(delta)}</span>`;
+        }
+        break;
+      }
+    }
+  }
+  const timeLabel = first.timestamp ? `<span class="chat-msg-time">${chatFormatTimestamp(first.timestamp)}${elapsedLabel}</span>` : '';
+
+  const caps = first.backend ? getBackendCapabilities(first.backend) : {};
+  const rawCombined = groupMsgs.map(m => m.content || '').join('\n\n');
+
+  let rowsHtml = '';
+  for (const m of groupMsgs) {
+    const rowTime = m.timestamp ? chatFormatTimestamp(m.timestamp) : '';
+    const rowActivity = m.toolActivity ? chatRenderToolActivityBlock(m.toolActivity) : '';
+    const rowThinking = m.thinking && caps.thinking !== false ? chatRenderThinkingBlock(m.thinking, false) : '';
+    const rowBody = chatRenderMarkdown(m.content);
+    rowsHtml += `
+      <div class="chat-progress-row" data-msg-id="${esc(m.id)}">
+        <div class="chat-progress-row-marker"></div>
+        <div class="chat-progress-row-content">
+          ${rowTime ? `<div class="chat-progress-row-time">${rowTime}</div>` : ''}
+          ${rowThinking}${rowActivity}
+          <div class="chat-progress-row-text">${rowBody}</div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="chat-msg assistant chat-msg-progress-group" data-raw-content="${esc(rawCombined)}">
+      <div class="chat-msg-wrapper">
+        <div class="chat-msg-avatar${avatarClass}">${avatar}</div>
+        <div class="chat-msg-body">
+          <div class="chat-msg-role">Assistant ${backendLabel}${timeLabel} <span class="chat-progress-count">${groupMsgs.length} step${groupMsgs.length !== 1 ? 's' : ''}</span></div>
+          <div class="chat-msg-content">
+            <div class="chat-progress-timeline">${rowsHtml}</div>
+          </div>
+          <div class="chat-msg-actions">
+            <button class="chat-msg-action" data-action="copy-msg" title="Copy">Copy</button>
+            <button class="chat-msg-action" data-action="copy-md" title="Copy Markdown">Copy MD</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
 }
 
 // ── Memory update inline message ─────────────────────────────────────────────

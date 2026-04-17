@@ -109,10 +109,10 @@ ws(s)://host/api/chat/conversations/:id/ws
 | `thinking` | `content`, `streaming?` | Extended thinking from assistant. Handled the same as `text`: the `streaming` flag is informational only — every `thinking` event is forwarded and accumulated regardless of the flag. |
 | `tool_activity` | `tool`, `description`, `id`, + enriched fields | Tool use notification (see enriched fields below). Events are accumulated per-turn and persisted as `toolActivity` on the saved assistant message (excluding `isPlanMode` and `isQuestion` meta-events). |
 | `tool_outcomes` | `outcomes` | Array of tool result outcomes extracted from CLI `user` events. Each outcome: `{ toolUseId, isError, outcome, status }`. Merged into `toolActivity` accumulator for persistence and forwarded to frontend for live display. |
-| `turn_boundary` | — | Marks boundary between assistant turns (internal — not forwarded to client). Triggers persistence of accumulated `toolActivity` on the intermediate message. |
+| `turn_boundary` | — | Marks boundary between assistant turns (internal — not forwarded to client). Triggers persistence of accumulated `toolActivity` on the intermediate message. The persisted message carries `turn: 'progress'`. |
 | `turn_complete` | — | Notifies client that tools finished and a new turn is starting |
 | `result` | `content` | Final result text from CLI |
-| `assistant_message` | `message` | Saved assistant message (intermediate or final) |
+| `assistant_message` | `message` | Saved assistant message (intermediate or final). `message.turn === 'progress'` for intermediate segments saved at a `turn_boundary`; `message.turn === 'final'` for the last segment saved at `done`. |
 | `title_updated` | `title` | Conversation title was auto-updated (sent after first assistant message in a reset session) |
 | `usage` | `usage`, `sessionUsage` | Cumulative token/cost totals for conversation (`usage`) and active session (`sessionUsage`), sent after each CLI result event |
 | `memory_update` | `capturedAt`, `fileCount`, `changedFiles` | Real-time `MemoryWatcher` re-captured workspace memory during this stream. Lightweight payload (no full snapshot) — frontend injects a synthetic system message (`kind: 'memory_update'`) into the conversation's in-memory messages array, which renders as an inline chat bubble with the Agent Cockpit logo as the avatar. Clicking the bubble refetches the snapshot from `GET /workspaces/:hash/memory` and opens the memory panel. |

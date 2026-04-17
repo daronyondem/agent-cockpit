@@ -56,6 +56,14 @@ export interface Message {
   timestamp: string;
   thinking?: string;
   toolActivity?: ToolActivity[];
+  /**
+   * Assistant messages only. `progress` = intermediate segment saved at a
+   * `turn_boundary` (agent still has more tool work to do). `final` = last
+   * segment of the agent run saved at `done`. Absent on user/system messages
+   * and on pre-existing assistant messages written before this field existed
+   * — the renderer treats absent as `final` for back-compat.
+   */
+  turn?: 'progress' | 'final';
 }
 
 // ── Sessions ─────────────────────────────────────────────────────────────────
