@@ -10,7 +10,7 @@ import { chatConnectWs, chatDisconnectWs, chatWsSend } from './websocket.js';
 import {
   chatLoadConversations, chatRenderConvList, chatUpdateSendButtonState,
   chatRenderFileChips, chatUpdateHeader, chatUpdateUsageDisplay,
-  chatRenderQueuedMessages,
+  chatRenderQueuedMessages, chatSaveDraft, chatDeleteDraft,
 } from './conversations.js';
 import { loadBackends, populateModelSelect } from './backends.js';
 import { chatOpenMemoryPanel } from './memory.js';
@@ -101,7 +101,7 @@ export function chatCleanupStreamState(convId, { force = false } = {}) {
 
 // ── Sending messages ─────────────────────────────────────────────────────────
 
-async function chatStartMessageRequest(targetConvId, content, { allowQueue = true } = {}) {
+async function chatStartMessageRequest(targetConvId, content, { allowQueue = true, onSendFailed = null } = {}) {
   if (!targetConvId || !content) return;
   if (allowQueue && state.chatStreamingConvs.has(targetConvId)) {
     const queue = state.chatMessageQueue.get(targetConvId) || [];
@@ -115,9 +115,6 @@ async function chatStartMessageRequest(targetConvId, content, { allowQueue = tru
     return;
   }
 
-  if (state.chatActiveConvId === targetConvId) {
-    state.chatDraftState.delete(targetConvId);
-  }
   const backend = document.getElementById('chat-backend-select')?.value || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
   const modelSelect = document.getElementById('chat-model-select');
   const model = (modelSelect && modelSelect.style.display !== 'none') ? modelSelect.value : undefined;
@@ -182,6 +179,11 @@ async function chatStartMessageRequest(targetConvId, content, { allowQueue = tru
     });
     const postResult = await response.json();
 
+    // Message accepted by server — now safe to drop the draft. Delaying the
+    // delete until here means a 401 (or any other POST failure) leaves the
+    // draft intact so `onSendFailed` can restore it to the textarea.
+    chatDeleteDraft(targetConvId);
+
     if (state.chatActiveConv && state.chatActiveConvId === targetConvId && postResult.userMessage) {
       state.chatActiveConv.messages.push(postResult.userMessage);
       chatRenderMessages();
@@ -202,6 +204,9 @@ async function chatStartMessageRequest(targetConvId, content, { allowQueue = tru
   } catch (err) {
     if (err.name !== 'AbortError') {
       if (state.chatActiveConvId === targetConvId) chatAppendError(err.message);
+      if (onSendFailed) {
+        try { onSendFailed(); } catch {}
+      }
     }
     const errSt = state.chatStreamingState.get(targetConvId);
     if (errSt) errSt._hadError = true;
@@ -273,6 +278,14 @@ export async function chatSendMessage() {
   if ((!hasText && !hasFiles) || state.chatResettingConvs.has(state.chatActiveConvId)) return;
   if (state.chatPendingFiles.some(e => e.status === 'uploading')) return;
 
+  // Snapshot the textarea + file state so we can restore it if the send POST
+  // fails. Also run chatSaveDraft() before clearing so the draft reaches
+  // localStorage even if this function throws synchronously before the
+  // fetch's catch block runs.
+  const originalText = textarea ? textarea.value : '';
+  const originalFiles = state.chatPendingFiles.slice();
+  chatSaveDraft();
+
   let content = textarea ? textarea.value.trim() : '';
   if (textarea) { textarea.value = ''; chatAutoResize(textarea); }
 
@@ -287,8 +300,20 @@ export async function chatSendMessage() {
   const sendBtn = document.getElementById('chat-send-btn');
   if (sendBtn) sendBtn.disabled = true;
 
+  const restoreFailedSend = () => {
+    if (textarea) {
+      textarea.value = originalText;
+      chatAutoResize(textarea);
+    }
+    state.chatPendingFiles = originalFiles;
+    chatRenderFileChips();
+    chatUpdateSendButtonState();
+    // Re-persist under the current active conv (may have been populated above
+    // if the conversation POST succeeded before the message POST failed).
+    chatSaveDraft();
+  };
+
   if (!state.chatActiveConvId) {
-    state.chatDraftState.delete('__new__');
     try {
       const body = state.chatPendingWorkingDir ? { workingDir: state.chatPendingWorkingDir } : {};
       state.chatPendingWorkingDir = null;
@@ -296,15 +321,20 @@ export async function chatSendMessage() {
       const conv = await res.json();
       state.chatActiveConvId = conv.id;
       state.chatActiveConv = conv;
+      // Conversation was created — the old __new__ draft is now obsolete.
+      // The message POST still needs to succeed; chatStartMessageRequest
+      // deletes the per-conv draft only after it does.
+      chatDeleteDraft('__new__');
       chatLoadConversations();
       chatUpdateHeader();
     } catch (err) {
+      restoreFailedSend();
       alert('Failed to create conversation: ' + err.message);
       return;
     }
   }
 
-  await chatStartMessageRequest(state.chatActiveConvId, content);
+  await chatStartMessageRequest(state.chatActiveConvId, content, { onSendFailed: restoreFailedSend });
 }
 
 // ── Stream event handling ────────────────────────────────────────────────────

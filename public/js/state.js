@@ -158,8 +158,9 @@ export async function chatFetch(path, opts = {}) {
 
 // ─── Session expiry overlay ──────────────────────────────────────────────────
 // Shown when any API request returns 401. Idempotent — calling it multiple
-// times does not stack overlays. Drafts are already persisted to localStorage
-// by draftState.js, so they survive the sign-in redirect and page reload.
+// times does not stack overlays. Drafts are mirrored to localStorage by
+// chatSaveDraft in conversations.js, so the text survives the sign-in redirect
+// and is rehydrated on boot by chatHydrateDraftsFromStorage.
 
 export function chatShowSessionExpired() {
   if (document.getElementById('chat-session-expired-overlay')) return;
