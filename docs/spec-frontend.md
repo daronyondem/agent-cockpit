@@ -91,7 +91,7 @@ Tabbed layout with five tabs:
 - System prompt textarea (global)
 - Default backend selector (also auto-updated when user sends a message with a different backend)
 - Default model selector (shown only when the selected backend has models; auto-updated with backend changes)
-- **Default Effort selector** (shown only when the default model declares `supportedEffortLevels`; options are dynamically built from the model's supported list — e.g. Opus shows `low/medium/high/max`, Sonnet shows `low/medium/high`, Haiku hides the row entirely). Changing the default model to one without effort support drops `defaultEffort` on save.
+- **Default Effort selector** (shown only when the default model declares `supportedEffortLevels`; options are dynamically built from the model's supported list — e.g. Opus 4.7 shows `low/medium/high/xhigh/max`, Opus 4.6 shows `low/medium/high/max`, Sonnet shows `low/medium/high`, Haiku hides the row entirely). Changing the default model to one without effort support drops `defaultEffort` on save.
 - Working directory
 
 **Usage Stats tab:**

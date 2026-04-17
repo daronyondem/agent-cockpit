@@ -94,8 +94,8 @@ export interface SessionHistoryItem {
 
 // ── Conversations ────────────────────────────────────────────────────────────
 
-/** Adaptive reasoning effort level. `max` is Opus 4.6 only. */
-export type EffortLevel = 'low' | 'medium' | 'high' | 'max';
+/** Adaptive reasoning effort level. `xhigh` is Opus 4.7 only; `max` is Opus 4.6+ only. */
+export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 export interface ConversationEntry {
   id: string;
@@ -731,7 +731,7 @@ export interface SendMessageOptions {
   systemPrompt: string;
   /** Backend-managed session ID from a previous session, for resume/rehydration. */
   externalSessionId?: string | null;
-  /** Model ID or alias (e.g., 'opus', 'claude-sonnet-4-6'). Backends that don't support model selection ignore this. */
+  /** Full model ID (e.g., 'claude-opus-4-7', 'claude-sonnet-4-6'). Backends that don't support model selection ignore this. */
   model?: string;
   /**
    * Adaptive reasoning effort level. Backends that don't support effort

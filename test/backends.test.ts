@@ -156,20 +156,26 @@ describe('ClaudeCodeAdapter', () => {
     const meta = adapter.metadata;
     expect(meta.models).toBeDefined();
     expect(Array.isArray(meta.models)).toBe(true);
-    expect(meta.models!.length).toBeGreaterThanOrEqual(3);
+    expect(meta.models!.length).toBe(4);
 
-    const opus = meta.models!.find(m => m.id === 'opus');
-    expect(opus).toBeDefined();
-    expect(opus!.label).toBe('Opus 4.6');
-    expect(opus!.family).toBe('opus');
-    expect(opus!.costTier).toBe('high');
+    const opus47 = meta.models!.find(m => m.id === 'claude-opus-4-7');
+    expect(opus47).toBeDefined();
+    expect(opus47!.label).toBe('Opus 4.7');
+    expect(opus47!.family).toBe('opus');
+    expect(opus47!.costTier).toBe('high');
 
-    const sonnet = meta.models!.find(m => m.id === 'sonnet');
+    const opus46 = meta.models!.find(m => m.id === 'claude-opus-4-6');
+    expect(opus46).toBeDefined();
+    expect(opus46!.label).toBe('Opus 4.6');
+    expect(opus46!.family).toBe('opus');
+    expect(opus46!.costTier).toBe('high');
+
+    const sonnet = meta.models!.find(m => m.id === 'claude-sonnet-4-6');
     expect(sonnet).toBeDefined();
     expect(sonnet!.default).toBe(true);
     expect(sonnet!.costTier).toBe('medium');
 
-    const haiku = meta.models!.find(m => m.id === 'haiku');
+    const haiku = meta.models!.find(m => m.id === 'claude-haiku-4-5');
     expect(haiku).toBeDefined();
     expect(haiku!.costTier).toBe('low');
   });
@@ -178,23 +184,25 @@ describe('ClaudeCodeAdapter', () => {
     const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
     const meta = adapter.metadata;
 
-    // Opus 4.6 supports all four levels including max
-    const opus = meta.models!.find(m => m.id === 'opus');
-    expect(opus!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'max']);
+    // Opus 4.7 is the only model that supports the new xhigh level
+    const opus47 = meta.models!.find(m => m.id === 'claude-opus-4-7');
+    expect(opus47!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
 
-    // Sonnet 4.6 supports low/medium/high (no max)
-    const sonnet = meta.models!.find(m => m.id === 'sonnet');
+    // Opus 4.6 supports low/medium/high/max (no xhigh)
+    const opus46 = meta.models!.find(m => m.id === 'claude-opus-4-6');
+    expect(opus46!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'max']);
+
+    // Sonnet 4.6 supports low/medium/high (no max, no xhigh)
+    const sonnet = meta.models!.find(m => m.id === 'claude-sonnet-4-6');
     expect(sonnet!.supportedEffortLevels).toEqual(['low', 'medium', 'high']);
 
     // Haiku does not support effort at all
-    const haiku = meta.models!.find(m => m.id === 'haiku');
+    const haiku = meta.models!.find(m => m.id === 'claude-haiku-4-5');
     expect(haiku!.supportedEffortLevels).toBeUndefined();
 
-    // 1M context variants inherit their base family's effort support
-    const opus1m = meta.models!.find(m => m.id === 'opus[1m]');
-    expect(opus1m!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'max']);
-    const sonnet1m = meta.models!.find(m => m.id === 'sonnet[1m]');
-    expect(sonnet1m!.supportedEffortLevels).toEqual(['low', 'medium', 'high']);
+    // The deprecated [1m] aliases are no longer exposed
+    expect(meta.models!.find(m => m.id === 'opus[1m]')).toBeUndefined();
+    expect(meta.models!.find(m => m.id === 'sonnet[1m]')).toBeUndefined();
   });
 
   test('uses default working directory', () => {
@@ -297,7 +305,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: true,
         workingDir: '/tmp',
         systemPrompt: '',
-        model: 'opus',
+        model: 'claude-opus-4-7',
       });
       streamRef = stream;
     });
@@ -309,7 +317,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     expect(capturedArgs).toBeDefined();
     const idx = capturedArgs!.indexOf('--model');
     expect(idx).toBeGreaterThan(-1);
-    expect(capturedArgs![idx + 1]).toBe('opus');
+    expect(capturedArgs![idx + 1]).toBe('claude-opus-4-7');
   });
 
   test('omits --model flag when model option is not set', async () => {
@@ -374,7 +382,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: true,
         workingDir: '/tmp',
         systemPrompt: '',
-        model: 'sonnet',
+        model: 'claude-sonnet-4-6',
         effort: 'high',
       });
       streamRef = stream;
@@ -415,7 +423,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: true,
         workingDir: '/tmp',
         systemPrompt: '',
-        model: 'opus',
+        model: 'claude-opus-4-6',
         effort: 'max',
       });
       streamRef = stream;
@@ -428,6 +436,86 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     expect(capturedArgs).toBeDefined();
     const idx = capturedArgs!.indexOf('--effort');
     expect(capturedArgs![idx + 1]).toBe('max');
+  });
+
+  test('passes --effort xhigh only for Opus 4.7', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-effort-xhigh',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        model: 'claude-opus-4-7',
+        effort: 'xhigh',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    const idx = capturedArgs!.indexOf('--effort');
+    expect(idx).toBeGreaterThan(-1);
+    expect(capturedArgs![idx + 1]).toBe('xhigh');
+  });
+
+  test('drops --effort xhigh on Opus 4.6 (only 4.7 supports it)', async () => {
+    let capturedArgs: string[] | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs = args;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-effort-xhigh-46',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        model: 'claude-opus-4-6',
+        effort: 'xhigh',
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toBeDefined();
+    expect(capturedArgs).not.toContain('--effort');
   });
 
   test('drops --effort when the selected model does not support that level', async () => {
@@ -456,7 +544,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: true,
         workingDir: '/tmp',
         systemPrompt: '',
-        model: 'sonnet',
+        model: 'claude-sonnet-4-6',
         effort: 'max',
       });
       streamRef = stream;
@@ -495,7 +583,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: true,
         workingDir: '/tmp',
         systemPrompt: '',
-        model: 'haiku',
+        model: 'claude-haiku-4-5',
         effort: 'high',
       });
       streamRef = stream;
@@ -1097,13 +1185,13 @@ describe('ClaudeCodeAdapter runOneShot', () => {
       }));
       const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
       const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
-      adapter.runOneShot('test prompt', { model: 'opus', effort: 'high' });
+      adapter.runOneShot('test prompt', { model: 'claude-opus-4-6', effort: 'high' });
     });
 
     expect(capturedArgs).toBeDefined();
     const modelIdx = capturedArgs!.indexOf('--model');
     expect(modelIdx).toBeGreaterThan(-1);
-    expect(capturedArgs![modelIdx + 1]).toBe('opus');
+    expect(capturedArgs![modelIdx + 1]).toBe('claude-opus-4-6');
     const effortIdx = capturedArgs!.indexOf('--effort');
     expect(effortIdx).toBeGreaterThan(-1);
     expect(capturedArgs![effortIdx + 1]).toBe('high');
@@ -1130,7 +1218,7 @@ describe('ClaudeCodeAdapter runOneShot', () => {
       }));
       const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
       const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
-      adapter.runOneShot('test prompt', { model: 'sonnet', effort: 'max' });
+      adapter.runOneShot('test prompt', { model: 'claude-sonnet-4-6', effort: 'max' });
     });
 
     expect(capturedArgs).toBeDefined();
@@ -1159,7 +1247,7 @@ describe('ClaudeCodeAdapter runOneShot', () => {
       }));
       const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
       const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
-      adapter.runOneShot('test prompt', { model: 'haiku', effort: 'high' });
+      adapter.runOneShot('test prompt', { model: 'claude-haiku-4-5', effort: 'high' });
     });
 
     expect(capturedArgs).toBeDefined();

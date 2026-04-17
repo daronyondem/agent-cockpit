@@ -68,7 +68,7 @@ The queue is also included in the `GET /conversations/:id` response as `messageQ
 ```
 GET /backends
 ```
-Returns `{ backends: [{ id, label, icon, capabilities, models? }] }` — metadata for every registered adapter. The optional `models` array lists available models: `[{ id, label, family, description?, costTier?, default?, supportedEffortLevels? }]`. `supportedEffortLevels` is an optional array of `'low' | 'medium' | 'high' | 'max'` indicating which adaptive reasoning levels the model accepts; the UI uses its presence to decide whether to show the effort dropdown. Backends without model selection (e.g. Kiro) omit the `models` field entirely.
+Returns `{ backends: [{ id, label, icon, capabilities, models? }] }` — metadata for every registered adapter. The optional `models` array lists available models: `[{ id, label, family, description?, costTier?, default?, supportedEffortLevels? }]`. `supportedEffortLevels` is an optional array of `'low' | 'medium' | 'high' | 'xhigh' | 'max'` indicating which adaptive reasoning levels the model accepts; the UI uses its presence to decide whether to show the effort dropdown. The `xhigh` level is currently Opus 4.7-only; `max` is Opus 4.6+ only. Backends without model selection (e.g. Kiro) omit the `models` field entirely.
 
 ## 3.7 Messaging and Streaming
 

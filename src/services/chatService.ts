@@ -313,7 +313,7 @@ export class ChatService {
     if (!supported || supported.length === 0) return undefined;
     if (supported.includes(requested)) return requested;
     // Downgrade: pick the highest supported level that is <= the request.
-    const order: EffortLevel[] = ['low', 'medium', 'high', 'max'];
+    const order: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
     const requestedIdx = order.indexOf(requested);
     for (let i = requestedIdx - 1; i >= 0; i--) {
       if (supported.includes(order[i])) return order[i];
