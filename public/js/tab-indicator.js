@@ -1,13 +1,12 @@
 // ─── Browser tab status indicator ────────────────────────────────────────────
-// Updates document.title and favicon (with a colored dot-badge overlay) to
-// reflect whether any conversation is streaming. "done" / "error" states only
-// appear when a stream ends while the tab is hidden, so a user working in
-// another tab is notified without the indicator flickering for visible work.
+// Overlays a colored dot-badge on the favicon to reflect whether any
+// conversation is streaming. "done" / "error" states only appear when a
+// stream ends while the tab is hidden, so a user working in another tab is
+// notified without the badge flickering for visible work.
 
 import { state } from './state.js';
 
 const FAVICON_HREF = 'favicon.svg';
-const BASE_TITLE_FALLBACK = 'Agent Cockpit';
 
 const DOT_COLORS = {
   running: '#3b82f6',
@@ -15,15 +14,7 @@ const DOT_COLORS = {
   error: '#ef4444',
 };
 
-const TITLE_PREFIX = {
-  idle: '',
-  running: '\u23F3 ',
-  done: '\u2705 ',
-  error: '\u26A0\uFE0F ',
-};
-
 let _currentState = 'idle';
-let _baseTitle = BASE_TITLE_FALLBACK;
 let _baseImg = null;
 let _baseImgPromise = null;
 let _pendingErrorFlag = false;
@@ -71,7 +62,6 @@ function renderFavicon(s) {
 function applyState(s) {
   if (_currentState === s) return;
   _currentState = s;
-  document.title = TITLE_PREFIX[s] + _baseTitle;
   renderFavicon(s);
 }
 
@@ -113,7 +103,6 @@ function onVisibilityChange() {
 export function chatInitTabIndicator() {
   if (_initialized) return;
   _initialized = true;
-  _baseTitle = document.title || BASE_TITLE_FALLBACK;
   document.addEventListener('visibilitychange', onVisibilityChange);
   loadBaseImage().catch(() => {});
 }

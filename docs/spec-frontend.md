@@ -56,14 +56,14 @@ Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is 
 
 ## Browser Tab Status Indicator
 
-Implemented in `public/js/tab-indicator.js`. Keeps users informed of task progress when the Agent Cockpit tab is not in focus. Four states:
+Implemented in `public/js/tab-indicator.js`. Overlays a colored dot-badge on the favicon so users can monitor task progress while working in other tabs. `document.title` is never modified — the signal lives entirely on the favicon. Four states:
 
-| State | `document.title` prefix | Favicon dot color | Condition |
-|-------|-------------------------|-------------------|-----------|
-| `idle` | (none) | (no dot — base favicon) | No conversations streaming |
-| `running` | `⏳ ` | Blue `#3b82f6` | Any conversation is streaming (`state.chatStreamingConvs.size > 0`) |
-| `done` | `✅ ` | Green `#22c55e` | Last stream ended successfully **while the tab was hidden** |
-| `error` | `⚠️ ` | Red `#ef4444` | Last stream ended with an error **while the tab was hidden** |
+| State | Favicon dot color | Condition |
+|-------|-------------------|-----------|
+| `idle` | (no dot — base favicon) | No conversations streaming |
+| `running` | Blue `#3b82f6` | Any conversation is streaming (`state.chatStreamingConvs.size > 0`) |
+| `done` | Green `#22c55e` | Last stream ended successfully **while the tab was hidden** |
+| `error` | Red `#ef4444` | Last stream ended with an error **while the tab was hidden** |
 
 - **Any-conversation semantics:** A single indicator reflects the aggregate — if multiple conversations stream concurrently, the indicator is `running` until all finish.
 - **Hidden-only completion:** If the tab is visible when a stream ends, the indicator returns directly to `idle` — the user already sees the completion in the UI, so no notification is needed. `done` and `error` are purely passive-notification states.
@@ -74,7 +74,7 @@ Implemented in `public/js/tab-indicator.js`. Keeps users informed of task progre
 - **Hook points:**
   - `chatStartMessageRequest()` in `streaming.js` calls `chatTabOnStreamChange()` immediately after adding to `chatStreamingConvs`.
   - The `finally` block in `chatStartMessageRequest()` calls `chatTabOnStreamChange({ error: !!hadError })` in the non-pending-interaction path, after deleting from `chatStreamingConvs`.
-- **Initialization:** `chatInitTabIndicator()` is called from `chatInit()` in `main.js`. It reads the original title, wires the visibility listener, and preloads the base favicon image. Idempotent.
+- **Initialization:** `chatInitTabIndicator()` is called from `chatInit()` in `main.js`. Wires the visibility listener and preloads the base favicon image. Idempotent.
 
 ## File Handling
 
