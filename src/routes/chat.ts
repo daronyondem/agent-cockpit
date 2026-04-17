@@ -518,6 +518,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
             dreamingNeeded: snapshot.needsSynthesisCount > 0,
             pendingEntries: snapshot.needsSynthesisCount,
             dreamingStatus: kbDreaming.isRunning(conv.workspaceHash) ? 'running' : snapshot.status,
+            dreamingStopping: kbDreaming.isStopRequested(conv.workspaceHash),
             failedItems: counters.rawByStatus.failed,
           };
         }
@@ -1847,6 +1848,23 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
+  // Cooperatively stop an in-progress dream run. Honored at the next
+  // batch/phase boundary; already-committed work is preserved. Returns 404
+  // if no run is in progress.
+  router.post('/workspaces/:hash/kb/dream/stop', csrfGuard, async (req: Request, res: Response) => {
+    const hash = param(req, 'hash');
+    try {
+      if (!kbDreaming.isRunning(hash)) {
+        res.status(404).json({ ok: false, error: 'No dreaming run in progress.' });
+        return;
+      }
+      kbDreaming.requestStop(hash);
+      res.json({ ok: true, stopping: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // Synthesis state: topics, connections, status for the KB Browser synthesis tab.
   router.get('/workspaces/:hash/kb/synthesis', async (req: Request, res: Response) => {
     const hash = param(req, 'hash');
@@ -1863,6 +1881,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
 
       res.json({
         status: snapshot.status,
+        stopping: kbDreaming.isStopRequested(hash),
         lastRunAt: snapshot.lastRunAt,
         lastRunError: snapshot.lastRunError,
         topicCount: snapshot.topicCount,

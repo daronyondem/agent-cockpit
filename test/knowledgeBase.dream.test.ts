@@ -775,4 +775,116 @@ describe('KbDreamService', () => {
     expect(result.errors.length).toBeGreaterThan(0);
     expect(result.errors[0]).toContain('is not registered');
   });
+
+  // ── Cooperative stop ──────────────────────────────────────────────────
+
+  test('isStopRequested returns false when no stop requested', () => {
+    expect(service.isStopRequested('ws-hash')).toBe(false);
+  });
+
+  test('requestStop returns false when no run is in progress', () => {
+    expect(service.requestStop('ws-hash')).toBe(false);
+    expect(service.isStopRequested('ws-hash')).toBe(false);
+  });
+
+  test('requestStop sets flag and emits WS frame while a run is in progress', async () => {
+    const emitFn = jest.fn();
+    const svc = new KbDreamService({
+      chatService: mockChatService as any,
+      backendRegistry: mockBackendRegistry as any,
+      kbSearchMcp: mockKbSearchMcp as any,
+      emit: emitFn,
+    });
+
+    // Hang the run on getSettings so we can observe a live state.
+    let resolveSettings!: (v: any) => void;
+    mockChatService.getSettings.mockReturnValue(
+      new Promise((resolve) => { resolveSettings = resolve; }),
+    );
+
+    const promise = svc.dream('ws-hash');
+    await new Promise((r) => setImmediate(r));
+
+    expect(svc.requestStop('ws-hash')).toBe(true);
+    expect(svc.isStopRequested('ws-hash')).toBe(true);
+
+    // WS frame with stopping:true should have been emitted immediately.
+    const stoppingFrame = emitFn.mock.calls.find(
+      ([, frame]) => frame?.changed?.stopping === true,
+    );
+    expect(stoppingFrame).toBeDefined();
+
+    // Let the run finish cleanly.
+    resolveSettings({ knowledgeBase: { dreamingCliBackend: 'test-backend' } });
+    await promise;
+
+    // Flag cleared after the run exits.
+    expect(svc.isStopRequested('ws-hash')).toBe(false);
+  });
+
+  test('stop during cold-start synthesis preserves committed batches and returns stopped=true', async () => {
+    // Three pending entries → three single-entry batches (SYNTHESIS_BATCH_SIZE=10,
+    // so in practice a single batch — we force per-batch by returning them one
+    // at a time in the cold-start sort via tag distribution).
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['e1', 'e2', 'e3']);
+    mockDb.listTopicSummaries.mockReturnValue([]);
+    mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue(undefined);
+
+    // First batch completes; request stop immediately after it commits.
+    // Cold-start batches 3 entries in a single batch (batch size 10), so we
+    // trigger the stop during the runOneShot call and rely on the stop check
+    // at the top of the next iteration. With only 1 batch here, we validate
+    // the top-level phase check by triggering stop during the single batch.
+    let callCount = 0;
+    mockAdapter.runOneShot.mockImplementation(async () => {
+      callCount++;
+      // Request stop during the first (and only) batch so the post-synthesis
+      // _checkStop short-circuits the rest of _run.
+      service.requestStop('ws-hash');
+      return '{"operations":[]}';
+    });
+
+    const result = await service.dream('ws-hash');
+
+    expect(callCount).toBeGreaterThan(0);
+    expect(result.stopped).toBe(true);
+    // The batch that was in-flight still committed.
+    expect(mockDb.clearNeedsSynthesis).toHaveBeenCalledWith(['e1', 'e2', 'e3']);
+    // Status ends idle (not failed).
+    expect(mockDb.setSynthesisMeta).toHaveBeenCalledWith('status', 'idle');
+    // stopped_at meta persisted.
+    expect(mockDb.setSynthesisMeta).toHaveBeenCalledWith('stopped_at', expect.any(String));
+    // last_run_at NOT touched on stop.
+    const lastRunAtCalls = mockDb.setSynthesisMeta.mock.calls.filter(
+      (c: unknown[]) => c[0] === 'last_run_at',
+    );
+    expect(lastRunAtCalls).toHaveLength(0);
+    // Running flag released.
+    expect(service.isRunning('ws-hash')).toBe(false);
+    // Stop flag cleared.
+    expect(service.isStopRequested('ws-hash')).toBe(false);
+  });
+
+  test('a second dream() after a stop processes remaining needs_synthesis entries', async () => {
+    // First run: three entries, stop triggered after first CLI call commits.
+    mockDb.listNeedsSynthesisEntryIds
+      .mockReturnValueOnce(['e1', 'e2', 'e3']) // first dream
+      .mockReturnValueOnce(['e3']); // second dream — only e3 still flagged
+
+    mockDb.listTopicSummaries.mockReturnValue([]);
+    mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue(undefined);
+
+    mockAdapter.runOneShot.mockImplementationOnce(async () => {
+      service.requestStop('ws-hash');
+      return '{"operations":[]}';
+    }).mockImplementationOnce(async () => '{"operations":[]}');
+
+    const r1 = await service.dream('ws-hash');
+    expect(r1.stopped).toBe(true);
+
+    const r2 = await service.dream('ws-hash');
+    expect(r2.stopped).toBeUndefined();
+    expect(r2.processedEntries).toBe(1);
+    expect(mockDb.clearNeedsSynthesis).toHaveBeenLastCalledWith(['e3']);
+  });
 });

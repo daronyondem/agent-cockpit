@@ -3890,6 +3890,21 @@
   }
   .chat-kb-dream-btn:hover { background: rgba(99, 102, 241, 0.2); }
   .chat-kb-dream-btn:disabled { opacity: 0.6; cursor: not-allowed; }
+  .chat-kb-stop-btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    border: 1px solid rgba(239, 68, 68, 0.5);
+    border-radius: 6px;
+    background: rgba(239, 68, 68, 0.12);
+    color: #ef4444;
+    cursor: pointer;
+    white-space: nowrap;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .chat-kb-stop-btn:hover { background: rgba(239, 68, 68, 0.22); }
+  .chat-kb-stop-btn:disabled { opacity: 0.6; cursor: not-allowed; }
   .chat-kb-dream-status {
     font-size: 12px;
     color: var(--muted);

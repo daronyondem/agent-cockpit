@@ -676,6 +676,8 @@ export interface KbStateUpdateEvent {
     synthesis?: boolean;
     batchProgress?: { done: number; total: number };
     dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'; done: number; total: number };
+    /** Emitted when a cooperative stop has been requested for an in-progress dream run. */
+    stopping?: boolean;
     /** Per-raw substep text shown beneath the status badge during long operations. */
     substep?: { rawId: string; text: string };
   };

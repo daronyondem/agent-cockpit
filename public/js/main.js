@@ -1,4 +1,4 @@
-import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, ICON_KB, ICON_MEMORY, ICON_CANCEL, ICON_EDIT, ICON_DOWNLOAD, ICON_RESET, ICON_SETTINGS, ICON_REFLECTION, ICON_USER, ICON_FILE_UPLOAD, ICON_TOKEN, fetchCsrfToken, chatShowSessionExpired } from './state.js';
+import { state, chatFetch, apiUrl, chatApiUrl, DEFAULT_BACKEND_ICON, KB_ICON_INGEST, KB_ICON_DIGEST, KB_ICON_DREAM, KB_ICON_STOP, KB_REF_ICON_PATTERN, KB_REF_ICON_CONTRADICTION, KB_REF_ICON_GAP, KB_REF_ICON_TREND, KB_REF_ICON_INSIGHT, ICON_STALE, ICON_AI_MODEL, ICON_CLI, ICON_SERVER, ICON_STATS, ICON_KB, ICON_MEMORY, ICON_CANCEL, ICON_EDIT, ICON_DOWNLOAD, ICON_RESET, ICON_SETTINGS, ICON_REFLECTION, ICON_USER, ICON_FILE_UPLOAD, ICON_TOKEN, fetchCsrfToken, chatShowSessionExpired } from './state.js';
 import { esc, chatFormatTokenCount, chatFormatCost, chatFormatEta } from './utils.js';
 import { applyTheme } from './theme.js';
 import { chatShowModal, chatCloseModal, chatShowAlert, chatShowConfirm, chatShowPrompt } from './modal.js';
@@ -1765,10 +1765,14 @@ function chatUpdateDreamBanner() {
 
   if (kb.dreamingStatus === 'running') {
     const prog = kb._dreamProgress;
+    const stopping = !!kb.dreamingStopping;
     banner.style.display = '';
     banner.innerHTML = `
       <span>Dreaming in progress</span>
       ${chatKbDreamStepperHtml(prog)}
+      <button class="chat-kb-stop-btn" onclick="chatTriggerDreamStop()"${stopping ? ' disabled' : ''}>
+        ${stopping ? '<span class="chat-dream-banner-spinner"></span> Stopping\u2026' : `${KB_ICON_STOP} Stop`}
+      </button>
     `;
     chatStartDreamBannerPoll();
     return;
@@ -1808,6 +1812,20 @@ async function chatTriggerDream(mode) {
 }
 window.chatTriggerDream = chatTriggerDream;
 window.chatUpdateDreamBanner = chatUpdateDreamBanner;
+
+async function chatTriggerDreamStop() {
+  const conv = state.chatActiveConv;
+  if (!conv?.workspaceHash) return;
+  const hash = conv.workspaceHash;
+  try {
+    await chatFetch(`workspaces/${encodeURIComponent(hash)}/kb/dream/stop`, { method: 'POST' });
+    if (conv.kb) conv.kb.dreamingStopping = true;
+    chatUpdateDreamBanner();
+  } catch (err) {
+    chatShowAlert('Stop failed: ' + err.message);
+  }
+}
+window.chatTriggerDreamStop = chatTriggerDreamStop;
 
 // Poll the conversation for dream status changes.  WS frames may not arrive
 // when there is no active chat stream.  This timer fires every 2s while the
@@ -1850,10 +1868,13 @@ let chatKbBrowserState = null;
 window.chatHandleKbStateUpdate = function chatHandleKbStateUpdate(convId, event) {
   // Update the dream banner if this event targets the active conversation.
   if (convId === state.chatActiveConvId && state.chatActiveConv?.kb) {
+    if (event?.changed?.stopping) {
+      state.chatActiveConv.kb.dreamingStopping = true;
+    }
     if (event?.changed?.dreamProgress) {
       state.chatActiveConv.kb.dreamingStatus = 'running';
       state.chatActiveConv.kb._dreamProgress = event.changed.dreamProgress;
-    } else if (event?.changed?.synthesis) {
+    } else if (event?.changed?.synthesis && !event?.changed?.stopping) {
       // Synthesis changed but no progress → dream finished or status reset.
       // Refetch the conversation to get updated kb block.
       chatFetch(`conversations/${convId}`).then(r => r.json()).then(conv => {
@@ -1900,11 +1921,16 @@ window.chatHandleKbStateUpdate = function chatHandleKbStateUpdate(convId, event)
     if (!prev || prev.phase !== next.phase || prev.done !== next.done) {
       chatKbBrowserState.synthesis._dreamStepStart = Date.now();
     }
+  } else if (event?.changed?.stopping) {
+    // Cooperative stop requested — surface "Stopping…" state immediately.
+    chatKbBrowserState.synthesis._stopping = true;
+    chatKbBrowserRenderTab();
   } else if (event?.changed?.synthesis) {
     // Synthesis changed but no progress → dream finished. Clear running state
     // and refetch synthesis data so the UI exits "Starting…" / stepper.
     chatKbBrowserState.synthesis._dreamProgress = null;
     chatKbBrowserState.synthesis._dreamStepStart = null;
+    chatKbBrowserState.synthesis._stopping = false;
     chatKbBrowserRefetchSynthesis();
   }
 
@@ -3646,6 +3672,7 @@ async function chatKbBrowserRefetchSynthesis() {
     chatKbBrowserState.synthesis._lastRunAt = data.lastRunAt;
     chatKbBrowserState.synthesis._lastRunError = data.lastRunError;
     chatKbBrowserState.synthesis._needsSynthesisCount = data.needsSynthesisCount || 0;
+    chatKbBrowserState.synthesis._stopping = data.status === 'running' ? !!data.stopping : false;
     if (data.status !== 'running' && !inGrace) {
       // Dream finished — clear progress state.
       chatKbBrowserState.synthesis._dreamProgress = null;
@@ -3756,6 +3783,7 @@ function chatKbBrowserSynthesisTab() {
   // Action bar: Dream / Re-dream buttons + status + search
   const pending = s._needsSynthesisCount || 0;
   const isRunning = s._status === 'running';
+  const isStopping = !!s._stopping;
   const lastRun = s._lastRunAt ? chatKbFormatRelative(s._lastRunAt) : 'never';
   const lastErr = s._lastRunError || '';
   const hash = chatKbBrowserState.hash;
@@ -3778,6 +3806,11 @@ function chatKbBrowserSynthesisTab() {
       <button class="chat-kb-dream-btn" id="chat-kb-dream-btn"${isRunning ? ' disabled' : ''} data-dream-hash="${esc(hash)}">
         ${isRunning ? '<span class="chat-dream-banner-spinner"></span> Dreaming\u2026' : `${KB_ICON_DREAM} Dream`}
       </button>
+      ${isRunning ? `
+        <button class="chat-kb-stop-btn" id="chat-kb-stop-btn"${isStopping ? ' disabled' : ''} data-dream-hash="${esc(hash)}">
+          ${isStopping ? '<span class="chat-dream-banner-spinner"></span> Stopping\u2026' : `${KB_ICON_STOP} Stop`}
+        </button>
+      ` : ''}
       <button class="chat-kb-dream-btn" id="chat-kb-redream-btn"${isRunning ? ' disabled' : ''} data-dream-hash="${esc(hash)}" style="opacity:0.7;">
         Re-Dream (full rebuild)
       </button>
@@ -4310,6 +4343,22 @@ function chatKbBrowserWireSynthesisTab() {
         chatKbBrowserState.synthesis._dreamTriggeredAt = Date.now();
         chatKbBrowserRenderTab();
       } catch (err) { chatShowAlert('Re-Dream failed: ' + err.message); }
+    };
+  }
+  const stopBtn = document.getElementById('chat-kb-stop-btn');
+  if (stopBtn) {
+    stopBtn.onclick = async () => {
+      const hash = stopBtn.dataset.dreamHash;
+      if (!hash) return;
+      stopBtn.disabled = true;
+      try {
+        await chatFetch(`workspaces/${encodeURIComponent(hash)}/kb/dream/stop`, { method: 'POST' });
+        chatKbBrowserState.synthesis._stopping = true;
+        chatKbBrowserRenderTab();
+      } catch (err) {
+        stopBtn.disabled = false;
+        chatShowAlert('Stop failed: ' + err.message);
+      }
     };
   }
   // Initialize 3D force graph (async — lazy-loads dependencies on first call).
