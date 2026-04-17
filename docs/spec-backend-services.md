@@ -371,8 +371,8 @@ The CLI backend layer uses a **pluggable adapter pattern**. New CLI tools can be
 ### BaseBackendAdapter (`src/services/backends/base.ts`)
 
 Abstract base class. Every backend must implement:
-- **`get metadata`** — returns `{ id, label, icon, capabilities, models? }` where capabilities: `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans). `models` is an optional array of `{ id, label, family, description?, costTier?, default?, supportedEffortLevels? }` for backends that support model selection. `supportedEffortLevels` is an optional `('low' | 'medium' | 'high' | 'max')[]`; omit it when the model does not support adaptive reasoning effort.
-- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the stream event contract in Section 3. `options` includes `{ sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model?, effort? }`. `conversationId` is the stable conversation ID (does not change on session reset) — used by backends like Kiro that key long-lived processes by conversation. `model` is the model alias or ID to use for this invocation (backends that don't support model selection ignore it). `effort` is the adaptive reasoning level for this turn; backends ignore it when the selected model doesn't declare the requested level in `supportedEffortLevels`.
+- **`get metadata`** — returns `{ id, label, icon, capabilities, models? }` where capabilities: `{ thinking, planMode, agents, toolActivity, userQuestions, stdinInput }` (all booleans). `models` is an optional array of `{ id, label, family, description?, costTier?, default?, supportedEffortLevels? }` for backends that support model selection. `supportedEffortLevels` is an optional `('low' | 'medium' | 'high' | 'xhigh' | 'max')[]`; omit it when the model does not support adaptive reasoning effort. The `xhigh` level is currently Opus 4.7 only; `max` is Opus 4.6+ only.
+- **`sendMessage(message, options)`** — returns `{ stream, abort, sendInput }` where `stream` is an async generator yielding events matching the stream event contract in Section 3. `options` includes `{ sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model?, effort? }`. `conversationId` is the stable conversation ID (does not change on session reset) — used by backends like Kiro that key long-lived processes by conversation. `model` is the full model ID to use for this invocation (e.g. `claude-opus-4-7`); backends that don't support model selection ignore it. `effort` is the adaptive reasoning level for this turn; backends ignore it when the selected model doesn't declare the requested level in `supportedEffortLevels`.
 - **`generateSummary(messages, fallback)`** — returns a one-line summary string
 - **`generateTitle(userMessage, fallback)`** — returns a short conversation title. Base class provides a default that truncates the user message to 80 chars.
 - **`shutdown()`** — called during server shutdown. Override to kill long-lived processes. No-op by default.
@@ -402,10 +402,20 @@ Shared helpers used by all backend adapters. Extracted for cross-adapter reuse �
 
 ### ClaudeCodeAdapter (`src/services/backends/claudeCode.ts`)
 
-**Metadata:** `id: 'claude-code'`, all capabilities enabled. Exposes `models` array with `opus`, `sonnet` (default), `haiku`, `opus[1m]`, and `sonnet[1m]` options using aliases so they auto-resolve to the latest version. Adaptive reasoning effort support (`supportedEffortLevels`):
-- `opus`, `opus[1m]`: `['low', 'medium', 'high', 'max']` — the `max` level is Opus-only
-- `sonnet`, `sonnet[1m]`: `['low', 'medium', 'high']`
-- `haiku`: field omitted (no effort support)
+**Metadata:** `id: 'claude-code'`, all capabilities enabled. Exposes `models` array with full model IDs (no aliases — IDs pin a specific version so the dropdown is stable across CLI updates):
+
+| `id` | `label` | `family` | `costTier` | `default` |
+|---|---|---|---|---|
+| `claude-opus-4-7` | Opus 4.7 | opus | high | — |
+| `claude-opus-4-6` | Opus 4.6 | opus | high | — |
+| `claude-sonnet-4-6` | Sonnet 4.6 | sonnet | medium | ✓ |
+| `claude-haiku-4-5` | Haiku 4.5 | haiku | low | — |
+
+Adaptive reasoning effort support (`supportedEffortLevels`):
+- `claude-opus-4-7`: `['low', 'medium', 'high', 'xhigh', 'max']` — the `xhigh` level is Opus 4.7-only
+- `claude-opus-4-6`: `['low', 'medium', 'high', 'max']` — the `max` level is Opus-only
+- `claude-sonnet-4-6`: `['low', 'medium', 'high']`
+- `claude-haiku-4-5`: field omitted (no effort support)
 
 **`sendMessage(message, options)`:**
 - `options`: `{ sessionId, isNewSession, workingDir, systemPrompt, model?, effort? }`
@@ -421,7 +431,7 @@ claude --print \
   --permission-mode bypassPermissions \
   --output-format stream-json \
   --verbose \
-  [--model <alias|id>]              # if model specified (e.g. opus, sonnet, haiku)
+  [--model <id>]                     # if model specified (e.g. claude-opus-4-7, claude-sonnet-4-6)
   [--effort <level>]                # if effort specified AND model supports that level
   [--session-id <uuid>]              # if isNewSession
   [--append-system-prompt <prompt>]  # if isNewSession and systemPrompt

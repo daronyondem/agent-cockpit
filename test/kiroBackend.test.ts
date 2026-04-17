@@ -31,15 +31,16 @@ describe('KiroAdapter', () => {
     const adapter = new KiroAdapter({ workingDir: '/tmp' });
     (adapter as any).cachedModels = [
       { modelId: 'auto', name: 'auto', description: 'Models chosen by task' },
-      { modelId: 'claude-opus-4.6', name: 'claude-opus-4.6', description: 'The latest Claude Opus model' },
-      { modelId: 'claude-sonnet-4.6', name: 'claude-sonnet-4.6', description: 'The latest Claude Sonnet model' },
+      { modelId: 'claude-opus-4.7', name: 'claude-opus-4.7', description: 'Experimental preview of Claude Opus 4.7 model with 1M context window' },
+      { modelId: 'claude-opus-4.6', name: 'claude-opus-4.6', description: 'The Claude Opus 4.6 model' },
+      { modelId: 'claude-sonnet-4.6', name: 'claude-sonnet-4.6', description: 'The latest Claude Sonnet model with 1M context window' },
       { modelId: 'claude-haiku-4.5', name: 'claude-haiku-4.5', description: 'The latest Claude Haiku model' },
       { modelId: 'claude-opus-4.6-1m', name: 'claude-opus-4.6-1m', description: '[Deprecated] Please switch to Opus 4.6' },
       { modelId: 'kimi-k2.5', name: 'kimi-k2.5', description: '[Internal] Internal test model' },
     ];
     const models = adapter.metadata.models;
     expect(models).toBeDefined();
-    expect(models!.length).toBe(4); // auto + opus + sonnet + haiku (deprecated and internal filtered)
+    expect(models!.length).toBe(5); // auto + opus 4.7 + opus 4.6 + sonnet + haiku (deprecated and internal filtered)
 
     const auto = models!.find(m => m.id === 'auto');
     expect(auto).toBeDefined();
@@ -47,10 +48,15 @@ describe('KiroAdapter', () => {
     expect(auto!.family).toBe('router');
     expect(auto!.costTier).toBe('medium');
 
-    const opus = models!.find(m => m.id === 'claude-opus-4.6');
-    expect(opus).toBeDefined();
-    expect(opus!.family).toBe('opus');
-    expect(opus!.costTier).toBe('high');
+    const opus47 = models!.find(m => m.id === 'claude-opus-4.7');
+    expect(opus47).toBeDefined();
+    expect(opus47!.family).toBe('opus');
+    expect(opus47!.costTier).toBe('high');
+
+    const opus46 = models!.find(m => m.id === 'claude-opus-4.6');
+    expect(opus46).toBeDefined();
+    expect(opus46!.family).toBe('opus');
+    expect(opus46!.costTier).toBe('high');
 
     const sonnet = models!.find(m => m.id === 'claude-sonnet-4.6');
     expect(sonnet).toBeDefined();

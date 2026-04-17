@@ -124,8 +124,8 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
     backend: string,            // 'claude-code'
-    model?: string,             // Selected model alias (e.g. 'opus', 'sonnet', 'haiku'); absent = backend default
-    effort?: string,            // Adaptive reasoning effort: 'low' | 'medium' | 'high' | 'max' (Opus only); absent = model default. Silently downgraded when the current model doesn't support the stored level.
+    model?: string,             // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
+    effort?: string,            // Adaptive reasoning effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. `xhigh` is Opus 4.7-only; `max` is Opus 4.6+ only. Silently downgraded when the current model doesn't support the stored level.
     currentSessionId: string,   // UUID of the active CLI session
     lastActivity: string,       // ISO 8601, updated on every message
     lastMessage: string|null,   // First 100 chars of last message content
@@ -205,8 +205,8 @@ Flat object assembled from workspace index + active session file:
   id: string,
   title: string,
   backend: string,
-  model?: string,               // Selected model alias (e.g. 'opus', 'sonnet', 'haiku')
-  effort?: string,              // Adaptive reasoning effort: 'low' | 'medium' | 'high' | 'max'
+  model?: string,               // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5')
+  effort?: string,              // Adaptive reasoning effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   workingDir: string,           // The workspace path
   currentSessionId: string,
   sessionNumber: number,        // Active session number
@@ -242,20 +242,20 @@ Daily per-backend/model token usage records for global statistics:
   "sendBehavior": "enter",
   "systemPrompt": "",
   "defaultBackend": "claude-code",
-  "defaultModel": "sonnet",
+  "defaultModel": "claude-sonnet-4-6",
   "defaultEffort": "high",
   "workingDirectory": "",
   "memory": {
     "cliBackend": "claude-code",
-    "cliModel": "sonnet",
+    "cliModel": "claude-sonnet-4-6",
     "cliEffort": "high"
   },
   "knowledgeBase": {
     "digestionCliBackend": "claude-code",
-    "digestionCliModel": "sonnet",
+    "digestionCliModel": "claude-sonnet-4-6",
     "digestionCliEffort": "high",
     "dreamingCliBackend": "claude-code",
-    "dreamingCliModel": "opus",
+    "dreamingCliModel": "claude-opus-4-7",
     "dreamingCliEffort": "high",
     "dreamingConcurrency": 2,
     "dreamingStrongMatchThreshold": 0.75,
