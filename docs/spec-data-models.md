@@ -620,6 +620,7 @@ interface KbStateUpdateEvent {
     synthesis?: boolean;
     batchProgress?: { done: number; total: number };
     dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'; done: number; total: number };
+    stopping?: boolean;
     substep?: { rawId: string; text: string };
   };
 }

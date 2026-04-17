@@ -392,6 +392,8 @@ export interface DreamResult {
   processedEntries: number;
   skippedBatches: number;
   errors: string[];
+  /** True if the run was halted early via a cooperative stop request. */
+  stopped?: boolean;
 }
 
 // ── Constants ───────────────────────────────────────────────────────────────
@@ -416,6 +418,8 @@ export class KbDreamService {
   private readonly kbSearchMcp: KbSearchMcpServer;
   /** Per-workspace lock — only one dream run at a time. */
   private readonly running = new Set<string>();
+  /** Cooperative stop flags; checked between batches/phases. */
+  private readonly stopRequested = new Set<string>();
 
   constructor(opts: KbDreamOptions) {
     this.chatService = opts.chatService;
@@ -437,6 +441,29 @@ export class KbDreamService {
   /** Check if a dream run is in progress for a workspace. */
   isRunning(hash: string): boolean {
     return this.running.has(hash);
+  }
+
+  /**
+   * Request a cooperative stop for an in-progress dream run. Honored at the
+   * next batch / phase boundary. No-op if no run is in progress.
+   * Returns true if a stop was requested (i.e. a run was in progress).
+   */
+  requestStop(hash: string): boolean {
+    if (!this.running.has(hash)) return false;
+    this.stopRequested.add(hash);
+    // Surface "stopping" state immediately so reloads/WS see it before the
+    // current batch finishes.
+    this.emit?.(hash, {
+      type: 'kb_state_update',
+      updatedAt: new Date().toISOString(),
+      changed: { synthesis: true, stopping: true },
+    });
+    return true;
+  }
+
+  /** Whether a stop has been requested for this workspace. */
+  isStopRequested(hash: string): boolean {
+    return this.stopRequested.has(hash);
   }
 
   // ── Core pipeline ─────────────────────────────────────────────────────────
@@ -539,6 +566,8 @@ export class KbDreamService {
       // Post-synthesis: regenerate markdown.
       regenerateSynthesisMarkdown(db, synthesisDir);
 
+      if (this._checkStop(hash, result)) return result;
+
       // Final sweep: embed all topics and clean up stale embeddings.
       try {
         await this._embedTopics(hash, db);
@@ -548,6 +577,8 @@ export class KbDreamService {
           (err as Error).message,
         );
       }
+
+      if (this._checkStop(hash, result)) return result;
 
       // Phase 4: Connection Discovery — sweep for missing connections.
       try {
@@ -562,6 +593,8 @@ export class KbDreamService {
 
       // Re-regenerate markdown after discovery may have added connections.
       regenerateSynthesisMarkdown(db, synthesisDir);
+
+      if (this._checkStop(hash, result)) return result;
 
       // Phase 5: Reflection — graph-level meta-synthesis.
       try {
@@ -589,6 +622,7 @@ export class KbDreamService {
       result.errors.push(msg);
     } finally {
       this.running.delete(hash);
+      this.stopRequested.delete(hash);
       this.kbSearchMcp.revokeKbSearchSession(hash);
       db.setSynthesisMeta('dream_progress', '');
       this._emitSynthesisChange(hash);
@@ -744,6 +778,7 @@ export class KbDreamService {
 
     // Synthesis for matched entries.
     for (const batchGroup of chunk(synthBatches, concurrency)) {
+      if (this._checkStop(hash, result)) return;
       const promises = batchGroup.map(async (batch) => {
         const prompt = buildRetrievalSynthesisPrompt(batch.entries, batch.topicIds);
         return this._runCliWithRetry(adapter, prompt, runOptionsWithMcp);
@@ -778,6 +813,7 @@ export class KbDreamService {
         .filter((e): e is NonNullable<typeof e> => e !== undefined);
 
       for (const batch of chunk(unmatchedMeta, SYNTHESIS_BATCH_SIZE)) {
+        if (this._checkStop(hash, result)) return;
         try {
           const prompt = buildNewTopicCreationPrompt(batch, true);
           const output = await this._runCliWithRetry(adapter, prompt, runOptionsWithMcp);
@@ -830,6 +866,7 @@ export class KbDreamService {
     this._emitDreamProgress('synthesis', 0, batches.length, hash);
 
     for (const batch of batches) {
+      if (this._checkStop(hash, result)) return;
       try {
         // First batch: no topics exist, no MCP tools useful.
         // Subsequent batches: topics exist, use MCP for connection discovery.
@@ -949,6 +986,7 @@ export class KbDreamService {
     this._emitDreamProgress('discovery', 0, batches.length, hash);
 
     for (const batch of batches) {
+      if (this._checkStop(hash, result)) return;
       try {
         // Build rich context for each candidate.
         const promptCandidates = batch.map((c) => {
@@ -1103,6 +1141,7 @@ export class KbDreamService {
     let done = 0;
 
     for (const cluster of selectedClusters) {
+      if (this._checkStop(hash, result)) return;
       try {
         // Build rich context for the cluster.
         const clusterTopics = cluster
@@ -1255,6 +1294,27 @@ export class KbDreamService {
       updatedAt: new Date().toISOString(),
       changed: { synthesis: true },
     });
+  }
+
+  /**
+   * If a stop has been requested for this workspace, mark the result as
+   * stopped, persist `stopped_at` meta, set status to idle, and return true
+   * so callers can early-return. Returns false otherwise.
+   *
+   * Does NOT touch `last_run_at` — a stop is not a natural completion.
+   */
+  private _checkStop(hash: string, result: DreamResult): boolean {
+    if (!this.stopRequested.has(hash)) return false;
+    result.stopped = true;
+    const db = this.chatService.getKbDb(hash);
+    if (db) {
+      db.setSynthesisMeta('status', 'idle');
+      db.setSynthesisMeta('stopped_at', new Date().toISOString());
+      if (result.errors.length > 0) {
+        db.setSynthesisMeta('last_run_error', result.errors.join('; '));
+      }
+    }
+    return true;
   }
 
   private _emitDreamProgress(
