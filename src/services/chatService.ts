@@ -30,6 +30,7 @@ import {
   normalizeFolderPath,
   KbDatabase,
 } from './knowledgeBase/db';
+import { computeDigestProgress } from './knowledgeBase/digest';
 import { KbVectorStore } from './knowledgeBase/vectorStore';
 import type { EmbeddingConfig } from './knowledgeBase/embeddings';
 
@@ -1609,6 +1610,9 @@ export class ChatService {
       ? normalizeFolderPath(opts.folderPath)
       : '';
 
+    const sessionRow = db.getDigestSession();
+    const digestProgress = sessionRow ? computeDigestProgress(sessionRow) : null;
+
     return {
       version: KB_STATE_VERSION,
       entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
@@ -1619,6 +1623,7 @@ export class ChatService {
         limit: opts.limit,
         offset: opts.offset,
       }),
+      digestProgress,
       updatedAt: new Date().toISOString(),
     };
   }
@@ -1646,6 +1651,7 @@ export class ChatService {
       counters: zeroCounters,
       folders: [],
       raw: [],
+      digestProgress: null,
       updatedAt: new Date().toISOString(),
     };
   }

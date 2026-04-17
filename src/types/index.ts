@@ -599,6 +599,26 @@ export interface KbCounters {
 }
 
 /**
+ * Aggregate digestion-queue progress for a workspace. Spans every digest
+ * call (batch, single-file manual, auto-digest) that runs while the
+ * per-workspace queue is busy; the server opens a session on the first
+ * enqueue into an idle queue and closes it when `done === total`.
+ *
+ * Persisted to `digest_session` in the KB DB so a mid-flight reload
+ * rehydrates the toolbar without losing ETA accuracy.
+ */
+export interface KbDigestProgress {
+  /** Tasks completed since the session opened. */
+  done: number;
+  /** Tasks enqueued since the session opened (bumps if new items arrive mid-session). */
+  total: number;
+  /** Average per-file digestion duration (ms) across completed tasks. 0 until the first task settles. */
+  avgMsPerItem: number;
+  /** Estimated remaining wall-clock time (ms). Omitted until `done >= 2` to avoid noisy initial estimates. */
+  etaMs?: number;
+}
+
+/**
  * Snapshot of the KB state surfaced by `GET /kb`. The entries and raws
  * lists are paginated at the endpoint level; this object always holds
  * counters + folder tree + a page of the currently-focused folder.
@@ -616,6 +636,12 @@ export interface KbState {
   folders: KbFolder[];
   /** Raw files in the currently-focused folder (or empty when listing is disabled). */
   raw: KbRawEntry[];
+  /**
+   * Aggregate digestion progress snapshot when the per-workspace queue is
+   * busy; `null` when idle. Populated from the persisted `digest_session`
+   * row so a mid-flight page reload hydrates the toolbar progress + ETA.
+   */
+  digestProgress: KbDigestProgress | null;
   /** ISO 8601 timestamp of the most recent mutation (for cache busting). */
   updatedAt: string;
 }
@@ -701,16 +727,17 @@ export interface KbStateUpdateEvent {
   /**
    * What changed in this tick. Frontend uses this to decide whether to
    * refetch, toast, or highlight the affected row. `folders: true` means
-   * the folder tree changed (created/renamed/deleted). `batchProgress`
-   * is emitted during "Digest All Pending" runs so the toolbar button
-   * can show live k/N progress.
+   * the folder tree changed (created/renamed/deleted). `digestProgress`
+   * is emitted on every digest enqueue/settle so the toolbar can render
+   * live `done / total — ~ETA` across batch, single-file, and
+   * auto-digest runs (one unified session per workspace).
    */
   changed: {
     raw?: string[];
     entries?: string[];
     folders?: boolean;
     synthesis?: boolean;
-    batchProgress?: { done: number; total: number };
+    digestProgress?: KbDigestProgress | null;
     /**
      * Per-workspace digestion-session counter. Fires on every entry-
      * creating settle (single or batch) with `active: true` and the

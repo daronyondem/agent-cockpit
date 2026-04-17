@@ -454,6 +454,20 @@ CREATE TABLE IF NOT EXISTS synthesis_reflection_citations (
   PRIMARY KEY (reflection_id, entry_id)
 );
 CREATE INDEX IF NOT EXISTS idx_src_entry ON synthesis_reflection_citations(entry_id);
+
+-- Singleton row persisted by the digestion orchestrator so a mid-flight
+-- browser reload rehydrates the KB Browser toolbar's progress + ETA
+-- without losing accuracy. Upserted on every `total`/`done` change
+-- (cheap — sqlite, typically sub-ms) and deleted when the queue drains.
+-- Cleared on KbDatabase construction via `_recoverFromCrash()` so a
+-- server restart mid-session doesn't leave a phantom indicator forever.
+CREATE TABLE IF NOT EXISTS digest_session (
+  id                INTEGER PRIMARY KEY CHECK (id = 1),
+  total             INTEGER NOT NULL,
+  done              INTEGER NOT NULL,
+  total_elapsed_ms  INTEGER NOT NULL,
+  started_at        TEXT NOT NULL
+);
 ```
 
 ### Cascade Behavior
@@ -584,6 +598,12 @@ interface KbState {
   counters: KbCounters;
   folders: KbFolder[];
   raw: KbRawEntry[];            // one page of the focused folder
+  /**
+   * Aggregate digestion-queue progress snapshot. Sourced from the
+   * persisted `digest_session` row so a mid-flight reload rehydrates
+   * the KB Browser toolbar indicator; `null` when the queue is idle.
+   */
+  digestProgress: KbDigestProgress | null;
   updatedAt: string;
 }
 
@@ -656,6 +676,22 @@ interface KbReflectionDetail {
   citedEntries: KbEntry[];
 }
 
+/**
+ * Aggregate digestion-queue progress snapshot. Spans every digest path
+ * (batch, single-file manual, auto-digest) so the UI can show one
+ * unified "N / M items — ~E min remaining" indicator across them all.
+ */
+interface KbDigestProgress {
+  /** Tasks completed since the session opened. */
+  done: number;
+  /** Tasks enqueued since the session opened (bumps when new items arrive mid-session). */
+  total: number;
+  /** Rolling average per-file digestion duration (ms). 0 until the first task settles. */
+  avgMsPerItem: number;
+  /** Estimated remaining wall-clock time (ms). Omitted until `done >= 2`. */
+  etaMs?: number;
+}
+
 /** WebSocket frame emitted for KB state changes */
 interface KbStateUpdateEvent {
   type: 'kb_state_update';
@@ -665,7 +701,14 @@ interface KbStateUpdateEvent {
     entries?: string[];
     folders?: boolean;
     synthesis?: boolean;
-    batchProgress?: { done: number; total: number };
+    /**
+     * Aggregate digestion progress. Emitted on every enqueue and every
+     * task settle; a final `null` signal fires when the queue drains so
+     * the UI can clear the indicator. Persisted to `digest_session` so
+     * `GET /kb` can rehydrate after a browser reload.
+     */
+    digestProgress?: KbDigestProgress | null;
+    digestion?: { active: boolean; entriesCreated: number };
     dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'; done: number; total: number };
     stopping?: boolean;
     substep?: { rawId: string; text: string };

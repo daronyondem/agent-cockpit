@@ -1906,9 +1906,12 @@ window.chatHandleKbStateUpdate = function chatHandleKbStateUpdate(convId, event)
     }
   }
 
-  // Track batch digest progress.
-  if (event?.changed?.batchProgress) {
-    chatKbBrowserState.batchProgress = event.changed.batchProgress;
+  // Track aggregate digestion progress (batch, single-file, auto-digest).
+  // `null` is the server's signal that the queue drained — clear the
+  // toolbar indicator. `undefined` means the frame didn't carry progress
+  // info (other fields changed), so leave the existing state alone.
+  if (event?.changed && 'digestProgress' in event.changed) {
+    chatKbBrowserState.digestProgress = event.changed.digestProgress || null;
   }
 
   // Track digestion session entity count (fires for both single and batch
@@ -1961,11 +1964,6 @@ window.chatHandleKbStateUpdate = function chatHandleKbStateUpdate(convId, event)
         delete chatKbBrowserState.processingStartTimes[rawId];
       }
     }
-    // Clear batch progress when last item finishes.
-    const bp = chatKbBrowserState.batchProgress;
-    if (bp && bp.done >= bp.total) {
-      chatKbBrowserState.batchProgress = null;
-    }
   }
 
   chatKbBrowserRefetch();
@@ -1999,8 +1997,14 @@ async function chatOpenKbBrowser(hash, label) {
     substeps: {},
     /** Per-rawId timestamps when a processing status started (for elapsed timer) */
     processingStartTimes: {},
-    /** Batch digest progress: { done, total } or null */
-    batchProgress: null,
+    /**
+     * Aggregate digestion-queue progress: { done, total, avgMsPerItem,
+     * etaMs? } or null when the queue is idle. Covers batch, single-file,
+     * and auto-digest runs; hydrated from both GET /kb and
+     * `digestProgress` frames so browser reload during a long digest
+     * keeps the indicator populated.
+     */
+    digestProgress: null,
     /** Active digestion session counter: { entriesCreated } or null. */
     digestion: null,
     /** Completion banner state: { entriesCreated } or null. Dismissable via close button. */
@@ -2181,6 +2185,9 @@ async function chatKbBrowserRefetch() {
     chatKbBrowserState.enabled = Boolean(data.enabled);
     chatKbBrowserState.state = data.state || null;
     chatKbBrowserState.autoDigest = Boolean(data.state?.autoDigest);
+    // Server-persisted progress rehydrates mid-digest reloads without
+    // losing the ETA. `null` (queue idle) wins over any stale frame.
+    chatKbBrowserState.digestProgress = data.state?.digestProgress || null;
     // Track processing start times for items that are being ingested/digested.
     const rawItems = data.state?.raw || [];
     for (const raw of rawItems) {
@@ -2345,10 +2352,10 @@ function chatKbBrowserRawTab(kbState) {
   const selectedFolder = chatKbBrowserState.selectedFolder || '';
   const crumb = chatKbBrowserFormatBreadcrumb(selectedFolder);
 
-  const bp = chatKbBrowserState.batchProgress;
+  const dp = chatKbBrowserState.digestProgress;
   const activeEntries = chatKbBrowserState.digestion?.entriesCreated || 0;
-  const progressText = bp
-    ? `${bp.done} of ${bp.total} done${activeEntries > 0 ? ` · ${activeEntries} entit${activeEntries === 1 ? 'y' : 'ies'} created` : ''}`
+  const progressText = dp
+    ? `${chatKbFormatDigestProgress(dp)}${activeEntries > 0 ? ` · ${activeEntries} entit${activeEntries === 1 ? 'y' : 'ies'} created` : ''}`
     : activeEntries > 0
       ? `${activeEntries} entit${activeEntries === 1 ? 'y' : 'ies'} created`
       : '';
@@ -2456,6 +2463,31 @@ function chatKbFormatElapsed(ms) {
   const mins = Math.floor(secs / 60);
   const rem = secs % 60;
   return `${mins}m ${rem < 10 ? '0' : ''}${rem}s`;
+}
+
+// Coarse ETA formatter tuned for the digest toolbar. Defaults to minutes
+// for the common range; widens to hours past 60 min and falls back to
+// seconds when < 1 min so small queues don't display "0 min remaining".
+function chatKbFormatEta(ms) {
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min`;
+  const hours = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins === 0 ? `${hours}h` : `${hours}h ${remMins}m`;
+}
+
+// Render a digestProgress payload as "N / M items — ~X min remaining".
+// The ETA clause is omitted until the server has observed ≥2 completions
+// (avgMsPerItem stabilizes enough that the estimate stops jumping).
+function chatKbFormatDigestProgress(dp) {
+  if (!dp) return '';
+  const base = `${dp.done} / ${dp.total} items`;
+  if (!Number.isFinite(dp.etaMs) || dp.etaMs <= 0) return base;
+  const eta = chatKbFormatEta(dp.etaMs);
+  return eta ? `${base} — ~${eta} remaining` : base;
 }
 
 function chatKbBrowserRawRow(raw) {
