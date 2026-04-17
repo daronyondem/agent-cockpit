@@ -111,3 +111,32 @@ form-action: 'self'
 ```
 
 Cross-Origin Embedder Policy: disabled.
+
+## 5.6 Path Traversal & Root-Delete Guards
+
+Several routes accept user-supplied relative paths that resolve inside a workspace working directory. All of them use the same shape of guard:
+
+1. **Normalize leading separators.** Any leading `/` or `\` is stripped from the input before `path.resolve(root, rel)` — this treats absolute-looking paths as relative to the workspace root instead of accidentally escaping to system paths.
+2. **Assert the resolved path is contained.** The resolved absolute path must equal the workspace root or start with `root + path.sep`. On failure the route returns `403 { error: "Access denied: path is outside workspace" }` without touching the filesystem.
+3. **Refuse destructive root operations.** The workspace root itself is never a valid target for rename or delete. Those routes return `400 { error: "Cannot rename workspace root" }` / `400 { error: "Cannot delete workspace root" }` before any `fs` call.
+
+**Routes covered by these guards:**
+
+| Route | Guards |
+|-------|--------|
+| `GET /workspaces/:hash/explorer/tree` | traversal |
+| `GET /workspaces/:hash/explorer/preview` | traversal |
+| `POST /workspaces/:hash/explorer/upload` | traversal on destination folder; multer `LIMIT_FILE_SIZE` 500 MB |
+| `POST /workspaces/:hash/explorer/mkdir` | traversal on parent folder; name rejected for `/`, `\`, `.`, `..`, or empty strings; final absolute path re-verified under the parent root before `fs.mkdir` |
+| `POST /workspaces/:hash/explorer/file` | traversal on parent folder; name rejected for `/`, `\`, `.`, `..`, or empty strings; final absolute path re-verified under the parent root; 409 on collision with any existing file or folder (no overwrite); optional seed `content` must be a string ≤ 5 MB UTF-8 or the request returns 413 without writing |
+| `PUT /workspaces/:hash/explorer/file` | traversal; refuses directories and workspace root; `content` must be a string; `Buffer.byteLength(content, 'utf8')` checked against the 5 MB edit cap before any write; over-limit payloads return 413 and leave the file untouched |
+| `PATCH /workspaces/:hash/explorer/rename` | traversal on both `from` and `to`; root-rename refusal; 409 on non-overwrite conflict |
+| `DELETE /workspaces/:hash/explorer/entry` | traversal; root-delete refusal |
+| `GET /workspaces/:hash/files` | traversal (pre-existing file-delivery route) |
+| `POST /workspaces/:hash/kb/raw` | filename + folder segment validation via `KbValidationError`; MIME-typed stage path verified under `knowledge/raw/` |
+| `DELETE /workspaces/:hash/kb/raw/:rawId` | hex-only `rawId` regex gate; staged path verified under `knowledge/raw/` |
+| `GET /workspaces/:hash/kb/raw/:rawId` | hex-only `rawId` gate; resolved file path verified under `knowledge/raw/` |
+
+The explorer upload uses multer's disk storage with a randomized `.ac-upload-<ts>-<nonce>-<safe>` prefix in the destination folder so a partial upload never clobbers an existing file. After the stream completes, a collision check against the real target decides whether to unlink the temp file (conflict without overwrite) or rename it into place.
+
+Hidden files (names starting with `.`) are intentionally returned by the explorer tree endpoint — this is a product requirement for the file explorer UI. The traversal guard is the only layer that prevents reading outside the workspace; there is no additional "safe extension" filter because the workspace root is defined by the user and may contain any file type they want to manage.
