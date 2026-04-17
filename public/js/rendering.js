@@ -70,6 +70,13 @@ export function chatRenderMessages() {
   // Messages are already just the current session (archived sessions live in separate files)
   const currentSessionMsgs = state.chatActiveConv.messages;
 
+  // If a stream is live for this conversation, the streaming bubble itself
+  // stands in for the "upcoming final message" — so a trailing progress run
+  // with no persisted final should nest inside the streaming bubble's content
+  // (handled in chatUpdateStreamingContent) instead of rendering as a
+  // standalone feed sibling. Detect here so the feed walk can skip it.
+  const hasActiveStream = state.chatStreamingState.has(state.chatActiveConvId);
+
   let html = '';
 
   // Session activity overview removed — not needed in current UI
@@ -117,7 +124,12 @@ export function chatRenderMessages() {
         mi = mj + 1;
         continue;
       }
-      html += chatRenderProgressBreadcrumb(progressRun, currentSessionMsgs, groupStart);
+      // Trailing progress run with no persisted final. If a stream is live,
+      // the streaming bubble will render the breadcrumb inside its own
+      // content area — skip the standalone feed item here.
+      if (!hasActiveStream) {
+        html += chatRenderProgressBreadcrumb(progressRun, currentSessionMsgs, groupStart);
+      }
       mi = mj;
       continue;
     }
@@ -207,6 +219,32 @@ function chatRenderSingleMessage(msg, mi, currentSessionMsgs, prependHtml = '') 
       </div>
     </div>
   `;
+}
+
+// ── Trailing progress breadcrumb for the streaming bubble ──────────────────
+// Finds the run of trailing `turn: 'progress'` assistant messages at the end
+// of the session (no intervening user/memory_update, matching backend) and
+// returns the rendered breadcrumb HTML. The streaming bubble uses this so
+// past progress steps stay visible under the Assistant header while the
+// agent works on the next segment.
+
+function chatBuildTrailingProgressBreadcrumb(msgs) {
+  if (!msgs || !msgs.length) return '';
+  let end = msgs.length;
+  let start = end;
+  for (let i = end - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m.kind === 'memory_update') break;
+    if (m.role !== 'assistant' || m.turn !== 'progress') break;
+    start = i;
+  }
+  if (start === end) return '';
+  // Same-backend guard: breadcrumb only covers the contiguous tail sharing
+  // the same backend as the very last progress message.
+  const backend = msgs[end - 1].backend;
+  while (start < end && msgs[start].backend !== backend) start++;
+  if (start >= end) return '';
+  return chatRenderProgressBreadcrumb(msgs.slice(start, end), msgs, start);
 }
 
 // ── Progress group (consecutive progress messages as one compact breadcrumb) ─
@@ -863,6 +901,14 @@ export function chatUpdateStreamingContent(msgEl, st) {
   if (!contentEl) return;
 
   let html = '';
+
+  // 0. Trailing progress breadcrumb — shows the agent's past `turn_boundary`
+  // segments (collapsed by default) under the Assistant header so the whole
+  // turn stays in one card while the agent is still working.
+  if (state.chatActiveConv && state.chatActiveConv.messages) {
+    const breadcrumbHtml = chatBuildTrailingProgressBreadcrumb(state.chatActiveConv.messages);
+    if (breadcrumbHtml) html += breadcrumbHtml;
+  }
 
   // 1. Thinking block
   if (st.assistantThinking) {
