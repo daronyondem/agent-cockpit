@@ -3,6 +3,7 @@ import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
 import type { BackendRegistry } from './backends/registry';
+import { SettingsService } from './settingsService';
 import { parseFrontmatter as parseMemoryFrontmatter } from './backends/claudeCode';
 import type {
   ContentBlock,
@@ -24,6 +25,9 @@ import type {
   KbState,
   KbCounters,
   KbRawStatus,
+  AttachmentMeta,
+  AttachmentKind,
+  QueuedMessage,
 } from '../types';
 import {
   openKbDatabase,
@@ -50,6 +54,123 @@ const KB_STATE_VERSION = 1;
 const KB_ENTRY_SCHEMA_VERSION = 1;
 
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
+
+/* ── Attachment metadata helpers ─────────────────────────────────────────────
+ * Shared between upload-response enrichment and queue migration. Both paths
+ * start from an absolute server path and must produce the same AttachmentMeta
+ * so that a queued message enqueued today looks identical to one reloaded
+ * from a pre-attachment-schema workspace index. */
+
+const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif']);
+const CODE_EXTS = new Set([
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.kts', '.scala', '.swift',
+  '.c', '.cc', '.cpp', '.cxx', '.h', '.hpp', '.hh',
+  '.cs', '.fs', '.php', '.pl', '.lua', '.sh', '.bash', '.zsh', '.fish',
+  '.sql', '.html', '.css', '.scss', '.less', '.vue', '.svelte',
+  '.json', '.jsonc', '.yaml', '.yml', '.toml', '.xml', '.ini', '.env',
+]);
+const TEXT_EXTS = new Set(['.txt', '.log', '.csv', '.tsv', '.rtf']);
+
+function attachmentKindFromPath(p: string): AttachmentKind {
+  const ext = path.extname(p).toLowerCase();
+  if (!ext) return 'file';
+  if (IMAGE_EXTS.has(ext)) return 'image';
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.md' || ext === '.markdown') return 'md';
+  if (CODE_EXTS.has(ext)) return 'code';
+  if (TEXT_EXTS.has(ext)) return 'text';
+  return 'file';
+}
+
+function formatAttachmentSize(bytes: number | undefined): string | undefined {
+  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return undefined;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/**
+ * Build AttachmentMeta from an absolute path. When `size` is known (e.g. from
+ * multer's `file.size`), pass it in; otherwise this function does NOT stat the
+ * file — callers should stat async if they care about size (queue migration
+ * best-effort stats inline with a fallback to undefined).
+ */
+export function attachmentFromPath(abs: string, size?: number): AttachmentMeta {
+  const name = path.basename(abs);
+  const kind = attachmentKindFromPath(abs);
+  return {
+    name,
+    path: abs,
+    size,
+    kind,
+    meta: formatAttachmentSize(size),
+  };
+}
+
+/**
+ * Parse a legacy `[Uploaded files: <path1>, <path2>, …]` tag out of a message
+ * content string. Returns the clean content + inferred attachments, or null
+ * when no tag is present. Used to migrate string[] queue entries into the
+ * new QueuedMessage shape on first read.
+ *
+ * The tag is matched greedily on the last occurrence so a user-authored
+ * message that happens to contain the literal "[Uploaded files:" earlier in
+ * its text survives. The regex is intentionally strict — anything else in
+ * the string passes through untouched.
+ */
+export function parseUploadedFilesTag(content: string): { content: string; attachments: AttachmentMeta[] } | null {
+  if (!content) return null;
+  const match = content.match(/\n*\[Uploaded files: ([^\]]+)\]\s*$/);
+  if (!match) return null;
+  const paths = match[1].split(',').map(s => s.trim()).filter(Boolean);
+  if (!paths.length) return null;
+  return {
+    content: content.slice(0, match.index).replace(/\s+$/, ''),
+    attachments: paths.map(p => attachmentFromPath(p)),
+  };
+}
+
+/**
+ * Normalize any shape that may appear under `messageQueue` on disk into the
+ * canonical `QueuedMessage[]`. Handles three cases:
+ *   1. Legacy `string[]`  — each element is parsed for `[Uploaded files: …]`
+ *      and split into `{content, attachments}` or `{content}` when absent.
+ *   2. Current `QueuedMessage[]` — passed through, with defensive filtering
+ *      of unknown fields so a hand-edited index can't smuggle state in.
+ *   3. Anything else — coerced to `[]`.
+ */
+export function normalizeMessageQueue(raw: unknown): QueuedMessage[] {
+  if (!Array.isArray(raw)) return [];
+  const out: QueuedMessage[] = [];
+  for (const entry of raw) {
+    if (typeof entry === 'string') {
+      const parsed = parseUploadedFilesTag(entry);
+      if (parsed) {
+        out.push({ content: parsed.content, attachments: parsed.attachments });
+      } else {
+        out.push({ content: entry });
+      }
+    } else if (entry && typeof entry === 'object' && typeof (entry as QueuedMessage).content === 'string') {
+      const q = entry as QueuedMessage;
+      const clean: QueuedMessage = { content: q.content };
+      if (Array.isArray(q.attachments) && q.attachments.length) {
+        clean.attachments = q.attachments
+          .filter(a => a && typeof a === 'object' && typeof a.path === 'string' && typeof a.name === 'string')
+          .map(a => ({
+            name: a.name,
+            path: a.path,
+            size: typeof a.size === 'number' ? a.size : undefined,
+            kind: (typeof a.kind === 'string' ? a.kind : attachmentKindFromPath(a.path)) as AttachmentKind,
+            meta: typeof a.meta === 'string' ? a.meta : formatAttachmentSize(typeof a.size === 'number' ? a.size : undefined),
+          }));
+      }
+      out.push(clean);
+    }
+  }
+  return out;
+}
 
 /**
  * Turn an arbitrary string into a short, filesystem-safe slug. Used to
@@ -92,8 +213,8 @@ export class ChatService {
   baseDir: string;
   workspacesDir: string;
   artifactsDir: string;
-  settingsFile: string;
   usageLedgerFile: string;
+  private _settingsService: SettingsService;
   private _defaultWorkspace: string;
   private _backendRegistry: BackendRegistry | null;
   private _convWorkspaceMap: Map<string, string>;
@@ -112,8 +233,8 @@ export class ChatService {
     this.baseDir = path.join(appRoot, 'data', 'chat');
     this.workspacesDir = path.join(this.baseDir, 'workspaces');
     this.artifactsDir = path.join(this.baseDir, 'artifacts');
-    this.settingsFile = path.join(this.baseDir, 'settings.json');
     this.usageLedgerFile = path.join(this.baseDir, 'usage-ledger.json');
+    this._settingsService = new SettingsService(this.baseDir);
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
     this._backendRegistry = options.backendRegistry || null;
     this._convWorkspaceMap = new Map();
@@ -336,6 +457,16 @@ export class ChatService {
     const sessionFile = await this._readSessionFile(hash, id, sessionNumber);
     const messages = sessionFile ? sessionFile.messages : [];
 
+    // Normalize the queue shape in place so GET/PUT round-trips — and any UI
+    // that hydrates from this payload — always see the canonical
+    // QueuedMessage[] even for legacy string[] queues on disk.
+    const normalizedQueue = normalizeMessageQueue(convEntry.messageQueue);
+    if (normalizedQueue.length) {
+      convEntry.messageQueue = normalizedQueue;
+    } else if (convEntry.messageQueue) {
+      delete convEntry.messageQueue;
+    }
+
     return {
       id: convEntry.id,
       title: convEntry.title,
@@ -350,7 +481,8 @@ export class ChatService {
       usage: convEntry.usage || this._emptyUsage(),
       sessionUsage: activeSession?.usage || this._emptyUsage(),
       externalSessionId: activeSession?.externalSessionId || null,
-      messageQueue: convEntry.messageQueue || undefined,
+      messageQueue: normalizedQueue.length ? normalizedQueue : undefined,
+      archived: convEntry.archived,
     };
   }
 
@@ -630,20 +762,37 @@ export class ChatService {
 
   // ── Message Queue Persistence ──────────────────────────────────────────────
 
-  async getQueue(convId: string): Promise<string[]> {
+  /**
+   * Return the normalized queue for a conversation. Also migrates a legacy
+   * `string[]` queue on disk to the new `QueuedMessage[]` shape in place
+   * (the migrated shape is persisted back only when the caller subsequently
+   * writes the index — normalization never writes on its own to avoid
+   * surprising mutations from what should be a read).
+   */
+  async getQueue(convId: string): Promise<QueuedMessage[]> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return [];
-    return result.convEntry.messageQueue || [];
+    const normalized = normalizeMessageQueue(result.convEntry.messageQueue);
+    // Mirror the normalized shape back onto the in-memory entry so subsequent
+    // writes persist the upgraded shape without requiring a dedicated migration
+    // step. Safe: _getConvFromIndex always returns the live index object.
+    if (normalized.length) {
+      result.convEntry.messageQueue = normalized;
+    } else if (result.convEntry.messageQueue) {
+      delete result.convEntry.messageQueue;
+    }
+    return normalized;
   }
 
-  async setQueue(convId: string, queue: string[]): Promise<boolean> {
+  async setQueue(convId: string, queue: QueuedMessage[]): Promise<boolean> {
     const result = await this._getConvFromIndex(convId);
     if (!result) return false;
     const { hash, index, convEntry } = result;
-    if (queue.length === 0) {
+    const normalized = normalizeMessageQueue(queue);
+    if (normalized.length === 0) {
       delete convEntry.messageQueue;
     } else {
-      convEntry.messageQueue = queue;
+      convEntry.messageQueue = normalized;
     }
     await this._writeWorkspaceIndex(hash, index);
     return true;
@@ -2040,41 +2189,11 @@ export class ChatService {
   // ── Settings ───────────────────────────────────────────────────────────────
 
   async getSettings(): Promise<Settings> {
-    try {
-      const data = await fsp.readFile(this.settingsFile, 'utf8');
-      const settings = JSON.parse(data) as Settings;
-
-      if (settings.customInstructions && settings.systemPrompt === undefined) {
-        const parts: string[] = [];
-        if (settings.customInstructions.aboutUser) {
-          parts.push(settings.customInstructions.aboutUser.trim());
-        }
-        if (settings.customInstructions.responseStyle) {
-          parts.push(settings.customInstructions.responseStyle.trim());
-        }
-        settings.systemPrompt = parts.join('\n\n');
-        delete settings.customInstructions;
-        await this.saveSettings(settings);
-      }
-
-      return settings;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return {
-          theme: 'system',
-          sendBehavior: 'enter',
-          systemPrompt: '',
-          defaultBackend: 'claude-code',
-          workingDirectory: '',
-        };
-      }
-      throw err;
-    }
+    return this._settingsService.getSettings();
   }
 
   async saveSettings(settings: Settings): Promise<Settings> {
-    await fsp.writeFile(this.settingsFile, JSON.stringify(settings, null, 2), 'utf8');
-    return settings;
+    return this._settingsService.saveSettings(settings);
   }
 }
 

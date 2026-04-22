@@ -19,7 +19,7 @@ const KIRO_ICON = '<svg width="28" height="28" viewBox="0 0 1200 1200" fill="non
 
 // ── Configuration ──────────���────────────────────────────────────────────────
 
-const ACP_IDLE_TIMEOUT_MS = parseInt(process.env.KIRO_ACP_IDLE_TIMEOUT_MS || '', 10) || 600_000;
+const ACP_IDLE_TIMEOUT_MS = parseInt(process.env.KIRO_ACP_IDLE_TIMEOUT_MS || '', 10) || 3_600_000;
 
 // ── Kiro Tool Name Normalization ────────────���───────────────────────────────
 

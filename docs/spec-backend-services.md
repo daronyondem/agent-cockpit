@@ -489,7 +489,7 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
 **ACP process lifecycle:** Lazy spawn + idle timeout + transparent recovery.
 - First message → spawn `kiro-cli acp` → `initialize` handshake → `session/new(cwd)` → **yield `external_session` stream event** → `[session/set_model]` → `session/prompt`
 - Subsequent messages → reuse process → `[session/set_model]` → `session/prompt`
-- Idle timeout (configurable via `KIRO_ACP_IDLE_TIMEOUT_MS` env var, default 10 min) → kill process
+- Idle timeout (configurable via `KIRO_ACP_IDLE_TIMEOUT_MS` env var, default 1 hour) → kill process
 - Next message after timeout → respawn → `initialize` → `session/load(sessionId, cwd)` → **drain replayed notifications** → `session/prompt`
 
 **`session/load` replay handling:** Per the ACP spec, `session/load` streams the full prior session history as `session/update` notifications before returning. The adapter's `AcpClient.notificationQueue` buffers these alongside any future notifications, and the notification consumer loop doesn't start until after `session/prompt` is sent. To prevent the replayed `agent_message_chunk` frames from being consumed as text for the current turn (which would concatenate every prior assistant response into the new reply), `AcpClient.drainNotifications()` is called immediately after the `session/load` promise resolves. The drain count is logged.
