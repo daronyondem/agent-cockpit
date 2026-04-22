@@ -22,9 +22,10 @@ Agent Cockpit solves this by decoupling **your data** from **the AI provider**. 
 - **Token and cost tracking** — Token usage and cost are tracked per conversation so you always know what a long-running task or an experiment is actually costing you.
 - **Message queue** — Keep typing while the CLI is still responding. Queued messages fire automatically as soon as the current response finishes, so your thinking isn't gated on the agent's latency — a feature rarely found in other chat UIs.
 - **File and image uploads** — Drag and drop, paste from the clipboard, or use the attach button to send images and text files directly into chat, with inline previews, just like any modern chat interface.
-- **Pick your CLI, model, and effort** — Switch backends per-conversation, choose the model, and set the reasoning effort when the CLI supports it.
-- **Markdown export** — Download any conversation or individual session as a Markdown file with one click, so your history is usable outside Agent Cockpit too.
-- **Knowledge base** — Upload PDFs, Word docs, PowerPoints, images, spreadsheets, and text files into a per-workspace knowledge base. Agent Cockpit automatically converts and analyzes each file, extracts structured entries, organizes them into topics, and discovers connections between ideas — building a personal knowledge graph your AI agents can search and reason over during conversations. Organize uploads into folders, let the system find patterns you missed, and give every future conversation deep, queryable context that goes far beyond what fits in a single prompt or memory file.
+- **Pick your CLI, model, and effort** — Switch backends per-conversation, choose the model (including Claude Opus 4.7), and set the reasoning effort up to `xhigh` when the CLI supports it.
+- **Workspace file explorer** — Browse and edit files in the conversation's working directory directly from the browser, so you can review what the agent changed without leaving Agent Cockpit.
+- **Markdown export & copy** — Download any conversation or individual session as a Markdown file, or copy any single message in its original Markdown with one click.
+- **Knowledge base** — Upload PDFs, Word docs, PowerPoints, images, spreadsheets, and text files into a per-workspace knowledge base. Agent Cockpit automatically converts and analyzes each file, extracts structured entries, organizes them into topics, and discovers connections between ideas — surfaced as an interactive 3D knowledge graph your AI agents can search and reason over during conversations. Organize uploads into folders, watch live digestion progress and ETAs, let the system find patterns you missed, and give every future conversation deep, queryable context that goes far beyond what fits in a single prompt or memory file.
 
 ## Supported Backends
 
@@ -51,28 +52,32 @@ This means:
 Beyond the headline capabilities above, Agent Cockpit also ships with:
 
 - **Real-time streaming** — responses stream live via WebSocket with automatic reconnection and state recovery
-- **Agent & tool visualization** — sub-agents, tool calls, thinking, and outcomes shown in real time with grouped activity panels
-- **Multi-workspace support** — conversations are organized by workspace directory, each with its own system prompt
-- **Conversation management** — create, rename, search, archive, and delete conversations grouped by workspace
+- **Agent & tool visualization** — sub-agents, tool calls, thinking, and outcomes shown in real time with grouped activity panels and a compact progress timeline that collapses intermediate turns
+- **Multi-workspace support** — conversations are organized by workspace directory, each with its own system prompt and per-workspace memory and knowledge-base toggles
+- **Conversation management** — create, rename, search, archive, mark unread, and delete conversations grouped by workspace
 - **Session management** — reset CLI sessions and view session history with LLM-generated summaries
 - **Auto-generated titles** — conversation titles are generated automatically from the first message
-- **Draft persistence** — unsent messages and attached files are preserved when switching conversations
-- **Plan mode and interactive questions** — approve plans and answer questions from the CLI directly in the browser
+- **Draft persistence** — unsent messages and attached files are preserved across conversation switches and survive session expiry mid-send
+- **Plan mode and interactive questions** — approve plans and answer questions from the CLI directly in the browser, with the approval UI preserved across reconnects
+- **CLI file delivery** — files emitted by the CLI appear inline as cards with a download button and an in-browser viewer
+- **Browser tab status indicator** — favicon dot shows when a task is still running so you can flip away and check back
+- **Per-CLI context tooltip** — hover the context chip to see what the active backend reports (tokens vs. credits/percentage)
 - **Dark and light themes** — system-aware theme with manual override
 - **Google and GitHub OAuth** — email whitelist for access control
 - **Self-update** — check for updates and apply them from the UI with one click
 - **Pluggable backend system** — extensible adapter architecture for adding new CLI backends
 - **Graceful shutdown** — clean process cleanup on SIGTERM/SIGINT
-- **File-based storage** — conversations, sessions, and settings stored as JSON on disk (no database)
+- **File-based storage** — conversations, sessions, settings, memory, and knowledge-base entries stored as JSON/Markdown on disk (no database)
 
 ## Prerequisites
 
-- Node.js 18+
+- Node.js 22+ (declared in `engines`)
 - At least one CLI backend installed and authenticated on the same machine:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [Kiro CLI](https://kiro.dev) (`kiro-cli`)
 - At least one OAuth provider configured: Google OAuth 2.0 **or** GitHub OAuth (or both)
-- (Optional) [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) or a similar tunnel for remote access
+- (Optional) [LibreOffice](https://www.libreoffice.org/) and/or [Pandoc](https://pandoc.org/) on `PATH` to expand Knowledge Base ingestion to Office and other document formats
+- (Optional) [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) or a similar tunnel for remote access — see [ONBOARDING.md](ONBOARDING.md) for a step-by-step self-hosting guide with PM2 and Cloudflare Tunnel
 
 ## Quick Start
 
@@ -156,6 +161,7 @@ Use the tunnel-provided URL to reach your local Agent Cockpit from any device. M
 agent-cockpit/
 ├── server.ts                 # Express server entry point (TypeScript, run via tsx)
 ├── src/
+│   ├── ws.ts                 # WebSocket server (streaming, reconnection, state recovery)
 │   ├── types/index.ts        # Shared type definitions
 │   ├── config/index.ts       # Environment configuration
 │   ├── middleware/
@@ -170,18 +176,30 @@ agent-cockpit/
 │       │   ├── kiro.ts           # Kiro CLI adapter (ACP protocol)
 │       │   ├── toolUtils.ts      # Shared tool helpers across backends
 │       │   └── registry.ts       # Backend registry (pluggable adapter system)
-│       ├── chatService.ts    # Conversation CRUD, messages, sessions, workspaces
+│       ├── knowledgeBase/    # KB ingestion, digestion, dreaming, embeddings, vector store
+│       ├── memoryMcp/        # Memory MCP server (notes from CLI tools)
+│       ├── kbSearchMcp/      # Knowledge-base search MCP server
+│       ├── chatService.ts    # Conversation CRUD, messages, sessions, workspaces, KB/memory state
+│       ├── memoryWatcher.ts  # Watches CLI memory files for snapshot capture
+│       ├── settingsService.ts # User settings persistence
 │       └── updateService.ts  # Self-update: version checking, git pull, PM2 restart
 ├── public/
-│   ├── index.html            # HTML shell
-│   ├── js/                   # Frontend ES modules (no build step)
-│   └── styles.css            # CSS with light/dark themes
+│   ├── v2/                   # Default UI (React 18 + Babel Standalone, no build step)
+│   │   ├── index.html
+│   │   └── src/              # JSX components, screens, primitives, styles
+│   ├── index.html            # Legacy V1 UI shell (served at /legacy/)
+│   ├── js/                   # Legacy V1 frontend ES modules
+│   └── styles.css            # Legacy V1 CSS with light/dark themes
+├── docs/                     # Wiki-style specification (see SPEC.md)
+├── scripts/                  # Build helpers (e.g. KB graph bundles)
 ├── test/                     # Jest test suites
 └── data/                     # Runtime data (gitignored)
     ├── chat/
-    │   ├── workspaces/{hash}/  # Workspace-based conversation storage
+    │   ├── workspaces/{hash}/  # Workspace-scoped storage
     │   │   ├── index.json      # Conversations + session metadata
-    │   │   └── {convId}/       # Session files per conversation
+    │   │   ├── {convId}/       # Session files per conversation
+    │   │   ├── memory/         # Per-workspace memory snapshots + notes
+    │   │   └── knowledge/      # Per-workspace KB raw/converted/entries/synthesis
     │   ├── artifacts/          # Per-conversation uploaded files
     │   └── settings.json       # User settings
     └── sessions/               # Express session files
@@ -195,7 +213,7 @@ Tests use Jest and run with:
 npm test
 ```
 
-Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, and self-update service.
+Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, self-update service, OAuth/auth flows, settings service, browser tab indicator, memory MCP and watcher, and the full Knowledge Base pipeline (ingestion, digestion, dreaming, embeddings, vector store, folders, multi-location, handlers).
 
 CI runs tests automatically on every pull request against `main` via GitHub Actions. Version bumps are automated on merge to `main`.
 
@@ -242,7 +260,7 @@ Agent Cockpit's pluggable adapter system makes it straightforward to add new CLI
 3. Import shared helpers from `toolUtils.ts` (never import from another adapter)
 4. Register in `server.ts` — no other file changes needed
 
-See [SPEC.md](SPEC.md) for the full adapter contract and stream event protocol.
+See [docs/SPEC.md](docs/SPEC.md) for the full adapter contract and stream event protocol.
 
 ## Roadmap
 
@@ -250,4 +268,4 @@ Agent Cockpit supports Claude Code and Kiro as its first two backends. As vendor
 
 ## Specification
 
-See [SPEC.md](SPEC.md) for a complete technical specification covering every API endpoint, data model, frontend behavior, security mechanism, and implementation detail.
+See [docs/SPEC.md](docs/SPEC.md) for a complete technical specification covering every API endpoint, data model, frontend behavior (V2 default UI and legacy V1), security mechanism, and implementation detail. The root `SPEC.md` is a thin redirect — all content lives under `docs/`.
