@@ -670,13 +670,29 @@ export class KiroAdapter extends BaseBackendAdapter {
 
       // ── Send prompt ────────────────────────────────────────────────────
       console.log(`[kiro] Sending prompt to session=${kiroSessionId} len=${promptText.length}`);
-      // When the session/prompt response arrives, signal the notification loop to stop
+      // Kiro has been observed returning the `session/prompt` JSON-RPC response
+      // early on long multi-agent turns, before `turn_end` arrives. Stopping the
+      // notification stream on the response therefore cut active streams off
+      // mid-turn. Instead, arm an idle grace timer when the response resolves,
+      // reset it on every incoming notification, and only stop the stream if
+      // Kiro truly goes silent (or on explicit `turn_end` / request failure).
+      const GRACE_PERIOD_MS = 60_000;
+      let graceTimer: NodeJS.Timeout | null = null;
+      const resetGraceTimer = () => {
+        if (graceTimer) clearTimeout(graceTimer);
+        graceTimer = setTimeout(() => {
+          console.log(`[kiro] No activity for ${GRACE_PERIOD_MS}ms after session/prompt response, stopping stream for session=${kiroSessionId}`);
+          client.stopNotifications();
+        }, GRACE_PERIOD_MS);
+      };
+
       client.request('session/prompt', {
         sessionId: kiroSessionId,
         prompt: [{ type: 'text', text: promptText }],
       }).then(() => {
-        client.stopNotifications();
+        resetGraceTimer();
       }).catch(() => {
+        if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
         client.stopNotifications();
       });
 
@@ -688,7 +704,9 @@ export class KiroAdapter extends BaseBackendAdapter {
       const toolToSubagent: Map<string, string> = new Map();
       const emittedSubagents = new Set<string>();
 
+      try {
       for await (const notification of client.notifications()) {
+        if (graceTimer) resetGraceTimer();
         if (state.aborted) {
           yield { type: 'error', error: 'Aborted by user' };
           yield { type: 'done' };
@@ -867,6 +885,9 @@ export class KiroAdapter extends BaseBackendAdapter {
 
       // Notification loop exited — either turn_end, prompt response, or process closed
       yield { type: 'done' };
+      } finally {
+        if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
+      }
     } catch (err) {
       yield { type: 'error', error: `Kiro error: ${(err as Error).message}` };
       yield { type: 'done' };
