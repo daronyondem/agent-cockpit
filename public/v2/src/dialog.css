@@ -1,0 +1,222 @@
+/* ============================================================
+   Dialog system — anchored popovers (reusable)
+   Usage: <DialogProvider><App/></DialogProvider>; inside a component,
+     const dialog = useDialog();
+     await dialog.confirm({ anchor, title, body, ... });
+   The dialog anchors to the HTMLElement passed as `anchor`.
+   When no anchor is given it falls back to viewport center (no arrow).
+   ============================================================ */
+
+.dlg-scrim{
+  position: fixed; inset: 0;
+  background: color-mix(in oklch, var(--bg), transparent 50%);
+  backdrop-filter: blur(2px);
+  z-index: 2000;
+  animation: dlg-scrim-in 140ms var(--easing);
+}
+@keyframes dlg-scrim-in{
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.dlg-panel{
+  position: fixed;
+  z-index: 2001;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-lg);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,.04) inset,
+    0 20px 40px -20px rgba(0,0,0,.4),
+    0 10px 30px -12px rgba(0,0,0,.35);
+  padding: 16px 18px 14px;
+  font-family: var(--ui-font);
+  transform-origin: top center;
+  animation: dlg-in 220ms var(--easing);
+  outline: none;
+}
+@keyframes dlg-in{
+  from { opacity: 0; transform: translateY(-6px); }
+  to   { opacity: 1; transform: translateY(0);    }
+}
+
+.dlg-arrow{
+  position: absolute;
+  width: 12px; height: 12px;
+  background: var(--surface);
+  transform: rotate(45deg);
+  border-top-left-radius: 2px;
+}
+.dlg-panel[data-placement="below"] .dlg-arrow{
+  top: -6px;
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+}
+.dlg-panel[data-placement="above"] .dlg-arrow{
+  bottom: -6px;
+  border-right: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+  border-top-left-radius: 0;
+  border-bottom-right-radius: 2px;
+}
+.dlg-panel[data-placement="above"]{ transform-origin: bottom center; animation: dlg-in-above 220ms var(--easing); }
+@keyframes dlg-in-above{
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0);   }
+}
+
+.dlg-head{
+  display: flex; align-items: center; gap: 8px;
+  margin-bottom: 4px;
+}
+.dlg-glyph{ display: inline-flex; }
+.dlg-eyebrow{
+  font-family: var(--mono-font);
+  font-size: 10.5px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--text-3);
+  flex: 1;
+}
+.dlg-panel[data-variant="warn"] .dlg-eyebrow,
+.dlg-panel[data-variant="error"] .dlg-eyebrow{
+  color: var(--status-error);
+}
+.dlg-esc{
+  font-family: var(--mono-font);
+  font-size: 10px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-4);
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+.dlg-title{
+  font-family: var(--prose-font);
+  font-size: 20px; line-height: 1.25; letter-spacing: -.01em;
+  font-weight: 500; color: var(--text);
+  margin: 2px 0 10px;
+}
+.dlg-body{
+  font-size: 13.5px; line-height: 1.55;
+  color: var(--text-2);
+  margin: 0 0 14px;
+}
+.dlg-body b{ color: var(--text); font-weight: 600; }
+.dlg-detail{
+  margin-top: 8px;
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  color: var(--text-3);
+  padding: 6px 9px;
+  background: color-mix(in oklch, var(--status-error), transparent 92%);
+  border: 1px solid color-mix(in oklch, var(--status-error), transparent 75%);
+  border-radius: var(--r-sm);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+.dlg-input-wrap{ margin: 0 0 14px; }
+.dlg-label{
+  font-size: 11px; font-weight: 600;
+  color: var(--text-2);
+  display: block; margin-bottom: 4px;
+}
+.dlg-input{
+  width: 100%; font: inherit;
+  padding: 8px 10px;
+  background: var(--bg-sunk);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-sm);
+  font-family: var(--mono-font);
+  font-size: 12.5px;
+  box-sizing: border-box;
+}
+.dlg-input:focus{
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.dlg-choices{ display: flex; flex-direction: column; gap: 4px; margin: 0 0 14px; }
+.dlg-choice{
+  display: grid;
+  grid-template-columns: 16px 1fr;
+  gap: 10px; align-items: start;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  background: var(--surface);
+}
+.dlg-choice:hover{ border-color: var(--border-strong); }
+.dlg-choice.active{
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.dlg-choice input{ position: absolute; opacity: 0; pointer-events: none; }
+.dlg-radio{
+  margin-top: 3px;
+  width: 14px; height: 14px; border-radius: 999px;
+  border: 1.5px solid var(--border-strong);
+  background: var(--bg-sunk);
+  position: relative;
+}
+.dlg-choice.active .dlg-radio{ border-color: var(--accent); }
+.dlg-choice.active .dlg-radio::after{
+  content: ""; position: absolute;
+  inset: 2.5px; border-radius: 999px;
+  background: var(--accent);
+}
+.dlg-choice-body{ display: flex; flex-direction: column; gap: 2px; }
+.dlg-choice-body b{ font-size: 13px; font-weight: 600; color: var(--text); }
+.dlg-choice-body em{ font-style: normal; font-size: 11.5px; color: var(--text-3); }
+
+.dlg-foot{
+  display: flex; align-items: center; gap: 8px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+.dlg-hint{
+  font-family: var(--mono-font);
+  font-size: 10.5px; color: var(--text-3);
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.dlg-hint kbd{
+  font-family: var(--mono-font);
+  font-size: 10px;
+  padding: 1px 5px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.dlg-btn{
+  appearance: none; font: inherit;
+  padding: 6px 12px;
+  font-size: 12.5px; font-weight: 500;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+}
+.dlg-btn.ghost{
+  border-color: var(--border);
+  background: transparent;
+  color: var(--text-2);
+}
+.dlg-btn.ghost:hover{ color: var(--text); background: var(--surface-2); }
+.dlg-btn.primary{
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+}
+.dlg-btn.primary:hover{ opacity: .9; }
+.dlg-btn.primary.danger{
+  background: var(--status-error);
+  color: #fff;
+  border-color: var(--status-error);
+}
+.dlg-btn.primary.danger:hover{
+  background: color-mix(in oklch, var(--status-error), black 12%);
+}

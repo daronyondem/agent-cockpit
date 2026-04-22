@@ -1,0 +1,210 @@
+/* ============================================================
+   Agent Cockpit — Design Tokens
+   3 directions × 2 themes. Everything drives off CSS vars.
+   ============================================================ */
+
+:root{
+  /* brand constant */
+  --brand-cyan: #02A6F5;
+  --brand-cyan-ink: #0088cc;
+
+  /* spacing scale */
+  --s-0: 0px;
+  --s-1: 2px;
+  --s-2: 4px;
+  --s-3: 6px;
+  --s-4: 8px;
+  --s-5: 10px;
+  --s-6: 12px;
+  --s-7: 14px;
+  --s-8: 16px;
+  --s-10: 20px;
+  --s-12: 24px;
+  --s-14: 28px;
+  --s-16: 32px;
+  --s-20: 40px;
+  --s-24: 48px;
+  --s-32: 64px;
+
+  /* type sizes */
+  --t-11: 11px;
+  --t-12: 12px;
+  --t-13: 13px;
+  --t-14: 14px;
+  --t-15: 15px;
+  --t-16: 16px;
+  --t-18: 18px;
+  --t-20: 20px;
+  --t-24: 24px;
+  --t-32: 32px;
+
+  /* density multipliers */
+  --density: 1;  /* 0.85 compact, 1 default, 1.15 spacious */
+
+  /* radius scale — overridden per direction */
+  --r-xs: 4px;
+  --r-sm: 6px;
+  --r-md: 10px;
+  --r-lg: 14px;
+  --r-xl: 20px;
+
+  /* status hues (theme-agnostic anchors) */
+  --status-running: #02A6F5;   /* cyan */
+  --status-awaiting: #E8A33D;  /* amber */
+  --status-done: #3FB27F;      /* green */
+  --status-error:  #E5484D;    /* red */
+  --status-subagent:#8B72E0;   /* purple */
+
+  /* durations */
+  --dur-1: 120ms;
+  --dur-2: 200ms;
+  --dur-3: 320ms;
+  --easing: cubic-bezier(.2,.7,.2,1);
+}
+
+/* ------------------------------------------------------------
+   DIRECTION A — Editorial + Cockpit Hybrid (primary)
+   Warm editorial chat surface; instrumented cockpit chrome.
+   ------------------------------------------------------------ */
+[data-direction="editorial"]{
+  /* LIGHT */
+  --bg:            #FAF8F4;              /* warm paper */
+  --bg-sunk:       #F3EFE8;              /* sidebar / rails */
+  --surface:       #FFFFFF;              /* cards, input */
+  --surface-2:     #F7F3EC;              /* nested cards */
+  --border:        rgba(30, 25, 18, .09);
+  --border-strong: rgba(30, 25, 18, .16);
+  --text:          #1A1613;              /* ink */
+  --text-2:        #4A453E;              /* body secondary */
+  --text-3:        #847D72;              /* meta */
+  --text-4:        #B2AB9F;              /* placeholder */
+  --accent:        var(--brand-cyan);
+  --accent-ink:    #0587C3;
+  --accent-soft:   rgba(2, 166, 245, .10);
+  --shadow-1: 0 1px 0 rgba(30,25,18,.04), 0 1px 2px rgba(30,25,18,.04);
+  --shadow-2: 0 2px 6px rgba(30,25,18,.06), 0 10px 24px -12px rgba(30,25,18,.10);
+  --focus-ring: 0 0 0 3px rgba(2, 166, 245, .22);
+  --ui-font: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  --prose-font: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --mono-font: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --r-xs: 4px; --r-sm: 7px; --r-md: 11px; --r-lg: 14px; --r-xl: 20px;
+}
+[data-direction="editorial"][data-theme="dark"]{
+  --bg:            #14110E;
+  --bg-sunk:       #0E0C0A;
+  --surface:       #1B1714;
+  --surface-2:     #221D19;
+  --border:        rgba(255, 248, 232, .07);
+  --border-strong: rgba(255, 248, 232, .13);
+  --text:          #F2ECE0;
+  --text-2:        #C7BFB1;
+  --text-3:        #8F877A;
+  --text-4:        #5C564C;
+  --accent:        var(--brand-cyan);
+  --accent-ink:    #5BC7FF;
+  --accent-soft:   rgba(2, 166, 245, .14);
+  --shadow-1: 0 1px 0 rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2: 0 2px 6px rgba(0,0,0,.4), 0 16px 32px -12px rgba(0,0,0,.6);
+}
+
+/* ------------------------------------------------------------
+   DIRECTION B — Terminal Calm
+   Cooler grays, slightly denser, mono-accented instrumentation.
+   ------------------------------------------------------------ */
+[data-direction="terminal"]{
+  --bg:            #F5F6F7;
+  --bg-sunk:       #ECEEF1;
+  --surface:       #FFFFFF;
+  --surface-2:     #F2F4F6;
+  --border:        rgba(20, 25, 35, .08);
+  --border-strong: rgba(20, 25, 35, .16);
+  --text:          #0E141C;
+  --text-2:        #3C4656;
+  --text-3:        #7A8597;
+  --text-4:        #AEB6C2;
+  --accent:        var(--brand-cyan);
+  --accent-ink:    #0587C3;
+  --accent-soft:   rgba(2, 166, 245, .10);
+  --shadow-1: 0 1px 0 rgba(20,25,35,.04), 0 1px 2px rgba(20,25,35,.05);
+  --shadow-2: 0 2px 4px rgba(20,25,35,.06), 0 8px 20px -10px rgba(20,25,35,.12);
+  --focus-ring: 0 0 0 3px rgba(2, 166, 245, .25);
+  --ui-font: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  --prose-font: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  --mono-font: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --r-xs: 3px; --r-sm: 5px; --r-md: 8px; --r-lg: 10px; --r-xl: 14px;
+}
+[data-direction="terminal"][data-theme="dark"]{
+  --bg:            #0D1117;
+  --bg-sunk:       #080B10;
+  --surface:       #141A23;
+  --surface-2:     #1B222C;
+  --border:        rgba(200, 215, 240, .07);
+  --border-strong: rgba(200, 215, 240, .14);
+  --text:          #E6EDF3;
+  --text-2:        #B0BAC8;
+  --text-3:        #7A8597;
+  --text-4:        #545D6B;
+  --accent:        var(--brand-cyan);
+  --accent-ink:    #5BC7FF;
+  --accent-soft:   rgba(2, 166, 245, .15);
+  --shadow-1: 0 1px 0 rgba(0,0,0,.4), 0 1px 2px rgba(0,0,0,.35);
+  --shadow-2: 0 2px 4px rgba(0,0,0,.35), 0 10px 24px -10px rgba(0,0,0,.55);
+}
+
+/* ------------------------------------------------------------
+   DIRECTION C — Paper Warm
+   Most editorial: stronger serif, roomier, soft sepia cast.
+   ------------------------------------------------------------ */
+[data-direction="paper"]{
+  --bg:            #F6F1E7;
+  --bg-sunk:       #EDE6D7;
+  --surface:       #FBF7EE;
+  --surface-2:     #F2ECDE;
+  --border:        rgba(60, 40, 20, .10);
+  --border-strong: rgba(60, 40, 20, .18);
+  --text:          #1F1812;
+  --text-2:        #4F4438;
+  --text-3:        #867A68;
+  --text-4:        #B3A995;
+  --accent:        #0D93D8;     /* slightly cooled cyan to sit with warm bg */
+  --accent-ink:    #066FA3;
+  --accent-soft:   rgba(13, 147, 216, .10);
+  --shadow-1: 0 1px 0 rgba(60,40,20,.05), 0 1px 2px rgba(60,40,20,.05);
+  --shadow-2: 0 2px 6px rgba(60,40,20,.07), 0 12px 28px -14px rgba(60,40,20,.12);
+  --focus-ring: 0 0 0 3px rgba(13, 147, 216, .25);
+  --ui-font: "General Sans", ui-sans-serif, system-ui, sans-serif;
+  --prose-font: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --mono-font: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --r-xs: 5px; --r-sm: 8px; --r-md: 12px; --r-lg: 16px; --r-xl: 22px;
+}
+[data-direction="paper"][data-theme="dark"]{
+  --bg:            #151108;
+  --bg-sunk:       #0E0B05;
+  --surface:       #1D1809;
+  --surface-2:     #241E0D;
+  --border:        rgba(255, 235, 190, .08);
+  --border-strong: rgba(255, 235, 190, .15);
+  --text:          #F5EBD3;
+  --text-2:        #CEC2A2;
+  --text-3:        #8F866D;
+  --text-4:        #5D5640;
+  --accent:        #3EB5F0;
+  --accent-ink:    #82D5FF;
+  --accent-soft:   rgba(62, 181, 240, .15);
+  --shadow-1: 0 1px 0 rgba(0,0,0,.5), 0 1px 2px rgba(0,0,0,.4);
+  --shadow-2: 0 2px 6px rgba(0,0,0,.45), 0 16px 32px -12px rgba(0,0,0,.7);
+}
+
+/* ------------------------------------------------------------
+   Radius tweaks (overrides any direction)
+   ------------------------------------------------------------ */
+[data-radius="sharp"]   { --r-xs: 2px; --r-sm: 3px; --r-md: 4px;  --r-lg: 6px;  --r-xl: 8px;  }
+[data-radius="moderate"]{ /* default per direction */ }
+[data-radius="soft"]    { --r-xs: 6px; --r-sm: 10px; --r-md: 14px; --r-lg: 20px; --r-xl: 28px; }
+
+/* ------------------------------------------------------------
+   Density tweaks
+   ------------------------------------------------------------ */
+[data-density="compact"]  { --density: 0.82; }
+[data-density="default"]  { --density: 1; }
+[data-density="spacious"] { --density: 1.18; }
