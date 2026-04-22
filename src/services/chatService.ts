@@ -519,6 +519,7 @@ export class ChatService {
           lastMessage: conv.lastMessage,
           usage: conv.usage || null,
           archived: conv.archived,
+          unread: conv.unread,
         });
       }
     }
@@ -557,6 +558,21 @@ export class ChatService {
     return true;
   }
 
+  async setConversationUnread(id: string, unread: boolean): Promise<boolean> {
+    const result = await this._getConvFromIndex(id);
+    if (!result) return false;
+    const { hash, index, convEntry } = result;
+    if (unread) {
+      if (convEntry.unread === true) return true;
+      convEntry.unread = true;
+    } else {
+      if (!convEntry.unread) return true;
+      delete convEntry.unread;
+    }
+    await this._writeWorkspaceIndex(hash, index);
+    return true;
+  }
+
   async deleteConversation(id: string): Promise<boolean> {
     const result = await this._getConvFromIndex(id);
     if (!result) return false;
@@ -587,7 +603,16 @@ export class ChatService {
     const result = await this._getConvFromIndex(convId);
     if (!result) return;
     const { hash, index, convEntry } = result;
+    const prevBackend = convEntry.backend;
     convEntry.backend = backend;
+    // contextUsagePercentage is a live snapshot from the backend (Kiro-only
+    // today), not a cumulative value. Clear it on backend switch so a stale
+    // Kiro percentage doesn't bleed into a Claude Code chip (or vice versa).
+    if (prevBackend !== backend) {
+      if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
+      const activeSession = convEntry.sessions.find(s => s.active);
+      if (activeSession?.usage) activeSession.usage.contextUsagePercentage = undefined;
+    }
     await this._writeWorkspaceIndex(hash, index);
   }
 
@@ -835,6 +860,10 @@ export class ChatService {
     const newSessionId = this._newId();
 
     delete convEntry.messageQueue;
+    // contextUsagePercentage is a live snapshot tied to the prior session's
+    // context window; clear it so the chip doesn't show a stale value before
+    // the new session's first turn reports fresh usage.
+    if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
     convEntry.currentSessionId = newSessionId;
     convEntry.title = 'New Chat';
     convEntry.sessions.push({

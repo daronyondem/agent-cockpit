@@ -152,6 +152,13 @@ function App(){
     });
   }, [dialog]);
 
+  /* Push the active conv into StreamStore so the unread auto-marker on
+     `done` knows whether the completing stream belongs to the visible
+     conv (don't flag) vs a background conv (do flag). */
+  React.useEffect(() => {
+    window.StreamStore.setActiveConvId(activeConvId);
+  }, [activeConvId]);
+
   const onArchived = React.useCallback(() => {
     setActiveConvId(null);
     AgentApi.invalidateConversations();
@@ -173,8 +180,21 @@ function App(){
     setKbView(null);
     setFilesView(null);
     setSettingsView(false);
+    /* Push the active id into StreamStore synchronously *before* markRead
+       so any `done` frame that fires between this call and the React-effect
+       sync below already sees the new active id and doesn't re-flag the
+       just-selected conv as unread. */
+    window.StreamStore.setActiveConvId(id);
     setActiveConvId(id);
     setSbOpen(false);
+    /* Clear the unread dot on selection. markRead always touches local
+       state so convStates() can override the stale `c.unread` the sidebar
+       may still have from the cached server list. */
+    if (id) window.StreamStore.markRead(id);
+  }, []);
+
+  const onMarkUnread = React.useCallback((id) => {
+    if (id) window.StreamStore.markUnread(id);
   }, []);
 
   const onOpenKb = React.useCallback((hash, label) => {
@@ -298,6 +318,7 @@ function App(){
       <Sidebar
         activeId={activeConvId}
         onSelect={onSelectConv}
+        onMarkUnread={onMarkUnread}
         convStates={convStates}
         onOpenKb={onOpenKb}
         onOpenFiles={onOpenFiles}
@@ -750,7 +771,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
           </> : null}
         </div>
         <div className="right">
-          {usage ? <ContextChip usage={usage}/> : null}
+          {usage ? <ContextChip backendId={conv.backend} usage={usage}/> : null}
           <button className="btn ghost" onClick={handleDownload} title="Download as markdown">↓ Download</button>
           <button className="btn ghost" onClick={(e) => handleReset(e.currentTarget)} disabled={streaming || sending || resetting} title="Reset session">{resetting ? '↺ Resetting…' : '↺ Reset'}</button>
           <button className="btn ghost" onClick={() => setSessionsOpen(true)} title="Session history">{Ico.clock(12)} Sessions</button>
@@ -1149,7 +1170,7 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs }){
             </div>
           </>
         )}
-        {showActions ? (
+        {showActions && !isUser ? (
           <div className="msg-actions">
             <button type="button" className="msg-action" onClick={() => copy('msg')}>
               {copied === 'msg' ? 'Copied!' : 'Copy'}
@@ -1160,6 +1181,16 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs }){
           </div>
         ) : null}
       </div>
+      {showActions && isUser ? (
+        <div className="msg-actions">
+          <button type="button" className="msg-action" onClick={() => copy('msg')}>
+            {copied === 'msg' ? 'Copied!' : 'Copy'}
+          </button>
+          <button type="button" className="msg-action" onClick={() => copy('md')} title="Copy raw markdown">
+            {copied === 'md' ? 'Copied!' : 'Copy MD'}
+          </button>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -1772,23 +1803,22 @@ function collapseProgressRuns(messages){
   return out;
 }
 
-function ContextChip({ usage }){
-  const pct = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
-  const total = (usage.inputTokens || 0) + (usage.outputTokens || 0);
-  if (pct == null && total === 0) return null;
-  const tokensLabel = total >= 1000 ? (total / 1000).toFixed(1) + 'k' : String(total);
-  const cost = typeof usage.costUsd === 'number' ? usage.costUsd : 0;
-  const costLabel = cost > 0 ? ' · $' + cost.toFixed(cost >= 1 ? 2 : 4) : '';
-  const title = `in ${(usage.inputTokens || 0).toLocaleString()} · out ${(usage.outputTokens || 0).toLocaleString()} tokens${costLabel ? costLabel : ''}`;
-  return (
+function ContextChip({ backendId, usage }){
+  const renderer = getChipRenderer(backendId);
+  const chipText = renderer.renderChipText(usage);
+  if (chipText == null) return null;
+  const card = renderer.renderTooltipCard(usage);
+  const chip = (
     <span
       className="u-mono"
-      title={title}
-      style={{fontSize:11,color:"var(--text-3)",padding:"0 6px"}}
+      tabIndex={0}
+      style={{fontSize:11,color:"var(--text-3)",padding:"0 6px",cursor:"help"}}
     >
-      {pct != null ? `${pct.toFixed(2)}% context · ` : ''}{tokensLabel}
+      {chipText}
     </span>
   );
+  if (!card) return chip;
+  return <Tip variant="stat" rich={card}>{chip}</Tip>;
 }
 
 function msgTime(iso){

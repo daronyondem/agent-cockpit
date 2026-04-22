@@ -53,6 +53,7 @@
    *   ws: WebSocket | null,
    *   wsOpening: Promise<void> | null,
    *   uiState: 'streaming' | 'awaiting' | 'error' | null,
+   *   unread: boolean,
    *   pendingInteraction: PendingInteraction | null,
    *   respondPending: boolean,
    *   composerBackend: string | null,
@@ -68,6 +69,10 @@
   const convSubs = new Map();
   /** @type {Set<() => void>} */
   const globalSubs = new Set();
+  /* Which conv the user is currently viewing. When a stream finishes on any
+     other conv we flag it as unread so the sidebar can highlight it. The
+     shell keeps this in sync via setActiveConvId in onSelectConv. */
+  let activeConvId = null;
 
   /* Draft localStorage persistence — survives tab crash / reload so the user
      doesn't lose a half-written message. Only text + *completed* attachments
@@ -165,6 +170,7 @@
       ws: null,
       wsOpening: null,
       uiState: null,
+      unread: false,
       pendingInteraction: null,
       respondPending: false,
       composerBackend: null,
@@ -187,20 +193,21 @@
     return states.get(convId) || null;
   }
 
-  function commit(convId, next, prev){
+  function commit(convId, next, prev, wasNew){
     states.set(convId, next);
     const subs = convSubs.get(convId);
     if (subs) subs.forEach(l => { try { l(); } catch {} });
-    if (prev.uiState !== next.uiState) {
+    if (wasNew || prev.uiState !== next.uiState || prev.unread !== next.unread) {
       globalSubs.forEach(l => { try { l(); } catch {} });
     }
   }
 
   function update(convId, patch){
+    const wasNew = !states.has(convId);
     const prev = ensureState(convId);
     const next = typeof patch === 'function' ? patch(prev) : { ...prev, ...patch };
     if (next === prev) return;
-    commit(convId, next, prev);
+    commit(convId, next, prev, wasNew);
   }
 
   function subscribe(convId, listener){
@@ -221,7 +228,16 @@
 
   function convStates(){
     const out = {};
-    for (const [id, s] of states) if (s.uiState) out[id] = s.uiState;
+    for (const [id, s] of states) {
+      if (s.uiState) out[id] = s.uiState;
+      else if (s.unread) out[id] = 'unread';
+      /* 'idle' sentinel — touched conv with no active state and no unread
+         flag. Sidebar uses this to override any stale `c.unread=true` left
+         in the server-cached conversation list (from before the user marked
+         it read this session). For untouched convs (no ConvState), c.unread
+         is the source of truth. */
+      else out[id] = 'idle';
+    }
     return out;
   }
 
@@ -537,6 +553,13 @@
       return;
     }
     if (frame.type === 'done') {
+      /* Flag conversation unread when a response completes on a non-active
+         conv and we're landing in the idle resting state (no error, no
+         pending interaction). The server persists via PATCH /unread so the
+         dot survives reload. */
+      const markUnreadNow = convId !== activeConvId
+        && !states.get(convId)?.streamError
+        && !states.get(convId)?.pendingInteraction;
       update(convId, cur => ({
         ...cur,
         streaming: false,
@@ -545,7 +568,11 @@
         uiState: cur.streamError
           ? 'error'
           : cur.pendingInteraction ? 'awaiting' : null,
+        unread: markUnreadNow ? true : cur.unread,
       }));
+      if (markUnreadNow) {
+        AgentApi.markConversationUnread(convId, true).catch(() => {});
+      }
       /* Auto-drain queue — if the just-finished run leaves us idle (no
          pending plan/question, no stream error) and there's a queued
          message, pop the head and send it. */
@@ -1124,6 +1151,53 @@
     update(convId, cur => ({ ...cur, conv: { ...cur.conv, ...patch } }));
   }
 
+  /* Active conv tracking — the shell pushes this on route change so the
+     `done` handler knows whether a completing stream belongs to the
+     currently-viewed conv (and should NOT mark unread). */
+  function setActiveConvId(id){
+    const prev = activeConvId;
+    activeConvId = id || null;
+    if (prev !== activeConvId) {
+      /* Touching the active conv may expose or hide the unread dot on
+         whichever row just lost/gained focus — nudge the sidebar. */
+      globalSubs.forEach(l => { try { l(); } catch {} });
+    }
+  }
+
+  /* Mark a conversation as (un)read. Optimistically updates local state so
+     the sidebar flips immediately; the server PATCH runs in the background
+     and is fire-and-forget — on error the next `/conversations` fetch will
+     reconcile. `unread:true` creates a ConvState entry if the user hasn't
+     visited the conv this session (manual dot click on a cold row), so
+     convStates() can surface it. */
+  function markUnread(convId){
+    const cur = states.get(convId);
+    if (cur && cur.unread) return;
+    if (cur) {
+      update(convId, { unread: true });
+    } else {
+      const next = { ...blankState(convId), unread: true };
+      const prev = blankState(convId);
+      commit(convId, next, prev, true);
+    }
+    AgentApi.markConversationUnread(convId, true).catch(() => {});
+  }
+
+  function markRead(convId){
+    const cur = states.get(convId);
+    if (cur) {
+      if (cur.unread) update(convId, { unread: false });
+    } else {
+      /* Even cold convs (no ConvState yet) need a touched entry so
+         convStates() returns 'idle' and the sidebar overrides the stale
+         `c.unread=true` it may still have from the server-cached list. */
+      const next = blankState(convId);
+      const prev = blankState(convId);
+      commit(convId, next, prev, true);
+    }
+    AgentApi.markConversationUnread(convId, false).catch(() => {});
+  }
+
   async function archive(convId){
     const s = states.get(convId);
     if (!s || s.streaming || s.sending) return false;
@@ -1133,7 +1207,7 @@
       const prev = states.get(convId);
       states.delete(convId);
       convSubs.delete(convId);
-      if (prev && prev.uiState) globalSubs.forEach(l => { try { l(); } catch {} });
+      if (prev && (prev.uiState || prev.unread)) globalSubs.forEach(l => { try { l(); } catch {} });
       return true;
     } catch (err) {
       update(convId, { streamError: err.message || String(err) });
@@ -1169,6 +1243,9 @@
     subscribe,
     subscribeGlobal,
     convStates,
+    setActiveConvId,
+    markRead,
+    markUnread,
     parseUploadedFilesTag,
     attachmentKindFromPath,
   };

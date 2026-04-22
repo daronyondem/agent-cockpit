@@ -191,6 +191,13 @@ export interface ConversationEntry {
   usageByBackend?: Record<string, Usage>;
   sessions: SessionEntry[];
   archived?: boolean;
+  /**
+   * True when the conversation has received a new response since the user
+   * last opened it. Set by the client when a stream completes on a non-active
+   * conversation (or manually via the sidebar dot); cleared when the user
+   * selects the conversation. Absent/false for read conversations.
+   */
+  unread?: boolean;
   messageQueue?: QueuedMessage[];
 }
 
@@ -281,6 +288,8 @@ export interface ConversationListItem {
   lastMessage: string | null;
   usage: Usage | null;
   archived?: boolean;
+  /** Mirror of `ConversationEntry.unread` so the sidebar can render unread dots without a second round-trip. */
+  unread?: boolean;
 }
 
 // ── Settings ─────────────────────────────────────────────────────────────────

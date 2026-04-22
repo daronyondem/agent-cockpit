@@ -137,6 +137,14 @@
     return res.json().catch(() => ({}));
   }
 
+  async function markConversationUnread(id, unread){
+    const res = await chatFetch('conversations/' + encodeURIComponent(id) + '/unread', {
+      method: 'PATCH',
+      body: { unread: !!unread },
+    });
+    return res.json().catch(() => ({}));
+  }
+
   async function renameConversation(id, title){
     const res = await chatFetch('conversations/' + encodeURIComponent(id), {
       method: 'PUT',
@@ -557,6 +565,7 @@
     invalidateConversations,
     createConversation,
     restoreConversation,
+    markConversationUnread,
     renameConversation,
     deleteConversation,
     getVersion,

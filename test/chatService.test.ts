@@ -284,6 +284,59 @@ describe('restoreConversation', () => {
   });
 });
 
+describe('setConversationUnread', () => {
+  test('sets unread flag on conversation entry', async () => {
+    const conv = await service.createConversation('Mark Unread', '/tmp/work');
+    expect(await service.setConversationUnread(conv.id, true)).toBe(true);
+
+    const hash = workspaceHash('/tmp/work');
+    const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const entry = index.conversations.find((c: any) => c.id === conv.id);
+    expect(entry.unread).toBe(true);
+  });
+
+  test('clears unread flag (deletes field) when unread=false', async () => {
+    const conv = await service.createConversation('Clear Unread', '/tmp/work');
+    await service.setConversationUnread(conv.id, true);
+
+    expect(await service.setConversationUnread(conv.id, false)).toBe(true);
+
+    const hash = workspaceHash('/tmp/work');
+    const indexPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json');
+    const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+    const entry = index.conversations.find((c: any) => c.id === conv.id);
+    expect(entry.unread).toBeUndefined();
+    expect('unread' in entry).toBe(false);
+  });
+
+  test('idempotent — repeat true returns true and does not duplicate', async () => {
+    const conv = await service.createConversation('Idempotent');
+    expect(await service.setConversationUnread(conv.id, true)).toBe(true);
+    expect(await service.setConversationUnread(conv.id, true)).toBe(true);
+  });
+
+  test('idempotent — clearing already-clear conversation returns true', async () => {
+    const conv = await service.createConversation('Already Clear');
+    expect(await service.setConversationUnread(conv.id, false)).toBe(true);
+  });
+
+  test('returns false for non-existent id', async () => {
+    expect(await service.setConversationUnread('nope', true)).toBe(false);
+    expect(await service.setConversationUnread('nope', false)).toBe(false);
+  });
+
+  test('listConversations surfaces unread on summary', async () => {
+    const conv = await service.createConversation('Surfaced');
+    await service.setConversationUnread(conv.id, true);
+
+    const list = await service.listConversations();
+    const item = list.find(c => c.id === conv.id);
+    expect(item).toBeDefined();
+    expect(item!.unread).toBe(true);
+  });
+});
+
 describe('listConversations with archived filter', () => {
   test('default excludes archived', async () => {
     const c1 = await service.createConversation('Active');
@@ -350,6 +403,31 @@ describe('updateConversationBackend', () => {
 
     const loaded = await service.getConversation(conv.id);
     expect(loaded!.backend).toBe('openai');
+  });
+
+  test('clears contextUsagePercentage on backend change', async () => {
+    const conv = await service.createConversation('Test');
+    await service.updateConversationBackend(conv.id, 'kiro');
+    await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, contextUsagePercentage: 42 }, 'kiro');
+
+    let usage = await service.getUsage(conv.id);
+    expect(usage!.contextUsagePercentage).toBe(42);
+
+    await service.updateConversationBackend(conv.id, 'claude-code');
+
+    usage = await service.getUsage(conv.id);
+    expect(usage!.contextUsagePercentage).toBeUndefined();
+  });
+
+  test('preserves contextUsagePercentage when backend is unchanged', async () => {
+    const conv = await service.createConversation('Test');
+    await service.updateConversationBackend(conv.id, 'kiro');
+    await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, contextUsagePercentage: 42 }, 'kiro');
+
+    await service.updateConversationBackend(conv.id, 'kiro');
+
+    const usage = await service.getUsage(conv.id);
+    expect(usage!.contextUsagePercentage).toBe(42);
   });
 });
 
@@ -828,6 +906,20 @@ describe('resetSession', () => {
 
   test('returns null for non-existent conversation', async () => {
     expect(await service.resetSession('nope')).toBeNull();
+  });
+
+  test('clears contextUsagePercentage on reset', async () => {
+    const conv = await service.createConversation('Test');
+    await service.updateConversationBackend(conv.id, 'kiro');
+    await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, contextUsagePercentage: 42 }, 'kiro');
+
+    let usage = await service.getUsage(conv.id);
+    expect(usage!.contextUsagePercentage).toBe(42);
+
+    await service.resetSession(conv.id);
+
+    usage = await service.getUsage(conv.id);
+    expect(usage!.contextUsagePercentage).toBeUndefined();
   });
 });
 

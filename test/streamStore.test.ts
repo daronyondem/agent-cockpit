@@ -60,6 +60,7 @@ beforeEach(() => {
     chatWsUrl: (id: string) => `ws://test/conv/${id}`,
     fetch: jest.fn(),
     invalidateConversations: jest.fn(),
+    markConversationUnread: jest.fn().mockResolvedValue({}),
   };
   (window as any).AgentApi = (global as any).AgentApi;
 
@@ -726,3 +727,119 @@ describe('draft persistence', () => {
     expect(Store.getState('c1').input).toBe('live input');
   });
 });
+
+describe('unread', () => {
+  test('done frame on a non-active conv flips unread:true and POSTs the flag', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    Store.setActiveConvId('other');
+
+    ws.dispatch({ type: 'done' });
+
+    expect(Store.getState('c1').unread).toBe(true);
+    expect(api.markConversationUnread).toHaveBeenCalledWith('c1', true);
+    expect(Store.convStates()['c1']).toBe('unread');
+  });
+
+  test('done frame on the active conv does NOT mark unread', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    Store.setActiveConvId('c1');
+
+    ws.dispatch({ type: 'done' });
+
+    expect(Store.getState('c1').unread).toBe(false);
+    expect(api.markConversationUnread).not.toHaveBeenCalled();
+    expect(Store.convStates()['c1']).toBe('idle');
+  });
+
+  test('done frame with pendingInteraction does NOT mark unread (awaiting wins)', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    Store.setActiveConvId('other');
+
+    ws.dispatch({
+      type: 'tool_activity', tool: 'ExitPlanMode',
+      isPlanMode: true, planAction: 'exit', planContent: 'p', id: 't',
+    });
+    ws.dispatch({ type: 'done' });
+
+    expect(Store.getState('c1').unread).toBe(false);
+    expect(api.markConversationUnread).not.toHaveBeenCalled();
+    expect(Store.convStates()['c1']).toBe('awaiting');
+  });
+
+  test('done frame with streamError does NOT mark unread (error wins)', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    Store.setActiveConvId('other');
+
+    ws.dispatch({ type: 'error', error: 'boom' });
+    ws.dispatch({ type: 'done' });
+
+    expect(Store.getState('c1').unread).toBe(false);
+    expect(api.markConversationUnread).not.toHaveBeenCalled();
+    expect(Store.convStates()['c1']).toBe('error');
+  });
+
+  test('markRead clears unread and POSTs unread:false', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    Store.setActiveConvId('other');
+    ws.dispatch({ type: 'done' });
+    expect(Store.getState('c1').unread).toBe(true);
+    api.markConversationUnread.mockClear();
+
+    Store.markRead('c1');
+
+    expect(Store.getState('c1').unread).toBe(false);
+    expect(api.markConversationUnread).toHaveBeenCalledWith('c1', false);
+    expect(Store.convStates()['c1']).toBe('idle');
+  });
+
+  test('markRead on a cold conv creates an idle entry to override stale c.unread', async () => {
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    expect(Store.getState('cold')).toBeNull();
+
+    Store.markRead('cold');
+
+    expect(Store.getState('cold')).not.toBeNull();
+    expect(Store.getState('cold').unread).toBe(false);
+    expect(Store.convStates()['cold']).toBe('idle');
+    expect(api.markConversationUnread).toHaveBeenCalledWith('cold', false);
+  });
+
+  test('markUnread on a cold conv creates an unread entry and POSTs', async () => {
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    Store.markUnread('cold');
+
+    expect(Store.getState('cold').unread).toBe(true);
+    expect(Store.convStates()['cold']).toBe('unread');
+    expect(api.markConversationUnread).toHaveBeenCalledWith('cold', true);
+  });
+
+  test('subscribeGlobal fires when a new conv first enters convStates', async () => {
+    const Store = (window as any).StreamStore;
+    const listener = jest.fn();
+    Store.subscribeGlobal(listener);
+
+    Store.markUnread('cold');
+
+    expect(listener).toHaveBeenCalled();
+  });
+});
+

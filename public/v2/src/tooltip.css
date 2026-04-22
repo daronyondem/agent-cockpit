@@ -1,0 +1,280 @@
+/* ============================================================
+   Tooltip system — editorial + cockpit hybrid
+   One primitive (<Tip>) covers every hover case: simple labels,
+   keyboard shortcuts, and rich cards (stat / entity / code / explain).
+   Viewport-clamped, auto-flips above/below, arrow tracks the anchor.
+   ============================================================ */
+
+.tt{
+  position: fixed;
+  z-index: 200;
+  pointer-events: none;
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r-md);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,.04) inset,
+    0 12px 32px -14px rgba(0,0,0,.55),
+    0 6px 18px -10px rgba(0,0,0,.4);
+  font-family: var(--ui-font);
+  transform-origin: top center;
+  animation: tt-pop 160ms var(--easing);
+}
+.tt[data-pinned="true"]{ pointer-events: auto; }
+.tt[data-placement="above"]{ transform-origin: bottom center; }
+
+@keyframes tt-pop{
+  from { opacity: 0; transform: scale(.96); }
+  to   { opacity: 1; transform: scale(1);   }
+}
+
+/* arrow */
+.tt-arrow{
+  position: absolute;
+  width: 10px; height: 10px;
+  background: var(--surface);
+  transform: rotate(45deg);
+}
+.tt[data-placement="below"] .tt-arrow{
+  top: -5px;
+  border-left: 1px solid var(--border-strong);
+  border-top: 1px solid var(--border-strong);
+  border-top-left-radius: 2px;
+}
+.tt[data-placement="above"] .tt-arrow{
+  bottom: -5px;
+  border-right: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+  border-bottom-right-radius: 2px;
+}
+
+/* ---------- SIMPLE (label) ---------- */
+.tt[data-variant="label"]{
+  padding: 5px 9px;
+  font-size: 11.5px; font-weight: 500;
+  color: var(--text);
+  background: var(--bg-sunk);
+  border-color: var(--border-strong);
+  border-radius: var(--r-sm);
+  white-space: nowrap;
+  box-shadow: 0 4px 12px -6px rgba(0,0,0,.4);
+}
+.tt[data-variant="label"] .tt-arrow{ background: var(--bg-sunk); }
+.tt[data-variant="label"] .tt-kb{
+  font-family: var(--mono-font); font-size: 10px;
+  margin-left: 6px; opacity: .7;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+}
+
+/* ---------- RICH (stat / entity / explain / code) ---------- */
+.tt[data-variant="rich"],
+.tt[data-variant="stat"],
+.tt[data-variant="entity"],
+.tt[data-variant="explain"],
+.tt[data-variant="code"]{
+  width: 320px;
+  padding: 0;
+  overflow: hidden;
+}
+.tt-header{
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px 8px;
+}
+.tt-eye{
+  font-family: var(--mono-font);
+  font-size: 10px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--text-3);
+  flex: 1;
+}
+.tt-status-dot{
+  width: 7px; height: 7px; border-radius: 999px;
+  background: var(--status-running);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--status-running), transparent 80%);
+}
+.tt-h{
+  font-family: var(--prose-font);
+  font-size: 17px; line-height: 1.25; letter-spacing: -.01em;
+  font-weight: 500; color: var(--text);
+  margin: 0;
+  padding: 0 14px 8px;
+}
+.tt-h .u-dim{ color: var(--text-3); font-weight: 400; }
+
+.tt-section{
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+.tt-section:first-child{ border-top: 0; }
+.tt-section-label{
+  font-family: var(--mono-font);
+  font-size: 9.5px; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--text-3);
+  margin: 0 0 6px;
+}
+
+/* stat rows */
+.tt-rows{ display: flex; flex-direction: column; gap: 5px; }
+.tt-kv{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: baseline;
+  font-size: 12px;
+}
+.tt-kv > span{
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 10.5px; letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.tt-kv > b{
+  color: var(--text);
+  font-weight: 600;
+  font-family: var(--mono-font);
+  font-size: 12.5px;
+  letter-spacing: -.01em;
+}
+.tt-kv > b em{
+  font-style: normal; font-weight: 400;
+  color: var(--text-3);
+  font-size: 10.5px;
+  margin-left: 4px;
+}
+
+/* context bar */
+.tt-bar-wrap{
+  display: flex; flex-direction: column; gap: 4px;
+  font-family: var(--mono-font); font-size: 10.5px;
+}
+.tt-bar-head{ display: flex; align-items: baseline; justify-content: space-between; color: var(--text-2); }
+.tt-bar-head b{ color: var(--text); font-weight: 600; font-size: 12px; }
+.tt-bar-head em{ font-style: normal; color: var(--text-3); }
+.tt-bar{
+  height: 5px; background: var(--bg-sunk);
+  border-radius: 999px; overflow: hidden;
+  border: 1px solid var(--border);
+}
+.tt-bar i{
+  display: block; height: 100%;
+  background: linear-gradient(90deg, var(--accent), color-mix(in oklch, var(--accent), white 10%));
+  border-radius: inherit;
+}
+
+/* model split */
+.tt-models{ display: flex; flex-direction: column; gap: 6px; }
+.tt-model{
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center; gap: 8px;
+  font-family: var(--mono-font); font-size: 11px;
+}
+.tt-model .sw{ width: 8px; height: 8px; border-radius: 2px; }
+.tt-model .nm{ color: var(--text-2); }
+.tt-model b{ color: var(--text); font-weight: 600; }
+.tt-model em{ color: var(--text-3); font-style: normal; margin-left: 6px; font-size: 10px; }
+
+/* footer link */
+.tt-foot{
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px 10px;
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklch, var(--surface-2), transparent 30%);
+}
+.tt-foot .hint{
+  font-family: var(--mono-font); font-size: 10px;
+  color: var(--text-3);
+}
+.tt-foot .spacer{ flex: 1; }
+.tt-foot a{
+  font-family: var(--ui-font);
+  font-size: 11.5px;
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.tt-foot a:hover{ text-decoration: underline; }
+
+/* code preview variant */
+.tt[data-variant="code"] .tt-code{
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  background: var(--bg-sunk);
+  color: var(--text-2);
+  padding: 10px 14px;
+  line-height: 1.55;
+  max-height: 160px;
+  overflow: hidden;
+  position: relative;
+}
+.tt[data-variant="code"] .tt-code::after{
+  content: ""; position: absolute; bottom: 0; left: 0; right: 0;
+  height: 36px;
+  background: linear-gradient(to bottom, transparent, var(--bg-sunk));
+  pointer-events: none;
+}
+.tt-code .ln{ color: var(--text-4); display: inline-block; width: 22px; text-align: right; margin-right: 8px; }
+.tt-code .add{ color: var(--status-done); }
+.tt-code .del{ color: var(--status-error); }
+
+/* entity variant */
+.tt[data-variant="entity"] .tt-entity-head{
+  display: flex; align-items: center; gap: 10px;
+  padding: 12px 14px 8px;
+}
+.tt[data-variant="entity"] .tt-ent-sw{
+  width: 28px; height: 28px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono-font); font-size: 11px; font-weight: 700;
+  color: #fff;
+}
+.tt[data-variant="entity"] .tt-ent-name{
+  font-family: var(--prose-font);
+  font-size: 16px; line-height: 1.2; letter-spacing: -.005em;
+  font-weight: 500; color: var(--text);
+}
+.tt[data-variant="entity"] .tt-ent-type{
+  font-family: var(--mono-font); font-size: 10px;
+  color: var(--text-3); letter-spacing: .12em; text-transform: uppercase;
+}
+.tt-chips{ display: flex; flex-wrap: wrap; gap: 4px; }
+.tt-chip{
+  font-family: var(--mono-font); font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: 999px;
+  color: var(--text-2);
+}
+
+/* explain variant */
+.tt[data-variant="explain"] .tt-body-text{
+  padding: 4px 14px 10px;
+  font-size: 12.5px; line-height: 1.55; color: var(--text-2);
+}
+.tt[data-variant="explain"] .tt-body-text b{ color: var(--text); }
+
+/* shortcut variant (reveals kb sequence) */
+.tt[data-variant="shortcut"]{
+  padding: 8px 10px;
+  display: inline-flex; align-items: center; gap: 8px;
+  background: var(--bg-sunk);
+  border-radius: var(--r-sm);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.tt[data-variant="shortcut"] .tt-arrow{ background: var(--bg-sunk); }
+.tt[data-variant="shortcut"] .kbd{
+  font-family: var(--mono-font); font-size: 10px;
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+}
+.tt[data-variant="shortcut"] .sep{ color: var(--text-4); margin: 0 2px; }

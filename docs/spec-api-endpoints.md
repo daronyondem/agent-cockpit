@@ -37,6 +37,7 @@ Recursively deletes directory. Refuses filesystem root. Returns `{ deleted, pare
 | DELETE | `/conversations/:id` | Yes | Aborts active stream, removes from workspace index, deletes session folder + artifacts. Works on both active and archived conversations. |
 | PATCH | `/conversations/:id/archive` | Yes | Sets `archived: true` on the conversation. Aborts active stream. Files remain on disk. `404` if not found. |
 | PATCH | `/conversations/:id/restore` | Yes | Removes `archived` flag, restoring the conversation to the active list. `404` if not found. |
+| PATCH | `/conversations/:id/unread` | Yes | `{ unread: boolean }` → sets or clears the conversation's unread flag in the workspace index. `unread: true` writes `unread: true` onto the entry; `unread: false` (or anything non-true) deletes the field to keep the index file lean. Returns `{ ok: true, unread }`. `404` if conversation not found. Idempotent. The frontend calls this on every stream `done` frame for non-active conversations (auto-mark) and from manual dot-click in the sidebar. |
 
 ## 3.3 Message Queue
 

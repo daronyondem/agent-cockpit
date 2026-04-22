@@ -718,6 +718,18 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
     }
   });
 
+  // ── Set / clear unread flag ───────────────────────────────────────────────
+  router.patch('/conversations/:id/unread', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const unread = req.body && req.body.unread === true;
+      const ok = await chatService.setConversationUnread(param(req, 'id'), unread);
+      if (!ok) return res.status(404).json({ error: 'Conversation not found' });
+      res.json({ ok: true, unread });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Message queue persistence ──────────────────────────────────────────────
   router.get('/conversations/:id/queue', async (req: Request, res: Response) => {
     try {
