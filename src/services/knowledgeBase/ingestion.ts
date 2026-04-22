@@ -534,6 +534,7 @@ export class KbIngestionService {
       status: (raw?.status as KbRawStatus) ?? 'ingesting',
       errorClass: null,
       errorMessage: null,
+      entryCount: 0,
     };
   }
 

@@ -44,6 +44,15 @@ export interface ToolActivity {
   parentAgentId?: string;
   outcome?: string;
   status?: string;
+  /**
+   * Incremented by the server every time a CLI `user` event (tool_result)
+   * closes out a batch of tool_uses. Tools emitted back-to-back without an
+   * intervening `user` event share the same `batchIndex` — those are the
+   * parallel tool calls from a single LLM assistant turn. The frontend uses
+   * this to group parallel runs correctly instead of relying on startTime
+   * gaps (which drift based on per-tool execution overhead).
+   */
+  batchIndex?: number;
 }
 
 // ── Messages ─────────────────────────────────────────────────────────────────
@@ -126,6 +135,48 @@ export interface SessionHistoryItem {
 /** Adaptive reasoning effort level. `xhigh` is Opus 4.7 only; `max` is Opus 4.6+ only. */
 export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/**
+ * Broad type grouping for an attachment, used by the composer to pick an icon
+ * tile + color. Derived server-side from file extension at upload time so the
+ * client can render type-aware chips without any client-side guessing.
+ */
+export type AttachmentKind = 'image' | 'pdf' | 'text' | 'code' | 'md' | 'folder' | 'file';
+
+/**
+ * Structured metadata for a single attachment on a user message. Produced by
+ * `POST /conversations/:id/upload` (enriched response) and carried verbatim on
+ * queued messages so the client can render typed chips without re-inferring.
+ * `path` is the absolute server path that is appended to the message content
+ * as `[Uploaded files: <path>]` when the message ships to the backend — the
+ * CLI reads the files from disk using those paths.
+ */
+export interface AttachmentMeta {
+  /** Basename of the file (e.g. "network-timeline.png"). */
+  name: string;
+  /** Absolute server path inside the conversation's artifacts dir. */
+  path: string;
+  /** Raw byte size, when known. */
+  size?: number;
+  /** Broad kind grouping for the composer chip. */
+  kind: AttachmentKind;
+  /** Human-readable secondary line for the chip (e.g. "1.8 MB", "service/kb"). */
+  meta?: string;
+}
+
+/**
+ * One entry in a conversation's message queue. `content` is the plain user
+ * text (without the `[Uploaded files: …]` tag); `attachments` carry the typed
+ * metadata the composer needs to render chips. On drain, the client rebuilds
+ * the wire format by appending `[Uploaded files: <paths>]` back onto content.
+ *
+ * Legacy queues stored as `string[]` are auto-migrated to this shape on read
+ * (see `_normalizeQueue` / `_parseUploadedFilesTag` in chatService).
+ */
+export interface QueuedMessage {
+  content: string;
+  attachments?: AttachmentMeta[];
+}
+
 export interface ConversationEntry {
   id: string;
   title: string;
@@ -140,7 +191,7 @@ export interface ConversationEntry {
   usageByBackend?: Record<string, Usage>;
   sessions: SessionEntry[];
   archived?: boolean;
-  messageQueue?: string[];
+  messageQueue?: QueuedMessage[];
 }
 
 export interface WorkspaceIndex {
@@ -200,7 +251,8 @@ export interface Conversation {
   sessionUsage?: Usage;
   /** Backend-managed session ID from the active session, for resume/rehydration. */
   externalSessionId?: string | null;
-  messageQueue?: string[];
+  messageQueue?: QueuedMessage[];
+  archived?: boolean;
   /** KB status snapshot, populated when workspace has KB enabled. */
   kb?: ConversationKbStatus;
 }
@@ -297,10 +349,6 @@ export interface Settings {
      * existing ingested files.
      */
     autoDigest?: boolean;
-  };
-  customInstructions?: {
-    aboutUser?: string;
-    responseStyle?: string;
   };
 }
 
@@ -554,6 +602,8 @@ export interface KbRawEntry {
   errorMessage?: string | null;
   /** Handler metadata blob (pageCount, slideCount, etc.). */
   metadata?: Record<string, unknown>;
+  /** Number of digested entries currently in the `entries` table for this raw. 0 when not digested. */
+  entryCount: number;
 }
 
 /** One virtual folder in the KB. '' is root. */

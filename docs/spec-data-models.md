@@ -48,7 +48,8 @@ agent-cockpit/
 │       │       ├── docx.ts             # DOCX → GFM markdown via pandoc subprocess + flattened embedded media
 │       │       ├── pptx.ts             # PPTX text/notes/media via adm-zip + fast-xml-parser, optional LO rasterization
 │       │       └── passthrough.ts      # Text (md/txt/json/...) + image passthrough with media copy
-│       ├── chatService.ts              # Conversation CRUD, messages, sessions, settings
+│       ├── chatService.ts              # Conversation CRUD, messages, sessions
+│       ├── settingsService.ts          # Settings I/O: read, write, legacy migration
 │       └── updateService.ts            # Self-update: version checking, git pull, PM2 restart
 ├── public/
 │   ├── index.html                      # HTML shell
@@ -142,7 +143,7 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
       [backendId]: Usage
     }|null,
     archived: boolean|undefined, // true when conversation is archived; absent/false = active
-    messageQueue: string[]|undefined, // Persisted follow-up message queue (content strings); absent when empty
+    messageQueue: QueuedMessage[]|undefined, // Persisted follow-up message queue (typed — see below); absent when empty. Legacy `string[]` entries are auto-migrated on read.
     sessions: [{
       number: number,           // 1-based session number
       sessionId: string,        // UUID passed to CLI
@@ -251,6 +252,59 @@ Ordering rules:
 - `tool_outcomes` patches the matching tool block in place by
   `activity.id`, updating `outcome` and `status`.
 
+### AttachmentMeta
+
+Typed file attachment used on both queued messages (`QueuedMessage.attachments`)
+and — transiently, client-side — in the composer's pending upload tray
+(`StreamStore.pendingAttachments[].result`). The fields mirror what
+`POST /conversations/:id/upload` returns (`name`, `path`, `size`) plus a
+server-inferred `kind` and an optional `meta` sublabel (e.g. page count for
+PDFs, line count for code/text files) used by the v2 composer chip layout.
+
+```typescript
+type AttachmentKind =
+  | 'image' | 'pdf' | 'text' | 'code' | 'md' | 'folder' | 'file';
+
+interface AttachmentMeta {
+  name: string;           // Filename (after upload rename)
+  path: string;           // Absolute server path under conv artifacts dir
+  size?: number;          // Bytes (omitted on legacy-migrated entries)
+  kind: AttachmentKind;   // Server-inferred category for chip styling
+  meta?: string;          // Optional sublabel — e.g. "12 pages", "142 lines"
+}
+```
+
+`kind` is inferred from the file's extension via `attachmentFromPath()` in
+`chatService.ts` (mirrored on the client by `StreamStore.attachmentKindFromPath`).
+Legacy entries migrated from the pre-typed `[Uploaded files: …]` tag carry
+only `name`, `path`, and `kind` — `size` and `meta` are unavailable for those.
+
+### QueuedMessage
+
+One entry in `ConversationRecord.messageQueue`. The server persists this typed
+shape; clients submit it via `PUT /conversations/:id/queue` (strings are
+**rejected** — senders must upgrade to the typed form).
+
+```typescript
+interface QueuedMessage {
+  content: string;                   // User-visible message text (no [Uploaded files: …] tag)
+  attachments?: AttachmentMeta[];    // Optional typed attachments
+}
+```
+
+When the queue drains, the client composes the outgoing wire content by
+appending `[Uploaded files: <abs paths>]` back onto `content` — Claude still
+reads files from disk; the typed attachments are a UI concern only.
+
+**Legacy migration:** `ChatService.normalizeMessageQueue()` runs on every
+read of `messageQueue` and handles three cases:
+- `string` entries → parsed via `parseUploadedFilesTag()` so any trailing
+  `[Uploaded files: …]` tag becomes typed `AttachmentMeta[]` (with
+  `kind` inferred from extension; `size`/`meta` are absent).
+- `QueuedMessage` entries → passed through unchanged (with `attachments`
+  defaulted to `[]` when absent).
+- Malformed entries → dropped silently.
+
 ## API Response: getConversation
 
 Flat object assembled from workspace index + active session file:
@@ -268,7 +322,8 @@ Flat object assembled from workspace index + active session file:
   messages: Message[],          // Active session messages
   usage: Usage,                 // Cumulative token/cost totals (zeroed if no usage yet)
   sessionUsage: Usage,          // Active session token/cost totals (zeroed if no usage yet)
-  externalSessionId: string|null // Backend-managed session ID (for resume after server restart)
+  externalSessionId: string|null, // Backend-managed session ID (for resume after server restart)
+  archived?: boolean            // true when the conversation is archived; absent/false otherwise. The v2 topbar swaps Archive → Unarchive + Delete when set.
 }
 ```
 
@@ -322,7 +377,7 @@ Daily per-backend/model token usage records for global statistics:
 
 `defaultEffort` is the default adaptive reasoning level for new conversations. It only applies when the chosen model matches `defaultModel` AND the model supports that effort level; otherwise the per-conversation selection falls back to `high` (or, defensively, the first supported level of the chosen model). The settings modal only renders the **Default Effort** field when `defaultBackend`/`defaultModel` resolve to a model that declares `supportedEffortLevels`; changing the default model to one without effort support drops `defaultEffort` on save.
 
-The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the start of each new session. It is additive — Claude Code's built-in system prompt is preserved. Legacy `customInstructions` objects are auto-migrated to `systemPrompt` on first read.
+The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the start of each new session. It is additive — Claude Code's built-in system prompt is preserved. Legacy `customInstructions` objects in the JSON file are auto-migrated to `systemPrompt` on first read by `SettingsService`; the `customInstructions` field no longer exists in the `Settings` type.
 
 The `memory` block configures the globally-shared **Memory CLI** used for `memory_note` MCP processing and post-session extraction (see Section 5 — Workspace Memory).
 
@@ -563,6 +618,8 @@ interface KbRawEntry {
   errorClass?: KbErrorClass | null;
   errorMessage?: string | null;
   metadata?: Record<string, unknown>;
+  /** COUNT(entries.entry_id) for this rawId. 0 when not yet digested. */
+  entryCount: number;
 }
 
 interface KbFolder {

@@ -189,6 +189,7 @@ interface RawJoinRow extends RawDbRow {
   location_folder_path: string;
   location_filename: string;
   location_uploaded_at: string;
+  entry_count: number;
 }
 
 /** Parameters for inserting a brand-new raw row. */
@@ -742,10 +743,13 @@ export class KbDatabase {
            r.uploaded_at, r.digested_at, r.error_class, r.error_message, r.metadata_json,
            l.folder_path AS location_folder_path,
            l.filename    AS location_filename,
-           l.uploaded_at AS location_uploaded_at
+           l.uploaded_at AS location_uploaded_at,
+           COUNT(e.entry_id) AS entry_count
          FROM raw_locations l
          JOIN raw r ON r.raw_id = l.raw_id
+         LEFT JOIN entries e ON e.raw_id = r.raw_id
          WHERE l.folder_path = ?
+         GROUP BY r.raw_id, l.folder_path, l.filename, l.uploaded_at
          ORDER BY l.filename
          LIMIT ? OFFSET ?`,
       )
@@ -2032,6 +2036,7 @@ function rawJoinRowToEntry(row: RawJoinRow): KbRawEntry {
     errorClass: (row.error_class as KbErrorClass | null) ?? null,
     errorMessage: row.error_message,
     metadata: row.metadata_json ? parseMetadata(row.metadata_json) : undefined,
+    entryCount: row.entry_count ?? 0,
   };
 }
 

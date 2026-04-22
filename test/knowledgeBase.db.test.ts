@@ -263,6 +263,59 @@ describe('raw_locations multi-location', () => {
     expect(c.rawByStatus.ingested).toBe(1);
   });
 
+  test('listRawInFolder returns entryCount reflecting the entries table', () => {
+    const a = makeRawFile('alpha file');
+    const b = makeRawFile('beta file');
+    db.insertRaw({
+      rawId: a.rawId,
+      sha256: a.sha256,
+      status: 'digested',
+      byteLength: 10,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.insertRaw({
+      rawId: b.rawId,
+      sha256: b.sha256,
+      status: 'ingested',
+      byteLength: 9,
+      mimeType: 'text/plain',
+      handler: null,
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.addLocation({ rawId: a.rawId, folderPath: 'docs', filename: 'a.txt', uploadedAt: '2026-01-01T00:00:00Z' });
+    db.addLocation({ rawId: b.rawId, folderPath: 'docs', filename: 'b.txt', uploadedAt: '2026-01-01T00:00:00Z' });
+
+    db.insertEntry({
+      entryId: `${a.rawId}-1`,
+      rawId: a.rawId,
+      title: 'one',
+      slug: 'one',
+      summary: 's',
+      schemaVersion: 1,
+      digestedAt: '2026-01-02T00:00:00Z',
+      tags: [],
+    });
+    db.insertEntry({
+      entryId: `${a.rawId}-2`,
+      rawId: a.rawId,
+      title: 'two',
+      slug: 'two',
+      summary: 's',
+      schemaVersion: 1,
+      digestedAt: '2026-01-02T00:00:00Z',
+      tags: [],
+    });
+
+    const rows = db.listRawInFolder('docs');
+    const byName = Object.fromEntries(rows.map((r) => [r.filename, r]));
+    expect(byName['a.txt'].entryCount).toBe(2);
+    expect(byName['b.txt'].entryCount).toBe(0);
+  });
+
   test('removeLocation + countLocations drive ref counting', () => {
     const { rawId, sha256 } = makeRawFile('ref count');
     db.insertRaw({

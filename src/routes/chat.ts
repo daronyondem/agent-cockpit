@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import multer from 'multer';
 import { csrfGuard } from '../middleware/csrf';
+import { attachmentFromPath } from '../services/chatService';
 import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
@@ -71,7 +72,14 @@ export async function processStream(
     outcome?: string;
     status?: string;
     startTime: number;
+    batchIndex: number;
   }> = [];
+  // Monotonic counter used to tag tool activities. All tool_uses emitted
+  // between two CLI `user` events (turn_boundaries) share the same batch —
+  // those are the parallel tool calls from a single LLM assistant turn.
+  let batchIndex = 0;
+  // Set when a turn_boundary fires; the next tool_activity advances batchIndex.
+  let pendingNewBatch = false;
   // Ordered interleaving of text / thinking / tool blocks as they arrive
   // from the CLI stream. Parallel to the flat `fullResponse` / `thinkingText`
   // / `toolActivityAccumulator` buckets, but preserves the source ordering
@@ -120,6 +128,7 @@ export async function processStream(
       if (t.parentAgentId) { toolEntry.parentAgentId = t.parentAgentId; }
       if (t.outcome) { toolEntry.outcome = t.outcome; }
       if (t.status) { toolEntry.status = t.status; }
+      toolEntry.batchIndex = t.batchIndex;
       return toolEntry;
     });
   }
@@ -178,19 +187,27 @@ export async function processStream(
         }
         emit({ type: 'tool_outcomes', outcomes: event.outcomes });
       } else if (event.type === 'turn_boundary') {
-        const turnToolActivity = computeToolDurations(toolActivityAccumulator);
         if (fullResponse.trim()) {
+          const turnToolActivity = computeToolDurations(toolActivityAccumulator);
           const turnBlocks = finalizeBlocks(turnToolActivity);
           console.log(`[chat] Saving intermediate message for conv=${convId}, len=${fullResponse.trim().length}, tools=${turnToolActivity.length}, blocks=${turnBlocks.length}`);
           const intermediateMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, turnToolActivity.length > 0 ? turnToolActivity : undefined, 'progress', turnBlocks.length > 0 ? turnBlocks : undefined);
           if (intermediateMsg) emit({ type: 'assistant_message', message: intermediateMsg });
           maybeUpdateTitle();
+          // Only reset when we actually persisted a segment. A tool-only
+          // turn_boundary (no text since the last save) keeps its accumulated
+          // tools so they ride along with the next segment that has text —
+          // otherwise parallel tools executed sequentially by the CLI get
+          // dropped after the first boundary.
+          fullResponse = '';
+          thinkingText = '';
+          toolActivityAccumulator = [];
+          blocks = [];
         }
+        // Any turn_boundary closes the current batch; the next tool_activity
+        // will start a new one. Used by the frontend to group parallel tools.
+        pendingNewBatch = true;
         emit({ type: 'turn_complete' });
-        fullResponse = '';
-        thinkingText = '';
-        toolActivityAccumulator = [];
-        blocks = [];
       } else if (event.type === 'tool_activity') {
         if (event.isPlanFile && event.planContent) {
           pendingPlanContent = event.planContent;
@@ -211,6 +228,10 @@ export async function processStream(
         }
         emit({ type: 'tool_activity', ...rest } as WsServerFrame);
         if (!event.isPlanMode && !event.isQuestion) {
+          if (pendingNewBatch) {
+            batchIndex += 1;
+            pendingNewBatch = false;
+          }
           const startTime = Date.now();
           toolActivityAccumulator.push({
             tool: rest.tool,
@@ -220,6 +241,7 @@ export async function processStream(
             subagentType: rest.subagentType || undefined,
             parentAgentId: rest.parentAgentId || undefined,
             startTime,
+            batchIndex,
           });
           const blockActivity: ToolActivity = {
             tool: rest.tool,
@@ -227,6 +249,7 @@ export async function processStream(
             id: rest.id || null,
             duration: null,
             startTime,
+            batchIndex,
           };
           if (rest.isAgent) { blockActivity.isAgent = true; if (rest.subagentType) blockActivity.subagentType = rest.subagentType; }
           if (rest.parentAgentId) blockActivity.parentAgentId = rest.parentAgentId;
@@ -707,11 +730,37 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
 
   router.put('/conversations/:id/queue', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const { queue } = req.body as { queue?: string[] };
-      if (!Array.isArray(queue) || !queue.every(item => typeof item === 'string')) {
-        return res.status(400).json({ error: 'queue must be an array of strings' });
+      const { queue } = req.body as { queue?: unknown };
+      if (!Array.isArray(queue)) {
+        return res.status(400).json({ error: 'queue must be an array of QueuedMessage' });
       }
-      const ok = await chatService.setQueue(param(req, 'id'), queue);
+      // Each entry must be { content: string, attachments?: AttachmentMeta[] }.
+      // Legacy string entries are rejected — the client is expected to post the
+      // new shape; server-side legacy migration is limited to reads.
+      for (const entry of queue) {
+        if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+          return res.status(400).json({ error: 'queue entries must be objects with a content string' });
+        }
+        const q = entry as { content?: unknown; attachments?: unknown };
+        if (typeof q.content !== 'string') {
+          return res.status(400).json({ error: 'queue entries must have a string content field' });
+        }
+        if (q.attachments != null) {
+          if (!Array.isArray(q.attachments)) {
+            return res.status(400).json({ error: 'queue entries attachments must be an array' });
+          }
+          for (const a of q.attachments) {
+            if (!a || typeof a !== 'object' || Array.isArray(a)) {
+              return res.status(400).json({ error: 'each attachment must be an object' });
+            }
+            const am = a as { name?: unknown; path?: unknown };
+            if (typeof am.name !== 'string' || typeof am.path !== 'string') {
+              return res.status(400).json({ error: 'each attachment must have string name and path' });
+            }
+          }
+        }
+      }
+      const ok = await chatService.setQueue(param(req, 'id'), queue as import('../types').QueuedMessage[]);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
     } catch (err: unknown) {
@@ -1165,11 +1214,20 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   });
 
   router.post('/conversations/:id/upload', csrfGuard, upload.array('files', 10), (req: Request, res: Response) => {
-    const files = ((req as unknown as { files?: Express.Multer.File[] }).files || []).map((f) => ({
-      name: f.originalname,
-      path: f.path,
-      size: f.size,
-    }));
+    const files = ((req as unknown as { files?: Express.Multer.File[] }).files || []).map((f) => {
+      // Use the stored filename (which was already sanitized by multer's filename
+      // callback) rather than originalname so the path we return is the one on
+      // disk — that matters when the content string ships with `[Uploaded files:
+      // <path>]` and the agent reads from disk.
+      const meta = attachmentFromPath(f.path, f.size);
+      return {
+        name: meta.name,
+        path: meta.path,
+        size: meta.size,
+        kind: meta.kind,
+        meta: meta.meta,
+      };
+    });
     res.json({ files });
   });
 
@@ -2322,6 +2380,42 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
         return res.status(404).json({ error: 'Raw file not found on disk.' });
       }
       res.sendFile(path.resolve(diskPath));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Serve a media file produced by ingestion under `converted/<rawId>/`.
+  // Entry bodies reference embedded images / extracted slides / rasterized
+  // pages with relative paths like `media/Slide123.jpg` or
+  // `slides/slide-001.png`, all rooted at the per-raw converted directory.
+  // The frontend rewrites those into URLs that hit this endpoint.
+  router.get('/workspaces/:hash/kb/raw/:rawId/media/:mediapath(*)', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const rawId = param(req, 'rawId');
+      if (!/^[a-f0-9]{1,64}$/i.test(rawId)) {
+        return res.status(400).json({ error: 'Invalid rawId.' });
+      }
+      const relPath = decodeURIComponent(param(req, 'mediapath') || '');
+      if (!relPath) return res.status(400).json({ error: 'media path required' });
+      // Reject any segment that would escape the rawId directory. The
+      // resolve-and-startsWith check below is the real guard, but keep this
+      // as a fast, explicit rejection for traversal attempts.
+      if (relPath.split(/[\\/]+/).some((seg) => seg === '..')) {
+        return res.status(400).json({ error: 'Invalid path.' });
+      }
+      const rawDir = path.resolve(chatService.getKbConvertedDir(hash), rawId);
+      const diskPath = path.resolve(rawDir, relPath);
+      if (!diskPath.startsWith(rawDir + path.sep)) {
+        return res.status(400).json({ error: 'Invalid path.' });
+      }
+      try {
+        await fs.promises.access(diskPath);
+      } catch {
+        return res.status(404).json({ error: 'Media file not found.' });
+      }
+      res.sendFile(diskPath);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

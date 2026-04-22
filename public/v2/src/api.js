@@ -1,0 +1,577 @@
+/* Agent Cockpit v2 — minimal API client
+   Exposed as window.AgentApi. Shared across React screens via globals,
+   matching the `window.X = X` pattern used by primitives / icons / screens. */
+
+(function(){
+  const API_BASE = new URL('./api/', window.location.href.replace(/\/v2\/.*/, '/'));
+
+  function apiUrl(path){
+    return new URL(String(path || '').replace(/^\/+/, ''), API_BASE).toString();
+  }
+
+  function chatUrl(path){
+    return apiUrl('chat/' + String(path || '').replace(/^\/+/, ''));
+  }
+
+  function kbUrl(hash, path){
+    return apiUrl('chat/workspaces/' + encodeURIComponent(hash) + '/kb/' + String(path || '').replace(/^\/+/, ''));
+  }
+
+  function explorerUrl(hash, path, params){
+    const base = apiUrl('chat/workspaces/' + encodeURIComponent(hash) + '/explorer/' + String(path || '').replace(/^\/+/, ''));
+    if (!params) return base;
+    const qs = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString();
+    return qs ? `${base}?${qs}` : base;
+  }
+
+  function chatWsUrl(convId){
+    const u = new URL('chat/conversations/' + encodeURIComponent(convId) + '/ws', API_BASE);
+    u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+    return u.toString();
+  }
+
+  const state = {
+    csrfToken: null,
+    onSessionExpired: null,
+    _conversationsCache: null,
+    _conversationsPromise: null,
+    _backendsCache: null,
+    _backendsPromise: null,
+  };
+
+  async function fetchCsrfToken(){
+    const res = await fetch(apiUrl('csrf-token'), { credentials: 'same-origin' });
+    if (res.status === 401) {
+      if (state.onSessionExpired) state.onSessionExpired();
+      throw new Error('Session expired');
+    }
+    if (!res.ok) throw new Error(`CSRF token fetch failed (${res.status})`);
+    const body = await res.json();
+    state.csrfToken = body.csrfToken;
+  }
+
+  async function chatFetch(path, opts){
+    opts = opts || {};
+    if (!state.csrfToken) await fetchCsrfToken();
+    const headers = Object.assign({}, opts.headers);
+    if (state.csrfToken) headers['x-csrf-token'] = state.csrfToken;
+    let body = opts.body;
+    if (body && typeof body === 'object' && !(body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify(body);
+    }
+    const res = await fetch(chatUrl(path), Object.assign({}, opts, { headers, body, credentials: 'same-origin' }));
+    if (res.status === 401) {
+      if (state.onSessionExpired) state.onSessionExpired();
+      throw new Error('Session expired');
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText || `HTTP ${res.status}`);
+    }
+    return res;
+  }
+
+  async function listConversations(opts){
+    const archived = opts && opts.archived ? 'true' : '';
+    const q = (opts && opts.q) || '';
+    const params = new URLSearchParams();
+    if (q) params.set('q', q);
+    if (archived) params.set('archived', archived);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await chatFetch(`conversations${qs}`);
+    const data = await res.json();
+    return data.conversations || [];
+  }
+
+  /* Cached variant — the v2 slide deck mounts the Sidebar inside many slides,
+     each remounting triggers a fetch. Caching flattens this to one request
+     until invalidate() is called. */
+  function getConversationsCached(){
+    if (state._conversationsCache) return Promise.resolve(state._conversationsCache);
+    if (state._conversationsPromise) return state._conversationsPromise;
+    state._conversationsPromise = listConversations().then(convs => {
+      state._conversationsCache = convs;
+      state._conversationsPromise = null;
+      return convs;
+    }).catch(err => {
+      state._conversationsPromise = null;
+      throw err;
+    });
+    return state._conversationsPromise;
+  }
+
+  function invalidateConversations(){
+    state._conversationsCache = null;
+    state._conversationsPromise = null;
+  }
+
+  async function browseDir(path, showHidden){
+    const params = new URLSearchParams();
+    if (path) params.set('path', path);
+    if (showHidden) params.set('showHidden', 'true');
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const res = await chatFetch(`browse${qs}`);
+    return res.json();
+  }
+
+  async function mkdirDir(parentPath, name){
+    const res = await chatFetch('mkdir', { method: 'POST', body: { parentPath, name } });
+    return res.json();
+  }
+
+  async function rmdirDir(dirPath){
+    const res = await chatFetch('rmdir', { method: 'POST', body: { dirPath } });
+    return res.json();
+  }
+
+  async function createConversation(body){
+    const res = await chatFetch('conversations', { method: 'POST', body: body || {} });
+    return res.json();
+  }
+
+  async function restoreConversation(id){
+    const res = await chatFetch('conversations/' + encodeURIComponent(id) + '/restore', { method: 'PATCH' });
+    return res.json().catch(() => ({}));
+  }
+
+  async function renameConversation(id, title){
+    const res = await chatFetch('conversations/' + encodeURIComponent(id), {
+      method: 'PUT',
+      body: { title },
+    });
+    return res.json();
+  }
+
+  async function deleteConversation(id){
+    const res = await chatFetch('conversations/' + encodeURIComponent(id), { method: 'DELETE' });
+    return res.json().catch(() => ({}));
+  }
+
+  /* Self-update endpoints. `getVersion` is the initial-load fetch (also returns
+     the cached remote/update-available flags). `getUpdateStatus` is the 5-min
+     background poll. `checkVersion` forces a fresh upstream git-ls-remote.
+     `triggerUpdate` pulls, installs, and pm2-restarts — the client treats a
+     "Failed to fetch" rejection as a success signal (the process was killed
+     mid-request). */
+  async function getVersion(){
+    const res = await chatFetch('version');
+    return res.json();
+  }
+
+  async function getUpdateStatus(){
+    const res = await chatFetch('update-status');
+    return res.json();
+  }
+
+  async function checkVersion(){
+    const res = await chatFetch('check-version', { method: 'POST' });
+    return res.json();
+  }
+
+  async function triggerUpdate(){
+    const res = await chatFetch('update-trigger', { method: 'POST' });
+    return res.json();
+  }
+
+  /* Backend registry is effectively static — one fetch per session is plenty.
+     Used by the composer pickers on every ChatLive mount. */
+  function getBackendsCached(){
+    if (state._backendsCache) return Promise.resolve(state._backendsCache);
+    if (state._backendsPromise) return state._backendsPromise;
+    state._backendsPromise = chatFetch('backends').then(r => r.json()).then(data => {
+      state._backendsCache = (data && data.backends) || [];
+      state._backendsPromise = null;
+      return state._backendsCache;
+    }).catch(err => {
+      state._backendsPromise = null;
+      throw err;
+    });
+    return state._backendsPromise;
+  }
+
+  async function kbFetch(hash, path, opts){
+    opts = opts || {};
+    if (!state.csrfToken) await fetchCsrfToken();
+    const headers = Object.assign({}, opts.headers);
+    if (state.csrfToken) headers['x-csrf-token'] = state.csrfToken;
+    let body = opts.body;
+    if (body && typeof body === 'object' && !(body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify(body);
+    }
+    const res = await fetch(kbUrl(hash, path), Object.assign({}, opts, { headers, body, credentials: 'same-origin' }));
+    if (res.status === 401) {
+      if (state.onSessionExpired) state.onSessionExpired();
+      throw new Error('Session expired');
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || res.statusText || `HTTP ${res.status}`);
+    }
+    return res;
+  }
+
+  async function kbGet(hash, path, params){
+    const qs = params ? new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString() : '';
+    const res = await kbFetch(hash, qs ? `${path}?${qs}` : path);
+    return res.json();
+  }
+
+  async function explorerFetch(hash, path, params, opts){
+    opts = opts || {};
+    if (!state.csrfToken) await fetchCsrfToken();
+    const headers = Object.assign({}, opts.headers);
+    if (state.csrfToken) headers['x-csrf-token'] = state.csrfToken;
+    let body = opts.body;
+    if (body && typeof body === 'object' && !(body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify(body);
+    }
+    const res = await fetch(explorerUrl(hash, path, params), Object.assign({}, opts, { headers, body, credentials: 'same-origin' }));
+    if (res.status === 401) {
+      if (state.onSessionExpired) state.onSessionExpired();
+      throw new Error('Session expired');
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      const wrapped = new Error(err.error || res.statusText || `HTTP ${res.status}`);
+      wrapped.status = res.status;
+      wrapped.body = err;
+      throw wrapped;
+    }
+    return res;
+  }
+
+  const ExplorerApi = {
+    tree: (hash, relPath) => explorerFetch(hash, 'tree', { path: relPath || '' })
+      .then(r => r.json()),
+    preview: (hash, relPath) => explorerFetch(hash, 'preview', { path: relPath, mode: 'view' })
+      .then(r => r.json()),
+    rawUrl: (hash, relPath) => explorerUrl(hash, 'preview', { path: relPath, mode: 'raw' }),
+    downloadUrl: (hash, relPath) => explorerUrl(hash, 'preview', { path: relPath, mode: 'download' }),
+    mkdir: (hash, parent, name) => explorerFetch(hash, 'mkdir', null, {
+      method: 'POST', body: { parent: parent || '', name },
+    }).then(r => r.json()),
+    createFile: (hash, parent, name, content) => explorerFetch(hash, 'file', null, {
+      method: 'POST', body: { parent: parent || '', name, content: content || '' },
+    }).then(r => r.json()),
+    saveFile: (hash, relPath, content) => explorerFetch(hash, 'file', null, {
+      method: 'PUT', body: { path: relPath, content: content || '' },
+    }).then(r => r.json()),
+    rename: (hash, from, to, overwrite) => explorerFetch(hash, 'rename', null, {
+      method: 'PATCH', body: { from, to, overwrite: !!overwrite },
+    }).then(r => r.json()),
+    deleteEntry: (hash, relPath) => explorerFetch(hash, 'entry', { path: relPath }, {
+      method: 'DELETE',
+    }).then(r => r.json()),
+    /* XHR-based upload so we can track progress per file. Returns a Promise
+       that resolves to { ok, entry } or rejects with a status-attached Error. */
+    upload: (hash, destPath, file, overwrite, onProgress) => new Promise((resolve, reject) => {
+      const url = explorerUrl(hash, 'upload', { path: destPath || '', overwrite: overwrite ? 'true' : '' });
+      const run = () => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.withCredentials = true;
+        if (state.csrfToken) xhr.setRequestHeader('x-csrf-token', state.csrfToken);
+        xhr.upload.onprogress = (ev) => {
+          if (onProgress && ev.lengthComputable) onProgress(ev.loaded, ev.total);
+        };
+        xhr.onload = () => {
+          let parsed = null;
+          try { parsed = JSON.parse(xhr.responseText); } catch { parsed = null; }
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(parsed || { ok: true });
+          } else if (xhr.status === 401) {
+            if (state.onSessionExpired) state.onSessionExpired();
+            const err = new Error('Session expired');
+            err.status = 401;
+            reject(err);
+          } else {
+            const err = new Error((parsed && parsed.error) || xhr.statusText || `HTTP ${xhr.status}`);
+            err.status = xhr.status;
+            err.body = parsed;
+            reject(err);
+          }
+        };
+        xhr.onerror = () => {
+          const err = new Error('Network error');
+          err.status = 0;
+          reject(err);
+        };
+        const fd = new FormData();
+        fd.append('file', file);
+        xhr.send(fd);
+      };
+      if (!state.csrfToken) {
+        fetchCsrfToken().then(run).catch(reject);
+      } else {
+        run();
+      }
+    }),
+  };
+
+  const KbApi = {
+    getState:       (hash, opts) => kbGet(hash, '', opts || {}).then(r => (r && r.state ? r.state : r)),
+    getEntries:     (hash, opts) => kbGet(hash, 'entries', opts || {}),
+    getEntry:       (hash, entryId) => kbGet(hash, 'entries/' + encodeURIComponent(entryId)),
+    getTags:        (hash) => kbGet(hash, 'tags'),
+    getSynthesis:   (hash) => kbGet(hash, 'synthesis'),
+    getTopic:       (hash, topicId) => kbGet(hash, 'synthesis/' + encodeURIComponent(topicId)),
+    getReflections: (hash) => kbGet(hash, 'reflections'),
+    getReflection:  (hash, reflectionId) => kbGet(hash, 'reflections/' + encodeURIComponent(reflectionId)),
+    rawDownloadUrl: (hash, rawId) => kbUrl(hash, 'raw/' + encodeURIComponent(rawId)),
+    rawMediaUrl:    (hash, rawId, mediaPath) => kbUrl(
+      hash,
+      'raw/' + encodeURIComponent(rawId) + '/media/' +
+        String(mediaPath || '').split('/').filter(Boolean).map(encodeURIComponent).join('/')
+    ),
+    setAutoDigest: (hash, enabled) => kbFetch(hash, 'auto-digest', {
+      method: 'PUT', body: { autoDigest: !!enabled },
+    }).then(r => r.json()),
+    digestRaw: (hash, rawId) => kbFetch(hash, 'raw/' + encodeURIComponent(rawId) + '/digest', {
+      method: 'POST', body: {},
+    }).then(r => r.json()),
+    digestAll: (hash) => kbFetch(hash, 'digest-all', {
+      method: 'POST', body: {},
+    }).then(r => r.json()),
+    /* `folder` and `filename` are optional — when both are present, only that
+       one location is removed; otherwise the rawId is fully purged. */
+    deleteRaw: (hash, rawId, folder, filename) => {
+      const qs = (folder != null && filename != null)
+        ? '?folder=' + encodeURIComponent(folder) + '&filename=' + encodeURIComponent(filename)
+        : '';
+      return kbFetch(hash, 'raw/' + encodeURIComponent(rawId) + qs, { method: 'DELETE' })
+        .then(r => r.json());
+    },
+    /* Single-file upload. Uses XHR so we can report progress. Resolves to
+       { entry, deduped, addedLocation }. Optional `onXhr(xhr)` exposes the
+       underlying XHR to callers so they can `.abort()` it (queue Cancel). */
+    uploadRaw: (hash, file, folder, onProgress, onXhr) => new Promise((resolve, reject) => {
+      const url = kbUrl(hash, 'raw');
+      const run = () => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', url);
+        xhr.withCredentials = true;
+        if (state.csrfToken) xhr.setRequestHeader('x-csrf-token', state.csrfToken);
+        xhr.upload.onprogress = (ev) => {
+          if (onProgress && ev.lengthComputable) onProgress(ev.loaded, ev.total);
+        };
+        xhr.onload = () => {
+          let parsed = null;
+          try { parsed = JSON.parse(xhr.responseText); } catch { parsed = null; }
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve(parsed || { ok: true });
+          } else if (xhr.status === 401) {
+            if (state.onSessionExpired) state.onSessionExpired();
+            const err = new Error('Session expired'); err.status = 401; reject(err);
+          } else {
+            const err = new Error((parsed && parsed.error) || xhr.statusText || `HTTP ${xhr.status}`);
+            err.status = xhr.status; err.body = parsed; reject(err);
+          }
+        };
+        xhr.onerror = () => { const err = new Error('Network error'); err.status = 0; reject(err); };
+        xhr.onabort = () => { const err = new Error('Aborted'); err.status = 0; err.aborted = true; reject(err); };
+        const fd = new FormData();
+        fd.append('file', file);
+        if (folder) fd.append('folder', folder);
+        if (onXhr) onXhr(xhr);
+        xhr.send(fd);
+      };
+      if (!state.csrfToken) fetchCsrfToken().then(run).catch(reject); else run();
+    }),
+    /* Folder CRUD. Backend rejects names containing slashes; folderPath is the
+       full nested path (e.g. "docs/specs"). createFolder is idempotent. */
+    createFolder: (hash, folderPath) => kbFetch(hash, 'folders', {
+      method: 'POST', body: { folderPath },
+    }).then(r => r.json()),
+    renameFolder: (hash, fromPath, toPath) => kbFetch(hash, 'folders', {
+      method: 'PUT', body: { fromPath, toPath },
+    }).then(r => r.json()),
+    /* `cascade` must be true when the folder (or any descendant) is non-empty;
+       backend returns 409 otherwise. */
+    deleteFolder: (hash, folderPath, cascade) => {
+      const qs = '?folder=' + encodeURIComponent(folderPath) +
+                 (cascade ? '&cascade=true' : '');
+      return kbFetch(hash, 'folders' + qs, { method: 'DELETE' })
+        .then(r => r.json());
+    },
+    /* Per-workspace embedding configuration for the PGLite vector layer.
+       getEmbeddingConfig returns { embeddingConfig: {model?, ollamaHost?, dimensions?} | null };
+       setEmbeddingConfig PUTs the same shape and returns { embeddingConfig: <result> };
+       embeddingHealth POSTs to test Ollama reachability + model availability,
+       resolving to { ok: boolean, error?: string }. */
+    getEmbeddingConfig: (hash) => kbFetch(hash, 'embedding-config').then(r => r.json()),
+    setEmbeddingConfig: (hash, cfg) => kbFetch(hash, 'embedding-config', {
+      method: 'PUT', body: cfg || {},
+    }).then(r => r.json()),
+    embeddingHealth: (hash) => kbFetch(hash, 'embedding-health', {
+      method: 'POST', body: {},
+    }).then(r => r.json()),
+    /* Top-level chat routes, not workspace-scoped. */
+    pandocStatus: () => chatFetch('kb/pandoc-status').then(r => r.json()),
+    libreOfficeStatus: () => chatFetch('kb/libreoffice-status').then(r => r.json()),
+  };
+
+  /* Per-workspace settings — backs the Workspace Settings modal (gear button
+     next to each workspace group in the sidebar). Instructions are prepended
+     to every new session's system prompt; Memory + KB enable flags gate the
+     respective pipelines for the workspace. All endpoints are scoped by the
+     workspace hash that came off the conversation row. */
+  const WorkspaceApi = {
+    getInstructions: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/instructions'
+    ).then(r => r.json()),
+    saveInstructions: (hash, instructions) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/instructions',
+      { method: 'PUT', body: { instructions: instructions || '' } },
+    ).then(r => r.json()),
+    getMemory: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/memory'
+    ).then(r => r.json()),
+    setMemoryEnabled: (hash, enabled) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/memory/enabled',
+      { method: 'PUT', body: { enabled: !!enabled } },
+    ).then(r => r.json()),
+    deleteMemoryEntry: (hash, relPath) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/memory/entries/' + encodeURIComponent(relPath),
+      { method: 'DELETE' },
+    ).then(r => r.json()),
+    clearMemory: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/memory/entries',
+      { method: 'DELETE' },
+    ).then(r => r.json()),
+    getKb: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/kb'
+    ).then(r => r.json()),
+    setKbEnabled: (hash, enabled) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/kb/enabled',
+      { method: 'PUT', body: { enabled: !!enabled } },
+    ).then(r => r.json()),
+    triggerDream: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/kb/dream',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    triggerRedream: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/kb/redream',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    stopDream: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/kb/dream/stop',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+  };
+
+  /* Global app settings + supporting reads consumed by the V2 Settings panel.
+     `getSettings` / `setSettings` round-trip the full Settings object (server
+     merges defaults for missing fields). `getBackends` returns the backend
+     registry with nested `models[]` per backend. `getUsageStats` /
+     `clearUsageStats` drive the Usage tab. `restartServer` kicks pm2 (server
+     replies 409 if any stream is active). */
+  const SettingsApi = {
+    get: () => chatFetch('settings').then(r => r.json()),
+    save: (settings) => chatFetch('settings', { method: 'PUT', body: settings || {} }).then(r => r.json()),
+    backends: () => chatFetch('backends').then(r => r.json()),
+    usageStats: () => chatFetch('usage-stats').then(r => r.json()),
+    clearUsageStats: () => chatFetch('usage-stats', { method: 'DELETE' }).then(r => r.json()),
+    restartServer: () => chatFetch('server/restart', { method: 'POST', body: {} }).then(r => r.json()),
+  };
+
+  /* Per-conversation file attachments. The composer's attachment tray drives
+     these; each upload lands in the conv's artifacts dir and the chosen
+     server path is embedded in the next /message body as `[Uploaded files: …]`
+     (wire-format stability — Claude reads the file from disk). */
+  const ConvApi = {
+    /* Upload a single file to the conv's artifacts dir. Resolves with a full
+       AttachmentMeta — `{name, path, size, kind, meta?}` where `kind` is one
+       of image|pdf|text|code|md|folder|file and `meta` is a short human-read
+       sublabel (e.g. "PDF · 12 pages", "1.2 MB"). `onXhr(xhr)` is invoked
+       synchronously once the underlying XHR is created so the caller can
+       abort it on remove. `onProgress(loaded, total)` feeds progress UI. */
+    uploadFile: (convId, file, onProgress, onXhr) => new Promise((resolve, reject) => {
+      const url = chatUrl('conversations/' + encodeURIComponent(convId) + '/upload');
+      const run = () => {
+        const xhr = new XMLHttpRequest();
+        if (onXhr) onXhr(xhr);
+        xhr.open('POST', url);
+        xhr.withCredentials = true;
+        if (state.csrfToken) xhr.setRequestHeader('x-csrf-token', state.csrfToken);
+        xhr.upload.onprogress = (ev) => {
+          if (onProgress && ev.lengthComputable) onProgress(ev.loaded, ev.total);
+        };
+        xhr.onload = () => {
+          let parsed = null;
+          try { parsed = JSON.parse(xhr.responseText); } catch { parsed = null; }
+          if (xhr.status >= 200 && xhr.status < 300) {
+            const entry = parsed && parsed.files && parsed.files[0];
+            if (entry) resolve(entry);
+            else reject(new Error('Upload returned no file'));
+          } else if (xhr.status === 401) {
+            if (state.onSessionExpired) state.onSessionExpired();
+            const err = new Error('Session expired'); err.status = 401; reject(err);
+          } else {
+            const err = new Error((parsed && parsed.error) || xhr.statusText || `HTTP ${xhr.status}`);
+            err.status = xhr.status; err.body = parsed; reject(err);
+          }
+        };
+        xhr.onerror = () => { const err = new Error('Network error'); err.status = 0; reject(err); };
+        xhr.onabort = () => { const err = new Error('Aborted'); err.status = 0; err.aborted = true; reject(err); };
+        const fd = new FormData();
+        fd.append('files', file);
+        xhr.send(fd);
+      };
+      if (!state.csrfToken) fetchCsrfToken().then(run).catch(reject);
+      else run();
+    }),
+    deleteUpload: (convId, filename) => chatFetch(
+      'conversations/' + encodeURIComponent(convId) + '/upload/' + encodeURIComponent(filename),
+      { method: 'DELETE' },
+    ).then(r => r.json()),
+    /* Session history — the Sessions modal in the chat topbar. `getSessions`
+       returns a flat list of session metadata; `getSessionMessages` hydrates
+       a single past session's messages on demand; `sessionDownloadUrl` is a
+       plain URL (no CSRF required for GET) that the caller passes to
+       `window.open()` so the browser drives the download. */
+    getSessions: (convId) => chatFetch(
+      'conversations/' + encodeURIComponent(convId) + '/sessions'
+    ).then(r => r.json()),
+    getSessionMessages: (convId, sessionNumber) => chatFetch(
+      'conversations/' + encodeURIComponent(convId) + '/sessions/' + encodeURIComponent(sessionNumber) + '/messages'
+    ).then(r => r.json()),
+    sessionDownloadUrl: (convId, sessionNumber) => chatUrl(
+      'conversations/' + encodeURIComponent(convId) + '/sessions/' + encodeURIComponent(sessionNumber) + '/download'
+    ),
+  };
+
+  window.AgentApi = {
+    apiUrl,
+    chatUrl,
+    chatWsUrl,
+    fetch: chatFetch,
+    listConversations,
+    getConversationsCached,
+    invalidateConversations,
+    createConversation,
+    restoreConversation,
+    renameConversation,
+    deleteConversation,
+    getVersion,
+    getUpdateStatus,
+    checkVersion,
+    triggerUpdate,
+    browseDir,
+    mkdirDir,
+    rmdirDir,
+    getBackendsCached,
+    setSessionExpiredHandler: (fn) => { state.onSessionExpired = fn; },
+    kb: KbApi,
+    explorer: ExplorerApi,
+    settings: SettingsApi,
+    workspace: WorkspaceApi,
+    conv: ConvApi,
+  };
+})();

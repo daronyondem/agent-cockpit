@@ -78,6 +78,12 @@ const updateService = new UpdateService(__dirname);
 const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = createChatRouter({ chatService, backendRegistry, updateService });
 app.use('/api/chat', chatRouter);
 
+// V2 is the default UI. Root redirects to /v2/; /legacy/ keeps the
+// previous vanilla-JS UI reachable (served from public/index.html via
+// express.static) as a fallback during the cutover.
+app.get('/', (_req: Request, res: Response): void => { res.redirect('/v2/'); });
+app.get(['/legacy', '/legacy/'], (_req: Request, res: Response): void => { res.redirect('/index.html'); });
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Port guard — prevent orphan processes and port conflicts

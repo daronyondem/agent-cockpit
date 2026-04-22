@@ -961,6 +961,98 @@ describe('Turn boundary intermediate messages', () => {
     expect(assistantMsgs[1].content).toBe('Post-tool content');
   });
 
+  test('carries tool-only turn_boundary activity forward to next saved segment', async () => {
+    // Claude Code CLI processes parallel tool_uses sequentially, firing
+    // turn_boundary after each tool_result. Tools after the first boundary
+    // arrive with no new text since the last save — they must stay in the
+    // accumulator so they land on the next message that has text, instead of
+    // being dropped on an empty-text reset.
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      { type: 'text', content: 'Reading all three in parallel.', streaming: true },
+      { type: 'tool_activity', tool: 'Read', description: 'Read a.md', id: 't1' },
+      { type: 'turn_boundary' }, // tool A result
+      { type: 'tool_activity', tool: 'Read', description: 'Read b.md', id: 't2' },
+      { type: 'turn_boundary' }, // tool B result — no text since last save
+      { type: 'tool_activity', tool: 'Read', description: 'Read c.md', id: 't3' },
+      { type: 'turn_boundary' }, // tool C result — still no text
+      { type: 'text', content: 'All three read.', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+    await eventsPromise;
+
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
+    // First save: the initial text arrives, then tool A fires, then the first
+    // turn_boundary persists a progress message carrying just tool A. Tools B
+    // and C are carried by subsequent empty-text boundaries until the final
+    // segment saves them all with its own text.
+    expect(assistantMsgs.length).toBe(2);
+    const firstTools = assistantMsgs[0].toolActivity || [];
+    const finalTools = assistantMsgs[1].toolActivity || [];
+    const firstToolNames = firstTools.map((t: any) => t.description);
+    const finalToolNames = finalTools.map((t: any) => t.description);
+    const allToolNames = [...firstToolNames, ...finalToolNames];
+    expect(allToolNames).toEqual(['Read a.md', 'Read b.md', 'Read c.md']);
+    // Final message must be the text bubble and carry the trailing tools.
+    expect(assistantMsgs[1].content).toBe('All three read.');
+    expect(finalTools.length).toBeGreaterThanOrEqual(2);
+    // Ordered contentBlocks preserve the interleaving.
+    const finalBlocks = assistantMsgs[1].contentBlocks || [];
+    const finalBlockTypes = finalBlocks.map((b: any) => b.type);
+    expect(finalBlockTypes).toContain('tool');
+    expect(finalBlockTypes).toContain('text');
+  });
+
+  test('tags tool activities with batchIndex that bumps on every turn_boundary', async () => {
+    // Tools emitted back-to-back with no turn_boundary between them are the
+    // parallel tool_uses of a single LLM assistant turn — they must share a
+    // batchIndex so the frontend groups them correctly regardless of how the
+    // CLI spaces the tool_result events in time. A turn_boundary always closes
+    // the current batch; the next tool starts a new one.
+    const conv = await chatService.createConversation('Test');
+
+    mockBackend.setMockEvents([
+      // Turn 1: two parallel tools (no turn_boundary between them).
+      { type: 'tool_activity', tool: 'Grep', description: 'search', id: 't1' },
+      { type: 'tool_activity', tool: 'Glob', description: 'find', id: 't2' },
+      { type: 'turn_boundary' }, // results for t1 + t2
+      // Turn 2: one sequential tool.
+      { type: 'tool_activity', tool: 'Bash', description: 'ls', id: 't3' },
+      { type: 'turn_boundary' },
+      { type: 'text', content: 'Done.', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await connectWs(conv.id);
+    const eventsPromise = readWsEvents(ws);
+    await makeRequest('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test',
+      backend: 'claude-code',
+    });
+    await eventsPromise;
+
+    const loaded = (await chatService.getConversation(conv.id))!;
+    const assistantMsgs = loaded.messages.filter((m: any) => m.role === 'assistant');
+    const finalTools = assistantMsgs[assistantMsgs.length - 1].toolActivity || [];
+    const byId: Record<string, any> = {};
+    for (const t of finalTools) {
+      if (t.id) byId[t.id] = t;
+    }
+    // t1 and t2 came in one batch (before the first turn_boundary).
+    expect(byId.t1.batchIndex).toBe(byId.t2.batchIndex);
+    // t3 came after a turn_boundary — strictly newer batchIndex.
+    expect(byId.t3.batchIndex).toBeGreaterThan(byId.t1.batchIndex);
+  });
+
   test('forwards whole-block text to WebSocket regardless of streaming flag', async () => {
     const conv = await chatService.createConversation('Test');
 
@@ -2768,18 +2860,38 @@ describe('Message Queue API', () => {
 
   test('PUT /conversations/:id/queue persists and GET retrieves', async () => {
     const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
-    const putRes = await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['msg1', 'msg2'] });
+    const putRes = await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, {
+      queue: [{ content: 'msg1' }, { content: 'msg2' }],
+    });
     expect(putRes.status).toBe(200);
     expect(putRes.body.ok).toBe(true);
 
     const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}/queue`);
     expect(getRes.status).toBe(200);
-    expect(getRes.body.queue).toEqual(['msg1', 'msg2']);
+    expect(getRes.body.queue).toEqual([{ content: 'msg1' }, { content: 'msg2' }]);
+  });
+
+  test('PUT /conversations/:id/queue persists attachments on queued messages', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    const attachments = [
+      { name: 'foo.pdf', path: '/tmp/foo.pdf', size: 1024, kind: 'pdf', meta: '1.0 KB' },
+      { name: 'bar.ts',  path: '/tmp/bar.ts',  size: 512,  kind: 'code', meta: '512 B' },
+    ];
+    const putRes = await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, {
+      queue: [{ content: 'look at these', attachments }, { content: 'plain' }],
+    });
+    expect(putRes.status).toBe(200);
+
+    const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}/queue`);
+    expect(getRes.body.queue).toEqual([
+      { content: 'look at these', attachments },
+      { content: 'plain' },
+    ]);
   });
 
   test('DELETE /conversations/:id/queue clears the queue', async () => {
     const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
-    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['msg1'] });
+    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: [{ content: 'msg1' }] });
 
     const delRes = await makeRequest('DELETE', `/api/chat/conversations/${conv.id}/queue`);
     expect(delRes.status).toBe(200);
@@ -2791,27 +2903,45 @@ describe('Message Queue API', () => {
 
   test('PUT /conversations/:id/queue returns 400 for invalid body', async () => {
     const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    // Numbers are not valid QueuedMessage objects
     const res = await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: [123] });
     expect(res.status).toBe(400);
   });
 
+  test('PUT /conversations/:id/queue rejects legacy string entries', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    // Legacy shape from the string[] era must be sent by the client as objects
+    const res = await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['legacy'] });
+    expect(res.status).toBe(400);
+  });
+
+  test('PUT /conversations/:id/queue rejects attachments without path', async () => {
+    const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    const res = await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, {
+      queue: [{ content: 'bad', attachments: [{ name: 'x' }] }],
+    });
+    expect(res.status).toBe(400);
+  });
+
   test('PUT /conversations/:id/queue returns 404 for unknown conversation', async () => {
-    const res = await makeRequest('PUT', '/api/chat/conversations/nonexistent/queue', { queue: ['msg'] });
+    const res = await makeRequest('PUT', '/api/chat/conversations/nonexistent/queue', { queue: [{ content: 'msg' }] });
     expect(res.status).toBe(404);
   });
 
   test('queue is included in GET /conversations/:id response', async () => {
     const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
-    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['hello', 'world'] });
+    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, {
+      queue: [{ content: 'hello' }, { content: 'world' }],
+    });
 
     const getRes = await makeRequest('GET', `/api/chat/conversations/${conv.id}`);
     expect(getRes.status).toBe(200);
-    expect(getRes.body.messageQueue).toEqual(['hello', 'world']);
+    expect(getRes.body.messageQueue).toEqual([{ content: 'hello' }, { content: 'world' }]);
   });
 
   test('queue is cleared on session reset', async () => {
     const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
-    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['pending msg'] });
+    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: [{ content: 'pending msg' }] });
 
     await makeRequest('POST', `/api/chat/conversations/${conv.id}/reset`);
 
@@ -2821,7 +2951,7 @@ describe('Message Queue API', () => {
 
   test('queue is cleared on archive', async () => {
     const conv = (await makeRequest('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
-    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: ['pending msg'] });
+    await makeRequest('PUT', `/api/chat/conversations/${conv.id}/queue`, { queue: [{ content: 'pending msg' }] });
 
     await makeRequest('PATCH', `/api/chat/conversations/${conv.id}/archive`);
 
@@ -3476,6 +3606,88 @@ describe('GET /workspaces/:hash/kb/raw/:rawId', () => {
     const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/kb/raw/../etc/passwd`);
     // Path has slashes so Express will 404 before we even see it; accept either.
     expect([400, 404]).toContain(res.status);
+  });
+});
+
+describe('GET /workspaces/:hash/kb/raw/:rawId/media/*', () => {
+  async function seedMediaFile(hash: string, rawId: string, relPath: string, bytes: Buffer): Promise<void> {
+    const full = path.join(chatService.getKbConvertedDir(hash), rawId, relPath);
+    await fs.promises.mkdir(path.dirname(full), { recursive: true });
+    await fs.promises.writeFile(full, bytes);
+  }
+
+  function fetchRaw(hash: string, rawId: string, mediaPath: string): Promise<{ status: number; bytes: Buffer }> {
+    return new Promise((resolve, reject) => {
+      const url = new URL(`/api/chat/workspaces/${hash}/kb/raw/${rawId}/media/${mediaPath}`, baseUrl);
+      http.get(
+        {
+          hostname: url.hostname,
+          port: url.port,
+          path: url.pathname + url.search,
+          headers: { 'x-csrf-token': CSRF_TOKEN },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (c: Buffer) => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode || 0, bytes: Buffer.concat(chunks) }));
+        },
+      ).on('error', reject);
+    });
+  }
+
+  test('streams back a media file from converted/<rawId>/', async () => {
+    const conv = await chatService.createConversation('KB media get', '/tmp/ws-kb-media-1');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const rawId = 'deadbeef01';
+    const jpg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46]);
+    await seedMediaFile(hash, rawId, path.join('media', 'Slide123.jpg'), jpg);
+
+    const { status, bytes } = await fetchRaw(hash, rawId, 'media/Slide123.jpg');
+    expect(status).toBe(200);
+    expect(bytes.equals(jpg)).toBe(true);
+  });
+
+  test('serves nested subdirs (slides/, pages/)', async () => {
+    const conv = await chatService.createConversation('KB nested media', '/tmp/ws-kb-media-2');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const rawId = 'deadbeef02';
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+    await seedMediaFile(hash, rawId, path.join('slides', 'slide-001.png'), png);
+
+    const { status, bytes } = await fetchRaw(hash, rawId, 'slides/slide-001.png');
+    expect(status).toBe(200);
+    expect(bytes.equals(png)).toBe(true);
+  });
+
+  test('404 when the media file does not exist', async () => {
+    const conv = await chatService.createConversation('KB media missing', '/tmp/ws-kb-media-3');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/kb/raw/deadbeef03/media/missing.jpg`);
+    expect(res.status).toBe(404);
+  });
+
+  test('400 for a non-hex rawId', async () => {
+    const conv = await chatService.createConversation('KB media bad id', '/tmp/ws-kb-media-4');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/kb/raw/not-hex-id/media/foo.jpg`);
+    expect(res.status).toBe(400);
+  });
+
+  test('400 on path traversal via ..', async () => {
+    const conv = await chatService.createConversation('KB media traversal', '/tmp/ws-kb-media-5');
+    const hash = chatService.getWorkspaceHashForConv(conv.id)!;
+    await chatService.setWorkspaceKbEnabled(hash, true);
+
+    const res = await makeRequest('GET', `/api/chat/workspaces/${hash}/kb/raw/deadbeef04/media/..%2F..%2Fsecret.txt`);
+    expect(res.status).toBe(400);
   });
 });
 

@@ -113,7 +113,7 @@ npm start
 | `ALLOWED_EMAIL` | Yes | — | Comma-separated list of allowed email addresses |
 | `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
 | `BASE_PATH` | No | `''` | URL base path for reverse proxy deployments |
-| `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing the Kiro ACP process |
+| `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
 
 *\* At least one OAuth provider (Google or GitHub) must be fully configured. You can set up one or both.*
 

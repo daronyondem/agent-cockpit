@@ -20,7 +20,7 @@
 | `GITHUB_CALLBACK_URL` | No | — | GitHub OAuth callback URL |
 | `ALLOWED_EMAIL` | Yes | — | Comma-separated list of allowed email addresses |
 | `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
-| `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing the Kiro ACP process |
+| `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
 | `BASE_PATH` | No | `''` | URL base path prefix (for reverse proxy deployments) |
 
 ## 5.2 Server Initialization Order
@@ -99,16 +99,19 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 Helmet with CSP directives:
 ```
 default-src: 'self'
-script-src: 'self', 'unsafe-inline', https://cdnjs.cloudflare.com
+script-src: 'self', 'unsafe-inline', https://cdnjs.cloudflare.com, https://esm.sh, https://unpkg.com
 script-src-attr: 'unsafe-inline'
-style-src: 'self', 'unsafe-inline', https://cdnjs.cloudflare.com
+style-src: 'self', 'unsafe-inline', https://cdnjs.cloudflare.com, https://fonts.googleapis.com, https://api.fontshare.com
+font-src: 'self', data:, https://fonts.gstatic.com, https://api.fontshare.com, https://cdn.fontshare.com
 img-src: 'self', data:, blob:
-connect-src: 'self'
+connect-src: 'self', https://esm.sh, https://unpkg.com
 object-src: 'none'
 base-uri: 'self'
 frame-ancestors: 'none'
 form-action: 'self'
 ```
+
+`unpkg.com` (script) + `fonts.googleapis.com` / `api.fontshare.com` (style) + `fonts.gstatic.com` / `api.fontshare.com` / `cdn.fontshare.com` (font) are allowlisted for the `/v2/` redesign preview (React + Babel Standalone from unpkg; General Sans / Instrument Serif / JetBrains Mono from Google Fonts + Fontshare). These entries can be narrowed after the v2 cutover if the vendored-asset alternative is chosen.
 
 Cross-Origin Embedder Policy: disabled.
 

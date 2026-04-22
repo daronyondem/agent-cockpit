@@ -2,7 +2,7 @@
  * @jest-environment jsdom
  */
 
-// Replicates the state-machine logic of public/js/tab-indicator.js so the
+// Replicates the state-machine logic of public/v2/src/tabIndicator.js so the
 // transitions can be exercised without a module bundler. If the real module
 // changes, mirror the change here.
 
