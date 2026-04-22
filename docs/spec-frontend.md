@@ -4,17 +4,19 @@
 
 ---
 
-**Files:** `public/index.html`, `public/js/*.js` (11 ES modules), `public/styles.css`
+**Files (default UI — V2):** `public/v2/index.html`, `public/v2/src/*.{jsx,js,css}`
 
-Vanilla JavaScript SPA — no framework, no bundler, no build step. Frontend is split into native ES modules (`<script type="module">`) loaded from `public/js/main.js`. Uses marked (CDN) for Markdown and highlight.js (CDN) for syntax highlighting. Shared mutable state lives in a single `state` object exported from `state.js`. Circular dependencies between modules are avoided via late-binding callback patterns (e.g. `setStreamEventHandler()` in `websocket.js`). Functions called from inline `onclick` in dynamically generated HTML are assigned to `window` in `main.js`. (Backend is TypeScript; frontend remains vanilla JS.)
+**Files (legacy UI — V1, retained as fallback):** `public/index.html`, `public/js/*.js` (11 ES modules), `public/styles.css`
 
-## In-progress v2 Redesign Preview
+## V2 — Default Frontend
 
 **Paths:**
-- `/v2/` — real app entry (`public/v2/index.html` → `shell.jsx`). Work-in-progress; active path.
+- `/` — redirects to `/v2/` (handled in `server.ts`).
+- `/v2/` — real app entry (`public/v2/index.html` → `shell.jsx`). The default UI.
 - `/v2/deck.html` — static mockup slide deck (all 16 screens from the design handoff, navigable with ←/→). Preserved during the rewrite so the target design can be referenced in-place; driven by `public/v2/src/app2.jsx`.
+- `/legacy/` — redirects to `/index.html` (the V1 UI — see [§ Legacy UI (V1)](#legacy-ui-v1) below).
 
-A parallel React-based redesign is under construction. The current vanilla-JS UI at `/` remains the live product; `/v2/` mounts the in-progress real app alongside it, and `/v2/deck.html` keeps the full design deck around as reference. Both are behind `requireAuth`. The v2 bundle is a React 18 + Babel Standalone prototype (no build step). Source tree:
+V2 is the production UI. The legacy vanilla-JS UI at `/index.html` is preserved as a fallback during the cutover and will be removed once V2 proves itself; `/v2/deck.html` keeps the full design deck around as reference. All paths are behind `requireAuth`. The V2 bundle is a React 18 + Babel Standalone prototype (no build step — see the production build issue on GitHub). Source tree:
 
 - `public/v2/index.html` — real app entry. Loads React/ReactDOM/Babel, `marked` (markdown parser), and `DOMPurify` (HTML sanitizer) from unpkg, the three stylesheets (`tokens.css`, `app.css`, `dialog.css`), then `api.js`, `streamStore.js`, `tabIndicator.js` (plain JS, self-initialising — mounts the browser-tab favicon-dot subscriber on top of `StreamStore.subscribeGlobal`), `icons.jsx`, `dialog.jsx`, `toast.jsx`, `primitives.jsx`, `screens/kbBrowser.jsx` (the real KB Browser), `screens/filesBrowser.jsx` (the real Files browser), `screens/settingsScreen.jsx` (the real Settings screen), `folderPicker.jsx`, `workspaceSettings.jsx`, `sessionsModal.jsx`, `updateModal.jsx`, and `shell.jsx`. Load order matters: `dialog.jsx` must come after `icons.jsx` (uses `Ico.*`) and before `shell.jsx` / the screens (which call `useDialog`); `toast.jsx` must come before `shell.jsx` and the screens that call `useToasts`; `settingsScreen.jsx` must come before `shell.jsx` because shell references `<SettingsScreen>`; `updateModal.jsx` must come before `shell.jsx` because shell references `<UpdateModal>` and `<RestartOverlay>`; `workspaceSettings.jsx` must come before `shell.jsx` because shell references `<WorkspaceSettingsModal>`; `sessionsModal.jsx` must come before `shell.jsx` because `ChatLive` references `<SessionsModal>`. Does **not** load the mock deck screens (`screens/kb.jsx`, `screens/files.jsx`, and the other `screens/*.jsx` stubs) — those live only in `deck.html`. Each script/stylesheet URL carries a `?v=N` cache-buster — bump when any of the imported JSX/JS/CSS files change so browsers fetch the new version instead of a cached copy.
 - `public/v2/deck.html` — slide deck entry. Loads the same base bundle plus `screens/*.jsx` and `app2.jsx` (the `SLIDES` scaffold + `Frame`/`Tweaks` overlay).
@@ -188,6 +190,10 @@ A parallel React-based redesign is under construction. The current vanilla-JS UI
 
   **Backwards compatibility (historical transcripts):** messages saved before the typed queue existed may carry `[Uploaded files: /abs/path1, /abs/path2]` trailing text on `Message.content` (user messages). The renderer feeds these through `StreamStore.parseUploadedFilesTag(content)`, which strips the tag and returns `{ content, attachments }` where each `AttachmentMeta` has `name` + `path` + `kind` (inferred from extension via `attachmentKindFromPath`). `size`/`meta` are unavailable for legacy entries — the `md` chip shows only the filename and kind badge in that case. Users receive the same typed-chip UX for old transcripts at read-time; the on-disk bytes are untouched.
 - **Everything else** — not in the real app at `/v2/`. Right rail, tab indicator, and the other mock screens remain accessible only via `/v2/deck.html` and will be wired in future PRs.
+
+## Legacy UI (V1)
+
+The sections below describe the legacy vanilla-JS UI at `public/index.html` + `public/js/*.js` + `public/styles.css`. It is reachable at `/legacy/` (redirects to `/index.html`) as a fallback during the V2 cutover and will be removed once V2 proves itself. All content below documents V1's behavior as of the cutover and is not being actively extended.
 
 ## Layout
 
