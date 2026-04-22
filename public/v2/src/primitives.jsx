@@ -120,7 +120,7 @@ function writeWsCollapsed(map){
 }
 
 /* ---------- Sidebar (shared across screens) ---------- */
-function Sidebar({ activeId = null, onSelect = null, convStates = null, onOpenKb = null, onOpenFiles = null, onOpenSettings = null, onOpenWorkspaceSettings = null, onNewConversation = null, refreshToken = 0, viewingArchive = false, onToggleArchive = null, onRestore = null, onSignOut = null, onShowUpdate = null }){
+function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convStates = null, onOpenKb = null, onOpenFiles = null, onOpenSettings = null, onOpenWorkspaceSettings = null, onNewConversation = null, refreshToken = 0, viewingArchive = false, onToggleArchive = null, onRestore = null, onSignOut = null, onShowUpdate = null }){
   const [convs, setConvs] = React.useState(null);  // null = loading, [] = empty, [...] = loaded
   const [err, setErr] = React.useState(null);
   const [query, setQuery] = React.useState('');
@@ -297,7 +297,21 @@ function Sidebar({ activeId = null, onSelect = null, convStates = null, onOpenKb
               const isActive = c.id === activeId;
               const selectable = typeof onSelect === 'function';
               const state = convStates ? convStates[c.id] : null;
-              const stateClass = (state === 'streaming' || state === 'awaiting' || state === 'error') ? ` ${state}` : '';
+              /* Priority: live status (streaming/awaiting/error) > unread.
+                 'idle' is the StreamStore sentinel meaning "touched conv,
+                 explicitly not unread" — it suppresses the c.unread fallback
+                 so the dot clears immediately on selection without waiting
+                 for the server-cached list to refresh. For untouched convs
+                 (no entry in convStates), c.unread from the server list is
+                 the source of truth. */
+              const liveState = (state === 'streaming' || state === 'awaiting' || state === 'error') ? state : null;
+              const isUnread = !liveState && (
+                state === 'unread' || (state == null && c.unread === true)
+              );
+              const stateClass = liveState
+                ? ` ${liveState}`
+                : (isUnread ? ' unread' : '');
+              const canMarkUnread = !liveState && !isUnread && !isActive && typeof onMarkUnread === 'function';
               return (
                 <div
                   key={c.id}
@@ -312,7 +326,17 @@ function Sidebar({ activeId = null, onSelect = null, convStates = null, onOpenKb
                   } : undefined}
                   style={selectable ? { cursor: 'pointer' } : undefined}
                 >
-                  <span className="dot"/>
+                  {canMarkUnread ? (
+                    <button
+                      type="button"
+                      className="dot dot-btn"
+                      title="Mark as unread"
+                      aria-label="Mark as unread"
+                      onClick={(e) => { e.stopPropagation(); onMarkUnread(c.id); }}
+                    />
+                  ) : (
+                    <span className="dot"/>
+                  )}
                   <span className="title">{c.title || 'Untitled'}</span>
                   {viewingArchive && onRestore ? (
                     <button

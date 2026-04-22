@@ -143,6 +143,7 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
       [backendId]: Usage
     }|null,
     archived: boolean|undefined, // true when conversation is archived; absent/false = active
+    unread: boolean|undefined,   // true when a response completed on this conversation while the user was viewing a different one. Cleared when the user selects the conversation. Toggled via PATCH /chat/conversations/:id/unread; absent for read conversations to keep the file lean.
     messageQueue: QueuedMessage[]|undefined, // Persisted follow-up message queue (typed — see below); absent when empty. Legacy `string[]` entries are auto-migrated on read.
     sessions: [{
       number: number,           // 1-based session number
@@ -323,7 +324,8 @@ Flat object assembled from workspace index + active session file:
   usage: Usage,                 // Cumulative token/cost totals (zeroed if no usage yet)
   sessionUsage: Usage,          // Active session token/cost totals (zeroed if no usage yet)
   externalSessionId: string|null, // Backend-managed session ID (for resume after server restart)
-  archived?: boolean            // true when the conversation is archived; absent/false otherwise. The v2 topbar swaps Archive → Unarchive + Delete when set.
+  archived?: boolean,           // true when the conversation is archived; absent/false otherwise. The v2 topbar swaps Archive → Unarchive + Delete when set.
+  unread?: boolean              // Mirror of `ConversationEntry.unread`. Lets the v2 sidebar render an unread dot on initial paint without a second round-trip per conversation.
 }
 ```
 

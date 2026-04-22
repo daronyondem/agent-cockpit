@@ -1761,6 +1761,50 @@ describe('PATCH /conversations/:id/restore', () => {
   });
 });
 
+// ── PATCH /conversations/:id/unread ──────────────────────────────────────────
+
+describe('PATCH /conversations/:id/unread', () => {
+  test('sets unread flag and surfaces it on list', async () => {
+    const conv = await chatService.createConversation('Test');
+    const res = await makeRequest('PATCH', `/api/chat/conversations/${conv.id}/unread`, { unread: true });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.unread).toBe(true);
+
+    const listRes = await makeRequest('GET', '/api/chat/conversations');
+    const item = listRes.body.conversations.find((c: any) => c.id === conv.id);
+    expect(item.unread).toBe(true);
+  });
+
+  test('clears unread flag (omitted from list summary)', async () => {
+    const conv = await chatService.createConversation('Test');
+    await chatService.setConversationUnread(conv.id, true);
+
+    const res = await makeRequest('PATCH', `/api/chat/conversations/${conv.id}/unread`, { unread: false });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.unread).toBe(false);
+
+    const listRes = await makeRequest('GET', '/api/chat/conversations');
+    const item = listRes.body.conversations.find((c: any) => c.id === conv.id);
+    expect(item.unread).toBeUndefined();
+  });
+
+  test('treats empty body as clear', async () => {
+    const conv = await chatService.createConversation('Test');
+    await chatService.setConversationUnread(conv.id, true);
+
+    const res = await makeRequest('PATCH', `/api/chat/conversations/${conv.id}/unread`, {});
+    expect(res.status).toBe(200);
+    expect(res.body.unread).toBe(false);
+  });
+
+  test('returns 404 for non-existent conversation', async () => {
+    const res = await makeRequest('PATCH', '/api/chat/conversations/nope/unread', { unread: true });
+    expect(res.status).toBe(404);
+  });
+});
+
 // ── GET /conversations?archived=true ──────��─────────────────────────────────
 
 describe('GET /conversations?archived=true', () => {
