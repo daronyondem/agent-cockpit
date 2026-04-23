@@ -15,6 +15,7 @@ import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
 import { KiroAdapter } from './src/services/backends/kiro';
 import { UpdateService } from './src/services/updateService';
 import { ClaudePlanUsageService } from './src/services/claudePlanUsageService';
+import { KiroPlanUsageService } from './src/services/kiroPlanUsageService';
 import { detectLibreOffice } from './src/services/knowledgeBase/libreOffice';
 import { detectPandoc } from './src/services/knowledgeBase/pandoc';
 import type { Request, Response, NextFunction } from './src/types';
@@ -77,7 +78,8 @@ backendRegistry.register(new KiroAdapter({ workingDir: config.DEFAULT_WORKSPACE 
 const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
 const updateService = new UpdateService(__dirname);
 const claudePlanUsageService = new ClaudePlanUsageService(__dirname);
-const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService });
+const kiroPlanUsageService = new KiroPlanUsageService(__dirname);
+const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService });
 app.use('/api/chat', chatRouter);
 
 // V2 is the default UI. Root redirects to /v2/; /legacy/ keeps the
@@ -118,6 +120,16 @@ chatService.initialize().then(async () => {
     claudePlanUsageService.maybeRefresh('server-start');
   }).catch((err: unknown) => {
     console.warn('[claudePlanUsage] init failed:', (err as Error).message);
+  });
+
+  // Same pattern for Kiro. Reads the kiro-cli SQLite store read-only to
+  // pick up the IdC access token + CodeWhisperer profile ARN, then calls
+  // AmazonCodeWhispererService.GetUsageLimits directly. Skipped silently
+  // if kiro-cli isn't installed or the access token has rotated out.
+  kiroPlanUsageService.init().then(() => {
+    kiroPlanUsageService.maybeRefresh('server-start');
+  }).catch((err: unknown) => {
+    console.warn('[kiroPlanUsage] init failed:', (err as Error).message);
   });
 
   // Detect LibreOffice in the background — used by the KB PPTX ingestion

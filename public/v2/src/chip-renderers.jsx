@@ -192,7 +192,115 @@ function ClaudeCodeTokenCard({ usage, planUsage }){
   );
 }
 
-function KiroTokenCard({ usage }){
+function _formatResetDate(epochSeconds){
+  if (typeof epochSeconds !== 'number' || !Number.isFinite(epochSeconds)) return '';
+  const d = new Date(epochSeconds * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
+function _fmtCredits(n){
+  if (typeof n !== 'number' || !Number.isFinite(n)) return '0';
+  if (n >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 0 });
+  if (n >= 10)   return n.toFixed(0);
+  return n.toFixed(2);
+}
+
+function _humanizeSubscriptionTitle(title){
+  if (!title || typeof title !== 'string') return 'Plan';
+  return title
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+function KiroPlanUsageSection({ data }){
+  const usage = data && data.usage;
+  const sub = usage && usage.subscription;
+  const breakdown = usage && usage.breakdown;
+  const tier = _humanizeSubscriptionTitle(sub && sub.subscriptionTitle);
+  const fetchedLabel = _formatFetchedAt(data && data.fetchedAt);
+  const errored = !!(data && data.lastError);
+  const stale = !!(data && data.stale);
+  const footerColor = errored
+    ? 'var(--status-error)'
+    : (stale ? 'var(--status-warning)' : 'var(--text-3)');
+
+  const used = breakdown && typeof breakdown.currentUsageWithPrecision === 'number'
+    ? breakdown.currentUsageWithPrecision
+    : (breakdown && breakdown.currentUsage);
+  const limit = breakdown && typeof breakdown.usageLimitWithPrecision === 'number'
+    ? breakdown.usageLimitWithPrecision
+    : (breakdown && breakdown.usageLimit);
+  const pct = (typeof used === 'number' && typeof limit === 'number' && limit > 0)
+    ? Math.min(100, Math.max(0, (used / limit) * 100))
+    : null;
+  const unitLabel = breakdown && breakdown.displayNamePlural || 'Credits';
+  const resetLabel = breakdown && typeof breakdown.nextDateReset === 'number'
+    ? `resets ${_formatResetDate(breakdown.nextDateReset)}`
+    : (usage && typeof usage.nextDateReset === 'number' ? `resets ${_formatResetDate(usage.nextDateReset)}` : '');
+
+  const overageEnabled = usage && usage.overageStatus === 'ENABLED';
+  const hasOverage = !!(breakdown && typeof breakdown.currentOveragesWithPrecision === 'number'
+    && breakdown.currentOveragesWithPrecision > 0);
+  const overageCount = breakdown && (typeof breakdown.currentOveragesWithPrecision === 'number'
+    ? breakdown.currentOveragesWithPrecision : breakdown.currentOverages) || 0;
+  const overageCharges = breakdown && typeof breakdown.overageCharges === 'number'
+    ? breakdown.overageCharges : 0;
+  const bonuses = breakdown && Array.isArray(breakdown.bonuses) ? breakdown.bonuses : [];
+
+  return (
+    <>
+      <div className="tt-section">
+        <div className="tt-section-label">Account · {tier}</div>
+        {breakdown ? (
+          <div className="tt-rows">
+            <div className="tt-bar-wrap">
+              <div className="tt-bar-head">
+                <span>{unitLabel}</span>
+                <span>
+                  <b>{_fmtCredits(used)} / {_fmtCredits(limit)}</b>
+                  {resetLabel ? <em> · {resetLabel}</em> : null}
+                </span>
+              </div>
+              {pct != null ? (
+                <div className="tt-bar"><i style={{width: pct + '%'}}/></div>
+              ) : null}
+            </div>
+            {overageEnabled ? (
+              <div className="tt-kv">
+                <span>Overage</span>
+                <b>
+                  {hasOverage
+                    ? <>{_fmtCredits(overageCount)} {unitLabel.toLowerCase()} · ${overageCharges.toFixed(2)}</>
+                    : <>Enabled · none used</>}
+                </b>
+              </div>
+            ) : null}
+            {bonuses.length > 0 ? (
+              <div className="tt-kv">
+                <span>Bonus credits</span>
+                <b>{bonuses.length}</b>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div style={{fontFamily: 'var(--mono-font)', fontSize: 11, color: 'var(--text-3)'}}>
+            No usage data yet.
+          </div>
+        )}
+      </div>
+      <div className="tt-section" style={{padding: '6px 14px 8px'}}>
+        <span style={{fontFamily: 'var(--mono-font)', fontSize: 10, color: footerColor}}>
+          {errored ? `Last update failed · ` : `Updated `}{fetchedLabel}
+        </span>
+      </div>
+    </>
+  );
+}
+
+function KiroTokenCard({ usage, planUsage }){
   const input  = usage.inputTokens  || 0;
   const output = usage.outputTokens || 0;
   const total  = input + output;
@@ -230,6 +338,7 @@ function KiroTokenCard({ usage }){
           </div>
         </div>
       ) : null}
+      {planUsage ? <KiroPlanUsageSection data={planUsage}/> : null}
     </>
   );
 }
@@ -284,7 +393,9 @@ const CHIP_RENDERERS = {
       if (pct != null) return `${pct.toFixed(2)}% context`;
       return tokensLabel;
     },
-    renderTooltipCard(usage){ return <KiroTokenCard usage={usage}/>; },
+    renderTooltipCard(usage, opts){
+      return <KiroTokenCard usage={usage} planUsage={opts && opts.planUsage}/>;
+    },
   },
 };
 

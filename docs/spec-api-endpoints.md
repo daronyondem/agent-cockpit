@@ -320,7 +320,54 @@ Account-wide Claude Code plan usage snapshot (5-hour session %, weekly %, per-mo
 
 See Section 4 (`ClaudePlanUsageService`) for the caching, credential resolution, and HTTP semantics.
 
-## 3.15 Error Response Patterns
+## 3.15 Kiro Plan Usage
+
+Account-wide Kiro (Amazon Q) plan usage snapshot (subscription tier, monthly credits used / cap, overage status + dollar charges, bonus credits, reset date). Surfaced in the ContextChip tooltip on Kiro conversations. The service fetches this directly from Amazon — it does **not** piggyback on the ACP stream (an earlier ACP-based attempt caused cross-conversation message leakage and was abandoned in favor of this direct path).
+
+| Method | Path | CSRF | Description |
+|--------|------|------|-------------|
+| GET | `/kiro-plan-usage` | — | Returns the last cached snapshot. **Does not trigger a refresh.** Response: `{ fetchedAt: string \| null, usage: KiroUsageData \| null, lastError: string \| null, stale: boolean }`. `fetchedAt` is ISO-8601 of the last successful fetch (`null` before the first ever fetch). `lastError` is the last fetch failure message (`token-expired`, `kiro-cli DB unavailable`, `missing access token`, `missing profile`, HTTP 4xx/5xx, or network error verbatim) — cleared on success. `stale: true` when `Date.now() - fetchedAt > 15 min` or no successful fetch has landed yet. |
+
+**`KiroUsageData` shape** — normalized from the Amazon Q `GetUsageLimits` response body (`subscriptionInfo`, `overageConfiguration.overageStatus`, `nextDateReset`, `usageBreakdownList[0]`) with each field coerced to `string | null` / `number | null` so missing or unexpected upstream fields never crash the frontend; `bonuses` is passed through as an opaque array.
+
+```ts
+{
+  subscription: {
+    subscriptionTitle:            string | null,  // "Free" / "Pro" / etc.
+    type:                         string | null,
+    overageCapability:            string | null,
+    upgradeCapability:            string | null,
+    subscriptionManagementTarget: string | null,
+  } | null,
+  overageStatus: string | null,                   // "ENABLED" / "DISABLED" / other
+  nextDateReset: number | null,                   // epoch seconds (not ms)
+  breakdown: {
+    currency:                     string | null,
+    currentUsage:                 number | null,  // credits used this cycle
+    currentUsageWithPrecision:    number | null,  // higher-precision variant — preferred by the renderer
+    currentOverages:              number | null,  // extra credits beyond the cap
+    currentOveragesWithPrecision: number | null,
+    overageCap:                   number | null,
+    overageCapWithPrecision:      number | null,
+    overageCharges:               number | null,  // dollar charges accrued from overage
+    overageRate:                  number | null,  // $ per credit rate
+    usageLimit:                   number | null,  // cycle cap
+    usageLimitWithPrecision:      number | null,
+    displayName:                  string | null,  // singular unit label ("Credit")
+    displayNamePlural:            string | null,  // plural unit label ("Credits")
+    resourceType:                 string | null,
+    unit:                         string | null,
+    nextDateReset:                number | null,  // per-breakdown reset (epoch seconds)
+    bonuses:                      unknown[],      // opaque — frontend shows the count, not the contents
+  } | null,
+}
+```
+
+**Refresh trigger policy:** The service refreshes opportunistically from two triggers — server startup (once, via `init()` + `maybeRefresh('server-start')`) and after each Kiro assistant turn (`onDone` callback in the chat router calls `maybeRefresh('turn-done')`). A floor of 10 minutes between attempts (tracked by last attempt time, not last success) protects against rate-limit retry storms. The HTTP route itself never forces a fetch — it only reads the cache. Other backends (Claude Code, etc.) do not trigger this service's refreshes.
+
+See Section 4 (`KiroPlanUsageService`) for the caching, SQLite credential resolution, and HTTP semantics.
+
+## 3.16 Error Response Patterns
 
 | Status | Meaning | Body |
 |--------|---------|------|

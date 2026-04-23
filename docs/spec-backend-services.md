@@ -612,3 +612,52 @@ Missing `accessToken` throws `credentials missing claudeAiOauth.accessToken`, su
 - `'keychain read failed: <msg>'` — `security` CLI returned non-zero.
 - `'usage API <status>: <body>'` — upstream HTTP 4xx/5xx (body truncated to 200 chars).
 - Any network error message verbatim (timeout, DNS, TLS).
+
+## 4.5 KiroPlanUsageService
+
+**File:** `src/services/kiroPlanUsageService.ts`
+
+Fetches and caches the Kiro (Amazon Q Developer) account-wide plan usage snapshot (subscription tier, monthly credits used / cap, overage status + dollar charges, bonus credits, reset date) by reading the kiro-cli's SQLite auth store read-only and calling `AmazonCodeWhispererService.GetUsageLimits` directly. Read-only — the service never writes to the SQLite DB, never refreshes the token, and never mutates the active CodeWhisperer profile. Surfaces in the V2 ContextChip tooltip for Kiro conversations only.
+
+**Why direct-call instead of an ACP piggyback:** an earlier attempt to fetch this via the ACP `initialize` / `authenticate` stream on a background worker conversation caused cross-conversation message leakage (the ACP client routed frames to whichever conversation happened to be streaming at the time). The direct REST path against the Amazon Q endpoint avoids the ACP transport entirely — the cadence gained from this approach is what makes the server-startup refresh viable without disturbing any live conversation.
+
+**Constants:**
+- `Q_API_URL = 'https://q.us-east-1.amazonaws.com/'`
+- `Q_TARGET = 'AmazonCodeWhispererService.GetUsageLimits'` (`X-Amz-Target` header)
+- `Q_ORIGIN = 'KIRO_CLI'` (query param + body field — identifies this as a kiro-cli caller)
+- `REFRESH_MIN_INTERVAL_MS = 10 * 60 * 1000` — minimum gap between fetch **attempts** (not successes) so transient failures back off cleanly instead of hammering
+- `STALE_AFTER_MS = 15 * 60 * 1000` — client-visible stale threshold (slightly above the refresh floor)
+- `EXPIRY_BUFFER_MS = 30 * 1000` — AWS IdC tokens rotate every ~8 min, so the buffer here is much tighter than Claude's 5 min; if <30s remain the service skips and waits for the CLI to refresh on its next real invocation
+
+**Constructor:** `new KiroPlanUsageService(appRoot: string, options?: { dbPath?: string })` — stores the on-disk cache at `<appRoot>/data/kiro-plan-usage.json`; `options.dbPath` is test-only (defaults to the platform-specific kiro-cli data file — see below).
+
+**Methods:**
+- `init()` — loads the persisted snapshot off disk on server startup. Silently ignores `ENOENT`; logs any other read/parse failure and keeps the in-memory snapshot as its initial empty shape.
+- `getCached()` — returns `{ fetchedAt, usage, lastError, stale }`. Does not trigger a refresh. `stale` is computed as `now - fetchedAt > STALE_AFTER_MS` (or `true` when `fetchedAt` is null). This is the exact shape returned by `GET /api/chat/kiro-plan-usage`.
+- `maybeRefresh(reason: string)` — triggers a refresh if all of: no in-flight refresh, and at least `REFRESH_MIN_INTERVAL_MS` have passed since the last attempt. Returns the shared in-flight promise when a fetch is already running, or an immediately-resolved promise when the throttle is active. The `reason` string is logged alongside success/failure (`server-start`, `turn-done`).
+- `_refresh(reason)` (private) — opens the kiro-cli SQLite DB read-only via `readKiroAuth(dbPath)`, short-circuits with `lastError: 'token-expired'` if the access token is within the 30-second expiry buffer, otherwise `POST`s `https://q.us-east-1.amazonaws.com/?profileArn=<enc>&origin=KIRO_CLI` with headers `Content-Type: application/x-amz-json-1.0`, `X-Amz-Target: AmazonCodeWhispererService.GetUsageLimits`, `Authorization: Bearer <accessToken>`, `X-Amzn-Codewhisperer-Optout: false`, `Accept: */*` and body `{"profileArn":"<arn>","origin":"KIRO_CLI"}`, with a 10-second abort signal. On success stores `{ fetchedAt: now, usage: normalizeUsage(body), lastError: null }`. On non-2xx or network failure preserves the prior `fetchedAt` / `usage` values and only overwrites `lastError` — the UI still renders the last-known snapshot.
+- `_persist()` (private) — `mkdir -p data/` then writes the snapshot to `data/kiro-plan-usage.json`. Failures are logged and swallowed.
+
+**SQLite credential resolution (`readKiroAuth`):** opens the kiro-cli data file with `better-sqlite3` using `{ readonly: true, fileMustExist: true }`, then reads two rows with prepared statements and closes the DB in a `finally`:
+- `SELECT value FROM auth_kv WHERE key = 'kirocli:odic:token'` — JSON blob with `{ access_token, expires_at }` (`expires_at` is ISO-8601, parsed to epoch ms; treated as non-expiring when absent or unparseable).
+- `SELECT value FROM state WHERE key = 'api.codewhisperer.profile'` — JSON blob with `{ arn }` (the active CodeWhisperer profile ARN, threaded into both the query string and the JSON body as required by the Q endpoint).
+
+**Default DB path (`defaultKiroDbPath`):** platform-specific — `~/Library/Application Support/kiro-cli/data.sqlite3` on darwin, `%APPDATA%/kiro-cli/data.sqlite3` on win32 (falls back to `~/AppData/Roaming/…` when `APPDATA` is unset), and `$XDG_DATA_HOME/kiro-cli/data.sqlite3` on Linux (falls back to `~/.local/share/…`).
+
+**Response normalization (`normalizeUsage`):** pulls `subscriptionInfo`, `overageConfiguration.overageStatus`, `nextDateReset`, and `usageBreakdownList[0]` from the raw body, coercing every field through `strOrNull` / `numOrNull` so missing or non-primitive values become `null` rather than crashing the renderer. `bonuses` passes through as an opaque array (`unknown[]`) — the frontend surfaces the count rather than the contents. See [spec-api-endpoints.md § 3.15](spec-api-endpoints.md#315-kiro-plan-usage) for the full `KiroUsageData` shape.
+
+**Integration points:**
+- `server.ts` — instantiated with `__dirname`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `kiroPlanUsageService` dependency.
+- `src/routes/chat.ts`:
+  - `GET /kiro-plan-usage` route returns `getCached()` verbatim.
+  - `onDone` stream callback calls `maybeRefresh('turn-done')` when `backendId === 'kiro'`. No other backend triggers a refresh for this service.
+
+**Error taxonomy (`lastError` values):**
+- `'token-expired'` — access token at/within the 30-second expiry buffer.
+- `'kiro-cli DB unavailable at <path>: <msg>'` — SQLite open failed (file missing when `fileMustExist: true`, permission error, corruption). Typical when the user has never run kiro-cli auth on this machine.
+- `'kiro-cli auth_kv missing access token'` — DB opens but the `kirocli:odic:token` row is absent or has an empty `value`.
+- `'kiro-cli state missing profile'` — DB opens but the `api.codewhisperer.profile` row is absent or has an empty `value`.
+- `'kiro-cli token blob missing access_token'` — token row present but the parsed JSON has no `access_token` string.
+- `'kiro-cli profile blob missing arn'` — profile row present but the parsed JSON has no `arn` string.
+- `'GetUsageLimits <status>: <body>'` — upstream HTTP 4xx/5xx (body truncated to 200 chars).
+- Any network error message verbatim (timeout, DNS, TLS).

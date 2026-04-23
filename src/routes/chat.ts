@@ -9,6 +9,7 @@ import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
 import type { ClaudePlanUsageService } from '../services/claudePlanUsageService';
+import type { KiroPlanUsageService } from '../services/kiroPlanUsageService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
 import { detectLibreOffice } from '../services/knowledgeBase/libreOffice';
@@ -331,9 +332,10 @@ interface ChatRouterDeps {
   backendRegistry: BackendRegistry;
   updateService: UpdateService;
   claudePlanUsageService: ClaudePlanUsageService;
+  kiroPlanUsageService: KiroPlanUsageService;
 }
 
-export function createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService }: ChatRouterDeps) {
+export function createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService }: ChatRouterDeps) {
   const router = express.Router();
   const packageJson = require('../../package.json');
 
@@ -457,6 +459,14 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // assistant turn (wired in server.ts and in the stream onDone below).
   router.get('/plan-usage', (_req: Request, res: Response) => {
     res.json(claudePlanUsageService.getCached());
+  });
+
+  // ── Kiro plan usage ────────────────────────────────────────────────────────
+  // Mirrors /plan-usage: returns the cached GetUsageLimits snapshot from
+  // KiroPlanUsageService without triggering a fetch. Refreshes happen on
+  // server start and after each Kiro turn (see stream onDone below).
+  router.get('/kiro-plan-usage', (_req: Request, res: Response) => {
+    res.json(kiroPlanUsageService.getCached());
   });
 
   // ── Manual version check ────────────────────────────────────────────────────
@@ -1183,6 +1193,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           memoryFingerprints.delete(convId);
           if (backendId === 'claude-code') {
             claudePlanUsageService.maybeRefresh('turn-done');
+          } else if (backendId === 'kiro') {
+            kiroPlanUsageService.maybeRefresh('turn-done');
           }
         },
         { chatService },

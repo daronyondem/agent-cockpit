@@ -573,11 +573,13 @@
       if (markUnreadNow) {
         AgentApi.markConversationUnread(convId, true).catch(() => {});
       }
-      /* Poll Claude Code account plan usage once per turn. Server floors
+      /* Poll the per-backend plan usage store once per turn. Server floors
          the actual API hit at 10 min; this just asks for the cached
          snapshot and fans it out to the ContextChip tooltip. */
       if (s.conv && s.conv.backend === 'claude-code' && window.PlanUsageStore) {
         window.PlanUsageStore.refresh();
+      } else if (s.conv && s.conv.backend === 'kiro' && window.KiroPlanUsageStore) {
+        window.KiroPlanUsageStore.refresh();
       }
       /* Auto-drain queue — if the just-finished run leaves us idle (no
          pending plan/question, no stream error) and there's a queued

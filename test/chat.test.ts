@@ -215,7 +215,12 @@ beforeEach(async () => {
     getCached: () => ({ fetchedAt: null, planTier: null, subscriptionType: null, rateLimits: null, lastError: null, stale: true }),
     maybeRefresh: async () => {},
   } as any;
-  const chatResult = createChatRouter({ chatService, backendRegistry, updateService: null as any, claudePlanUsageService: mockPlanUsage });
+  const mockKiroPlanUsage = {
+    init: async () => {},
+    getCached: () => ({ fetchedAt: null, usage: null, lastError: null, stale: true }),
+    maybeRefresh: async () => {},
+  } as any;
+  const chatResult = createChatRouter({ chatService, backendRegistry, updateService: null as any, claudePlanUsageService: mockPlanUsage, kiroPlanUsageService: mockKiroPlanUsage });
   activeStreams = chatResult.activeStreams;
   app.use('/api/chat', chatResult.router);
 
