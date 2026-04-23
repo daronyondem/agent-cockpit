@@ -184,6 +184,16 @@
     return res.json();
   }
 
+  /* Claude plan usage (Max/Pro rate limit utilization). Server-side cache
+     is refreshed opportunistically on server start and after each Claude
+     Code assistant turn, floor-throttled to once per 10 minutes. The
+     endpoint itself never triggers a fetch — it just returns the cached
+     snapshot with a `stale` boolean. */
+  async function getClaudePlanUsage(){
+    const res = await chatFetch('plan-usage');
+    return res.json();
+  }
+
   /* Backend registry is effectively static — one fetch per session is plenty.
      Used by the composer pickers on every ChatLive mount. */
   function getBackendsCached(){
@@ -572,6 +582,7 @@
     getUpdateStatus,
     checkVersion,
     triggerUpdate,
+    getClaudePlanUsage,
     browseDir,
     mkdirDir,
     rmdirDir,

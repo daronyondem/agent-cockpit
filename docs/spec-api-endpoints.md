@@ -288,7 +288,39 @@ Constants (defined in `src/routes/chat.ts`):
 | POST | `/update-trigger` | Yes | Full update sequence (see Section 4, UpdateService). |
 | POST | `/server/restart` | Yes | Plain pm2 restart (no git pull / npm install) via `UpdateService.restart()`. Returns `409` if an update is in progress or active conversation streams exist. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. |
 
-## 3.14 Error Response Patterns
+## 3.14 Claude Code Plan Usage
+
+Account-wide Claude Code plan usage snapshot (5-hour session %, weekly %, per-model breakdown, reset times, plan tier, optional extra-credit balance). Surfaced in the ContextChip tooltip on Claude Code conversations.
+
+| Method | Path | CSRF | Description |
+|--------|------|------|-------------|
+| GET | `/plan-usage` | — | Returns the last cached snapshot. **Does not trigger a refresh.** Response: `{ fetchedAt: string \| null, planTier: string \| null, subscriptionType: string \| null, rateLimits: RateLimits \| null, lastError: string \| null, stale: boolean }`. `fetchedAt` is ISO-8601 of the last successful fetch (`null` before the first ever fetch). `planTier` mirrors the OAuth credential's `rateLimitTier` (e.g. `default_claude_max_20x`). `subscriptionType` mirrors the credential's `subscriptionType` (e.g. `max`). `lastError` is the last fetch failure message (`token-expired`, HTTP 4xx/5xx, or network error) — cleared on success. `stale: true` when `Date.now() - fetchedAt > 15 min` or no fetch has landed yet. |
+
+**`RateLimits` shape** — every field optional and nullable; the `/api/oauth/usage` upstream ships new buckets under codenames (`seven_day_omelette`, `seven_day_cowork`, `iguana_necktie`, `omelette_promotional`) before they land with stable names, so the response is stored verbatim and the client derives labels for unknown keys.
+
+```ts
+{
+  five_hour?:            { utilization: number, resets_at: string } | null,
+  seven_day?:            { utilization: number, resets_at: string } | null,
+  seven_day_opus?:       { utilization: number, resets_at: string } | null,
+  seven_day_sonnet?:     { utilization: number, resets_at: string } | null,
+  seven_day_oauth_apps?: { utilization: number, resets_at: string } | null,
+  extra_usage?: {
+    is_enabled:     boolean,
+    monthly_limit:  number | null,  // integer cents (50000 → $500.00)
+    used_credits:   number | null,  // integer cents (18734 → $187.34)
+    utilization:    number | null,
+    currency?:      string | null,
+  } | null,
+  // …any additional codename keys are preserved verbatim.
+}
+```
+
+**Refresh trigger policy:** The service behind this endpoint refreshes opportunistically from two triggers — server startup (once, via `init()` + `maybeRefresh('server-start')`) and after each Claude Code assistant turn (`onDone` callback in the chat router calls `maybeRefresh('turn-done')`). A floor of 10 minutes between attempts (tracked by last attempt time, not last success) protects against rate-limit retry storms. The HTTP route itself never forces a fetch — it only reads the cache. Other backends (Kiro, etc.) do not trigger refreshes.
+
+See Section 4 (`ClaudePlanUsageService`) for the caching, credential resolution, and HTTP semantics.
+
+## 3.15 Error Response Patterns
 
 | Status | Meaning | Body |
 |--------|---------|------|

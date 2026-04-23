@@ -573,6 +573,12 @@
       if (markUnreadNow) {
         AgentApi.markConversationUnread(convId, true).catch(() => {});
       }
+      /* Poll Claude Code account plan usage once per turn. Server floors
+         the actual API hit at 10 min; this just asks for the cached
+         snapshot and fans it out to the ContextChip tooltip. */
+      if (s.conv && s.conv.backend === 'claude-code' && window.PlanUsageStore) {
+        window.PlanUsageStore.refresh();
+      }
       /* Auto-drain queue — if the just-finished run leaves us idle (no
          pending plan/question, no stream error) and there's a queued
          message, pop the head and send it. */

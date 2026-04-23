@@ -1805,9 +1805,22 @@ function collapseProgressRuns(messages){
 
 function ContextChip({ backendId, usage }){
   const renderer = getChipRenderer(backendId);
+  /* Subscribe to the Claude Code account plan usage store so the tooltip
+     reflects the latest cached snapshot. The store is a singleton; the
+     server fronts it with a 10-min throttle so refresh-on-mount is cheap
+     and safe. */
+  const [planUsage, setPlanUsage] = React.useState(() =>
+    window.PlanUsageStore ? window.PlanUsageStore.get() : null
+  );
+  React.useEffect(() => {
+    if (backendId !== 'claude-code' || !window.PlanUsageStore) return;
+    const unsub = window.PlanUsageStore.subscribe(setPlanUsage);
+    window.PlanUsageStore.refresh();
+    return unsub;
+  }, [backendId]);
   const chipText = renderer.renderChipText(usage);
   if (chipText == null) return null;
-  const card = renderer.renderTooltipCard(usage);
+  const card = renderer.renderTooltipCard(usage, { planUsage });
   const chip = (
     <span
       className="u-mono"

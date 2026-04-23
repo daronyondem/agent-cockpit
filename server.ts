@@ -14,6 +14,7 @@ import { BackendRegistry } from './src/services/backends/registry';
 import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
 import { KiroAdapter } from './src/services/backends/kiro';
 import { UpdateService } from './src/services/updateService';
+import { ClaudePlanUsageService } from './src/services/claudePlanUsageService';
 import { detectLibreOffice } from './src/services/knowledgeBase/libreOffice';
 import { detectPandoc } from './src/services/knowledgeBase/pandoc';
 import type { Request, Response, NextFunction } from './src/types';
@@ -75,7 +76,8 @@ backendRegistry.register(new KiroAdapter({ workingDir: config.DEFAULT_WORKSPACE 
 
 const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
 const updateService = new UpdateService(__dirname);
-const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = createChatRouter({ chatService, backendRegistry, updateService });
+const claudePlanUsageService = new ClaudePlanUsageService(__dirname);
+const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService });
 app.use('/api/chat', chatRouter);
 
 // V2 is the default UI. Root redirects to /v2/; /legacy/ keeps the
@@ -108,6 +110,15 @@ chatService.initialize().then(async () => {
   }
 
   updateService.start();
+
+  // Load last-persisted Claude plan usage snapshot, then fire-and-forget
+  // the first refresh. Further refreshes happen opportunistically after
+  // each Claude Code assistant turn; both paths respect a 10-min floor.
+  claudePlanUsageService.init().then(() => {
+    claudePlanUsageService.maybeRefresh('server-start');
+  }).catch((err: unknown) => {
+    console.warn('[claudePlanUsage] init failed:', (err as Error).message);
+  });
 
   // Detect LibreOffice in the background — used by the KB PPTX ingestion
   // path when `Settings.knowledgeBase.convertSlidesToImages` is enabled.
