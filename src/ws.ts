@@ -16,6 +16,8 @@ export interface WsFunctions {
   isConnected: (convId: string) => boolean;
   isStreamAlive: (convId: string) => boolean;
   clearBuffer: (convId: string) => void;
+  /** Invoke `cb` for each conversation with an OPEN WebSocket. */
+  forEachConnected: (cb: (convId: string) => void) => void;
 }
 
 // ── Event buffer for reconnection ──────────────────────────────────────────
@@ -337,6 +339,13 @@ export function attachWebSocket(
     return !!ws && ws.readyState === WebSocket.OPEN;
   }
 
+  /** Enumerate every conversation with an OPEN WebSocket. */
+  function forEachConnected(cb: (convId: string) => void): void {
+    for (const [convId, ws] of activeWebSockets) {
+      if (ws.readyState === WebSocket.OPEN) cb(convId);
+    }
+  }
+
   /**
    * True if the stream should keep running: WS is open OR we're in a grace
    * period (buffer exists with an active grace timer). Used by processStream's
@@ -368,5 +377,5 @@ export function attachWebSocket(
     wss.close();
   }
 
-  return { shutdown, send, isConnected, isStreamAlive, clearBuffer };
+  return { shutdown, send, isConnected, isStreamAlive, clearBuffer, forEachConnected };
 }

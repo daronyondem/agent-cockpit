@@ -624,10 +624,19 @@
         kb._dreamProgress = changed.dreamProgress;
       }
       update(convId, curState => ({ ...curState, conv: { ...curState.conv, kb } }));
-      /* Synthesis changed without progress → dream finished or status
-         reset. Refetch the conv to pull fresh kb block (pendingEntries,
-         dreamingStatus, etc.). */
-      if (changed.synthesis && !changed.stopping) {
+      /* Any event that changes the count of pending-digestion or
+         pending-synthesis items requires a refetch so the composer's KB
+         status icon sees accurate `pendingDigestions` / `pendingEntries`.
+         `synthesis` covers dream completion, `raw` covers ingestion
+         add/delete, `entries` covers digest completion, and `digestion`
+         covers digestion-session transitions (active true↔false). */
+      const needsRefresh = (
+        (changed.synthesis && !changed.stopping) ||
+        (Array.isArray(changed.raw) && changed.raw.length > 0) ||
+        (Array.isArray(changed.entries) && changed.entries.length > 0) ||
+        (changed.digestion && typeof changed.digestion.active === 'boolean')
+      );
+      if (needsRefresh) {
         AgentApi.fetch('conversations/' + encodeURIComponent(convId))
           .then(r => r.json())
           .then(data => {

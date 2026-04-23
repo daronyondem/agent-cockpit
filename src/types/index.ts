@@ -264,11 +264,15 @@ export interface Conversation {
   kb?: ConversationKbStatus;
 }
 
-/** KB status block on conversation responses (avoids extra round-trip for the dreaming banner). */
+/** KB status block on conversation responses (avoids extra round-trip for the KB status icon). */
 export interface ConversationKbStatus {
   enabled: boolean;
   dreamingNeeded: boolean;
   pendingEntries: number;
+  /** Raw files awaiting digestion (status = 'ingested' | 'pending-delete'). */
+  pendingDigestions: number;
+  /** Per-workspace auto-digest toggle — when true, pendingDigestions drains on its own. */
+  autoDigest: boolean;
   dreamingStatus: 'idle' | 'running' | 'failed';
   failedItems: number;
 }
