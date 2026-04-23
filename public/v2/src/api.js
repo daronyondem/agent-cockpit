@@ -194,6 +194,14 @@
     return res.json();
   }
 
+  /* Kiro plan usage (Amazon Q credits / overages / subscription). Same
+     shape of contract as getClaudePlanUsage — server-side cache, 10-min
+     floor, endpoint never triggers a fetch. */
+  async function getKiroPlanUsage(){
+    const res = await chatFetch('kiro-plan-usage');
+    return res.json();
+  }
+
   /* Backend registry is effectively static — one fetch per session is plenty.
      Used by the composer pickers on every ChatLive mount. */
   function getBackendsCached(){
@@ -583,6 +591,7 @@
     checkVersion,
     triggerUpdate,
     getClaudePlanUsage,
+    getKiroPlanUsage,
     browseDir,
     mkdirDir,
     rmdirDir,

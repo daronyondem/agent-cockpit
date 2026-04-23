@@ -1800,19 +1800,21 @@ function collapseProgressRuns(messages){
 
 function ContextChip({ backendId, usage }){
   const renderer = getChipRenderer(backendId);
-  /* Subscribe to the Claude Code account plan usage store so the tooltip
-     reflects the latest cached snapshot. The store is a singleton; the
-     server fronts it with a 10-min throttle so refresh-on-mount is cheap
-     and safe. */
-  const [planUsage, setPlanUsage] = React.useState(() =>
-    window.PlanUsageStore ? window.PlanUsageStore.get() : null
-  );
+  /* Subscribe to the per-backend plan usage store so the tooltip reflects
+     the latest cached snapshot. Each store is a singleton; the server
+     fronts it with a 10-min throttle so refresh-on-mount is cheap and
+     safe. Claude Code → window.PlanUsageStore; Kiro → window.KiroPlanUsageStore. */
+  const store = backendId === 'claude-code' ? window.PlanUsageStore
+    : backendId === 'kiro'        ? window.KiroPlanUsageStore
+    : null;
+  const [planUsage, setPlanUsage] = React.useState(() => store ? store.get() : null);
   React.useEffect(() => {
-    if (backendId !== 'claude-code' || !window.PlanUsageStore) return;
-    const unsub = window.PlanUsageStore.subscribe(setPlanUsage);
-    window.PlanUsageStore.refresh();
+    if (!store) { setPlanUsage(null); return; }
+    setPlanUsage(store.get());
+    const unsub = store.subscribe(setPlanUsage);
+    store.refresh();
     return unsub;
-  }, [backendId]);
+  }, [backendId, store]);
   const chipText = renderer.renderChipText(usage);
   if (chipText == null) return null;
   const card = renderer.renderTooltipCard(usage, { planUsage });
