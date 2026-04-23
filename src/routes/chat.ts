@@ -632,6 +632,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   });
 
+  // ── Active streams ─────────────────────────────────────────────────────────
+  // Lets the frontend rehydrate sidebar "streaming" dots after a page refresh.
+  // `activeStreams` is the in-memory registry of CLI streams whose generator
+  // has not yet returned — a conversation is listed here while its stream is
+  // running OR paused awaiting user input (plan approval / question).
+  router.get('/active-streams', (_req: Request, res: Response) => {
+    res.json({ ids: Array.from(activeStreams.keys()) });
+  });
+
   // ── Get single conversation ────────────────────────────────────────────────
   router.get('/conversations/:id', async (req: Request, res: Response) => {
     try {

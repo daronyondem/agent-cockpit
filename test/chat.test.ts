@@ -1833,6 +1833,40 @@ describe('GET /conversations?archived=true', () => {
   });
 });
 
+describe('GET /active-streams', () => {
+  test('returns empty list when no streams are active', async () => {
+    const res = await makeRequest('GET', '/api/chat/active-streams');
+    expect(res.status).toBe(200);
+    expect(res.body.ids).toEqual([]);
+  });
+
+  test('returns ids of conversations with live entries in activeStreams', async () => {
+    const c1 = await chatService.createConversation('Live 1');
+    const c2 = await chatService.createConversation('Live 2');
+    const c3 = await chatService.createConversation('Idle');
+
+    const makeEntry = (): ActiveStreamEntry => ({
+      stream: (async function* () { yield { type: 'done' } as StreamEvent; })(),
+      abort: () => {},
+      sendInput: () => {},
+      backend: 'claude-code',
+      needsTitleUpdate: false,
+      titleUpdateMessage: null,
+    });
+    activeStreams.set(c1.id, makeEntry());
+    activeStreams.set(c2.id, makeEntry());
+
+    const res = await makeRequest('GET', '/api/chat/active-streams');
+    expect(res.status).toBe(200);
+    expect(res.body.ids).toEqual(expect.arrayContaining([c1.id, c2.id]));
+    expect(res.body.ids).toHaveLength(2);
+    expect(res.body.ids).not.toContain(c3.id);
+
+    activeStreams.delete(c1.id);
+    activeStreams.delete(c2.id);
+  });
+});
+
 // ── DELETE /conversations/:id/upload/:filename ─────────────────────────────��──
 
 describe('DELETE /conversations/:id/upload/:filename', () => {

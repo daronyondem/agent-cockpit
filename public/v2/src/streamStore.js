@@ -313,6 +313,31 @@
     return loadConvList({ query: convList.query, archived: convList.archived });
   }
 
+  /* Seeds `uiState: 'streaming'` for conversations whose CLI stream is
+     still alive on the server but whose per-conv ConvState was wiped by a
+     page refresh. Called once on sidebar mount. Without this the sidebar
+     would show gray dots for live streams until the user clicked into
+     each one to trigger a WS reconnect + replay.
+
+     Only seeds convs that don't already have an open WS (where the real
+     stream state is already being tracked). If a seeded stream finishes
+     while the user never clicks in, the dot stays blue until the next
+     refresh — acceptable trade-off vs. opening a WS per conv. */
+  async function hydrateActiveStreams(){
+    let ids;
+    try {
+      ids = await AgentApi.getActiveStreams();
+    } catch {
+      return; // non-fatal — silent on network/auth errors
+    }
+    if (!Array.isArray(ids) || ids.length === 0) return;
+    for (const id of ids) {
+      const cur = states.get(id);
+      if (cur && cur.ws) continue; // real WS already tracking state
+      update(id, { uiState: 'streaming' });
+    }
+  }
+
   function patchConvListItem(convId, patch){
     if (!Array.isArray(convList.items)) return;
     let changed = false;
@@ -1393,6 +1418,7 @@
     getConvList,
     loadConvList,
     refreshConvList,
+    hydrateActiveStreams,
     patchConvListItem,
     removeConvListItem,
     prependConvListItem,
