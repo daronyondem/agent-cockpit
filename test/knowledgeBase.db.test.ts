@@ -77,6 +77,9 @@ describe('schema + root folder', () => {
     expect(c.rawByStatus.ingested).toBe(0);
     expect(c.rawByStatus.digested).toBe(0);
     expect(c.rawByStatus.failed).toBe(0);
+    expect(c.topicCount).toBe(0);
+    expect(c.connectionCount).toBe(0);
+    expect(c.reflectionCount).toBe(0);
   });
 });
 
@@ -461,6 +464,24 @@ describe('getCounters', () => {
     expect(c.rawByStatus.failed).toBe(1);
     expect(c.rawByStatus['pending-delete']).toBe(1);
     expect(c.pendingCount).toBe(3); // 2 ingested + 1 pending-delete
+  });
+
+  test('topic, connection, and reflection counts reflect synthesis tables', () => {
+    const now = '2026-01-01T00:00:00Z';
+    db.upsertTopic({ topicId: 't1', title: 'T1', summary: null, content: null, updatedAt: now });
+    db.upsertTopic({ topicId: 't2', title: 'T2', summary: null, content: null, updatedAt: now });
+    db.upsertTopic({ topicId: 't3', title: 'T3', summary: null, content: null, updatedAt: now });
+    db.upsertConnection({ sourceTopic: 't1', targetTopic: 't2', relationship: 'r', confidence: 'inferred', evidence: null });
+    db.upsertConnection({ sourceTopic: 't2', targetTopic: 't3', relationship: 'r', confidence: 'inferred', evidence: null });
+    db.insertReflection({
+      reflectionId: 'ref-1', title: 'R', type: 'pattern',
+      summary: null, content: 'c', createdAt: now, citedEntryIds: [],
+    });
+
+    const c = db.getCounters();
+    expect(c.topicCount).toBe(3);
+    expect(c.connectionCount).toBe(2);
+    expect(c.reflectionCount).toBe(1);
   });
 });
 

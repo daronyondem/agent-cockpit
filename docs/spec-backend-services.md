@@ -199,6 +199,9 @@ Files missing on disk during migration are still inserted with `sha256 = rawId` 
     entryCount: number,
     pendingCount: number,       // ingested + pending-delete
     folderCount: number,
+    topicCount: number,
+    connectionCount: number,
+    reflectionCount: number,
   },
   folders: KbFolder[],          // full flat folder tree sorted by folderPath
   raw: KbRawEntry[],            // ONE PAGE of the focused folder (not workspace-wide)

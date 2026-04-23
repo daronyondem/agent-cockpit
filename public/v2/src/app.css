@@ -2113,15 +2113,6 @@ body{
   background: var(--surface);
   box-shadow: inset 0 -2px 0 var(--accent);
 }
-.kb-status{
-  display: flex; align-items: center; flex-wrap: wrap; gap: 6px;
-  padding: 8px 16px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-sunk);
-  font-family: var(--mono-font);
-  font-size: 10.5px;
-  color: var(--text-2);
-}
 .kb-pill{
   display: inline-flex; align-items: center; gap: 6px;
   padding: 3px 8px;
@@ -2193,30 +2184,15 @@ body{
   border-bottom: 1px solid var(--border);
   background: var(--bg-sunk);
 }
+/* KB Synthesis tab wrapper styling: the host band that holds the handoff
+   .kb-actions grid + .stepper. Visual details (buttons, stepper) live in
+   src/stepper.css which is imported verbatim from the handoff bundle. */
 .kb-synth-controls{
-  display: flex; flex-direction: column; gap: 6px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-sunk);
   font-size: 12px;
   color: var(--text-2);
-}
-.kb-synth-btn-row{ display: flex; align-items: center; gap: 8px; }
-.kb-synth-info-row{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.kb-synth-dream-btn{
-  background: var(--accent, #6366f1);
-  color: #fff;
-  border-color: var(--accent, #6366f1);
-}
-.kb-synth-dream-btn:hover:not(:disabled){ filter: brightness(1.05); }
-.kb-synth-dream-btn:disabled{ opacity: .6; cursor: not-allowed; }
-.kb-synth-stop-btn{ display: inline-flex; align-items: center; gap: 4px; }
-.kb-synth-redream-btn{ opacity: .85; }
-.kb-synth-redream-btn:disabled{ opacity: .5; cursor: not-allowed; }
-.kb-synth-status{
-  font-family: var(--mono-font);
-  font-size: 11px;
-  color: var(--text-3);
 }
 .kb-search-input{
   width: 100%;
@@ -2686,7 +2662,12 @@ body{
 .kb-settings-health.ok{ color: var(--status-done); border-color: var(--status-done); }
 .kb-settings-health.err{ color: var(--status-error); border-color: var(--status-error); }
 
-.kb-split{ flex-direction: row; }
+.kb-split{
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+}
 .kb-split-left{
   flex: 0 0 380px;
   min-height: 0;
