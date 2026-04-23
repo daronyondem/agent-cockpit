@@ -5,7 +5,6 @@ import { BaseBackendAdapter, type RunOneShotOptions } from './base';
 import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUtils';
 import type {
   BackendMetadata,
-  ModelOption,
   SendMessageOptions,
   SendMessageResult,
   StreamEvent,
@@ -158,10 +157,6 @@ type JsonRpcMessage = JsonRpcResponse | JsonRpcNotification;
 
 interface KiroSessionNewResult {
   sessionId: string;
-  models?: {
-    currentModelId: string;
-    availableModels: Array<{ modelId: string; name: string; description: string }>;
-  };
 }
 
 interface AcpProcess {
@@ -317,7 +312,6 @@ class AcpClient {
 export class KiroAdapter extends BaseBackendAdapter {
   private processes: Map<string, AcpProcess> = new Map();
   private sessionMap: Map<string, string> = new Map();
-  private cachedModels: Array<{ modelId: string; name: string; description: string }> | null = null;
 
   constructor(options: { workingDir?: string } = {}) {
     super(options);
@@ -337,38 +331,101 @@ export class KiroAdapter extends BaseBackendAdapter {
         userQuestions: false,
         stdinInput: false,
       },
-      models: this._getModelOptions(),
+      models: [
+        {
+          id: 'auto',
+          label: 'auto',
+          family: 'router',
+          description: "Kiro's model router — picks the optimal model per task",
+          costTier: 'medium',
+          default: true,
+        },
+        {
+          id: 'claude-opus-4.7',
+          label: 'claude-opus-4.7',
+          family: 'opus',
+          description: 'Latest Anthropic model — enhanced agentic capabilities and 3x higher resolution vision',
+          costTier: 'high',
+        },
+        {
+          id: 'claude-opus-4.6',
+          label: 'claude-opus-4.6',
+          family: 'opus',
+          description: 'State-of-the-art coding; strong on agentic tasks and large codebases',
+          costTier: 'high',
+        },
+        {
+          id: 'claude-opus-4.5',
+          label: 'claude-opus-4.5',
+          family: 'opus',
+          description: 'Maximum reasoning depth for complex multi-system problems and tradeoff analysis',
+          costTier: 'high',
+        },
+        {
+          id: 'claude-sonnet-4.6',
+          label: 'claude-sonnet-4.6',
+          family: 'sonnet',
+          description: 'Approaches Opus intelligence while being more token-efficient for iterative workflows',
+          costTier: 'medium',
+        },
+        {
+          id: 'claude-sonnet-4.5',
+          label: 'claude-sonnet-4.5',
+          family: 'sonnet',
+          description: 'Best model for complex agents with extended autonomous operation',
+          costTier: 'medium',
+        },
+        {
+          id: 'claude-sonnet-4.0',
+          label: 'claude-sonnet-4.0',
+          family: 'sonnet',
+          description: 'Consistent baseline Sonnet — no routing or optimization layers',
+          costTier: 'medium',
+        },
+        {
+          id: 'claude-haiku-4.5',
+          label: 'claude-haiku-4.5',
+          family: 'haiku',
+          description: 'Fast — matches Sonnet 4 performance at roughly one-third the cost',
+          costTier: 'low',
+        },
+        {
+          id: 'deepseek-3.2',
+          label: 'deepseek-3.2',
+          family: 'other',
+          description: 'Open-weight model optimized for agentic workflows and multi-step reasoning',
+          costTier: 'low',
+        },
+        {
+          id: 'minimax-m2.5',
+          label: 'minimax-m2.5',
+          family: 'other',
+          description: 'Open-weight model delivering frontier-class coding at reduced cost',
+          costTier: 'low',
+        },
+        {
+          id: 'minimax-m2.1',
+          label: 'minimax-m2.1',
+          family: 'other',
+          description: 'Open-weight model — strong multilingual programming across many languages',
+          costTier: 'low',
+        },
+        {
+          id: 'glm-5',
+          label: 'glm-5',
+          family: 'other',
+          description: 'Sparse mixture-of-experts — repository-scale context and long agentic tasks',
+          costTier: 'low',
+        },
+        {
+          id: 'qwen3-coder-next',
+          label: 'qwen3-coder-next',
+          family: 'other',
+          description: 'Purpose-built coding agent — 256K context and strong error recovery',
+          costTier: 'low',
+        },
+      ],
     };
-  }
-
-  private _getModelOptions(): ModelOption[] | undefined {
-    if (!this.cachedModels) return undefined;
-    return this.cachedModels
-      .filter(m => !m.description.includes('[Deprecated]') && !m.description.includes('[Internal]'))
-      .map(m => ({
-        id: m.modelId,
-        label: m.name,
-        family: this._modelFamily(m.modelId),
-        description: m.description,
-        costTier: this._costTier(m.modelId),
-        default: m.modelId === 'auto',
-      }));
-  }
-
-  private _modelFamily(modelId: string): string {
-    if (modelId === 'auto') return 'router';
-    if (modelId.startsWith('claude-opus')) return 'opus';
-    if (modelId.startsWith('claude-sonnet')) return 'sonnet';
-    if (modelId.startsWith('claude-haiku')) return 'haiku';
-    return 'other';
-  }
-
-  private _costTier(modelId: string): 'high' | 'medium' | 'low' {
-    if (modelId === 'auto') return 'medium';
-    if (modelId.startsWith('claude-opus')) return 'high';
-    if (modelId.startsWith('claude-sonnet')) return 'medium';
-    if (modelId.startsWith('claude-haiku')) return 'low';
-    return 'low';
   }
 
   shutdown(): void {
@@ -603,9 +660,6 @@ export class KiroAdapter extends BaseBackendAdapter {
         const result = await client.request('session/new', { cwd, mcpServers: mcpServersForAcp }) as KiroSessionNewResult;
         kiroSessionId = result.sessionId;
         this.sessionMap.set(sessionId, kiroSessionId);
-        if (result.models?.availableModels) {
-          this.cachedModels = result.models.availableModels;
-        }
         console.log(`[kiro] Created new session: ${kiroSessionId} for cockpit session ${sessionId}`);
         // Signal processStream to persist the Kiro session ID onto the
         // cockpit's SessionEntry.externalSessionId so we can rehydrate
