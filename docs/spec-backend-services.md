@@ -541,3 +541,56 @@ Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, succes
 
 - `_checkRemoteVersion()` — `git fetch origin main` + `git show origin/main:package.json`
 - `_isNewer(remote, local)` — three-part numeric semver comparison
+
+## 4.4 ClaudePlanUsageService
+
+**File:** `src/services/claudePlanUsageService.ts`
+
+Fetches and caches the Claude Code account-wide plan usage snapshot (5-hour session %, weekly %, per-model breakdown, extra credits) from Anthropic's undocumented `/api/oauth/usage` endpoint using the OAuth access token that Claude Code writes to the user's machine. Read-only — the service never refreshes the token or writes back to the credentials store. Surfaces in the V2 ContextChip tooltip for Claude Code conversations only.
+
+**Constants:**
+- `BASE_API_URL = 'https://api.anthropic.com'`
+- `ANTHROPIC_BETA = 'oauth-2025-04-20'` (required `anthropic-beta` header)
+- `CREDENTIALS_PATH = ~/.claude/.credentials.json`
+- `KEYCHAIN_SERVICE = 'Claude Code-credentials'` (macOS only)
+- `REFRESH_MIN_INTERVAL_MS = 10 * 60 * 1000` — minimum gap between fetch **attempts** (not successes) so transient failures back off cleanly instead of hammering
+- `STALE_AFTER_MS = 15 * 60 * 1000` — client-visible stale threshold (slightly above the refresh floor)
+- `EXPIRY_BUFFER_MS = 5 * 60 * 1000` — token is treated as expired when `Date.now() + buffer >= expiresAt`
+
+**Constructor:** `new ClaudePlanUsageService(appRoot: string)` — stores the cache at `<appRoot>/data/claude-plan-usage.json`.
+
+**Methods:**
+- `init()` — loads the persisted snapshot off disk on server startup. Silently ignores `ENOENT`; logs any other read/parse failure and keeps the in-memory snapshot as its initial empty shape.
+- `getCached()` — returns `{ fetchedAt, planTier, subscriptionType, rateLimits, lastError, stale }`. Does not trigger a refresh. `stale` is computed as `now - fetchedAt > STALE_AFTER_MS` (or `true` when `fetchedAt` is null). This is the exact shape returned by `GET /api/chat/plan-usage`.
+- `maybeRefresh(reason: string)` — triggers a refresh if all of: no in-flight refresh, and at least `REFRESH_MIN_INTERVAL_MS` have passed since the last attempt. Returns the shared in-flight promise when a fetch is already running, or an immediately-resolved promise when the throttle is active. The `reason` string is logged alongside success/failure (`server-start`, `turn-done`).
+- `_refresh(reason)` (private) — reads credentials, short-circuits with `lastError: 'token-expired'` if the token is within the 5-minute buffer, otherwise calls `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer <token>` + `anthropic-beta: oauth-2025-04-20` and a 10-second abort signal. On success stores `{ fetchedAt: now, planTier: creds.rateLimitTier, subscriptionType: creds.subscriptionType, rateLimits: <body>, lastError: null }`. On non-2xx or network failure preserves the prior `fetchedAt`/`planTier`/`subscriptionType`/`rateLimits` values and only overwrites `lastError` with the failure message — the UI can still render the last-known snapshot.
+- `_persist()` (private) — `mkdir -p data/` then writes the snapshot to `data/claude-plan-usage.json`. Failures are logged and swallowed.
+
+**Credential resolution (`readStoredCredentials`):** The OAuth tokens Claude Code writes have two storage backends, tried in order:
+1. `~/.claude/.credentials.json` — JSON file, preferred when present (works on Linux and any Mac where Claude Code fell back from the Keychain).
+2. macOS Keychain (service name `Claude Code-credentials`) — fallback, read via `/usr/bin/security find-generic-password -s "Claude Code-credentials" -w` with a 10-second timeout. Only attempted on `process.platform === 'darwin'`. No Keychain permission prompt: the `security` CLI reuses the same ACL that Claude Code itself installed, so the user sees no OS-level dialog.
+
+Parsed shape (`parseCredsBlob`):
+```ts
+{ claudeAiOauth: {
+    accessToken: string,
+    expiresAt?: number,        // epoch ms; null ⇒ treat as non-expiring
+    subscriptionType?: string,  // e.g. "max"
+    rateLimitTier?: string,     // e.g. "default_claude_max_20x"
+} }
+```
+Missing `accessToken` throws `credentials missing claudeAiOauth.accessToken`, surfaced as `lastError`.
+
+**Integration points:**
+- `server.ts` — instantiated with `__dirname`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `claudePlanUsageService` dependency.
+- `src/routes/chat.ts`:
+  - `GET /plan-usage` route returns `getCached()` verbatim.
+  - `onDone` stream callback calls `maybeRefresh('turn-done')` when `backendId === 'claude-code'`. No other backend triggers a refresh.
+
+**Error taxonomy (`lastError` values):**
+- `'token-expired'` — access token at/within the 5-minute expiry buffer.
+- `'credentials missing claudeAiOauth.accessToken'` — creds blob parsed but missing field.
+- `'no credentials found at <path>'` — file not found on non-darwin and thus nothing to fall back to.
+- `'keychain read failed: <msg>'` — `security` CLI returned non-zero.
+- `'usage API <status>: <body>'` — upstream HTTP 4xx/5xx (body truncated to 200 chars).
+- Any network error message verbatim (timeout, DNS, TLS).

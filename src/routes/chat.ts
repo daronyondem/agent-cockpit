@@ -8,6 +8,7 @@ import { attachmentFromPath } from '../services/chatService';
 import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
+import type { ClaudePlanUsageService } from '../services/claudePlanUsageService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
 import { detectLibreOffice } from '../services/knowledgeBase/libreOffice';
@@ -329,9 +330,10 @@ interface ChatRouterDeps {
   chatService: ChatService;
   backendRegistry: BackendRegistry;
   updateService: UpdateService;
+  claudePlanUsageService: ClaudePlanUsageService;
 }
 
-export function createChatRouter({ chatService, backendRegistry, updateService }: ChatRouterDeps) {
+export function createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService }: ChatRouterDeps) {
   const router = express.Router();
   const packageJson = require('../../package.json');
 
@@ -446,6 +448,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
   router.get('/update-status', (_req: Request, res: Response) => {
     if (!updateService) return res.json({ updateAvailable: false });
     res.json(updateService.getStatus());
+  });
+
+  // ── Claude plan usage ──────────────────────────────────────────────────────
+  // Returns the last-successful `/api/oauth/usage` snapshot from the
+  // ClaudePlanUsageService cache. Never triggers a refresh itself — those
+  // happen opportunistically on server start and after each Claude Code
+  // assistant turn (wired in server.ts and in the stream onDone below).
+  router.get('/plan-usage', (_req: Request, res: Response) => {
+    res.json(claudePlanUsageService.getCached());
   });
 
   // ── Manual version check ────────────────────────────────────────────────────
@@ -1170,6 +1181,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService }
           activeStreams.delete(convId);
           memoryWatcher.unwatch(convId);
           memoryFingerprints.delete(convId);
+          if (backendId === 'claude-code') {
+            claudePlanUsageService.maybeRefresh('turn-done');
+          }
         },
         { chatService },
       ).catch((err) => {
