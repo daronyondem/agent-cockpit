@@ -1050,7 +1050,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
                   <span style={{fontSize:11.5}}>Attach…</span>
                 </button>
               </span>
-              <KbStatusIcon conv={conv} convId={convId}/>
+              <ComposerNotifIcon conv={conv} convId={convId}/>
               {streaming ? (
                 <button
                   className="send stop"
@@ -2491,16 +2491,20 @@ function StreamErrorCard({ convId, error, queueLength, messages }){
   );
 }
 
-/* Composer KB status icon — car-dashboard-style indicator positioned
-   just left of the Send button. Only renders when the conversation's
-   workspace has KB enabled. On hover a rich tooltip shows pending-
-   digestion and pending-synthesis counts plus auto-digest state, using
-   the standard Tip stat-variant template (.tt-header / .tt-eye / .tt-h
-   / .tt-section / .tt-rows / .tt-kv). State is hydrated from `conv.kb`
-   on conv load and patched live via `kb_state_update` WS frames
-   (handled in streamStore). A 2s poll on GET /conversations/:id
-   backstops dream progress transitions while a run is in flight. */
-function KbStatusIcon({ conv, convId }){
+/* Composer notification icon — car-dashboard-style indicator positioned
+   just left of the Send button. Only renders when there is something to
+   notify about. Currently sourced exclusively from KB state (pending
+   digestions, pending synthesis entries, dreaming-in-progress); designed
+   to grow additional notification sources later. Hidden when KB is
+   disabled OR when KB is enabled and idle (no pending work, no dream
+   running). On hover a rich tooltip shows pending-digestion and
+   pending-synthesis counts plus auto-digest state, using the standard
+   Tip stat-variant template (.tt-header / .tt-eye / .tt-h / .tt-section
+   / .tt-rows / .tt-kv). KB state is hydrated from `conv.kb` on conv
+   load and patched live via `kb_state_update` WS frames (handled in
+   streamStore). A 2s poll on GET /conversations/:id backstops dream
+   progress transitions while a run is in flight. */
+function ComposerNotifIcon({ conv, convId }){
   const kb = conv && conv.kb;
   const running = !!(kb && kb.dreamingStatus === 'running');
 
@@ -2525,7 +2529,8 @@ function KbStatusIcon({ conv, convId }){
   const pendingDream  = Math.max(0, kb.pendingEntries || 0);
   const autoDigest    = !!kb.autoDigest;
   const hasWork       = pendingDigest > 0 || pendingDream > 0;
-  const state = running ? 'running' : hasWork ? 'pending' : 'ok';
+  if (!running && !hasWork) return null;
+  const state = running ? 'running' : 'pending';
 
   const card = (
     <>
@@ -2535,9 +2540,7 @@ function KbStatusIcon({ conv, convId }){
       <h4 className="tt-h">
         {running
           ? 'Dreaming…'
-          : hasWork
-            ? (pendingDigest + pendingDream) + ' pending'
-            : 'Up to date'}
+          : (pendingDigest + pendingDream) + ' pending'}
       </h4>
       <div className="tt-section">
         <div className="tt-rows">
@@ -2574,19 +2577,17 @@ function KbStatusIcon({ conv, convId }){
 
   const label = running
     ? 'KB: dreaming in progress'
-    : hasWork
-      ? ('KB: ' + (pendingDigest + pendingDream) + ' pending')
-      : 'KB up to date';
+    : ('KB: ' + (pendingDigest + pendingDream) + ' pending');
 
   return (
     <Tip variant="stat" rich={card}>
       <button
         type="button"
-        className={"kb-status-icon state-" + state}
+        className={"composer-notif state-" + state}
         aria-label={label}
       >
         {Ico.book(14)}
-        {state !== 'ok' ? <span className={"kb-status-pulse state-" + state}/> : null}
+        <span className={"composer-notif-pulse state-" + state}/>
       </button>
     </Tip>
   );
