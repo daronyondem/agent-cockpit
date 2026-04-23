@@ -166,7 +166,7 @@ body{
 
 .cockpit{
   display: grid;
-  grid-template-columns: 260px 1fr;
+  grid-template-columns: var(--cockpit-sb-w, 260px) 1fr;
   grid-template-rows: 100%;
   height: 100%;
   width: 100%;
@@ -178,17 +178,33 @@ body{
   overflow: hidden;
 }
 .cockpit.with-rail{
-  grid-template-columns: 260px 1fr 320px;
+  grid-template-columns: var(--cockpit-sb-w, 260px) 1fr 320px;
 }
 
 /* ---------- sidebar ---------- */
 .sb{
+  position: relative;
   background: var(--bg-sunk);
   border-right: 1px solid var(--border);
   display: flex; flex-direction: column;
   min-height: 0;
   overflow: hidden;
 }
+.sb-resizer{
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 120ms ease;
+  user-select: none;
+  z-index: 10;
+}
+.sb-resizer:hover,
+.sb-resizer.dragging{ background: var(--accent); }
+.sb-resizer.dragging{ transition: none; }
 .sb-top{
   padding: calc(14px * var(--density)) 14px 10px;
   display: flex; align-items: center; gap: 10px;
@@ -4311,6 +4327,7 @@ body:has(.deck){ background:#0A0A0B; }
     transition: transform .25s ease;
     box-shadow: 0 8px 32px rgba(0,0,0,.25);
   }
+  .sb-resizer{ display: none; }
   .cockpit.sb-open .sb{
     transform: translateX(0);
   }
