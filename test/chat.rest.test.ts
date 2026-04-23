@@ -3,7 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
-import type { StreamEvent } from '../src/types';
+import type { StreamEvent, ActiveStreamEntry } from '../src/types';
 
 let env: ChatRouterEnv;
 

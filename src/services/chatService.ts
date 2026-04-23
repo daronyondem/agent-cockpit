@@ -11,6 +11,7 @@ import type {
   ToolActivity,
   Usage,
   UsageLedger,
+  UsageLedgerDay,
   SessionEntry,
   SessionFile,
   SessionHistoryItem,
@@ -2196,12 +2197,13 @@ export class ChatService {
     }
 
     // Migrate old format: if day has 'backends' but no 'records', convert
-    if ((dayEntry as any).backends && !dayEntry.records) {
-      dayEntry.records = [];
-      for (const [bid, u] of Object.entries((dayEntry as any).backends)) {
-        dayEntry.records.push({ backend: bid, model: 'unknown', usage: u as Usage });
+    const legacy = dayEntry as UsageLedgerDay & { backends?: Record<string, Usage> };
+    if (legacy.backends && !legacy.records) {
+      legacy.records = [];
+      for (const [bid, u] of Object.entries(legacy.backends)) {
+        legacy.records.push({ backend: bid, model: 'unknown', usage: u });
       }
-      delete (dayEntry as any).backends;
+      delete legacy.backends;
     }
 
     let record = dayEntry.records.find(r => r.backend === backendId && r.model === model);

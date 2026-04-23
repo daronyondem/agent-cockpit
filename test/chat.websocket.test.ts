@@ -2,7 +2,7 @@
 
 import WebSocket from 'ws';
 import { createChatRouterEnv, destroyChatRouterEnv, CSRF_TOKEN, type ChatRouterEnv } from './helpers/chatEnv';
-import type { StreamEvent } from '../src/types';
+import type { StreamEvent, SendMessageOptions } from '../src/types';
 
 let env: ChatRouterEnv;
 

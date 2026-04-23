@@ -199,8 +199,7 @@ export function attachWebSocket(
         }
 
         // Check passport user exists in session
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const passportUser = (session as any)?.passport?.user;
+        const passportUser = session?.passport?.user;
         if (!passportUser && !isLocal) {
           socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
           socket.destroy();

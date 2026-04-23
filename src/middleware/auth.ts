@@ -1,5 +1,5 @@
 import passport from 'passport';
-import { Strategy as GoogleStrategy, type Profile } from 'passport-google-oauth20';
+import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import rateLimit from 'express-rate-limit';
 import type { Request, Response, NextFunction, Express } from '../types';
@@ -24,7 +24,7 @@ function verifyEmail(config: AppConfig) {
   return (
     _accessToken: string,
     _refreshToken: string,
-    profile: Profile,
+    profile: passport.Profile,
     done: (err: Error | null, user?: AuthUser | false, info?: { message: string }) => void,
   ) => {
     const email = profile.emails?.[0]?.value;
@@ -55,8 +55,7 @@ export function setupAuth(app: Express, config: AppConfig): void {
         callbackURL: config.GITHUB_CALLBACK_URL || '',
         scope: ['user:email'],
       },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      verifyEmail(config) as any,
+      verifyEmail(config),
     ));
   }
 
