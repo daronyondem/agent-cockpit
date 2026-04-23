@@ -1517,12 +1517,14 @@ body{
   box-shadow: var(--shadow-2);
   overflow: hidden;
 }
-/* Composer KB status icon — dashboard-style indicator rendered to the
-   left of the Send button when the conversation's workspace has KB
-   enabled. Replaces the former `.dream-banner` in-flow panel. Hover
-   surfaces a rich tooltip with pending counts, auto-digest state, and
-   Dream/Stop actions. */
-.kb-status-icon{
+/* Composer notification icon — dashboard-style indicator rendered to
+   the left of the Send button when there is something to notify about.
+   Currently sourced from KB state (pending digestions / pending
+   synthesis / dreaming-in-progress); designed to grow additional
+   notification sources later. Hidden when there is nothing to notify
+   about. Replaces the former `.dream-banner` in-flow panel. Hover
+   surfaces a rich tooltip with the active notification details. */
+.composer-notif{
   position: relative;
   display: inline-flex; align-items: center; justify-content: center;
   width: 26px; height: 26px;
@@ -1534,10 +1536,10 @@ body{
   padding: 0;
   transition: border-color .15s, color .15s, background .15s;
 }
-.kb-status-icon:hover{ border-color: var(--border-strong); color: var(--text); }
-.kb-status-icon.state-pending{ color: var(--accent, #6366f1); border-color: var(--accent-border, rgba(99,102,241,.45)); }
-.kb-status-icon.state-running{ color: var(--accent, #6366f1); border-color: var(--accent-border, rgba(99,102,241,.55)); background: var(--accent-bg, rgba(99,102,241,.08)); }
-.kb-status-pulse{
+.composer-notif:hover{ border-color: var(--border-strong); color: var(--text); }
+.composer-notif.state-pending{ color: var(--accent, #6366f1); border-color: var(--accent-border, rgba(99,102,241,.45)); }
+.composer-notif.state-running{ color: var(--accent, #6366f1); border-color: var(--accent-border, rgba(99,102,241,.55)); background: var(--accent-bg, rgba(99,102,241,.08)); }
+.composer-notif-pulse{
   position: absolute;
   top: 2px; right: 2px;
   width: 7px; height: 7px;
@@ -1545,8 +1547,8 @@ body{
   background: var(--accent, #6366f1);
   box-shadow: 0 0 0 2px var(--surface);
 }
-.kb-status-pulse.state-running{ animation: kb-status-pulse 1.6s ease-in-out infinite; }
-@keyframes kb-status-pulse{
+.composer-notif-pulse.state-running{ animation: composer-notif-pulse 1.6s ease-in-out infinite; }
+@keyframes composer-notif-pulse{
   0%,100% { transform: scale(1);   opacity: 1;   }
   50%     { transform: scale(1.35); opacity: .55; }
 }
