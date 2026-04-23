@@ -119,6 +119,29 @@ function writeWsCollapsed(map){
   catch (e) {}
 }
 
+/* Sidebar width is persisted via the `--cockpit-sb-w` CSS variable set on
+   `document.documentElement`. `public/v2/index.html` reads the saved value
+   pre-paint so the grid is correctly sized before React boots. */
+const SB_WIDTH_KEY = 'ac:v2:sb-width';
+const SB_WIDTH_DEFAULT = 260;
+const SB_WIDTH_MIN = 200;
+const SB_WIDTH_MAX = 600;
+
+function loadSbWidth(){
+  try {
+    const raw = window.localStorage.getItem(SB_WIDTH_KEY);
+    if (!raw) return SB_WIDTH_DEFAULT;
+    const n = Number(raw);
+    if (!Number.isFinite(n)) return SB_WIDTH_DEFAULT;
+    return Math.max(SB_WIDTH_MIN, Math.min(SB_WIDTH_MAX, Math.round(n)));
+  } catch { return SB_WIDTH_DEFAULT; }
+}
+
+function saveSbWidth(width){
+  try { window.localStorage.setItem(SB_WIDTH_KEY, String(Math.round(width))); }
+  catch {}
+}
+
 /* ---------- Sidebar (shared across screens) ---------- */
 function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convStates = null, onOpenKb = null, onOpenFiles = null, onOpenSettings = null, onOpenWorkspaceSettings = null, onNewConversation = null, refreshToken = 0, viewingArchive = false, onToggleArchive = null, onRestore = null, onSignOut = null, onShowUpdate = null }){
   const [convs, setConvs] = React.useState(null);  // null = loading, [] = empty, [...] = loaded
@@ -126,7 +149,44 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
   const [query, setQuery] = React.useState('');
   const [debouncedQuery, setDebouncedQuery] = React.useState('');
   const [wsCollapsed, setWsCollapsed] = React.useState(readWsCollapsed);
+  const [sbWidth, setSbWidth] = React.useState(loadSbWidth);
+  const [sbResizing, setSbResizing] = React.useState(false);
   const searchInputRef = React.useRef(null);
+  const sbWidthRef = React.useRef(sbWidth);
+  sbWidthRef.current = sbWidth;
+
+  React.useEffect(() => {
+    document.documentElement.style.setProperty('--cockpit-sb-w', sbWidth + 'px');
+  }, [sbWidth]);
+
+  const onSbResizerMouseDown = React.useCallback((e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startW = sbWidthRef.current;
+    setSbResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    const onMove = (ev) => {
+      const next = Math.max(SB_WIDTH_MIN, Math.min(SB_WIDTH_MAX, startW + (ev.clientX - startX)));
+      setSbWidth(next);
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      setSbResizing(false);
+      saveSbWidth(sbWidthRef.current);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, []);
+
+  const onSbResizerDoubleClick = React.useCallback(() => {
+    setSbWidth(SB_WIDTH_DEFAULT);
+    saveSbWidth(SB_WIDTH_DEFAULT);
+  }, []);
 
   function toggleWsCollapsed(hash){
     if (!hash) return;
@@ -396,6 +456,15 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
       </div>
 
       <VersionIndicator onShowUpdate={onShowUpdate} />
+
+      <div
+        className={"sb-resizer" + (sbResizing ? " dragging" : "")}
+        role="separator"
+        aria-orientation="vertical"
+        title="Drag to resize · double-click to reset"
+        onMouseDown={onSbResizerMouseDown}
+        onDoubleClick={onSbResizerDoubleClick}
+      />
     </aside>
   );
 }
