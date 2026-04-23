@@ -151,6 +151,9 @@ interface JsonRpcNotification {
   jsonrpc: '2.0';
   method: string;
   params?: Record<string, unknown>;
+  /** Present when the peer is actually sending a JSON-RPC request (e.g. `session/request_permission`),
+      not a pure notification — the queue holds both. */
+  id?: number;
 }
 
 type JsonRpcMessage = JsonRpcResponse | JsonRpcNotification;
@@ -761,7 +764,7 @@ export class KiroAdapter extends BaseBackendAdapter {
 
         // ── Permission requests (auto-approve) ─────────────────────────
         if (notification.method === 'session/request_permission') {
-          const reqId = (notification as any).id;
+          const reqId = notification.id;
           if (reqId != null) {
             client.respond(reqId, {
               outcome: { outcome: 'selected', optionId: 'allow_always' },
@@ -774,7 +777,7 @@ export class KiroAdapter extends BaseBackendAdapter {
         if (notification.method.startsWith('_kiro.dev/')) {
           // Extract subagent info from list_update
           if (notification.method === '_kiro.dev/subagent/list_update') {
-            const subagents = (notification.params as any)?.subagents as Array<{ sessionId: string; sessionName: string; agentName?: string; initialQuery?: string }> | undefined;
+            const subagents = notification.params?.subagents as Array<{ sessionId: string; sessionName: string; agentName?: string; initialQuery?: string }> | undefined;
             if (subagents) {
               for (const sa of subagents) {
                 if (sa.sessionId && sa.sessionName) {
@@ -797,8 +800,8 @@ export class KiroAdapter extends BaseBackendAdapter {
           }
           // Map toolCallId → sessionId from subagent session updates
           if (notification.method === '_kiro.dev/session/update') {
-            const intUpdate = (notification.params as any)?.update as Record<string, unknown> | undefined;
-            const intSessionId = (notification.params as any)?.sessionId as string | undefined;
+            const intUpdate = notification.params?.update as Record<string, unknown> | undefined;
+            const intSessionId = notification.params?.sessionId as string | undefined;
             if (intUpdate && intSessionId && intUpdate.toolCallId) {
               toolToSubagent.set(intUpdate.toolCallId as string, intSessionId);
             }

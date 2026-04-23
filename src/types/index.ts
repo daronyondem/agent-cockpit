@@ -919,6 +919,7 @@ export interface AppConfig {
 declare module 'express-session' {
   interface SessionData {
     csrfToken?: string;
+    passport?: { user?: unknown };
   }
 }
 
