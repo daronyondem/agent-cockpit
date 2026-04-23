@@ -143,9 +143,13 @@ function saveSbWidth(width){
 }
 
 /* ---------- Sidebar (shared across screens) ---------- */
-function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convStates = null, onOpenKb = null, onOpenFiles = null, onOpenSettings = null, onOpenWorkspaceSettings = null, onNewConversation = null, refreshToken = 0, viewingArchive = false, onToggleArchive = null, onRestore = null, onSignOut = null, onShowUpdate = null }){
-  const [convs, setConvs] = React.useState(null);  // null = loading, [] = empty, [...] = loaded
-  const [err, setErr] = React.useState(null);
+function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convStates = null, onOpenKb = null, onOpenFiles = null, onOpenSettings = null, onOpenWorkspaceSettings = null, onNewConversation = null, viewingArchive = false, onToggleArchive = null, onRestore = null, onSignOut = null, onShowUpdate = null }){
+  /* Conv list is owned by StreamStore — we only subscribe here. That way
+     `title_updated`, archive, rename, delete, create all flow into the
+     sidebar without React-prop refresh tokens. */
+  const [listState, setListState] = React.useState(() => StreamStore.getConvList());
+  const convs = listState.items;
+  const err = listState.error;
   const [query, setQuery] = React.useState('');
   const [debouncedQuery, setDebouncedQuery] = React.useState('');
   const [wsCollapsed, setWsCollapsed] = React.useState(readWsCollapsed);
@@ -204,28 +208,19 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
     return () => clearTimeout(handle);
   }, [query]);
 
-  /* Fetch convs whenever the debounced query, archive view, or refresh token
-     changes. Empty query + active view uses the cached fast path; anything
-     else hits `GET /conversations?q=…&archived=…` directly. The server
-     satisfies `q` by matching against title, lastMessage, and full message
-     content. */
+  /* Subscribe once to the store; every mutation re-renders this component. */
   React.useEffect(() => {
-    let cancelled = false;
-    setErr(null);
-    setConvs(null);
-    let fetcher;
-    if (viewingArchive) {
-      fetcher = AgentApi.listConversations({ q: debouncedQuery, archived: true });
-    } else if (debouncedQuery) {
-      fetcher = AgentApi.listConversations({ q: debouncedQuery });
-    } else {
-      fetcher = AgentApi.getConversationsCached();
-    }
-    fetcher
-      .then(list => { if (!cancelled) setConvs(list); })
-      .catch(e => { if (!cancelled) setErr(e.message || String(e)); });
-    return () => { cancelled = true; };
-  }, [debouncedQuery, refreshToken, viewingArchive]);
+    return StreamStore.subscribeConvList(() => {
+      setListState({ ...StreamStore.getConvList() });
+    });
+  }, []);
+
+  /* Re-fetch whenever the debounced query or archive view changes. The
+     server satisfies `q` by matching against title, lastMessage, and full
+     message content. */
+  React.useEffect(() => {
+    StreamStore.loadConvList({ query: debouncedQuery, archived: viewingArchive });
+  }, [debouncedQuery, viewingArchive]);
 
   /* ⌘K / Ctrl+K focuses the search input. Matches V1. The ⌘N hint on the
      New-conversation button is decorative only — V1 never bound the shortcut

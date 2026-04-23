@@ -35,8 +35,6 @@
   const state = {
     csrfToken: null,
     onSessionExpired: null,
-    _conversationsCache: null,
-    _conversationsPromise: null,
     _backendsCache: null,
     _backendsPromise: null,
   };
@@ -84,28 +82,6 @@
     const res = await chatFetch(`conversations${qs}`);
     const data = await res.json();
     return data.conversations || [];
-  }
-
-  /* Cached variant — the v2 slide deck mounts the Sidebar inside many slides,
-     each remounting triggers a fetch. Caching flattens this to one request
-     until invalidate() is called. */
-  function getConversationsCached(){
-    if (state._conversationsCache) return Promise.resolve(state._conversationsCache);
-    if (state._conversationsPromise) return state._conversationsPromise;
-    state._conversationsPromise = listConversations().then(convs => {
-      state._conversationsCache = convs;
-      state._conversationsPromise = null;
-      return convs;
-    }).catch(err => {
-      state._conversationsPromise = null;
-      throw err;
-    });
-    return state._conversationsPromise;
-  }
-
-  function invalidateConversations(){
-    state._conversationsCache = null;
-    state._conversationsPromise = null;
   }
 
   async function browseDir(path, showHidden){
@@ -579,8 +555,6 @@
     chatWsUrl,
     fetch: chatFetch,
     listConversations,
-    getConversationsCached,
-    invalidateConversations,
     createConversation,
     restoreConversation,
     markConversationUnread,
