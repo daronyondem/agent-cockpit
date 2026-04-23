@@ -547,7 +547,6 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
      send button turns into a stop-styled affordance; clicking it enqueues
      whatever is in the composer so the user can stack follow-ups. */
   const canEnqueue = hasContent && !sending && !awaiting && !hasUploadingFiles && streaming;
-  const subtitle = [conv.backend, conv.model].filter(Boolean).join(' · ');
 
   function handleDragEnter(e){
     if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
@@ -765,10 +764,6 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
               {conv.title || 'Untitled'}
             </span>
           )}
-          {subtitle ? <>
-            <span className="sep">·</span>
-            <span className="u-mono" style={{fontSize:11,color:"var(--text-3)"}}>{subtitle}</span>
-          </> : null}
         </div>
         <div className="right">
           {usage ? <ContextChip backendId={conv.backend} usage={usage}/> : null}
