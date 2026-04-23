@@ -818,6 +818,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
                   <MessageBubble
                     key={entry.message.id}
                     message={entry.message}
+                    isStreaming={streaming && streamingMsgId === entry.message.id}
                     attachedProgress={entry.progressRun}
                     elapsedMs={elapsedByMsgId.get(entry.message.id)}
                   />
@@ -1763,8 +1764,14 @@ function ToolRow({ activity }){
 /* Collapse runs of consecutive assistant messages with turn:'progress' into a
    single breadcrumb entry. Three cases:
      - plain                   → a non-progress message rendered as-is
-     - final-with-progress     → the breadcrumb prepends to a following turn:'final' bubble
-     - progress-trailing       → the run has no final after it yet (stream in progress or aborted)
+     - final-with-progress     → the breadcrumb prepends to a following non-progress
+                                 assistant bubble (a persisted turn:'final' or the live
+                                 streaming placeholder, which has no turn field). Keeps
+                                 an in-flight multi-segment turn in a single agent
+                                 presence instead of a standalone breadcrumb bubble
+                                 above a separate streaming bubble.
+     - progress-trailing       → the run has no following assistant bubble at all
+                                 (aborted/orphan runs).
 */
 function collapseProgressRuns(messages){
   const out = [];
@@ -1788,7 +1795,7 @@ function collapseProgressRuns(messages){
       }
     }
     const next = messages[i];
-    if (next && next.role === 'assistant' && next.turn === 'final') {
+    if (next && next.role === 'assistant' && next.turn !== 'progress') {
       out.push({ kind: 'final-with-progress', message: next, progressRun: run });
       i++;
     } else {
