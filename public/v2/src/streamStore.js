@@ -74,6 +74,23 @@
      shell keeps this in sync via setActiveConvId in onSelectConv. */
   let activeConvId = null;
 
+  /* Conversation list — single source of truth for the sidebar and any
+     other consumer that wants to render the list. The store reflects the
+     last `loadConvList({query, archived})` call; toggling views or typing
+     a search re-fetches. Targeted mutations (title_updated, archive,
+     delete, rename, create) patch the in-memory list so other views update
+     without a server round-trip. */
+  const convList = {
+    items: null,        // null = not loaded yet, [] = empty, [...] = loaded
+    error: null,
+    query: '',
+    archived: false,
+    loading: false,
+    reqGen: 0,          // race-cancellation gen counter for loadConvList
+  };
+  /** @type {Set<() => void>} */
+  const convListSubs = new Set();
+
   /* Draft localStorage persistence — survives tab crash / reload so the user
      doesn't lose a half-written message. Only text + *completed* attachments
      (those with a server path) are persisted; in-flight uploads can't be
@@ -239,6 +256,79 @@
       else out[id] = 'idle';
     }
     return out;
+  }
+
+  /* ── Conversation list ─────────────────────────────────────────────── */
+
+  function notifyConvList(){
+    convListSubs.forEach(l => { try { l(); } catch {} });
+  }
+
+  function subscribeConvList(listener){
+    convListSubs.add(listener);
+    return () => { convListSubs.delete(listener); };
+  }
+
+  function getConvList(){ return convList; }
+
+  /* Fetch conversations matching the given filters and replace `items`.
+     `reqGen` drops responses for any fetch that has been overtaken by a
+     newer one (e.g. fast typing in the search box). */
+  async function loadConvList(opts){
+    const nextQuery = (opts && typeof opts.query === 'string') ? opts.query : '';
+    const nextArchived = !!(opts && opts.archived);
+    const gen = ++convList.reqGen;
+    convList.query = nextQuery;
+    convList.archived = nextArchived;
+    convList.items = null;
+    convList.error = null;
+    convList.loading = true;
+    notifyConvList();
+    try {
+      const items = await AgentApi.listConversations({ q: nextQuery, archived: nextArchived });
+      if (gen !== convList.reqGen) return;
+      convList.items = items;
+      convList.loading = false;
+      notifyConvList();
+    } catch (err) {
+      if (gen !== convList.reqGen) return;
+      convList.error = err.message || String(err);
+      convList.loading = false;
+      notifyConvList();
+    }
+  }
+
+  function refreshConvList(){
+    return loadConvList({ query: convList.query, archived: convList.archived });
+  }
+
+  function patchConvListItem(convId, patch){
+    if (!Array.isArray(convList.items)) return;
+    let changed = false;
+    const next = convList.items.map(c => {
+      if (c.id !== convId) return c;
+      changed = true;
+      return { ...c, ...patch };
+    });
+    if (!changed) return;
+    convList.items = next;
+    notifyConvList();
+  }
+
+  function removeConvListItem(convId){
+    if (!Array.isArray(convList.items)) return;
+    const next = convList.items.filter(c => c.id !== convId);
+    if (next.length === convList.items.length) return;
+    convList.items = next;
+    notifyConvList();
+  }
+
+  function prependConvListItem(conv){
+    if (!conv || !conv.id) return;
+    if (!Array.isArray(convList.items)) return;
+    if (convList.items.some(c => c.id === conv.id)) return;
+    convList.items = [conv, ...convList.items];
+    notifyConvList();
   }
 
   /* Infer an AttachmentKind from a file path's extension. Mirrors the
@@ -540,7 +630,7 @@
         ...cur,
         conv: cur.conv ? { ...cur.conv, title: frame.title } : cur.conv,
       }));
-      AgentApi.invalidateConversations();
+      patchConvListItem(convId, { title: frame.title });
       return;
     }
     if (frame.type === 'usage') {
@@ -1098,7 +1188,6 @@
     update(convId, { resetting: true });
     try {
       await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/reset', { method: 'POST', body: {} });
-      AgentApi.invalidateConversations();
       const r = await AgentApi.fetch('conversations/' + encodeURIComponent(convId));
       const data = await r.json();
       update(convId, cur => ({
@@ -1112,6 +1201,11 @@
         uiState: null,
         resetting: false,
       }));
+      /* Server resets title to 'New Chat' on session reset; mirror that
+         in the sidebar list so the row label flips immediately. */
+      if (data && typeof data.title === 'string') {
+        patchConvListItem(convId, { title: data.title });
+      }
       return true;
     } catch (err) {
       update(convId, { streamError: err.message || String(err), resetting: false });
@@ -1225,6 +1319,7 @@
       states.delete(convId);
       convSubs.delete(convId);
       if (prev && (prev.uiState || prev.unread)) globalSubs.forEach(l => { try { l(); } catch {} });
+      removeConvListItem(convId);
       return true;
     } catch (err) {
       update(convId, { streamError: err.message || String(err) });
@@ -1265,5 +1360,12 @@
     markUnread,
     parseUploadedFilesTag,
     attachmentKindFromPath,
+    subscribeConvList,
+    getConvList,
+    loadConvList,
+    refreshConvList,
+    patchConvListItem,
+    removeConvListItem,
+    prependConvListItem,
   };
 })();

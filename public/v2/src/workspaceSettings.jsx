@@ -118,10 +118,10 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onClose }){
     setKbEnabled(enabled);
     try {
       await AgentApi.workspace.setKbEnabled(hash, enabled);
-      /* Sidebar shows a Knowledge Base icon only when KB is enabled for the
-         workspace — invalidate + refresh so the indicator appears/disappears
-         without a manual reload. */
-      AgentApi.invalidateConversations();
+      /* The book icon on the sidebar group reflects workspaceKbEnabled,
+         which is workspace-scoped (set on every conv in the group). The
+         shell's onCloseWorkspaceSettings refetches the list when the
+         modal closes, which is when the icon needs to update. */
     } catch (err) {
       setKbEnabled(prev);
       dialog.alert({

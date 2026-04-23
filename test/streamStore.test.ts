@@ -59,7 +59,6 @@ beforeEach(() => {
   (global as any).AgentApi = {
     chatWsUrl: (id: string) => `ws://test/conv/${id}`,
     fetch: jest.fn(),
-    invalidateConversations: jest.fn(),
     markConversationUnread: jest.fn().mockResolvedValue({}),
   };
   (window as any).AgentApi = (global as any).AgentApi;

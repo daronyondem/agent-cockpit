@@ -132,7 +132,6 @@ function App(){
   const [settingsView, setSettingsView] = React.useState(false); // boolean — global app settings, no per-workspace context
   const [folderPickerOpen, setFolderPickerOpen] = React.useState(false);
   const [creatingConv, setCreatingConv] = React.useState(false);
-  const [convsRefreshToken, setConvsRefreshToken] = React.useState(0);
   const [viewingArchive, setViewingArchive] = React.useState(false);
   const [updateTarget, setUpdateTarget] = React.useState(null); // { localVersion, remoteVersion } | null
   const [restarting, setRestarting] = React.useState(false);
@@ -159,22 +158,19 @@ function App(){
     window.StreamStore.setActiveConvId(activeConvId);
   }, [activeConvId]);
 
+  /* Archive/delete/rename callbacks: the StreamStore mutation now happens
+     at the action site (handleArchive/handleDelete/saveTitle below), so
+     these only handle the page-level side effect of clearing the chat
+     view. Rename has no view-level side effect. */
   const onArchived = React.useCallback(() => {
     setActiveConvId(null);
-    AgentApi.invalidateConversations();
-    setConvsRefreshToken(t => t + 1);
   }, []);
 
   const onDeleted = React.useCallback(() => {
     setActiveConvId(null);
-    AgentApi.invalidateConversations();
-    setConvsRefreshToken(t => t + 1);
   }, []);
 
-  const onRenamed = React.useCallback(() => {
-    AgentApi.invalidateConversations();
-    setConvsRefreshToken(t => t + 1);
-  }, []);
+  const onRenamed = React.useCallback(() => {}, []);
 
   const onSelectConv = React.useCallback((id) => {
     setKbView(null);
@@ -240,8 +236,9 @@ function App(){
   const onRestoreConv = React.useCallback(async (id) => {
     try {
       await AgentApi.restoreConversation(id);
-      AgentApi.invalidateConversations();
-      setConvsRefreshToken(t => t + 1);
+      /* Conv leaves the archived view; if user is on the active view it
+         was never present anyway. removeConvListItem is a no-op then. */
+      StreamStore.removeConvListItem(id);
     } catch (err) {
       dialog.alert({
         variant: 'error',
@@ -275,10 +272,12 @@ function App(){
   }, []);
 
   const onCloseWorkspaceSettings = React.useCallback(() => {
-    /* KB toggle may have flipped — refresh the sidebar so the book icon on
-       the workspace group updates without a manual reload. */
+    /* KB toggle may have flipped — refetch so the workspace-level
+       `workspaceKbEnabled` flag (and the book icon on the group header)
+       reflects the new state. Targeted patches don't apply here because
+       the toggle affects every conv in the workspace, not just one. */
     setWorkspaceSettings(null);
-    setConvsRefreshToken(t => t + 1);
+    StreamStore.refreshConvList();
   }, []);
 
   const createConv = React.useCallback(async (workingDir) => {
@@ -294,8 +293,7 @@ function App(){
       if (workingDir) body.workingDir = workingDir;
       if (defaultBackend) body.backend = defaultBackend;
       const conv = await AgentApi.createConversation(body);
-      AgentApi.invalidateConversations();
-      setConvsRefreshToken(t => t + 1);
+      StreamStore.prependConvListItem(conv);
       setFolderPickerOpen(false);
       setKbView(null);
       setFilesView(null);
@@ -325,7 +323,6 @@ function App(){
         onOpenSettings={onOpenSettings}
         onOpenWorkspaceSettings={onOpenWorkspaceSettings}
         onNewConversation={onNewConversation}
-        refreshToken={convsRefreshToken}
         viewingArchive={viewingArchive}
         onToggleArchive={onToggleArchive}
         onRestore={onRestoreConv}
@@ -669,7 +666,9 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
     try {
       await AgentApi.restoreConversation(convId);
       StreamStore.patchConv(convId, { archived: false });
-      if (onRenamed) onRenamed();
+      /* Conv leaves whatever view the sidebar is showing (archived view
+         only, since you can't unarchive an active conv). */
+      StreamStore.removeConvListItem(convId);
       toast.success('Conversation restored');
     } catch (err) {
       await dialog.alert({ variant: 'error', title: 'Restore failed', body: err.message || String(err) });
@@ -689,6 +688,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
     if (!ok) return;
     try {
       await AgentApi.deleteConversation(convId);
+      StreamStore.removeConvListItem(convId);
       if (onDeleted) onDeleted();
     } catch (err) {
       await dialog.alert({ anchor, variant: 'error', title: 'Delete failed', body: err.message || String(err) });
@@ -712,8 +712,10 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
     setSavingTitle(true);
     try {
       const updated = await AgentApi.renameConversation(convId, next);
-      if (updated && updated.title) StreamStore.patchConv(convId, { title: updated.title });
-      if (onRenamed) onRenamed();
+      if (updated && updated.title) {
+        StreamStore.patchConv(convId, { title: updated.title });
+        StreamStore.patchConvListItem(convId, { title: updated.title });
+      }
       setEditingTitle(false);
     } catch (err) {
       await dialog.alert({ variant: 'error', title: 'Rename failed', body: err.message || String(err) });
