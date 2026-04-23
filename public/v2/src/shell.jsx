@@ -125,6 +125,38 @@ function AssistantAvatar({ backend }){
   );
 }
 
+/* Contains render/effect crashes inside <ChatLive> so one broken conversation
+   can't take down the whole shell. The parent wraps this with
+   key={activeConvId} so switching conversations resets the boundary and
+   gives users a fresh attempt. */
+class ChatErrorBoundary extends React.Component {
+  constructor(props){
+    super(props);
+    this.state = { err: null };
+    this.onReload = () => { try { window.location.reload(); } catch(e) {} };
+  }
+  static getDerivedStateFromError(err){ return { err }; }
+  componentDidCatch(err, info){
+    try { console.error('[ChatErrorBoundary]', err, info); } catch(e) {}
+  }
+  render(){
+    if (!this.state.err) return this.props.children;
+    const msg = (this.state.err && this.state.err.message) || String(this.state.err);
+    return (
+      <section className="main main-error">
+        <div style={{ maxWidth: 520, margin: '64px auto', padding: 24, textAlign: 'center' }}>
+          <h2 style={{ margin: '0 0 8px' }}>Something went wrong</h2>
+          <p style={{ color: 'var(--fg-muted)', margin: '0 0 16px', fontSize: 14 }}>
+            This conversation failed to render. Try switching to another conversation, or reload the app.
+          </p>
+          <pre style={{ textAlign: 'left', background: 'var(--bg-muted)', padding: 12, borderRadius: 'var(--r-sm)', fontSize: 12, whiteSpace: 'pre-wrap', margin: '0 0 16px' }}>{msg}</pre>
+          <button className="btn primary" onClick={this.onReload}>Reload</button>
+        </div>
+      </section>
+    );
+  }
+}
+
 function App(){
   const [activeConvId, setActiveConvId] = React.useState(null);
   const [kbView, setKbView] = React.useState(null);     // { hash, label } | null
@@ -431,13 +463,15 @@ function App(){
           <KbBrowser hash={kbView.hash} label={kbView.label} onClose={() => setKbView(null)}/>
         </section>
       ) : activeConvId
-        ? <ChatLive
-            convId={activeConvId}
-            onArchived={onArchived}
-            onDeleted={onDeleted}
-            onRenamed={onRenamed}
-            onOpenWorkspaceSettings={onOpenWorkspaceSettings}
-          />
+        ? <ChatErrorBoundary key={activeConvId}>
+            <ChatLive
+              convId={activeConvId}
+              onArchived={onArchived}
+              onDeleted={onDeleted}
+              onRenamed={onRenamed}
+              onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+            />
+          </ChatErrorBoundary>
         : <EmptyMain/>}
       <FolderPicker
         open={folderPickerOpen}
@@ -970,6 +1004,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
             />
             {pendingAttachments.length ? (
               <AttTray
+                convId={convId}
                 attachments={pendingAttachments}
                 onRemove={(id) => StreamStore.removeAttachment(convId, id)}
                 onAdd={openFilePicker}
@@ -2112,11 +2147,11 @@ function AttChip({ att, size = 'md', onRemove, thumbUrl, uploading, progress }){
    plus a dashed "Add" tile at the end. Image previews use a blob: URL
    created from the in-memory File so the thumbnail appears immediately —
    the URL is revoked when the entry unmounts. */
-function AttTray({ attachments, onRemove, onAdd }){
+function AttTray({ convId, attachments, onRemove, onAdd }){
   return (
     <div className="att-tray">
       {attachments.map(entry => (
-        <PendingAttChip key={entry.id} entry={entry} onRemove={() => onRemove(entry.id)}/>
+        <PendingAttChip key={entry.id} convId={convId} entry={entry} onRemove={() => onRemove(entry.id)}/>
       ))}
       <button type="button" className="att-add" onClick={onAdd} title="Add attachment" aria-label="Add attachment">
         <span className="att-add-icon">{Ico.plus(14)}</span>
@@ -2127,24 +2162,35 @@ function AttTray({ attachments, onRemove, onAdd }){
 }
 
 /* AttChip wrapper that derives kind/meta/thumb from an in-flight or
-   uploaded PendingAttachment. Image thumbs come from the File blob until
-   the server returns (which will happen on the same chip). */
-function PendingAttChip({ entry, onRemove }){
+   uploaded PendingAttachment. Image thumbs come from the File blob for
+   fresh uploads; for entries rehydrated from localStorage (no Blob in
+   memory), we fall back to the server-side file URL so the thumb still
+   renders after a page reload. */
+function PendingAttChip({ convId, entry, onRemove }){
   const { file, status, progress, error, result } = entry;
   const kind = result ? result.kind : kindFromFile(file);
   const isImage = kind === 'image';
+  const restored = !!entry.restored;
+  const restoredName = restored ? ((result && result.name) || (file && file.name) || '') : '';
   const [thumb, setThumb] = React.useState(null);
   React.useEffect(() => {
     if (!isImage) return;
+    if (restored) {
+      if (convId && restoredName) {
+        setThumb(AgentApi.chatUrl('conversations/' + encodeURIComponent(convId) + '/files/' + encodeURIComponent(restoredName)));
+      }
+      return;
+    }
+    if (!(file instanceof Blob)) return;
     const url = URL.createObjectURL(file);
     setThumb(url);
     return () => URL.revokeObjectURL(url);
-  }, [file, isImage]);
+  }, [file, isImage, restored, convId, restoredName]);
   const att = {
-    name: (result && result.name) || file.name,
+    name: (result && result.name) || (file && file.name) || '',
     path: result ? result.path : '',
     kind,
-    meta: result && result.meta ? result.meta : fmtFileSize(file.size),
+    meta: result && result.meta ? result.meta : fmtFileSize(file && file.size),
   };
   return (
     <div title={error || undefined} style={status === 'error' ? { outline: '1px solid var(--status-error)', borderRadius: 'var(--r-sm)' } : undefined}>
