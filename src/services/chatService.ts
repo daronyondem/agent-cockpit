@@ -779,6 +779,13 @@ export class ChatService {
       newTitle = fallback;
     }
 
+    // Hard-cut titles to 8 words regardless of adapter output or fallback,
+    // so sidebar/header entries don't wrap or crowd out sibling controls.
+    const words = newTitle.trim().split(/\s+/);
+    if (words.length > 8) {
+      newTitle = words.slice(0, 8).join(' ');
+    }
+
     convEntry.title = newTitle;
     await this._writeWorkspaceIndex(hash, index);
 
