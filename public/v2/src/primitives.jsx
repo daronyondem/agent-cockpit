@@ -222,6 +222,14 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
     StreamStore.loadConvList({ query: debouncedQuery, archived: viewingArchive });
   }, [debouncedQuery, viewingArchive]);
 
+  /* Once-per-mount: seed `uiState: 'streaming'` for convs whose CLI stream
+     survived the page refresh (buffered on the server, not in the wiped
+     ConvState). Without this, the blue dots disappear on refresh even
+     though the stream still runs in the background. */
+  React.useEffect(() => {
+    StreamStore.hydrateActiveStreams();
+  }, []);
+
   /* ⌘K / Ctrl+K focuses the search input. Matches V1. The ⌘N hint on the
      New-conversation button is decorative only — V1 never bound the shortcut
      either, since ⌘N / Ctrl+N is reserved by the browser for "new window". */

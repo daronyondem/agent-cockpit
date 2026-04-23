@@ -84,6 +84,15 @@
     return data.conversations || [];
   }
 
+  /* Returns the IDs of conversations whose CLI stream is currently running
+     on the server (or paused awaiting user input). Used on app load to
+     restore sidebar "streaming" dots after a page refresh. */
+  async function getActiveStreams(){
+    const res = await chatFetch('active-streams');
+    const data = await res.json();
+    return data.ids || [];
+  }
+
   async function browseDir(path, showHidden){
     const params = new URLSearchParams();
     if (path) params.set('path', path);
@@ -555,6 +564,7 @@
     chatWsUrl,
     fetch: chatFetch,
     listConversations,
+    getActiveStreams,
     createConversation,
     restoreConversation,
     markConversationUnread,

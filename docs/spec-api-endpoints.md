@@ -38,6 +38,7 @@ Recursively deletes directory. Refuses filesystem root. Returns `{ deleted, pare
 | PATCH | `/conversations/:id/archive` | Yes | Sets `archived: true` on the conversation. Aborts active stream. Files remain on disk. `404` if not found. |
 | PATCH | `/conversations/:id/restore` | Yes | Removes `archived` flag, restoring the conversation to the active list. `404` if not found. |
 | PATCH | `/conversations/:id/unread` | Yes | `{ unread: boolean }` → sets or clears the conversation's unread flag in the workspace index. `unread: true` writes `unread: true` onto the entry; `unread: false` (or anything non-true) deletes the field to keep the index file lean. Returns `{ ok: true, unread }`. `404` if conversation not found. Idempotent. The frontend calls this on every stream `done` frame for non-active conversations (auto-mark) and from manual dot-click in the sidebar. |
+| GET | `/active-streams` | — | Returns `{ ids: string[] }` — conversation IDs whose CLI stream is currently running on the server (or paused awaiting user input). Drawn from the in-memory `activeStreams` map in the chat router; no disk state. Used by the v2 frontend on app load to re-seed sidebar "streaming" dots after a page refresh (the per-conversation `ConvState` in `StreamStore` is wiped by the refresh, but the server-side stream and its WS event buffer survive). |
 
 ## 3.3 Message Queue
 
