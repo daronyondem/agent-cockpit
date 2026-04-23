@@ -813,12 +813,24 @@ export class KbDatabase {
     const folderCountRow = this.db
       .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM folders')
       .get();
+    const topicCountRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_topics')
+      .get();
+    const connectionCountRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_connections')
+      .get();
+    const reflectionCountRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_reflections')
+      .get();
     return {
       rawTotal,
       rawByStatus,
       entryCount: entryCountRow?.n ?? 0,
       pendingCount: rawByStatus.ingested + rawByStatus['pending-delete'],
       folderCount: folderCountRow?.n ?? 0,
+      topicCount: topicCountRow?.n ?? 0,
+      connectionCount: connectionCountRow?.n ?? 0,
+      reflectionCount: reflectionCountRow?.n ?? 0,
     };
   }
 

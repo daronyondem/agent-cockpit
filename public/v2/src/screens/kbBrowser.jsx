@@ -81,7 +81,9 @@ function KbBrowser({ hash, label, onClose }){
   const totals = counters ? {
     raw: counters.rawTotal || 0,
     entries: counters.entryCount || 0,
-    folders: counters.folderCount || 0,
+    topics: counters.topicCount || 0,
+    connections: counters.connectionCount || 0,
+    reflections: counters.reflectionCount || 0,
   } : null;
 
   return (
@@ -94,7 +96,7 @@ function KbBrowser({ hash, label, onClose }){
         <span className="ws">{label}</span>
         {totals ? (
           <span className="u-mono u-dim" style={{fontSize:10.5}}>
-            {totals.raw} files · {totals.entries} entries{totals.folders ? ` · ${totals.folders} folders` : ''}
+            {totals.raw} files · {totals.entries} entries · {totals.topics} topics · {totals.connections} connections · {totals.reflections} reflections
           </span>
         ) : kbErr ? (
           <span className="u-err" style={{fontSize:11}}>{kbErr}</span>
@@ -462,33 +464,81 @@ function formatDreamRelative(iso){
   return `${day}d ago`;
 }
 
-/* Horizontal stepper rendered inside the Synthesis controls bar while a
-   dream is running. Five phases (routing → verification → synthesis →
-   discovery → reflection) render as done / active / pending. The active
-   step shows `done/total` plus elapsed-in-step. Duplicates shell.jsx's
-   DreamStepper because this file loads before shell.jsx and can't import
-   from it; the shape stays aligned deliberately. */
-function DreamStepper({ progress, stepStart }){
-  const phases = ['routing', 'verification', 'synthesis', 'discovery', 'reflection'];
-  const currentIdx = progress && progress.phase ? phases.indexOf(progress.phase) : -1;
-  const elapsed = stepStart ? formatDreamElapsed(Date.now() - stepStart) : '';
+/* Dream pipeline stepper. Markup and class names mirror the handoff
+   `src/stepper.jsx` verbatim so that `public/v2/src/stepper.css` (also
+   copied verbatim from the handoff) applies without any adaptation.
+   Five phases (routing → verification → synthesis → discovery →
+   reflection) render as upcoming / active / done. Active reserves a wider
+   slot (6-col grid, active spans 2) and shows done/total. The component
+   renders a shimmering "Starting…" rail when triggered before the first
+   progress frame arrives. Spec: docs/spec-frontend.md#dream-pipeline-stepper. */
+const DREAM_PHASES = ['routing', 'verification', 'synthesis', 'discovery', 'reflection'];
+const DREAM_PHASE_LABELS = {
+  routing: 'Routing',
+  verification: 'Verification',
+  synthesis: 'Synthesis',
+  discovery: 'Discovery',
+  reflection: 'Reflection',
+};
+function StepCheck(){
   return (
-    <div className="dream-stepper">
-      {phases.map((p, i) => {
-        const active = i === currentIdx;
-        const done = currentIdx > i;
-        const label = p.charAt(0).toUpperCase() + p.slice(1);
-        const counts = active && progress && progress.total ? ` ${progress.done || 0}/${progress.total}` : '';
-        const elapsedLabel = active && elapsed ? ` — ${elapsed}` : '';
-        return (
-          <React.Fragment key={p}>
-            {i > 0 ? <span className="dream-stepper-sep">→</span> : null}
-            <span className={"dream-stepper-step" + (active ? ' active' : done ? ' done' : '')}>
-              {done ? '✓ ' : ''}{label}{counts}{elapsedLabel}
-            </span>
-          </React.Fragment>
-        );
-      })}
+    <svg className="step-check" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+      <path d="M2.5 6.5 L5 9 L9.5 3.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+function DreamStepperGrid({ progress, stepStart, starting }){
+  if (starting || !progress || !progress.phase) {
+    return (
+      <div className="stepper-host">
+        <div className="stepper starting" role="status" aria-live="polite">
+          <div className="stepper-stages">
+            <span className="starting-chip"><span className="spin" aria-hidden="true"/> Starting…</span>
+            <span className="starting-rail"/>
+          </div>
+          <div className="stepper-timer"><span className="lbl">Elapsed</span><b>0:00</b></div>
+        </div>
+      </div>
+    );
+  }
+  const currentIdx = DREAM_PHASES.indexOf(progress.phase);
+  const stages = DREAM_PHASES.map((key, i) => {
+    const label = DREAM_PHASE_LABELS[key];
+    if (i < currentIdx) return { key, label, state: 'done' };
+    if (i === currentIdx) return {
+      key, label, state: 'active',
+      count: progress.done || 0,
+      total: progress.total || 0,
+    };
+    return { key, label, state: 'upcoming' };
+  });
+  const elapsed = stepStart ? formatDreamElapsed(Date.now() - stepStart) : '0:00';
+  return (
+    <div className="stepper-host">
+      <div className="stepper" role="group" aria-label="Dream pipeline progress">
+        <div className="stepper-stages">
+          {stages.map((s, i) => (
+            <div key={s.key} className="step" data-state={s.state}
+                 aria-label={`Stage ${i+1} of 5, ${s.label}, ${s.state}`}>
+              <span className="step-icon">
+                {s.state === 'active' ? <span className="spin" aria-hidden="true"/>
+                  : s.state === 'done' ? <StepCheck/>
+                  : <span className="step-num">{i+1}</span>}
+              </span>
+              <span className="step-body">
+                <span className="step-label">{s.label}</span>
+                <span className="step-counter" aria-hidden={s.state !== 'active'}>
+                  {s.state === 'active' && s.total ? `${s.count}/${s.total}` : ''}
+                </span>
+              </span>
+            </div>
+          ))}
+        </div>
+        <div className="stepper-timer"><span className="lbl">Elapsed</span><b>{elapsed}</b></div>
+        <span className="sr-only" aria-live="polite">
+          {stages.filter(s => s.state === 'active').map(s => `${s.label} ${s.count} of ${s.total}`).join(', ')}
+        </span>
+      </div>
     </div>
   );
 }
@@ -629,35 +679,36 @@ function KbSynthesisTab({ hash }){
   const lastRunLabel = formatDreamRelative(data.lastRunAt);
   const pending = data.needsSynthesisCount || 0;
   const lastErr = data.lastRunError || '';
-  const statusLabel = isRunning ? 'running' : (data.status || 'idle');
 
   return (
-    <div className="kb-pane kb-split">
-      <div className="kb-split-left">
-        <div className="kb-synth-controls">
-          <div className="kb-synth-btn-row">
+    <div className="kb-pane">
+      <div className="kb-synth-controls">
+        <div className="kb-actions">
+          <div className="btns">
             <button
               type="button"
-              className="btn kb-synth-dream-btn"
+              className={"btn-dream" + (isRunning ? " running" : "")}
               onClick={startDream}
               disabled={starting || isRunning}
               title="Run incremental dream on pending entries"
             >
-              {starting || isRunning ? 'Dreaming…' : <>{Ico.moon(12)} Dream</>}
+              {starting || isRunning
+                ? <>{Ico.bolt(12)} Dreaming…</>
+                : <>{Ico.moon(12)} Dream</>}
             </button>
             {isRunning ? (
               <button
                 type="button"
-                className="btn danger kb-synth-stop-btn"
+                className="btn-dream stop"
                 onClick={stopDream}
                 disabled={stopping || isStopping}
               >
-                {stopping || isStopping ? 'Stopping…' : <>{Ico.stop(12)} Stop</>}
+                {Ico.stop(11)} {stopping || isStopping ? 'Stopping…' : 'Stop'}
               </button>
             ) : null}
             <button
               type="button"
-              className="btn kb-synth-redream-btn"
+              className="btn-dream ghost"
               onClick={(e) => redream(e.currentTarget)}
               disabled={isRunning}
               title="Wipe all topics & connections, then rebuild from scratch"
@@ -665,71 +716,70 @@ function KbSynthesisTab({ hash }){
               Re-Dream
             </button>
           </div>
-          <div className="kb-synth-info-row">
-            <span className="kb-synth-status">
-              Last run: {lastRunLabel}
-              {pending > 0 ? <> · <span>{pending} pending</span></> : null}
-              {lastErr ? <> · <span className="u-err">{lastErr}</span></> : null}
-            </span>
-            {isRunning ? <DreamStepper progress={data.dreamProgress} stepStart={stepStart}/> : null}
+          <div className="status">
+            Last run: {lastRunLabel}
+            {pending > 0 ? <> · <span>{pending} pending</span></> : null}
+            {lastErr ? <> · <span className="u-err">{lastErr}</span></> : null}
           </div>
         </div>
-        <div className="kb-status">
-          <span className={`kb-pill ${statusLabel === 'idle' ? 'ok' : 'run'}`}>
-            <span className="dot"/>{statusLabel}
-          </span>
-          <span className="kb-pill"><span className="dot"/>{topics.length} topics</span>
-          <span className="kb-pill"><span className="dot"/>{data.connectionCount || 0} connections</span>
-          {data.needsSynthesisCount ? <span className="kb-pill warn"><span className="dot"/>{data.needsSynthesisCount} pending</span> : null}
-          {data.reflectionCount ? <span className="kb-pill"><span className="dot"/>{data.reflectionCount} reflections</span> : null}
-        </div>
-        {topics.length > 0 ? (
-          <div className="kb-filters">
-            <input
-              type="text"
-              placeholder="Search topics…"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              className="kb-search-input"
-            />
-          </div>
-        ) : null}
-        <div className="kb-list">
-          {topics.length === 0 ? (
-            <div className="u-dim" style={{padding:"16px"}}>No topics yet. Click Dream to synthesize pending entries into topics.</div>
-          ) : filteredTopics.length === 0 ? (
-            <div className="u-dim" style={{padding:"16px"}}>No matches for “{query.trim()}”.</div>
-          ) : filteredTopics.map(t => (
-            <button
-              key={t.topicId}
-              type="button"
-              className={`kb-entry-row ${selectedId === t.topicId ? 'active' : ''}`}
-              onClick={() => setSelectedId(t.topicId)}
-            >
-              <div className="kb-entry-title">
-                {t.isGodNode ? <span className="u-accent" style={{marginRight:6}}>★</span> : null}
-                {t.title}
-              </div>
-              {t.summary ? <div className="kb-entry-summary">{t.summary}</div> : null}
-              <div className="kb-entry-meta">
-                <span className="kb-meta-chip">{t.entryCount || 0} entries</span>
-                <span className="kb-meta-chip">{t.connectionCount || 0} links</span>
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-      <div className="kb-split-right">
-        {selectedId ? (
-          <KbTopicDetail
-            hash={hash}
-            topicId={selectedId}
-            topicsById={topicsById}
-            onSelectTopic={setSelectedId}
+        {isRunning ? (
+          <DreamStepperGrid
+            progress={data && data.dreamProgress}
+            stepStart={stepStart}
+            starting={!(data && data.dreamProgress && data.dreamProgress.phase)}
           />
-        ) : (
-          <div className="u-dim" style={{padding:"16px"}}>Select a topic to view its entries and connections.</div>
-        )}
+        ) : null}
+      </div>
+      <div className="kb-split">
+        <div className="kb-split-left">
+          {topics.length > 0 ? (
+            <div className="kb-filters">
+              <input
+                type="text"
+                placeholder="Search topics…"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                className="kb-search-input"
+              />
+            </div>
+          ) : null}
+          <div className="kb-list">
+            {topics.length === 0 ? (
+              <div className="u-dim" style={{padding:"16px"}}>No topics yet. Click Dream to synthesize pending entries into topics.</div>
+            ) : filteredTopics.length === 0 ? (
+              <div className="u-dim" style={{padding:"16px"}}>No matches for “{query.trim()}”.</div>
+            ) : filteredTopics.map(t => (
+              <button
+                key={t.topicId}
+                type="button"
+                className={`kb-entry-row ${selectedId === t.topicId ? 'active' : ''}`}
+                onClick={() => setSelectedId(t.topicId)}
+              >
+                <div className="kb-entry-title">
+                  {t.isGodNode ? <span className="u-accent" style={{marginRight:6}}>★</span> : null}
+                  {t.title}
+                </div>
+                {t.summary ? <div className="kb-entry-summary">{t.summary}</div> : null}
+                <div className="kb-entry-meta">
+                  <span className="kb-meta-chip">{t.entryCount || 0} entries</span>
+                  <span className="kb-meta-chip">{t.connectionCount || 0} links</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="kb-split-right">
+          {selectedId ? (
+            <KbTopicDetail
+              hash={hash}
+              topicId={selectedId}
+              topicsById={topicsById}
+              onSelectTopic={setSelectedId}
+            />
+          ) : (
+            <div className="u-dim" style={{padding:"16px"}}>Select a topic to view its entries and connections.</div>
+          )}
+        </div>
       </div>
     </div>
   );

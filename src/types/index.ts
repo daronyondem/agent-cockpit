@@ -659,6 +659,9 @@ export interface KbCounters {
   entryCount: number;
   pendingCount: number; // ingested + pending-delete
   folderCount: number;
+  topicCount: number;
+  connectionCount: number;
+  reflectionCount: number;
 }
 
 /**

@@ -1829,6 +1829,9 @@ export class ChatService {
       entryCount: 0,
       pendingCount: 0,
       folderCount: 0,
+      topicCount: 0,
+      connectionCount: 0,
+      reflectionCount: 0,
     };
     return {
       version: KB_STATE_VERSION,
