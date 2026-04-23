@@ -22,25 +22,11 @@ describe('KiroAdapter', () => {
     });
   });
 
-  test('metadata.models is undefined before first session', () => {
+  test('metadata.models is populated immediately with hardcoded list', () => {
     const adapter = new KiroAdapter({ workingDir: '/tmp' });
-    expect(adapter.metadata.models).toBeUndefined();
-  });
-
-  test('metadata.models is populated after setCachedModels', () => {
-    const adapter = new KiroAdapter({ workingDir: '/tmp' });
-    (adapter as any).cachedModels = [
-      { modelId: 'auto', name: 'auto', description: 'Models chosen by task' },
-      { modelId: 'claude-opus-4.7', name: 'claude-opus-4.7', description: 'Experimental preview of Claude Opus 4.7 model with 1M context window' },
-      { modelId: 'claude-opus-4.6', name: 'claude-opus-4.6', description: 'The Claude Opus 4.6 model' },
-      { modelId: 'claude-sonnet-4.6', name: 'claude-sonnet-4.6', description: 'The latest Claude Sonnet model with 1M context window' },
-      { modelId: 'claude-haiku-4.5', name: 'claude-haiku-4.5', description: 'The latest Claude Haiku model' },
-      { modelId: 'claude-opus-4.6-1m', name: 'claude-opus-4.6-1m', description: '[Deprecated] Please switch to Opus 4.6' },
-      { modelId: 'kimi-k2.5', name: 'kimi-k2.5', description: '[Internal] Internal test model' },
-    ];
     const models = adapter.metadata.models;
     expect(models).toBeDefined();
-    expect(models!.length).toBe(5); // auto + opus 4.7 + opus 4.6 + sonnet + haiku (deprecated and internal filtered)
+    expect(models!.length).toBe(13); // auto + 3 opus + 3 sonnet + haiku + 5 open-weight
 
     const auto = models!.find(m => m.id === 'auto');
     expect(auto).toBeDefined();
@@ -48,40 +34,39 @@ describe('KiroAdapter', () => {
     expect(auto!.family).toBe('router');
     expect(auto!.costTier).toBe('medium');
 
+    // auto is the only default
+    expect(models!.filter(m => m.default).length).toBe(1);
+
     const opus47 = models!.find(m => m.id === 'claude-opus-4.7');
     expect(opus47).toBeDefined();
     expect(opus47!.family).toBe('opus');
     expect(opus47!.costTier).toBe('high');
 
-    const opus46 = models!.find(m => m.id === 'claude-opus-4.6');
-    expect(opus46).toBeDefined();
-    expect(opus46!.family).toBe('opus');
-    expect(opus46!.costTier).toBe('high');
+    const opus45 = models!.find(m => m.id === 'claude-opus-4.5');
+    expect(opus45).toBeDefined();
+    expect(opus45!.family).toBe('opus');
 
-    const sonnet = models!.find(m => m.id === 'claude-sonnet-4.6');
-    expect(sonnet).toBeDefined();
-    expect(sonnet!.family).toBe('sonnet');
-    expect(sonnet!.costTier).toBe('medium');
+    const sonnet46 = models!.find(m => m.id === 'claude-sonnet-4.6');
+    expect(sonnet46).toBeDefined();
+    expect(sonnet46!.family).toBe('sonnet');
+    expect(sonnet46!.costTier).toBe('medium');
+
+    const sonnet40 = models!.find(m => m.id === 'claude-sonnet-4.0');
+    expect(sonnet40).toBeDefined();
+    expect(sonnet40!.family).toBe('sonnet');
 
     const haiku = models!.find(m => m.id === 'claude-haiku-4.5');
     expect(haiku).toBeDefined();
     expect(haiku!.family).toBe('haiku');
     expect(haiku!.costTier).toBe('low');
 
-    // Deprecated and internal models are filtered out
-    expect(models!.find(m => m.id === 'claude-opus-4.6-1m')).toBeUndefined();
-    expect(models!.find(m => m.id === 'kimi-k2.5')).toBeUndefined();
-  });
-
-  test('model family detection for non-Claude models', () => {
-    const adapter = new KiroAdapter({ workingDir: '/tmp' });
-    (adapter as any).cachedModels = [
-      { modelId: 'deepseek-3.2', name: 'deepseek-3.2', description: 'DeepSeek open model' },
-    ];
-    const models = adapter.metadata.models;
-    expect(models).toBeDefined();
-    expect(models![0].family).toBe('other');
-    expect(models![0].costTier).toBe('low');
+    // Open-weight models are tagged family='other' and costTier='low'
+    for (const id of ['deepseek-3.2', 'minimax-m2.5', 'minimax-m2.1', 'glm-5', 'qwen3-coder-next']) {
+      const m = models!.find(x => x.id === id);
+      expect(m).toBeDefined();
+      expect(m!.family).toBe('other');
+      expect(m!.costTier).toBe('low');
+    }
   });
 
   test('stdinInput is false', () => {

@@ -481,7 +481,25 @@ All detail objects include `tool`, `id` (block id or null), and `description`. L
 
 ### KiroAdapter (`src/services/backends/kiro.ts`)
 
-**Metadata:** `id: 'kiro'`, capabilities: `thinking: true, planMode: false, agents: true, toolActivity: true, userQuestions: false, stdinInput: false`. Exposes dynamic `models` array populated from `session/new` response (undefined until first session). Deprecated (`[Deprecated]`) and internal (`[Internal]`) models are filtered out.
+**Metadata:** `id: 'kiro'`, capabilities: `thinking: true, planMode: false, agents: true, toolActivity: true, userQuestions: false, stdinInput: false`. Exposes a hardcoded `models` array so the selector renders immediately on page load (Kiro's ACP `session/new` response also carries a model list, but that's only available after the first message — reading it lazily caused the dropdown to appear empty and then pop in "after the fact"). The hardcoded list mirrors [kiro.dev/docs/cli/models](https://kiro.dev/docs/cli/models/):
+
+| ID | Family | Cost Tier | Default |
+|---|---|---|---|
+| `auto` | router | medium | ✓ |
+| `claude-opus-4.7` | opus | high | — |
+| `claude-opus-4.6` | opus | high | — |
+| `claude-opus-4.5` | opus | high | — |
+| `claude-sonnet-4.6` | sonnet | medium | — |
+| `claude-sonnet-4.5` | sonnet | medium | — |
+| `claude-sonnet-4.0` | sonnet | medium | — |
+| `claude-haiku-4.5` | haiku | low | — |
+| `deepseek-3.2` | other | low | — |
+| `minimax-m2.5` | other | low | — |
+| `minimax-m2.1` | other | low | — |
+| `glm-5` | other | low | — |
+| `qwen3-coder-next` | other | low | — |
+
+No `supportedEffortLevels` — Kiro does not expose effort tuning. When Kiro adds or removes models upstream, update this list manually.
 
 **Integration protocol:** ACP (Agent Client Protocol) — JSON-RPC 2.0 over stdin/stdout via `kiro-cli acp`.
 
