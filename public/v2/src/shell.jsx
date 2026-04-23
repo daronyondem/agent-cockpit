@@ -2370,18 +2370,15 @@ function StreamErrorCard({ convId, error, queueLength, messages }){
 /* Composer KB status icon — car-dashboard-style indicator positioned
    just left of the Send button. Only renders when the conversation's
    workspace has KB enabled. On hover a rich tooltip shows pending-
-   digestion and pending-synthesis counts, plus an inline Dream/Stop
-   action when applicable. State is hydrated from `conv.kb` on conv
-   load and patched live via `kb_state_update` WS frames (handled in
-   streamStore). A 2s poll on GET /conversations/:id backstops dream
-   progress transitions while a run is in flight. */
+   digestion and pending-synthesis counts plus auto-digest state, using
+   the standard Tip stat-variant template (.tt-header / .tt-eye / .tt-h
+   / .tt-section / .tt-rows / .tt-kv). State is hydrated from `conv.kb`
+   on conv load and patched live via `kb_state_update` WS frames
+   (handled in streamStore). A 2s poll on GET /conversations/:id
+   backstops dream progress transitions while a run is in flight. */
 function KbStatusIcon({ conv, convId }){
-  const toast = useToasts();
   const kb = conv && conv.kb;
-  const hash = conv && conv.workspaceHash;
   const running = !!(kb && kb.dreamingStatus === 'running');
-  const [starting, setStarting] = React.useState(false);
-  const [stopping, setStopping] = React.useState(false);
 
   React.useEffect(() => {
     if (!running || !convId) return;
@@ -2404,84 +2401,51 @@ function KbStatusIcon({ conv, convId }){
   const pendingDream  = Math.max(0, kb.pendingEntries || 0);
   const autoDigest    = !!kb.autoDigest;
   const hasWork       = pendingDigest > 0 || pendingDream > 0;
-  const stopPending   = !!kb.dreamingStopping;
   const state = running ? 'running' : hasWork ? 'pending' : 'ok';
 
-  async function startDream(){
-    if (!hash || starting || running) return;
-    setStarting(true);
-    try {
-      await AgentApi.workspace.triggerDream(hash);
-      StreamStore.patchConv(convId, { kb: { ...kb, dreamingStatus: 'running', _dreamProgress: null } });
-    } catch (err) {
-      toast.error('Failed to start dreaming: ' + (err.message || String(err)));
-    } finally {
-      setStarting(false);
-    }
-  }
-  async function stopDream(){
-    if (!hash || stopping) return;
-    setStopping(true);
-    try {
-      await AgentApi.workspace.stopDream(hash);
-      StreamStore.patchConv(convId, { kb: { ...kb, dreamingStopping: true } });
-    } catch (err) {
-      toast.error('Stop failed: ' + (err.message || String(err)));
-    } finally {
-      setStopping(false);
-    }
-  }
-
   const card = (
-    <div className="kb-status-card">
-      <div className="kb-status-head">Knowledge Base</div>
-
-      <div className="kb-status-row">
-        <span className={"kb-status-dot " + (pendingDigest > 0 ? 'warn' : 'ok')}/>
-        <span className="kb-status-row-label">
-          {pendingDigest === 0
-            ? 'No files awaiting digestion'
-            : (pendingDigest + (pendingDigest === 1 ? ' file' : ' files') + ' awaiting digestion')}
-        </span>
-        {pendingDigest > 0 && !autoDigest ? (
-          <span className="kb-status-hint">auto-digest off</span>
-        ) : null}
+    <>
+      <div className="tt-header">
+        <span className="tt-eye">Knowledge Base</span>
       </div>
-
-      <div className="kb-status-row">
-        <span className={"kb-status-dot " + (pendingDream > 0 ? 'warn' : 'ok')}/>
-        <span className="kb-status-row-label">
-          {pendingDream === 0
-            ? 'No entries awaiting synthesis'
-            : (pendingDream + (pendingDream === 1 ? ' entry' : ' entries') + ' awaiting synthesis')}
-        </span>
-        {pendingDream > 0 && !running ? (
-          <button
-            className="btn kb-status-action"
-            onClick={startDream}
-            disabled={starting}
-          >
-            {starting ? 'Starting…' : 'Dream now'}
-          </button>
-        ) : null}
-      </div>
-
-      {running ? (
-        <div className="kb-status-running">
-          <div className="kb-status-running-head">
-            {Ico.moon(12)} Dreaming in progress
-            <button
-              className="btn danger kb-status-stop"
-              onClick={stopDream}
-              disabled={stopPending || stopping}
-            >
-              {stopPending ? 'Stopping…' : <>{Ico.stop(10)} Stop</>}
-            </button>
+      <h4 className="tt-h">
+        {running
+          ? 'Dreaming…'
+          : hasWork
+            ? (pendingDigest + pendingDream) + ' pending'
+            : 'Up to date'}
+      </h4>
+      <div className="tt-section">
+        <div className="tt-rows">
+          <div className="tt-kv">
+            <span>Digestion</span>
+            <b>
+              {pendingDigest === 0
+                ? '—'
+                : pendingDigest + (pendingDigest === 1 ? ' file' : ' files')}
+            </b>
           </div>
+          <div className="tt-kv">
+            <span>Synthesis</span>
+            <b>
+              {pendingDream === 0
+                ? '—'
+                : pendingDream + (pendingDream === 1 ? ' entry' : ' entries')}
+            </b>
+          </div>
+          <div className="tt-kv">
+            <span>Auto-digest</span>
+            <b>{autoDigest ? 'on' : 'off'}</b>
+          </div>
+        </div>
+      </div>
+      {running ? (
+        <div className="tt-section">
+          <div className="tt-section-label">Dreaming in progress</div>
           <DreamStepper progress={kb._dreamProgress}/>
         </div>
       ) : null}
-    </div>
+    </>
   );
 
   const label = running
