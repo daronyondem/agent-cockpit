@@ -725,6 +725,54 @@ describe('draft persistence', () => {
     await Store.load('c1');
     expect(Store.getState('c1').input).toBe('live input');
   });
+
+  /* Session-expired mid-send (401): send() wipes the composer optimistically
+     for a snappy "message queued" feel, then on POST failure must restore
+     BOTH input and pendingAttachments so the user doesn't have to retype or
+     re-upload. Also verifies the localStorage copy survives the failure so
+     a full reload (popup blocked → fallback redirect) hydrates the draft. */
+  test('POST failure restores input and keeps the persisted draft', async () => {
+    await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    Store.setInput('c1', 'my message');
+    await new Promise(r => setTimeout(r, 200));
+    expect(localStorage.getItem(KEY)).not.toBeNull();
+
+    api.fetch.mockRejectedValueOnce(new Error('Session expired'));
+    await Store.send('c1', 'my message');
+
+    const state = Store.getState('c1');
+    expect(state.input).toBe('my message');
+    expect(state.streamError).toBe('Session expired');
+    expect(state.sending).toBe(false);
+    const raw = localStorage.getItem(KEY);
+    expect(raw).not.toBeNull();
+    expect(JSON.parse(raw!)).toEqual({ text: 'my message', attachments: [] });
+  });
+
+  /* clearAllStreamErrors (called by the shell after a silent re-auth)
+     sweeps streamError on every conv that has one so stale session-expired
+     error cards disappear once the session is back. */
+  test('clearAllStreamErrors clears errors across every conv', async () => {
+    await openWs('c1');
+    await openWs('c2');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    api.fetch.mockRejectedValueOnce(new Error('Session expired'));
+    await Store.send('c1', 'msg one');
+    api.fetch.mockRejectedValueOnce(new Error('Session expired'));
+    await Store.send('c2', 'msg two');
+
+    expect(Store.getState('c1').streamError).toBe('Session expired');
+    expect(Store.getState('c2').streamError).toBe('Session expired');
+
+    Store.clearAllStreamErrors();
+    expect(Store.getState('c1').streamError).toBeNull();
+    expect(Store.getState('c2').streamError).toBeNull();
+  });
 });
 
 describe('unread', () => {

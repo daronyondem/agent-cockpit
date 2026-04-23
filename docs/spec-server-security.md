@@ -29,7 +29,7 @@
 
 1. Create Express app, set `trust proxy: 1`
 2. Apply Helmet security headers via `applySecurity(app)`
-3. Configure express-session with FileStore (`data/sessions/`, 24h TTL, `retries: 0`)
+3. Configure express-session with FileStore (`data/sessions/`, 24h TTL, `retries: 0`). `cookie.maxAge` is 24h and `rolling: true` is set — every request re-issues the cookie with a fresh 24h expiry, so active users never hit the wall mid-workflow while idle users still expire after 24h of no activity.
 4. Passport 0.7 polyfill — adds `session.regenerate`/`session.save` stubs if missing
 5. Setup Passport with `setupAuth(app, config)`
 6. Apply `requireAuth` middleware globally
@@ -72,17 +72,29 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 
 | Route | Method | Description |
 |-------|--------|-------------|
-| `/auth/login` | GET | Login page with Google + GitHub (if configured) buttons |
-| `/auth/google` | GET | Initiates Google OAuth flow |
-| `/auth/google/callback` | GET | Google callback → `/` on success, `/auth/denied` on failure |
-| `/auth/github` | GET | Initiates GitHub OAuth flow |
-| `/auth/github/callback` | GET | GitHub callback → `/` on success, `/auth/denied` on failure |
+| `/auth/login` | GET | Login page with Google + GitHub (if configured) buttons. Accepts `?popup=1` — when set, the provider button hrefs become `/auth/google?popup=1` / `/auth/github?popup=1` so the popup flag propagates through the whole flow. |
+| `/auth/google` | GET | Initiates Google OAuth flow. If `?popup=1`, the `markPopupIfRequested` middleware sets `req.session.reAuthPopup = true` before passport's redirect; the flag survives the Google roundtrip via express-session. |
+| `/auth/google/callback` | GET | Google callback → `finishAuth`: redirects to `/auth/popup-done` when `req.session.reAuthPopup` is set (and unsets the flag), otherwise `/`. Failure redirects to `/auth/denied`. |
+| `/auth/github` | GET | Initiates GitHub OAuth flow. Same `?popup=1` handling as Google. |
+| `/auth/github/callback` | GET | GitHub callback → `finishAuth` (same popup logic as Google). Failure → `/auth/denied`. |
+| `/auth/popup-done` | GET | Terminal page for popup re-auth. Serves a tiny HTML document that calls `window.opener.postMessage({ type: 'ac-reauth-ok' }, window.location.origin)` and then `window.close()`. Same-origin check on the message is enforced implicitly via the `targetOrigin` argument. |
 | `/auth/denied` | GET | Access denied page |
 | `/auth/logout` | GET | Destroys session, clears cookie, redirects to `/` |
 
 **`requireAuth` middleware:** Localhost passes through without auth. Otherwise requires `req.isAuthenticated()`. For unauthenticated requests to `/api/*` paths, responds with `401 { error: "Not authenticated" }` as JSON (so client `fetch` callers can handle it without trying to parse an HTML login page). All other unauthenticated requests are redirected to `/auth/login`.
 
-**Frontend session-expired handling:** When any API request returns `401`, `chatFetch` / `fetchCsrfToken` / the streaming send path each call `chatShowSessionExpired()` (in `public/js/state.js`), which renders a modal overlay (`#chat-session-expired-overlay`) with a "Sign in again" button pointing at `./auth/login`. The overlay is idempotent — calling it repeatedly does not stack overlays. Drafts are preserved by existing `draftState.js` localStorage persistence and survive the sign-in redirect.
+**V1 frontend session-expired handling:** When any API request returns `401`, `chatFetch` / `fetchCsrfToken` / the streaming send path each call `chatShowSessionExpired()` (in `public/js/state.js`), which renders a modal overlay (`#chat-session-expired-overlay`) with a "Sign in again" button pointing at `./auth/login`. The overlay is idempotent — calling it repeatedly does not stack overlays. Drafts are preserved by existing `draftState.js` localStorage persistence and survive the sign-in redirect.
+
+**V2 frontend silent re-auth:** When `AgentApi.chatFetch` sees a 401, it invokes the handler registered via `AgentApi.setSessionExpiredHandler`. The shell wires this (see `public/v2/src/shell.jsx`) to a popup flow:
+
+1. `dialog.confirm` with "Sign in" / "Cancel" — if the user declines, nothing happens.
+2. On confirm, `window.open('/auth/login?popup=1', 'ac-reauth', ...)`. If the popup is blocked, fall back to a full-page redirect to `/auth/login` (the draft still survives via the localStorage mirror).
+3. The main window awaits either a `postMessage({ type: 'ac-reauth-ok' })` from the popup (sent by `/auth/popup-done` after successful OAuth) or the popup closing without a success message (polled via `popup.closed` every 500 ms).
+4. In either case, call `AgentApi.invalidateCsrfToken()` — the old cached CSRF token is tied to the old session and would be rejected by `csrfGuard`; the next `chatFetch` re-fetches lazily.
+5. On success, call `StreamStore.clearAllStreamErrors()` to sweep stale "session expired" stream-error cards across every conv. The user's draft (input text + completed uploads) is already preserved in `ConvState.input` / `ConvState.pendingAttachments` by the `send()` snapshot/restore logic (`streamStore.js`), so they can just click send again.
+6. On close-without-success, verify with a `GET /api/csrf-token`; if still 401, open an error alert and re-enable the handler.
+
+Re-entrancy is guarded by a `reAuthInFlightRef` — overlapping 401s on concurrent requests don't stack dialogs or popups.
 
 ## 5.4 CSRF Protection
 

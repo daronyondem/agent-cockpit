@@ -571,6 +571,10 @@
     rmdirDir,
     getBackendsCached,
     setSessionExpiredHandler: (fn) => { state.onSessionExpired = fn; },
+    // Invalidates the cached CSRF token — called after a silent re-auth,
+    // since the new session has a new csrfToken and the old cached value
+    // would be rejected by csrfGuard. The next chatFetch re-fetches lazily.
+    invalidateCsrfToken: () => { state.csrfToken = null; },
     kb: KbApi,
     explorer: ExplorerApi,
     settings: SettingsApi,

@@ -174,6 +174,43 @@ describe('setupAuth — /auth/login', () => {
       expect(res.body).toContain('Agent Cockpit');
     });
   });
+
+  test('propagates ?popup=1 to provider button hrefs', async () => {
+    const app = buildAuthApp({
+      GITHUB_CLIENT_ID: 'test-github-id',
+      GITHUB_CLIENT_SECRET: 'test-github-secret',
+      GITHUB_CALLBACK_URL: 'http://localhost:3000/auth/github/callback',
+    });
+    await withServer(app, async (server) => {
+      const res = await makeRequest(server, 'GET', '/auth/login?popup=1', 'example.com');
+      expect(res.body).toContain('href="/auth/google?popup=1"');
+      expect(res.body).toContain('href="/auth/github?popup=1"');
+    });
+  });
+
+  test('omits popup query when not in popup mode', async () => {
+    const app = buildAuthApp();
+    await withServer(app, async (server) => {
+      const res = await makeRequest(server, 'GET', '/auth/login', 'example.com');
+      expect(res.body).toContain('href="/auth/google"');
+      expect(res.body).not.toContain('href="/auth/google?popup=1"');
+    });
+  });
+});
+
+describe('setupAuth — /auth/popup-done', () => {
+  test('returns 200 with HTML that posts ac-reauth-ok and self-closes', async () => {
+    const app = buildAuthApp();
+    await withServer(app, async (server) => {
+      const res = await makeRequest(server, 'GET', '/auth/popup-done', 'example.com');
+      expect(res.status).toBe(200);
+      expect(res.headers['content-type']).toMatch(/text\/html/);
+      expect(res.body).toContain("type: 'ac-reauth-ok'");
+      expect(res.body).toContain('window.opener.postMessage');
+      expect(res.body).toContain('window.close()');
+      expect(res.body).toContain('window.location.origin');
+    });
+  });
 });
 
 describe('setupAuth — /auth/denied', () => {
