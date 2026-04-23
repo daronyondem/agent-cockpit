@@ -1517,30 +1517,94 @@ body{
   box-shadow: var(--shadow-2);
   overflow: hidden;
 }
-.dream-banner{
-  display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px;
-  margin-bottom: 10px;
-  border-radius: var(--r-md, 8px);
-  border: 1px solid var(--accent-border, rgba(99,102,241,.35));
-  background: var(--accent-bg, rgba(99,102,241,.08));
+/* Composer KB status icon — dashboard-style indicator rendered to the
+   left of the Send button when the conversation's workspace has KB
+   enabled. Replaces the former `.dream-banner` in-flow panel. Hover
+   surfaces a rich tooltip with pending counts, auto-digest state, and
+   Dream/Stop actions. */
+.kb-status-icon{
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.kb-status-icon:hover{ border-color: var(--border-strong); color: var(--text); }
+.kb-status-icon.state-pending{ color: var(--accent, #6366f1); border-color: var(--accent-border, rgba(99,102,241,.45)); }
+.kb-status-icon.state-running{ color: var(--accent, #6366f1); border-color: var(--accent-border, rgba(99,102,241,.55)); background: var(--accent-bg, rgba(99,102,241,.08)); }
+.kb-status-pulse{
+  position: absolute;
+  top: 2px; right: 2px;
+  width: 7px; height: 7px;
+  border-radius: 999px;
+  background: var(--accent, #6366f1);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.kb-status-pulse.state-running{ animation: kb-status-pulse 1.6s ease-in-out infinite; }
+@keyframes kb-status-pulse{
+  0%,100% { transform: scale(1);   opacity: 1;   }
+  50%     { transform: scale(1.35); opacity: .55; }
+}
+.kb-status-card{
+  display: flex; flex-direction: column; gap: 8px;
+  min-width: 260px;
+  padding: 2px 0;
   font-size: 12.5px;
   color: var(--text);
+  text-align: left;
 }
-.dream-banner-label{
-  display: inline-flex; align-items: center; gap: 6px;
-  font-weight: 500;
+.kb-status-head{
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--text-3);
 }
-.dream-go-btn{
-  margin-left: auto;
+.kb-status-row{
+  display: flex; align-items: center; gap: 8px;
+  flex-wrap: wrap;
+}
+.kb-status-row-label{ flex: 1; min-width: 0; }
+.kb-status-dot{
+  display: inline-block;
+  width: 8px; height: 8px; border-radius: 999px;
+  flex-shrink: 0;
+}
+.kb-status-dot.ok{ background: var(--status-ok, #22c55e); }
+.kb-status-dot.warn{ background: var(--accent, #6366f1); }
+.kb-status-hint{
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.kb-status-action{
+  font-size: 11.5px;
+  padding: 3px 8px;
   background: var(--accent, #6366f1);
   color: #fff;
   border-color: var(--accent, #6366f1);
 }
-.dream-go-btn:hover{ filter: brightness(1.05); }
-.dream-stop-btn{
+.kb-status-action:hover{ filter: brightness(1.05); }
+.kb-status-running{
+  display: flex; flex-direction: column; gap: 6px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.kb-status-running-head{
+  display: flex; align-items: center; gap: 6px;
+  font-weight: 500;
+}
+.kb-status-stop{
   margin-left: auto;
-  display: inline-flex; align-items: center; gap: 4px;
+  display: inline-flex; align-items: center; gap: 3px;
+  padding: 2px 6px;
+  font-size: 11px;
 }
 .dream-stepper{
   display: flex; align-items: center; gap: 6px;
@@ -2186,13 +2250,15 @@ body{
   background: var(--bg-sunk);
 }
 .kb-synth-controls{
-  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  display: flex; flex-direction: column; gap: 6px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-sunk);
   font-size: 12px;
   color: var(--text-2);
 }
+.kb-synth-btn-row{ display: flex; align-items: center; gap: 8px; }
+.kb-synth-info-row{ display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .kb-synth-dream-btn{
   background: var(--accent, #6366f1);
   color: #fff;

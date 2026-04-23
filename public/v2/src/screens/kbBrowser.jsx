@@ -635,40 +635,44 @@ function KbSynthesisTab({ hash }){
     <div className="kb-pane kb-split">
       <div className="kb-split-left">
         <div className="kb-synth-controls">
-          <button
-            type="button"
-            className="btn kb-synth-dream-btn"
-            onClick={startDream}
-            disabled={starting || isRunning}
-            title="Run incremental dream on pending entries"
-          >
-            {starting || isRunning ? 'Dreaming…' : <>{Ico.moon(12)} Dream</>}
-          </button>
-          {isRunning ? (
+          <div className="kb-synth-btn-row">
             <button
               type="button"
-              className="btn danger kb-synth-stop-btn"
-              onClick={stopDream}
-              disabled={stopping || isStopping}
+              className="btn kb-synth-dream-btn"
+              onClick={startDream}
+              disabled={starting || isRunning}
+              title="Run incremental dream on pending entries"
             >
-              {stopping || isStopping ? 'Stopping…' : <>{Ico.stop(12)} Stop</>}
+              {starting || isRunning ? 'Dreaming…' : <>{Ico.moon(12)} Dream</>}
             </button>
-          ) : null}
-          <button
-            type="button"
-            className="btn kb-synth-redream-btn"
-            onClick={(e) => redream(e.currentTarget)}
-            disabled={isRunning}
-            title="Wipe all topics & connections, then rebuild from scratch"
-          >
-            Re-Dream
-          </button>
-          <span className="kb-synth-status">
-            Last run: {lastRunLabel}
-            {pending > 0 ? <> · <span>{pending} pending</span></> : null}
-            {lastErr ? <> · <span className="u-err">{lastErr}</span></> : null}
-          </span>
-          {isRunning ? <DreamStepper progress={data.dreamProgress} stepStart={stepStart}/> : null}
+            {isRunning ? (
+              <button
+                type="button"
+                className="btn danger kb-synth-stop-btn"
+                onClick={stopDream}
+                disabled={stopping || isStopping}
+              >
+                {stopping || isStopping ? 'Stopping…' : <>{Ico.stop(12)} Stop</>}
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="btn kb-synth-redream-btn"
+              onClick={(e) => redream(e.currentTarget)}
+              disabled={isRunning}
+              title="Wipe all topics & connections, then rebuild from scratch"
+            >
+              Re-Dream
+            </button>
+          </div>
+          <div className="kb-synth-info-row">
+            <span className="kb-synth-status">
+              Last run: {lastRunLabel}
+              {pending > 0 ? <> · <span>{pending} pending</span></> : null}
+              {lastErr ? <> · <span className="u-err">{lastErr}</span></> : null}
+            </span>
+            {isRunning ? <DreamStepper progress={data.dreamProgress} stepStart={stepStart}/> : null}
+          </div>
         </div>
         <div className="kb-status">
           <span className={`kb-pill ${statusLabel === 'idle' ? 'ok' : 'run'}`}>

@@ -345,22 +345,24 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // used by the watcher to compute `changedFiles` for the `memory_update` WS frame.
   // Cleared when the watcher is unwatched so a re-watched conversation starts fresh.
   const memoryFingerprints = new Map<string, Map<string, string>>();
-  let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer'> | null = null;
+  let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected'> | null = null;
 
   /**
-   * Fan out a `kb_state_update` frame to every active stream whose
-   * conversation belongs to the target workspace. Mirrors the pattern
-   * used for `memory_update` — only conversations with a live WS get
-   * the frame; the KB Browser polls GET /kb when it's opened standalone
-   * (no active stream) so it still sees changes.
+   * Fan out a `kb_state_update` frame to every conversation with an OPEN
+   * WebSocket whose workspace matches the event — regardless of whether
+   * that conv has an active agent stream. This is what lets the composer
+   * KB status icon update in real time while the user is idle in the
+   * conversation (e.g. after uploading files via the KB Browser).
    */
   function broadcastKbStateUpdate(hash: string, frame: import('../types').KbStateUpdateEvent): void {
     if (!wsFns) return;
-    for (const [convId] of activeStreams) {
-      if (chatService.getWorkspaceHashForConv(convId) === hash && wsFns.isConnected(convId)) {
-        wsFns.send(convId, frame);
-      }
-    }
+    const sent = new Set<string>();
+    wsFns.forEachConnected((convId) => {
+      if (chatService.getWorkspaceHashForConv(convId) !== hash) return;
+      if (sent.has(convId)) return;
+      sent.add(convId);
+      wsFns!.send(convId, frame);
+    });
   }
 
   // Knowledge Base ingestion orchestrator. Owns the per-workspace queue
@@ -636,18 +638,21 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       const conv = await chatService.getConversation(param(req, 'id'));
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
 
-      // Augment with KB status so the frontend can render the dreaming
-      // banner without a separate round-trip to GET /kb.
+      // Augment with KB status so the frontend's composer KB status icon
+      // can render without a separate round-trip to GET /kb.
       const kbEnabled = await chatService.getWorkspaceKbEnabled(conv.workspaceHash);
       if (kbEnabled) {
         const db = chatService.getKbDb(conv.workspaceHash);
         if (db) {
           const snapshot = db.getSynthesisSnapshot();
           const counters = db.getCounters();
+          const autoDigest = await chatService.getWorkspaceKbAutoDigest(conv.workspaceHash);
           (conv as unknown as Record<string, unknown>).kb = {
             enabled: true,
             dreamingNeeded: snapshot.needsSynthesisCount > 0,
             pendingEntries: snapshot.needsSynthesisCount,
+            pendingDigestions: counters.pendingCount,
+            autoDigest,
             dreamingStatus: kbDreaming.isRunning(conv.workspaceHash) ? 'running' : snapshot.status,
             dreamingStopping: kbDreaming.isStopRequested(conv.workspaceHash),
             failedItems: counters.rawByStatus.failed,
@@ -2759,7 +2764,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     if (updateService) updateService.stop();
   }
 
-  function setWsFunctions(fns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer'>) {
+  function setWsFunctions(fns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected'>) {
     wsFns = fns;
   }
 

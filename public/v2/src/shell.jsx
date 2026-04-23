@@ -855,7 +855,6 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
 
       <div className="composer">
         <div className="composer-inner">
-          <DreamBanner conv={conv} convId={convId}/>
           <div className="composer-box">
             <textarea
               rows={3}
@@ -937,6 +936,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
                   <span style={{fontSize:11.5}}>Attach…</span>
                 </button>
               </span>
+              <KbStatusIcon conv={conv} convId={convId}/>
               {streaming ? (
                 <button
                   className="send stop"
@@ -2360,13 +2360,15 @@ function StreamErrorCard({ convId, error, queueLength, messages }){
   );
 }
 
-/* Dream banner — shown above the composer when the active conversation's
-   workspace KB has pending entries awaiting synthesis, OR while a dream run
-   is in progress. Reads from conv.kb (hydrated by GET /conversations/:id).
-   Live progress arrives via kb_state_update WS frames; a 2s poll on
-   GET /conversations/:id backstops status transitions when no WS frames
-   cover them. */
-function DreamBanner({ conv, convId }){
+/* Composer KB status icon — car-dashboard-style indicator positioned
+   just left of the Send button. Only renders when the conversation's
+   workspace has KB enabled. On hover a rich tooltip shows pending-
+   digestion and pending-synthesis counts, plus an inline Dream/Stop
+   action when applicable. State is hydrated from `conv.kb` on conv
+   load and patched live via `kb_state_update` WS frames (handled in
+   streamStore). A 2s poll on GET /conversations/:id backstops dream
+   progress transitions while a run is in flight. */
+function KbStatusIcon({ conv, convId }){
   const toast = useToasts();
   const kb = conv && conv.kb;
   const hash = conv && conv.workspaceHash;
@@ -2390,11 +2392,16 @@ function DreamBanner({ conv, convId }){
   }, [running, convId]);
 
   if (!kb || !kb.enabled) return null;
-  const idle = !running && kb.dreamingNeeded && kb.pendingEntries > 0;
-  if (!running && !idle) return null;
+
+  const pendingDigest = Math.max(0, kb.pendingDigestions || 0);
+  const pendingDream  = Math.max(0, kb.pendingEntries || 0);
+  const autoDigest    = !!kb.autoDigest;
+  const hasWork       = pendingDigest > 0 || pendingDream > 0;
+  const stopPending   = !!kb.dreamingStopping;
+  const state = running ? 'running' : hasWork ? 'pending' : 'ok';
 
   async function startDream(){
-    if (!hash || starting) return;
+    if (!hash || starting || running) return;
     setStarting(true);
     try {
       await AgentApi.workspace.triggerDream(hash);
@@ -2418,33 +2425,75 @@ function DreamBanner({ conv, convId }){
     }
   }
 
-  if (running) {
-    const stopPending = !!kb.dreamingStopping;
-    return (
-      <div className="dream-banner">
-        <span className="dream-banner-label">Dreaming in progress</span>
-        <DreamStepper progress={kb._dreamProgress}/>
-        <button
-          className="btn danger dream-stop-btn"
-          onClick={stopDream}
-          disabled={stopPending || stopping}
-        >
-          {stopPending ? 'Stopping…' : <>{Ico.stop(12)} Stop</>}
-        </button>
-      </div>
-    );
-  }
+  const card = (
+    <div className="kb-status-card">
+      <div className="kb-status-head">Knowledge Base</div>
 
-  const n = kb.pendingEntries;
-  return (
-    <div className="dream-banner">
-      <span className="dream-banner-label">
-        {Ico.moon(13)} {n} entr{n === 1 ? 'y' : 'ies'} awaiting synthesis
-      </span>
-      <button className="btn dream-go-btn" onClick={startDream} disabled={starting}>
-        {starting ? 'Starting…' : 'Dream now'}
-      </button>
+      <div className="kb-status-row">
+        <span className={"kb-status-dot " + (pendingDigest > 0 ? 'warn' : 'ok')}/>
+        <span className="kb-status-row-label">
+          {pendingDigest === 0
+            ? 'No files awaiting digestion'
+            : (pendingDigest + (pendingDigest === 1 ? ' file' : ' files') + ' awaiting digestion')}
+        </span>
+        {pendingDigest > 0 && !autoDigest ? (
+          <span className="kb-status-hint">auto-digest off</span>
+        ) : null}
+      </div>
+
+      <div className="kb-status-row">
+        <span className={"kb-status-dot " + (pendingDream > 0 ? 'warn' : 'ok')}/>
+        <span className="kb-status-row-label">
+          {pendingDream === 0
+            ? 'No entries awaiting synthesis'
+            : (pendingDream + (pendingDream === 1 ? ' entry' : ' entries') + ' awaiting synthesis')}
+        </span>
+        {pendingDream > 0 && !running ? (
+          <button
+            className="btn kb-status-action"
+            onClick={startDream}
+            disabled={starting}
+          >
+            {starting ? 'Starting…' : 'Dream now'}
+          </button>
+        ) : null}
+      </div>
+
+      {running ? (
+        <div className="kb-status-running">
+          <div className="kb-status-running-head">
+            {Ico.moon(12)} Dreaming in progress
+            <button
+              className="btn danger kb-status-stop"
+              onClick={stopDream}
+              disabled={stopPending || stopping}
+            >
+              {stopPending ? 'Stopping…' : <>{Ico.stop(10)} Stop</>}
+            </button>
+          </div>
+          <DreamStepper progress={kb._dreamProgress}/>
+        </div>
+      ) : null}
     </div>
+  );
+
+  const label = running
+    ? 'KB: dreaming in progress'
+    : hasWork
+      ? ('KB: ' + (pendingDigest + pendingDream) + ' pending')
+      : 'KB up to date';
+
+  return (
+    <Tip variant="stat" rich={card}>
+      <button
+        type="button"
+        className={"kb-status-icon state-" + state}
+        aria-label={label}
+      >
+        {Ico.book(14)}
+        {state !== 'ok' ? <span className={"kb-status-pulse state-" + state}/> : null}
+      </button>
+    </Tip>
   );
 }
 
