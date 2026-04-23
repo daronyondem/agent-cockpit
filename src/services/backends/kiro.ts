@@ -724,29 +724,21 @@ export class KiroAdapter extends BaseBackendAdapter {
 
       // ── Send prompt ────────────────────────────────────────────────────
       console.log(`[kiro] Sending prompt to session=${kiroSessionId} len=${promptText.length}`);
-      // Kiro has been observed returning the `session/prompt` JSON-RPC response
-      // early on long multi-agent turns, before `turn_end` arrives. Stopping the
-      // notification stream on the response therefore cut active streams off
-      // mid-turn. Instead, arm an idle grace timer when the response resolves,
-      // reset it on every incoming notification, and only stop the stream if
-      // Kiro truly goes silent (or on explicit `turn_end` / request failure).
-      const GRACE_PERIOD_MS = 60_000;
-      let graceTimer: NodeJS.Timeout | null = null;
-      const resetGraceTimer = () => {
-        if (graceTimer) clearTimeout(graceTimer);
-        graceTimer = setTimeout(() => {
-          console.log(`[kiro] No activity for ${GRACE_PERIOD_MS}ms after session/prompt response, stopping stream for session=${kiroSessionId}`);
-          client.stopNotifications();
-        }, GRACE_PERIOD_MS);
-      };
-
+      // Empirically, Kiro holds the `session/prompt` JSON-RPC response until
+      // the turn is fully done — after all subagents, tool calls, permission
+      // requests, and streaming chunks complete. The response body's
+      // `stopReason` IS the end-of-turn signal; Kiro does NOT emit a
+      // `session/update` with `sessionUpdate: 'turn_end'` on the ACP
+      // channel. Once the response arrives, stop notifications immediately.
       client.request('session/prompt', {
         sessionId: kiroSessionId,
         prompt: [{ type: 'text', text: promptText }],
-      }).then(() => {
-        resetGraceTimer();
-      }).catch(() => {
-        if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
+      }).then((resp) => {
+        const stopReason = (resp as { stopReason?: string } | null)?.stopReason;
+        console.log(`[kiro] Turn ended session=${kiroSessionId} stopReason=${stopReason}`);
+        client.stopNotifications();
+      }).catch((err) => {
+        console.warn(`[kiro] session/prompt failed for session=${kiroSessionId}: ${(err as Error).message}`);
         client.stopNotifications();
       });
 
@@ -758,9 +750,7 @@ export class KiroAdapter extends BaseBackendAdapter {
       const toolToSubagent: Map<string, string> = new Map();
       const emittedSubagents = new Set<string>();
 
-      try {
       for await (const notification of client.notifications()) {
-        if (graceTimer) resetGraceTimer();
         if (state.aborted) {
           yield { type: 'error', error: 'Aborted by user' };
           yield { type: 'done' };
@@ -928,6 +918,10 @@ export class KiroAdapter extends BaseBackendAdapter {
           }
 
           // ── Turn end ─────────────────────────────────────────────────
+          // Defensive: Kiro does not emit this on the ACP channel (the
+          // `session/prompt` response body's `stopReason` is the real
+          // end-of-turn signal), but the ACP spec lists `turn_end` as a
+          // valid `sessionUpdate` so handle it if it ever arrives.
           else if (updateType === 'turn_end') {
             yield { type: 'done' };
             return;
@@ -937,11 +931,9 @@ export class KiroAdapter extends BaseBackendAdapter {
         // ── Other notification methods (ignore) ───────────────────────
       }
 
-      // Notification loop exited — either turn_end, prompt response, or process closed
+      // Notification loop exited — session/prompt response arrived and
+      // called stopNotifications(), or the ACP process closed.
       yield { type: 'done' };
-      } finally {
-        if (graceTimer) { clearTimeout(graceTimer); graceTimer = null; }
-      }
     } catch (err) {
       yield { type: 'error', error: `Kiro error: ${(err as Error).message}` };
       yield { type: 'done' };
