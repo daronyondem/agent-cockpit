@@ -830,6 +830,41 @@ describe('generateAndUpdateTitle', () => {
   test('returns null for non-existent conversation', async () => {
     expect(await service.generateAndUpdateTitle('nonexistent', 'msg')).toBeNull();
   });
+
+  test('hard-cuts fallback title to 8 words', async () => {
+    const conv = await service.createConversation('Old Title');
+    const tenWords = 'one two three four five six seven eight nine ten';
+    const newTitle = await service.generateAndUpdateTitle(conv.id, tenWords);
+    expect(newTitle).toBe('one two three four five six seven eight');
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.title).toBe('one two three four five six seven eight');
+  });
+
+  test('hard-cuts adapter-returned title to 8 words', async () => {
+    class LongTitleAdapter extends BaseBackendAdapter {
+      get metadata(): BackendMetadata {
+        return { id: 'claude-code', label: 'Test', icon: null, capabilities: {} as any };
+      }
+      sendMessage(_message: string, _options?: SendMessageOptions): SendMessageResult {
+        return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} };
+      }
+      async generateSummary(_msgs: Pick<Message, 'role' | 'content'>[], _fb: string): Promise<string> { return _fb; }
+      async generateTitle(_msg: string): Promise<string> {
+        return 'A Very Long Title With Many Words That Exceeds The Limit';
+      }
+    }
+
+    const registry = new BackendRegistry();
+    registry.register(new LongTitleAdapter());
+    const svc = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE, backendRegistry: registry });
+    await svc.initialize();
+
+    const conv = await svc.createConversation('Old Title');
+    const newTitle = await svc.generateAndUpdateTitle(conv.id, 'some message');
+    expect(newTitle).toBe('A Very Long Title With Many Words That');
+    const loaded = await svc.getConversation(conv.id);
+    expect(loaded!.title).toBe('A Very Long Title With Many Words That');
+  });
 });
 
 // ── Session Management ───────────────────────────────────────────────────────

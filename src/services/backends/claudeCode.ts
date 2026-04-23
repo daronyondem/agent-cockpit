@@ -288,7 +288,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     }
     try {
       const truncated = userMessage.substring(0, 2000);
-      const prompt = `Generate a short, descriptive title (max 60 characters) for a conversation that starts with this user message. Only output the title text, nothing else — no quotes, no prefix:\n\n${truncated}`;
+      const prompt = `Generate a short, descriptive title (max 8 words) for a conversation that starts with this user message. Only output the title text, nothing else — no quotes, no prefix:\n\n${truncated}`;
 
       return await new Promise<string>((resolve) => {
         const child = execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
