@@ -39,6 +39,10 @@ app.use(session({
   secret: config.SESSION_SECRET,
   resave: false,
   saveUninitialized: false,
+  // Rolling: every authenticated request resets cookie.maxAge so an active
+  // user never hits the 24h wall mid-workflow. Idle users still expire after
+  // 24h of no activity.
+  rolling: true,
   cookie: {
     secure: 'auto',
     httpOnly: true,

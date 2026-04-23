@@ -152,6 +152,17 @@
     draftSaveTimers.set(convId, t);
   }
 
+  /* Cancels any pending debounced save and writes the current state to
+     localStorage immediately. Called before the optimistic-wipe in send()
+     so a timer firing post-wipe doesn't clobber the persisted draft a
+     session-expired refresh depends on. */
+  function flushDraftNow(convId){
+    const t = draftSaveTimers.get(convId);
+    if (t) { clearTimeout(t); draftSaveTimers.delete(convId); }
+    const s = states.get(convId);
+    if (s) writeDraft(convId, s.input, s.pendingAttachments);
+  }
+
   /* Rebuilds PendingAttachment rows from persisted AttachmentMeta entries.
      The `file` field is a stub with just name/size since we lost the File
      blob — the existing attachment-chip renderer guards on `f.type &&
@@ -762,19 +773,26 @@
     if (hasUploading) return;
     if (!text && doneAtts.length === 0) return;
 
-    /* Snapshot pendingAttachments so we can restore on POST failure — the
-       files are still on the server so we don't need to re-upload. */
+    /* Snapshot pendingAttachments and input so we can restore on POST
+       failure — the files are still on the server so we don't need to
+       re-upload, and the user shouldn't have to retype their message. */
     const attsSnapshot = s.pendingAttachments.slice();
+    const inputSnapshot = s.input;
     const attachmentsMeta = doneAtts.map(f => f.result).filter(Boolean);
     const qm = { content: text || '', attachments: attachmentsMeta };
     const content = composeWireContent(qm);
+
+    /* Flush the persisted draft *before* the optimistic wipe so a pending
+       debounce timer can't fire later and erase localStorage with the
+       wiped state. On POST failure we keep this copy intact for refresh. */
+    flushDraftNow(convId);
 
     update(convId, { sending: true, streamError: null, pendingInteraction: null, pendingAttachments: [] });
 
     try {
       await ensureWsOpen(convId);
     } catch (err) {
-      update(convId, { streamError: err.message || String(err), sending: false, pendingAttachments: attsSnapshot });
+      update(convId, { streamError: err.message || String(err), sending: false, pendingAttachments: attsSnapshot, input: inputSnapshot });
       return;
     }
 
@@ -836,6 +854,7 @@
         uiState: 'error',
         messages: cur.messages.filter(m => m.id !== tempUserId && m.id !== tempAssistId),
         pendingAttachments: attsSnapshot,
+        input: inputSnapshot,
       }));
     } finally {
       update(convId, { sending: false });
@@ -1110,6 +1129,15 @@
     if (opts && opts.resumeQueue) drainQueueIfReady(convId);
   }
 
+  /* Bulk-clear stream errors across every conv. Called by the shell after
+     a silent re-auth so stale "session expired" error cards vanish instead
+     of sitting around until the user sends again. */
+  function clearAllStreamErrors(){
+    for (const [convId, s] of states) {
+      if (s.streamError) clearStreamError(convId);
+    }
+  }
+
   /* Internal — send an already-composed wire-format content string (used by
      the queue drainer; bypasses the pendingAttachments pipeline since the
      attachments were uploaded when the message was queued). */
@@ -1348,6 +1376,7 @@
     clearQueue,
     resumeSuspendedQueue,
     clearStreamError,
+    clearAllStreamErrors,
     reset,
     archive,
     patchConv,

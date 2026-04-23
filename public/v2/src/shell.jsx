@@ -140,14 +140,90 @@ function App(){
   const convStates = useConvStates();
   const dialog = useDialog();
 
+  /* Silent re-auth. When a request returns 401, we prompt the user to
+     sign in via a popup window that lands on /auth/popup-done, which
+     postMessages back and self-closes. On success we dismiss the
+     dialog — the user's draft (text + attachments) is already preserved
+     in StreamStore + localStorage, so they can just click send again.
+     Re-entrancy guarded so overlapping 401s don't stack dialogs. */
+  const reAuthInFlightRef = React.useRef(false);
   React.useEffect(() => {
-    AgentApi.setSessionExpiredHandler(() => {
-      dialog.alert({
-        variant: 'error',
-        title: 'Session expired',
-        body: 'Refresh and sign in again.',
-        confirmLabel: 'OK',
-      });
+    AgentApi.setSessionExpiredHandler(async () => {
+      if (reAuthInFlightRef.current) return;
+      reAuthInFlightRef.current = true;
+      try {
+        const ok = await dialog.confirm({
+          variant: 'error',
+          title: 'Session expired',
+          body: 'Sign in again to continue — your draft and attachments are preserved.',
+          confirmLabel: 'Sign in',
+          cancelLabel: 'Cancel',
+        });
+        if (!ok) return;
+
+        const w = 480, h = 640;
+        const left = Math.max(0, (window.screen.width  - w) / 2);
+        const top  = Math.max(0, (window.screen.height - h) / 2);
+        const popup = window.open(
+          '/auth/login?popup=1',
+          'ac-reauth',
+          `width=${w},height=${h},left=${left},top=${top}`,
+        );
+        if (!popup) {
+          // Popup blocked — fall back to a full-page redirect. The
+          // localStorage draft will be restored on reload.
+          window.location.href = '/auth/login';
+          return;
+        }
+
+        const origin = window.location.origin;
+        const settled = await new Promise((resolve) => {
+          const onMessage = (ev) => {
+            if (ev.origin !== origin) return;
+            if (ev.data && ev.data.type === 'ac-reauth-ok') {
+              cleanup();
+              resolve('ok');
+            }
+          };
+          const poll = setInterval(() => {
+            if (popup.closed) {
+              cleanup();
+              resolve('closed');
+            }
+          }, 500);
+          function cleanup(){
+            window.removeEventListener('message', onMessage);
+            clearInterval(poll);
+          }
+          window.addEventListener('message', onMessage);
+        });
+
+        // The old CSRF token is tied to the old session; after re-auth
+        // we must drop it so chatFetch lazily re-fetches the new one.
+        AgentApi.invalidateCsrfToken();
+
+        if (settled === 'ok') {
+          // Session is back — sweep stale "session expired" error cards so
+          // the user doesn't see them hanging around after signing in.
+          StreamStore.clearAllStreamErrors();
+          return;
+        }
+
+        // Popup was closed without a success message — verify with a
+        // cheap authenticated GET. If still 401, tell the user.
+        try {
+          const res = await fetch('/api/csrf-token', { credentials: 'same-origin' });
+          if (res.ok) return;
+        } catch {}
+        await dialog.alert({
+          variant: 'error',
+          title: 'Still signed out',
+          body: 'The sign-in window was closed before it completed. Try again.',
+          confirmLabel: 'OK',
+        });
+      } finally {
+        reAuthInFlightRef.current = false;
+      }
     });
   }, [dialog]);
 
