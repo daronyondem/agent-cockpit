@@ -192,6 +192,62 @@ describe('parseDreamOutput', () => {
       expect(result.operations).toHaveLength(1);
     }
   });
+
+  test('handles braces inside string values without truncating', () => {
+    const raw = JSON.stringify({
+      operations: [
+        {
+          op: 'create_topic',
+          topic_id: 't1',
+          title: 'T1',
+          summary: 'S1',
+          content: 'Example JSON: { "foo": "bar" } and template `${x}` rendered as { "a": { "b": 1 } }.',
+        },
+      ],
+    });
+    const result = parseDreamOutput(raw);
+    expect(result.warnings).toHaveLength(0);
+    expect(result.operations).toHaveLength(1);
+    expect((result.operations[0] as { content: string }).content).toContain('"bar"');
+  });
+
+  test('handles escaped quotes inside string values', () => {
+    const raw = JSON.stringify({
+      operations: [
+        {
+          op: 'create_topic',
+          topic_id: 't1',
+          title: 'T1',
+          summary: 'S1',
+          content: 'She said: "use { and } sparingly" then closed the brace }.',
+        },
+      ],
+    });
+    const result = parseDreamOutput(raw);
+    expect(result.warnings).toHaveLength(0);
+    expect(result.operations).toHaveLength(1);
+  });
+
+  test('does not cut mid-string on trailing unmatched braces', () => {
+    // Regression: naive brace counter would pop depth to 0 inside the content
+    // string, returning a slice ending mid-string and producing
+    // "Unterminated string in JSON" on JSON.parse.
+    const raw = JSON.stringify({
+      operations: [
+        {
+          op: 'create_topic',
+          topic_id: 't1',
+          title: 'T1',
+          summary: 'S1',
+          content: 'trailing braces }} should not close the object',
+        },
+      ],
+    });
+    const result = parseDreamOutput(raw);
+    expect(result.warnings).toHaveLength(0);
+    expect(result.operations).toHaveLength(1);
+    expect((result.operations[0] as { content: string }).content).toContain('}}');
+  });
 });
 
 // ─── Apply operations ───────────────────────────────────────────────────────
