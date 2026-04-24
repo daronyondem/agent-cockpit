@@ -202,6 +202,18 @@ describe('parseVerificationOutput', () => {
     expect(result.verified).toHaveLength(1);
     expect(result.warnings).toHaveLength(0);
   });
+
+  test('handles braces inside string values without truncating', () => {
+    const raw = JSON.stringify({
+      verified: [
+        { entry_id: 'e1', topic_id: 't1', note: 'Matches template `{ foo: 1 }`' },
+      ],
+      rejected: [],
+    });
+    const result = parseVerificationOutput(raw);
+    expect(result.warnings).toHaveLength(0);
+    expect(result.verified).toHaveLength(1);
+  });
 });
 
 // ── parseDiscoveryOutput ─────────────────────────────────────────────────
@@ -301,6 +313,23 @@ describe('parseDiscoveryOutput', () => {
     expect(result.accepted).toEqual([]);
     expect(result.warnings).toHaveLength(0);
   });
+
+  test('handles braces inside string values without truncating', () => {
+    const raw = JSON.stringify({
+      results: [
+        {
+          topic_a: 'a', topic_b: 'b', accept: true,
+          source_topic: 'a', target_topic: 'b',
+          relationship: 'related',
+          evidence: 'Both use shape { id, name } in examples',
+        },
+      ],
+    });
+    const result = parseDiscoveryOutput(raw);
+    expect(result.warnings).toHaveLength(0);
+    expect(result.accepted).toHaveLength(1);
+    expect(result.accepted[0].evidence).toContain('{ id, name }');
+  });
 });
 
 // ── parseReflectionOutput ────────────────────────────────────────────────
@@ -386,6 +415,24 @@ describe('parseReflectionOutput', () => {
     const result = parseReflectionOutput(JSON.stringify({ reflections: [] }));
     expect(result.reflections).toHaveLength(0);
     expect(result.warnings).toHaveLength(0);
+  });
+
+  test('handles braces inside string values without truncating', () => {
+    const raw = JSON.stringify({
+      reflections: [
+        {
+          title: 'Template Patterns',
+          type: 'pattern',
+          summary: 'Both use object literals',
+          content: 'Entries share the shape `{ id: string, parent: { kind: "topic" } }` across modules.',
+          cited_entry_ids: ['e1', 'e2'],
+        },
+      ],
+    });
+    const result = parseReflectionOutput(raw);
+    expect(result.warnings).toHaveLength(0);
+    expect(result.reflections).toHaveLength(1);
+    expect(result.reflections[0].content).toContain('{ kind: "topic" }');
   });
 });
 

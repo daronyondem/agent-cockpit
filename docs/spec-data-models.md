@@ -878,4 +878,4 @@ The dreaming CLI returns `{ "operations": [...] }` JSON. 10 supported operation 
 
 Connection confidence levels: `extracted` (entry explicitly states relationship), `inferred` (deduced from overlapping concepts), `speculative` (weaker thematic connection). Most connections should be `inferred`.
 
-All operations are parsed by `parseDreamOutput()` (extracts JSON from potentially noisy CLI output, supports markdown fences and brace matching), validated by `validateOp()`, and applied transactionally by `applyOperations()` in `dreamOps.ts`.
+All operations are parsed by `parseDreamOutput()` (extracts JSON from potentially noisy CLI output via markdown-fence matching or a string-aware balanced-brace scanner that ignores braces inside JSON string literals), validated by `validateOp()`, and applied transactionally by `applyOperations()` in `dreamOps.ts`. The same string-aware scanner backs `parseVerificationOutput()`, `parseDiscoveryOutput()`, and `parseReflectionOutput()` in `dream.ts`.

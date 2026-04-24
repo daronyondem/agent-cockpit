@@ -1546,13 +1546,37 @@ function extractJsonFromOutput(raw: string): string | null {
     const inner = fenceMatch[1].trim();
     if (inner.startsWith('{')) return inner;
   }
+  return scanBalancedObject(raw);
+}
+
+/**
+ * Walk `raw` and return the slice covering the first balanced top-level
+ * `{ ... }`. Ignores braces inside JSON string literals, honouring backslash
+ * escapes. Returns `null` if no balanced object is found.
+ */
+function scanBalancedObject(raw: string): string | null {
   let depth = 0;
   let start = -1;
+  let inString = false;
+  let escaped = false;
   for (let i = 0; i < raw.length; i++) {
-    if (raw[i] === '{') {
+    const ch = raw[i];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (ch === '\\') {
+        escaped = true;
+      } else if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+    } else if (ch === '{') {
       if (depth === 0) start = i;
       depth++;
-    } else if (raw[i] === '}') {
+    } else if (ch === '}') {
       depth--;
       if (depth === 0 && start !== -1) {
         return raw.slice(start, i + 1);
