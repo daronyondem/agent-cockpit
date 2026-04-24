@@ -169,8 +169,17 @@ function App(){
   const [restarting, setRestarting] = React.useState(false);
   const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label } | null
   const [sbOpen, setSbOpen] = React.useState(false); // mobile-only sidebar overlay; ignored on desktop
+  const [user, setUser] = React.useState(null); // { displayName, email, provider } | null
   const convStates = useConvStates();
   const dialog = useDialog();
+
+  React.useEffect(() => {
+    let cancelled = false;
+    AgentApi.getMe()
+      .then(me => { if (!cancelled) setUser(me); })
+      .catch(() => { /* silent — session-expired handler covers 401s */ });
+    return () => { cancelled = true; };
+  }, []);
 
   /* Silent re-auth. When a request returns 401, we prompt the user to
      sign in via a popup window that lands on /auth/popup-done, which
@@ -436,6 +445,7 @@ function App(){
         onRestore={onRestoreConv}
         onSignOut={onSignOut}
         onShowUpdate={onShowUpdate}
+        user={user}
       />
       <div className="sb-backdrop" onClick={() => setSbOpen(false)} aria-hidden="true"/>
       <button

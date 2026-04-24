@@ -31,11 +31,13 @@
 2. Apply Helmet security headers via `applySecurity(app)`
 3. Configure express-session with FileStore (`data/sessions/`, 24h TTL, `retries: 0`). `cookie.maxAge` is 24h and `rolling: true` is set — every request re-issues the cookie with a fresh 24h expiry, so active users never hit the wall mid-workflow while idle users still expire after 24h of no activity.
 4. Passport 0.7 polyfill — adds `session.regenerate`/`session.save` stubs if missing
+4a. Mount the public logo route `GET /logo-full-no-text.svg` (serves `public/logo-full-no-text.svg`) — placed before `setupAuth` / `requireAuth` so the unauthenticated login page can load the Agent Cockpit brand mark
 5. Setup Passport with `setupAuth(app, config)`
 6. Apply `requireAuth` middleware globally
 7. Apply `ensureCsrfToken` middleware globally
 8. Parse JSON bodies with `express.json()`
 9. Mount CSRF token endpoint at `GET /api/csrf-token`
+9a. Mount current-user endpoint at `GET /api/me`
 10. Create BackendRegistry, register ClaudeCodeAdapter and KiroAdapter
 11. Initialize ChatService
 12. Initialize UpdateService
@@ -64,7 +66,7 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 - **Google OAuth 2.0** (always registered): `passport-google-oauth20`, scope `['profile', 'email']`
 - **GitHub OAuth** (optional, if both `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` set): `passport-github2`, scope `['user:email']`
 
-**Email verification:** Both strategies use `verifyEmail(config)` — parses `ALLOWED_EMAIL` into lowercased array, case-insensitive match, returns `{ id, email, displayName }` or `false`.
+**Email verification:** Both strategies use `verifyEmail(config, provider)` — parses `ALLOWED_EMAIL` into lowercased array, case-insensitive match, returns `{ id, email, displayName, provider }` or `false`. The `provider` field (`'google'` or `'github'`) is baked into the user object at verification time so downstream code (e.g. `meHandler`) can tell where the user signed in from without re-inspecting the passport strategy.
 
 **Rate limiting:** Applied to `/auth/google*` and `/auth/github*` — 15 min window, 20 requests/IP.
 
@@ -72,7 +74,7 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 
 | Route | Method | Description |
 |-------|--------|-------------|
-| `/auth/login` | GET | Login page with Google + GitHub (if configured) buttons. Accepts `?popup=1` — when set, the provider button hrefs become `/auth/google?popup=1` / `/auth/github?popup=1` so the popup flag propagates through the whole flow. |
+| `/auth/login` | GET | Editorial two-column login page. **Left column:** topbar with the Agent Cockpit logo (`<img src="/logo-full-no-text.svg">` — the same asset the V2 sidebar renders, rendered at 90×35) + "Agent Cockpit" wordmark, with a "Readme.md here" link (→ `https://github.com/daronyondem/agent-cockpit`, `target="_blank"`) on the right; centered body with a pulsing-dot "Ready" eyebrow, serif title ("The cockpit _is listening._ Sign in to take the controls."), sub-paragraph, provider buttons for Google (real multi-color G SVG) and — when GitHub config is present — GitHub (real Octocat SVG, tagged "Recommended"), legal paragraph; mono footer with "All systems operational" status + Terms (`#`) / Privacy (`#`) / Docs (→ `https://github.com/daronyondem/agent-cockpit/tree/main/docs`) links. **Right column (hidden below 960px):** radial-gradient editorial canvas with a serif pull-quote about Agent Cockpit attributed to _Daron Yondem · Sr AI/ML Architect, AWS_; the quote's three `<em>` spans (`knowledge base`, `memory`, `multiple CLI vendors`) render in `--accent` blue via the `.pe-quote em` rule. Theme follows `localStorage['ac:v2:theme']` (`'system'` default falls back to `prefers-color-scheme`), applied via an inline pre-paint script that sets `data-theme` on `<html>` before CSS loads. Design tokens (editorial direction, light + dark) are inlined in the response because `/v2/src/tokens.css` is gated behind `requireAuth`. Fonts (JetBrains Mono, Instrument Serif, General Sans) are loaded from the same CDNs as the V2 app — allowed by the CSP `style-src` / `font-src` lists. Accepts `?popup=1` — when set, the provider button hrefs become `/auth/google?popup=1` / `/auth/github?popup=1` so the popup flag propagates through the whole flow. The logo asset is served by a targeted `app.get('/logo-full-no-text.svg', ...)` route mounted in `server.ts` _before_ `app.use(requireAuth)`, so unauthenticated visitors to the login page can load it without opening up the rest of `public/`. |
 | `/auth/google` | GET | Initiates Google OAuth flow. If `?popup=1`, the `markPopupIfRequested` middleware sets `req.session.reAuthPopup = true` before passport's redirect; the flag survives the Google roundtrip via express-session. |
 | `/auth/google/callback` | GET | Google callback → `finishAuth`: redirects to `/auth/popup-done` when `req.session.reAuthPopup` is set (and unsets the flag), otherwise `/`. Failure redirects to `/auth/denied`. |
 | `/auth/github` | GET | Initiates GitHub OAuth flow. Same `?popup=1` handling as Google. |
@@ -82,6 +84,8 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 | `/auth/logout` | GET | Destroys session, clears cookie, redirects to `/` |
 
 **`requireAuth` middleware:** Localhost passes through without auth. Otherwise requires `req.isAuthenticated()`. For unauthenticated requests to `/api/*` paths, responds with `401 { error: "Not authenticated" }` as JSON (so client `fetch` callers can handle it without trying to parse an HTML login page). All other unauthenticated requests are redirected to `/auth/login`.
+
+**`meHandler` (`GET /api/me`):** Returns `{ displayName: string | null, email: string | null, provider: 'google' | 'github' | null }` from `req.user`. The endpoint sits behind `requireAuth`, so unauthenticated non-local callers get the standard `401 { error: "Not authenticated" }`. Local-bypass requests that arrive without a user object get `200` with all three fields set to `null`, so the v2 sidebar footer can render a neutral placeholder in localhost dev sessions instead of failing the fetch.
 
 **V1 frontend session-expired handling:** When any API request returns `401`, `chatFetch` / `fetchCsrfToken` / the streaming send path each call `chatShowSessionExpired()` (in `public/js/state.js`), which renders a modal overlay (`#chat-session-expired-overlay`) with a "Sign in again" button pointing at `./auth/login`. The overlay is idempotent — calling it repeatedly does not stack overlays. Drafts are preserved by existing `draftState.js` localStorage persistence and survive the sign-in redirect.
 
@@ -103,6 +107,7 @@ Re-entrancy is guarded by a `reAuthInFlightRef` — overlapping 401s on concurre
 - `ensureCsrfToken` (global middleware): generates 32-byte hex token if missing from session
 - `csrfGuard` (route-level, POST/PUT/DELETE): validates `x-csrf-token` header or `req.body._csrf` against session token. Returns `403` on mismatch.
 - `GET /api/csrf-token`: returns `{ csrfToken }` from session
+- `GET /api/me`: returns `{ displayName, email, provider }` (all nullable) from `req.user`. Same auth gating as other `/api/*` routes.
 
 ## 5.5 Security Headers
 

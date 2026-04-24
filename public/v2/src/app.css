@@ -482,6 +482,18 @@ body{
   font-size: 10.5px; font-weight: 600;
   font-family: var(--mono-font);
 }
+/* Identity-provider logos (Google/GitHub) need a neutral background so the
+   brand colors read cleanly — the default accent-soft wash would tint them. */
+.sb-footer .avatar.avatar-provider{
+  background: #fff;
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+/* Placeholder while /api/me is in flight — keeps layout stable without
+   showing misleading initials. */
+.sb-footer .avatar.avatar-empty{
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
 
 .sb-version{
   display: flex; align-items: center; justify-content: center;
