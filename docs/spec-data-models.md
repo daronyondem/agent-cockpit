@@ -93,6 +93,7 @@ agent-cockpit/
     │   │   │   │   ├── topics/<id>.md  # Per-topic prose, related topics, entry list
     │   │   │   │   └── reflections/<reflection-id>.md  # Per-reflection markdown with YAML frontmatter + body
     │   │   │   ├── vectors/            # PGLite database directory (pgvector embeddings for entries + topics)
+    │   │   │   ├── _dream_debug/       # Raw CLI outputs from persistent parse failures: parse-failure-<phase>-<iso>.txt
     │   │   │   └── _dream_tmp/         # Ephemeral staging files for dream prompts (auto-cleaned after run)
     │   │   └── {convId}/
     │   │       ├── session-1.json      # Archived session
