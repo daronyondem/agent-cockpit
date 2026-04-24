@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import fsp from 'fs/promises';
 import { homedir } from 'os';
 import path from 'path';
+import { atomicWriteFile } from '../utils/atomicWrite';
 
 // Kiro CLI = Amazon Q Developer CLI under the hood. It stores its AWS IdC
 // (SSO) access_token and the active CodeWhisperer profile ARN in a local
@@ -174,7 +175,7 @@ export class KiroPlanUsageService {
   private async _persist(): Promise<void> {
     try {
       await fsp.mkdir(path.dirname(this._cacheFile), { recursive: true });
-      await fsp.writeFile(this._cacheFile, JSON.stringify(this._snapshot, null, 2), 'utf8');
+      await atomicWriteFile(this._cacheFile, JSON.stringify(this._snapshot, null, 2));
     } catch (err: unknown) {
       console.warn('[kiroPlanUsage] Failed to persist cache:', (err as Error).message);
     }

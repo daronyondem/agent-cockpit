@@ -61,6 +61,10 @@
 
 All methods are `async` except `getWorkspaceContext()`. `getWorkspaceMemoryPointer()` is `async` so it can `mkdir -p` the memory dir on first access.
 
+### Durability primitives
+
+Every JSON file ChatService writes (`workspaces/{hash}/index.json`, session files, the usage ledger, memory `snapshot.json`) goes through `atomicWriteFile` from `src/utils/atomicWrite.ts` — a sibling-tmp + `rename(2)` helper so readers never observe a torn file. Read-modify-write methods that mutate a workspace index are wrapped in `_indexLock.run(hash, ...)` (a `KeyedMutex` from `src/utils/keyedMutex.ts`) so concurrent mutators on the same workspace serialize FIFO and never lose updates; different workspaces run in parallel. `_recordToLedger` and `clearUsageStats` use `_ledgerLock` with the constant key `'__usage_ledger__'` for the same reason on the shared ledger. `generateAndUpdateTitle` keeps the slow backend adapter call **outside** the lock (only the persist step acquires it) so a hung backend can't stall other writes on the workspace. `initialize()`'s `_buildLookupMap` catches `JSON.parse` failures per workspace, logs a warning, and keeps building — a single corrupt `index.json` degrades access to that workspace but cannot crash the server into a restart loop.
+
 ### Workspace Context Injection
 
 When a new CLI session starts, the router prepends up to three bracketed pointer blocks to the outgoing user message (not stored in the conversation's message list). The first is always present; the second is added only when Memory is enabled for the workspace; the third is added only when Knowledge Base is enabled for the workspace.

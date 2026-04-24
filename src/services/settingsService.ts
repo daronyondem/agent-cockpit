@@ -1,6 +1,7 @@
 import fsp from 'fs/promises';
 import path from 'path';
 import type { Settings } from '../types';
+import { atomicWriteFile } from '../utils/atomicWrite';
 
 interface PersistedSettings extends Settings {
   customInstructions?: { aboutUser?: string; responseStyle?: string };
@@ -49,7 +50,7 @@ export class SettingsService {
   }
 
   async saveSettings(settings: Settings): Promise<Settings> {
-    await fsp.writeFile(this._settingsFile, JSON.stringify(settings, null, 2), 'utf8');
+    await atomicWriteFile(this._settingsFile, JSON.stringify(settings, null, 2));
     return settings;
   }
 }

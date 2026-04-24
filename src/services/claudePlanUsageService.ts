@@ -2,6 +2,7 @@ import { execFile } from 'child_process';
 import fsp from 'fs/promises';
 import { homedir } from 'os';
 import path from 'path';
+import { atomicWriteFile } from '../utils/atomicWrite';
 
 const BASE_API_URL = 'https://api.anthropic.com';
 const ANTHROPIC_BETA = 'oauth-2025-04-20';
@@ -156,7 +157,7 @@ export class ClaudePlanUsageService {
   private async _persist(): Promise<void> {
     try {
       await fsp.mkdir(path.dirname(this._cacheFile), { recursive: true });
-      await fsp.writeFile(this._cacheFile, JSON.stringify(this._snapshot, null, 2), 'utf8');
+      await atomicWriteFile(this._cacheFile, JSON.stringify(this._snapshot, null, 2));
     } catch (err: unknown) {
       console.warn('[claudePlanUsage] Failed to persist cache:', (err as Error).message);
     }
