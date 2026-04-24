@@ -678,7 +678,15 @@ interface KbSynthesisState {
   connectionCount: number;
   needsSynthesisCount: number;
   godNodes: string[];
-  dreamProgress: { phase: string; done: number; total: number } | null;
+  dreamProgress: {
+    phase: string;
+    done: number;
+    total: number;
+    /** ms epoch when the dream run first entered `running` status. */
+    startedAt?: number;
+    /** ms epoch when the current phase began (updated on phase transition only). */
+    phaseStartedAt?: number;
+  } | null;
   reflectionCount: number;
   staleReflectionCount: number;
   topics: KbSynthesisTopicSummary[];
@@ -771,7 +779,7 @@ interface KbStateUpdateEvent {
      */
     digestProgress?: KbDigestProgress | null;
     digestion?: { active: boolean; entriesCreated: number };
-    dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'; done: number; total: number };
+    dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'; done: number; total: number; startedAt?: number; phaseStartedAt?: number };
     stopping?: boolean;
     substep?: { rawId: string; text: string };
   };

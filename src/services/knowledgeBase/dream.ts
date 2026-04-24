@@ -420,6 +420,10 @@ export class KbDreamService {
   private readonly running = new Set<string>();
   /** Cooperative stop flags; checked between batches/phases. */
   private readonly stopRequested = new Set<string>();
+  /** Wall-clock ms when the current dream run started (persisted into dream_progress). */
+  private readonly dreamStartedAt = new Map<string, number>();
+  /** Current phase + ms stamp, reset whenever phase changes within a run. */
+  private readonly dreamPhaseStartedAt = new Map<string, { phase: string; startedAt: number }>();
 
   constructor(opts: KbDreamOptions) {
     this.chatService = opts.chatService;
@@ -494,6 +498,8 @@ export class KbDreamService {
     const result: DreamResult = { mode, processedEntries: 0, skippedBatches: 0, errors: [] };
 
     try {
+      this.dreamStartedAt.set(hash, Date.now());
+      this.dreamPhaseStartedAt.delete(hash);
       db.setSynthesisMeta('status', 'running');
       db.setSynthesisMeta('last_run_error', '');
       this._emitSynthesisChange(hash);
@@ -623,6 +629,8 @@ export class KbDreamService {
     } finally {
       this.running.delete(hash);
       this.stopRequested.delete(hash);
+      this.dreamStartedAt.delete(hash);
+      this.dreamPhaseStartedAt.delete(hash);
       this.kbSearchMcp.revokeKbSearchSession(hash);
       db.setSynthesisMeta('dream_progress', '');
       this._emitSynthesisChange(hash);
@@ -1323,16 +1331,23 @@ export class KbDreamService {
     total: number,
     hash: string,
   ): void {
+    const startedAt = this.dreamStartedAt.get(hash);
+    const priorPhase = this.dreamPhaseStartedAt.get(hash);
+    if (!priorPhase || priorPhase.phase !== phase) {
+      this.dreamPhaseStartedAt.set(hash, { phase, startedAt: Date.now() });
+    }
+    const phaseStartedAt = this.dreamPhaseStartedAt.get(hash)?.startedAt;
+    const payload = { phase, done, total, startedAt, phaseStartedAt };
     // Persist progress so the REST endpoint can return it (WS may not be
     // connected when the KB Browser is open without an active chat stream).
     const db = this.chatService.getKbDb(hash);
     if (db) {
-      db.setSynthesisMeta('dream_progress', JSON.stringify({ phase, done, total }));
+      db.setSynthesisMeta('dream_progress', JSON.stringify(payload));
     }
     this.emit?.(hash, {
       type: 'kb_state_update',
       updatedAt: new Date().toISOString(),
-      changed: { synthesis: true, dreamProgress: { phase, done, total } },
+      changed: { synthesis: true, dreamProgress: payload },
     });
   }
 
