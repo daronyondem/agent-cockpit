@@ -1698,6 +1698,16 @@ body{
   display: inline-flex; align-items: center; justify-content: center;
 }
 .att-x:hover{ background: var(--surface); color: var(--text); }
+.att-dissolve{
+  position: absolute; top: 5px; right: 26px;
+  width: 18px; height: 18px; border-radius: 4px;
+  border: 0; background: transparent;
+  color: var(--text-3); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.att-dissolve:hover{ background: var(--surface); color: var(--accent); }
+.att-card.has-dissolve{ padding-right: 46px; }
+.att-card.att-image.has-dissolve{ padding-right: 44px; }
 .att-upload-ring{
   position: absolute; inset: 0;
   background: rgba(0,0,0,.35);
