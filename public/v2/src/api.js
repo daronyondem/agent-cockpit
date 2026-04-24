@@ -50,6 +50,19 @@
     state.csrfToken = body.csrfToken;
   }
 
+  /* Returns the logged-in user's display name and identity provider. Used by
+     the sidebar footer to render the provider's logo + name. Local-only dev
+     sessions may return null fields — the caller renders a neutral fallback. */
+  async function getMe(){
+    const res = await fetch(apiUrl('me'), { credentials: 'same-origin' });
+    if (res.status === 401) {
+      if (state.onSessionExpired) state.onSessionExpired();
+      throw new Error('Session expired');
+    }
+    if (!res.ok) throw new Error(`/api/me failed (${res.status})`);
+    return res.json();
+  }
+
   async function chatFetch(path, opts){
     opts = opts || {};
     if (!state.csrfToken) await fetchCsrfToken();
@@ -563,6 +576,7 @@
     chatUrl,
     chatWsUrl,
     fetch: chatFetch,
+    getMe,
     listConversations,
     getActiveStreams,
     createConversation,

@@ -4,7 +4,7 @@ import express from 'express';
 import session from 'express-session';
 import FileStoreFactory from 'session-file-store';
 import config from './src/config';
-import { setupAuth, requireAuth } from './src/middleware/auth';
+import { setupAuth, requireAuth, meHandler } from './src/middleware/auth';
 import { ensureCsrfToken } from './src/middleware/csrf';
 import { applySecurity } from './src/middleware/security';
 import { createChatRouter } from './src/routes/chat';
@@ -64,6 +64,13 @@ app.use((req: Request, _res: Response, next: NextFunction) => {
   next();
 });
 
+// Public brand asset — served without auth so /auth/login can render the
+// Agent Cockpit logo. One targeted route instead of a blanket public-asset
+// mount, so the rest of public/ stays behind requireAuth.
+app.get('/logo-full-no-text.svg', (_req: Request, res: Response): void => {
+  res.sendFile(path.join(__dirname, 'public', 'logo-full-no-text.svg'));
+});
+
 setupAuth(app, config);
 
 app.use(requireAuth);
@@ -74,6 +81,8 @@ app.use(express.json());
 app.get('/api/csrf-token', (req: Request, res: Response) => {
   res.json({ csrfToken: req.session.csrfToken });
 });
+
+app.get('/api/me', meHandler);
 
 const backendRegistry = new BackendRegistry();
 backendRegistry.register(new ClaudeCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));

@@ -1,7 +1,7 @@
 import express from 'express';
 import session from 'express-session';
 import http from 'http';
-import { requireAuth, setupAuth } from '../src/middleware/auth';
+import { requireAuth, setupAuth, meHandler } from '../src/middleware/auth';
 import type { AppConfig } from '../src/types';
 
 // ── Test helpers ────────────────────────────────────────────────────────────
@@ -126,13 +126,13 @@ function buildAuthApp(configOverrides: Partial<AppConfig> = {}): express.Express
 }
 
 describe('setupAuth — /auth/login', () => {
-  test('returns 200 with HTML containing "Sign In"', async () => {
+  test('returns 200 with the editorial login markup', async () => {
     const app = buildAuthApp();
     await withServer(app, async (server) => {
       const res = await makeRequest(server, 'GET', '/auth/login', 'example.com');
       expect(res.status).toBe(200);
       expect(res.headers['content-type']).toMatch(/text\/html/);
-      expect(res.body).toContain('Sign In');
+      expect(res.body).toContain('Sign in to take the controls.');
     });
   });
 
@@ -140,7 +140,7 @@ describe('setupAuth — /auth/login', () => {
     const app = buildAuthApp();
     await withServer(app, async (server) => {
       const res = await makeRequest(server, 'GET', '/auth/login', 'example.com');
-      expect(res.body).toContain('Sign in with Google');
+      expect(res.body).toContain('Continue with Google');
       expect(res.body).toContain('href="/auth/google"');
     });
   });
@@ -153,7 +153,7 @@ describe('setupAuth — /auth/login', () => {
     });
     await withServer(app, async (server) => {
       const res = await makeRequest(server, 'GET', '/auth/login', 'example.com');
-      expect(res.body).toContain('Sign in with GitHub');
+      expect(res.body).toContain('Continue with GitHub');
       expect(res.body).toContain('href="/auth/github"');
     });
   });
@@ -162,7 +162,7 @@ describe('setupAuth — /auth/login', () => {
     const app = buildAuthApp();
     await withServer(app, async (server) => {
       const res = await makeRequest(server, 'GET', '/auth/login', 'example.com');
-      expect(res.body).not.toContain('Sign in with GitHub');
+      expect(res.body).not.toContain('Continue with GitHub');
       expect(res.body).not.toContain('href="/auth/github"');
     });
   });
@@ -290,6 +290,60 @@ describe('setupAuth — /auth/logout', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('meHandler — /api/me', () => {
+  function buildMeApp(authenticated: boolean, user: unknown): express.Express {
+    const app = express();
+    app.use((req, _res, next) => {
+      (req as unknown as { isAuthenticated: () => boolean }).isAuthenticated = () => authenticated;
+      (req as unknown as { user: unknown }).user = user;
+      next();
+    });
+    app.use(requireAuth);
+    app.get('/api/me', meHandler);
+    return app;
+  }
+
+  test('unauthenticated non-local request returns 401', async () => {
+    const app = buildMeApp(false, undefined);
+    await withServer(app, async (server) => {
+      const res = await makeRequest(server, 'GET', '/api/me', 'example.com');
+      expect(res.status).toBe(401);
+      expect(JSON.parse(res.body)).toEqual({ error: 'Not authenticated' });
+    });
+  });
+
+  test('authenticated request returns displayName, email, and provider', async () => {
+    const app = buildMeApp(true, { displayName: 'Daron Yondem', email: 'daron@example.com', provider: 'google' });
+    await withServer(app, async (server) => {
+      const res = await makeRequest(server, 'GET', '/api/me', 'example.com');
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({
+        displayName: 'Daron Yondem',
+        email: 'daron@example.com',
+        provider: 'google',
+      });
+    });
+  });
+
+  test('authenticated GitHub user returns provider "github"', async () => {
+    const app = buildMeApp(true, { displayName: 'octocat', email: 'octocat@github.com', provider: 'github' });
+    await withServer(app, async (server) => {
+      const res = await makeRequest(server, 'GET', '/api/me', 'example.com');
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body).provider).toBe('github');
+    });
+  });
+
+  test('localhost bypass with no user returns null fields', async () => {
+    const app = buildMeApp(false, undefined);
+    await withServer(app, async (server) => {
+      const res = await makeRequest(server, 'GET', '/api/me', 'localhost');
+      expect(res.status).toBe(200);
+      expect(JSON.parse(res.body)).toEqual({ displayName: null, email: null, provider: null });
+    });
   });
 });
 
