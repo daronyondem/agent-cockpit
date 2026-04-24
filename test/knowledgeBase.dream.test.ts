@@ -22,6 +22,7 @@ jest.mock('../src/services/knowledgeBase/dreamOps', () => ({
   applyOperations: jest.fn().mockReturnValue([]),
 }));
 
+import fs from 'fs';
 import {
   extractAffectedTopicIds,
   parseVerificationOutput,
@@ -29,9 +30,11 @@ import {
   parseReflectionOutput,
   identifyTopicClusters,
   buildReflectionPrompt,
+  hasParseFailure,
   KbDreamService,
 } from '../src/services/knowledgeBase/dream';
 import type { DreamOperation } from '../src/services/knowledgeBase/dreamOps';
+import * as dreamOpsMod from '../src/services/knowledgeBase/dreamOps';
 
 // ── extractAffectedTopicIds ───────────────────────────────────────────────
 
@@ -886,5 +889,128 @@ describe('KbDreamService', () => {
     expect(r2.stopped).toBeUndefined();
     expect(r2.processedEntries).toBe(1);
     expect(mockDb.clearNeedsSynthesis).toHaveBeenLastCalledWith(['e3']);
+  });
+
+  // ── Parse-failure retry + debug logging ───────────────────────────────
+
+  test('retries CLI once when parser reports a JSON parse failure', async () => {
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
+    mockDb.listTopicSummaries.mockReturnValue([]);
+    mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue(undefined);
+
+    // First parse returns a parse-failure warning; second parse succeeds.
+    (dreamOpsMod.parseDreamOutput as jest.Mock)
+      .mockReturnValueOnce({ operations: [], warnings: ['JSON parse error at pos 42'] })
+      .mockReturnValueOnce({ operations: [], warnings: [] });
+
+    mockAdapter.runOneShot.mockResolvedValue('{"broken": ');
+
+    const result = await service.dream('ws-hash');
+
+    // CLI invoked twice (retry) and the entry was processed on the second attempt.
+    expect(mockAdapter.runOneShot).toHaveBeenCalledTimes(2);
+    expect(result.processedEntries).toBe(1);
+    expect(mockDb.clearNeedsSynthesis).toHaveBeenCalledWith(['entry-1']);
+  });
+
+  test('writes parse-failure debug log when both attempts fail to parse', async () => {
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
+    mockDb.listTopicSummaries.mockReturnValue([]);
+    mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue(undefined);
+    mockChatService.getKbKnowledgeDir.mockReturnValue('/tmp/kb/knowledge');
+
+    (dreamOpsMod.parseDreamOutput as jest.Mock)
+      .mockReturnValueOnce({ operations: [], warnings: ['JSON parse error: foo'] })
+      .mockReturnValueOnce({ operations: [], warnings: ['No JSON object found in output.'] });
+
+    mockAdapter.runOneShot
+      .mockResolvedValueOnce('first garbled output')
+      .mockResolvedValueOnce('second garbled output');
+
+    const mkdirSpy = jest.spyOn(fs, 'mkdirSync').mockImplementation(() => undefined);
+    const writeSpy = jest.spyOn(fs, 'writeFileSync').mockImplementation(() => undefined);
+
+    try {
+      await service.dream('ws-hash');
+
+      expect(mockAdapter.runOneShot).toHaveBeenCalledTimes(2);
+      expect(mkdirSpy).toHaveBeenCalledWith(
+        expect.stringContaining('_dream_debug'),
+        expect.objectContaining({ recursive: true }),
+      );
+      expect(writeSpy).toHaveBeenCalledTimes(1);
+      const [filepath, contents] = writeSpy.mock.calls[0] as [string, string, string];
+      expect(filepath).toMatch(/_dream_debug\/parse-failure-cold-start-.*\.txt$/);
+      expect(contents).toContain('first garbled output');
+      expect(contents).toContain('second garbled output');
+      expect(contents).toContain('ATTEMPT BOUNDARY');
+    } finally {
+      mkdirSpy.mockRestore();
+      writeSpy.mockRestore();
+    }
+  });
+
+  test('does not retry CLI when first attempt parses cleanly', async () => {
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
+    mockDb.listTopicSummaries.mockReturnValue([]);
+    mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue(undefined);
+
+    // Default mock returns { operations: [], warnings: [] } — no parse failure.
+    mockAdapter.runOneShot.mockResolvedValue('{"operations":[]}');
+
+    await service.dream('ws-hash');
+
+    expect(mockAdapter.runOneShot).toHaveBeenCalledTimes(1);
+  });
+
+  test('does not retry when CLI returns null on the first attempt', async () => {
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
+    mockDb.listTopicSummaries.mockReturnValue([]);
+    mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue(undefined);
+
+    mockAdapter.runOneShot.mockResolvedValue(null);
+
+    const result = await service.dream('ws-hash');
+
+    // No retry on null output — the caller preserves the existing skip behavior.
+    expect(mockAdapter.runOneShot).toHaveBeenCalledTimes(1);
+    // Entry is NOT marked processed when CLI returned nothing.
+    expect(result.processedEntries).toBe(0);
+    expect(mockDb.clearNeedsSynthesis).not.toHaveBeenCalledWith(['entry-1']);
+  });
+});
+
+// ── hasParseFailure ───────────────────────────────────────────────────────
+
+describe('hasParseFailure', () => {
+  test('returns false for empty warnings array', () => {
+    expect(hasParseFailure([])).toBe(false);
+  });
+
+  test('returns true when a warning contains "JSON parse error"', () => {
+    expect(hasParseFailure(['JSON parse error at position 42'])).toBe(true);
+  });
+
+  test('returns true when a warning contains "no JSON found"', () => {
+    expect(hasParseFailure(['No JSON found in output.'])).toBe(true);
+  });
+
+  test('returns true when a warning contains "no JSON object found"', () => {
+    expect(hasParseFailure(['No JSON object found in output.'])).toBe(true);
+  });
+
+  test('is case-insensitive', () => {
+    expect(hasParseFailure(['json parse error: bad token'])).toBe(true);
+    expect(hasParseFailure(['NO JSON FOUND'])).toBe(true);
+  });
+
+  test('returns false for structural/schema warnings (which a retry would not fix)', () => {
+    expect(hasParseFailure(['missing "verified" array'])).toBe(false);
+    expect(hasParseFailure(['op #3: unknown op "foo"'])).toBe(false);
+    expect(hasParseFailure(['reflection #1 has no valid cited_entry_ids'])).toBe(false);
+  });
+
+  test('returns true if any warning is a parse failure (mixed set)', () => {
+    expect(hasParseFailure(['missing "reflections" array', 'JSON parse error: boom'])).toBe(true);
   });
 });

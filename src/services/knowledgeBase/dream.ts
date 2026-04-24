@@ -746,10 +746,11 @@ export class KbDreamService {
             summary: be.summary,
           }));
           const prompt = buildVerificationPrompt(entries, [...allCandidates.values()]);
-          const output = await this._runCliWithRetry(adapter, prompt, baseRunOptions);
+          const parsed = await this._runCliAndParseWithRetry(
+            adapter, prompt, baseRunOptions, parseVerificationOutput, hash, 'verification',
+          );
 
-          if (output) {
-            const parsed = parseVerificationOutput(output);
+          if (parsed) {
             for (const v of parsed.verified) {
               const existing = synthesisGroups.get(v.topic_id) ?? [];
               existing.push(v.entry_id);
@@ -789,7 +790,9 @@ export class KbDreamService {
       if (this._checkStop(hash, result)) return;
       const promises = batchGroup.map(async (batch) => {
         const prompt = buildRetrievalSynthesisPrompt(batch.entries, batch.topicIds);
-        return this._runCliWithRetry(adapter, prompt, runOptionsWithMcp);
+        return this._runCliAndParseWithRetry(
+          adapter, prompt, runOptionsWithMcp, parseDreamOutput, hash, 'synthesis',
+        );
       });
 
       const results = await Promise.allSettled(promises);
@@ -798,7 +801,7 @@ export class KbDreamService {
         this._emitDreamProgress('synthesis', synthDone, totalSynthBatches, hash);
         const r = results[i];
         if (r.status === 'fulfilled' && r.value) {
-          const { operations, warnings } = parseDreamOutput(r.value);
+          const { operations, warnings } = r.value;
           if (warnings.length > 0) result.errors.push(...warnings);
           const applyWarnings = applyOperations(db, operations);
           if (applyWarnings.length > 0) result.errors.push(...applyWarnings);
@@ -824,9 +827,11 @@ export class KbDreamService {
         if (this._checkStop(hash, result)) return;
         try {
           const prompt = buildNewTopicCreationPrompt(batch, true);
-          const output = await this._runCliWithRetry(adapter, prompt, runOptionsWithMcp);
-          if (output) {
-            const { operations, warnings } = parseDreamOutput(output);
+          const parsed = await this._runCliAndParseWithRetry(
+            adapter, prompt, runOptionsWithMcp, parseDreamOutput, hash, 'new-topics',
+          );
+          if (parsed) {
+            const { operations, warnings } = parsed;
             if (warnings.length > 0) result.errors.push(...warnings);
             const applyWarnings = applyOperations(db, operations);
             if (applyWarnings.length > 0) result.errors.push(...applyWarnings);
@@ -881,9 +886,11 @@ export class KbDreamService {
         const hasTopics = db.listTopicSummaries().length > 0;
         const useOptions = hasTopics ? runOptionsWithMcp : baseRunOptions;
         const prompt = buildNewTopicCreationPrompt(batch, hasTopics);
-        const output = await this._runCliWithRetry(adapter, prompt, useOptions);
-        if (output) {
-          const { operations, warnings } = parseDreamOutput(output);
+        const parsed = await this._runCliAndParseWithRetry(
+          adapter, prompt, useOptions, parseDreamOutput, hash, 'cold-start',
+        );
+        if (parsed) {
+          const { operations, warnings } = parsed;
           if (warnings.length > 0) result.errors.push(...warnings);
           const applyWarnings = applyOperations(db, operations);
           if (applyWarnings.length > 0) result.errors.push(...applyWarnings);
@@ -1053,10 +1060,12 @@ export class KbDreamService {
         }
 
         const prompt = buildConnectionDiscoveryPrompt(promptCandidates);
-        const output = await this._runCliWithRetry(adapter, prompt, runOptionsWithMcp);
+        const parsed = await this._runCliAndParseWithRetry(
+          adapter, prompt, runOptionsWithMcp, parseDiscoveryOutput, hash, 'discovery',
+        );
 
-        if (output) {
-          const { accepted, warnings } = parseDiscoveryOutput(output);
+        if (parsed) {
+          const { accepted, warnings } = parsed;
           if (warnings.length > 0) result.errors.push(...warnings);
           for (const conn of accepted) {
             db.upsertConnection({
@@ -1180,10 +1189,12 @@ export class KbDreamService {
         }
 
         const prompt = buildReflectionPrompt(clusterTopics, clusterConnections, [...clusterEntries.values()]);
-        const output = await this._runCliWithRetry(adapter, prompt, runOptionsWithMcp);
+        const parsed = await this._runCliAndParseWithRetry(
+          adapter, prompt, runOptionsWithMcp, parseReflectionOutput, hash, 'reflection',
+        );
 
-        if (output) {
-          const { reflections, warnings } = parseReflectionOutput(output);
+        if (parsed) {
+          const { reflections, warnings } = parsed;
           if (warnings.length > 0) result.errors.push(...warnings);
 
           const now = new Date().toISOString();
@@ -1229,6 +1240,58 @@ export class KbDreamService {
       } catch (retryErr) {
         throw retryErr;
       }
+    }
+  }
+
+  /**
+   * Run the CLI, parse the output, and retry once if the parser reports a
+   * JSON extraction or parse failure. On persistent failure, write both raw
+   * outputs to `<kb-knowledge-dir>/_dream_debug/` for post-mortem diagnosis.
+   * Returns `null` if the CLI itself produced no output on the first attempt
+   * (callers preserve their existing empty-output handling).
+   */
+  private async _runCliAndParseWithRetry<T extends { warnings: string[] }>(
+    adapter: BaseBackendAdapter,
+    prompt: string,
+    options: RunOneShotOptions,
+    parse: (raw: string) => T,
+    hash: string,
+    phase: string,
+  ): Promise<T | null> {
+    const first = await this._runCliWithRetry(adapter, prompt, options);
+    if (!first) return null;
+    const parsedFirst = parse(first);
+    if (!hasParseFailure(parsedFirst.warnings)) return parsedFirst;
+
+    // Parse failed — one more CLI attempt.
+    const second = await this._runCliWithRetry(adapter, prompt, options);
+    if (!second) {
+      this._writeParseFailureLog(hash, phase, [first]);
+      return parsedFirst;
+    }
+    const parsedSecond = parse(second);
+    if (hasParseFailure(parsedSecond.warnings)) {
+      this._writeParseFailureLog(hash, phase, [first, second]);
+    }
+    return parsedSecond;
+  }
+
+  /**
+   * Best-effort: write raw CLI outputs that failed to parse to a debug file
+   * under the workspace KB's `_dream_debug/` directory. Never throws — a
+   * debug logger must not break the dream pipeline.
+   */
+  private _writeParseFailureLog(hash: string, phase: string, attempts: string[]): void {
+    try {
+      const dir = path.join(this.chatService.getKbKnowledgeDir(hash), '_dream_debug');
+      fs.mkdirSync(dir, { recursive: true });
+      const ts = new Date().toISOString().replace(/[:.]/g, '-');
+      const filepath = path.join(dir, `parse-failure-${phase}-${ts}.txt`);
+      const header = `Parse failure in phase "${phase}" at ${new Date().toISOString()}\nAttempts: ${attempts.length}\n`;
+      const separator = `\n\n${'='.repeat(32)} ATTEMPT BOUNDARY ${'='.repeat(32)}\n\n`;
+      fs.writeFileSync(filepath, header + separator + attempts.join(separator), 'utf8');
+    } catch {
+      // Swallow — debug logging is best-effort.
     }
   }
 
@@ -1500,6 +1563,17 @@ function extractJsonFromOutput(raw: string): string | null {
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
+
+/**
+ * Return true when the supplied warnings indicate the raw CLI output could
+ * not be extracted or parsed as JSON. Structural warnings (e.g. "missing
+ * verified array", invalid op fields) are NOT parse failures — they mean
+ * the JSON parsed cleanly but its schema was off, which a retry would not
+ * meaningfully improve.
+ */
+export function hasParseFailure(warnings: string[]): boolean {
+  return warnings.some((w) => /json parse error|no json (object )?found/i.test(w));
+}
 
 /** Extract topic IDs affected by a set of operations. */
 export function extractAffectedTopicIds(operations: DreamOperation[]): string[] {
