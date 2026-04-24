@@ -530,6 +530,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
   const toast = useToasts();
   const feedRef = React.useRef(null);
   const fileInputRef = React.useRef(null);
+  const composerTextRef = React.useRef(null);
   const dragCounterRef = React.useRef(0);
   const [dragOver, setDragOver] = React.useState(false);
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
@@ -730,6 +731,47 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
       const textFile = new File([pastedText], 'pasted-text-' + ts + '.txt', { type: 'text/plain' });
       StreamStore.addAttachments(convId, [textFile]);
     }
+  }
+
+  /* Reverse a paste-to-attachment: read the synthesized .txt blob back, splice
+     it into the composer at the current cursor, then drop the attachment. Only
+     wired for fresh pasted-text-*.txt entries that still have a Blob in memory
+     (rehydrated entries lose their Blob, so dissolve isn't offered there).
+     Confirm before inserting >50KB so a huge dump doesn't surprise the user. */
+  async function dissolveAttachment(entry){
+    if (!entry || !(entry.file instanceof Blob)) return;
+    let text = '';
+    try { text = await entry.file.text(); } catch { return; }
+    if (text.length > 50000) {
+      const ok = await dialog.confirm({
+        title: 'Inline this text into the message?',
+        body: text.length.toLocaleString() + ' characters will be inserted into the composer.',
+        confirmLabel: 'Inline',
+        cancelLabel: 'Cancel',
+      });
+      if (!ok) return;
+    }
+    const ta = composerTextRef.current;
+    const current = (ta ? ta.value : (StreamStore.getState(convId) || {}).input) || '';
+    let nextValue;
+    let caret;
+    if (ta && typeof ta.selectionStart === 'number') {
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      nextValue = current.slice(0, start) + text + current.slice(end);
+      caret = start + text.length;
+    } else {
+      nextValue = current + text;
+      caret = nextValue.length;
+    }
+    StreamStore.setInput(convId, nextValue);
+    StreamStore.removeAttachment(convId, entry.id);
+    requestAnimationFrame(() => {
+      const t = composerTextRef.current;
+      if (!t) return;
+      t.focus();
+      try { t.setSelectionRange(caret, caret); } catch {}
+    });
   }
 
   function doSend(){
@@ -980,6 +1022,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
         <div className="composer-inner">
           <div className="composer-box">
             <textarea
+              ref={composerTextRef}
               rows={3}
               placeholder={
                 awaiting
@@ -1017,6 +1060,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
                 convId={convId}
                 attachments={pendingAttachments}
                 onRemove={(id) => StreamStore.removeAttachment(convId, id)}
+                onDissolve={dissolveAttachment}
                 onAdd={openFilePicker}
               />
             ) : null}
@@ -2097,7 +2141,7 @@ function attStyle(kind){
 /* Typed attachment chip. size='md' renders as a tray card (icon + name +
    meta + × button; images get a thumbnail and a corner kind badge). size='sm'
    renders as a compact pill used in queue rows and sent messages. */
-function AttChip({ att, size = 'md', onRemove, thumbUrl, uploading, progress }){
+function AttChip({ att, size = 'md', onRemove, onDissolve, thumbUrl, uploading, progress }){
   const s = attStyle(att.kind);
   const isImage = att.kind === 'image';
   if (size === 'sm') {
@@ -2112,9 +2156,18 @@ function AttChip({ att, size = 'md', onRemove, thumbUrl, uploading, progress }){
       </span>
     );
   }
+  const dissolveBtn = onDissolve ? (
+    <button
+      type="button"
+      className="att-dissolve"
+      onClick={onDissolve}
+      title="Inline text back into message"
+      aria-label="Inline text back into message"
+    >{Ico.up(11)}</button>
+  ) : null;
   if (isImage) {
     return (
-      <div className={'att-card att-image' + (uploading ? ' uploading' : '')}>
+      <div className={'att-card att-image' + (uploading ? ' uploading' : '') + (onDissolve ? ' has-dissolve' : '')}>
         <div
           className="att-thumb"
           style={thumbUrl
@@ -2128,6 +2181,7 @@ function AttChip({ att, size = 'md', onRemove, thumbUrl, uploading, progress }){
           <div className="att-name">{att.name}</div>
           <div className="att-sub">{att.meta || ''}</div>
         </div>
+        {dissolveBtn}
         {onRemove ? (
           <button className="att-x" onClick={onRemove} title="Remove" aria-label="Remove">{Ico.x(11)}</button>
         ) : null}
@@ -2135,7 +2189,7 @@ function AttChip({ att, size = 'md', onRemove, thumbUrl, uploading, progress }){
     );
   }
   return (
-    <div className={'att-card' + (uploading ? ' uploading' : '')}>
+    <div className={'att-card' + (uploading ? ' uploading' : '') + (onDissolve ? ' has-dissolve' : '')}>
       <div className="att-icon" style={{background: s.bg, color: s.fg}}>
         <span className="att-label">{s.label}</span>
       </div>
@@ -2146,6 +2200,7 @@ function AttChip({ att, size = 'md', onRemove, thumbUrl, uploading, progress }){
           <div className="att-progress"><i style={{width: (progress || 0) + '%'}}/></div>
         ) : null}
       </div>
+      {dissolveBtn}
       {onRemove ? (
         <button className="att-x" onClick={onRemove} title="Remove" aria-label="Remove">{Ico.x(11)}</button>
       ) : null}
@@ -2157,11 +2212,17 @@ function AttChip({ att, size = 'md', onRemove, thumbUrl, uploading, progress }){
    plus a dashed "Add" tile at the end. Image previews use a blob: URL
    created from the in-memory File so the thumbnail appears immediately —
    the URL is revoked when the entry unmounts. */
-function AttTray({ convId, attachments, onRemove, onAdd }){
+function AttTray({ convId, attachments, onRemove, onDissolve, onAdd }){
   return (
     <div className="att-tray">
       {attachments.map(entry => (
-        <PendingAttChip key={entry.id} convId={convId} entry={entry} onRemove={() => onRemove(entry.id)}/>
+        <PendingAttChip
+          key={entry.id}
+          convId={convId}
+          entry={entry}
+          onRemove={() => onRemove(entry.id)}
+          onDissolve={onDissolve ? () => onDissolve(entry) : null}
+        />
       ))}
       <button type="button" className="att-add" onClick={onAdd} title="Add attachment" aria-label="Add attachment">
         <span className="att-add-icon">{Ico.plus(14)}</span>
@@ -2176,12 +2237,20 @@ function AttTray({ convId, attachments, onRemove, onAdd }){
    fresh uploads; for entries rehydrated from localStorage (no Blob in
    memory), we fall back to the server-side file URL so the thumb still
    renders after a page reload. */
-function PendingAttChip({ convId, entry, onRemove }){
+function PendingAttChip({ convId, entry, onRemove, onDissolve }){
   const { file, status, progress, error, result } = entry;
   const kind = result ? result.kind : kindFromFile(file);
   const isImage = kind === 'image';
   const restored = !!entry.restored;
   const restoredName = restored ? ((result && result.name) || (file && file.name) || '') : '';
+  /* Dissolve is only meaningful when we still have the original Blob in
+     memory AND it's a paste-synthesized text file. Restored entries (loaded
+     from localStorage on reload) lost the Blob, so the original text isn't
+     recoverable client-side and we don't offer dissolve. */
+  const dissolvable = !restored
+    && file instanceof Blob
+    && file.name && file.name.startsWith('pasted-text-')
+    && typeof onDissolve === 'function';
   const [thumb, setThumb] = React.useState(null);
   React.useEffect(() => {
     if (!isImage) return;
@@ -2208,6 +2277,7 @@ function PendingAttChip({ convId, entry, onRemove }){
         att={att}
         size="md"
         onRemove={onRemove}
+        onDissolve={dissolvable ? onDissolve : null}
         thumbUrl={thumb}
         uploading={status === 'uploading'}
         progress={progress}
@@ -2350,11 +2420,17 @@ function QueueRow({ item, position, first, last, onRemove, onMoveUp, onMoveDown,
 function QueueRowExpanded({ convId, item, position, index, first, onClose, onRemove, onMoveUp }){
   const originalText = item.content || '';
   const originalAtts = Array.isArray(item.attachments) ? item.attachments : [];
+  const dialog = useDialog();
   const [text, setText] = React.useState(originalText);
   const [atts, setAtts] = React.useState(originalAtts);
   const [uploading, setUploading] = React.useState(false);
   const [error, setError] = React.useState('');
   const fileRef = React.useRef(null);
+  const textRef = React.useRef(null);
+  /* attName -> original pasted text. Only populated by this component's
+     paste-to-attachment flow; lasts until the editor closes (state lives
+     with the component). Lookup is what gates the dissolve button. */
+  const dissolveMapRef = React.useRef(new Map());
   const dirty = text !== originalText || attsChanged(atts, originalAtts);
   async function save(){
     try {
@@ -2364,11 +2440,13 @@ function QueueRowExpanded({ convId, item, position, index, first, onClose, onRem
       setError(err.message || 'Failed to save');
     }
   }
-  function removeAtt(ai){ setAtts(atts.filter((_, i) => i !== ai)); }
+  function removeAtt(ai){
+    const target = atts[ai];
+    if (target && target.name) dissolveMapRef.current.delete(target.name);
+    setAtts(atts.filter((_, i) => i !== ai));
+  }
   function openFilePicker(){ if (fileRef.current) fileRef.current.click(); }
-  async function onPickAdd(e){
-    const files = Array.from(e.target.files || []);
-    e.target.value = '';
+  async function uploadFiles(files, originalsByName){
     if (!files.length) return;
     setUploading(true);
     setError('');
@@ -2376,7 +2454,12 @@ function QueueRowExpanded({ convId, item, position, index, first, onClose, onRem
       const uploaded = [];
       for (const file of files) {
         const result = await AgentApi.conv.uploadFile(convId, file);
-        if (result) uploaded.push(result);
+        if (result) {
+          uploaded.push(result);
+          if (originalsByName && originalsByName.has(file.name) && result.name) {
+            dissolveMapRef.current.set(result.name, originalsByName.get(file.name));
+          }
+        }
       }
       setAtts(cur => [...cur, ...uploaded]);
     } catch (err) {
@@ -2384,6 +2467,91 @@ function QueueRowExpanded({ convId, item, position, index, first, onClose, onRem
     } finally {
       setUploading(false);
     }
+  }
+  async function onPickAdd(e){
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    await uploadFiles(files);
+  }
+  /* Mirrors composer onPaste: ≥1000-char text → synthesized pasted-text-*.txt
+     attachment uploaded into the conv's artifacts dir. Image-file pastes also
+     route through the same upload path so behavior matches the main composer.
+     Original pasted text is stashed in dissolveMapRef so the chip can offer
+     a dissolve button (only available within this edit session). */
+  function onPaste(e){
+    const items = (e.clipboardData && e.clipboardData.items) || null;
+    if (items) {
+      const files = [];
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) {
+            const ts = Date.now();
+            const ext = file.name && file.name.includes('.') ? '.' + file.name.split('.').pop() : '.png';
+            const baseName = file.name ? file.name.replace(/\.[^.]+$/, '') : 'pasted-image';
+            const uniqueName = baseName + '-' + ts + '-' + (files.length + 1) + ext;
+            files.push(new File([file], uniqueName, { type: file.type }));
+          }
+        }
+      }
+      if (files.length) {
+        e.preventDefault();
+        uploadFiles(files);
+        return;
+      }
+    }
+    const pastedText = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+    if (pastedText && pastedText.length >= 1000) {
+      e.preventDefault();
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const ts = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate())
+        + '-' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+      const fname = 'pasted-text-' + ts + '.txt';
+      const textFile = new File([pastedText], fname, { type: 'text/plain' });
+      const originals = new Map();
+      originals.set(fname, pastedText);
+      uploadFiles([textFile], originals);
+    }
+  }
+  async function dissolveAtt(att, ai){
+    const original = att && att.name ? dissolveMapRef.current.get(att.name) : null;
+    if (!original) return;
+    if (original.length > 50000) {
+      const ok = await dialog.confirm({
+        title: 'Inline this text into the message?',
+        body: original.length.toLocaleString() + ' characters will be inserted into the editor.',
+        confirmLabel: 'Inline',
+        cancelLabel: 'Cancel',
+      });
+      if (!ok) return;
+    }
+    const ta = textRef.current;
+    const current = ta ? ta.value : text;
+    let nextValue;
+    let caret;
+    if (ta && typeof ta.selectionStart === 'number') {
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      nextValue = current.slice(0, start) + original + current.slice(end);
+      caret = start + original.length;
+    } else {
+      nextValue = current + original;
+      caret = nextValue.length;
+    }
+    setText(nextValue);
+    removeAtt(ai);
+    /* Dissolve is the "undo the paste" path — the just-uploaded artifact
+       should not linger on disk. Fire-and-forget delete; if it fails the
+       chip is already gone from the queue draft so the next save won't
+       reference it. Mirrors composer's removeAttachment cleanup. */
+    if (att && att.name) AgentApi.conv.deleteUpload(convId, att.name).catch(() => {});
+    requestAnimationFrame(() => {
+      const t = textRef.current;
+      if (!t) return;
+      t.focus();
+      try { t.setSelectionRange(caret, caret); } catch {}
+    });
   }
   return (
     <div className="qexp">
@@ -2394,9 +2562,11 @@ function QueueRowExpanded({ convId, item, position, index, first, onClose, onRem
         <span className="u-mono u-dim" style={{fontSize:10.5}}>editing</span>
       </div>
       <textarea
+        ref={textRef}
         className="qexp-text"
         value={text}
         onChange={(e) => setText(e.target.value)}
+        onPaste={onPaste}
         rows={4}
         autoFocus
       />
@@ -2405,7 +2575,16 @@ function QueueRowExpanded({ convId, item, position, index, first, onClose, onRem
         <>
           <div className="qexp-att-head u-mono">{atts.length} attachment{atts.length === 1 ? '' : 's'}</div>
           <div className="qexp-atts">
-            {atts.map((a, i) => <AttChip key={i} att={a} onRemove={() => removeAtt(i)}/>)}
+            {atts.map((a, i) => (
+              <AttChip
+                key={i}
+                att={a}
+                onRemove={() => removeAtt(i)}
+                onDissolve={a && a.name && dissolveMapRef.current.has(a.name)
+                  ? () => dissolveAtt(a, i)
+                  : null}
+              />
+            ))}
           </div>
         </>
       ) : null}
