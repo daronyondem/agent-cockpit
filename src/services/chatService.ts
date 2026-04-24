@@ -38,6 +38,8 @@ import {
 import { computeDigestProgress } from './knowledgeBase/digest';
 import { KbVectorStore } from './knowledgeBase/vectorStore';
 import type { EmbeddingConfig } from './knowledgeBase/embeddings';
+import { atomicWriteFile } from '../utils/atomicWrite';
+import { KeyedMutex } from '../utils/keyedMutex';
 
 /**
  * Schema version of the `state.json` envelope itself. Bumped only when
@@ -229,6 +231,20 @@ export class ChatService {
   private _kbDbs: Map<string, KbDatabase> = new Map();
   /** Per-workspace PGLite vector store cache. Mirrors `_kbDbs` lifecycle. */
   private _kbVectorStores: Map<string, KbVectorStore> = new Map();
+  /**
+   * Serializes read-modify-write cycles on a workspace `index.json`. All
+   * public methods that mutate the index acquire this lock keyed by workspace
+   * hash, so concurrent mutators neither race on the file (byte-level
+   * corruption) nor lose each other's updates (stale reads).
+   */
+  private _indexLock = new KeyedMutex();
+  /**
+   * Serializes read-modify-write cycles on the shared `usage-ledger.json`
+   * file, which is written from every completed assistant stream across
+   * every conversation.
+   */
+  private _ledgerLock = new KeyedMutex();
+  private static readonly LEDGER_LOCK_KEY = '__usage_ledger__';
 
   constructor(appRoot: string, options: { defaultWorkspace?: string; backendRegistry?: BackendRegistry } = {}) {
     this.baseDir = path.join(appRoot, 'data', 'chat');
@@ -268,7 +284,16 @@ export class ChatService {
     }
     for (const hash of dirs) {
       if (hash.startsWith('.')) continue;
-      const index = await this._readWorkspaceIndex(hash);
+      let index: WorkspaceIndex | null;
+      try {
+        index = await this._readWorkspaceIndex(hash);
+      } catch (err) {
+        // A corrupt index.json must not take the server down on startup.
+        // Log and skip — the affected workspace becomes invisible until the
+        // file is repaired, but every other workspace stays usable.
+        console.error(`[chat] Skipping workspace ${hash} — could not read index.json: ${(err as Error).message}`);
+        continue;
+      }
       if (!index || !index.conversations) continue;
       for (const conv of index.conversations) {
         this._convWorkspaceMap.set(conv.id, hash);
@@ -311,7 +336,7 @@ export class ChatService {
   private async _writeWorkspaceIndex(hash: string, index: WorkspaceIndex): Promise<void> {
     const dir = this._workspaceDir(hash);
     await fsp.mkdir(dir, { recursive: true });
-    await fsp.writeFile(this._workspaceIndexPath(hash), JSON.stringify(index, null, 2), 'utf8');
+    await atomicWriteFile(this._workspaceIndexPath(hash), JSON.stringify(index, null, 2));
   }
 
   private async _readSessionFile(hash: string, convId: string, sessionNumber: number): Promise<SessionFile | null> {
@@ -327,7 +352,7 @@ export class ChatService {
   private async _writeSessionFile(hash: string, convId: string, sessionNumber: number, data: SessionFile): Promise<void> {
     const filePath = this._sessionFilePath(hash, convId, sessionNumber);
     await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    await fsp.writeFile(filePath, JSON.stringify(data, null, 2), 'utf8');
+    await atomicWriteFile(filePath, JSON.stringify(data, null, 2));
   }
 
   private async _getConvFromIndex(convId: string): Promise<ConvLookupResult | null> {
@@ -368,59 +393,61 @@ export class ChatService {
     const workspacePath = workingDir || this._defaultWorkspace;
     const hash = this._workspaceHash(workspacePath);
 
-    let index = await this._readWorkspaceIndex(hash);
-    if (!index) {
-      index = { workspacePath, conversations: [] };
-    }
+    return this._indexLock.run(hash, async () => {
+      let index = await this._readWorkspaceIndex(hash);
+      if (!index) {
+        index = { workspacePath, conversations: [] };
+      }
 
-    const defaultBackend = this._backendRegistry?.getDefault()?.metadata.id || 'claude-code';
-    const resolvedBackend = backend || defaultBackend;
-    const effective = this._effectiveEffort(resolvedBackend, model, effort);
-    const convEntry: ConversationEntry = {
-      id,
-      title: title || 'New Chat',
-      backend: resolvedBackend,
-      model: model || undefined,
-      effort: effective,
-      currentSessionId: sessionId,
-      lastActivity: now,
-      lastMessage: null,
-      sessions: [{
-        number: 1,
+      const defaultBackend = this._backendRegistry?.getDefault()?.metadata.id || 'claude-code';
+      const resolvedBackend = backend || defaultBackend;
+      const effective = this._effectiveEffort(resolvedBackend, model, effort);
+      const convEntry: ConversationEntry = {
+        id,
+        title: title || 'New Chat',
+        backend: resolvedBackend,
+        model: model || undefined,
+        effort: effective,
+        currentSessionId: sessionId,
+        lastActivity: now,
+        lastMessage: null,
+        sessions: [{
+          number: 1,
+          sessionId,
+          summary: null,
+          active: true,
+          messageCount: 0,
+          startedAt: now,
+          endedAt: null,
+        }],
+      };
+
+      index.conversations.push(convEntry);
+      await this._writeWorkspaceIndex(hash, index);
+
+      await this._writeSessionFile(hash, id, 1, {
+        sessionNumber: 1,
         sessionId,
-        summary: null,
-        active: true,
-        messageCount: 0,
         startedAt: now,
         endedAt: null,
-      }],
-    };
+        messages: [],
+      });
 
-    index.conversations.push(convEntry);
-    await this._writeWorkspaceIndex(hash, index);
+      this._convWorkspaceMap.set(id, hash);
 
-    await this._writeSessionFile(hash, id, 1, {
-      sessionNumber: 1,
-      sessionId,
-      startedAt: now,
-      endedAt: null,
-      messages: [],
+      return {
+        id,
+        title: convEntry.title,
+        backend: convEntry.backend,
+        model: convEntry.model,
+        effort: convEntry.effort,
+        workingDir: workspacePath,
+        workspaceHash: hash,
+        currentSessionId: sessionId,
+        sessionNumber: 1,
+        messages: [],
+      };
     });
-
-    this._convWorkspaceMap.set(id, hash);
-
-    return {
-      id,
-      title: convEntry.title,
-      backend: convEntry.backend,
-      model: convEntry.model,
-      effort: convEntry.effort,
-      workingDir: workspacePath,
-      workspaceHash: hash,
-      currentSessionId: sessionId,
-      sessionNumber: 1,
-      messages: [],
-    };
   }
 
   /**
@@ -530,91 +557,113 @@ export class ChatService {
   }
 
   async renameConversation(id: string, newTitle: string): Promise<Conversation | null> {
-    const result = await this._getConvFromIndex(id);
-    if (!result) return null;
-    const { hash, index, convEntry } = result;
-
-    convEntry.title = newTitle;
-    await this._writeWorkspaceIndex(hash, index);
-
+    const hash = this._convWorkspaceMap.get(id);
+    if (!hash) return null;
+    await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(id);
+      if (!result) return;
+      const { index, convEntry } = result;
+      convEntry.title = newTitle;
+      await this._writeWorkspaceIndex(hash, index);
+    });
     return this.getConversation(id);
   }
 
   async archiveConversation(id: string): Promise<boolean> {
-    const result = await this._getConvFromIndex(id);
-    if (!result) return false;
-    const { hash, index, convEntry } = result;
-    convEntry.archived = true;
-    delete convEntry.messageQueue;
-    await this._writeWorkspaceIndex(hash, index);
-    return true;
+    const hash = this._convWorkspaceMap.get(id);
+    if (!hash) return false;
+    return this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(id);
+      if (!result) return false;
+      const { index, convEntry } = result;
+      convEntry.archived = true;
+      delete convEntry.messageQueue;
+      await this._writeWorkspaceIndex(hash, index);
+      return true;
+    });
   }
 
   async restoreConversation(id: string): Promise<boolean> {
-    const result = await this._getConvFromIndex(id);
-    if (!result) return false;
-    const { hash, index, convEntry } = result;
-    delete convEntry.archived;
-    await this._writeWorkspaceIndex(hash, index);
-    return true;
+    const hash = this._convWorkspaceMap.get(id);
+    if (!hash) return false;
+    return this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(id);
+      if (!result) return false;
+      const { index, convEntry } = result;
+      delete convEntry.archived;
+      await this._writeWorkspaceIndex(hash, index);
+      return true;
+    });
   }
 
   async setConversationUnread(id: string, unread: boolean): Promise<boolean> {
-    const result = await this._getConvFromIndex(id);
-    if (!result) return false;
-    const { hash, index, convEntry } = result;
-    if (unread) {
-      if (convEntry.unread === true) return true;
-      convEntry.unread = true;
-    } else {
-      if (!convEntry.unread) return true;
-      delete convEntry.unread;
-    }
-    await this._writeWorkspaceIndex(hash, index);
-    return true;
+    const hash = this._convWorkspaceMap.get(id);
+    if (!hash) return false;
+    return this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(id);
+      if (!result) return false;
+      const { index, convEntry } = result;
+      if (unread) {
+        if (convEntry.unread === true) return true;
+        convEntry.unread = true;
+      } else {
+        if (!convEntry.unread) return true;
+        delete convEntry.unread;
+      }
+      await this._writeWorkspaceIndex(hash, index);
+      return true;
+    });
   }
 
   async deleteConversation(id: string): Promise<boolean> {
-    const result = await this._getConvFromIndex(id);
-    if (!result) return false;
-    const { hash, index } = result;
+    const hash = this._convWorkspaceMap.get(id);
+    if (!hash) return false;
+    return this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(id);
+      if (!result) return false;
+      const { index } = result;
 
-    index.conversations = index.conversations.filter(c => c.id !== id);
-    await this._writeWorkspaceIndex(hash, index);
+      index.conversations = index.conversations.filter(c => c.id !== id);
+      await this._writeWorkspaceIndex(hash, index);
 
-    const convDir = path.join(this._workspaceDir(hash), id);
-    try {
-      await fsp.rm(convDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+      const convDir = path.join(this._workspaceDir(hash), id);
+      try {
+        await fsp.rm(convDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
 
-    const artifactDir = path.join(this.artifactsDir, id);
-    try {
-      await fsp.rm(artifactDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+      const artifactDir = path.join(this.artifactsDir, id);
+      try {
+        await fsp.rm(artifactDir, { recursive: true, force: true });
+      } catch {
+        // Ignore cleanup errors
+      }
 
-    this._convWorkspaceMap.delete(id);
-    return true;
+      this._convWorkspaceMap.delete(id);
+      return true;
+    });
   }
 
   async updateConversationBackend(convId: string, backend: string): Promise<void> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return;
-    const { hash, index, convEntry } = result;
-    const prevBackend = convEntry.backend;
-    convEntry.backend = backend;
-    // contextUsagePercentage is a live snapshot from the backend (Kiro-only
-    // today), not a cumulative value. Clear it on backend switch so a stale
-    // Kiro percentage doesn't bleed into a Claude Code chip (or vice versa).
-    if (prevBackend !== backend) {
-      if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
-      const activeSession = convEntry.sessions.find(s => s.active);
-      if (activeSession?.usage) activeSession.usage.contextUsagePercentage = undefined;
-    }
-    await this._writeWorkspaceIndex(hash, index);
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return;
+    await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return;
+      const { index, convEntry } = result;
+      const prevBackend = convEntry.backend;
+      convEntry.backend = backend;
+      // contextUsagePercentage is a live snapshot from the backend (Kiro-only
+      // today), not a cumulative value. Clear it on backend switch so a stale
+      // Kiro percentage doesn't bleed into a Claude Code chip (or vice versa).
+      if (prevBackend !== backend) {
+        if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
+        const activeSession = convEntry.sessions.find(s => s.active);
+        if (activeSession?.usage) activeSession.usage.contextUsagePercentage = undefined;
+      }
+      await this._writeWorkspaceIndex(hash, index);
+    });
   }
 
   /**
@@ -627,36 +676,48 @@ export class ChatService {
    * the same field.
    */
   async setExternalSessionId(convId: string, externalSessionId: string): Promise<void> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return;
-    const { hash, index, convEntry } = result;
-    const activeSession = convEntry.sessions.find(s => s.active);
-    if (!activeSession) return;
-    if (activeSession.externalSessionId === externalSessionId) return;
-    activeSession.externalSessionId = externalSessionId;
-    await this._writeWorkspaceIndex(hash, index);
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return;
+    await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return;
+      const { index, convEntry } = result;
+      const activeSession = convEntry.sessions.find(s => s.active);
+      if (!activeSession) return;
+      if (activeSession.externalSessionId === externalSessionId) return;
+      activeSession.externalSessionId = externalSessionId;
+      await this._writeWorkspaceIndex(hash, index);
+    });
   }
 
   async updateConversationModel(convId: string, model: string | null): Promise<void> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return;
-    const { hash, index, convEntry } = result;
-    convEntry.model = model || undefined;
-    // Silently downgrade stored effort if the new model doesn't support it.
-    if (convEntry.effort) {
-      convEntry.effort = this._effectiveEffort(convEntry.backend, convEntry.model, convEntry.effort);
-    }
-    await this._writeWorkspaceIndex(hash, index);
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return;
+    await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return;
+      const { index, convEntry } = result;
+      convEntry.model = model || undefined;
+      // Silently downgrade stored effort if the new model doesn't support it.
+      if (convEntry.effort) {
+        convEntry.effort = this._effectiveEffort(convEntry.backend, convEntry.model, convEntry.effort);
+      }
+      await this._writeWorkspaceIndex(hash, index);
+    });
   }
 
   async updateConversationEffort(convId: string, effort: EffortLevel | null): Promise<void> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return;
-    const { hash, index, convEntry } = result;
-    convEntry.effort = effort
-      ? this._effectiveEffort(convEntry.backend, convEntry.model, effort)
-      : undefined;
-    await this._writeWorkspaceIndex(hash, index);
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return;
+    await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return;
+      const { index, convEntry } = result;
+      convEntry.effort = effort
+        ? this._effectiveEffort(convEntry.backend, convEntry.model, effort)
+        : undefined;
+      await this._writeWorkspaceIndex(hash, index);
+    });
   }
 
   // ── Messages ───────────────────────────────────────────────────────────────
@@ -671,107 +732,123 @@ export class ChatService {
     turn?: 'progress' | 'final',
     contentBlocks?: ContentBlock[],
   ): Promise<Message | null> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return null;
-    const { hash, index, convEntry } = result;
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return null;
+    return this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return null;
+      const { index, convEntry } = result;
 
-    const msg: Message = {
-      id: this._newId(),
-      role,
-      content,
-      backend: backend || convEntry.backend,
-      timestamp: new Date().toISOString(),
-    };
-
-    if (thinking) {
-      msg.thinking = thinking;
-    }
-
-    if (toolActivity && toolActivity.length > 0) {
-      msg.toolActivity = toolActivity;
-    }
-
-    if (contentBlocks && contentBlocks.length > 0 && role === 'assistant') {
-      msg.contentBlocks = contentBlocks;
-    }
-
-    if (turn && role === 'assistant') {
-      msg.turn = turn;
-    }
-
-    const activeSession = convEntry.sessions.find(s => s.active);
-    const sessionNumber = activeSession ? activeSession.number : 1;
-
-    if (role === 'user' && convEntry.title === 'New Chat' && sessionNumber <= 1) {
-      convEntry.title = content.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
-    }
-
-    let sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
-    if (!sessionFile) {
-      sessionFile = {
-        sessionNumber,
-        sessionId: convEntry.currentSessionId,
-        startedAt: msg.timestamp,
-        endedAt: null,
-        messages: [],
+      const msg: Message = {
+        id: this._newId(),
+        role,
+        content,
+        backend: backend || convEntry.backend,
+        timestamp: new Date().toISOString(),
       };
-    }
-    sessionFile.messages.push(msg);
-    await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
 
-    convEntry.lastActivity = msg.timestamp;
-    convEntry.lastMessage = content.substring(0, 100);
-    if (activeSession) {
-      activeSession.messageCount = sessionFile.messages.length;
-    }
-    await this._writeWorkspaceIndex(hash, index);
+      if (thinking) {
+        msg.thinking = thinking;
+      }
 
-    return msg;
+      if (toolActivity && toolActivity.length > 0) {
+        msg.toolActivity = toolActivity;
+      }
+
+      if (contentBlocks && contentBlocks.length > 0 && role === 'assistant') {
+        msg.contentBlocks = contentBlocks;
+      }
+
+      if (turn && role === 'assistant') {
+        msg.turn = turn;
+      }
+
+      const activeSession = convEntry.sessions.find(s => s.active);
+      const sessionNumber = activeSession ? activeSession.number : 1;
+
+      if (role === 'user' && convEntry.title === 'New Chat' && sessionNumber <= 1) {
+        convEntry.title = content.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+      }
+
+      let sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
+      if (!sessionFile) {
+        sessionFile = {
+          sessionNumber,
+          sessionId: convEntry.currentSessionId,
+          startedAt: msg.timestamp,
+          endedAt: null,
+          messages: [],
+        };
+      }
+      sessionFile.messages.push(msg);
+      await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
+
+      convEntry.lastActivity = msg.timestamp;
+      convEntry.lastMessage = content.substring(0, 100);
+      if (activeSession) {
+        activeSession.messageCount = sessionFile.messages.length;
+      }
+      await this._writeWorkspaceIndex(hash, index);
+
+      return msg;
+    });
   }
 
   async updateMessageContent(convId: string, messageId: string, newContent: string): Promise<EditMessageResult | null> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return null;
-    const { hash, index, convEntry } = result;
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return null;
+    const msg = await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return null;
+      const { index, convEntry } = result;
 
-    const activeSession = convEntry.sessions.find(s => s.active);
-    const sessionNumber = activeSession ? activeSession.number : 1;
+      const activeSession = convEntry.sessions.find(s => s.active);
+      const sessionNumber = activeSession ? activeSession.number : 1;
 
-    const sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
-    if (!sessionFile) return null;
+      const sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
+      if (!sessionFile) return null;
 
-    const msgIndex = sessionFile.messages.findIndex(m => m.id === messageId);
-    if (msgIndex === -1) return null;
+      const msgIndex = sessionFile.messages.findIndex(m => m.id === messageId);
+      if (msgIndex === -1) return null;
 
-    sessionFile.messages = sessionFile.messages.slice(0, msgIndex);
+      sessionFile.messages = sessionFile.messages.slice(0, msgIndex);
 
-    const msg: Message = {
-      id: this._newId(),
-      role: 'user',
-      content: newContent,
-      backend: convEntry.backend,
-      timestamp: new Date().toISOString(),
-    };
-    sessionFile.messages.push(msg);
-    await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
+      const msg: Message = {
+        id: this._newId(),
+        role: 'user',
+        content: newContent,
+        backend: convEntry.backend,
+        timestamp: new Date().toISOString(),
+      };
+      sessionFile.messages.push(msg);
+      await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
 
-    if (activeSession) {
-      activeSession.messageCount = sessionFile.messages.length;
-    }
-    convEntry.lastActivity = msg.timestamp;
-    convEntry.lastMessage = newContent.substring(0, 100);
-    await this._writeWorkspaceIndex(hash, index);
+      if (activeSession) {
+        activeSession.messageCount = sessionFile.messages.length;
+      }
+      convEntry.lastActivity = msg.timestamp;
+      convEntry.lastMessage = newContent.substring(0, 100);
+      await this._writeWorkspaceIndex(hash, index);
+
+      return msg;
+    });
+    if (!msg) return null;
 
     const conversation = await this.getConversation(convId);
     return { conversation: conversation!, message: msg };
   }
 
   async generateAndUpdateTitle(convId: string, userMessage: string): Promise<string | null> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return null;
-    const { hash, index, convEntry } = result;
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return null;
 
-    const adapter = this._backendRegistry?.get(convEntry.backend || 'claude-code');
+    // Resolve the adapter title OUTSIDE the lock — adapter calls are slow
+    // (backend round-trips) and holding the per-workspace lock during that
+    // window would stall every other mutator for this workspace, including
+    // addMessage during active streams.
+    const conv = await this._getConvFromIndex(convId);
+    if (!conv) return null;
+    const adapter = this._backendRegistry?.get(conv.convEntry.backend || 'claude-code');
     const fallback = userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
     let newTitle: string;
     if (adapter && typeof adapter.generateTitle === 'function') {
@@ -787,10 +864,14 @@ export class ChatService {
       newTitle = words.slice(0, 8).join(' ');
     }
 
-    convEntry.title = newTitle;
-    await this._writeWorkspaceIndex(hash, index);
-
-    return newTitle;
+    return this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return null;
+      const { index, convEntry } = result;
+      convEntry.title = newTitle;
+      await this._writeWorkspaceIndex(hash, index);
+      return newTitle;
+    });
   }
 
   // ── Message Queue Persistence ──────────────────────────────────────────────
@@ -818,17 +899,21 @@ export class ChatService {
   }
 
   async setQueue(convId: string, queue: QueuedMessage[]): Promise<boolean> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return false;
-    const { hash, index, convEntry } = result;
-    const normalized = normalizeMessageQueue(queue);
-    if (normalized.length === 0) {
-      delete convEntry.messageQueue;
-    } else {
-      convEntry.messageQueue = normalized;
-    }
-    await this._writeWorkspaceIndex(hash, index);
-    return true;
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return false;
+    return this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return false;
+      const { index, convEntry } = result;
+      const normalized = normalizeMessageQueue(queue);
+      if (normalized.length === 0) {
+        delete convEntry.messageQueue;
+      } else {
+        convEntry.messageQueue = normalized;
+      }
+      await this._writeWorkspaceIndex(hash, index);
+      return true;
+    });
   }
 
   async clearQueue(convId: string): Promise<boolean> {
@@ -838,74 +923,84 @@ export class ChatService {
   // ── Session Management ─────────────────────────────────────────────────────
 
   async resetSession(convId: string): Promise<ResetSessionResult | null> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return null;
-    const { hash, index, convEntry } = result;
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return null;
+    const summarySnapshot = await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return null;
+      const { index, convEntry } = result;
 
-    const now = new Date();
-    const activeSession = convEntry.sessions.find(s => s.active);
-    if (!activeSession) return null;
+      const now = new Date();
+      const activeSession = convEntry.sessions.find(s => s.active);
+      if (!activeSession) return null;
 
-    const currentSessionNumber = activeSession.number;
+      const currentSessionNumber = activeSession.number;
 
-    const sessionFile = await this._readSessionFile(hash, convId, currentSessionNumber);
-    const currentMessages = sessionFile ? sessionFile.messages : [];
+      const sessionFile = await this._readSessionFile(hash, convId, currentSessionNumber);
+      const currentMessages = sessionFile ? sessionFile.messages : [];
 
-    const fallback = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
-    const summary = await this._generateSessionSummary(currentMessages, fallback, convEntry.backend);
+      const fallback = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
+      const summary = await this._generateSessionSummary(currentMessages, fallback, convEntry.backend);
 
-    activeSession.active = false;
-    activeSession.summary = summary;
-    activeSession.endedAt = now.toISOString();
-    activeSession.messageCount = currentMessages.length;
+      activeSession.active = false;
+      activeSession.summary = summary;
+      activeSession.endedAt = now.toISOString();
+      activeSession.messageCount = currentMessages.length;
 
-    if (sessionFile) {
-      sessionFile.endedAt = now.toISOString();
-      await this._writeSessionFile(hash, convId, currentSessionNumber, sessionFile);
-    }
+      if (sessionFile) {
+        sessionFile.endedAt = now.toISOString();
+        await this._writeSessionFile(hash, convId, currentSessionNumber, sessionFile);
+      }
 
-    const newSessionNumber = currentSessionNumber + 1;
-    const newSessionId = this._newId();
+      const newSessionNumber = currentSessionNumber + 1;
+      const newSessionId = this._newId();
 
-    delete convEntry.messageQueue;
-    // contextUsagePercentage is a live snapshot tied to the prior session's
-    // context window; clear it so the chip doesn't show a stale value before
-    // the new session's first turn reports fresh usage.
-    if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
-    convEntry.currentSessionId = newSessionId;
-    convEntry.title = 'New Chat';
-    convEntry.sessions.push({
-      number: newSessionNumber,
-      sessionId: newSessionId,
-      summary: null,
-      active: true,
-      messageCount: 0,
-      startedAt: now.toISOString(),
-      endedAt: null,
+      delete convEntry.messageQueue;
+      // contextUsagePercentage is a live snapshot tied to the prior session's
+      // context window; clear it so the chip doesn't show a stale value before
+      // the new session's first turn reports fresh usage.
+      if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
+      convEntry.currentSessionId = newSessionId;
+      convEntry.title = 'New Chat';
+      convEntry.sessions.push({
+        number: newSessionNumber,
+        sessionId: newSessionId,
+        summary: null,
+        active: true,
+        messageCount: 0,
+        startedAt: now.toISOString(),
+        endedAt: null,
+      });
+
+      await this._writeSessionFile(hash, convId, newSessionNumber, {
+        sessionNumber: newSessionNumber,
+        sessionId: newSessionId,
+        startedAt: now.toISOString(),
+        endedAt: null,
+        messages: [],
+      });
+
+      await this._writeWorkspaceIndex(hash, index);
+
+      return {
+        newSessionNumber,
+        archivedSession: {
+          number: currentSessionNumber,
+          sessionId: activeSession.sessionId || null,
+          startedAt: activeSession.startedAt,
+          endedAt: now.toISOString(),
+          messageCount: currentMessages.length,
+          summary,
+        },
+      };
     });
-
-    await this._writeSessionFile(hash, convId, newSessionNumber, {
-      sessionNumber: newSessionNumber,
-      sessionId: newSessionId,
-      startedAt: now.toISOString(),
-      endedAt: null,
-      messages: [],
-    });
-
-    await this._writeWorkspaceIndex(hash, index);
+    if (!summarySnapshot) return null;
 
     const conversation = await this.getConversation(convId);
     return {
       conversation: conversation!,
-      newSessionNumber,
-      archivedSession: {
-        number: currentSessionNumber,
-        sessionId: activeSession.sessionId || null,
-        startedAt: activeSession.startedAt,
-        endedAt: now.toISOString(),
-        messageCount: currentMessages.length,
-        summary,
-      },
+      newSessionNumber: summarySnapshot.newSessionNumber,
+      archivedSession: summarySnapshot.archivedSession,
     };
   }
 
@@ -1031,11 +1126,13 @@ export class ChatService {
   }
 
   async setWorkspaceInstructions(hash: string, instructions: string): Promise<string | null> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
-    index.instructions = instructions || '';
-    await this._writeWorkspaceIndex(hash, index);
-    return index.instructions;
+    return this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
+      index.instructions = instructions || '';
+      await this._writeWorkspaceIndex(hash, index);
+      return index.instructions;
+    });
   }
 
   getWorkspaceHashForConv(convId: string): string | null {
@@ -1204,10 +1301,9 @@ export class ChatService {
       files: [...claudeFiles, ...notes],
     };
 
-    await fsp.writeFile(
+    await atomicWriteFile(
       this._memorySnapshotPath(hash),
       JSON.stringify(merged, null, 2),
-      'utf8',
     );
   }
 
@@ -1406,7 +1502,7 @@ export class ChatService {
       capturedAt: new Date().toISOString(),
       files: [...claudeFiles, ...notes],
     };
-    await fsp.writeFile(snapshotPath, JSON.stringify(next, null, 2), 'utf8');
+    await atomicWriteFile(snapshotPath, JSON.stringify(next, null, 2));
   }
 
   /** Per-workspace Memory enable/disable (stored on the workspace index). */
@@ -1417,11 +1513,13 @@ export class ChatService {
   }
 
   async setWorkspaceMemoryEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
-    index.memoryEnabled = Boolean(enabled);
-    await this._writeWorkspaceIndex(hash, index);
-    return index.memoryEnabled;
+    return this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
+      index.memoryEnabled = Boolean(enabled);
+      await this._writeWorkspaceIndex(hash, index);
+      return index.memoryEnabled;
+    });
   }
 
   /**
@@ -1668,23 +1766,27 @@ export class ChatService {
     hash: string,
     cfg: EmbeddingConfig,
   ): Promise<EmbeddingConfig | null> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
+    const updated = await this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
 
-    const oldCfg = index.kbEmbedding;
-    const modelChanged = (cfg.model ?? 'nomic-embed-text') !== (oldCfg?.model ?? 'nomic-embed-text');
-    const dimsChanged = (cfg.dimensions ?? 768) !== (oldCfg?.dimensions ?? 768);
+      const oldCfg = index.kbEmbedding;
+      const modelChanged = (cfg.model ?? 'nomic-embed-text') !== (oldCfg?.model ?? 'nomic-embed-text');
+      const dimsChanged = (cfg.dimensions ?? 768) !== (oldCfg?.dimensions ?? 768);
 
-    index.kbEmbedding = {
-      model: cfg.model,
-      ollamaHost: cfg.ollamaHost,
-      dimensions: cfg.dimensions,
-    };
-    await this._writeWorkspaceIndex(hash, index);
+      index.kbEmbedding = {
+        model: cfg.model,
+        ollamaHost: cfg.ollamaHost,
+        dimensions: cfg.dimensions,
+      };
+      await this._writeWorkspaceIndex(hash, index);
+      return { config: index.kbEmbedding, wipe: modelChanged || dimsChanged };
+    });
+    if (!updated) return null;
 
     // When model or dimensions change, wipe existing embeddings so they
     // get regenerated on the next digest/dream cycle.
-    if ((modelChanged || dimsChanged) && this._kbVectorStores.has(hash)) {
+    if (updated.wipe && this._kbVectorStores.has(hash)) {
       try {
         const store = this._kbVectorStores.get(hash)!;
         await store.close();
@@ -1692,7 +1794,7 @@ export class ChatService {
       } catch { /* ignore close errors */ }
     }
 
-    return index.kbEmbedding;
+    return updated.config;
   }
 
   /**
@@ -1730,11 +1832,13 @@ export class ChatService {
   }
 
   async setWorkspaceKbEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
-    index.kbEnabled = Boolean(enabled);
-    await this._writeWorkspaceIndex(hash, index);
-    return index.kbEnabled;
+    return this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
+      index.kbEnabled = Boolean(enabled);
+      await this._writeWorkspaceIndex(hash, index);
+      return index.kbEnabled;
+    });
   }
 
   /**
@@ -1755,11 +1859,13 @@ export class ChatService {
   }
 
   async setWorkspaceKbAutoDigest(hash: string, autoDigest: boolean): Promise<boolean | null> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
-    index.kbAutoDigest = Boolean(autoDigest);
-    await this._writeWorkspaceIndex(hash, index);
-    return index.kbAutoDigest;
+    return this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
+      index.kbAutoDigest = Boolean(autoDigest);
+      await this._writeWorkspaceIndex(hash, index);
+      return index.kbAutoDigest;
+    });
   }
 
   /**
@@ -2126,44 +2232,50 @@ export class ChatService {
 
   async addUsage(convId: string, usage: Usage, backend?: string, model?: string, options?: { skipLedger?: boolean }): Promise<{ conversationUsage: Usage; sessionUsage: Usage } | null> {
     if (!usage) return null;
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return null;
-    const { hash, index, convEntry } = result;
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return null;
+    const mutated = await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return null;
+      const { index, convEntry } = result;
 
-    // Conversation-level totals
-    if (!convEntry.usage) convEntry.usage = this._emptyUsage();
-    this._addToUsage(convEntry.usage, usage);
+      // Conversation-level totals
+      if (!convEntry.usage) convEntry.usage = this._emptyUsage();
+      this._addToUsage(convEntry.usage, usage);
 
-    // Per-backend on conversation
-    const backendId = backend || convEntry.backend;
-    if (!convEntry.usageByBackend) convEntry.usageByBackend = {};
-    if (!convEntry.usageByBackend[backendId]) convEntry.usageByBackend[backendId] = this._emptyUsage();
-    this._addToUsage(convEntry.usageByBackend[backendId], usage);
+      // Per-backend on conversation
+      const backendId = backend || convEntry.backend;
+      if (!convEntry.usageByBackend) convEntry.usageByBackend = {};
+      if (!convEntry.usageByBackend[backendId]) convEntry.usageByBackend[backendId] = this._emptyUsage();
+      this._addToUsage(convEntry.usageByBackend[backendId], usage);
 
-    // Session-level totals + per-backend
-    let sessionUsage = this._emptyUsage();
-    const activeSession = convEntry.sessions.find(s => s.active);
-    if (activeSession) {
-      if (!activeSession.usage) activeSession.usage = this._emptyUsage();
-      this._addToUsage(activeSession.usage, usage);
-      sessionUsage = activeSession.usage;
+      // Session-level totals + per-backend
+      let sessionUsage = this._emptyUsage();
+      const activeSession = convEntry.sessions.find(s => s.active);
+      if (activeSession) {
+        if (!activeSession.usage) activeSession.usage = this._emptyUsage();
+        this._addToUsage(activeSession.usage, usage);
+        sessionUsage = activeSession.usage;
 
-      if (!activeSession.usageByBackend) activeSession.usageByBackend = {};
-      if (!activeSession.usageByBackend[backendId]) activeSession.usageByBackend[backendId] = this._emptyUsage();
-      this._addToUsage(activeSession.usageByBackend[backendId], usage);
-    }
+        if (!activeSession.usageByBackend) activeSession.usageByBackend = {};
+        if (!activeSession.usageByBackend[backendId]) activeSession.usageByBackend[backendId] = this._emptyUsage();
+        this._addToUsage(activeSession.usageByBackend[backendId], usage);
+      }
 
-    await this._writeWorkspaceIndex(hash, index);
+      await this._writeWorkspaceIndex(hash, index);
+      return { conversationUsage: convEntry.usage, sessionUsage, backendId };
+    });
+    if (!mutated) return null;
 
     // Record to daily ledger (fire-and-forget, don't block the response)
     // Skip ledger for backends that don't provide token-based usage (e.g. Kiro)
     if (!options?.skipLedger) {
-      this._recordToLedger(backendId, model || 'unknown', usage).catch(err => {
+      this._recordToLedger(mutated.backendId, model || 'unknown', usage).catch(err => {
         console.error('[usage] Failed to write ledger:', (err as Error).message);
       });
     }
 
-    return { conversationUsage: convEntry.usage, sessionUsage };
+    return { conversationUsage: mutated.conversationUsage, sessionUsage: mutated.sessionUsage };
   }
 
   async getUsage(convId: string): Promise<Usage | null> {
@@ -2186,37 +2298,39 @@ export class ChatService {
   }
 
   private async _writeLedger(ledger: UsageLedger): Promise<void> {
-    await fsp.writeFile(this.usageLedgerFile, JSON.stringify(ledger, null, 2), 'utf8');
+    await atomicWriteFile(this.usageLedgerFile, JSON.stringify(ledger, null, 2));
   }
 
   private async _recordToLedger(backendId: string, model: string, usage: Usage): Promise<void> {
-    const ledger = await this._readLedger();
-    const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    await this._ledgerLock.run(ChatService.LEDGER_LOCK_KEY, async () => {
+      const ledger = await this._readLedger();
+      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
-    let dayEntry = ledger.days.find(d => d.date === today);
-    if (!dayEntry) {
-      dayEntry = { date: today, records: [] };
-      ledger.days.push(dayEntry);
-    }
-
-    // Migrate old format: if day has 'backends' but no 'records', convert
-    const legacy = dayEntry as UsageLedgerDay & { backends?: Record<string, Usage> };
-    if (legacy.backends && !legacy.records) {
-      legacy.records = [];
-      for (const [bid, u] of Object.entries(legacy.backends)) {
-        legacy.records.push({ backend: bid, model: 'unknown', usage: u });
+      let dayEntry = ledger.days.find(d => d.date === today);
+      if (!dayEntry) {
+        dayEntry = { date: today, records: [] };
+        ledger.days.push(dayEntry);
       }
-      delete legacy.backends;
-    }
 
-    let record = dayEntry.records.find(r => r.backend === backendId && r.model === model);
-    if (!record) {
-      record = { backend: backendId, model, usage: this._emptyUsage() };
-      dayEntry.records.push(record);
-    }
-    this._addToUsage(record.usage, usage);
+      // Migrate old format: if day has 'backends' but no 'records', convert
+      const legacy = dayEntry as UsageLedgerDay & { backends?: Record<string, Usage> };
+      if (legacy.backends && !legacy.records) {
+        legacy.records = [];
+        for (const [bid, u] of Object.entries(legacy.backends)) {
+          legacy.records.push({ backend: bid, model: 'unknown', usage: u });
+        }
+        delete legacy.backends;
+      }
 
-    await this._writeLedger(ledger);
+      let record = dayEntry.records.find(r => r.backend === backendId && r.model === model);
+      if (!record) {
+        record = { backend: backendId, model, usage: this._emptyUsage() };
+        dayEntry.records.push(record);
+      }
+      this._addToUsage(record.usage, usage);
+
+      await this._writeLedger(ledger);
+    });
   }
 
   async getUsageStats(): Promise<UsageLedger> {
@@ -2224,7 +2338,9 @@ export class ChatService {
   }
 
   async clearUsageStats(): Promise<void> {
-    await this._writeLedger({ days: [] });
+    await this._ledgerLock.run(ChatService.LEDGER_LOCK_KEY, async () => {
+      await this._writeLedger({ days: [] });
+    });
   }
 
   // ── Settings ───────────────────────────────────────────────────────────────

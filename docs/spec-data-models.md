@@ -108,6 +108,15 @@ agent-cockpit/
 
 All workspace hashes throughout the system use: `SHA-256(workspacePath).substring(0, 16)` — a deterministic mapping from absolute workspace path to storage folder name.
 
+## Persistence Durability
+
+All mutable JSON files under `data/` are written with two primitives to survive concurrent access without corruption:
+
+- **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, usage ledger, memory `snapshot.json`), `SettingsService`, `ClaudePlanUsageService`, and `KiroPlanUsageService`.
+- **Per-key mutex** — `src/utils/keyedMutex.ts` exports `KeyedMutex.run<T>(key, fn)`. Callers sharing a key are serialized FIFO; different keys run concurrently. `ChatService` holds one `_indexLock` keyed by workspace hash (every read-modify-write on a workspace `index.json` runs inside `_indexLock.run(hash, ...)`) and one `_ledgerLock` keyed by the constant `'__usage_ledger__'` (wrapping ledger record/clear). Not reentrant — locked regions must not recursively acquire the same key.
+
+Together these guarantee that a workspace index always parses on disk and that concurrent mutators do not clobber each other's updates. `ChatService._buildLookupMap` also catches per-workspace `JSON.parse` failures at startup, logs them, and continues, so a single corrupt file cannot crash the server into a restart loop.
+
 ## Workspace Index (`workspaces/{hash}/index.json`)
 
 ```javascript
