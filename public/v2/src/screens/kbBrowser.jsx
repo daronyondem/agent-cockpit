@@ -487,7 +487,7 @@ function StepCheck(){
     </svg>
   );
 }
-function DreamStepperGrid({ progress, stepStart, starting }){
+function DreamStepperGrid({ progress, starting }){
   if (starting || !progress || !progress.phase) {
     return (
       <div className="stepper-host">
@@ -512,7 +512,10 @@ function DreamStepperGrid({ progress, stepStart, starting }){
     };
     return { key, label, state: 'upcoming' };
   });
-  const elapsed = stepStart ? formatDreamElapsed(Date.now() - stepStart) : '0:00';
+  const now = Date.now();
+  const totalElapsed = progress.startedAt ? formatDreamElapsed(now - progress.startedAt) : '0s';
+  const phaseElapsed = progress.phaseStartedAt ? formatDreamElapsed(now - progress.phaseStartedAt) : '0s';
+  const phaseLabel = DREAM_PHASE_LABELS[progress.phase] || progress.phase;
   return (
     <div className="stepper-host">
       <div className="stepper" role="group" aria-label="Dream pipeline progress">
@@ -534,7 +537,11 @@ function DreamStepperGrid({ progress, stepStart, starting }){
             </div>
           ))}
         </div>
-        <div className="stepper-timer"><span className="lbl">Elapsed</span><b>{elapsed}</b></div>
+        <div className="stepper-timer">
+          <span className="lbl">Total</span><b>{totalElapsed}</b>
+          <span className="sep" aria-hidden="true">·</span>
+          <span className="lbl">{phaseLabel}</span><b>{phaseElapsed}</b>
+        </div>
         <span className="sr-only" aria-live="polite">
           {stages.filter(s => s.state === 'active').map(s => `${s.label} ${s.count} of ${s.total}`).join(', ')}
         </span>
@@ -551,10 +558,8 @@ function KbSynthesisTab({ hash }){
   const [selectedId, setSelectedId] = React.useState(null);
   const [query, setQuery] = React.useState('');
   const [triggeredAt, setTriggeredAt] = React.useState(null);
-  const [stepStart, setStepStart] = React.useState(null);
   const [starting, setStarting] = React.useState(false);
   const [stopping, setStopping] = React.useState(false);
-  const prevProgressRef = React.useRef(null);
 
   const refetch = React.useCallback(() => {
     return AgentApi.kb.getSynthesis(hash)
@@ -563,23 +568,6 @@ function KbSynthesisTab({ hash }){
   }, [hash]);
 
   React.useEffect(() => { refetch(); }, [refetch]);
-
-  /* Detect step transitions so the stepper can show elapsed-since-phase.
-     Matches V1 `main.js:3850-3852` — reset stepStart on phase/done change.
-     When progress clears (dream finished) we null out the tracked step too. */
-  React.useEffect(() => {
-    const prog = data && data.dreamProgress;
-    if (!prog) {
-      prevProgressRef.current = null;
-      if (stepStart !== null) setStepStart(null);
-      return;
-    }
-    const prev = prevProgressRef.current;
-    if (!prev || prev.phase !== prog.phase || prev.done !== prog.done) {
-      setStepStart(Date.now());
-      prevProgressRef.current = prog;
-    }
-  }, [data, stepStart]);
 
   /* Optimistic "running" grace window (≤15 s) after trigger, before the
      server reports status=running. Mirrors V1 `main.js:3829-3836`. */
@@ -618,8 +606,6 @@ function KbSynthesisTab({ hash }){
     try {
       await AgentApi.workspace.triggerDream(hash);
       setTriggeredAt(Date.now());
-      setStepStart(null);
-      prevProgressRef.current = null;
       refetch();
     } catch (e) {
       toast.error('Dream failed: ' + (e.message || String(e)));
@@ -641,8 +627,6 @@ function KbSynthesisTab({ hash }){
     try {
       await AgentApi.workspace.triggerRedream(hash);
       setTriggeredAt(Date.now());
-      setStepStart(null);
-      prevProgressRef.current = null;
       refetch();
     } catch (e) {
       toast.error('Re-Dream failed: ' + (e.message || String(e)));
@@ -725,7 +709,6 @@ function KbSynthesisTab({ hash }){
         {isRunning ? (
           <DreamStepperGrid
             progress={data && data.dreamProgress}
-            stepStart={stepStart}
             starting={!(data && data.dreamProgress && data.dreamProgress.phase)}
           />
         ) : null}

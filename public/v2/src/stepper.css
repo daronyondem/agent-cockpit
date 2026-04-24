@@ -281,6 +281,7 @@
 }
 .stepper-timer .lbl{ color: var(--text-4); font-size: 9.5px; letter-spacing: .14em; text-transform: uppercase; }
 .stepper-timer b{ color: var(--text); font-weight: 600; }
+.stepper-timer .sep{ color: var(--text-4); margin: 0 2px; }
 
 /* ---------- Starting state ---------- */
 .stepper.starting .stepper-stages{ display: flex; align-items: center; gap: 10px; }

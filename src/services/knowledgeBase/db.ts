@@ -301,7 +301,13 @@ export interface SynthesisSnapshot {
   connectionCount: number;
   needsSynthesisCount: number;
   godNodes: string[];
-  dreamProgress: { phase: string; done: number; total: number } | null;
+  dreamProgress: {
+    phase: string;
+    done: number;
+    total: number;
+    startedAt?: number;
+    phaseStartedAt?: number;
+  } | null;
   reflectionCount: number;
   staleReflectionCount: number;
 }
