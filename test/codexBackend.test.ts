@@ -14,7 +14,7 @@ describe('CodexAdapter', () => {
     expect(meta.capabilities).toEqual({
       thinking: true,
       planMode: false,
-      agents: false,
+      agents: true,
       toolActivity: true,
       userQuestions: false,
       stdinInput: true,
@@ -222,6 +222,66 @@ describe('extractCodexToolDetails', () => {
   test('imageGeneration maps to ImageGen', () => {
     const result = extractCodexToolDetails({ type: 'imageGeneration', id: 'ig-1' });
     expect(result!.tool).toBe('ImageGen');
+  });
+
+  test('collabAgentToolCall (spawnAgent) maps to Agent with prompt preview and isAgent flag', () => {
+    const result = extractCodexToolDetails({
+      type: 'collabAgentToolCall',
+      id: 'collab-1',
+      tool: 'spawnAgent',
+      prompt: 'Investigate the failing test in src/foo.ts',
+    });
+    expect(result).not.toBeNull();
+    expect(result!.tool).toBe('Agent');
+    expect(result!.id).toBe('collab-1');
+    expect(result!.description).toContain('Spawning subagent');
+    expect(result!.description).toContain('Investigate the failing test');
+    expect(result!.isAgent).toBe(true);
+    expect(result!.subagentType).toBe('spawnAgent');
+  });
+
+  test('collabAgentToolCall (spawnAgent) truncates long prompts', () => {
+    const longPrompt = 'a'.repeat(120);
+    const result = extractCodexToolDetails({
+      type: 'collabAgentToolCall',
+      id: 'collab-2',
+      tool: 'spawnAgent',
+      prompt: longPrompt,
+    });
+    expect(result!.description).toContain('...');
+  });
+
+  test('collabAgentToolCall (sendInput) maps to Agent with input preview', () => {
+    const result = extractCodexToolDetails({
+      type: 'collabAgentToolCall',
+      id: 'collab-3',
+      tool: 'sendInput',
+      prompt: 'follow up',
+    });
+    expect(result!.tool).toBe('Agent');
+    expect(result!.description).toContain('Subagent input');
+    expect(result!.subagentType).toBe('sendInput');
+  });
+
+  test('collabAgentToolCall (closeAgent) maps to Agent with closing label', () => {
+    const result = extractCodexToolDetails({
+      type: 'collabAgentToolCall',
+      id: 'collab-4',
+      tool: 'closeAgent',
+    });
+    expect(result!.tool).toBe('Agent');
+    expect(result!.description).toBe('Closing subagent');
+    expect(result!.subagentType).toBe('closeAgent');
+  });
+
+  test('collabAgentToolCall without tool falls back to generic subagent label', () => {
+    const result = extractCodexToolDetails({
+      type: 'collabAgentToolCall',
+      id: 'collab-5',
+    });
+    expect(result!.tool).toBe('Agent');
+    expect(result!.isAgent).toBe(true);
+    expect(result!.subagentType).toBe('subagent');
   });
 
   test('unknown item types return null', () => {

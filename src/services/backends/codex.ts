@@ -126,15 +126,17 @@ const FALLBACK_MODELS: ModelOption[] = [
 //
 // Codex doesn't expose generic tool names — items in the protocol are typed
 // (`commandExecution`, `fileChange`, `mcpToolCall`, `dynamicToolCall`,
-// `webSearch`, `imageView`, `imageGeneration`). We map the item type to
-// Cockpit's canonical tool names. For `mcpToolCall` and `dynamicToolCall`
-// the actual tool name is on the item itself and used verbatim.
+// `webSearch`, `imageView`, `imageGeneration`, `collabAgentToolCall`). We map
+// the item type to Cockpit's canonical tool names. For `mcpToolCall` and
+// `dynamicToolCall` the actual tool name is on the item itself and used
+// verbatim.
 const ITEM_TYPE_TO_TOOL: Record<string, string> = {
   commandExecution: 'Bash',
   fileChange: 'Edit',
   webSearch: 'WebSearch',
   imageView: 'Read',
   imageGeneration: 'ImageGen',
+  collabAgentToolCall: 'Agent',
 };
 
 interface CodexThreadItem {
@@ -148,7 +150,9 @@ interface CodexThreadItem {
   aggregatedOutput?: string | null;
   // fileChange
   changes?: Array<{ path?: string; type?: string }>;
-  // mcpToolCall / dynamicToolCall
+  // mcpToolCall / dynamicToolCall / collabAgentToolCall
+  // For collab calls `tool` is a fixed enum: spawnAgent | sendInput |
+  // resumeAgent | wait | closeAgent.
   server?: string;
   tool?: string;
   namespace?: string | null;
@@ -161,6 +165,11 @@ interface CodexThreadItem {
   // status (varies per item kind)
   status?: string;
   success?: boolean | null;
+  // collabAgentToolCall
+  senderThreadId?: string;
+  receiverThreadIds?: string[];
+  prompt?: string;
+  agentsStates?: Record<string, { status?: string; message?: string }>;
 }
 
 export function extractCodexToolDetails(item: CodexThreadItem): ToolDetail | null {
@@ -232,6 +241,39 @@ export function extractCodexToolDetails(item: CodexThreadItem): ToolDetail | nul
     };
   }
 
+  if (item.type === 'collabAgentToolCall') {
+    // `tool` is one of: spawnAgent | sendInput | resumeAgent | wait | closeAgent.
+    // `prompt` is set on spawnAgent / sendInput; absent on the others.
+    // The cockpit can't see notifications from the child thread (item/started
+    // and item/completed don't carry threadId, so per-child demux on a single
+    // connection isn't possible), so each collab call is rendered as its own
+    // opaque Agent card.
+    const op = item.tool || 'subagent';
+    const promptText = item.prompt || '';
+    const promptShort = promptText.length > 80 ? promptText.substring(0, 80) + '...' : promptText;
+    let description: string;
+    if (op === 'spawnAgent') {
+      description = promptShort ? `Spawning subagent: \`${promptShort}\`` : 'Spawning subagent';
+    } else if (op === 'sendInput') {
+      description = promptShort ? `Subagent input: \`${promptShort}\`` : 'Sending input to subagent';
+    } else if (op === 'resumeAgent') {
+      description = 'Resuming subagent';
+    } else if (op === 'wait') {
+      description = 'Waiting on subagent';
+    } else if (op === 'closeAgent') {
+      description = 'Closing subagent';
+    } else {
+      description = `Subagent ${op}`;
+    }
+    return {
+      tool: 'Agent',
+      id: item.id,
+      description,
+      isAgent: true,
+      subagentType: op,
+    };
+  }
+
   if (toolName) {
     return { tool: toolName, id: item.id, description: `Using ${toolName}` };
   }
@@ -258,6 +300,19 @@ function deriveOutcomeFromItem(item: CodexThreadItem): { outcome: string; status
     if (item.success === false || item.status === 'failed' || item.status === 'error') {
       return { outcome: 'error', status: 'error' };
     }
+    return { outcome: 'done', status: 'success' };
+  }
+
+  if (item.type === 'collabAgentToolCall') {
+    // status: inProgress | completed | failed (item-level)
+    // agentsStates: per-receiver { status: pendingInit | running | interrupted |
+    // completed | errored | shutdown | notFound, message? }. Surface a receiver
+    // error even when the call itself "completed" so the user sees subagent
+    // failures rather than a misleading green checkmark.
+    const states = item.agentsStates ? Object.values(item.agentsStates) : [];
+    const hasErrored = states.some((s) => s && (s.status === 'errored' || s.status === 'notFound'));
+    if (item.status === 'failed' || hasErrored) return { outcome: 'failed', status: 'error' };
+    if (item.status === 'inProgress') return { outcome: 'running', status: 'success' };
     return { outcome: 'done', status: 'success' };
   }
 
@@ -498,7 +553,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       capabilities: {
         thinking: true,
         planMode: false,
-        agents: false,
+        agents: true,
         toolActivity: true,
         userQuestions: false,
         stdinInput: true,
@@ -971,6 +1026,9 @@ export class CodexAdapter extends BaseBackendAdapter {
             if (!item) break;
             // Skip non-tool items (agentMessage, reasoning, plan, userMessage).
             // Their content already streamed via the delta notifications.
+            // `collabAgentToolCall` is in ITEM_TYPE_TO_TOOL so it's covered;
+            // mcpToolCall/dynamicToolCall aren't in the table because their
+            // tool name is dynamic, but they're tool items.
             if (!ITEM_TYPE_TO_TOOL[item.type] && item.type !== 'mcpToolCall' && item.type !== 'dynamicToolCall') {
               break;
             }
