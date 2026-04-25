@@ -362,6 +362,25 @@
     notifyConvList();
   }
 
+  /* Bump a sidebar row's `updatedAt` and re-sort the list. The server bumps
+     `lastActivity` on every persisted user/assistant message, but the sidebar
+     holds a snapshot from its last full fetch — without this, the relative
+     time label and row order go stale until the next list reload. */
+  function bumpConvListActivity(convId, iso){
+    if (!Array.isArray(convList.items)) return;
+    const stamp = iso || new Date().toISOString();
+    let found = false;
+    const patched = convList.items.map(c => {
+      if (c.id !== convId) return c;
+      found = true;
+      return { ...c, updatedAt: stamp };
+    });
+    if (!found) return;
+    patched.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+    convList.items = patched;
+    notifyConvList();
+  }
+
   function prependConvListItem(conv){
     if (!conv || !conv.id) return;
     if (!Array.isArray(convList.items)) return;
@@ -422,7 +441,7 @@
         ...cur,
         conv: data,
         messages: Array.isArray(data.messages) ? data.messages : [],
-        usage: data.usage || null,
+        usage: data.sessionUsage || null,
         queue: restoredQueue,
         /* Mark a non-empty restored queue as suspended so the auto-drainer
            bails until the user explicitly resumes or clears. Mirrors V1
@@ -629,6 +648,7 @@
           : [...cur.messages, frame.message];
         return { ...cur, messages, streamingMsgId: null };
       });
+      bumpConvListActivity(convId, frame.message.timestamp);
       return;
     }
     if (frame.type === 'turn_complete') {
@@ -673,7 +693,7 @@
       return;
     }
     if (frame.type === 'usage') {
-      if (frame.usage) update(convId, { usage: frame.usage });
+      if (frame.sessionUsage) update(convId, { usage: frame.sessionUsage });
       return;
     }
     if (frame.type === 'error') {
@@ -868,6 +888,7 @@
             effort:  sendEffort  !== null ? sendEffort  : cur.conv.effort,
           } : cur.conv,
         }));
+        bumpConvListActivity(convId, authoritativeUser.timestamp);
       }
       /* Draft wiped only on server-confirmed success — keep the persisted
          copy through a POST failure so a session-expired retry after reload
@@ -1265,6 +1286,7 @@
           ...cur,
           messages: cur.messages.map(m => m.id === tempUserId ? authoritativeUser : m),
         }));
+        bumpConvListActivity(convId, authoritativeUser.timestamp);
       }
     } catch (err) {
       update(convId, cur => ({
@@ -1293,6 +1315,7 @@
         conv: data,
         messages: Array.isArray(data.messages) ? data.messages : [],
         queue: Array.isArray(data.messageQueue) ? data.messageQueue : [],
+        usage: data.sessionUsage || null,
         streamError: null,
         streamingMsgId: null,
         pendingInteraction: null,

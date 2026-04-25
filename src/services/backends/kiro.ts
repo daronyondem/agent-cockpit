@@ -828,6 +828,10 @@ export class KiroAdapter extends BaseBackendAdapter {
           return;
         }
 
+        // Reset idle timer on every notification — keeps long-running turns
+        // (multi-agent, large refactors) from being SIGTERM'd mid-flight.
+        this._resetIdleTimer(convId);
+
         const params = (notification.params || {}) as Record<string, unknown>;
 
         // ── Permission requests (auto-approve) ─────────────────────────
