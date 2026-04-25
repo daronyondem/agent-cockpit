@@ -17,7 +17,7 @@ describe('CodexAdapter', () => {
       agents: false,
       toolActivity: true,
       userQuestions: false,
-      stdinInput: false,
+      stdinInput: true,
     });
   });
 
@@ -32,9 +32,9 @@ describe('CodexAdapter', () => {
     expect(models!.find((m) => m.id === 'gpt-5.5')).toBeDefined();
   });
 
-  test('stdinInput is false (Codex does not accept mid-turn user input)', () => {
+  test('stdinInput is true (Codex accepts mid-turn user input via turn/steer)', () => {
     const adapter = new CodexAdapter({ workingDir: '/tmp' });
-    expect(adapter.metadata.capabilities.stdinInput).toBe(false);
+    expect(adapter.metadata.capabilities.stdinInput).toBe(true);
   });
 
   test('uses default working directory under .codex', () => {
@@ -75,7 +75,8 @@ describe('CodexAdapter', () => {
     expect(typeof abort).toBe('function');
     expect(typeof sendInput).toBe('function');
 
-    // sendInput is a no-op for Codex — should not throw
+    // sendInput is a no-op when no active turn (no client/threadId/turnId yet
+    // since we never let the spawn complete). Should not throw.
     expect(() => sendInput('some text')).not.toThrow();
 
     // Abort to prevent the stream from hanging on a real spawn
