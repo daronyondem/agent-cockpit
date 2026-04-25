@@ -368,6 +368,40 @@ interface TurnStartResult {
   turn: { id: string; status?: string };
 }
 
+// `item/tool/requestUserInput` (server-to-client request, EXPERIMENTAL,
+// API v2 only). The server pauses the turn while waiting for our response.
+interface ToolRequestUserInputOption {
+  label: string;
+  description: string;
+}
+interface ToolRequestUserInputQuestion {
+  id: string;
+  header: string;
+  question: string;
+  isOther?: boolean;
+  isSecret?: boolean;
+  options?: ToolRequestUserInputOption[];
+}
+interface ToolRequestUserInputParams {
+  threadId: string;
+  turnId: string;
+  itemId: string;
+  questions: ToolRequestUserInputQuestion[];
+}
+// Each answer is a wrapping object holding a Vec<String> — multi-select capable.
+interface ToolRequestUserInputAnswer {
+  answers: string[];
+}
+interface ToolRequestUserInputResponse {
+  answers: Record<string, ToolRequestUserInputAnswer>;
+}
+
+interface PendingUserInput {
+  reqId: number;
+  itemId: string;
+  questions: ToolRequestUserInputQuestion[];
+}
+
 interface ModelListResult {
   data: Array<{
     id: string;
@@ -555,7 +589,7 @@ export class CodexAdapter extends BaseBackendAdapter {
         planMode: false,
         agents: true,
         toolActivity: true,
-        userQuestions: false,
+        userQuestions: true,
         stdinInput: true,
       },
       models: this.modelCache || FALLBACK_MODELS,
@@ -581,10 +615,16 @@ export class CodexAdapter extends BaseBackendAdapter {
 
   sendMessage(message: string, options: SendMessageOptions = {} as SendMessageOptions): SendMessageResult {
     let aborted = false;
-    const state: { client: CodexAppServerClient | null; threadId: string | null; turnId: string | null } = {
+    const state: {
+      client: CodexAppServerClient | null;
+      threadId: string | null;
+      turnId: string | null;
+      pendingUserInput: PendingUserInput | null;
+    } = {
       client: null,
       threadId: null,
       turnId: null,
+      pendingUserInput: null,
     };
 
     const stream = this._createStream(message, options, {
@@ -592,6 +632,8 @@ export class CodexAdapter extends BaseBackendAdapter {
       set client(c: CodexAppServerClient | null) { state.client = c; },
       set threadId(t: string | null) { state.threadId = t; },
       set turnId(t: string | null) { state.turnId = t; },
+      get pendingUserInput() { return state.pendingUserInput; },
+      set pendingUserInput(p: PendingUserInput | null) { state.pendingUserInput = p; },
     });
 
     const abort = () => {
@@ -602,17 +644,34 @@ export class CodexAdapter extends BaseBackendAdapter {
       }
     };
 
-    // Append text to the in-flight turn via `turn/steer`. No-op when no
-    // active turn exists yet (server would reject with invalid-request);
-    // also no-op once aborted, so we don't race the turn/interrupt above.
-    // expectedTurnId is required by the protocol; passing the tracked turnId
-    // makes the server reject stale UI input rather than apply it to a new
-    // turn the user didn't intend.
+    // Route the user's input either to a pending `item/tool/requestUserInput`
+    // request (JSON-RPC response) or to the in-flight turn (`turn/steer`):
+    //   • If the server is currently waiting on a user-question, build a
+    //     `ToolRequestUserInputResponse` and reply to the original request.
+    //     Only the first question gets the user's text — the cockpit UI
+    //     surfaces a single question at a time. The server tolerates partial
+    //     answers (HashMap is unconstrained on the wire).
+    //   • Otherwise append the text to the active turn via `turn/steer`,
+    //     passing `expectedTurnId` so the server rejects stale UI input
+    //     rather than applying it to a turn the user didn't intend.
+    // No-ops when aborted, when text is empty/non-string, or when the
+    // client/threadId state isn't populated yet.
     const sendInput = (text: string) => {
       if (aborted) return;
       if (typeof text !== 'string' || !text) return;
-      const { client, threadId, turnId } = state;
-      if (!client || client.isClosed || !threadId || !turnId) return;
+      const { client, threadId, turnId, pendingUserInput } = state;
+      if (!client || client.isClosed || !threadId) return;
+
+      if (pendingUserInput) {
+        const first = pendingUserInput.questions[0];
+        const response: ToolRequestUserInputResponse = { answers: {} };
+        if (first) response.answers[first.id] = { answers: [text] };
+        state.pendingUserInput = null;
+        client.respond(pendingUserInput.reqId, response);
+        return;
+      }
+
+      if (!turnId) return;
       client.request('turn/steer', {
         threadId,
         input: [{ type: 'text', text }],
@@ -814,6 +873,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       client: CodexAppServerClient | null;
       threadId: string | null;
       turnId: string | null;
+      pendingUserInput: PendingUserInput | null;
     },
   ): AsyncGenerator<StreamEvent> {
     const { sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model, mcpServers } = options;
@@ -978,9 +1038,34 @@ export class CodexAdapter extends BaseBackendAdapter {
             continue;
           }
 
-          // mcpServer/elicitation/request, item/tool/requestUserInput,
-          // item/tool/call — decline so we don't hang the turn waiting on
-          // a UI we don't yet expose.
+          // item/tool/requestUserInput — surface as a userQuestion in the
+          // cockpit. The server pauses the turn until we respond. The
+          // response is sent via `sendInput()` from the outer closure when
+          // the user answers; see the sendInput branch on pendingUserInput.
+          if (method === 'item/tool/requestUserInput') {
+            const p = params as unknown as ToolRequestUserInputParams;
+            const questions = Array.isArray(p.questions) ? p.questions : [];
+            state.pendingUserInput = { reqId, itemId: p.itemId, questions };
+            const first = questions[0];
+            yield {
+              type: 'tool_activity',
+              tool: 'AskUserQuestion',
+              id: p.itemId,
+              description: (first && first.header) || 'Question',
+              isQuestion: true,
+              // Frontend reads questions[0].question and questions[0].options
+              // (object shape, not the typedef's string[]). Cast through
+              // unknown to match the runtime contract.
+              questions: questions.map((q) => ({
+                question: q.question,
+                options: Array.isArray(q.options) ? q.options : [],
+              })) as unknown as string[],
+            };
+            continue;
+          }
+
+          // mcpServer/elicitation/request, item/tool/call — decline so we
+          // don't hang the turn waiting on UI we don't yet expose.
           client.respond(reqId, { error: { code: -32601, message: 'Not supported by client' } });
           continue;
         }
@@ -990,6 +1075,20 @@ export class CodexAdapter extends BaseBackendAdapter {
           case 'turn/started': {
             const turnId = (params as { turnId?: string }).turnId;
             if (turnId) state.turnId = turnId;
+            break;
+          }
+
+          case 'serverRequest/resolved': {
+            // Server emits this after the pending server-to-client request
+            // is settled — either because we responded, or because the turn
+            // ended/was interrupted and the server cleared the request on
+            // its side. Drop our pending state so a stale sendInput()
+            // doesn't try to respond to a dead request.
+            const p = params as { requestId?: number };
+            const pending = state.pendingUserInput;
+            if (pending && typeof p.requestId === 'number' && p.requestId === pending.reqId) {
+              state.pendingUserInput = null;
+            }
             break;
           }
 
