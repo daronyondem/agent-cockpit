@@ -244,10 +244,10 @@ export function extractCodexToolDetails(item: CodexThreadItem): ToolDetail | nul
   if (item.type === 'collabAgentToolCall') {
     // `tool` is one of: spawnAgent | sendInput | resumeAgent | wait | closeAgent.
     // `prompt` is set on spawnAgent / sendInput; absent on the others.
-    // The cockpit can't see notifications from the child thread (item/started
-    // and item/completed don't carry threadId, so per-child demux on a single
-    // connection isn't possible), so each collab call is rendered as its own
-    // opaque Agent card.
+    // Child-thread item notifications carry `threadId` at the params level
+    // (verified via raw protocol capture; see `lookupParentAgentId`), so
+    // `_createStream` attributes child tool activity back to the originating
+    // spawnAgent's Agent card via `parentAgentId`.
     const op = item.tool || 'subagent';
     const promptText = item.prompt || '';
     const promptShort = promptText.length > 80 ? promptText.substring(0, 80) + '...' : promptText;
@@ -322,6 +322,50 @@ function deriveOutcomeFromItem(item: CodexThreadItem): { outcome: string; status
   if (fallback) return fallback;
 
   return { outcome: 'done', status: 'success' };
+}
+
+// ── Subagent thread routing ─────────────────────────────────────────────────
+//
+// Every `item/*` and `item/*/delta` notification carries `threadId` and
+// `turnId` at the params level (alongside the `item` object). This is not
+// reflected in the public README — verified by capturing raw JSON-RPC traffic
+// against `codex app-server` during a multi_agent turn. We use that threadId
+// to attribute child-thread activity to the right top-level Agent card.
+
+export function lookupParentAgentId(
+  params: Record<string, unknown>,
+  subagentByThreadId: Map<string, string>,
+): string | undefined {
+  const tid = (params as { threadId?: string }).threadId;
+  if (!tid) return undefined;
+  return subagentByThreadId.get(tid);
+}
+
+export function eventIsFromChildThread(
+  params: Record<string, unknown>,
+  subagentByThreadId: Map<string, string>,
+): boolean {
+  const tid = (params as { threadId?: string }).threadId;
+  return !!tid && subagentByThreadId.has(tid);
+}
+
+// Extract child threadIds from a completed `collabAgentToolCall(spawnAgent)`
+// and record each one against the top-level Agent card id. Grand-children
+// (spawned by a thread that's already a child) are flattened to the same
+// top-level id — the cockpit UI nests one level deep. Non-spawnAgent items
+// and spawnAgent items without populated `receiverThreadIds` are no-ops.
+export function recordSpawnAgentReceivers(
+  item: CodexThreadItem,
+  subagentByThreadId: Map<string, string>,
+): void {
+  if (item.type !== 'collabAgentToolCall') return;
+  if (item.tool !== 'spawnAgent') return;
+  if (!Array.isArray(item.receiverThreadIds) || item.receiverThreadIds.length === 0) return;
+  const senderTid = item.senderThreadId;
+  const topLevelCallId = (senderTid && subagentByThreadId.get(senderTid)) || item.id;
+  for (const childTid of item.receiverThreadIds) {
+    subagentByThreadId.set(childTid, topLevelCallId);
+  }
 }
 
 // ── JSON-RPC Protocol Types (minimal hand-typed subset) ─────────────────────
@@ -620,11 +664,13 @@ export class CodexAdapter extends BaseBackendAdapter {
       threadId: string | null;
       turnId: string | null;
       pendingUserInput: PendingUserInput | null;
+      subagentByThreadId: Map<string, string>;
     } = {
       client: null,
       threadId: null,
       turnId: null,
       pendingUserInput: null,
+      subagentByThreadId: new Map(),
     };
 
     const stream = this._createStream(message, options, {
@@ -634,6 +680,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       set turnId(t: string | null) { state.turnId = t; },
       get pendingUserInput() { return state.pendingUserInput; },
       set pendingUserInput(p: PendingUserInput | null) { state.pendingUserInput = p; },
+      subagentByThreadId: state.subagentByThreadId,
     });
 
     const abort = () => {
@@ -874,6 +921,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       threadId: string | null;
       turnId: string | null;
       pendingUserInput: PendingUserInput | null;
+      subagentByThreadId: Map<string, string>;
     },
   ): AsyncGenerator<StreamEvent> {
     const { sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model, mcpServers } = options;
@@ -1093,6 +1141,12 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           case 'item/agentMessage/delta': {
+            // Drop child-thread message deltas: the parent's text content is
+            // built only from its own deltas, and the child's final summary
+            // bubbles up via `agentsStates[childTid].message` on the closing
+            // wait/closeAgent collabAgentToolCall — surfaced as the Agent
+            // card's outcome rather than streamed inline.
+            if (eventIsFromChildThread(params, state.subagentByThreadId)) break;
             const delta = (params as { delta?: string }).delta;
             if (typeof delta === 'string' && delta.length > 0) {
               yield { type: 'text', content: delta, streaming: true };
@@ -1102,6 +1156,9 @@ export class CodexAdapter extends BaseBackendAdapter {
 
           case 'item/reasoning/textDelta':
           case 'item/reasoning/summaryTextDelta': {
+            // Drop child-thread reasoning for the same reason — UI has no
+            // place to render per-child thinking under an Agent card today.
+            if (eventIsFromChildThread(params, state.subagentByThreadId)) break;
             const delta = (params as { delta?: string }).delta;
             if (typeof delta === 'string' && delta.length > 0) {
               yield { type: 'thinking', content: delta, streaming: true };
@@ -1115,7 +1172,12 @@ export class CodexAdapter extends BaseBackendAdapter {
             const detail = extractCodexToolDetails(item);
             if (detail) {
               toolByItemId.set(item.id, detail.tool);
-              yield { type: 'tool_activity', ...detail };
+              const parentAgentId = lookupParentAgentId(params, state.subagentByThreadId);
+              yield {
+                type: 'tool_activity',
+                ...detail,
+                ...(parentAgentId ? { parentAgentId } : {}),
+              };
             }
             break;
           }
@@ -1123,6 +1185,11 @@ export class CodexAdapter extends BaseBackendAdapter {
           case 'item/completed': {
             const item = (params as { item?: CodexThreadItem }).item;
             if (!item) break;
+            // Record any newly-spawned child threadIds against the top-level
+            // Agent card so subsequent item/* events from those threads get
+            // attributed back via `parentAgentId`. No-op for non-spawnAgent
+            // items.
+            recordSpawnAgentReceivers(item, state.subagentByThreadId);
             // Skip non-tool items (agentMessage, reasoning, plan, userMessage).
             // Their content already streamed via the delta notifications.
             // `collabAgentToolCall` is in ITEM_TYPE_TO_TOOL so it's covered;
