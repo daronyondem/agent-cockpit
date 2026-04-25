@@ -1335,6 +1335,72 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   });
 
+  // OCR an uploaded image attachment to Markdown via a one-shot CLI call.
+  // The conversation's configured backend/model/effort are reused so the
+  // user gets the same quality they'd get if the image rode the prompt; the
+  // call is throwaway (does not touch the active session). Caller is the
+  // composer's per-attachment OCR button — result is inserted at the cursor
+  // and cached client-side so re-clicks are free.
+  router.post('/conversations/:id/attachments/ocr', csrfGuard, async (req: Request, res: Response) => {
+    const convId = param(req, 'id');
+    const { path: attachmentPath } = req.body as { path?: string };
+
+    if (!attachmentPath || typeof attachmentPath !== 'string') {
+      return res.status(400).json({ error: 'path is required' });
+    }
+
+    // Confine the path to this conversation's artifacts dir so a crafted
+    // request can't OCR (and thereby exfiltrate text from) arbitrary files.
+    const convDir = path.resolve(path.join(chatService.artifactsDir, convId));
+    const resolved = path.resolve(attachmentPath);
+    if (resolved !== convDir && !resolved.startsWith(convDir + path.sep)) {
+      return res.status(400).json({ error: 'Invalid attachment path' });
+    }
+
+    try {
+      await fs.promises.access(resolved);
+    } catch {
+      return res.status(404).json({ error: 'Attachment not found' });
+    }
+    const meta = attachmentFromPath(resolved);
+    if (meta.kind !== 'image') {
+      return res.status(400).json({ error: 'OCR is only supported for image attachments' });
+    }
+
+    const conv = await chatService.getConversation(convId);
+    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+    const backendId = conv.backend || 'claude-code';
+    const adapter = backendRegistry.get(backendId);
+    if (!adapter) {
+      return res.status(500).json({ error: `Backend not registered: ${backendId}` });
+    }
+
+    const prompt = [
+      `Read the image at ${resolved} and convert its contents to clean Markdown.`,
+      'Preserve structure — use headings for headings, lists for lists, and proper Markdown tables (| col | col | with a |---|---| separator) for any tabular data.',
+      'If the image contains diagrams or non-text visuals you cannot transcribe, briefly note them in italics (e.g. *[diagram: network topology]*).',
+      'Output only the Markdown. No preamble, no commentary, no fenced code wrapper around the whole thing.',
+    ].join(' ');
+
+    try {
+      const markdown = await adapter.runOneShot(prompt, {
+        model: conv.model || undefined,
+        effort: conv.effort || undefined,
+        timeoutMs: 90_000,
+        allowTools: true,
+        workingDir: conv.workingDir || undefined,
+      });
+      const cleaned = (markdown || '').trim();
+      if (!cleaned) {
+        return res.status(502).json({ error: 'OCR returned empty output' });
+      }
+      res.json({ markdown: cleaned });
+    } catch (err: unknown) {
+      console.error(`[ocr] backend=${backendId} conv=${convId} failed:`, (err as Error).message);
+      return res.status(502).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Workspace instructions ──────────────────────────────────────────────────
   router.get('/workspaces/:hash/instructions', async (req: Request, res: Response) => {
     try {

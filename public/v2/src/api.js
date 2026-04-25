@@ -555,6 +555,17 @@
       'conversations/' + encodeURIComponent(convId) + '/upload/' + encodeURIComponent(filename),
       { method: 'DELETE' },
     ).then(r => r.json()),
+    /* One-shot OCR for an image attachment. Server reuses the conv's
+       backend/model/effort and returns `{ markdown }`. The composer's
+       per-attachment OCR button calls through StreamStore.ocrAttachment,
+       which caches the result so re-clicks don't re-spawn the CLI. */
+    ocrAttachment: async (convId, path) => {
+      const res = await chatFetch(
+        'conversations/' + encodeURIComponent(convId) + '/attachments/ocr',
+        { method: 'POST', body: { path } },
+      );
+      return await res.json();
+    },
     /* Session history — the Sessions modal in the chat topbar. `getSessions`
        returns a flat list of session metadata; `getSessionMessages` hydrates
        a single past session's messages on demand; `sessionDownloadUrl` is a

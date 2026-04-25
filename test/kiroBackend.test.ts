@@ -1,6 +1,6 @@
 import { BaseBackendAdapter } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
-import { KiroAdapter, extractKiroToolDetails, parseKiroChatOutput } from '../src/services/backends/kiro';
+import { KiroAdapter, extractKiroToolDetails } from '../src/services/backends/kiro';
 import type { BackendMetadata, SendMessageResult } from '../src/types';
 
 // ── KiroAdapter metadata ────────────────────────────────────────────────────
@@ -336,71 +336,348 @@ describe('KiroAdapter generateTitle', () => {
   });
 });
 
-// ── parseKiroChatOutput ─────────────────────────────────────────────────────
+// ── KiroAdapter.runOneShot (ACP-based) ──────────────────────────────────────
+//
+// runOneShot speaks ACP (JSON-RPC over stdio) instead of `kiro-cli chat`,
+// because chat output bakes tool-call narration into the answer text and
+// requires fragile string parsing. ACP gives us structured `agent_message_chunk`
+// notifications distinct from `tool_call` / `tool_call_update`, so we can
+// collect just the model's final text without seeing tool narration at all.
 
-describe('parseKiroChatOutput', () => {
-  // Build the real output shape that `kiro-cli chat --no-interactive
-  // --trust-all-tools` produces, so the tests exercise the same bytes that
-  // the adapter will see in production.
-  function buildKiroRawOutput(answer: string): string {
-    return (
-      '\x1b[32mAll tools are now trusted (\x1b[0m\x1b[31m!\x1b[0m\x1b[32m). ' +
-      'Kiro will execute tools without asking for confirmation.\x1b[0m\n' +
-      'Agents can sometimes do unexpected things so understand the risks.\n\n' +
-      'Learn more at \x1b[38;5;141mhttps://kiro.dev/docs/cli/chat/security/' +
-      '#using-tools-trust-all-safely\x1b[0m\n\n\n\n' +
-      '\x1b[38;5;252m\x1b[0m\x1b[?25l\x1b[38;5;141m> \x1b[0m' + answer + '\n\n' +
-      ' \x1b[38;5;141m▸\x1b[0m Credits: 0.02 • Time: 3s\n'
-    );
+describe('KiroAdapter.runOneShot', () => {
+  // Build a fake kiro-cli acp process. Tests interact with it via
+  // `respond` / `notify` / `sessionUpdate` to drive the JSON-RPC exchange.
+  function createKiroSimulator() {
+    const { EventEmitter } = require('events');
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+
+    const stdinWrites: string[] = [];
+    const requestLog: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [];
+    let lineBuf = '';
+
+    const sim: {
+      proc: any;
+      requestLog: typeof requestLog;
+      stdinWrites: string[];
+      onRequest: ((msg: { id: number; method: string; params?: Record<string, unknown> }) => void) | null;
+      respond: (id: number, result: unknown) => void;
+      rejectRequest: (id: number, message: string) => void;
+      notify: (method: string, params?: unknown, id?: number) => void;
+      sessionUpdate: (sessionId: string, update: Record<string, unknown>) => void;
+      findRequest: (method: string) => { id: number; method: string; params?: Record<string, unknown> } | undefined;
+      findResponseTo: (id: number) => Record<string, unknown> | undefined;
+    } = {
+      proc,
+      requestLog,
+      stdinWrites,
+      onRequest: null,
+      respond: (id, result) => {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n'));
+      },
+      rejectRequest: (id, message) => {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32000, message } }) + '\n'));
+      },
+      notify: (method, params, id) => {
+        const msg: Record<string, unknown> = { jsonrpc: '2.0', method, params };
+        if (id != null) msg.id = id;
+        proc.stdout.emit('data', Buffer.from(JSON.stringify(msg) + '\n'));
+      },
+      sessionUpdate: (sessionId, update) => {
+        sim.notify('session/update', { sessionId, update });
+      },
+      findRequest: (method) => requestLog.find((r) => r.method === method),
+      findResponseTo: (id) => {
+        for (const line of stdinWrites.flatMap((w) => w.split('\n'))) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.id === id && !msg.method) return msg;
+          } catch {
+            // ignore
+          }
+        }
+        return undefined;
+      },
+    };
+
+    proc.stdin = {
+      write: (s: string) => {
+        stdinWrites.push(s);
+        lineBuf += s;
+        const lines = lineBuf.split('\n');
+        lineBuf = lines.pop()!;
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.method && msg.id != null) {
+              requestLog.push(msg);
+              if (sim.onRequest) sim.onRequest(msg);
+            }
+          } catch {
+            // ignore
+          }
+        }
+        return true;
+      },
+      destroyed: false,
+    };
+    proc.killed = false;
+    proc.exitCode = null;
+    proc.kill = () => {
+      if (!proc.killed) {
+        proc.killed = true;
+        proc.exitCode = 0;
+        setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+      }
+    };
+
+    return sim;
   }
 
-  test('strips ANSI, trust header, prompt prefix and credits footer', () => {
-    const raw = buildKiroRawOutput('Hey there, friend!');
-    expect(parseKiroChatOutput(raw)).toBe('Hey there, friend!');
+  // Wait for a request with a given method to arrive. Polls every 5ms.
+  async function waitForRequest(sim: ReturnType<typeof createKiroSimulator>, method: string, timeoutMs = 1000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const req = sim.findRequest(method);
+      if (req) return req;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error(`Timed out waiting for ${method} request`);
+  }
+
+  test('returns only post-tool agent text (filters out pre-tool reasoning)', async () => {
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('OCR this image', { workingDir: '/tmp' });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    sim.respond(newReq.id, { sessionId: 'sess-1' });
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+
+    // Pre-tool reasoning — should be discarded when tool_call arrives
+    sim.sessionUpdate('sess-1', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'Let me read the image first.' },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    sim.sessionUpdate('sess-1', {
+      sessionUpdate: 'tool_call',
+      toolCallId: 'tc-read',
+      kind: 'read',
+      title: 'Reading image',
+      status: 'pending',
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    sim.sessionUpdate('sess-1', {
+      sessionUpdate: 'tool_call_update',
+      toolCallId: 'tc-read',
+      status: 'completed',
+    });
+    // Post-tool answer — should be the only thing returned
+    sim.sessionUpdate('sess-1', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: '# Heading\n\n| col | col |\n|---|---|\n| a | b |' },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    sim.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    const result = await resultPromise;
+    expect(result).toBe('# Heading\n\n| col | col |\n|---|---|\n| a | b |');
+    expect(result).not.toContain('Let me read');
   });
 
-  test('preserves multi-line answers', () => {
-    const raw = buildKiroRawOutput('Red\nBlue\nGreen');
-    expect(parseKiroChatOutput(raw)).toBe('Red\nBlue\nGreen');
+  test('returns concatenated text when no tools are called', async () => {
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('hi', { workingDir: '/tmp' });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    sim.respond(newReq.id, { sessionId: 'sess-2' });
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+
+    sim.sessionUpdate('sess-2', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'Hello ' },
+    });
+    sim.sessionUpdate('sess-2', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'world!' },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    sim.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    const result = await resultPromise;
+    expect(result).toBe('Hello world!');
   });
 
-  test('preserves markdown blockquotes inside the answer', () => {
-    // Leading `> ` in the answer body must survive — only the FIRST `> `
-    // prompt prefix is stripped.
-    const raw = buildKiroRawOutput('Here is a quote:\n> the inner quote\nDone.');
-    expect(parseKiroChatOutput(raw)).toBe('Here is a quote:\n> the inner quote\nDone.');
+  test('forwards mcpServers in session/new params', async () => {
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+    const servers = [{ name: 'memory', command: 'node', args: ['memory.js'], env: {} }];
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp', mcpServers: servers });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    expect((newReq.params as { mcpServers: unknown }).mcpServers).toEqual(servers);
+    sim.respond(newReq.id, { sessionId: 'sess-3' });
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+    sim.sessionUpdate('sess-3', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ok' } });
+    await new Promise((r) => setTimeout(r, 20));
+    sim.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    await resultPromise;
   });
 
-  test('strips ANSI codes embedded inside the answer', () => {
-    const raw = buildKiroRawOutput('\x1b[1mBold\x1b[0m answer');
-    expect(parseKiroChatOutput(raw)).toBe('Bold answer');
+  test('issues session/set_model when model option is provided', async () => {
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp', model: 'claude-opus-4.7' });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    sim.respond(newReq.id, { sessionId: 'sess-4' });
+    const setModelReq = await waitForRequest(sim, 'session/set_model');
+    expect((setModelReq.params as { modelId: string }).modelId).toBe('claude-opus-4.7');
+    sim.respond(setModelReq.id, {});
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+    sim.sessionUpdate('sess-4', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ok' } });
+    await new Promise((r) => setTimeout(r, 20));
+    sim.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    await resultPromise;
   });
 
-  test('returns empty string for empty input', () => {
-    expect(parseKiroChatOutput('')).toBe('');
+  test('auto-approves session/request_permission notifications', async () => {
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp' });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    sim.respond(newReq.id, { sessionId: 'sess-5' });
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+
+    // Simulate Kiro asking for permission (server-to-client request: method + id)
+    sim.notify('session/request_permission', { sessionId: 'sess-5', toolCall: { kind: 'shell' } }, 9999);
+    await new Promise((r) => setTimeout(r, 30));
+
+    // Adapter must auto-respond on stdin with allow_always
+    const response = sim.findResponseTo(9999);
+    expect(response).toBeDefined();
+    expect((response!.result as { outcome: { outcome: string; optionId: string } }).outcome).toEqual({
+      outcome: 'selected',
+      optionId: 'allow_always',
+    });
+
+    sim.sessionUpdate('sess-5', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'done' } });
+    await new Promise((r) => setTimeout(r, 20));
+    sim.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    await expect(resultPromise).resolves.toBe('done');
   });
 
-  test('handles output without the trust-warning header (format drift safety)', () => {
-    // If kiro-cli ever stops emitting the trust header, we should still
-    // return a usable answer rather than a blank string.
-    const raw = '\x1b[38;5;141m> \x1b[0mHello world\n\n \x1b[38;5;141m▸\x1b[0m Credits: 0.01 • Time: 1s\n';
-    expect(parseKiroChatOutput(raw)).toBe('Hello world');
+  test('rejects with friendly error on spawn ENOENT', async () => {
+    let resultPromise!: Promise<string>;
+    let proc: any;
+
+    jest.isolateModules(() => {
+      const { EventEmitter } = require('events');
+      proc = new EventEmitter();
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.stdin = { write: () => true, destroyed: false };
+      proc.kill = () => {};
+      proc.killed = false;
+      jest.mock('child_process', () => ({
+        spawn: () => proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp' });
+    });
+
+    setImmediate(() => proc.emit('error', new Error('spawn kiro-cli ENOENT')));
+
+    await expect(resultPromise).rejects.toThrow('Kiro CLI is not installed');
   });
 
-  test('handles output without the credits footer', () => {
-    const raw = buildKiroRawOutput('No footer answer').replace(/\n \x1b\[38;5;141m▸.*$/s, '\n');
-    expect(parseKiroChatOutput(raw)).toBe('No footer answer');
-  });
+  test('rejects on timeoutMs', async () => {
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
 
-  test('strips the specific sequence reported in the bug ([38;5;141m> [0m)', () => {
-    // Reproducer from GitHub issue: user reported seeing
-    //   "[38;5;141m> [0mAsking about a number"
-    // in their Kiro conversation titles.
-    const raw = buildKiroRawOutput('Asking about a number');
-    const result = parseKiroChatOutput(raw);
-    expect(result).toBe('Asking about a number');
-    expect(result).not.toMatch(/\x1b/);
-    expect(result).not.toMatch(/^> /);
-    expect(result).not.toMatch(/\[38;5;141m/);
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp', timeoutMs: 100 });
+    });
+
+    // Don't respond to anything — let the timeout fire
+    await expect(resultPromise).rejects.toThrow(/timed out after 100ms/);
   });
 });

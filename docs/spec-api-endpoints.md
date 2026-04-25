@@ -176,6 +176,21 @@ DELETE /conversations/:id/upload/:filename  [CSRF]
 Path traversal guard. Returns `{ ok: true }`. `404`/`400` on error.
 
 ```
+POST /conversations/:id/attachments/ocr  [CSRF]
+Content-Type: application/json
+Body: { path: string }
+```
+One-shot OCR for an image attachment. Resolves the conversation's configured backend (`backend`/`model`/`effort`) and calls `adapter.runOneShot(prompt, { allowTools: true, model, effort, workingDir, timeoutMs: 90_000 })` with a fixed prompt that asks for clean Markdown including proper Markdown tables (`| col | col |` with `|---|---|` separator) and italic placeholders (`*[diagram: …]*`) for any non-text visuals the model cannot transcribe. The throwaway invocation does not touch the active session. Returns `{ markdown: string }` on success.
+
+Errors:
+- `400` — missing/invalid `path`, path resolves outside the conversation's `data/chat/artifacts/{id}/` dir (path-confinement check), or the attachment kind is not `image`.
+- `404` — file not present on disk, or conversation not found.
+- `500` — backend not registered.
+- `502` — `runOneShot` threw, or returned empty output (after trim).
+
+The composer's per-attachment OCR button (`AttChip` image branch, sits in the same slot as the dissolve button — image-only and paste-text-only buttons never co-exist on the same chip) calls this through `StreamStore.ocrAttachment(convId, attachmentId)`. The result is cached on the `PendingAttachment` (`ocrMarkdown`/`ocrStatus`/`ocrError` fields) so re-clicks insert instantly without re-spawning the CLI. The cache lives only for the lifetime of the pending attachment — once the message ships, the cache is discarded with the rest of the composer state.
+
+```
 GET /conversations/:id/files/:filename[?mode=view|download]
 ```
 Path traversal guard. No CSRF (used by `<img>` tags and file badge cards).

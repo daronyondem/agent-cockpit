@@ -185,6 +185,108 @@ describe('DELETE /conversations/:id/upload/:filename', () => {
   });
 });
 
+// ── POST /conversations/:id/attachments/ocr ─────────────────────────────────
+
+describe('POST /conversations/:id/attachments/ocr', () => {
+  test('returns markdown from the backend runOneShot', async () => {
+    const conv = await env.chatService.createConversation('Test');
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const imagePath = path.join(artifactDir, 'screenshot.png');
+    fs.writeFileSync(imagePath, 'fakeimage');
+
+    env.mockBackend.setOneShotImpl(async () => '# Heading\n\n| col1 | col2 |\n|---|---|\n| a | b |\n');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, { path: imagePath });
+    expect(res.status).toBe(200);
+    expect(res.body.markdown).toContain('# Heading');
+    expect(res.body.markdown).toContain('| col1 | col2 |');
+
+    const call = env.mockBackend._oneShotCalls[env.mockBackend._oneShotCalls.length - 1];
+    expect(call.prompt).toContain(imagePath);
+    expect(call.options?.allowTools).toBe(true);
+  });
+
+  test('rejects paths outside the conversation artifacts dir', async () => {
+    const conv = await env.chatService.createConversation('Test');
+    env.mockBackend.setOneShotImpl(async () => 'should not be called');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, { path: '/etc/passwd' });
+    expect(res.status).toBe(400);
+    expect(env.mockBackend._oneShotCalls).toHaveLength(0);
+  });
+
+  test('rejects paths from a different conversation', async () => {
+    const convA = await env.chatService.createConversation('A');
+    const convB = await env.chatService.createConversation('B');
+    const artifactDirB = path.join(env.chatService.artifactsDir, convB.id);
+    fs.mkdirSync(artifactDirB, { recursive: true });
+    const imagePathB = path.join(artifactDirB, 'image.png');
+    fs.writeFileSync(imagePathB, 'fakeimage');
+
+    env.mockBackend.setOneShotImpl(async () => 'should not be called');
+
+    const res = await env.request('POST', `/api/chat/conversations/${convA.id}/attachments/ocr`, { path: imagePathB });
+    expect(res.status).toBe(400);
+    expect(env.mockBackend._oneShotCalls).toHaveLength(0);
+  });
+
+  test('returns 404 when attachment file does not exist', async () => {
+    const conv = await env.chatService.createConversation('Test');
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const ghostPath = path.join(artifactDir, 'nope.png');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, { path: ghostPath });
+    expect(res.status).toBe(404);
+  });
+
+  test('refuses non-image attachments', async () => {
+    const conv = await env.chatService.createConversation('Test');
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const txtPath = path.join(artifactDir, 'notes.txt');
+    fs.writeFileSync(txtPath, 'plain text');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, { path: txtPath });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/image/i);
+  });
+
+  test('returns 502 when runOneShot throws', async () => {
+    const conv = await env.chatService.createConversation('Test');
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const imagePath = path.join(artifactDir, 'screenshot.png');
+    fs.writeFileSync(imagePath, 'fakeimage');
+
+    env.mockBackend.setOneShotImpl(async () => { throw new Error('cli boom'); });
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, { path: imagePath });
+    expect(res.status).toBe(502);
+    expect(res.body.error).toMatch(/cli boom/);
+  });
+
+  test('returns 502 on empty runOneShot output', async () => {
+    const conv = await env.chatService.createConversation('Test');
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const imagePath = path.join(artifactDir, 'screenshot.png');
+    fs.writeFileSync(imagePath, 'fakeimage');
+
+    env.mockBackend.setOneShotImpl(async () => '   ');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, { path: imagePath });
+    expect(res.status).toBe(502);
+  });
+
+  test('rejects request without a path', async () => {
+    const conv = await env.chatService.createConversation('Test');
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, {});
+    expect(res.status).toBe(400);
+  });
+});
+
 // ── GET /conversations/:id/files/:filename ──────────────────────────────────
 
 describe('GET /conversations/:id/files/:filename', () => {
