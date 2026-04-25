@@ -16,7 +16,7 @@ describe('CodexAdapter', () => {
       planMode: false,
       agents: true,
       toolActivity: true,
-      userQuestions: false,
+      userQuestions: true,
       stdinInput: true,
     });
   });
@@ -35,6 +35,11 @@ describe('CodexAdapter', () => {
   test('stdinInput is true (Codex accepts mid-turn user input via turn/steer)', () => {
     const adapter = new CodexAdapter({ workingDir: '/tmp' });
     expect(adapter.metadata.capabilities.stdinInput).toBe(true);
+  });
+
+  test('userQuestions is true (Codex emits item/tool/requestUserInput)', () => {
+    const adapter = new CodexAdapter({ workingDir: '/tmp' });
+    expect(adapter.metadata.capabilities.userQuestions).toBe(true);
   });
 
   test('uses default working directory under .codex', () => {
