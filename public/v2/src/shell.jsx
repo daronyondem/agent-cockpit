@@ -751,6 +751,16 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
       });
       if (!ok) return;
     }
+    insertAtComposerCursor(text);
+    StreamStore.removeAttachment(convId, entry.id);
+  }
+
+  /* Splice text into the composer at the current cursor position (or at the
+     end if the textarea isn't focused). Restores the caret after the React
+     re-render so the user can keep typing immediately. Shared by attachment
+     dissolve and OCR. */
+  function insertAtComposerCursor(text){
+    if (!text) return;
     const ta = composerTextRef.current;
     const current = (ta ? ta.value : (StreamStore.getState(convId) || {}).input) || '';
     let nextValue;
@@ -765,13 +775,31 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
       caret = nextValue.length;
     }
     StreamStore.setInput(convId, nextValue);
-    StreamStore.removeAttachment(convId, entry.id);
     requestAnimationFrame(() => {
       const t = composerTextRef.current;
       if (!t) return;
       t.focus();
       try { t.setSelectionRange(caret, caret); } catch {}
     });
+  }
+
+  /* OCR a pasted screenshot to Markdown via a one-shot CLI call and splice
+     the result at the cursor. The original image attachment stays put — the
+     user decides whether to remove it (e.g. text-only screenshot) or keep it
+     (mixed text+diagram, where the model still benefits from seeing the
+     visual). The result is cached on the attachment so re-clicks are free. */
+  async function ocrAttachment(entry){
+    if (!entry || !entry.result || entry.result.kind !== 'image') return;
+    try {
+      const markdown = await StreamStore.ocrAttachment(convId, entry.id);
+      if (!markdown) {
+        toast.error('OCR returned no text');
+        return;
+      }
+      insertAtComposerCursor(markdown);
+    } catch (err) {
+      toast.error('OCR failed: ' + (err.message || 'unknown error'));
+    }
   }
 
   function doSend(){
@@ -1061,6 +1089,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
                 attachments={pendingAttachments}
                 onRemove={(id) => StreamStore.removeAttachment(convId, id)}
                 onDissolve={dissolveAttachment}
+                onOcr={ocrAttachment}
                 onAdd={openFilePicker}
               />
             ) : null}
@@ -2141,7 +2170,7 @@ function attStyle(kind){
 /* Typed attachment chip. size='md' renders as a tray card (icon + name +
    meta + × button; images get a thumbnail and a corner kind badge). size='sm'
    renders as a compact pill used in queue rows and sent messages. */
-function AttChip({ att, size = 'md', onRemove, onDissolve, thumbUrl, uploading, progress }){
+function AttChip({ att, size = 'md', onRemove, onDissolve, onOcr, ocring, ocrCached, thumbUrl, uploading, progress }){
   const s = attStyle(att.kind);
   const isImage = att.kind === 'image';
   if (size === 'sm') {
@@ -2165,9 +2194,24 @@ function AttChip({ att, size = 'md', onRemove, onDissolve, thumbUrl, uploading, 
       aria-label="Inline text back into message"
     >{Ico.up(11)}</button>
   ) : null;
+  /* OCR is image-only; spins up a one-shot CLI server-side and inserts the
+     resulting Markdown at the composer cursor. ocrCached flips the title so
+     the user knows a re-click is instant rather than another CLI run. */
+  const ocrBtn = (isImage && onOcr) ? (
+    <button
+      type="button"
+      className={'att-ocr' + (ocring ? ' ocring' : '')}
+      onClick={onOcr}
+      disabled={!!ocring}
+      title={ocring
+        ? 'OCR in progress…'
+        : (ocrCached ? 'Insert OCR Markdown (cached)' : 'OCR image to Markdown at cursor')}
+      aria-label={ocring ? 'OCR in progress' : 'OCR image to Markdown'}
+    >{ocring ? <span className="att-ocr-spin"/> : Ico.fileText(11)}</button>
+  ) : null;
   if (isImage) {
     return (
-      <div className={'att-card att-image' + (uploading ? ' uploading' : '') + (onDissolve ? ' has-dissolve' : '')}>
+      <div className={'att-card att-image' + (uploading ? ' uploading' : '') + (onDissolve ? ' has-dissolve' : '') + (onOcr ? ' has-ocr' : '')}>
         <div
           className="att-thumb"
           style={thumbUrl
@@ -2181,6 +2225,7 @@ function AttChip({ att, size = 'md', onRemove, onDissolve, thumbUrl, uploading, 
           <div className="att-name">{att.name}</div>
           <div className="att-sub">{att.meta || ''}</div>
         </div>
+        {ocrBtn}
         {dissolveBtn}
         {onRemove ? (
           <button className="att-x" onClick={onRemove} title="Remove" aria-label="Remove">{Ico.x(11)}</button>
@@ -2212,7 +2257,7 @@ function AttChip({ att, size = 'md', onRemove, onDissolve, thumbUrl, uploading, 
    plus a dashed "Add" tile at the end. Image previews use a blob: URL
    created from the in-memory File so the thumbnail appears immediately —
    the URL is revoked when the entry unmounts. */
-function AttTray({ convId, attachments, onRemove, onDissolve, onAdd }){
+function AttTray({ convId, attachments, onRemove, onDissolve, onOcr, onAdd }){
   return (
     <div className="att-tray">
       {attachments.map(entry => (
@@ -2222,6 +2267,7 @@ function AttTray({ convId, attachments, onRemove, onDissolve, onAdd }){
           entry={entry}
           onRemove={() => onRemove(entry.id)}
           onDissolve={onDissolve ? () => onDissolve(entry) : null}
+          onOcr={onOcr ? () => onOcr(entry) : null}
         />
       ))}
       <button type="button" className="att-add" onClick={onAdd} title="Add attachment" aria-label="Add attachment">
@@ -2237,7 +2283,7 @@ function AttTray({ convId, attachments, onRemove, onDissolve, onAdd }){
    fresh uploads; for entries rehydrated from localStorage (no Blob in
    memory), we fall back to the server-side file URL so the thumb still
    renders after a page reload. */
-function PendingAttChip({ convId, entry, onRemove, onDissolve }){
+function PendingAttChip({ convId, entry, onRemove, onDissolve, onOcr }){
   const { file, status, progress, error, result } = entry;
   const kind = result ? result.kind : kindFromFile(file);
   const isImage = kind === 'image';
@@ -2251,6 +2297,12 @@ function PendingAttChip({ convId, entry, onRemove, onDissolve }){
     && file instanceof Blob
     && file.name && file.name.startsWith('pasted-text-')
     && typeof onDissolve === 'function';
+  /* OCR offered only once the upload has landed (need result.path); restored
+     entries qualify too since the file still lives on the server. */
+  const ocrable = isImage
+    && status === 'done'
+    && result && result.path
+    && typeof onOcr === 'function';
   const [thumb, setThumb] = React.useState(null);
   React.useEffect(() => {
     if (!isImage) return;
@@ -2278,6 +2330,9 @@ function PendingAttChip({ convId, entry, onRemove, onDissolve }){
         size="md"
         onRemove={onRemove}
         onDissolve={dissolvable ? onDissolve : null}
+        onOcr={ocrable ? onOcr : null}
+        ocring={entry.ocrStatus === 'running'}
+        ocrCached={!!entry.ocrMarkdown}
         thumbUrl={thumb}
         uploading={status === 'uploading'}
         progress={progress}

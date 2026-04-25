@@ -36,6 +36,9 @@
    *   result: AttachmentMeta | null,
    *   xhr: XMLHttpRequest | null,
    *   error: string | null,
+   *   ocrStatus?: 'idle' | 'running' | 'done' | 'error',
+   *   ocrMarkdown?: string | null,
+   *   ocrError?: string | null,
    * }} PendingAttachment */
 
   /** @typedef {{
@@ -966,6 +969,48 @@
     scheduleDraftSave(convId);
   }
 
+  /* OCR a pending image attachment into Markdown via a one-shot CLI call
+     on the server. Returns the Markdown so the caller can splice it into
+     the composer at the cursor. Caches the result on the attachment so a
+     re-click is instant (no second CLI spin-up). */
+  async function ocrAttachment(convId, attachmentId){
+    const s = states.get(convId);
+    if (!s) throw new Error('Conversation not loaded');
+    const entry = s.pendingAttachments.find(f => f.id === attachmentId);
+    if (!entry) throw new Error('Attachment not found');
+    if (entry.status !== 'done' || !entry.result || !entry.result.path) {
+      throw new Error('Attachment not yet uploaded');
+    }
+    if (entry.result.kind !== 'image') {
+      throw new Error('OCR is only available for images');
+    }
+    if (entry.ocrMarkdown) return entry.ocrMarkdown;
+    if (entry.ocrStatus === 'running') {
+      throw new Error('OCR already in progress');
+    }
+    update(convId, cur => ({
+      ...cur,
+      pendingAttachments: cur.pendingAttachments.map(f => f.id === attachmentId
+        ? { ...f, ocrStatus: 'running', ocrError: null } : f),
+    }));
+    try {
+      const { markdown } = await AgentApi.conv.ocrAttachment(convId, entry.result.path);
+      update(convId, cur => ({
+        ...cur,
+        pendingAttachments: cur.pendingAttachments.map(f => f.id === attachmentId
+          ? { ...f, ocrStatus: 'done', ocrMarkdown: markdown, ocrError: null } : f),
+      }));
+      return markdown;
+    } catch (err) {
+      update(convId, cur => ({
+        ...cur,
+        pendingAttachments: cur.pendingAttachments.map(f => f.id === attachmentId
+          ? { ...f, ocrStatus: 'error', ocrError: err.message || 'OCR failed' } : f),
+      }));
+      throw err;
+    }
+  }
+
   /* Clear the composer's pending attachments without deleting the uploads.
      Used when detaching them into a queued message — the server copies stay
      put, and the queue entry carries the AttachmentMeta references. */
@@ -1392,6 +1437,7 @@
     setComposerEffort,
     addAttachments,
     removeAttachment,
+    ocrAttachment,
     clearPendingAttachments,
     loadQueue,
     enqueue,

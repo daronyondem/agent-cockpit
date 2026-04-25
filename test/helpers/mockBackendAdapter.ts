@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { BaseBackendAdapter } from '../../src/services/backends/base';
+import { BaseBackendAdapter, type RunOneShotOptions } from '../../src/services/backends/base';
 import type { BackendMetadata, SendMessageOptions, SendMessageResult, StreamEvent, Message } from '../../src/types';
 
 /** In-memory backend adapter used by chat router and streaming tests. */
@@ -12,6 +12,8 @@ export class MockBackendAdapter extends BaseBackendAdapter {
   _mockTitle?: string;
   _streamDelayMs: number = 0;
   _mockMemoryDir: string | null = null;
+  _oneShotImpl: ((prompt: string, opts?: RunOneShotOptions) => Promise<string>) | null = null;
+  _oneShotCalls: Array<{ prompt: string; options?: RunOneShotOptions }> = [];
 
   constructor() {
     super({ workingDir: '/tmp' });
@@ -101,5 +103,19 @@ export class MockBackendAdapter extends BaseBackendAdapter {
 
   async generateTitle(userMessage: string, fallback: string) {
     return this._mockTitle || fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+  }
+
+  /** Inject a runOneShot handler. The default (null) makes runOneShot throw,
+      matching BaseBackendAdapter behavior so callers see a clean failure. */
+  setOneShotImpl(impl: ((prompt: string, opts?: RunOneShotOptions) => Promise<string>) | null) {
+    this._oneShotImpl = impl;
+  }
+
+  async runOneShot(prompt: string, options?: RunOneShotOptions): Promise<string> {
+    this._oneShotCalls.push({ prompt, options });
+    if (!this._oneShotImpl) {
+      throw new Error('MockBackendAdapter.runOneShot: no impl set');
+    }
+    return this._oneShotImpl(prompt, options);
   }
 }

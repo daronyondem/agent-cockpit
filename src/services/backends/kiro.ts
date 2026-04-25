@@ -1,4 +1,4 @@
-import { spawn, execFile, type ChildProcess } from 'child_process';
+import { spawn, type ChildProcess } from 'child_process';
 import path from 'path';
 import os from 'os';
 import { BaseBackendAdapter, type RunOneShotOptions } from './base';
@@ -10,6 +10,7 @@ import type {
   StreamEvent,
   Message,
   ToolDetail,
+  McpServerConfig,
 } from '../../types';
 
 // ── Icon ────────────���───────────────────────────────────────────────────────
@@ -51,69 +52,6 @@ const KIRO_TOOL_NAME_MAP: Record<string, string> = {
 
 function normalizeKiroToolName(kiroName: string): string {
   return KIRO_TOOL_NAME_MAP[kiroName] || kiroName;
-}
-
-// ── kiro-cli one-shot output parser ─────────────────────────────────────────
-//
-// `kiro-cli chat --no-interactive` does NOT produce plain text.  It always
-// emits ANSI colour codes (ignores `NO_COLOR` and `TERM=dumb`), wraps the
-// answer in a `> ` prompt prefix, prints a fixed "trust all tools" warning
-// header on stderr/stdout, and finishes with a `▸ Credits: X • Time: Ys`
-// footer.  Feeding this raw output into titles or memory-note JSON parsing
-// leaves garbage like `[38;5;141m> [0mAsking about a number`.
-//
-// This helper extracts the clean answer body.  It is exported for unit tests.
-//
-// Sample raw output (with ANSI stripped for readability):
-//   All tools are now trusted (!). Kiro will execute tools without asking...
-//   Agents can sometimes do unexpected things so understand the risks.
-//
-//   Learn more at https://kiro.dev/docs/cli/chat/security/#using-tools-trust-all-safely
-//
-//
-//
-//   > Hey there, friend!
-//
-//    ▸ Credits: 0.02 • Time: 3s
-//
-// After parsing: "Hey there, friend!"
-//
-// CSI regex covers colour codes (`\x1b[32m`), 256-colour (`\x1b[38;5;141m`),
-// cursor-show/hide (`\x1b[?25l`), and similar standard escape sequences.
-const ANSI_CSI_REGEX = /\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g;
-
-export function parseKiroChatOutput(raw: string): string {
-  if (!raw) return '';
-
-  // 1. Strip ANSI escape sequences.
-  const noAnsi = raw.replace(ANSI_CSI_REGEX, '');
-
-  // 2. Strip the fixed trust-warning header if present.  The end of the
-  //    header is the stable URL fragment, which avoids fragile line counts.
-  const headerEndMarker = '/chat/security/#using-tools-trust-all-safely';
-  const headerEndIdx = noAnsi.indexOf(headerEndMarker);
-  let body = headerEndIdx >= 0
-    ? noAnsi.slice(headerEndIdx + headerEndMarker.length)
-    : noAnsi;
-
-  // 3. Strip the `▸ Credits: ... • Time: ...` footer line.  Match from the
-  //    start of its line so we never slice into the answer itself.
-  const footerIdx = body.search(/\n\s*▸\s+Credits:/);
-  if (footerIdx >= 0) {
-    body = body.slice(0, footerIdx);
-  }
-
-  // 4. Trim whitespace.
-  body = body.trim();
-
-  // 5. Strip the single leading `> ` prompt prefix kiro-cli prints before
-  //    the first line of the answer.  Only the very first two characters —
-  //    never anywhere else — so markdown blockquotes in the answer survive.
-  if (body.startsWith('> ')) {
-    body = body.slice(2);
-  }
-
-  return body.trim();
 }
 
 export function extractKiroToolDetails(toolCallId: string, kiroName: string, title: string, kind?: string): ToolDetail {
@@ -493,73 +431,203 @@ export class KiroAdapter extends BaseBackendAdapter {
       }
       const prompt = `Summarize the following chat session in one concise sentence (100-150 characters max). Only output the summary, nothing else:\n\n${sessionText}`;
 
-      return await new Promise<string>((resolve) => {
-        execFile('kiro-cli', ['chat', '--no-interactive', '--trust-all-tools', prompt], { timeout: 30000 }, (err, stdout) => {
-          if (err || !stdout.trim()) {
-            resolve(fallback || `Session (${messages.length} messages)`);
-          } else {
-            resolve(stdout.trim().substring(0, 200));
-          }
-        });
-      });
+      const out = await this._acpOneShot(prompt, { timeoutMs: 30000 });
+      if (!out) return fallback || `Session (${messages.length} messages)`;
+      return out.substring(0, 200);
     } catch {
       return fallback || `Session (${messages.length} messages)`;
     }
   }
 
   /**
-   * Run `kiro-cli chat` in one-shot mode against a single prompt and
-   * return the clean answer text.  Used by the Memory MCP server when
-   * Kiro is the configured Memory CLI.
+   * Run a one-shot prompt against an ephemeral `kiro-cli acp` session and
+   * return the model's final answer text. Used by the Memory MCP server,
+   * KB digestion, and the OCR endpoint via this `runOneShot` entry point;
+   * also used internally for `generateTitle` / `generateSummary` so every
+   * Kiro one-shot call goes through the same structured ACP path.
    *
-   * kiro-cli always emits ANSI colour codes plus a trust-warning header
-   * and a credits footer around the answer, even with `--no-interactive`
-   * and `NO_COLOR=1`.  We run the raw output through `parseKiroChatOutput`
-   * so callers get just the answer body.
+   * Why ACP instead of `kiro-cli chat --no-interactive`:
+   * `kiro-cli chat` prints tool-call narration ("Reading images: ...",
+   * " (using tool: read)", " ✓ Successfully ...", " - Completed in Xs")
+   * inline with the answer text. Parsing it back out is fragile and
+   * version-dependent. ACP is a structured JSON-RPC protocol where
+   * `agent_message_chunk` (assistant text) is distinct from `tool_call`
+   * notifications, so we get the final answer without any string parsing.
    */
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { timeoutMs = 60000, workingDir } = options;
-    return await new Promise<string>((resolve, reject) => {
-      execFile(
-        'kiro-cli',
-        ['chat', '--no-interactive', '--trust-all-tools', prompt],
-        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined },
-        (err, stdout, stderr) => {
-          if (err) {
-            const msg = (stderr && stderr.trim()) || err.message;
-            reject(new Error(`kiro-cli chat failed: ${msg}`));
-            return;
-          }
-          resolve(parseKiroChatOutput(stdout || ''));
-        },
-      );
-    });
+    return this._acpOneShot(prompt, options);
   }
 
   async generateTitle(userMessage: string, fallback: string): Promise<string> {
     if (!userMessage || typeof userMessage !== 'string' || !userMessage.trim()) {
       return fallback || 'New Chat';
     }
+    const titleFallback = () => fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
     try {
       const truncated = userMessage.substring(0, 2000);
       const prompt = `Generate a short, descriptive title (max 8 words) for a conversation that starts with this user message. Only output the title text, nothing else — no quotes, no prefix:\n\n${truncated}`;
 
-      return await new Promise<string>((resolve) => {
-        execFile('kiro-cli', ['chat', '--no-interactive', '--trust-all-tools', prompt], { timeout: 30000 }, (err, stdout) => {
-          const cleaned = parseKiroChatOutput(stdout || '');
-          if (err || !cleaned) {
-            resolve(fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat');
-          } else {
-            resolve(cleaned.substring(0, 80));
-          }
-        });
-      });
+      const out = await this._acpOneShot(prompt, { timeoutMs: 30000 });
+      if (!out) return titleFallback();
+      return out.substring(0, 80);
     } catch {
-      return fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+      return titleFallback();
     }
   }
 
   // ── Private ─────────���─────────────────────────────────────────────────────
+
+  /**
+   * Spawn an ephemeral `kiro-cli acp` process, run a single prompt, collect
+   * the model's final answer, and return it. The single shared one-shot
+   * primitive used by `runOneShot`, `generateTitle`, and `generateSummary`.
+   *
+   * Buffer rule: append `agent_message_chunk` text only when no tool is
+   * currently active; **clear** the buffer on each `tool_call`; remove from
+   * the active set on `tool_call_update`. This discards any pre-tool
+   * reasoning ("Let me read the image first.") and retains only the
+   * post-tool final answer.
+   */
+  private _acpOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
+    const { timeoutMs = 60000, workingDir, model, mcpServers } = options;
+    const cwd = workingDir || this.workingDir || os.homedir();
+    const mcpServersForAcp: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
+
+    const proc = spawn('kiro-cli', ['acp'], {
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+
+    let stderrBuf = '';
+    proc.stderr!.on('data', (chunk: Buffer) => {
+      stderrBuf += chunk.toString();
+      if (stderrBuf.length > 4000) stderrBuf = stderrBuf.slice(-4000);
+    });
+
+    const client = new AcpClient(proc);
+    let timer: NodeJS.Timeout | null = null;
+    let settled = false;
+
+    return new Promise<string>((resolve, reject) => {
+      const cleanup = () => {
+        if (timer) { clearTimeout(timer); timer = null; }
+        if (!proc.killed) proc.kill('SIGTERM');
+      };
+      const settle = (fn: () => void) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        fn();
+      };
+
+      timer = setTimeout(() => {
+        settle(() => reject(new Error(`kiro-cli acp runOneShot timed out after ${timeoutMs}ms`)));
+      }, timeoutMs);
+
+      proc.on('error', (err) => {
+        const msg = err.message.includes('ENOENT')
+          ? 'Kiro CLI is not installed. Install it from https://kiro.dev/cli/'
+          : `kiro-cli acp spawn failed: ${err.message}`;
+        settle(() => reject(new Error(msg)));
+      });
+
+      (async () => {
+        try {
+          await client.request('initialize', {
+            protocolVersion: 1,
+            clientCapabilities: {
+              fs: { readTextFile: true, writeTextFile: true },
+              terminal: true,
+            },
+            clientInfo: { name: 'agent-cockpit', version: '1.0.0' },
+          });
+
+          const sessionResult = await client.request('session/new', {
+            cwd,
+            mcpServers: mcpServersForAcp,
+          }) as KiroSessionNewResult;
+          const kiroSessionId = sessionResult.sessionId;
+
+          if (model) {
+            try {
+              await Promise.race([
+                client.request('session/set_model', { sessionId: kiroSessionId, modelId: model }),
+                new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), 5000)),
+              ]);
+            } catch {
+              // Ignore — fall back to default model
+            }
+          }
+
+          let promptError: Error | null = null;
+          client.request('session/prompt', {
+            sessionId: kiroSessionId,
+            prompt: [{ type: 'text', text: prompt }],
+          }).then(() => {
+            client.stopNotifications();
+          }).catch((err: Error) => {
+            promptError = err;
+            client.stopNotifications();
+          });
+
+          let buffer = '';
+          const activeToolIds = new Set<string>();
+
+          for await (const notification of client.notifications()) {
+            if (notification.method === 'session/request_permission') {
+              const reqId = notification.id;
+              if (reqId != null) {
+                client.respond(reqId, {
+                  outcome: { outcome: 'selected', optionId: 'allow_always' },
+                });
+              }
+              continue;
+            }
+
+            if (notification.method !== 'session/update') continue;
+
+            const params = (notification.params || {}) as Record<string, unknown>;
+            const update = params.update as Record<string, unknown>;
+            if (!update) continue;
+
+            const updateType = update.sessionUpdate as string;
+
+            if (updateType === 'agent_message_chunk') {
+              const content = update.content as Record<string, unknown> | undefined;
+              if (content && content.type === 'text' && typeof content.text === 'string' && activeToolIds.size === 0) {
+                buffer += content.text;
+              }
+            } else if (updateType === 'tool_call') {
+              const toolCallId = update.toolCallId as string;
+              const status = (update.status as string) || 'pending';
+              const kind = (update.kind as string) || '';
+              const title = (update.title as string) || '';
+              const toolName = kind || title.split(' ')[0] || 'unknown';
+              if (toolName === 'thinking') continue;
+              if (status === 'pending' || status === 'in_progress') {
+                activeToolIds.add(toolCallId);
+                buffer = '';
+              }
+            } else if (updateType === 'tool_call_update') {
+              const toolCallId = update.toolCallId as string;
+              activeToolIds.delete(toolCallId);
+            }
+          }
+
+          if (promptError) {
+            const stderr = stderrBuf.trim();
+            settle(() => reject(new Error(`kiro-cli acp prompt failed: ${promptError!.message}${stderr ? ` | stderr: ${stderr.slice(0, 200)}` : ''}`)));
+            return;
+          }
+
+          settle(() => resolve(buffer.trim()));
+        } catch (err) {
+          const stderr = stderrBuf.trim();
+          settle(() => reject(new Error(`kiro-cli acp runOneShot failed: ${(err as Error).message}${stderr ? ` | stderr: ${stderr.slice(0, 200)}` : ''}`)));
+        }
+      })();
+    });
+  }
 
   private _resetIdleTimer(conversationId: string): void {
     const entry = this.processes.get(conversationId);
