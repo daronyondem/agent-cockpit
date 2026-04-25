@@ -515,7 +515,7 @@ No `supportedEffortLevels` — Kiro does not expose effort tuning. When Kiro add
 **ACP process lifecycle:** Lazy spawn + idle timeout + transparent recovery.
 - First message → spawn `kiro-cli acp` → `initialize` handshake → `session/new(cwd)` → **yield `external_session` stream event** → `[session/set_model]` → `session/prompt`
 - Subsequent messages → reuse process → `[session/set_model]` → `session/prompt`
-- Idle timeout (configurable via `KIRO_ACP_IDLE_TIMEOUT_MS` env var, default 1 hour) → kill process
+- Idle timeout (configurable via `KIRO_ACP_IDLE_TIMEOUT_MS` env var, default 1 hour) → kill process. The timer resets on every ACP notification received during a turn, so long-running multi-agent runs don't get killed mid-flight; "idle" means literally no activity from the app-server, not "time since last user message".
 - Next message after timeout → respawn → `initialize` → `session/load(sessionId, cwd)` → **drain replayed notifications** → `session/prompt`
 
 **Stream termination:** Empirically, Kiro holds the `session/prompt` JSON-RPC response until the turn is fully done — after all subagents, tool calls, permission requests, and streaming chunks complete. The response body's `stopReason` (`end_turn` | `cancelled` | `refusal` | `max_tokens`) IS the end-of-turn signal; Kiro does **not** emit a `session/update` with `sessionUpdate: 'turn_end'` on the ACP channel. The adapter calls `AcpClient.stopNotifications()` immediately when the `session/prompt` response resolves (same on `.catch()`), which ends the notification iterator and the stream loop exits with a `done` event. The `turn_end` branch in the notification handler is kept as defensive handling in case Kiro ever starts emitting it.
@@ -533,6 +533,55 @@ No `supportedEffortLevels` — Kiro does not expose effort tuning. When Kiro add
 **Usage tracking:** Kiro's `_kiro.dev/metadata` notifications are parsed for `credits` (accumulated) and `contextUsagePercentage` (snapshot, overwritten each update). These are persisted on the conversation and session `Usage` objects but **excluded from the daily usage ledger** — Kiro's credit-based billing is not comparable with token-based backends. The frontend header's per-CLI chip surfaces the context percentage for `kiro` (see `chip-renderers.jsx` in spec-frontend). Because `contextUsagePercentage` is a Kiro-only snapshot and `chatService._addToUsage` only overwrites the field when the incoming source includes it, both `updateConversationBackend` and `resetSession` explicitly clear the field on the conversation entry (and `updateConversationBackend` also clears it on the active session) so a stale Kiro value cannot leak into a subsequent Claude Code / generic-backend chip.
 
 **One-shot LLM calls (`runOneShot`, `generateTitle`, `generateSummary`):** All three callers funnel through one private helper, `_acpOneShot(prompt, { model?, timeoutMs? })`, which speaks ACP via an **ephemeral** `kiro-cli acp` process — separate from any per-conversation ACP process — so one-shot calls never pollute streaming session state. The flow: spawn `kiro-cli acp` → `initialize` → `session/new({ cwd, mcpServers })` → optional `session/set_model({ modelId })` → `session/prompt`. Permission requests are auto-approved with `{ outcome: 'selected', optionId: 'allow_always' }`. The buffer rule for collecting the assistant's final answer is: append `agent_message_chunk` text only when no tool is currently active, **clear** the buffer on each `tool_call`, and remove the tool from the active set on `tool_call_update`. This discards any pre-tool reasoning ("Let me read the image first.") and retains only the post-tool final answer, exactly as `agent_message_chunk` text. The process is killed on `session/prompt` resolution, on timeout (`timeoutMs`, default 60s; `generateTitle`/`generateSummary` use 30s), or on spawn error. `generateTitle` and `generateSummary` truncate the result (80 chars / 200 chars) and fall back gracefully if kiro-cli is not installed or not authenticated. ACP is used uniformly because the legacy `kiro-cli chat --no-interactive` path interleaves tool-call narration (`Reading images: …`, ` (using tool: …)`, ` ✓ Successfully …`, ` - Completed in Xs`) inline with the answer text whenever the agent decides to call a tool — and parsing that back out is fragile and CLI-version-dependent. ACP gives us structurally distinct frame types so no string parsing is required.
+
+### CodexAdapter (`src/services/backends/codex.ts`)
+
+**Metadata:** `id: 'codex'`, capabilities: `thinking: true, planMode: false, agents: false, toolActivity: true, userQuestions: false, stdinInput: false`. Models are discovered dynamically via `model/list` against the running `codex app-server`; until that background fetch lands the picker shows a hardcoded `FALLBACK_MODELS` set covering `gpt-5.5` (default), `gpt-5.5-codex`, and `gpt-5.5-mini`. The fallback also stays in effect when the CLI is missing or `model/list` fails. The constructor kicks off `_refreshModels()` once at construction; under Jest (`process.env.JEST_WORKER_ID` is set) the refresh is skipped so unit tests don't spawn real processes. No `supportedEffortLevels` — Codex doesn't expose effort tuning at the protocol level.
+
+**Integration protocol:** Codex App Server (JSON-RPC 2.0) over stdin/stdout via `codex app-server`. The protocol is documented inline in the OpenAI codex repo and ships TypeScript types via `codex app-server generate-ts --out <DIR>`. The adapter hand-types only the request/response/notification shapes it actually uses (~10 interfaces) to avoid vendoring 400+ generated files; drift is checked manually by re-running the generator and diffing.
+
+**Auth model:** Codex authenticates via `~/.codex/auth.json` — written by `codex login` (ChatGPT OAuth) or `codex login --api-key` (API-key billing). The adapter never imports `@openai/codex-sdk` because that path requires API-key billing and would break ChatGPT subscription users. Both `codex app-server` (streaming) and `codex exec` (one-shot) read the same `auth.json`, so subscription and API-key users work identically.
+
+**App-server process lifecycle:** Lazy spawn + idle timeout + transparent recovery, mirroring Kiro.
+- First message → spawn `codex app-server` → `initialize({clientInfo, capabilities})` → `thread/start({cwd, approvalPolicy: 'on-request', sandbox: 'workspace-write', experimentalRawEvents: false, persistExtendedHistory: false, model?, developerInstructions?})` → **yield `external_session` stream event** → `turn/start({threadId, input, model?})`
+- Subsequent messages → reuse process → `turn/start`
+- Idle timeout (configurable via `CODEX_IDLE_TIMEOUT_MS`, default 10 min) → SIGTERM → cleanup. The timer resets on every JSON-RPC notification received during a turn so long-running multi-agent runs don't get killed mid-flight; "idle" means literally no activity from the app-server, not "time since last user message".
+- Next message after timeout → respawn → `initialize` → `thread/resume({threadId, cwd, approvalPolicy, sandbox, excludeTurns: true, persistExtendedHistory: false, model?})` → drain replayed notifications → `turn/start`. If `thread/resume` fails (e.g. persisted threadId no longer exists on disk), the adapter falls back to a fresh `thread/start` so the conversation isn't dead-ended.
+
+**Turn input:** Codex's `turn/start` expects an array of typed input items: `[{ type: 'text', text: <message>, text_elements: [] }]`. The cockpit currently sends a single text element; image attachments and other element types are not surfaced through the cockpit UI.
+
+**Turn termination:** Codex emits a `turn/completed` notification when the turn finishes. The notification includes per-turn token usage (`thread/tokenUsage/updated` arrives separately). On `turn/completed` the stream loop yields a `done` event and stops the notification iterator. `turn/interrupt({threadId, turnId})` is the abort path.
+
+**Approvals:** Codex uses server-to-client JSON-RPC requests (not notifications) for approvals — `item/commandExecution/requestApproval`, `item/fileChange/requestApproval`, and `item/permissions/requestApproval`. The adapter auto-approves all three:
+- `commandExecution` / `fileChange` → `{ decision: 'acceptForSession' }`
+- `permissions` → `{ scope: 'session' }`
+
+Other server-side requests we do **not** answer (we reply with rejection so the turn doesn't hang on UI we don't expose):
+- `item/elicitation/request` — interactive prompts asking the user to pick / type
+- `item/userInput/request` — same idea, free-form text
+- Dynamic tool calls' `requestApproval` — out-of-protocol tools the cockpit hasn't whitelisted
+
+**Tool name normalization:** Codex thread items are typed (`type: 'commandExecution' | 'fileChange' | 'mcpToolCall' | 'dynamicToolCall' | 'webSearch' | 'imageView' | 'imageGeneration' | 'agentMessage' | 'reasoning' | 'plan' | …`), not named. The adapter dispatches on `item.type` via `extractCodexToolDetails()` and `ITEM_TYPE_TO_TOOL`. For `mcpToolCall` and `dynamicToolCall` the actual tool name on the item is preserved verbatim.
+
+**Thinking:** `item/reasoning/textDelta` and `item/reasoning/summaryTextDelta` are emitted as `ThinkingEvent` so they render in the dedicated thinking UI rather than the main message body.
+
+**Session mapping:** The Codex `thread.id` is yielded as an `external_session` `StreamEvent` immediately after `thread/start`. `processStream` persists it on the active `SessionEntry.externalSessionId` so `thread/resume` can reattach across cockpit restarts. The `excludeTurns: true` flag on `thread/resume` suppresses the history replay (Codex would otherwise re-emit every prior assistant turn as notifications, which would be double-counted in the cockpit transcript).
+
+**MCP injection:** Codex configures MCP servers via `[mcp_servers.<name>]` sections in its config.toml. The adapter injects cockpit-managed servers per-spawn via repeated `-c` config overrides on `codex app-server` (and `codex exec` for one-shots). For each server the adapter emits three (or two if no env) `-c` pairs:
+
+```
+-c mcp_servers.<name>.command="<cmd>"
+-c mcp_servers.<name>.args=["<arg1>", "<arg2>", …]
+-c mcp_servers.<name>.env={ KEY = "value", … }
+```
+
+Values are TOML-escaped via small inline helpers (`tomlEscapeString` / `tomlBareKey`). Codex's `-c` parser overrides the matching keys on top of whatever `~/.codex/config.toml` provides. The user's `~/.codex/` is otherwise untouched — auth, sessions, plugins, skills, and any user-defined config keys all load normally — which means cockpit-managed threads share rollout storage with the user's standalone `codex` CLI usage and `thread/resume` works across process respawns.
+
+Before injecting, the adapter reads the user's `~/.codex/config.toml` and skips any server whose name collides with a `[mcp_servers.<name>]` already present there (warning logged) so user-defined MCP servers always win. To handle MCP set changes within a conversation, the adapter hashes the `mcpServers` list and respawns the app-server when the hash differs from the previous spawn for that conversation.
+
+**One-shot LLM calls (`runOneShot`, `generateTitle`, `generateSummary`):** All three funnel through `_execOneShot(prompt, options)`, which invokes `codex exec --full-auto --skip-git-repo-check -C <cwd> [-c mcp_servers.…] [-m <model>] "<prompt>"` via `child_process.execFile`. `codex exec` is a dedicated non-interactive subcommand that prints the model's final answer on stdout (no streaming-protocol parsing required). MCP injection reuses the same `-c`-flag path as the app-server. ENOENT is mapped to a friendly "Codex CLI is not installed" error; all other errors are surfaced as `codex exec failed: <stderr or exit code>`. `generateTitle` / `generateSummary` truncate the result (80 chars / 200 chars) and fall back to a substring-of-userMessage / `Session (N messages)` placeholder if codex is missing or unauthenticated.
+
+**Regenerating protocol types (drift check):** When upgrading the Codex CLI, run `codex app-server generate-ts --out /tmp/codex-ts` and diff the relevant interfaces (`v2/ThreadStartParams.ts`, `TurnStartParams.ts`, `ItemStartedNotification.ts`, `ThreadItem.ts`, `ServerRequest.ts`, `Model.ts`, `ModelListResponse.ts`) against the hand-typed shapes in `codex.ts`. The hand-typed subset is intentionally narrow — only fields the adapter reads.
 
 ### Adding a New Backend
 

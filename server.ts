@@ -13,6 +13,7 @@ import { ChatService } from './src/services/chatService';
 import { BackendRegistry } from './src/services/backends/registry';
 import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
 import { KiroAdapter } from './src/services/backends/kiro';
+import { CodexAdapter } from './src/services/backends/codex';
 import { UpdateService } from './src/services/updateService';
 import { ClaudePlanUsageService } from './src/services/claudePlanUsageService';
 import { KiroPlanUsageService } from './src/services/kiroPlanUsageService';
@@ -87,6 +88,7 @@ app.get('/api/me', meHandler);
 const backendRegistry = new BackendRegistry();
 backendRegistry.register(new ClaudeCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 backendRegistry.register(new KiroAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
+backendRegistry.register(new CodexAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 
 const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
 const updateService = new UpdateService(__dirname);
