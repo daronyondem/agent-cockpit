@@ -501,7 +501,7 @@ export class CodexAdapter extends BaseBackendAdapter {
         agents: false,
         toolActivity: true,
         userQuestions: false,
-        stdinInput: false,
+        stdinInput: true,
       },
       models: this.modelCache || FALLBACK_MODELS,
     };
@@ -547,9 +547,25 @@ export class CodexAdapter extends BaseBackendAdapter {
       }
     };
 
-    // Codex doesn't support stdin user input mid-turn — approval flows go
-    // through serverRequest, which the adapter auto-approves.
-    const sendInput = (_text: string) => {};
+    // Append text to the in-flight turn via `turn/steer`. No-op when no
+    // active turn exists yet (server would reject with invalid-request);
+    // also no-op once aborted, so we don't race the turn/interrupt above.
+    // expectedTurnId is required by the protocol; passing the tracked turnId
+    // makes the server reject stale UI input rather than apply it to a new
+    // turn the user didn't intend.
+    const sendInput = (text: string) => {
+      if (aborted) return;
+      if (typeof text !== 'string' || !text) return;
+      const { client, threadId, turnId } = state;
+      if (!client || client.isClosed || !threadId || !turnId) return;
+      client.request('turn/steer', {
+        threadId,
+        input: [{ type: 'text', text }],
+        expectedTurnId: turnId,
+      }).catch((err: Error) => {
+        console.warn(`[codex] turn/steer rejected: ${err.message}`);
+      });
+    };
 
     return { stream, abort, sendInput };
   }

@@ -10,4 +10,4 @@ Agent Cockpit supports multiple CLI backends. Not all backends expose the same m
 | Plan mode | Yes | No | No | Claude Code's special plan-only mode is unique to it. |
 | Subagents | Yes | Yes | No | Codex does not expose a delegation/subagent primitive. |
 | MCP injection | `--mcp-config` flag | `mcpServers` in `session/new`/`session/load` | `-c mcp_servers.<name>.{command,args,env}=…` flags | Codex configures MCP via `[mcp_servers.<name>]` TOML sections. Cockpit injects them per-spawn via repeated `-c` overrides on `codex app-server`, so the user's real `~/.codex/` is used unchanged for auth, sessions, and config. Collisions with names already defined in the user's `config.toml` log a warning and keep the user's. |
-| Mid-turn user input (stdin) | Yes | No | No | Only Claude Code accepts additional input lines mid-turn. |
+| Mid-turn user input (stdin) | Yes | No | Yes (`turn/steer`) | Claude Code writes additional lines to the CLI's stdin. Codex appends text to the in-flight turn via the JSON-RPC `turn/steer` request (no-op when no turn is active). |
