@@ -70,6 +70,7 @@ Always use pm2:
 
 - Do NOT add `Co-Authored-By: Claude ...` lines in commit messages.
 - Do NOT add "Generated with Claude Code" footers in PR bodies.
+- **Never use auto-closing keywords (`Closes`, `Fixes`, `Resolves`) for an issue unless the user has explicitly said the PR fully resolves it.** Default to non-closing references (`Refs #N`, `Re #N`, or just `#N`). This repo squash-merges, so the keyword in the *commit message body* gets inherited by the squash commit and closes the issue on merge — fixing only the PR body is not enough. When in doubt, ask whether the issue should close on merge.
 - Before submitting a PR, always:
   1. Run existing tests and ensure they pass.
   2. Add new tests for any new functionality or endpoints.
