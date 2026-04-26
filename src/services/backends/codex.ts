@@ -689,8 +689,11 @@ export class CodexAdapter extends BaseBackendAdapter {
 
     const stream = this._createStream(message, options, {
       get aborted() { return aborted; },
+      get client() { return state.client; },
       set client(c: CodexAppServerClient | null) { state.client = c; },
+      get threadId() { return state.threadId; },
       set threadId(t: string | null) { state.threadId = t; },
+      get turnId() { return state.turnId; },
       set turnId(t: string | null) { state.turnId = t; },
       get pendingUserInput() { return state.pendingUserInput; },
       set pendingUserInput(p: PendingUserInput | null) { state.pendingUserInput = p; },
