@@ -1,9 +1,21 @@
-// ─── DOCX handler (pandoc-backed) ───────────────────────────────────────────
-// Converts `.docx` to GitHub-Flavored Markdown via a `pandoc` subprocess.
-// We previously used `mammoth` here, but it collapses tables to flat prose —
-// that's fine for text extraction but loses structure the Digestion CLI
-// needs. Pandoc is the only thing in our stack that round-trips OOXML tables
-// into semantic markdown, so we pay the "external binary" cost to use it.
+// ─── DOCX handler (pandoc + per-image AI description) ──────────────────────
+// Converts `.docx` to GitHub-Flavored Markdown via a `pandoc` subprocess, then
+// describes embedded images with the configured Ingestion CLI so digestion
+// sees real text instead of bare image links.
+//
+// Flow:
+//   1. pandoc → GFM markdown + media/ directory (unchanged from before)
+//   2. For each extracted image:
+//        - measure width via `@napi-rs/canvas.loadImage`
+//        - skip when `width < 100` (icons, logos, decorative dividers)
+//        - skip when no Ingestion CLI is configured
+//        - otherwise call `convertImageToMarkdown` and append a
+//          `> Image description (source: artificial-intelligence): …`
+//          quoted block right after every reference to that image.
+//      Per-image failures fall back to the bare link with no description.
+//
+// Pandoc is the only tool in our stack that round-trips OOXML tables into
+// semantic markdown, so we pay the "external binary" cost to use it.
 //
 // Contract with callers:
 //   - `detectPandoc()` MUST have been run at least once before this handler
@@ -18,8 +30,27 @@ import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
 import { promises as fsp } from 'fs';
+import * as napiCanvas from '@napi-rs/canvas';
 import { runPandoc } from '../pandoc';
 import type { Handler, HandlerResult } from './types';
+import { convertImageToMarkdown } from '../ingestion/pageConversion';
+
+/** Below this pixel width an image is treated as decorative and not described. */
+const MIN_DESCRIBABLE_WIDTH = 100;
+
+type ImageSource =
+  | 'artificial-intelligence'
+  | 'too-small'
+  | 'no-adapter'
+  | 'ai-failed';
+
+interface ImageRecord {
+  mediaPath: string;
+  width: number | null;
+  source: ImageSource;
+  aiCallDurationMs: number | null;
+  aiRetries: number;
+}
 
 /** Recursively walk a directory and return absolute file paths. */
 async function walkFiles(root: string): Promise<string[]> {
@@ -48,6 +79,9 @@ export const docxHandler: Handler = async ({
   buffer,
   filename,
   outDir,
+  ingestionAdapter,
+  ingestionModel,
+  ingestionEffort,
 }): Promise<HandlerResult> => {
   // Pandoc reads docx from disk (it needs to unzip the OOXML package), so
   // we stage the upload in a temp file. We use a scrambled name to avoid
@@ -140,22 +174,134 @@ export const docxHandler: Handler = async ({
       );
     }
 
+    // Per-image classification + AI description pass. Order matches `mediaFiles`
+    // so the metadata reflects the order pandoc emitted them.
+    const imageRecords: ImageRecord[] = [];
+    for (const rel of mediaFiles) {
+      const abs = path.join(outDir, rel);
+      let width: number | null = null;
+      try {
+        const img = await napiCanvas.loadImage(abs);
+        width = img.width;
+      } catch {
+        // Couldn't decode (uncommon format, corrupt bytes) — fall through and
+        // try to describe anyway, since AI vision can sometimes still read it.
+        width = null;
+      }
+
+      if (width !== null && width < MIN_DESCRIBABLE_WIDTH) {
+        imageRecords.push({
+          mediaPath: rel,
+          width,
+          source: 'too-small',
+          aiCallDurationMs: null,
+          aiRetries: 0,
+        });
+        continue;
+      }
+
+      if (!ingestionAdapter) {
+        imageRecords.push({
+          mediaPath: rel,
+          width,
+          source: 'no-adapter',
+          aiCallDurationMs: null,
+          aiRetries: 0,
+        });
+        continue;
+      }
+
+      const startedAt = Date.now();
+      let description: string | null = null;
+      let retried = false;
+      let aiError: string | null = null;
+      try {
+        const result = await convertImageToMarkdown(abs, {
+          adapter: ingestionAdapter,
+          model: ingestionModel,
+          effort: ingestionEffort,
+        });
+        description = result.markdown;
+        retried = result.retried;
+      } catch (err) {
+        aiError = err instanceof Error ? err.message : String(err);
+      }
+      const aiCallDurationMs = Date.now() - startedAt;
+
+      if (description !== null) {
+        markdown = augmentImageReference(markdown, rel, description);
+        imageRecords.push({
+          mediaPath: rel,
+          width,
+          source: 'artificial-intelligence',
+          aiCallDurationMs,
+          aiRetries: retried ? 1 : 0,
+        });
+      } else {
+        console.warn(`[kb/docx] AI description failed for ${rel} of "${filename}": ${aiError}`);
+        imageRecords.push({
+          mediaPath: rel,
+          width,
+          source: 'ai-failed',
+          aiCallDurationMs,
+          aiRetries: 1,
+        });
+      }
+    }
+
     // Prepend a title line so the converted markdown is self-identifying and
     // the Digestion CLI can cite the source filename without reaching into
     // meta.json. Matches the pdf/pptx handlers.
     const body = `# ${filename}\n\n${markdown.trim() || '_[empty document]_'}`;
     const wordCount = markdown.split(/\s+/).filter(Boolean).length;
 
+    const sourceCounts = imageRecords.reduce(
+      (acc, r) => {
+        acc[r.source] = (acc[r.source] ?? 0) + 1;
+        return acc;
+      },
+      {} as Record<ImageSource, number>,
+    );
+
     return {
       text: body,
       mediaFiles,
-      handler: 'docx/pandoc',
+      handler: 'docx/pandoc-hybrid',
       metadata: {
         wordCount,
         mediaCount: mediaFiles.length,
+        sourceCounts,
+        images: imageRecords,
       },
     };
   } finally {
     await fsp.rm(tmpBase, { recursive: true, force: true }).catch(() => undefined);
   }
 };
+
+/**
+ * Append a quoted "Image description" block right after every reference to
+ * `mediaRel` in the markdown. Multi-line descriptions are quoted with `>` on
+ * every line so the rendered markdown shows them as a single blockquote.
+ */
+function augmentImageReference(
+  markdown: string,
+  mediaRel: string,
+  description: string,
+): string {
+  const desc = description.trim();
+  if (!desc) return markdown;
+
+  const lines = desc.split('\n');
+  const quoted = lines
+    .map((line, i) =>
+      i === 0
+        ? `> Image description (source: artificial-intelligence): ${line}`
+        : `> ${line}`,
+    )
+    .join('\n');
+
+  const escaped = mediaRel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`(!\\[[^\\]]*\\]\\(${escaped}\\))`, 'g');
+  return markdown.replace(re, `$1\n\n${quoted}`);
+}
