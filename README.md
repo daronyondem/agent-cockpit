@@ -16,7 +16,7 @@ Agent Cockpit solves this by decoupling **your data** from **the AI provider**. 
 
 ## Highlighted features
 
-- **Own your data across any CLI** — Every conversation, session, and memory update is stored locally as open JSON on your own disk. Switch between Claude Code, Kiro, and future backends without losing history or context. When a better model ships from another vendor, your accumulated context comes with you instead of being locked inside their platform.
+- **Own your data across any CLI** — Every conversation, session, and memory update is stored locally as open JSON on your own disk. Switch between Claude Code, Kiro, Codex, and future backends without losing history or context. When a better model ships from another vendor, your accumulated context comes with you instead of being locked inside their platform.
 - **Remote web access to local or remote CLIs** — Install Agent Cockpit on your laptop or on a remote machine and drive it from any browser. Pair it with a tunnel like Cloudflare Tunnel to chat with your coding agents from your phone, tablet, or a café laptop while they operate on real files in their native environment.
 - **Integrated memory system** — Adds persistent memory to CLIs that don't have one (like Kiro) and captures memory on the fly from CLIs that do (like Claude Code). Every change to the CLI's own memory file is snapshotted locally, so your accumulated context is portable and vendor-neutral — not trapped inside whichever CLI happens to own it today.
 - **Token and cost tracking** — Token usage and cost are tracked per conversation so you always know what a long-running task or an experiment is actually costing you.
@@ -33,6 +33,7 @@ Agent Cockpit solves this by decoupling **your data** from **the AI provider**. 
 |---------|-----|--------|
 | **Claude Code** | `claude` | Fully supported |
 | **Kiro** | `kiro-cli` | Fully supported |
+| **OpenAI Codex** | `codex` | Fully supported |
 
 Switch between backends per-conversation using the dropdown in the chat input area. Your selected backend is remembered for new conversations.
 
@@ -75,6 +76,7 @@ Beyond the headline capabilities above, Agent Cockpit also ships with:
 - At least one CLI backend installed and authenticated on the same machine:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [Kiro CLI](https://kiro.dev) (`kiro-cli`)
+  - [OpenAI Codex CLI](https://github.com/openai/codex) (`codex`, install with `npm install -g @openai/codex`)
 - At least one OAuth provider configured: Google OAuth 2.0 **or** GitHub OAuth (or both)
 - (Optional) [LibreOffice](https://www.libreoffice.org/) and/or [Pandoc](https://pandoc.org/) on `PATH` to expand Knowledge Base ingestion to Office and other document formats
 - (Optional) [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) or a similar tunnel for remote access — see [ONBOARDING.md](ONBOARDING.md) for a step-by-step self-hosting guide with PM2 and Cloudflare Tunnel
@@ -119,6 +121,7 @@ npm start
 | `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
 | `BASE_PATH` | No | `''` | URL base path for reverse proxy deployments |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
+| `CODEX_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing the Codex `app-server` process |
 
 *\* At least one OAuth provider (Google or GitHub) must be fully configured. You can set up one or both.*
 
@@ -174,6 +177,7 @@ agent-cockpit/
 │       │   ├── base.ts           # Base adapter interface for CLI backends
 │       │   ├── claudeCode.ts     # Claude Code CLI adapter
 │       │   ├── kiro.ts           # Kiro CLI adapter (ACP protocol)
+│       │   ├── codex.ts          # Codex CLI adapter (Codex App Server protocol)
 │       │   ├── toolUtils.ts      # Shared tool helpers across backends
 │       │   └── registry.ts       # Backend registry (pluggable adapter system)
 │       ├── knowledgeBase/    # KB ingestion, digestion, dreaming, embeddings, vector store
@@ -213,7 +217,7 @@ Tests use Jest and run with:
 npm test
 ```
 
-Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, self-update service, OAuth/auth flows, settings service, browser tab indicator, memory MCP and watcher, and the full Knowledge Base pipeline (ingestion, digestion, dreaming, embeddings, vector store, folders, multi-location, handlers).
+Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, CodexAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, self-update service, OAuth/auth flows, settings service, browser tab indicator, memory MCP and watcher, and the full Knowledge Base pipeline (ingestion, digestion, dreaming, embeddings, vector store, folders, multi-location, handlers).
 
 CI runs tests automatically on every pull request against `main` via GitHub Actions. Version bumps are automated on merge to `main`.
 
@@ -251,6 +255,20 @@ Kiro connects via ACP (Agent Client Protocol) — JSON-RPC 2.0 over stdin/stdout
 
 Ensure `kiro-cli` is installed and authenticated before selecting Kiro as a backend.
 
+### OpenAI Codex CLI
+
+Codex connects via the Codex App Server protocol — JSON-RPC 2.0 over stdin/stdout (a separate transport from ACP, but conceptually similar). The adapter handles:
+- Lazy `codex app-server` process spawning per conversation with idle timeout (configurable via `CODEX_IDLE_TIMEOUT_MS`, default 10 min)
+- Automatic thread creation, resume across server restarts, and `turn/interrupt` for aborts
+- Mid-turn user input via `turn/steer`
+- Interactive user questions via `item/tool/requestUserInput` (gated behind Codex's `default_mode_request_user_input` experimental flag — wired but dormant until enabled)
+- Full subagent thread demultiplexing — child threads spawned via `spawn_agent` render nested under their parent Agent card with their own live tool activity, matching Claude Code's behavior
+- MCP server injection via `-c mcp_servers.<name>.{command,args,env}=…` overrides at spawn time, so your real `~/.codex/` is used unchanged for auth, sessions, and config
+- Per-turn token usage tracking via `thread/tokenUsage/updated`
+- Permission auto-approval for all tool calls and patches
+
+Ensure `codex` is installed (`npm install -g @openai/codex`) and authenticated (`codex login` or `OPENAI_API_KEY`) before selecting Codex as a backend.
+
 ## Adding a New Backend
 
 Agent Cockpit's pluggable adapter system makes it straightforward to add new CLI backends:
@@ -264,7 +282,7 @@ See [docs/SPEC.md](docs/SPEC.md) for the full adapter contract and stream event 
 
 ## Roadmap
 
-Agent Cockpit supports Claude Code and Kiro as its first two backends. As vendors release more CLI-based coding agents, Agent Cockpit will add adapters so you can use them all from a single interface while keeping your data portable.
+Agent Cockpit supports Claude Code, Kiro, and OpenAI Codex as its first three backends. As vendors release more CLI-based coding agents, Agent Cockpit will add adapters so you can use them all from a single interface while keeping your data portable.
 
 ## Specification
 
