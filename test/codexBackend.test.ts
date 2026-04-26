@@ -1,6 +1,13 @@
 import { BaseBackendAdapter } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
-import { CodexAdapter, extractCodexToolDetails } from '../src/services/backends/codex';
+import {
+  CodexAdapter,
+  extractCodexToolDetails,
+  lookupParentAgentId,
+  eventIsFromChildThread,
+  recordSpawnAgentReceivers,
+  isParentTurnCompleted,
+} from '../src/services/backends/codex';
 
 // ── CodexAdapter metadata ───────────────────────────────────────────────────
 
@@ -292,6 +299,187 @@ describe('extractCodexToolDetails', () => {
   test('unknown item types return null', () => {
     const result = extractCodexToolDetails({ type: 'agentMessage', id: 'm-1' });
     expect(result).toBeNull();
+  });
+});
+
+// ── Subagent thread demultiplexing helpers ─────────────────────────────────
+//
+// `item/*` notifications from `codex app-server` carry `threadId` at the
+// params level. The cockpit uses three small helpers to attribute child-
+// thread activity back to its originating top-level Agent card:
+//   • recordSpawnAgentReceivers — populates the threadId → topLevelCallId map
+//     when a spawnAgent item completes
+//   • lookupParentAgentId       — reads parentAgentId for an event's threadId
+//   • eventIsFromChildThread    — boolean variant for drop-decisions
+
+describe('recordSpawnAgentReceivers', () => {
+  test('completed spawnAgent populates the map (top-level → call id)', () => {
+    const map = new Map<string, string>();
+    recordSpawnAgentReceivers(
+      {
+        type: 'collabAgentToolCall',
+        id: 'call-1',
+        tool: 'spawnAgent',
+        senderThreadId: 'parent-thread',
+        receiverThreadIds: ['child-a', 'child-b'],
+      },
+      map,
+    );
+    expect(map.get('child-a')).toBe('call-1');
+    expect(map.get('child-b')).toBe('call-1');
+  });
+
+  test('non-collab item is a no-op', () => {
+    const map = new Map<string, string>();
+    recordSpawnAgentReceivers(
+      { type: 'commandExecution', id: 'cmd-1', command: 'ls' },
+      map,
+    );
+    expect(map.size).toBe(0);
+  });
+
+  test('non-spawnAgent collab tool is a no-op', () => {
+    const map = new Map<string, string>();
+    for (const tool of ['sendInput', 'resumeAgent', 'wait', 'closeAgent']) {
+      recordSpawnAgentReceivers(
+        {
+          type: 'collabAgentToolCall',
+          id: `call-${tool}`,
+          tool,
+          senderThreadId: 'parent-thread',
+          receiverThreadIds: ['child-x'],
+        },
+        map,
+      );
+    }
+    expect(map.size).toBe(0);
+  });
+
+  test('spawnAgent with empty receiverThreadIds is a no-op', () => {
+    const map = new Map<string, string>();
+    recordSpawnAgentReceivers(
+      {
+        type: 'collabAgentToolCall',
+        id: 'call-2',
+        tool: 'spawnAgent',
+        senderThreadId: 'parent-thread',
+        receiverThreadIds: [],
+      },
+      map,
+    );
+    expect(map.size).toBe(0);
+  });
+
+  test('spawnAgent without receiverThreadIds is a no-op', () => {
+    const map = new Map<string, string>();
+    recordSpawnAgentReceivers(
+      {
+        type: 'collabAgentToolCall',
+        id: 'call-3',
+        tool: 'spawnAgent',
+        senderThreadId: 'parent-thread',
+      },
+      map,
+    );
+    expect(map.size).toBe(0);
+  });
+
+  test('grand-children flatten to the original top-level call id', () => {
+    const map = new Map<string, string>();
+    // Parent spawns child-a under call-1
+    recordSpawnAgentReceivers(
+      {
+        type: 'collabAgentToolCall',
+        id: 'call-1',
+        tool: 'spawnAgent',
+        senderThreadId: 'parent-thread',
+        receiverThreadIds: ['child-a'],
+      },
+      map,
+    );
+    // child-a then spawns grand-c under call-2; sender is already in the map,
+    // so grand-c should attribute back to call-1, not call-2.
+    recordSpawnAgentReceivers(
+      {
+        type: 'collabAgentToolCall',
+        id: 'call-2',
+        tool: 'spawnAgent',
+        senderThreadId: 'child-a',
+        receiverThreadIds: ['grand-c'],
+      },
+      map,
+    );
+    expect(map.get('grand-c')).toBe('call-1');
+  });
+
+  test('falls back to call id when senderThreadId is missing', () => {
+    const map = new Map<string, string>();
+    recordSpawnAgentReceivers(
+      {
+        type: 'collabAgentToolCall',
+        id: 'call-1',
+        tool: 'spawnAgent',
+        receiverThreadIds: ['child-a'],
+      },
+      map,
+    );
+    expect(map.get('child-a')).toBe('call-1');
+  });
+});
+
+describe('lookupParentAgentId', () => {
+  test('returns mapped value for a known child threadId', () => {
+    const map = new Map<string, string>([['child-a', 'call-1']]);
+    expect(lookupParentAgentId({ threadId: 'child-a' }, map)).toBe('call-1');
+  });
+
+  test('returns undefined when threadId is missing', () => {
+    const map = new Map<string, string>([['child-a', 'call-1']]);
+    expect(lookupParentAgentId({}, map)).toBeUndefined();
+  });
+
+  test('returns undefined for parent (unmapped) threadId', () => {
+    const map = new Map<string, string>([['child-a', 'call-1']]);
+    expect(lookupParentAgentId({ threadId: 'parent-thread' }, map)).toBeUndefined();
+  });
+});
+
+describe('isParentTurnCompleted', () => {
+  test('returns true when threadId matches parent', () => {
+    expect(isParentTurnCompleted({ threadId: 'parent' }, 'parent')).toBe(true);
+  });
+
+  test('returns false when threadId is a child', () => {
+    expect(isParentTurnCompleted({ threadId: 'child-a' }, 'parent')).toBe(false);
+  });
+
+  test('returns true (legacy) when params has no threadId', () => {
+    expect(isParentTurnCompleted({}, 'parent')).toBe(true);
+  });
+
+  test('returns true (legacy) when parentThreadId is null', () => {
+    expect(isParentTurnCompleted({ threadId: 'anything' }, null)).toBe(true);
+  });
+});
+
+describe('eventIsFromChildThread', () => {
+  test('returns true for known child threadId', () => {
+    const map = new Map<string, string>([['child-a', 'call-1']]);
+    expect(eventIsFromChildThread({ threadId: 'child-a' }, map)).toBe(true);
+  });
+
+  test('returns false for unknown threadId', () => {
+    const map = new Map<string, string>([['child-a', 'call-1']]);
+    expect(eventIsFromChildThread({ threadId: 'parent-thread' }, map)).toBe(false);
+  });
+
+  test('returns false when threadId is missing', () => {
+    const map = new Map<string, string>([['child-a', 'call-1']]);
+    expect(eventIsFromChildThread({}, map)).toBe(false);
+  });
+
+  test('returns false for empty map', () => {
+    expect(eventIsFromChildThread({ threadId: 'anything' }, new Map())).toBe(false);
   });
 });
 
