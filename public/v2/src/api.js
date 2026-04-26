@@ -200,6 +200,14 @@
     return res.json();
   }
 
+  /* Codex plan usage (ChatGPT plan tier + 5-hour/weekly rate-limit
+     utilization from `codex app-server`'s `account/read` and
+     `account/rateLimits/read` RPCs). Same contract as the others. */
+  async function getCodexPlanUsage(){
+    const res = await chatFetch('codex-plan-usage');
+    return res.json();
+  }
+
   /* Backend registry is effectively static — one fetch per session is plenty.
      Used by the composer pickers on every ChatLive mount. */
   function getBackendsCached(){
@@ -601,6 +609,7 @@
     triggerUpdate,
     getClaudePlanUsage,
     getKiroPlanUsage,
+    getCodexPlanUsage,
     browseDir,
     mkdirDir,
     rmdirDir,

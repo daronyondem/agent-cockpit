@@ -383,7 +383,59 @@ Account-wide Kiro (Amazon Q) plan usage snapshot (subscription tier, monthly cre
 
 See Section 4 (`KiroPlanUsageService`) for the caching, SQLite credential resolution, and HTTP semantics.
 
-## 3.16 Error Response Patterns
+## 3.16 Codex Plan Usage
+
+Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pro / Business / Enterprise / etc.), 5-hour rate-limit window utilization, weekly rate-limit window utilization, and optional credit balance. Surfaced in the ContextChip tooltip on Codex conversations. The service spawns a one-shot `codex app-server` and calls its `account/read` + `account/rateLimits/read` JSON-RPC methods — it does **not** piggyback on the long-lived `app-server` instance owned by `CodexAdapter` (the latter is bound to a specific conversation thread).
+
+| Method | Path | CSRF | Description |
+|--------|------|------|-------------|
+| GET | `/codex-plan-usage` | — | Returns the last cached snapshot. **Does not trigger a refresh.** Response: `{ fetchedAt: string \| null, account: CodexAccount \| null, rateLimits: CodexRateLimits \| null, lastError: string \| null, stale: boolean }`. `fetchedAt` is ISO-8601 of the last successful fetch (`null` before the first ever fetch). `lastError` is the last fetch failure message (`codex app-server unavailable: …` for missing CLI, RPC error string, or `codex app-server closed`) — cleared on success. `stale: true` when `Date.now() - fetchedAt > 15 min` or no successful fetch has landed yet. |
+
+**`CodexAccount` shape** — normalized from the `account/read` RPC response (`raw.account`):
+
+```ts
+{
+  type:     string | null,  // e.g. "chatgpt"
+  email:    string | null,
+  planType: string | null,  // "free" | "go" | "plus" | "pro" | "prolite" | "team" |
+                            // "self_serve_business_usage_based" | "business" |
+                            // "enterprise_cbp_usage_based" | "enterprise" | "edu" | "unknown"
+}
+```
+
+**`CodexRateLimits` shape** — normalized from the `account/rateLimits/read` RPC response (`raw.rateLimits`):
+
+```ts
+{
+  limitId:              string | null,
+  limitName:            string | null,
+  primary: {
+    usedPercent:        number | null,  // 0..100
+    windowDurationMins: number | null,  // 300 = 5h
+    resetsAt:           number | null,  // epoch SECONDS (not ms, not ISO string)
+  } | null,
+  secondary: {
+    usedPercent:        number | null,
+    windowDurationMins: number | null,  // 10080 = weekly (7d)
+    resetsAt:           number | null,
+  } | null,
+  credits: {
+    hasCredits: boolean,                // strict === true after coercion
+    unlimited:  boolean,                // strict === true after coercion
+    balance:    string | null,          // pre-formatted by Codex (e.g. "0", "12.50")
+  } | null,
+  planType:             string | null,  // duplicates the account-level planType for convenience
+  rateLimitReachedType: string | null,  // null when neither window is exhausted
+}
+```
+
+**Window slot semantics:** The frontend keys bar labels off `windowDurationMins` (300 → "5h session", 10080 → "Weekly"), not slot order. A future Codex API change that swaps `primary` / `secondary` won't mislabel the bars.
+
+**Refresh trigger policy:** The service refreshes opportunistically from two triggers — server startup (once, via `init()` + `maybeRefresh('server-start')`) and after each Codex assistant turn (`onDone` callback in the chat router calls `maybeRefresh('turn-done')`). A floor of 10 minutes between attempts (tracked by last attempt time, not last success) protects against rate-limit retry storms. The HTTP route itself never forces a fetch — it only reads the cache. Other backends (Claude Code, Kiro) do not trigger this service's refreshes.
+
+See Section 4.6 (`CodexPlanUsageService`) for the spawn / RPC / kill semantics.
+
+## 3.17 Error Response Patterns
 
 | Status | Meaning | Body |
 |--------|---------|------|

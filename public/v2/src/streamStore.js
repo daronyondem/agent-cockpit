@@ -729,6 +729,8 @@
         window.PlanUsageStore.refresh();
       } else if (s.conv && s.conv.backend === 'kiro' && window.KiroPlanUsageStore) {
         window.KiroPlanUsageStore.refresh();
+      } else if (s.conv && s.conv.backend === 'codex' && window.CodexPlanUsageStore) {
+        window.CodexPlanUsageStore.refresh();
       }
       /* Auto-drain queue — if the just-finished run leaves us idle (no
          pending plan/question, no stream error) and there's a queued

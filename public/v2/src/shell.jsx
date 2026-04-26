@@ -2006,9 +2006,11 @@ function ContextChip({ backendId, usage }){
   /* Subscribe to the per-backend plan usage store so the tooltip reflects
      the latest cached snapshot. Each store is a singleton; the server
      fronts it with a 10-min throttle so refresh-on-mount is cheap and
-     safe. Claude Code → window.PlanUsageStore; Kiro → window.KiroPlanUsageStore. */
+     safe. Claude Code → window.PlanUsageStore; Kiro → window.KiroPlanUsageStore;
+     Codex → window.CodexPlanUsageStore. */
   const store = backendId === 'claude-code' ? window.PlanUsageStore
     : backendId === 'kiro'        ? window.KiroPlanUsageStore
+    : backendId === 'codex'       ? window.CodexPlanUsageStore
     : null;
   const [planUsage, setPlanUsage] = React.useState(() => store ? store.get() : null);
   React.useEffect(() => {

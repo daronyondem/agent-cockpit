@@ -343,6 +343,168 @@ function KiroTokenCard({ usage, planUsage }){
   );
 }
 
+/* Codex `planType` is one of `free | go | plus | pro | prolite | team |
+   self_serve_business_usage_based | business |
+   enterprise_cbp_usage_based | enterprise | edu | unknown`. Title-case
+   each underscore-separated word; collapse the verbose business/enterprise
+   strings to their tier name + the `Usage-based` suffix. */
+function _humanizeCodexPlan(planType){
+  if (!planType || typeof planType !== 'string') return 'Plan';
+  const map = {
+    'self_serve_business_usage_based': 'Business · Usage-based',
+    'enterprise_cbp_usage_based': 'Enterprise · Usage-based',
+  };
+  if (map[planType]) return map[planType];
+  return planType.split('_').filter(Boolean)
+    .map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/* Codex windows arrive as `windowDurationMins` so we can name them by
+   duration instead of relying on key ordering. 300 → "5h session";
+   10080 (60 × 24 × 7) → "Weekly". Unknown durations get a derived
+   "<N>h"/"<N>d" label so future buckets still render. */
+function _codexWindowLabel(mins){
+  if (mins === 300) return '5h session';
+  if (mins === 10080) return 'Weekly';
+  if (typeof mins !== 'number' || !Number.isFinite(mins) || mins <= 0) return 'Limit';
+  if (mins < 60) return `${mins}m window`;
+  if (mins < 1440) return `${Math.round(mins / 60)}h window`;
+  return `${Math.round(mins / 1440)}d window`;
+}
+
+/* Codex `resetsAt` is epoch *seconds*, not millis like Claude's ISO
+   strings. Convert before measuring distance. */
+function _formatResetAtEpoch(epochSeconds){
+  if (typeof epochSeconds !== 'number' || !Number.isFinite(epochSeconds)) return '';
+  const diff = epochSeconds * 1000 - Date.now();
+  if (diff <= 0) return 'resets now';
+  const m = Math.floor(diff / 60000);
+  if (m < 60) return `resets in ${m}m`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `resets in ${h}h`;
+  return `resets in ${Math.floor(h / 24)}d`;
+}
+
+function _buildCodexBars(rateLimits){
+  const out = [];
+  const windows = [
+    { key: 'primary', win: rateLimits && rateLimits.primary },
+    { key: 'secondary', win: rateLimits && rateLimits.secondary },
+  ];
+  for (const { key, win } of windows) {
+    if (!win || typeof win.usedPercent !== 'number') continue;
+    out.push({
+      key,
+      label: _codexWindowLabel(win.windowDurationMins),
+      pct: win.usedPercent,
+      pctLabel: Math.round(win.usedPercent) + '%',
+      resetLabel: _formatResetAtEpoch(win.resetsAt),
+    });
+  }
+  return out;
+}
+
+function CodexPlanUsageSection({ data }){
+  const rateLimits = data && data.rateLimits;
+  const account = data && data.account;
+  // `account.planType` and `rateLimits.planType` agree in practice, but
+  // prefer account since it's the authoritative source. Fall back to
+  // rate-limits if a credentials race left account null.
+  const planType = (account && account.planType) || (rateLimits && rateLimits.planType) || null;
+  const tier = _humanizeCodexPlan(planType);
+  const bars = _buildCodexBars(rateLimits);
+  const credits = rateLimits && rateLimits.credits;
+  const showCredits = !!(credits && credits.hasCredits);
+  const fetchedLabel = _formatFetchedAt(data && data.fetchedAt);
+  const errored = !!(data && data.lastError);
+  const stale = !!(data && data.stale);
+  const footerColor = errored
+    ? 'var(--status-error)'
+    : (stale ? 'var(--status-warning)' : 'var(--text-3)');
+  return (
+    <>
+      <div className="tt-section">
+        <div className="tt-section-label">Account · {tier}</div>
+        {bars.length ? (
+          <div className="tt-rows">
+            {bars.map(bar => (
+              <div key={bar.key} className="tt-bar-wrap">
+                <div className="tt-bar-head">
+                  <span>{bar.label}</span>
+                  <span>
+                    <b>{bar.pctLabel}</b>
+                    {bar.resetLabel ? <em> · {bar.resetLabel}</em> : null}
+                  </span>
+                </div>
+                <div className="tt-bar"><i style={{width: Math.min(100, Math.max(0, bar.pct)) + '%'}}/></div>
+              </div>
+            ))}
+            {showCredits ? (
+              <div className="tt-kv">
+                <span>Credits</span>
+                <b>{credits.unlimited ? 'Unlimited' : (credits.balance || '0')}</b>
+              </div>
+            ) : null}
+          </div>
+        ) : (
+          <div style={{fontFamily: 'var(--mono-font)', fontSize: 11, color: 'var(--text-3)'}}>
+            No usage data yet.
+          </div>
+        )}
+      </div>
+      <div className="tt-section" style={{padding: '6px 14px 8px'}}>
+        <span style={{fontFamily: 'var(--mono-font)', fontSize: 10, color: footerColor}}>
+          {errored ? `Last update failed · ` : `Updated `}{fetchedLabel}
+        </span>
+      </div>
+    </>
+  );
+}
+
+function CodexTokenCard({ usage, planUsage }){
+  const input  = usage.inputTokens  || 0;
+  const output = usage.outputTokens || 0;
+  const total  = input + output;
+  const pctRaw = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
+  const pct    = pctRaw == null ? 0 : pctRaw;
+  const pctStr = pct.toFixed(2) + '%';
+  return (
+    <>
+      <div className="tt-header">
+        <span className="tt-eye">Session usage</span>
+      </div>
+      <h4 className="tt-h">
+        {pctRaw != null ? <>{pctStr} context</> : <>{_fmtTokensShort(total)} tokens</>}
+        {pctRaw != null && total > 0 ? (
+          <span className="u-dim"> · {_fmtTokensShort(total)} tokens</span>
+        ) : null}
+      </h4>
+      {pctRaw != null ? (
+        <div className="tt-section">
+          <div className="tt-section-label">Context window</div>
+          <div className="tt-bar-wrap">
+            <div className="tt-bar-head">
+              <span><b>{pctStr}</b> <em>used</em></span>
+            </div>
+            <div className="tt-bar"><i style={{width: Math.min(100, Math.max(0, pct)) + '%'}}/></div>
+          </div>
+        </div>
+      ) : null}
+      {total > 0 ? (
+        <div className="tt-section">
+          <div className="tt-section-label">Tokens</div>
+          <div className="tt-rows">
+            <div className="tt-kv"><span>Input</span><b>{_fmtInt(input)}</b></div>
+            <div className="tt-kv"><span>Output</span><b>{_fmtInt(output)}</b></div>
+          </div>
+        </div>
+      ) : null}
+      {planUsage ? <CodexPlanUsageSection data={planUsage}/> : null}
+    </>
+  );
+}
+
 function DefaultTokenCard({ usage }){
   const input  = usage.inputTokens  || 0;
   const output = usage.outputTokens || 0;
@@ -395,6 +557,20 @@ const CHIP_RENDERERS = {
     },
     renderTooltipCard(usage, opts){
       return <KiroTokenCard usage={usage} planUsage={opts && opts.planUsage}/>;
+    },
+  },
+  'codex': {
+    renderChipText(usage){
+      const total = (usage.inputTokens || 0) + (usage.outputTokens || 0);
+      const pct   = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
+      if (pct == null && total === 0) return null;
+      const tokensLabel = total > 0 ? _fmtTokensShort(total) : '';
+      if (pct != null && tokensLabel) return `${pct.toFixed(2)}% context · ${tokensLabel}`;
+      if (pct != null) return `${pct.toFixed(2)}% context`;
+      return tokensLabel;
+    },
+    renderTooltipCard(usage, opts){
+      return <CodexTokenCard usage={usage} planUsage={opts && opts.planUsage}/>;
     },
   },
 };
