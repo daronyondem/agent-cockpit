@@ -41,6 +41,7 @@ import { ingestFile, UnsupportedFileTypeError } from './handlers';
 import type { HandlerResult } from './handlers/types';
 import type { KbDatabase } from './db';
 import { normalizeFolderPath } from './db';
+import type { BackendRegistry } from '../backends/registry';
 
 /** Subset of chatService the orchestrator depends on — keeps tests light. */
 export interface KbIngestionChatService {
@@ -66,6 +67,13 @@ export interface KbIngestionOptions {
   emit?: KbStateEmitter;
   /** Digest hook for auto-digest (optional, wired after construction). */
   digestTrigger?: KbDigestTrigger;
+  /**
+   * Backend registry, used to resolve the configured Ingestion CLI for
+   * AI-assisted page/slide/image conversion. Optional — when absent (or
+   * when no Ingestion CLI is configured in settings), hybrid handlers
+   * skip AI conversion and emit `source: image-only` for visual content.
+   */
+  backendRegistry?: BackendRegistry;
 }
 
 export interface KbUploadInput {
@@ -131,6 +139,7 @@ export class KbIngestionService {
   private readonly chatService: KbIngestionChatService;
   private readonly emit?: KbStateEmitter;
   private digestTrigger?: KbDigestTrigger;
+  private readonly backendRegistry?: BackendRegistry;
   /**
    * Per-workspace FIFO queue implemented as a chained Promise. All writes
    * to a workspace's DB and `converted/` dir go through this queue so
@@ -143,6 +152,7 @@ export class KbIngestionService {
     this.chatService = opts.chatService;
     this.emit = opts.emit;
     this.digestTrigger = opts.digestTrigger;
+    this.backendRegistry = opts.backendRegistry;
   }
 
   /**
@@ -623,6 +633,17 @@ export class KbIngestionService {
 
       const settings = await this.chatService.getSettings();
       const convertSlidesToImages = Boolean(settings.knowledgeBase?.convertSlidesToImages);
+      const ingestionCliBackend = settings.knowledgeBase?.ingestionCliBackend;
+      const ingestionAdapter =
+        ingestionCliBackend && this.backendRegistry
+          ? this.backendRegistry.get(ingestionCliBackend) ?? undefined
+          : undefined;
+      if (ingestionCliBackend && !ingestionAdapter) {
+        console.warn(
+          `[kb/ingest] Configured Ingestion CLI "${ingestionCliBackend}" is not registered; ` +
+          `skipping AI conversion for this raw.`,
+        );
+      }
 
       this._emitChange(hash, new Date().toISOString(), {
         raw: [rawId],
@@ -638,6 +659,9 @@ export class KbIngestionService {
           mimeType: file.mimeType || 'application/octet-stream',
           outDir,
           convertSlidesToImages,
+          ingestionAdapter: ingestionAdapter ?? undefined,
+          ingestionModel: settings.knowledgeBase?.ingestionCliModel,
+          ingestionEffort: settings.knowledgeBase?.ingestionCliEffort,
         });
       } catch (err: unknown) {
         errorMessage =

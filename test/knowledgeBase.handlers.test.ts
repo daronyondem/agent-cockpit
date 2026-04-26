@@ -16,6 +16,7 @@ import { pdfHandler } from '../src/services/knowledgeBase/handlers/pdf';
 import { docxHandler } from '../src/services/knowledgeBase/handlers/docx';
 import { pptxHandler } from '../src/services/knowledgeBase/handlers/pptx';
 import * as pandocModule from '../src/services/knowledgeBase/pandoc';
+import * as pdfSignalsModule from '../src/services/knowledgeBase/ingestion/pdfSignals';
 import {
   passthroughHandler,
   passthroughSupports,
@@ -45,7 +46,7 @@ afterEach(() => {
 // ── PDF ─────────────────────────────────────────────────────────────────────
 
 describe('pdfHandler', () => {
-  test('rasterizes each page to PNG and returns a thin markdown index', async () => {
+  test('rasterizes each page and emits a hybrid source-annotated index', async () => {
     const buffer = readFixture('sample.pdf');
     const result = await pdfHandler({
       buffer,
@@ -54,37 +55,158 @@ describe('pdfHandler', () => {
       outDir,
     });
 
-    // Handler identity + title prefix.
-    expect(result.handler).toBe('pdf/rasterized');
+    // Handler tag matches the renamed hybrid pipeline.
+    expect(result.handler).toBe('pdf/rasterized-hybrid');
     expect(result.text).toContain('# sample.pdf');
 
-    // One section per page. The 1-page fixture produces exactly one `## Page 1`.
+    // One section per page with a `> source: ...` annotation. The fixture
+    // is plain prose with no figures/tables, so source must be `pdfjs`.
     expect(result.text).toContain('## Page 1');
-    // No extracted prose — the thin index is image-references-only.
-    expect(result.text).not.toContain('Hello KB test PDF');
-
-    // The page image reference uses the same relative path we expose
-    // via `mediaFiles`, so a CLI following the link lands on the file.
+    expect(result.text).toMatch(
+      /^> source: pdfjs \| figures: 0 \| table-likely: false$/m,
+    );
+    // The image link is preserved regardless of source.
     expect(result.text).toMatch(/!\[Page 1\]\(pages\/page-0001\.png\)/);
     expect(result.mediaFiles).toEqual(['pages/page-0001.png']);
+
+    // pdfjs extracts the body text on safe-text pages.
+    expect(result.text).toContain('Hello KB test PDF');
+
     // The PNG actually exists on disk and is non-empty.
     const onDisk = fs.statSync(path.join(outDir, 'pages/page-0001.png'));
     expect(onDisk.size).toBeGreaterThan(0);
-    // PNG magic bytes sanity check.
-    const header = fs.readFileSync(path.join(outDir, 'pages/page-0001.png'), {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } as any).subarray(0, 8);
-    expect(header[0]).toBe(0x89);
-    expect(header[1]).toBe(0x50);
-    expect(header[2]).toBe(0x4e);
-    expect(header[3]).toBe(0x47);
+    const header = fs
+      .readFileSync(path.join(outDir, 'pages/page-0001.png'))
+      .subarray(0, 4);
+    expect([header[0], header[1], header[2], header[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
 
-    // Metadata reflects the new shape (pageCount + renderedPageCount,
-    // no word count because we don't extract text anymore).
+    // Metadata: counts + nested sourceCounts + per-page array.
     expect(result.metadata?.pageCount).toBe(1);
     expect(result.metadata?.renderedPageCount).toBe(1);
     expect(result.metadata?.rasterDpi).toBe(150);
-    expect(result.metadata?.wordCount).toBeUndefined();
+    const sourceCounts = result.metadata?.sourceCounts as Record<string, number>;
+    expect(sourceCounts.pdfjs).toBe(1);
+    expect(sourceCounts['artificial-intelligence']).toBeUndefined();
+    expect(sourceCounts['image-only']).toBeUndefined();
+
+    const pages = result.metadata?.pages as Array<{
+      pageNumber: number;
+      source: string;
+      figureCount: number;
+      tableLikely: boolean;
+      extractedChars: number;
+    }>;
+    expect(pages).toHaveLength(1);
+    expect(pages[0].pageNumber).toBe(1);
+    expect(pages[0].source).toBe('pdfjs');
+    expect(pages[0].figureCount).toBe(0);
+    expect(pages[0].tableLikely).toBe(false);
+    expect(pages[0].extractedChars).toBeGreaterThan(0);
+  });
+
+  test('falls back to image-only when no Ingestion CLI is configured for needs-ai pages', async () => {
+    // Force the classify path into `needs-ai` by stubbing the signals
+    // module to report figureCount > 0. Easiest way: load a real PDF and
+    // monkey-patch `extractPageSignals` for the duration of the test.
+    const spy = jest.spyOn(pdfSignalsModule, 'extractPageSignals').mockResolvedValue({
+      extractedText: '',
+      extractedChars: 0,
+      figureCount: 1,
+      tableLikely: false,
+    });
+    try {
+      const buffer = readFixture('sample.pdf');
+      const result = await pdfHandler({
+        buffer,
+        filename: 'sample.pdf',
+        mimeType: 'application/pdf',
+        outDir,
+        // ingestionAdapter intentionally omitted
+      });
+      expect(result.text).toMatch(/^> source: image-only \| figures: 1 \| table-likely: false$/m);
+      const sc = result.metadata?.sourceCounts as Record<string, number>;
+      expect(sc['image-only']).toBe(1);
+      expect(sc['artificial-intelligence']).toBeUndefined();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('calls the Ingestion CLI for needs-ai pages and annotates source: artificial-intelligence', async () => {
+    const spy = jest.spyOn(pdfSignalsModule, 'extractPageSignals').mockResolvedValue({
+      extractedText: '',
+      extractedChars: 0,
+      figureCount: 1,
+      tableLikely: true,
+    });
+
+    const adapterCalls: Array<{ prompt: string; opts: any }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string, opts?: any) {
+        adapterCalls.push({ prompt, opts });
+        return '## AI-reconstructed page heading\n\n| Col1 | Col2 |\n|------|------|\n| a    | b    |';
+      },
+    } as any;
+
+    try {
+      const buffer = readFixture('sample.pdf');
+      const result = await pdfHandler({
+        buffer,
+        filename: 'sample.pdf',
+        mimeType: 'application/pdf',
+        outDir,
+        ingestionAdapter: stubAdapter,
+        ingestionModel: 'claude-sonnet-4-6',
+      });
+
+      expect(adapterCalls).toHaveLength(1);
+      expect(adapterCalls[0].prompt).toContain('page-0001.png');
+      expect(adapterCalls[0].opts.model).toBe('claude-sonnet-4-6');
+      expect(adapterCalls[0].opts.allowTools).toBe(true);
+
+      expect(result.text).toMatch(
+        /^> source: artificial-intelligence \| figures: 1 \| table-likely: true$/m,
+      );
+      expect(result.text).toContain('AI-reconstructed page heading');
+      // Image link is still appended after the AI body.
+      expect(result.text).toMatch(/!\[Page 1\]\(pages\/page-0001\.png\)/);
+
+      const sc = result.metadata?.sourceCounts as Record<string, number>;
+      expect(sc['artificial-intelligence']).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('falls back to image-only when the Ingestion CLI fails twice', async () => {
+    const spy = jest.spyOn(pdfSignalsModule, 'extractPageSignals').mockResolvedValue({
+      extractedText: '',
+      extractedChars: 0,
+      figureCount: 1,
+      tableLikely: false,
+    });
+    const stubAdapter = {
+      async runOneShot() {
+        throw new Error('CLI exploded');
+      },
+    } as any;
+
+    try {
+      const buffer = readFixture('sample.pdf');
+      const result = await pdfHandler({
+        buffer,
+        filename: 'sample.pdf',
+        mimeType: 'application/pdf',
+        outDir,
+        ingestionAdapter: stubAdapter,
+      });
+      expect(result.text).toMatch(/^> source: image-only \| note: AI conversion failed after retry$/m);
+      expect(result.text).toMatch(/!\[Page 1\]\(pages\/page-0001\.png\)/);
+      const sc = result.metadata?.sourceCounts as Record<string, number>;
+      expect(sc['image-only']).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });
 
@@ -409,10 +531,11 @@ describe('dispatch', () => {
       mimeType: 'application/pdf',
       outDir,
     });
-    expect(result.handler).toBe('pdf/rasterized');
-    // Dispatcher returns a rasterized index, not prose — the one page
-    // of our fixture turns into exactly one PNG reference.
+    expect(result.handler).toBe('pdf/rasterized-hybrid');
+    // Dispatcher returns a rasterized index — one page of the fixture turns
+    // into exactly one PNG reference, with the source annotation block.
     expect(result.mediaFiles).toEqual(['pages/page-0001.png']);
     expect(result.text).toMatch(/!\[Page 1\]\(pages\/page-0001\.png\)/);
+    expect(result.text).toMatch(/^> source: pdfjs/m);
   });
 });
