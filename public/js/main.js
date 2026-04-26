@@ -56,6 +56,8 @@ window.chatSettingsBackendChanged = chatSettingsBackendChanged;
 window.chatSettingsModelChanged = chatSettingsModelChanged;
 window.chatSettingsMemoryBackendChanged = chatSettingsMemoryBackendChanged;
 window.chatSettingsMemoryModelChanged = chatSettingsMemoryModelChanged;
+window.chatSettingsKbIngestBackendChanged = chatSettingsKbIngestBackendChanged;
+window.chatSettingsKbIngestModelChanged = chatSettingsKbIngestModelChanged;
 window.chatSettingsKbDigestBackendChanged = chatSettingsKbDigestBackendChanged;
 window.chatSettingsKbDigestModelChanged = chatSettingsKbDigestModelChanged;
 window.chatSettingsKbDreamBackendChanged = chatSettingsKbDreamBackendChanged;
@@ -553,11 +555,21 @@ async function chatShowSettings(initialTab) {
     ? mem.cliEffort
     : (memLevels.includes('high') ? 'high' : memLevels[0] || '');
 
-  // Knowledge Base config mirrors the Memory shape but has two separate
-  // CLI roles: Digestion (runs per raw file) and Dreaming (manual synthesis).
-  // Both fall back to the default backend so fresh installs don't require
-  // extra config before the feature starts working.
+  // Knowledge Base config mirrors the Memory shape but has three separate
+  // CLI roles: Ingestion (vision-capable, optional, AI-assisted page/slide/image
+  // conversion at ingest time), Digestion (runs per raw file), and Dreaming
+  // (manual synthesis). Digestion + Dreaming fall back to the default backend;
+  // Ingestion is opt-in (empty = skip AI conversion).
   const kb = s.knowledgeBase || {};
+  const kbIngestBackendId = kb.ingestionCliBackend || '';
+  const kbIngestModels = state.BACKEND_MODELS[kbIngestBackendId] || [];
+  const kbIngestSelectedModel = kb.ingestionCliModel || kbIngestModels.find((m) => m.default)?.id || (kbIngestModels[0]?.id || '');
+  const kbIngestModel = kbIngestModels.find((m) => m.id === kbIngestSelectedModel);
+  const kbIngestLevels = kbIngestModel?.supportedEffortLevels || [];
+  const kbIngestSelectedEffort = kb.ingestionCliEffort && kbIngestLevels.includes(kb.ingestionCliEffort)
+    ? kb.ingestionCliEffort
+    : (kbIngestLevels.includes('high') ? 'high' : kbIngestLevels[0] || '');
+
   const kbDigestBackendId = kb.digestionCliBackend || s.defaultBackend || (state.CHAT_BACKENDS[0]?.id || 'claude-code');
   const kbDigestModels = state.BACKEND_MODELS[kbDigestBackendId] || [];
   const kbDigestSelectedModel = kb.digestionCliModel || kbDigestModels.find((m) => m.default)?.id || (kbDigestModels[0]?.id || '');
@@ -577,7 +589,7 @@ async function chatShowSettings(initialTab) {
     : (kbDreamLevels.includes('high') ? 'high' : kbDreamLevels[0] || '');
 
   const kbConvertSlides = Boolean(kb.convertSlidesToImages);
-  const kbDreamConcurrency = kb.dreamingConcurrency || 2;
+  const kbCliConcurrency = kb.cliConcurrency || 2;
 
   const html = `
     <div class="chat-settings-tabs">
@@ -677,11 +689,14 @@ async function chatShowSettings(initialTab) {
       <div class="chat-settings-tab-content" id="chat-tab-kb" style="display:none;">
         <div class="chat-settings-group">
           <div class="chat-settings-desc">
-            The Knowledge Base pipeline has two CLI roles. <strong>Digestion</strong>
-            runs once per uploaded file to produce a structured entry. <strong>Dreaming</strong>
-            is triggered manually to synthesize entries into a cross-linked
-            knowledge graph. Both fall back to the default backend when
-            unset. These settings are global — enable the feature per
+            The Knowledge Base pipeline has three CLI roles. <strong>Ingestion</strong>
+            (optional, vision-capable) converts PDF pages with figures/tables, embedded
+            DOCX images, PPTX slides with charts, and standalone uploaded images into
+            clean Markdown at ingest time. <strong>Digestion</strong> runs once per
+            uploaded file to produce a structured entry. <strong>Dreaming</strong> is
+            triggered manually to synthesize entries into a cross-linked knowledge
+            graph. Digestion + Dreaming fall back to the default backend when unset;
+            Ingestion is opt-in. These settings are global — enable the feature per
             workspace in Workspace Settings → Knowledge Base.
           </div>
         </div>
@@ -698,6 +713,27 @@ async function chatShowSettings(initialTab) {
             detection can re-run. DOCX uploads are rejected until pandoc is
             detected on the server PATH.
           </div>
+        </div>
+        <div class="chat-settings-group">
+          <div class="chat-settings-label">${ICON_CLI} Ingestion CLI</div>
+          <div class="chat-settings-desc">Vision-capable backend used to convert flagged page/slide/image content into Markdown at ingest time. Leave as <em>None</em> to skip AI conversion.</div>
+          <select class="chat-settings-select" id="chat-settings-kb-ingest-backend" onchange="chatSettingsKbIngestBackendChanged()">
+            <option value=""${kbIngestBackendId ? '' : ' selected'}>None (skip AI conversion)</option>
+            ${state.CHAT_BACKENDS.map((b) => `<option value="${esc(b.id)}"${b.id === kbIngestBackendId ? ' selected' : ''}>${esc(b.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-kb-ingest-model-group"${(kbIngestBackendId && kbIngestModels.length) ? '' : ' style="display:none;"'}>
+          <div class="chat-settings-label">${ICON_AI_MODEL} Ingestion Model</div>
+          <select class="chat-settings-select" id="chat-settings-kb-ingest-model" onchange="chatSettingsKbIngestModelChanged()">
+            ${kbIngestModels.map((m) => `<option value="${esc(m.id)}"${m.id === kbIngestSelectedModel ? ' selected' : ''}>${esc(m.label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="chat-settings-group" id="chat-settings-kb-ingest-effort-group"${(kbIngestBackendId && kbIngestLevels.length) ? '' : ' style="display:none;"'}>
+          <div class="chat-settings-label">Ingestion Effort</div>
+          <div class="chat-settings-desc">Adaptive reasoning level for the Ingestion CLI. Lower levels are faster and cheaper per page.</div>
+          <select class="chat-settings-select" id="chat-settings-kb-ingest-effort">
+            ${kbIngestLevels.map((lv) => `<option value="${esc(lv)}"${lv === kbIngestSelectedEffort ? ' selected' : ''}>${lv.charAt(0).toUpperCase() + lv.slice(1)}</option>`).join('')}
+          </select>
         </div>
         <div class="chat-settings-group">
           <div class="chat-settings-label">${ICON_CLI} Digestion CLI</div>
@@ -738,9 +774,9 @@ async function chatShowSettings(initialTab) {
           </select>
         </div>
         <div class="chat-settings-group">
-          <div class="chat-settings-label">Dreaming Concurrency</div>
-          <div class="chat-settings-desc">Maximum number of parallel CLI calls during dreaming. Higher values speed up large KBs at the cost of more concurrent resource usage.</div>
-          <input type="number" class="chat-settings-select" id="chat-settings-kb-dream-concurrency" min="1" max="10" value="${kbDreamConcurrency}" style="width:80px;" />
+          <div class="chat-settings-label">CLI Concurrency</div>
+          <div class="chat-settings-desc">Documents processed in parallel by ingestion, digestion, and dreaming CLIs. Within a document, work stays sequential. Higher values speed up large KBs at the cost of more concurrent resource usage.</div>
+          <input type="number" class="chat-settings-select" id="chat-settings-kb-cli-concurrency" min="1" max="10" value="${kbCliConcurrency}" style="width:80px;" />
         </div>
         <div class="chat-settings-group">
           <label class="chat-settings-label" style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -957,7 +993,12 @@ function chatSettingsRefreshKbEffortGroup(role) {
 
   const prev = effortSelect.value;
   const kb = state.chatSettingsData?.knowledgeBase || {};
-  const stored = role === 'digest' ? kb.digestionCliEffort : kb.dreamingCliEffort;
+  const storedByRole = {
+    ingest: kb.ingestionCliEffort,
+    digest: kb.digestionCliEffort,
+    dream: kb.dreamingCliEffort,
+  };
+  const stored = storedByRole[role];
   let next = null;
   if (prev && levels.includes(prev)) next = prev;
   else if (stored && levels.includes(stored)) next = stored;
@@ -970,6 +1011,8 @@ function chatSettingsRefreshKbEffortGroup(role) {
   ).join('');
 }
 
+function chatSettingsKbIngestBackendChanged() { chatSettingsKbBackendChanged('ingest'); }
+function chatSettingsKbIngestModelChanged() { chatSettingsRefreshKbEffortGroup('ingest'); }
 function chatSettingsKbDigestBackendChanged() { chatSettingsKbBackendChanged('digest'); }
 function chatSettingsKbDigestModelChanged() { chatSettingsRefreshKbEffortGroup('digest'); }
 function chatSettingsKbDreamBackendChanged() { chatSettingsKbBackendChanged('dream'); }
@@ -1073,6 +1116,11 @@ function chatSaveSettings() {
   // Knowledge Base CLI config — same "drop hidden values" rule as Memory.
   // Digestion and Dreaming roles are independent to let users route costly
   // synthesis work through a different (cheaper or smarter) model.
+  const kbIngestBackendEl = document.getElementById('chat-settings-kb-ingest-backend');
+  const kbIngestModelEl = document.getElementById('chat-settings-kb-ingest-model');
+  const kbIngestModelGroup = document.getElementById('chat-settings-kb-ingest-model-group');
+  const kbIngestEffortEl = document.getElementById('chat-settings-kb-ingest-effort');
+  const kbIngestEffortGroup = document.getElementById('chat-settings-kb-ingest-effort-group');
   const kbDigestBackendEl = document.getElementById('chat-settings-kb-digest-backend');
   const kbDigestModelEl = document.getElementById('chat-settings-kb-digest-model');
   const kbDigestModelGroup = document.getElementById('chat-settings-kb-digest-model-group');
@@ -1085,16 +1133,21 @@ function chatSaveSettings() {
   const kbDreamEffortGroup = document.getElementById('chat-settings-kb-dream-effort-group');
   const kbConvertSlidesEl = document.getElementById('chat-settings-kb-convert-slides');
   const knowledgeBase = {};
+  if (kbIngestBackendEl?.value) {
+    knowledgeBase.ingestionCliBackend = kbIngestBackendEl.value;
+    if (kbIngestModelEl?.value && kbIngestModelGroup?.style.display !== 'none') knowledgeBase.ingestionCliModel = kbIngestModelEl.value;
+    if (kbIngestEffortEl?.value && kbIngestEffortGroup?.style.display !== 'none') knowledgeBase.ingestionCliEffort = kbIngestEffortEl.value;
+  }
   if (kbDigestBackendEl?.value) knowledgeBase.digestionCliBackend = kbDigestBackendEl.value;
   if (kbDigestModelEl?.value && kbDigestModelGroup?.style.display !== 'none') knowledgeBase.digestionCliModel = kbDigestModelEl.value;
   if (kbDigestEffortEl?.value && kbDigestEffortGroup?.style.display !== 'none') knowledgeBase.digestionCliEffort = kbDigestEffortEl.value;
   if (kbDreamBackendEl?.value) knowledgeBase.dreamingCliBackend = kbDreamBackendEl.value;
   if (kbDreamModelEl?.value && kbDreamModelGroup?.style.display !== 'none') knowledgeBase.dreamingCliModel = kbDreamModelEl.value;
   if (kbDreamEffortEl?.value && kbDreamEffortGroup?.style.display !== 'none') knowledgeBase.dreamingCliEffort = kbDreamEffortEl.value;
-  const kbDreamConcurrencyEl = document.getElementById('chat-settings-kb-dream-concurrency');
-  if (kbDreamConcurrencyEl) {
-    const val = parseInt(kbDreamConcurrencyEl.value, 10);
-    if (val >= 1 && val <= 10) knowledgeBase.dreamingConcurrency = val;
+  const kbCliConcurrencyEl = document.getElementById('chat-settings-kb-cli-concurrency');
+  if (kbCliConcurrencyEl) {
+    const val = parseInt(kbCliConcurrencyEl.value, 10);
+    if (val >= 1 && val <= 10) knowledgeBase.cliConcurrency = val;
   }
   if (kbConvertSlidesEl) knowledgeBase.convertSlidesToImages = Boolean(kbConvertSlidesEl.checked);
 

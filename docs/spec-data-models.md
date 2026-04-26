@@ -373,13 +373,16 @@ Daily per-backend/model token usage records for global statistics:
     "cliEffort": "high"
   },
   "knowledgeBase": {
+    "ingestionCliBackend": "claude-code",
+    "ingestionCliModel": "claude-sonnet-4-6",
+    "ingestionCliEffort": "high",
     "digestionCliBackend": "claude-code",
     "digestionCliModel": "claude-sonnet-4-6",
     "digestionCliEffort": "high",
     "dreamingCliBackend": "claude-code",
     "dreamingCliModel": "claude-opus-4-7",
     "dreamingCliEffort": "high",
-    "dreamingConcurrency": 2,
+    "cliConcurrency": 2,
     "dreamingStrongMatchThreshold": 0.75,
     "dreamingBorderlineThreshold": 0.45,
     "convertSlidesToImages": false
@@ -393,7 +396,9 @@ The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the star
 
 The `memory` block configures the globally-shared **Memory CLI** used for `memory_note` MCP processing and post-session extraction (see Section 5 — Workspace Memory).
 
-The `knowledgeBase` block configures the globally-shared **Digestion CLI** and **Dreaming CLI** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). Both CLIs default to `defaultBackend` when unset. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
+The `knowledgeBase` block configures the globally-shared **Ingestion CLI**, **Digestion CLI**, and **Dreaming CLI** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). Digestion + Dreaming default to `defaultBackend` when unset. The Ingestion CLI is opt-in (must be vision-capable, currently used for AI-assisted page/slide/image conversion at ingest time); leaving it unset falls back to image-only references for visual content. `cliConcurrency` (default 2) caps how many documents are processed in parallel by ingestion, digestion, and dreaming pipelines per workspace; within a single document, work stays sequential. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
+
+**Migration:** `dreamingConcurrency` was renamed to `cliConcurrency` in the hybrid-ingestion design (PR 1). On read, `SettingsService.getSettings()` copies `dreamingConcurrency` forward to `cliConcurrency` when the new key is missing — disk state is left untouched until the next save. Existing settings files load without warnings; the deprecated `dreamingConcurrency` field stays on the `Settings` type for one release cycle, then is removed.
 
 ## KB SQLite Schema (Complete)
 

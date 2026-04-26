@@ -523,7 +523,7 @@ export class KbDreamService {
       const adapter = this._getAdapter(settings);
       const baseRunOptions = this._buildRunOptions(hash, settings);
       const runOptionsWithMcp = { ...baseRunOptions, mcpServers: mcpSession.mcpServers };
-      const concurrency = settings.knowledgeBase?.dreamingConcurrency ?? DEFAULT_CONCURRENCY;
+      const concurrency = settings.knowledgeBase?.cliConcurrency ?? DEFAULT_CONCURRENCY;
       const strongThreshold = settings.knowledgeBase?.dreamingStrongMatchThreshold ?? DEFAULT_STRONG_THRESHOLD;
       const borderlineThreshold = settings.knowledgeBase?.dreamingBorderlineThreshold ?? DEFAULT_BORDERLINE_THRESHOLD;
 

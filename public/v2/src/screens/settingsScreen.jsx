@@ -347,6 +347,13 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
   const kb = settings.knowledgeBase || {};
   const fallbackBackend = settings.defaultBackend || (backends[0] && backends[0].id) || '';
 
+  // Ingestion picks (vision-capable CLI for AI-assisted page/slide/image conversion)
+  const igBackend = kb.ingestionCliBackend || '';
+  const igModels = modelsForBackend(backends, igBackend);
+  const igModel = kb.ingestionCliModel || defaultModelId(igModels) || '';
+  const igEfforts = effortLevelsForModel(backends, igBackend, igModel);
+  const igEffort = kb.ingestionCliEffort || defaultEffortFor(igEfforts) || '';
+
   // Digestion picks
   const dgBackend = kb.digestionCliBackend || fallbackBackend;
   const dgModels = modelsForBackend(backends, dgBackend);
@@ -361,7 +368,7 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
   const drEfforts = effortLevelsForModel(backends, drBackend, drModel);
   const drEffort = kb.dreamingCliEffort || defaultEffortFor(drEfforts) || '';
 
-  const concurrency = Number.isFinite(kb.dreamingConcurrency) ? kb.dreamingConcurrency : 2;
+  const concurrency = Number.isFinite(kb.cliConcurrency) ? kb.cliConcurrency : 2;
   const convertSlides = !!kb.convertSlidesToImages;
 
   const [pandoc, setPandoc] = React.useState(null);
@@ -375,6 +382,16 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
 
   function patchKb(next){
     onPatch(prev => ({ knowledgeBase: { ...(prev.knowledgeBase || {}), ...next } }));
+  }
+  function onIgBackend(v){
+    const m = modelsForBackend(backends, v);
+    const newModel = defaultModelId(m);
+    const e = effortLevelsForModel(backends, v, newModel);
+    patchKb({ ingestionCliBackend: v, ingestionCliModel: newModel, ingestionCliEffort: defaultEffortFor(e) });
+  }
+  function onIgModel(v){
+    const e = effortLevelsForModel(backends, igBackend, v);
+    patchKb({ ingestionCliModel: v, ingestionCliEffort: defaultEffortFor(e) });
   }
   function onDgBackend(v){
     const m = modelsForBackend(backends, v);
@@ -399,7 +416,7 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
   function onConcurrency(v){
     const n = parseInt(v, 10);
     if (!Number.isFinite(n)) return;
-    patchKb({ dreamingConcurrency: Math.max(1, Math.min(10, n)) });
+    patchKb({ cliConcurrency: Math.max(1, Math.min(10, n)) });
   }
   /* LibreOffice required for the PPTX→images conversion path; reject the
      toggle and surface a warning if the binary isn't on PATH so the user
@@ -416,8 +433,8 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
   return (
     <div className="settings-form">
       <p className="settings-desc u-dim">
-        Per-CLI defaults for the digestion and dreaming pipelines. Embedding configuration
-        lives on each workspace's KB Settings tab.
+        Per-CLI defaults for the ingestion, digestion, and dreaming pipelines. Embedding
+        configuration lives on each workspace's KB Settings tab.
       </p>
 
       <div className="settings-status-row">
@@ -432,6 +449,36 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
             : 'LibreOffice: not installed'}
         </span>
       </div>
+
+      <div className="settings-section-title">Ingestion</div>
+      <p className="settings-desc u-dim">
+        Optional vision-capable CLI used at ingest time to convert PDF pages with
+        figures/tables, embedded DOCX images, PPTX slides with charts, and standalone
+        uploaded images into clean Markdown. Leave blank to skip AI-assisted conversion;
+        flagged content falls back to image-only references.
+      </p>
+      <Field label="Ingestion CLI backend">
+        <select value={igBackend} onChange={(e) => onIgBackend(e.target.value)}>
+          <option value="">— None (skip AI conversion) —</option>
+          {backends.map(b => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
+        </select>
+      </Field>
+      {igBackend && igModels.length ? (
+        <Field label="Ingestion model">
+          <select value={igModel} onChange={(e) => onIgModel(e.target.value)}>
+            {igModels.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+          </select>
+        </Field>
+      ) : null}
+      {igBackend && igEfforts.length ? (
+        <Field label="Ingestion effort">
+          <Seg
+            value={igEffort}
+            onChange={(v) => patchKb({ ingestionCliEffort: v })}
+            options={igEfforts.map(lv => ({ id: lv, label: lv }))}
+          />
+        </Field>
+      ) : null}
 
       <div className="settings-section-title">Digestion</div>
       <Field label="Digestion CLI backend">
@@ -480,7 +527,12 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
           />
         </Field>
       ) : null}
-      <Field label="Dreaming concurrency" hint="Parallel topic-routing agents (1–10).">
+
+      <div className="settings-section-title">Pipeline</div>
+      <Field
+        label="CLI concurrency"
+        hint="Documents processed in parallel by ingestion, digestion, and dreaming CLIs (1–10). Within a document, work stays sequential."
+      >
         <input
           type="number"
           min={1}

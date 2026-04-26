@@ -67,4 +67,43 @@ describe('settings', () => {
     expect(loaded.systemPrompt).toBe('Use bullet points');
     expect((loaded as any).customInstructions).toBeUndefined();
   });
+
+  test('copies legacy dreamingConcurrency forward to cliConcurrency on read', async () => {
+    // Read-time migration only — disk file should NOT be rewritten until the
+    // next legitimate save (the new key materializes on disk only when the
+    // user changes a setting through the UI).
+    const legacy = {
+      theme: 'system',
+      knowledgeBase: {
+        dreamingCliBackend: 'claude-code',
+        dreamingConcurrency: 4,
+      },
+    };
+    await service.saveSettings(legacy as any);
+
+    const loaded = await service.getSettings();
+    expect(loaded.knowledgeBase?.cliConcurrency).toBe(4);
+    expect(loaded.knowledgeBase?.dreamingConcurrency).toBe(4);
+
+    // Disk untouched — still has only the legacy key.
+    const onDisk = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, 'settings.json'), 'utf8'),
+    );
+    expect(onDisk.knowledgeBase.cliConcurrency).toBeUndefined();
+    expect(onDisk.knowledgeBase.dreamingConcurrency).toBe(4);
+  });
+
+  test('does not overwrite cliConcurrency when both keys are present', async () => {
+    const settings = {
+      theme: 'system',
+      knowledgeBase: {
+        dreamingConcurrency: 4,
+        cliConcurrency: 7,
+      },
+    };
+    await service.saveSettings(settings as any);
+
+    const loaded = await service.getSettings();
+    expect(loaded.knowledgeBase?.cliConcurrency).toBe(7);
+  });
 });
