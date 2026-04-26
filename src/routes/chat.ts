@@ -373,6 +373,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   const kbIngestion = new KbIngestionService({
     chatService,
     emit: broadcastKbStateUpdate,
+    backendRegistry,
   });
 
   // Knowledge Base digestion orchestrator. Runs the configured Digestion

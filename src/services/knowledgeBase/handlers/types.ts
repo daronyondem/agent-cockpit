@@ -36,9 +36,11 @@ export interface HandlerResult {
   /**
    * Handler-specific metadata (page count, slide count, word count, etc.).
    * Free-form on purpose — the UI renders a few common keys opportunistically
-   * and leaves the rest for debugging.
+   * and leaves the rest for debugging. Nested objects/arrays are allowed
+   * (the hybrid PDF handler emits a `pages` array and a `sourceCounts`
+   * object, for example).
    */
-  metadata?: Record<string, string | number | boolean>;
+  metadata?: Record<string, unknown>;
 }
 
 /** Input passed to every handler. */

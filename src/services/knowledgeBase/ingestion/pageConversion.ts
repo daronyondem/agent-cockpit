@@ -49,6 +49,13 @@ export interface ConvertImageOptions {
   timeoutMs?: number;
 }
 
+export interface ConvertImageResult {
+  /** The Markdown returned by the Ingestion CLI. */
+  markdown: string;
+  /** True iff the first attempt failed and the second attempt succeeded. */
+  retried: boolean;
+}
+
 /**
  * Convert a single image to Markdown via the Ingestion CLI.
  *
@@ -59,7 +66,7 @@ export interface ConvertImageOptions {
 export async function convertImageToMarkdown(
   imagePath: string,
   opts: ConvertImageOptions,
-): Promise<string> {
+): Promise<ConvertImageResult> {
   const basename = path.basename(imagePath);
   const workingDir = path.dirname(imagePath);
   const prompt = IMAGE_TO_MARKDOWN_PROMPT_TEMPLATE(basename);
@@ -76,7 +83,7 @@ export async function convertImageToMarkdown(
     try {
       const output = await opts.adapter.runOneShot(prompt, runOptions);
       if (output && output.trim().length > 0) {
-        return output;
+        return { markdown: output, retried: attempt > 0 };
       }
       lastError = new Error('ingestion CLI returned empty output');
     } catch (err) {
