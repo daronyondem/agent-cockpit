@@ -694,7 +694,7 @@ Fetches and caches the Kiro (Amazon Q Developer) account-wide plan usage snapsho
 - `Q_API_URL = 'https://q.us-east-1.amazonaws.com/'`
 - `Q_TARGET = 'AmazonCodeWhispererService.GetUsageLimits'` (`X-Amz-Target` header)
 - `Q_ORIGIN = 'KIRO_CLI'` (query param + body field — identifies this as a kiro-cli caller)
-- `REFRESH_MIN_INTERVAL_MS = 10 * 60 * 1000` — minimum gap between fetch **attempts** (not successes) so transient failures back off cleanly instead of hammering
+- `REFRESH_MIN_INTERVAL_MS = 10 * 60 * 1000` — minimum gap between fetch **attempts** (not successes) so transient failures back off cleanly instead of hammering. Token-expired skips do **not** count as attempts — they reset the cooldown so the next trigger can retry as soon as kiro-cli rotates its IdC token.
 - `STALE_AFTER_MS = 15 * 60 * 1000` — client-visible stale threshold (slightly above the refresh floor)
 - `EXPIRY_BUFFER_MS = 30 * 1000` — AWS IdC tokens rotate every ~8 min, so the buffer here is much tighter than Claude's 5 min; if <30s remain the service skips and waits for the CLI to refresh on its next real invocation
 
@@ -704,7 +704,7 @@ Fetches and caches the Kiro (Amazon Q Developer) account-wide plan usage snapsho
 - `init()` — loads the persisted snapshot off disk on server startup. Silently ignores `ENOENT`; logs any other read/parse failure and keeps the in-memory snapshot as its initial empty shape.
 - `getCached()` — returns `{ fetchedAt, usage, lastError, stale }`. Does not trigger a refresh. `stale` is computed as `now - fetchedAt > STALE_AFTER_MS` (or `true` when `fetchedAt` is null). This is the exact shape returned by `GET /api/chat/kiro-plan-usage`.
 - `maybeRefresh(reason: string)` — triggers a refresh if all of: no in-flight refresh, and at least `REFRESH_MIN_INTERVAL_MS` have passed since the last attempt. Returns the shared in-flight promise when a fetch is already running, or an immediately-resolved promise when the throttle is active. The `reason` string is logged alongside success/failure (`server-start`, `turn-done`).
-- `_refresh(reason)` (private) — opens the kiro-cli SQLite DB read-only via `readKiroAuth(dbPath)`, short-circuits with `lastError: 'token-expired'` if the access token is within the 30-second expiry buffer, otherwise `POST`s `https://q.us-east-1.amazonaws.com/?profileArn=<enc>&origin=KIRO_CLI` with headers `Content-Type: application/x-amz-json-1.0`, `X-Amz-Target: AmazonCodeWhispererService.GetUsageLimits`, `Authorization: Bearer <accessToken>`, `X-Amzn-Codewhisperer-Optout: false`, `Accept: */*` and body `{"profileArn":"<arn>","origin":"KIRO_CLI"}`, with a 10-second abort signal. On success stores `{ fetchedAt: now, usage: normalizeUsage(body), lastError: null }`. On non-2xx or network failure preserves the prior `fetchedAt` / `usage` values and only overwrites `lastError` — the UI still renders the last-known snapshot.
+- `_refresh(reason)` (private) — opens the kiro-cli SQLite DB read-only via `readKiroAuth(dbPath)`, short-circuits with `lastError: 'token-expired'` if the access token is within the 30-second expiry buffer (and resets `_lastAttemptAt = 0` so the throttle does not gate the next trigger — no API call was made, so this is not a real attempt), otherwise `POST`s `https://q.us-east-1.amazonaws.com/?profileArn=<enc>&origin=KIRO_CLI` with headers `Content-Type: application/x-amz-json-1.0`, `X-Amz-Target: AmazonCodeWhispererService.GetUsageLimits`, `Authorization: Bearer <accessToken>`, `X-Amzn-Codewhisperer-Optout: false`, `Accept: */*` and body `{"profileArn":"<arn>","origin":"KIRO_CLI"}`, with a 10-second abort signal. On success stores `{ fetchedAt: now, usage: normalizeUsage(body), lastError: null }`. On non-2xx or network failure preserves the prior `fetchedAt` / `usage` values and only overwrites `lastError` — the UI still renders the last-known snapshot.
 - `_persist()` (private) — `mkdir -p data/` then writes the snapshot to `data/kiro-plan-usage.json`. Failures are logged and swallowed.
 
 **SQLite credential resolution (`readKiroAuth`):** opens the kiro-cli data file with `better-sqlite3` using `{ readonly: true, fileMustExist: true }`, then reads two rows with prepared statements and closes the DB in a `finally`:
@@ -730,3 +730,63 @@ Fetches and caches the Kiro (Amazon Q Developer) account-wide plan usage snapsho
 - `'kiro-cli profile blob missing arn'` — profile row present but the parsed JSON has no `arn` string.
 - `'GetUsageLimits <status>: <body>'` — upstream HTTP 4xx/5xx (body truncated to 200 chars).
 - Any network error message verbatim (timeout, DNS, TLS).
+
+## 4.6 CodexPlanUsageService
+
+**File:** `src/services/codexPlanUsageService.ts`
+
+Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Plus / Pro / Business / Enterprise / etc.), 5-hour rate-limit window utilization, weekly rate-limit window utilization, and optional credit balance — by spawning a one-shot `codex app-server` process and calling its `account/read` and `account/rateLimits/read` JSON-RPC methods over stdio. Surfaces in the V2 ContextChip tooltip for Codex conversations only.
+
+**Why one-shot spawn instead of the long-lived `app-server` already used by `CodexAdapter`:** the `app-server` instance owned by `CodexAdapter` is bound to a specific conversation thread; reusing it for plan-usage queries would couple two unrelated lifecycles (refresh on server start when there's no active turn, refresh on turn-done from any conversation). A throwaway process per refresh costs ~hundreds of milliseconds and runs at most once every 10 minutes, which is well below the per-turn budget. App-server *also* emits `account/updated` and `account/rateLimits/updated` notifications on long-lived sessions, but those don't help at server boot when no Codex conversation is active.
+
+**Constants:**
+- `REFRESH_MIN_INTERVAL_MS = 10 * 60 * 1000` — minimum gap between refresh attempts; matches the Claude/Kiro floor.
+- `STALE_AFTER_MS = 15 * 60 * 1000` — client-visible stale threshold.
+- `REFRESH_TIMEOUT_MS = 15_000` — hard ceiling on the spawned `codex app-server`. The two RPCs are sub-second in practice; a stuck process gets `SIGKILL`'d at this point.
+- `PROCESS_KILL_GRACE_MS = 1_000` — after the fetch finishes the service first sends `SIGTERM` and gives the process this long to exit cleanly before `SIGKILL`. The fallback timer is `.unref()`'d so it never holds the event loop open.
+
+**Constructor:** `new CodexPlanUsageService(appRoot: string)` — stores the on-disk cache at `<appRoot>/data/codex-plan-usage.json`.
+
+**Methods:**
+- `init()` — loads the persisted snapshot off disk on server startup. Silently ignores `ENOENT`; logs any other read/parse failure and keeps the in-memory snapshot as its initial empty shape.
+- `getCached()` — returns `{ fetchedAt, account, rateLimits, lastError, stale }`. Does not trigger a refresh. `stale` is computed as `now - fetchedAt > STALE_AFTER_MS` (or `true` when `fetchedAt` is null). This is the exact shape returned by `GET /api/chat/codex-plan-usage`.
+- `maybeRefresh(reason: string)` — triggers a refresh if all of: no in-flight refresh, and at least `REFRESH_MIN_INTERVAL_MS` have passed since the last attempt. Returns the shared in-flight promise when a fetch is already running, or an immediately-resolved promise when the throttle is active. The `reason` string is logged alongside success/failure (`server-start`, `turn-done`).
+- `_refresh(reason)` (private) — calls `fetchFromAppServer()` (see below). On success stores `{ fetchedAt: now, account, rateLimits, lastError: null }`. On failure preserves the prior `account` / `rateLimits` values and only overwrites `lastError` — the UI still renders the last-known snapshot.
+- `_persist()` (private) — `mkdir -p data/` then writes the snapshot to `data/codex-plan-usage.json` via `atomicWriteFile`. Failures are logged and swallowed.
+
+**App-server interaction (`fetchFromAppServer`):**
+1. `spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] })`. Errors from `spawn` itself (rare — only thrown for invalid args) bubble up as `'spawn codex app-server failed: <msg>'`.
+2. Register an `'error'` listener on the proc to capture `ENOENT` (no `codex` on `PATH`).
+3. `await new Promise(r => setImmediate(r))` — yield once so the async `'error'` event has a chance to fire before any `stdin.write` (which would otherwise crash with `EPIPE` on a non-existent process).
+4. If `spawnFailed` is set at this point, throw `'codex app-server unavailable: <msg>'`.
+5. Construct an `RpcClient` (see below) bound to the proc and call `initialize` with `{ clientInfo: { name: 'agent-cockpit', title: null, version: '1.0.0' }, capabilities: null }`.
+6. Issue `account/read` (params `{ refreshToken: false }` — we don't want to trigger an OAuth refresh from a passive read) and `account/rateLimits/read` (no params) in parallel via `Promise.all`.
+7. Normalize both results (see below) and return `{ account, rateLimits }`.
+8. **`finally`:** clear the 15s kill timer; if the proc isn't already killed, `SIGTERM` then schedule a `SIGKILL` after `PROCESS_KILL_GRACE_MS` (the fallback timer is `.unref()`'d).
+
+**`RpcClient` (private nested class):** minimal newline-delimited JSON-RPC over `proc.stdin` / `proc.stdout`.
+- `nextId` starts at 1; each `request` allocates a fresh id and stores `{ resolve, reject }` in a `pending` map keyed by id.
+- The stdout listener buffers partial lines, splits on `\n`, and for each complete line: `JSON.parse`, then if the message has an `id` and no `method` (i.e. it's a response, not a server-to-client notification or request), look up `pending[id]` — `reject(new Error(error.message))` on RPC error, `resolve(result)` otherwise.
+- Server-to-client notifications and requests are dropped silently (the cockpit only cares about its own responses).
+- On `proc.close` the client rejects every pending promise with `'codex app-server closed'` and clears the map. Subsequent `request()` calls reject immediately with `'codex app-server is closed'`.
+
+**Response normalization:** every accessor goes through `strOrNull` / `numOrNull` so missing or wrong-typed fields become `null` rather than crashing the renderer.
+- `normalizeAccount(raw)` reads `raw.account` and returns `{ type, email, planType }` (or `null` if `account` is absent).
+- `normalizeRateLimits(raw)` reads `raw.rateLimits` and returns `{ limitId, limitName, primary, secondary, credits, planType, rateLimitReachedType }` (or `null` if `rateLimits` is absent). Each `primary` / `secondary` window is normalized to `{ usedPercent, windowDurationMins, resetsAt }` — `resetsAt` is **epoch seconds** (not ISO string like Claude's `resets_at`).
+- `normalizeCredits(raw)` returns `{ hasCredits, unlimited, balance }` where `hasCredits` and `unlimited` are coerced to strict booleans (`=== true`) and `balance` is preserved as a string (Codex returns it pre-formatted, e.g. `'0'`).
+
+**Window semantics:** Codex's API returns two windows per limit: `primary` (5-hour, `windowDurationMins: 300`) and `secondary` (weekly, `windowDurationMins: 10080`). The frontend uses `windowDurationMins` to label each bar — it does **not** assume the slot order, so a future Codex API change that swaps slots won't mislabel the bars.
+
+**Integration points:**
+- `server.ts` — instantiated with `__dirname`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `codexPlanUsageService` dependency.
+- `src/routes/chat.ts`:
+  - `GET /codex-plan-usage` route returns `getCached()` verbatim.
+  - `onDone` stream callback calls `maybeRefresh('turn-done')` when `backendId === 'codex'`. No other backend triggers a refresh for this service.
+
+**Error taxonomy (`lastError` values):**
+- `'spawn codex app-server failed: <msg>'` — synchronous throw from `child_process.spawn`.
+- `'codex app-server unavailable: <msg>'` — async `'error'` event (typically `ENOENT` when `codex` is not on `PATH`).
+- `'codex app-server closed'` — the process exited before responding to a pending RPC.
+- `'codex app-server is closed'` — a request was issued after the proc had already been closed.
+- Any RPC error message verbatim (e.g. `'auth required'`, `'invalid params'`).
+- Any network/TLS error verbatim if `codex` itself fails to reach OpenAI's account API.

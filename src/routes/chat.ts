@@ -10,6 +10,7 @@ import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
 import type { ClaudePlanUsageService } from '../services/claudePlanUsageService';
 import type { KiroPlanUsageService } from '../services/kiroPlanUsageService';
+import type { CodexPlanUsageService } from '../services/codexPlanUsageService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
 import { detectLibreOffice } from '../services/knowledgeBase/libreOffice';
@@ -333,9 +334,10 @@ interface ChatRouterDeps {
   updateService: UpdateService;
   claudePlanUsageService: ClaudePlanUsageService;
   kiroPlanUsageService: KiroPlanUsageService;
+  codexPlanUsageService: CodexPlanUsageService;
 }
 
-export function createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService }: ChatRouterDeps) {
+export function createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService }: ChatRouterDeps) {
   const router = express.Router();
   const packageJson = require('../../package.json');
 
@@ -469,6 +471,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // server start and after each Kiro turn (see stream onDone below).
   router.get('/kiro-plan-usage', (_req: Request, res: Response) => {
     res.json(kiroPlanUsageService.getCached());
+  });
+
+  // ── Codex plan usage ───────────────────────────────────────────────────────
+  // Mirrors /plan-usage and /kiro-plan-usage: returns the cached
+  // `account/read` + `account/rateLimits/read` snapshot from
+  // CodexPlanUsageService. Refreshes happen on server start and after
+  // each Codex turn (see stream onDone below).
+  router.get('/codex-plan-usage', (_req: Request, res: Response) => {
+    res.json(codexPlanUsageService.getCached());
   });
 
   // ── Manual version check ────────────────────────────────────────────────────
@@ -1209,6 +1220,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
             claudePlanUsageService.maybeRefresh('turn-done');
           } else if (backendId === 'kiro') {
             kiroPlanUsageService.maybeRefresh('turn-done');
+          } else if (backendId === 'codex') {
+            codexPlanUsageService.maybeRefresh('turn-done');
           }
         },
         { chatService },

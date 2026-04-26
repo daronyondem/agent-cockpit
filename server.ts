@@ -17,6 +17,7 @@ import { CodexAdapter } from './src/services/backends/codex';
 import { UpdateService } from './src/services/updateService';
 import { ClaudePlanUsageService } from './src/services/claudePlanUsageService';
 import { KiroPlanUsageService } from './src/services/kiroPlanUsageService';
+import { CodexPlanUsageService } from './src/services/codexPlanUsageService';
 import { detectLibreOffice } from './src/services/knowledgeBase/libreOffice';
 import { detectPandoc } from './src/services/knowledgeBase/pandoc';
 import type { Request, Response, NextFunction } from './src/types';
@@ -94,7 +95,8 @@ const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAUL
 const updateService = new UpdateService(__dirname);
 const claudePlanUsageService = new ClaudePlanUsageService(__dirname);
 const kiroPlanUsageService = new KiroPlanUsageService(__dirname);
-const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService });
+const codexPlanUsageService = new CodexPlanUsageService(__dirname);
+const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
 app.use('/api/chat', chatRouter);
 
 // V2 is the default UI. Root redirects to /v2/; /legacy/ keeps the
@@ -145,6 +147,15 @@ chatService.initialize().then(async () => {
     kiroPlanUsageService.maybeRefresh('server-start');
   }).catch((err: unknown) => {
     console.warn('[kiroPlanUsage] init failed:', (err as Error).message);
+  });
+
+  // Same pattern for Codex. Spawns a one-shot `codex app-server` and
+  // calls `account/read` + `account/rateLimits/read` over JSON-RPC,
+  // then kills the process. Skipped silently if `codex` isn't on PATH.
+  codexPlanUsageService.init().then(() => {
+    codexPlanUsageService.maybeRefresh('server-start');
+  }).catch((err: unknown) => {
+    console.warn('[codexPlanUsage] init failed:', (err as Error).message);
   });
 
   // Detect LibreOffice in the background — used by the KB PPTX ingestion

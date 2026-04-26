@@ -66,7 +66,12 @@ export async function createChatRouterEnv(): Promise<ChatRouterEnv> {
     getCached: () => ({ fetchedAt: null, usage: null, lastError: null, stale: true }),
     maybeRefresh: async () => {},
   } as any;
-  const chatResult = createChatRouter({ chatService, backendRegistry, updateService: null as any, claudePlanUsageService: mockPlanUsage, kiroPlanUsageService: mockKiroPlanUsage });
+  const mockCodexPlanUsage = {
+    init: async () => {},
+    getCached: () => ({ fetchedAt: null, account: null, rateLimits: null, lastError: null, stale: true }),
+    maybeRefresh: async () => {},
+  } as any;
+  const chatResult = createChatRouter({ chatService, backendRegistry, updateService: null as any, claudePlanUsageService: mockPlanUsage, kiroPlanUsageService: mockKiroPlanUsage, codexPlanUsageService: mockCodexPlanUsage });
   const { activeStreams } = chatResult;
   app.use('/api/chat', chatResult.router);
 

@@ -270,6 +270,28 @@ describe('KiroPlanUsageService', () => {
       expect(service.getCached().lastError).toBe('token-expired');
     });
 
+    test('token-expired skip does not burn the 10-min throttle', async () => {
+      // First call: token expired → snapshot marked, no fetch. The throttle
+      // must NOT engage — otherwise stale data persists for 10+ min after
+      // kiro-cli has rotated to a fresh token.
+      createKiroDb(dbPath, { expiresAt: new Date(Date.now() - 1000).toISOString() });
+      const firstFetch = mockFetchOk(USAGE_BODY);
+      await service.maybeRefresh('first');
+      expect(firstFetch).not.toHaveBeenCalled();
+      expect(service.getCached().lastError).toBe('token-expired');
+
+      // Simulate kiro-cli rotating its IdC token: rebuild the DB with a valid one.
+      fs.rmSync(dbPath);
+      createKiroDb(dbPath, { expiresAt: new Date(Date.now() + 10 * 60_000).toISOString() });
+      const secondFetch = mockFetchOk(USAGE_BODY);
+
+      // Second call right away should proceed (no throttle from the prior skip).
+      await service.maybeRefresh('second');
+      expect(secondFetch).toHaveBeenCalledTimes(1);
+      expect(service.getCached().lastError).toBeNull();
+      expect(service.getCached().usage?.breakdown?.usageLimit).toBe(10000);
+    });
+
     test('records lastError when DB file is missing', async () => {
       // Don't create DB — kiro-cli not installed scenario.
       const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
