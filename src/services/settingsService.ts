@@ -40,6 +40,15 @@ export class SettingsService {
         await this.saveSettings(settings);
       }
 
+      const kb = settings.knowledgeBase;
+      if (
+        kb &&
+        typeof kb.dreamingConcurrency === 'number' &&
+        kb.cliConcurrency === undefined
+      ) {
+        kb.cliConcurrency = kb.dreamingConcurrency;
+      }
+
       return settings;
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {

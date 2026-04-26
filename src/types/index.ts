@@ -321,23 +321,42 @@ export interface Settings {
     cliEffort?: EffortLevel;
   };
   /**
-   * Globally-configured Knowledge Base CLIs. Two separate roles:
+   * Globally-configured Knowledge Base CLIs. Three separate roles:
+   *   - Ingestion: optional vision-capable CLI that converts visual
+   *     content (PDF pages with figures/tables, DOCX images, PPTX slides
+   *     with charts, standalone uploaded images) into clean Markdown at
+   *     ingest time. When unset, those code paths fall back to image-only
+   *     references (current behavior).
    *   - Digestion: runs once per raw file to produce structured entries.
    *   - Dreaming: manually invoked to synthesize entries into a coherent
    *     knowledge graph. Incremental by default, full rebuild on demand.
-   * Both must be registered backends. Shape mirrors `memory` so the
+   * All three must be registered backends. Shape mirrors `memory` so the
    * config surface stays consistent. `convertSlidesToImages` opts into
    * the LibreOffice-backed PPTX slide rasterization path (global, not
    * per-workspace).
    */
   knowledgeBase?: {
+    ingestionCliBackend?: string;
+    ingestionCliModel?: string;
+    ingestionCliEffort?: EffortLevel;
     digestionCliBackend?: string;
     digestionCliModel?: string;
     digestionCliEffort?: EffortLevel;
     dreamingCliBackend?: string;
     dreamingCliModel?: string;
     dreamingCliEffort?: EffortLevel;
-    /** Max concurrent CLI calls during dreaming batches. Default 2. */
+    /**
+     * Max documents processed in parallel by ingestion, digestion, and
+     * dreaming pipelines per workspace. Within a single document, work
+     * stays sequential. Default 2.
+     */
+    cliConcurrency?: number;
+    /**
+     * @deprecated Renamed to `cliConcurrency`. Read-time migration in
+     * `settingsService.getSettings()` copies this value forward when the
+     * new key is missing. Kept on the type for one release cycle so old
+     * `settings.json` files continue to load without warnings.
+     */
     dreamingConcurrency?: number;
     /** Cosine similarity score above which an entry→topic match skips LLM verification. Default 0.75. */
     dreamingStrongMatchThreshold?: number;
