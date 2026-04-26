@@ -15,6 +15,14 @@
 | 7. Export, Limitations & Deployment | [spec-deployment.md](spec-deployment.md) | Markdown export, known limitations, deployment |
 | 8. Testing & CI/CD | [spec-testing.md](spec-testing.md) | Test suite, test files, CI workflows |
 
+### Design Documents
+
+In-flight or pending design proposals that complement (but have not yet been folded into) the spec proper:
+
+| Document | Status | Description |
+|----------|--------|-------------|
+| [design-kb-ingestion-hybrid.md](design-kb-ingestion-hybrid.md) | Draft | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) |
+
 ---
 
 ## 1. Overview
