@@ -587,6 +587,71 @@ describe('entry CRUD + tag filtering', () => {
     expect(db.listEntries({ search: '%' }).map((e) => e.title)).toEqual(['Title with 50% off']);
   });
 
+  test('listEntries search matches source filename even when title does not', () => {
+    const { rawId, sha256 } = makeRawFile('budget contents');
+    db.insertRaw({
+      rawId,
+      sha256,
+      status: 'digested',
+      byteLength: 15,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.addLocation({
+      rawId,
+      folderPath: 'reports',
+      filename: 'q1-budget.md',
+      uploadedAt: '2026-01-01T00:00:00Z',
+    });
+    db.insertEntry({
+      entryId: `${rawId}-summary`,
+      rawId,
+      title: 'Quarterly numbers',
+      slug: 'summary',
+      summary: '',
+      schemaVersion: 1,
+      digestedAt: '2026-01-02T00:00:00Z',
+      tags: [],
+    });
+    // Filename substring match, case-insensitive.
+    expect(db.listEntries({ search: 'q1-budget' }).map((e) => e.title)).toEqual(['Quarterly numbers']);
+    expect(db.listEntries({ search: 'BUDGET' }).map((e) => e.title)).toEqual(['Quarterly numbers']);
+    // Title match still works when the term doesn't appear in the filename.
+    expect(db.listEntries({ search: 'quarterly' }).map((e) => e.title)).toEqual(['Quarterly numbers']);
+    // Term that matches neither title nor filename returns nothing.
+    expect(db.listEntries({ search: 'invoice' }).length).toBe(0);
+  });
+
+  test('listEntries search does not duplicate rows when title and multiple filenames match', () => {
+    const { rawId, sha256 } = makeRawFile('multi-loc');
+    db.insertRaw({
+      rawId,
+      sha256,
+      status: 'digested',
+      byteLength: 9,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.addLocation({ rawId, folderPath: 'a', filename: 'report.md', uploadedAt: '2026-01-01T00:00:00Z' });
+    db.addLocation({ rawId, folderPath: 'b', filename: 'report-v2.md', uploadedAt: '2026-01-01T00:00:00Z' });
+    db.insertEntry({
+      entryId: `${rawId}-x`,
+      rawId,
+      title: 'Report Highlights',
+      slug: 'x',
+      summary: '',
+      schemaVersion: 1,
+      digestedAt: '2026-01-02T00:00:00Z',
+      tags: [],
+    });
+    // Term matches the title and both filenames — the entry must surface exactly once.
+    expect(db.listEntries({ search: 'report' }).length).toBe(1);
+  });
+
   test('listEntries multi-tag filter uses AND semantics', () => {
     seedRawWithEntries();
     // Both seeded entries have `shared`; only alpha has `core`.

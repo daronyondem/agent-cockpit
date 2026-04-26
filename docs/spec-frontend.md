@@ -410,7 +410,7 @@ The **KB Browser** is a full-screen panel that swaps into the main chat area (hi
       selectedEntryId: string|null,  // row selected on the left
       entryBody: string,             // fetched body for the right panel
       filters: {
-        search: string,              // title substring
+        search: string,              // matches entry title OR any source filename in raw_locations
         tags: string[],              // AND-selected tag list
         uploadedPreset: string,      // 'all'|'today'|'7d'|'30d'|'90d'|'custom'
         uploadedFrom: string,        // '' or 'YYYY-MM-DD' (only when preset='custom')
@@ -465,7 +465,7 @@ The **KB Browser** is a full-screen panel that swaps into the main chat area (hi
 - **Entries tab:** Two-column layout — a filtered+paginated list of digested entries on the left (with a filter bar above and pagination controls below), a detail pane on the right. Scroll position is preserved across re-renders by saving/restoring `scrollTop` on the inner scrollable elements (`.chat-kb-entries-list` and `.chat-kb-entry-detail`), not just the outer `#chat-kb-browser` container.
   - **State:** `chatKbBrowserState.entries = { loading, items, total, selectedEntryId, entryBody, filters, page, pageSize, allTags, allTagsLoaded, tagPickerOpen, tagPickerQuery, searchDebounceTimer }`. `filters = { search, tags[], uploadedPreset, uploadedFrom, uploadedTo, digestedPreset, digestedFrom, digestedTo }`. `pageSize` defaults to `50` and the selector offers `25 / 50 / 100`.
   - **Filter bar** (`chatKbBrowserEntriesToolbar`): Four filter controls, all combining with AND semantics.
-    - **Title search** — `<input type="search">` bound to `filters.search`, debounced **300 ms** via `setTimeout` stored on `entries.searchDebounceTimer`. Each change resets `page` to `1`.
+    - **Title / filename search** — `<input type="search">` bound to `filters.search`, debounced **300 ms** via `setTimeout` stored on `entries.searchDebounceTimer`. Each change resets `page` to `1`. The server matches the term as a case-insensitive substring against the entry title **or** any source filename in `raw_locations` for the parent raw (folder path is not included).
     - **Tag picker** — a `Tags (N)` button opens a dropdown (`.chat-kb-tag-dropdown`) populated from `GET /kb/tags` (fetched once per browser open, cached on `entries.allTags`). The dropdown includes an in-list search input (`entries.tagPickerQuery`) so long tag lists remain navigable. Selected tags render as removable chips below the filter rows (the `×` button clears the chip). **Multi-tag semantics are AND** — an entry must carry every selected tag — and a small hint line in the dropdown reminds the user. Outside-click closes the dropdown (wired on each render while `tagPickerOpen` is true).
     - **Uploaded date** — `<select>` with presets `All time / Today / Last 7 days / Last 30 days / Last 90 days / Custom…`. Presets resolve to ISO bounds at refetch time via `chatKbBrowserResolveDateRange(preset, from, to)`. Picking `Custom…` reveals two `<input type="date">` pickers; the `from` input is floored to 00:00:00 and the `to` input is widened to 23:59:59.999 so the full day is inclusive. Filters against the joined `raw.uploaded_at` column server-side.
     - **Digested date** — same preset set; filters against `entries.digested_at` server-side.

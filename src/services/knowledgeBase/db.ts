@@ -1043,8 +1043,14 @@ export class KbDatabase {
     }
 
     if (opts.search !== undefined && opts.search.trim() !== '') {
-      clauses.push("e.title LIKE ? ESCAPE '\\' COLLATE NOCASE");
-      params.push('%' + opts.search.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%');
+      const needle = '%' + opts.search.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%';
+      clauses.push(
+        "(e.title LIKE ? ESCAPE '\\' COLLATE NOCASE"
+          + " OR EXISTS (SELECT 1 FROM raw_locations rl"
+          + " WHERE rl.raw_id = e.raw_id"
+          + " AND rl.filename LIKE ? ESCAPE '\\' COLLATE NOCASE))",
+      );
+      params.push(needle, needle);
     }
 
     if (opts.digestedFrom !== undefined && opts.digestedFrom !== '') {
