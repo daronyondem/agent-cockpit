@@ -347,7 +347,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // used by the watcher to compute `changedFiles` for the `memory_update` WS frame.
   // Cleared when the watcher is unwatched so a re-watched conversation starts fresh.
   const memoryFingerprints = new Map<string, Map<string, string>>();
-  let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected'> | null = null;
+  let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected' | 'startStreamGracePeriod'> | null = null;
 
   /**
    * Fan out a `kb_state_update` frame to every conversation with an OPEN
@@ -1150,9 +1150,17 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
     activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });
 
-    // If a WebSocket is connected for this conversation, pipe the stream to it
-    if (wsFns && wsFns.isConnected(convId)) {
+    // Always pipe the stream — if no WS is connected yet (e.g. the user
+    // arrived via a stale page after a long sleep / network change), the
+    // stream still runs and frames buffer until either a reconnect replays
+    // them or the grace period expires and synthesizes error+done.
+    if (wsFns) {
       wsFns.clearBuffer(convId); // Fresh buffer for the new stream
+      // Kick the grace period if no WS is connected at submission time so
+      // processStream's isStreamAlive() stays true while frames buffer.
+      if (!wsFns.isConnected(convId)) {
+        wsFns.startStreamGracePeriod(convId);
+      }
 
       // Start real-time memory watching for this stream.  When Claude
       // Code's extraction agent writes to its memory directory, the
@@ -2852,7 +2860,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     if (updateService) updateService.stop();
   }
 
-  function setWsFunctions(fns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected'>) {
+  function setWsFunctions(fns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected' | 'startStreamGracePeriod'>) {
     wsFns = fns;
   }
 

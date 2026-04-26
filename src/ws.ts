@@ -8,6 +8,9 @@ interface AttachWebSocketOpts {
   sessionStore: Store;
   sessionSecret: string;
   activeStreams: Map<string, ActiveStreamEntry>;
+  /** Override the WebSocket reconnect grace period (default 60_000 ms).
+   *  Used by tests so grace-expiry behavior can be exercised quickly. */
+  gracePeriodMs?: number;
 }
 
 export interface WsFunctions {
@@ -18,6 +21,13 @@ export interface WsFunctions {
   clearBuffer: (convId: string) => void;
   /** Invoke `cb` for each conversation with an OPEN WebSocket. */
   forEachConnected: (cb: (convId: string) => void) => void;
+  /** Start (or no-op if already running) the grace period for an active
+   *  stream that has no live WebSocket. Used by the POST /message handler
+   *  when no client WS is connected at submission time so the stream still
+   *  runs and buffers; if the client never reconnects within the grace
+   *  window, the stream is aborted and synthetic error+done frames are
+   *  buffered so a later reconnect (e.g. page refresh) sees the closure. */
+  startStreamGracePeriod: (convId: string) => void;
 }
 
 // ── Event buffer for reconnection ──────────────────────────────────────────
@@ -71,6 +81,7 @@ export function attachWebSocket(
   opts: AttachWebSocketOpts,
 ): WsFunctions {
   const { sessionStore, sessionSecret, activeStreams } = opts;
+  const gracePeriodMs = opts.gracePeriodMs ?? GRACE_PERIOD_MS;
 
   const wss = new WebSocketServer({ noServer: true });
   const activeWebSockets = new Map<string, WebSocket>();
@@ -278,23 +289,7 @@ export function attachWebSocket(
       if (activeWebSockets.get(convId) === ws) {
         activeWebSockets.delete(convId);
       }
-
-      // If a stream is active, start grace period instead of aborting
-      const entry = activeStreams.get(convId);
-      if (entry) {
-        const graceBuf = getOrCreateBuffer(convId);
-        console.log(`[ws] Starting ${GRACE_PERIOD_MS / 1000}s grace period for conv=${convId}`);
-        graceBuf.graceTimer = setTimeout(() => {
-          console.log(`[ws] Grace period expired for conv=${convId}, aborting CLI`);
-          graceBuf.graceTimer = null;
-          const staleEntry = activeStreams.get(convId);
-          if (staleEntry) {
-            staleEntry.abort();
-            activeStreams.delete(convId);
-          }
-          deleteBuffer(convId);
-        }, GRACE_PERIOD_MS);
-      }
+      startStreamGracePeriod(convId);
     });
 
     ws.on('error', (err) => {
@@ -361,6 +356,33 @@ export function attachWebSocket(
     deleteBuffer(convId);
   }
 
+  /** Start the grace period for an active stream with no live WS. Idempotent —
+   *  no-op if a grace timer is already running for this conv. Called both from
+   *  the WS close handler (existing path) and from the POST /message handler
+   *  when no WS is connected at submission time (network-change recovery). */
+  function startStreamGracePeriod(convId: string): void {
+    const entry = activeStreams.get(convId);
+    if (!entry) return;
+    const buf = getOrCreateBuffer(convId);
+    if (buf.graceTimer) return;
+    console.log(`[ws] Starting ${gracePeriodMs / 1000}s grace period for conv=${convId}`);
+    buf.graceTimer = setTimeout(() => {
+      console.log(`[ws] Grace period expired for conv=${convId}, aborting CLI`);
+      buf.graceTimer = null;
+      const staleEntry = activeStreams.get(convId);
+      if (staleEntry) {
+        staleEntry.abort();
+        activeStreams.delete(convId);
+      }
+      // Buffer synthetic error+done so a future reconnect (page refresh
+      // after long sleep / network change) sees the closure and clears
+      // its "in-progress" UI state. send() schedules the cleanup timer
+      // when it sees a `done` with no live WS.
+      send(convId, { type: 'error', error: 'WebSocket reconnect grace period expired' });
+      send(convId, { type: 'done' });
+    }, gracePeriodMs);
+  }
+
   function shutdown() {
     shuttingDown = true;
     clearInterval(pingInterval);
@@ -376,5 +398,5 @@ export function attachWebSocket(
     wss.close();
   }
 
-  return { shutdown, send, isConnected, isStreamAlive, clearBuffer, forEachConnected };
+  return { shutdown, send, isConnected, isStreamAlive, clearBuffer, forEachConnected, startStreamGracePeriod };
 }
