@@ -121,6 +121,10 @@ export class ClaudePlanUsageService {
       if (isExpired(creds.expiresAt)) {
         this._snapshot = { ...this._snapshot, lastError: 'token-expired' };
         await this._persist();
+        // Token-expired isn't a real attempt — we never reached the API. Reset
+        // the throttle so the next trigger can retry the moment Claude Code
+        // refreshes the OAuth token, instead of waiting out the full 10-min cooldown.
+        this._lastAttemptAt = 0;
         console.log(`[claudePlanUsage] refresh(${reason}) skipped: access token expired`);
         return;
       }

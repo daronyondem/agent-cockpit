@@ -244,6 +244,29 @@ describe('ClaudePlanUsageService', () => {
       expect(service.getCached().lastError).toBe('token-expired');
     });
 
+    test('token-expired skip does not burn the 10-min throttle', async () => {
+      // First call: token expired → snapshot marked, no fetch. Throttle must
+      // NOT engage — otherwise stale data persists for 10+ min after Claude
+      // Code rotates to a fresh OAuth token.
+      const expired = Date.now() - 1000;
+      readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson({ expiresAt: expired }) }]);
+      const firstFetch = mockFetchOk(USAGE_BODY);
+      await service.maybeRefresh('first');
+      expect(firstFetch).not.toHaveBeenCalled();
+      expect(service.getCached().lastError).toBe('token-expired');
+
+      // Simulate Claude Code rotating its OAuth token: swap the creds for a fresh one.
+      readSpy.mockRestore();
+      readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson() }]);
+      const secondFetch = mockFetchOk(USAGE_BODY);
+
+      // Second call right away should proceed (no throttle from the prior skip).
+      await service.maybeRefresh('second');
+      expect(secondFetch).toHaveBeenCalledTimes(1);
+      expect(service.getCached().lastError).toBeNull();
+      expect(service.getCached().rateLimits?.five_hour?.utilization).toBe(18);
+    });
+
     test('records lastError on HTTP 401, preserves prior snapshot', async () => {
       // Seed prior good snapshot
       const cacheFile = path.join(tmpDir, 'data', 'claude-plan-usage.json');
