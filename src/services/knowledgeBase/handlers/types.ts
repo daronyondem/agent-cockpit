@@ -8,6 +8,9 @@
 // filesystem. The orchestrator is responsible for updating `state.json`
 // and emitting WS frames.
 
+import type { BaseBackendAdapter } from '../../backends/base';
+import type { EffortLevel } from '../../../types';
+
 /** Result of converting a raw file into a digestible form. */
 export interface HandlerResult {
   /**
@@ -58,6 +61,18 @@ export interface HandlerInput {
    * at the top of `ingest()`.
    */
   convertSlidesToImages?: boolean;
+  /**
+   * Configured Ingestion CLI adapter, used by hybrid handlers (PDF, DOCX,
+   * PPTX, passthrough image) to convert page/slide/embedded images to
+   * Markdown via `convertImageToMarkdown`. Undefined when the user has not
+   * configured an Ingestion CLI — handlers fall back to image-link-only
+   * output for visual content in that case.
+   */
+  ingestionAdapter?: BaseBackendAdapter;
+  /** Optional Ingestion CLI model override (must be vision-capable). */
+  ingestionModel?: string;
+  /** Optional Ingestion CLI reasoning effort. */
+  ingestionEffort?: EffortLevel;
 }
 
 /** Shape of a handler function — pure async, throws on fatal errors. */
