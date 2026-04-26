@@ -349,6 +349,20 @@ export function eventIsFromChildThread(
   return !!tid && subagentByThreadId.has(tid);
 }
 
+// Multi-agent turns emit one `turn/completed` per thread (each child has its
+// own turn lifecycle), so the cockpit can't treat the first one it sees as
+// terminal — that's almost always a child's, and acting on it would close
+// the stream before the parent's final summary arrives. Only the parent
+// thread's `turn/completed` ends the cockpit's notification loop.
+export function isParentTurnCompleted(
+  params: Record<string, unknown>,
+  parentThreadId: string | null,
+): boolean {
+  const completedTid = (params as { threadId?: string }).threadId;
+  if (!completedTid || !parentThreadId) return true;
+  return completedTid === parentThreadId;
+}
+
 // Extract child threadIds from a completed `collabAgentToolCall(spawnAgent)`
 // and record each one against the top-level Agent card id. Grand-children
 // (spawned by a thread that's already a child) are flattened to the same
@@ -1238,6 +1252,12 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           case 'turn/completed': {
+            // Multi-agent turns emit one `turn/completed` per thread (each
+            // child has its own turn lifecycle). Only the parent thread's
+            // `turn/completed` is terminal — closing on the first child's
+            // would cut off the parent's final summary, which arrives after
+            // the children finish.
+            if (!isParentTurnCompleted(params, state.threadId)) break;
             turnEnded = true;
             client.stopNotifications();
             break;

@@ -6,6 +6,7 @@ import {
   lookupParentAgentId,
   eventIsFromChildThread,
   recordSpawnAgentReceivers,
+  isParentTurnCompleted,
 } from '../src/services/backends/codex';
 
 // ── CodexAdapter metadata ───────────────────────────────────────────────────
@@ -440,6 +441,24 @@ describe('lookupParentAgentId', () => {
   test('returns undefined for parent (unmapped) threadId', () => {
     const map = new Map<string, string>([['child-a', 'call-1']]);
     expect(lookupParentAgentId({ threadId: 'parent-thread' }, map)).toBeUndefined();
+  });
+});
+
+describe('isParentTurnCompleted', () => {
+  test('returns true when threadId matches parent', () => {
+    expect(isParentTurnCompleted({ threadId: 'parent' }, 'parent')).toBe(true);
+  });
+
+  test('returns false when threadId is a child', () => {
+    expect(isParentTurnCompleted({ threadId: 'child-a' }, 'parent')).toBe(false);
+  });
+
+  test('returns true (legacy) when params has no threadId', () => {
+    expect(isParentTurnCompleted({}, 'parent')).toBe(true);
+  });
+
+  test('returns true (legacy) when parentThreadId is null', () => {
+    expect(isParentTurnCompleted({ threadId: 'anything' }, null)).toBe(true);
   });
 });
 
