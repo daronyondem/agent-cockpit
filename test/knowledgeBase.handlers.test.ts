@@ -173,6 +173,42 @@ describe('pdfHandler', () => {
 
       const sc = result.metadata?.sourceCounts as Record<string, number>;
       expect(sc['artificial-intelligence']).toBe(1);
+      // First-attempt success → aiRetries=0 (not 1).
+      const pages = result.metadata?.pages as Array<{ aiRetries: number }>;
+      expect(pages[0].aiRetries).toBe(0);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  test('records aiRetries=1 when the AI succeeds on the second attempt', async () => {
+    const spy = jest.spyOn(pdfSignalsModule, 'extractPageSignals').mockResolvedValue({
+      extractedText: '',
+      extractedChars: 0,
+      figureCount: 1,
+      tableLikely: false,
+    });
+    let calls = 0;
+    const stubAdapter = {
+      async runOneShot() {
+        calls += 1;
+        if (calls === 1) throw new Error('first attempt failed');
+        return '# AI second-attempt success';
+      },
+    } as any;
+
+    try {
+      const buffer = readFixture('sample.pdf');
+      const result = await pdfHandler({
+        buffer,
+        filename: 'sample.pdf',
+        mimeType: 'application/pdf',
+        outDir,
+        ingestionAdapter: stubAdapter,
+      });
+      const pages = result.metadata?.pages as Array<{ source: string; aiRetries: number }>;
+      expect(pages[0].source).toBe('artificial-intelligence');
+      expect(pages[0].aiRetries).toBe(1);
     } finally {
       spy.mockRestore();
     }

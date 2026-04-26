@@ -159,13 +159,16 @@ export const pdfHandler: Handler = async ({
 
     const startedAt = Date.now();
     let aiMarkdown: string | null = null;
+    let aiRetried = false;
     let aiError: string | null = null;
     try {
-      aiMarkdown = await convertImageToMarkdown(absImagePath, {
+      const result = await convertImageToMarkdown(absImagePath, {
         adapter: ingestionAdapter,
         model: ingestionModel,
         effort: ingestionEffort,
       });
+      aiMarkdown = result.markdown;
+      aiRetried = result.retried;
     } catch (err) {
       aiError = err instanceof Error ? err.message : String(err);
     }
@@ -179,7 +182,7 @@ export const pdfHandler: Handler = async ({
         tableLikely: signals.tableLikely,
         extractedChars: signals.extractedChars,
         aiCallDurationMs,
-        aiRetries: 1,
+        aiRetries: aiRetried ? 1 : 0,
       });
       pageBodies.push(buildSection(pageNumber, 'artificial-intelligence', signals, aiMarkdown, rel));
     } else {

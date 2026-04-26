@@ -38,16 +38,17 @@ class StubAdapter extends BaseBackendAdapter {
 const IMAGE_PATH = '/tmp/raw-abc/pages/page-0042.png';
 
 describe('convertImageToMarkdown', () => {
-  test('returns adapter output on first success', async () => {
+  test('returns markdown with retried=false on first success', async () => {
     const adapter = new StubAdapter(async () => '# Page 42\n\nHello world.');
 
     const result = await convertImageToMarkdown(IMAGE_PATH, { adapter });
 
-    expect(result).toBe('# Page 42\n\nHello world.');
+    expect(result.markdown).toBe('# Page 42\n\nHello world.');
+    expect(result.retried).toBe(false);
     expect(adapter.calls).toHaveLength(1);
   });
 
-  test('retries once on throw and returns second success', async () => {
+  test('retries once on throw and returns retried=true on second success', async () => {
     let callCount = 0;
     const adapter = new StubAdapter(async () => {
       callCount += 1;
@@ -57,11 +58,12 @@ describe('convertImageToMarkdown', () => {
 
     const result = await convertImageToMarkdown(IMAGE_PATH, { adapter });
 
-    expect(result).toBe('# Page 42');
+    expect(result.markdown).toBe('# Page 42');
+    expect(result.retried).toBe(true);
     expect(adapter.calls).toHaveLength(2);
   });
 
-  test('retries once on empty output and returns second success', async () => {
+  test('retries once on empty output and returns retried=true on second success', async () => {
     let callCount = 0;
     const adapter = new StubAdapter(async () => {
       callCount += 1;
@@ -70,7 +72,8 @@ describe('convertImageToMarkdown', () => {
 
     const result = await convertImageToMarkdown(IMAGE_PATH, { adapter });
 
-    expect(result).toBe('# Page 42');
+    expect(result.markdown).toBe('# Page 42');
+    expect(result.retried).toBe(true);
     expect(adapter.calls).toHaveLength(2);
   });
 
