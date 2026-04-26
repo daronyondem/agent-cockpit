@@ -431,6 +431,27 @@ describe('buildDigestPrompt', () => {
     });
     expect(prompt).toContain('Folder: <root>');
   });
+
+  test('instructs the CLI to open every referenced image (rasterized PDFs)', () => {
+    // Mirrors what the PDF handler emits: a thin markdown index whose only
+    // content is `![Page N](pages/page-NNNN.png)` links. Without an explicit
+    // rule, multimodal CLIs were returning "no body text was extracted"
+    // pointer entries instead of actually reading the page images.
+    const prompt = buildDigestPrompt({
+      filename: 'book.pdf',
+      folderPath: 'books',
+      rawId: 'pdfraw',
+      handler: 'pdf/rasterized',
+      mimeType: 'application/pdf',
+      convertedTextPath: 'converted/pdfraw/text.md',
+      convertedText: '# book.pdf\n\n## Page 1\n\n![Page 1](pages/page-0001.png)',
+      handlerMetadata: { pageCount: 185, rasterDpi: 150 },
+    });
+    expect(prompt).toMatch(/image references/i);
+    expect(prompt).toMatch(/MUST open and analyze EVERY referenced image/);
+    expect(prompt).toMatch(/relative to the converted text file's directory/);
+    expect(prompt).toMatch(/page images ARE the content/);
+  });
 });
 
 // ─── End-to-end digest against seeded raw ────────────────────────────────────
