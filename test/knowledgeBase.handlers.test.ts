@@ -428,6 +428,59 @@ describe('docxHandler', () => {
     expect(images[0].aiRetries).toBe(0);
   });
 
+  test('rewrites HTML <img> tags (pandoc absolutizes when DOCX has inline styling) and appends AI description', async () => {
+    // Pandoc falls back to raw HTML <img> for images that carry inline width/
+    // height styling — anything markdown's `![](…)` can't represent. The src
+    // gets absolutized to the on-disk path inside the --extract-media dir.
+    runPandocSpy = jest
+      .spyOn(pandocModule, 'runPandoc')
+      .mockImplementation(async (args) => {
+        const extractArg = (args as string[]).find((a) =>
+          a.startsWith('--extract-media='),
+        )!;
+        const mediaRoot = extractArg.replace('--extract-media=', '');
+        const nested = path.join(mediaRoot, 'media');
+        fs.mkdirSync(nested, { recursive: true });
+        const abs = path.join(nested, 'image1.png');
+        fs.writeFileSync(abs, makePng(400, 400));
+        // Emit pandoc's exact HTML-img output shape: absolute path + inline style.
+        const stdout =
+          'Intro paragraph.\n\n' +
+          `<img src="${abs}" style="width:2.05in;height:2.79in" />\n\n` +
+          'Closing paragraph.\n';
+        return { stdout, stderr: '' };
+      });
+    const adapterCalls: Array<{ prompt: string }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string) {
+        adapterCalls.push({ prompt });
+        return 'A line chart showing daily active users.';
+      },
+    } as any;
+
+    const result = await docxHandler({
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      filename: 'styled.docx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      outDir,
+      ingestionAdapter: stubAdapter,
+    });
+
+    expect(adapterCalls).toHaveLength(1);
+    // Path was rewritten to the flattened relative form — no absolute path leaks.
+    expect(result.text).not.toMatch(/src="\/[^"]*media\/media\//);
+    expect(result.text).toContain('src="media/image1.png"');
+    // Inline style is preserved through the rewrite.
+    expect(result.text).toContain('style="width:2.05in;height:2.79in"');
+    // AI description is appended right after the <img> tag.
+    expect(result.text).toContain(
+      '> Image description (source: artificial-intelligence): A line chart showing daily active users.',
+    );
+    const sc = result.metadata?.sourceCounts as Record<string, number>;
+    expect(sc['artificial-intelligence']).toBe(1);
+  });
+
   test('falls back to bare link when AI description fails twice', async () => {
     stubPandocOneImage(
       400,

@@ -155,21 +155,29 @@ export const docxHandler: Handler = async ({
       await fsp.rm(pandocMediaSubdir, { recursive: true, force: true }).catch(() => undefined);
     }
 
-    // Rewrite any `media/media/foo.png` references pandoc inserted into the
-    // markdown to point at the flattened `media/foo.png` layout. We keep the
-    // rename map per target so collision-suffixed files still resolve.
+    // Rewrite image references pandoc inserted to point at the flattened
+    // `media/<basename>` layout. Pandoc emits TWO forms depending on whether
+    // the source DOCX preserved inline width/height styling:
+    //   - Plain markdown: `![](./media/media/foo.png)` (relative path)
+    //   - HTML img tag:   `<img src="/abs/.../media/media/foo.png" style="…" />`
+    //                     (pandoc absolutizes the src and falls back to raw
+    //                     HTML for anything markdown can't represent natively,
+    //                     like inline sizing — common for figures from Word).
+    // Both forms get rewritten by basename so the result is portable.
     let markdown = stdout;
     if (mediaFiles.length > 0) {
       markdown = markdown.replace(
-        /(!\[[^\]]*\]\()(?:\.\/)?media\/media\/([^)\s]+)(\))/g,
-        (match, open: string, rel: string, close: string) => {
-          const flatBase = path.basename(rel).replace(/[\/\\]/g, '_');
-          // Find the post-collision name for this original basename.
-          const hit = mediaFiles.find((m) => {
-            const mBase = path.basename(m);
-            return mBase === flatBase || mBase.startsWith(flatBase.replace(/\.[^.]+$/, '') + '-');
-          });
-          return `${open}${hit || path.join('media', flatBase)}${close}`;
+        /(!\[[^\]]*\]\()([^)\s]+)(\))/g,
+        (match, open: string, src: string, close: string) => {
+          const hit = findFlattenedRel(src, mediaFiles);
+          return hit ? `${open}${hit}${close}` : match;
+        },
+      );
+      markdown = markdown.replace(
+        /<img\b([^>]*?)\bsrc="([^"]+)"([^>]*?)>/gi,
+        (match, before: string, src: string, after: string) => {
+          const hit = findFlattenedRel(src, mediaFiles);
+          return hit ? `<img${before}src="${hit}"${after}>` : match;
         },
       );
     }
@@ -280,9 +288,32 @@ export const docxHandler: Handler = async ({
 };
 
 /**
+ * Look up the post-flatten relative path for an image reference whose `src`
+ * may be relative (`./media/media/foo.png`) or absolute (the full disk path
+ * pandoc emits when it falls back to an HTML `<img>` tag). Returns the entry
+ * in `mediaFiles` whose basename matches `src`'s basename — including the
+ * collision-suffixed form (`foo-1.png`) when two embedded images shared a
+ * basename. Returns `null` when nothing matches (so callers can leave the
+ * reference untouched rather than fabricate a path).
+ */
+function findFlattenedRel(src: string, mediaFiles: string[]): string | null {
+  const baseRaw = path.basename(src);
+  const flatBase = baseRaw.replace(/[\/\\]/g, '_');
+  const stem = flatBase.replace(/\.[^.]+$/, '');
+  return (
+    mediaFiles.find((m) => {
+      const mBase = path.basename(m);
+      return mBase === flatBase || mBase.startsWith(stem + '-');
+    }) ?? null
+  );
+}
+
+/**
  * Append a quoted "Image description" block right after every reference to
- * `mediaRel` in the markdown. Multi-line descriptions are quoted with `>` on
- * every line so the rendered markdown shows them as a single blockquote.
+ * `mediaRel` in the markdown. Handles both pandoc output forms — markdown
+ * `![alt](mediaRel)` and HTML `<img ... src="mediaRel" ...>`. Multi-line
+ * descriptions are quoted with `>` on every line so the rendered markdown
+ * shows them as a single blockquote.
  */
 function augmentImageReference(
   markdown: string,
@@ -302,6 +333,7 @@ function augmentImageReference(
     .join('\n');
 
   const escaped = mediaRel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const re = new RegExp(`(!\\[[^\\]]*\\]\\(${escaped}\\))`, 'g');
-  return markdown.replace(re, `$1\n\n${quoted}`);
+  const mdRe = new RegExp(`(!\\[[^\\]]*\\]\\(${escaped}\\))`, 'g');
+  const htmlRe = new RegExp(`(<img\\b[^>]*?\\bsrc="${escaped}"[^>]*?>)`, 'gi');
+  return markdown.replace(mdRe, `$1\n\n${quoted}`).replace(htmlRe, `$1\n\n${quoted}`);
 }
