@@ -890,3 +890,76 @@ describe('unread', () => {
   });
 });
 
+// ── WebSocket revalidation on network change / sleep ───────────────────────
+
+describe('WebSocket revalidation', () => {
+  test('revalidateAllSockets closes the existing socket and opens a fresh one', async () => {
+    const initialWs = await openWs('c1');
+    const Store = (window as any).StreamStore;
+
+    expect(initialWs.readyState).toBe(FakeWS.OPEN);
+
+    Store.revalidateAllSockets();
+
+    // Old socket gets closed by the helper.
+    expect(initialWs.readyState).toBe(FakeWS.CLOSED);
+
+    // ensureWsOpen creates a new FakeWS — fakeWSInstance reflects the latest.
+    const newWs = fakeWSInstance!;
+    expect(newWs).not.toBe(initialWs);
+
+    // Wait for the queued microtask in FakeWS.addEventListener('open') so the
+    // new socket transitions to OPEN before we assert.
+    await new Promise<void>(r => queueMicrotask(() => r()));
+    expect(newWs.readyState).toBe(FakeWS.OPEN);
+  });
+
+  test('visibility change with >=30s hidden gap triggers revalidation', async () => {
+    const initialWs = await openWs('c1');
+    const Store = (window as any).StreamStore;
+
+    const t0 = 1_000_000;
+    const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(t0);
+
+    // Tab goes hidden — record lastHiddenAt = t0.
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    Store._handleVisibilityChange();
+
+    // Advance virtual clock past the 30s threshold.
+    dateSpy.mockReturnValue(t0 + 31_000);
+
+    // Tab returns visible — should trigger revalidateAllSockets.
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    Store._handleVisibilityChange();
+
+    expect(initialWs.readyState).toBe(FakeWS.CLOSED);
+    expect(fakeWSInstance).not.toBe(initialWs);
+
+    dateSpy.mockRestore();
+  });
+
+  test('visibility change with <30s hidden gap does NOT revalidate', async () => {
+    const initialWs = await openWs('c1');
+    const Store = (window as any).StreamStore;
+
+    const t0 = 2_000_000;
+    const dateSpy = jest.spyOn(Date, 'now').mockReturnValue(t0);
+
+    Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+    Store._handleVisibilityChange();
+
+    // A brief tab switch — well under the 30s threshold.
+    dateSpy.mockReturnValue(t0 + 5_000);
+
+    Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+    Store._handleVisibilityChange();
+
+    // Original socket survives — replay would otherwise wipe the streaming
+    // placeholder's contentBlocks unnecessarily.
+    expect(initialWs.readyState).toBe(FakeWS.OPEN);
+    expect(fakeWSInstance).toBe(initialWs);
+
+    dateSpy.mockRestore();
+  });
+});
+

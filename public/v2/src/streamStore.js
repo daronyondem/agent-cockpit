@@ -1450,6 +1450,57 @@
     }
   }
 
+  /* Re-open every live WebSocket after a long sleep / network change.
+
+     A `WebSocket` that survived the underlying TCP socket dying (laptop
+     sleep, NAT rebind on Wi-Fi switch) often sits in `readyState === OPEN`
+     for several minutes before the OS surfaces the failure, so naive checks
+     of readyState pass and new POSTs proceed without a usable transport.
+     The server then receives a /message but no client-driven WS frames,
+     and the conversation looks "in-progress" forever after a refresh.
+
+     We force a fresh socket per conv: closing triggers the server's grace
+     period (60s buffer of pending events) and the immediate reopen replays
+     anything buffered. The replay handler in handleFrame() wipes the
+     streaming placeholder's contentBlocks so duplicate frames don't double
+     up. */
+  const VISIBILITY_REVALIDATE_THRESHOLD_MS = 30_000;
+  let lastHiddenAt = null;
+
+  function revalidateAllSockets(){
+    for (const [convId, s] of states) {
+      if (!s.ws) continue;
+      try { s.ws.close(4000, 'revalidating'); } catch {}
+      update(convId, { ws: null, wsOpening: null });
+      ensureWsOpen(convId).catch(() => {});
+    }
+  }
+
+  function handleVisibilityChange(){
+    if (typeof document === 'undefined') return;
+    if (document.hidden) {
+      lastHiddenAt = Date.now();
+      return;
+    }
+    /* Brief tab switches must NOT revalidate — replay_start wipes
+       contentBlocks and a sub-30s away triggers needless replay churn. */
+    if (lastHiddenAt != null && (Date.now() - lastHiddenAt) >= VISIBILITY_REVALIDATE_THRESHOLD_MS) {
+      revalidateAllSockets();
+    }
+    lastHiddenAt = null;
+  }
+
+  function handleOnline(){
+    revalidateAllSockets();
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+  }
+  if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+    window.addEventListener('online', handleOnline);
+  }
+
   window.StreamStore = {
     getState,
     load,
@@ -1493,5 +1544,9 @@
     patchConvListItem,
     removeConvListItem,
     prependConvListItem,
+    revalidateAllSockets,
+    /* Exposed for tests so the threshold logic can be exercised without
+       cross-test event-listener interference. Not part of the stable API. */
+    _handleVisibilityChange: handleVisibilityChange,
   };
 })();

@@ -578,5 +578,123 @@ describe('WebSocket reconnection', () => {
   });
 });
 
+// ── POST without WebSocket — network-change recovery ──────────────────────
+
+describe('POST /message without an open WebSocket', () => {
+  test('stream still runs and buffered events replay on later WS connect', async () => {
+    const conv = await env.chatService.createConversation('POST No WS');
+
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'buffered text', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    // POST /message WITHOUT opening a WS first — pre-fix this would buffer
+    // the user message but never spawn the CLI.
+    const postRes = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'no ws yet',
+      backend: 'claude-code',
+    });
+    expect(postRes.status).toBe(200);
+
+    // Give the stream a moment to run and emit into the buffer.
+    await new Promise(resolve => setTimeout(resolve, 200));
+
+    // Now connect — server should replay the buffered events. Register the
+    // message listener BEFORE 'open' so the synchronous replay isn't missed.
+    const port = (env.server.address() as any).port;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${conv.id}/ws`);
+    const events: any[] = [];
+    const gotReplayEnd = new Promise<void>((resolve) => {
+      ws.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        events.push(event);
+        if (event.type === 'replay_end') resolve();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', () => resolve());
+      ws.on('error', reject);
+    });
+    await gotReplayEnd;
+
+    expect(events[0].type).toBe('replay_start');
+    const replayedText = events.find(e => e.type === 'text' && e.content === 'buffered text');
+    expect(replayedText).toBeDefined();
+    const doneEvent = events.find(e => e.type === 'done');
+    expect(doneEvent).toBeDefined();
+
+    ws.close();
+  });
+
+  test('grace expiry without reconnect emits synthetic error+done into the buffer', async () => {
+    // Use a short grace period so the test runs quickly.
+    await destroyChatRouterEnv(env);
+    env = await createChatRouterEnv({ gracePeriodMs: 200 });
+
+    const conv = await env.chatService.createConversation('Grace Expiry');
+
+    let aborted = false;
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    env.mockBackend.sendMessage = function(msg: string, opts?: SendMessageOptions) {
+      (this as any)._lastMessage = msg;
+      (this as any)._lastOptions = opts || null;
+      async function* createStream() {
+        yield { type: 'text', content: 'partial', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { aborted = true; unblock!(); },
+        sendInput: () => {},
+      };
+    };
+
+    // POST without a WS — stream starts and grace timer is armed.
+    const postRes = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'no reconnect',
+      backend: 'claude-code',
+    });
+    expect(postRes.status).toBe(200);
+
+    // Wait for grace period (200ms) plus margin so the timer fires.
+    await new Promise(resolve => setTimeout(resolve, 500));
+
+    // Stream should have been aborted and removed from activeStreams.
+    expect(aborted).toBe(true);
+    expect(env.activeStreams.has(conv.id)).toBe(false);
+
+    // Reconnect — buffer should contain the synthetic error + done so the UI
+    // can recover from "in-progress" state on a refresh. Listener registered
+    // BEFORE 'open' so the replay isn't missed.
+    const port = (env.server.address() as any).port;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${conv.id}/ws`);
+    const events: any[] = [];
+    const gotReplayEnd = new Promise<void>((resolve) => {
+      ws.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        events.push(event);
+        if (event.type === 'replay_end') resolve();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', () => resolve());
+      ws.on('error', reject);
+    });
+    await gotReplayEnd;
+
+    expect(events[0].type).toBe('replay_start');
+    const errorEvent = events.find(e => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent.error).toMatch(/grace period/i);
+    const doneEvent = events.find(e => e.type === 'done');
+    expect(doneEvent).toBeDefined();
+
+    ws.close();
+  });
+});
+
 // ── Message Queue Persistence ──────────────────────────────────────────────
 

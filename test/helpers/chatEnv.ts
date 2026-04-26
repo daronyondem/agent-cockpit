@@ -38,10 +38,15 @@ export interface ChatRouterEnv {
   readWsEvents(ws: WebSocket, timeout?: number): Promise<any[]>;
 }
 
+export interface CreateChatRouterEnvOpts {
+  /** Override the WebSocket reconnect grace period for grace-expiry tests. */
+  gracePeriodMs?: number;
+}
+
 /** Build an isolated Express + WebSocket test server with a fresh ChatService,
     MockBackendAdapter and scratch tmpDir. Each test should create and tear
     down its own env for full isolation. */
-export async function createChatRouterEnv(): Promise<ChatRouterEnv> {
+export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): Promise<ChatRouterEnv> {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatroute-'));
   const mockBackend = new MockBackendAdapter();
   const backendRegistry = new BackendRegistry();
@@ -85,7 +90,7 @@ export async function createChatRouterEnv(): Promise<ChatRouterEnv> {
     set: (_sid: string, _session: any, cb?: (err?: any) => void) => cb?.(),
     destroy: (_sid: string, cb?: (err?: any) => void) => cb?.(),
   } as any;
-  const wsResult = attachWebSocket(server, { sessionStore: mockStore, sessionSecret: 'test-secret', activeStreams });
+  const wsResult = attachWebSocket(server, { sessionStore: mockStore, sessionSecret: 'test-secret', activeStreams, gracePeriodMs: opts.gracePeriodMs });
   const wsShutdown = wsResult.shutdown;
   chatResult.setWsFunctions(wsResult);
 
