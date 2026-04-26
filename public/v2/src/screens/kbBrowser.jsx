@@ -247,7 +247,7 @@ function KbEntriesTab({ hash }){
       <div className="kb-filters">
         <input
           type="text"
-          placeholder="Search titles…"
+          placeholder="Search titles or filenames…"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="kb-search-input"
