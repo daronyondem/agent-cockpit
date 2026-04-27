@@ -437,6 +437,9 @@
       const draft = (!s.input && s.pendingAttachments.length === 0)
         ? readDraft(convId)
         : null;
+      console.log('[diag]', new Date().toISOString(), 'load-result',
+        'conv=' + convId.slice(0,8),
+        'msgCount=' + (Array.isArray(data.messages) ? data.messages.length : 0));
       update(convId, cur => ({
         ...cur,
         conv: data,
@@ -470,10 +473,11 @@
     if (s.ws && (s.ws.readyState === WebSocket.OPEN || s.ws.readyState === WebSocket.CONNECTING)) {
       return s.wsOpening || Promise.resolve();
     }
+    console.log('[diag]', new Date().toISOString(), 'ensureWsOpen-new', 'conv=' + convId.slice(0,8));
     const ws = new WebSocket(AgentApi.chatWsUrl(convId));
     const opening = new Promise((resolve, reject) => {
       const timer = setTimeout(() => reject(new Error('WebSocket connect timed out')), 5000);
-      ws.addEventListener('open', () => { clearTimeout(timer); resolve(); }, { once: true });
+      ws.addEventListener('open', () => { clearTimeout(timer); console.log('[diag]', new Date().toISOString(), 'ws-open', 'conv=' + convId.slice(0,8)); resolve(); }, { once: true });
       ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket failed')); }, { once: true });
     });
     ws.onmessage = (evt) => {
@@ -481,8 +485,9 @@
       try { frame = JSON.parse(evt.data); } catch { return; }
       handleFrame(convId, frame);
     };
-    ws.onerror = () => { update(convId, { streamError: 'WebSocket error', uiState: 'error' }); };
-    ws.onclose = () => {
+    ws.onerror = () => { console.log('[diag]', new Date().toISOString(), 'ws-error', 'conv=' + convId.slice(0,8)); update(convId, { streamError: 'WebSocket error', uiState: 'error' }); };
+    ws.onclose = (ev) => {
+      console.log('[diag]', new Date().toISOString(), 'ws-close', 'conv=' + convId.slice(0,8), 'code=' + (ev?.code ?? '?'), 'reason=' + (ev?.reason || ''));
       const cur = states.get(convId);
       if (cur && cur.ws === ws) update(convId, { ws: null, wsOpening: null });
     };
@@ -588,6 +593,10 @@
     if (!frame || typeof frame !== 'object') return;
     const s = states.get(convId);
     if (!s) return;
+    if (frame.type !== 'text' && frame.type !== 'thinking') {
+      console.log('[diag]', new Date().toISOString(), 'frame', 'conv=' + convId.slice(0,8), 'type=' + frame.type,
+        frame.message ? ('msgId=' + String(frame.message.id || '').slice(0,16)) : '');
+    }
 
     if (frame.type === 'text') {
       appendTextOrThinking(convId, 'text', typeof frame.content === 'string' ? frame.content : '');
@@ -643,11 +652,20 @@
     if (frame.type === 'assistant_message' && frame.message) {
       update(convId, cur => {
         const phId = cur.streamingMsgId;
+        const matched = phId && cur.messages.some(m => m.id === phId);
+        console.log('[diag]', new Date().toISOString(), 'assistant_message-apply',
+          'conv=' + convId.slice(0,8),
+          'phId=' + (phId ? String(phId).slice(0,16) : 'null'),
+          'matched=' + matched,
+          'incomingId=' + String(frame.message.id || '').slice(0,16),
+          'incomingTs=' + (frame.message.timestamp || 'null'),
+          'mode=' + (phId ? 'replace-placeholder' : 'append'));
         const messages = phId
           ? cur.messages.map(m => m.id === phId ? frame.message : m)
           : [...cur.messages, frame.message];
         return { ...cur, messages, streamingMsgId: null };
       });
+      diagSnap(convId, 'assistant_message-after');
       bumpConvListActivity(convId, frame.message.timestamp);
       return;
     }
@@ -659,6 +677,10 @@
       return;
     }
     if (frame.type === 'replay_start') {
+      console.log('[diag]', new Date().toISOString(), 'replay_start',
+        'conv=' + convId.slice(0,8),
+        'bufferedEvents=' + (frame.bufferedEvents ?? '?'));
+      diagSnap(convId, 'replay_start-before');
       /* Server is about to replay the full per-conv WS buffer (ws.ts
          replayBuffer). Wipe the streaming placeholder's contentBlocks and
          any partial accumulated interaction state so the replayed frames
@@ -680,6 +702,7 @@
       return;
     }
     if (frame.type === 'replay_end') {
+      diagSnap(convId, 'replay_end-after');
       /* No-op — state was rebuilt during replay by the normal frame
          handlers; React subscribers re-render on each update. */
       return;
@@ -815,6 +838,23 @@
       : '[Uploaded files: ' + paths + ']';
   }
 
+  function diagSnap(convId, label){
+    const s = states.get(convId);
+    if (!s) { console.log('[diag]', new Date().toISOString(), label, 'conv=' + convId.slice(0,8), 'NO_STATE'); return; }
+    const last3 = (s.messages || []).slice(-3).map(m => ({
+      id: m.id ? String(m.id).slice(0,16) : null,
+      role: m.role,
+      ts: m.timestamp || null,
+      snippet: typeof m.content === 'string' ? m.content.slice(0, 50) : '[blocks]',
+    }));
+    console.log('[diag]', new Date().toISOString(), label,
+      'conv=' + convId.slice(0,8),
+      'len=' + (s.messages?.length ?? 0),
+      'streamingMsgId=' + (s.streamingMsgId ? String(s.streamingMsgId).slice(0,16) : 'null'),
+      'wsReady=' + (s.ws ? s.ws.readyState : 'no-ws'),
+      'last3=', last3);
+  }
+
   async function send(convId, text){
     const s = states.get(convId);
     if (!s || s.sending || s.streaming) return;
@@ -822,6 +862,7 @@
     const hasUploading = s.pendingAttachments.some(f => f.status === 'uploading');
     if (hasUploading) return;
     if (!text && doneAtts.length === 0) return;
+    diagSnap(convId, 'send-entry');
 
     /* Snapshot pendingAttachments and input so we can restore on POST
        failure — the files are still on the server so we don't need to
@@ -865,6 +906,7 @@
       uiState: 'streaming',
       input: '',
     }));
+    diagSnap(convId, 'send-post-optimistic');
 
     try {
       const body = { content };
@@ -1468,29 +1510,37 @@
   let lastHiddenAt = null;
 
   function revalidateAllSockets(){
+    let count = 0;
     for (const [convId, s] of states) {
       if (!s.ws) continue;
+      count++;
+      console.log('[diag]', new Date().toISOString(), 'revalidate-close', 'conv=' + convId.slice(0,8), 'wsReady=' + s.ws.readyState);
       try { s.ws.close(4000, 'revalidating'); } catch {}
       update(convId, { ws: null, wsOpening: null });
       ensureWsOpen(convId).catch(() => {});
     }
+    console.log('[diag]', new Date().toISOString(), 'revalidateAllSockets-done', 'count=' + count);
   }
 
   function handleVisibilityChange(){
     if (typeof document === 'undefined') return;
     if (document.hidden) {
       lastHiddenAt = Date.now();
+      console.log('[diag]', new Date().toISOString(), 'visibility-hidden');
       return;
     }
+    const hiddenMs = lastHiddenAt != null ? (Date.now() - lastHiddenAt) : 0;
+    console.log('[diag]', new Date().toISOString(), 'visibility-visible', 'hiddenMs=' + hiddenMs);
     /* Brief tab switches must NOT revalidate — replay_start wipes
        contentBlocks and a sub-30s away triggers needless replay churn. */
-    if (lastHiddenAt != null && (Date.now() - lastHiddenAt) >= VISIBILITY_REVALIDATE_THRESHOLD_MS) {
+    if (lastHiddenAt != null && hiddenMs >= VISIBILITY_REVALIDATE_THRESHOLD_MS) {
       revalidateAllSockets();
     }
     lastHiddenAt = null;
   }
 
   function handleOnline(){
+    console.log('[diag]', new Date().toISOString(), 'online-event');
     revalidateAllSockets();
   }
 
