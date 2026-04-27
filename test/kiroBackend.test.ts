@@ -683,6 +683,43 @@ describe('KiroAdapter.runOneShot', () => {
     // Don't respond to anything — let the timeout fire
     await expect(resultPromise).rejects.toThrow(/timed out after 100ms/);
   });
+
+  test('surfaces JSON-RPC error code and data in the rejected error message', async () => {
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp' });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    sim.respond(newReq.id, { sessionId: 'sess-err' });
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+
+    // Emit a JSON-RPC error response with code AND data — the AcpClient should
+    // capture both onto the rejected Error so the diagnostic surfaces upstream.
+    sim.proc.stdout.emit('data', Buffer.from(JSON.stringify({
+      jsonrpc: '2.0',
+      id: promptReq.id,
+      error: {
+        code: -32603,
+        message: 'Internal error',
+        data: { reason: 'Prompt is too long', tokens: 250000 },
+      },
+    }) + '\n'));
+
+    await expect(resultPromise).rejects.toThrow(/code=-32603/);
+    await expect(resultPromise).rejects.toThrow(/Prompt is too long/);
+  });
 });
 
 // ── collectImageContentBlocks ──────────────────────────────────────────────

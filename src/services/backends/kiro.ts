@@ -145,7 +145,10 @@ class AcpClient {
               this.pendingRequests.delete(msg.id);
               const resp = msg as JsonRpcResponse;
               if (resp.error) {
-                pending.reject(new Error(resp.error.message));
+                const err = new Error(resp.error.message) as Error & { code?: number; data?: unknown };
+                err.code = resp.error.code;
+                err.data = resp.error.data;
+                pending.reject(err);
               } else {
                 pending.resolve(resp.result);
               }
@@ -692,7 +695,19 @@ export class KiroAdapter extends BaseBackendAdapter {
 
           if (promptError) {
             const stderr = stderrBuf.trim();
-            settle(() => reject(new Error(`kiro-cli acp prompt failed: ${promptError!.message}${stderr ? ` | stderr: ${stderr.slice(0, 200)}` : ''}`)));
+            const e = promptError as Error & { code?: number; data?: unknown };
+            const codePart = typeof e.code === 'number' ? ` [code=${e.code}]` : '';
+            let dataPart = '';
+            if (e.data !== undefined) {
+              try {
+                const dataStr = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
+                dataPart = ` | data: ${dataStr.slice(0, 500)}`;
+              } catch {
+                dataPart = ' | data: <unstringifiable>';
+              }
+            }
+            const stderrPart = stderr ? ` | stderr: ${stderr.slice(0, 200)}` : '';
+            settle(() => reject(new Error(`kiro-cli acp prompt failed: ${e.message}${codePart}${dataPart}${stderrPart}`)));
             return;
           }
 
@@ -885,7 +900,18 @@ export class KiroAdapter extends BaseBackendAdapter {
         console.log(`[kiro] Turn ended session=${kiroSessionId} stopReason=${stopReason}`);
         client.stopNotifications();
       }).catch((err) => {
-        console.warn(`[kiro] session/prompt failed for session=${kiroSessionId}: ${(err as Error).message}`);
+        const e = err as Error & { code?: number; data?: unknown };
+        const codePart = typeof e.code === 'number' ? ` [code=${e.code}]` : '';
+        let dataPart = '';
+        if (e.data !== undefined) {
+          try {
+            const dataStr = typeof e.data === 'string' ? e.data : JSON.stringify(e.data);
+            dataPart = ` | data: ${dataStr.slice(0, 500)}`;
+          } catch {
+            dataPart = ' | data: <unstringifiable>';
+          }
+        }
+        console.warn(`[kiro] session/prompt failed for session=${kiroSessionId}: ${e.message}${codePart}${dataPart}`);
         client.stopNotifications();
       });
 
