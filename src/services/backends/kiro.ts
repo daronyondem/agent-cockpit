@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'child_process';
+import { promises as fsp } from 'fs';
 import path from 'path';
 import os from 'os';
 import { BaseBackendAdapter, type RunOneShotOptions } from './base';
@@ -246,6 +247,56 @@ class AcpClient {
       this.proc.kill('SIGTERM');
     }
   }
+}
+
+// ── Image attachment for ACP session/prompt ────────────────────────────────
+//
+// Kiro's `fs_read` tool in Image mode base64-inlines image bytes into the
+// conversation transcript, which can blow the upstream model's prompt budget
+// (manifests as JSON-RPC `-32603 Internal error: Prompt is too long`). To
+// avoid that path entirely, when the prompt mentions an image file by
+// basename and that file exists in `workingDir`, attach it as a proper ACP
+// `{type:"image"}` content block instead. This is fully encapsulated inside
+// the Kiro adapter — callers pass plain text prompts and a `workingDir` like
+// before.
+
+const IMAGE_MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+};
+
+const MAX_IMAGE_ATTACHMENTS = 5;
+
+export async function collectImageContentBlocks(
+  prompt: string,
+  workingDir: string | undefined,
+): Promise<Array<{ type: 'image'; mimeType: string; data: string }>> {
+  if (!workingDir) return [];
+  let entries: string[];
+  try {
+    entries = await fsp.readdir(workingDir);
+  } catch {
+    return [];
+  }
+  const blocks: Array<{ type: 'image'; mimeType: string; data: string }> = [];
+  for (const entry of entries) {
+    if (blocks.length >= MAX_IMAGE_ATTACHMENTS) break;
+    const ext = path.extname(entry).toLowerCase();
+    const mimeType = IMAGE_MIME_BY_EXT[ext];
+    if (!mimeType) continue;
+    if (!prompt.includes(entry)) continue;
+    try {
+      const filePath = path.join(workingDir, entry);
+      const buf = await fsp.readFile(filePath);
+      blocks.push({ type: 'image', mimeType, data: buf.toString('base64') });
+    } catch {
+      // skip unreadable files
+    }
+  }
+  return blocks;
 }
 
 // ── Adapter ���────────────────────────────────────────────────────────────────
@@ -559,10 +610,16 @@ export class KiroAdapter extends BaseBackendAdapter {
             }
           }
 
+          const imageBlocks = await collectImageContentBlocks(prompt, cwd);
+          const promptArray: Array<Record<string, unknown>> = [
+            { type: 'text', text: prompt },
+            ...imageBlocks,
+          ];
+
           let promptError: Error | null = null;
           client.request('session/prompt', {
             sessionId: kiroSessionId,
-            prompt: [{ type: 'text', text: prompt }],
+            prompt: promptArray,
           }).then(() => {
             client.stopNotifications();
           }).catch((err: Error) => {

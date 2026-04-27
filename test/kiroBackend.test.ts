@@ -1,6 +1,9 @@
 import { BaseBackendAdapter } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
-import { KiroAdapter, extractKiroToolDetails } from '../src/services/backends/kiro';
+import { KiroAdapter, extractKiroToolDetails, collectImageContentBlocks } from '../src/services/backends/kiro';
+import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 import type { BackendMetadata, SendMessageResult } from '../src/types';
 
 // ── KiroAdapter metadata ────────────────────────────────────────────────────
@@ -679,5 +682,230 @@ describe('KiroAdapter.runOneShot', () => {
 
     // Don't respond to anything — let the timeout fire
     await expect(resultPromise).rejects.toThrow(/timed out after 100ms/);
+  });
+});
+
+// ── collectImageContentBlocks ──────────────────────────────────────────────
+//
+// Kiro's `fs_read` Image-mode would otherwise base64-inline image bytes into
+// the prompt transcript and overflow the upstream model's prompt budget.
+// The adapter sidesteps that by attaching matching images as proper ACP
+// `{type:"image"}` content blocks. These tests cover the helper directly
+// (filesystem branches) and the end-to-end attach into `session/prompt`.
+
+describe('collectImageContentBlocks', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-img-'));
+  });
+
+  afterEach(() => {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  test('returns empty when workingDir is undefined', async () => {
+    const blocks = await collectImageContentBlocks('Read foo.png', undefined);
+    expect(blocks).toEqual([]);
+  });
+
+  test('returns empty when workingDir does not exist', async () => {
+    const blocks = await collectImageContentBlocks('Read foo.png', path.join(tmpDir, 'missing'));
+    expect(blocks).toEqual([]);
+  });
+
+  test('returns empty when no image basename appears in the prompt', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'unrelated.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const blocks = await collectImageContentBlocks('do something', tmpDir);
+    expect(blocks).toEqual([]);
+  });
+
+  test('attaches matching image as base64-encoded content block', async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    fs.writeFileSync(path.join(tmpDir, 'foo.png'), bytes);
+    const blocks = await collectImageContentBlocks('Read the image file `foo.png`', tmpDir);
+    expect(blocks).toEqual([
+      { type: 'image', mimeType: 'image/png', data: bytes.toString('base64') },
+    ]);
+  });
+
+  test('maps extensions to the right MIME type', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'a.jpg'), Buffer.from([0xff, 0xd8]));
+    fs.writeFileSync(path.join(tmpDir, 'b.JPEG'), Buffer.from([0xff, 0xd8]));
+    fs.writeFileSync(path.join(tmpDir, 'c.gif'), Buffer.from([0x47, 0x49, 0x46]));
+    fs.writeFileSync(path.join(tmpDir, 'd.webp'), Buffer.from([0x52, 0x49, 0x46, 0x46]));
+    const blocks = await collectImageContentBlocks('a.jpg b.JPEG c.gif d.webp', tmpDir);
+    const mimes = blocks.map((b) => b.mimeType).sort();
+    expect(mimes).toEqual(['image/gif', 'image/jpeg', 'image/jpeg', 'image/webp']);
+  });
+
+  test('ignores unsupported extensions', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'doc.pdf'), Buffer.from([0x25, 0x50, 0x44, 0x46]));
+    fs.writeFileSync(path.join(tmpDir, 'note.txt'), 'hello');
+    const blocks = await collectImageContentBlocks('doc.pdf note.txt', tmpDir);
+    expect(blocks).toEqual([]);
+  });
+
+  test('caps total attachments at 5', async () => {
+    for (let i = 0; i < 8; i++) {
+      fs.writeFileSync(path.join(tmpDir, `img${i}.png`), Buffer.from([0x89, 0x50]));
+    }
+    const prompt = Array.from({ length: 8 }, (_, i) => `img${i}.png`).join(' ');
+    const blocks = await collectImageContentBlocks(prompt, tmpDir);
+    expect(blocks).toHaveLength(5);
+  });
+});
+
+describe('KiroAdapter.runOneShot image attachment', () => {
+  function createKiroSimulator() {
+    const { EventEmitter } = require('events');
+    const proc = new EventEmitter() as any;
+    proc.stdout = new EventEmitter();
+    proc.stderr = new EventEmitter();
+
+    const stdinWrites: string[] = [];
+    const requestLog: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [];
+    let lineBuf = '';
+
+    const sim: any = {
+      proc,
+      requestLog,
+      respond: (id: number, result: unknown) => {
+        proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n'));
+      },
+      notify: (method: string, params: unknown, id?: number) => {
+        const msg: Record<string, unknown> = { jsonrpc: '2.0', method, params };
+        if (id != null) msg.id = id;
+        proc.stdout.emit('data', Buffer.from(JSON.stringify(msg) + '\n'));
+      },
+      sessionUpdate: (sessionId: string, update: Record<string, unknown>) => {
+        sim.notify('session/update', { sessionId, update });
+      },
+      findRequest: (method: string) => requestLog.find((r) => r.method === method),
+    };
+
+    proc.stdin = {
+      write: (s: string) => {
+        stdinWrites.push(s);
+        lineBuf += s;
+        const lines = lineBuf.split('\n');
+        lineBuf = lines.pop()!;
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const msg = JSON.parse(line);
+            if (msg.method && msg.id != null) requestLog.push(msg);
+          } catch { /* ignore */ }
+        }
+        return true;
+      },
+      destroyed: false,
+    };
+    proc.killed = false;
+    proc.exitCode = null;
+    proc.kill = () => {
+      if (!proc.killed) {
+        proc.killed = true;
+        proc.exitCode = 0;
+        setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+      }
+    };
+    return sim;
+  }
+
+  async function waitForRequest(sim: any, method: string, timeoutMs = 1000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const req = sim.findRequest(method);
+      if (req) return req;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error(`Timed out waiting for ${method} request`);
+  }
+
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kiro-img-'));
+  });
+
+  afterEach(() => {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
+  test('appends image content block to session/prompt when workingDir contains a referenced image', async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xde, 0xad, 0xbe, 0xef]);
+    fs.writeFileSync(path.join(tmpDir, 'page1.png'), bytes);
+
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+    const workingDir = tmpDir;
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir });
+      resultPromise = adapter.runOneShot('Read the image file `page1.png` and convert.', { workingDir });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    sim.respond(newReq.id, { sessionId: 'sess-img-1' });
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+
+    const promptArr = (promptReq.params as { prompt: Array<Record<string, unknown>> }).prompt;
+    expect(promptArr).toHaveLength(2);
+    expect(promptArr[0]).toEqual({ type: 'text', text: 'Read the image file `page1.png` and convert.' });
+    expect(promptArr[1]).toEqual({
+      type: 'image',
+      mimeType: 'image/png',
+      data: bytes.toString('base64'),
+    });
+
+    sim.sessionUpdate('sess-img-1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ok' } });
+    await new Promise((r) => setTimeout(r, 20));
+    sim.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    await expect(resultPromise).resolves.toBe('ok');
+  });
+
+  test('sends only the text block when no images match', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'other.png'), Buffer.from([0x89, 0x50]));
+
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+    const workingDir = tmpDir;
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir });
+      resultPromise = adapter.runOneShot('plain text prompt', { workingDir });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    sim.respond(newReq.id, { sessionId: 'sess-img-2' });
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+
+    const promptArr = (promptReq.params as { prompt: Array<Record<string, unknown>> }).prompt;
+    expect(promptArr).toHaveLength(1);
+    expect(promptArr[0]).toEqual({ type: 'text', text: 'plain text prompt' });
+
+    sim.sessionUpdate('sess-img-2', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ok' } });
+    await new Promise((r) => setTimeout(r, 20));
+    sim.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    await resultPromise;
   });
 });
