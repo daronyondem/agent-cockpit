@@ -11,8 +11,13 @@
 //   - Prompt references the image by basename
 //   - workingDir is set to the image's parent directory
 //   - allowTools is true (so the CLI can use Read on the image)
+//   - Images whose long edge exceeds 2576 px are downscaled to a temp PNG
+//     before the AI call, and the temp dir is removed afterwards.
 
 import path from 'path';
+import os from 'os';
+import { promises as fsp } from 'fs';
+import * as napiCanvas from '@napi-rs/canvas';
 import {
   BaseBackendAdapter,
   type RunOneShotOptions,
@@ -21,6 +26,14 @@ import {
   convertImageToMarkdown,
   IMAGE_TO_MARKDOWN_PROMPT_TEMPLATE,
 } from '../src/services/knowledgeBase/ingestion/pageConversion';
+
+async function writePng(filePath: string, width: number, height: number): Promise<void> {
+  const canvas = napiCanvas.createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#cccccc';
+  ctx.fillRect(0, 0, width, height);
+  await fsp.writeFile(filePath, canvas.toBuffer('image/png'));
+}
 
 type RunOneShotFn = (prompt: string, opts?: RunOneShotOptions) => Promise<string>;
 
@@ -150,5 +163,84 @@ describe('convertImageToMarkdown', () => {
     await convertImageToMarkdown(IMAGE_PATH, { adapter });
 
     expect(adapter.calls[0].opts?.timeoutMs).toBe(3 * 60_000);
+  });
+
+  describe('downscaling', () => {
+    let workDir: string;
+    beforeEach(async () => {
+      workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-pc-test-'));
+    });
+    afterEach(async () => {
+      await fsp.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+    });
+
+    test('downscales the image to a temp PNG when the long edge exceeds 2576 px', async () => {
+      const original = path.join(workDir, 'huge.png');
+      await writePng(original, 3000, 2000);
+
+      let observedDimensions: { width: number; height: number } | null = null;
+      let observedWorkingDir: string | null = null;
+      const adapter = new StubAdapter(async (_prompt, opts) => {
+        observedWorkingDir = opts?.workingDir ?? null;
+        const sentPath = path.join(opts!.workingDir!, 'huge.png');
+        const img = await napiCanvas.loadImage(sentPath);
+        observedDimensions = { width: img.width, height: img.height };
+        return 'ok';
+      });
+
+      await convertImageToMarkdown(original, { adapter });
+
+      expect(observedWorkingDir).not.toBeNull();
+      expect(observedWorkingDir).not.toBe(workDir);
+      expect(observedWorkingDir!.startsWith(os.tmpdir())).toBe(true);
+      expect(adapter.calls[0].prompt).toContain('huge.png');
+      expect(observedDimensions).toEqual({ width: 2576, height: Math.round(2000 * (2576 / 3000)) });
+      // Temp dir is removed after the call returns.
+      await expect(fsp.access(observedWorkingDir!)).rejects.toThrow();
+    });
+
+    test('passes the original image through when the long edge fits the cap', async () => {
+      const original = path.join(workDir, 'small.png');
+      await writePng(original, 800, 600);
+
+      const adapter = new StubAdapter(async () => 'ok');
+
+      await convertImageToMarkdown(original, { adapter });
+
+      expect(adapter.calls[0].opts?.workingDir).toBe(workDir);
+      expect(adapter.calls[0].prompt).toContain('small.png');
+      // Original file untouched.
+      await expect(fsp.access(original)).resolves.toBeUndefined();
+    });
+
+    test('cleans up the temp dir even when the AI call throws', async () => {
+      const original = path.join(workDir, 'huge.png');
+      await writePng(original, 3000, 2000);
+
+      let observedWorkingDir: string | null = null;
+      const adapter = new StubAdapter(async (_prompt, opts) => {
+        observedWorkingDir = opts?.workingDir ?? null;
+        throw new Error('boom');
+      });
+
+      await expect(
+        convertImageToMarkdown(original, { adapter }),
+      ).rejects.toThrow('boom');
+
+      expect(observedWorkingDir).not.toBeNull();
+      expect(observedWorkingDir).not.toBe(workDir);
+      await expect(fsp.access(observedWorkingDir!)).rejects.toThrow();
+    });
+
+    test('falls through to the original path when the image cannot be decoded', async () => {
+      // Nonexistent file — loadImage throws ENOENT, helper returns passthrough.
+      const adapter = new StubAdapter(async () => 'ok');
+      const fake = '/tmp/no-such-dir/missing.png';
+
+      await convertImageToMarkdown(fake, { adapter });
+
+      expect(adapter.calls[0].opts?.workingDir).toBe(path.dirname(fake));
+      expect(adapter.calls[0].prompt).toContain('missing.png');
+    });
   });
 });
