@@ -328,6 +328,55 @@ test('replayed assistant_message with id matching an existing message replaces i
   expect(after.messages[0].content).toBe('final reply (replayed)');
 });
 
+test('replay after turn complete (text → assistant_message) does not duplicate the prior final message', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  // Land a final message exactly as the original turn would: the
+  // server emits `text` deltas (which create a placeholder) and then
+  // `assistant_message` (which replaces it with the persisted id) and
+  // finally `done` (which clears streamingMsgId).
+  ws.dispatch({ type: 'text', content: 'final reply' });
+  ws.dispatch({
+    type: 'assistant_message',
+    message: {
+      id: 'msg-final-1',
+      role: 'assistant',
+      content: 'final reply',
+      timestamp: '2026-04-26T12:00:00.000Z',
+      contentBlocks: [{ type: 'text', content: 'final reply' }],
+    },
+  });
+  ws.dispatch({ type: 'done' });
+  expect(Store.getState('c1').messages).toHaveLength(1);
+  expect(Store.getState('c1').streamingMsgId).toBeNull();
+
+  // Now simulate a network-change / visibility-revalidate replay: the
+  // server replays the same buffered events on the new socket. After
+  // turn complete streamingMsgId is null, so the replayed `text` delta
+  // creates a *new* placeholder, then `assistant_message` arrives with
+  // the same id as the original final message — which without the
+  // dedupe leaves two entries sharing one id.
+  ws.dispatch({ type: 'replay_start', bufferedEvents: 3 });
+  ws.dispatch({ type: 'text', content: 'final reply' });
+  ws.dispatch({
+    type: 'assistant_message',
+    message: {
+      id: 'msg-final-1',
+      role: 'assistant',
+      content: 'final reply',
+      timestamp: '2026-04-26T12:00:00.000Z',
+      contentBlocks: [{ type: 'text', content: 'final reply' }],
+    },
+  });
+  ws.dispatch({ type: 'done' });
+  ws.dispatch({ type: 'replay_end' });
+
+  const after = Store.getState('c1');
+  expect(after.messages).toHaveLength(1);
+  expect(after.messages[0].id).toBe('msg-final-1');
+});
+
 test('replay_end is a no-op', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;
