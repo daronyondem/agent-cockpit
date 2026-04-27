@@ -23,6 +23,14 @@ In-flight or pending design proposals that complement (but have not yet been fol
 |----------|--------|-------------|
 | [design-kb-ingestion-hybrid.md](design-kb-ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |
 
+### Notes & Findings
+
+Engineering notes that capture empirical findings — not proposals or specs, but durable knowledge worth preserving:
+
+| Document | Description |
+|----------|-------------|
+| [notes-kiro-bedrock-parity.md](notes-kiro-bedrock-parity.md) | Differences observed between Kiro (AWS Bedrock-routed) and Claude Code (direct Anthropic API) for Opus 4.7 — image format/dimension caps, ACP stream termination, JSON-RPC error extraction, etc. |
+
 ---
 
 ## 1. Overview
