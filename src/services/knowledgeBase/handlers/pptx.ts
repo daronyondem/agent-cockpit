@@ -39,7 +39,39 @@ import { XMLParser } from 'fast-xml-parser';
 import type { Handler, HandlerResult } from './types';
 import * as pptxSignalsModule from '../ingestion/pptxSignals';
 import * as pptxSlideRenderModule from '../ingestion/pptxSlideRender';
-import { convertImageToMarkdown } from '../ingestion/pageConversion';
+import {
+  convertImageToMarkdown,
+  ensureAiReadyImage,
+} from '../ingestion/pageConversion';
+
+/**
+ * Resolve the path/rel a vision-capable consumer (the Ingestion AI call,
+ * the digestion-time CLI read) should use for each image. Oversized images
+ * get a `.ai.png` sibling on disk; small ones pass through. Originals are
+ * always preserved.
+ */
+interface DownscaledImage {
+  /** On-disk file written from the source pipeline (e.g. `media/foo.png`). */
+  storeRel: string;
+  /** Rel the markdown link should point at (sibling if downscaled). */
+  linkRel: string;
+  /** Absolute path that should be passed to `convertImageToMarkdown`. */
+  absLinkPath: string;
+}
+
+async function downscaleAll(rels: string[], outDir: string): Promise<DownscaledImage[]> {
+  return Promise.all(
+    rels.map(async (rel) => {
+      const abs = path.join(outDir, rel);
+      const sidecarAbs = abs + '.ai.png';
+      const sidecarRel = rel + '.ai.png';
+      const resolved = await ensureAiReadyImage(abs, sidecarAbs);
+      return resolved === abs
+        ? { storeRel: rel, linkRel: rel, absLinkPath: abs }
+        : { storeRel: rel, linkRel: sidecarRel, absLinkPath: sidecarAbs };
+    }),
+  );
+}
 
 interface ExtractedSlide {
   /**
@@ -283,9 +315,9 @@ export const pptxHandler: Handler = async ({
   ingestionEffort,
 }): Promise<HandlerResult> => {
   const { slides, hiddenCount, totalCount } = await extractPptxSlides(buffer);
-  const embeddedMedia = await extractPptxMedia(buffer, outDir);
+  const embeddedMediaRels = await extractPptxMedia(buffer, outDir);
 
-  let slideImages: string[] = [];
+  let slideImageRels: string[] = [];
   let slideImagesWarning: string | undefined;
   if (convertSlidesToImages) {
     const result = await pptxSlideRenderModule.rasterizeSlidesViaLibreOffice(
@@ -293,11 +325,22 @@ export const pptxHandler: Handler = async ({
       filename,
       outDir,
     );
-    slideImages = result.images;
+    slideImageRels = result.images;
     slideImagesWarning = result.warning;
   }
 
-  const mediaFiles = [...embeddedMedia, ...slideImages];
+  // Downscale any oversized images so both the AI call here and the
+  // digestion-time CLI read stay under the vision-token cap. The
+  // originals on disk are preserved; only the markdown link target
+  // changes when a `.ai.png` sibling is written.
+  const embeddedItems = await downscaleAll(embeddedMediaRels, outDir);
+  const slideItems = await downscaleAll(slideImageRels, outDir);
+
+  const mediaFiles: string[] = [];
+  for (const item of [...embeddedItems, ...slideItems]) {
+    mediaFiles.push(item.storeRel);
+    if (item.linkRel !== item.storeRel) mediaFiles.push(item.linkRel);
+  }
 
   const slideRecords: SlideRecord[] = [];
   const slideBlocks: string[] = [];
@@ -305,10 +348,11 @@ export const pptxHandler: Handler = async ({
   for (const slide of slides) {
     const signals = pptxSignalsModule.extractSlideSignals(slide.rawXml);
     const safeText = signals.figureCount === 0 && !signals.tableLikely;
-    // slideImages is 1-indexed by visible-slide number. LibreOffice's PDF
+    // slideItems is 1-indexed by visible-slide number. LibreOffice's PDF
     // export skips hidden slides too, so the indexing matches displayNumber
     // unless rasterization stopped partway (then later slides have no image).
-    const imageRel: string | null = slideImages[slide.slideNumber - 1] ?? null;
+    const slideItem = slideItems[slide.slideNumber - 1] ?? null;
+    const imageRel: string | null = slideItem ? slideItem.linkRel : null;
 
     if (safeText) {
       const record: SlideRecord = {
@@ -363,7 +407,8 @@ export const pptxHandler: Handler = async ({
       continue;
     }
 
-    const absImagePath = path.join(outDir, imageRel);
+    // slideItem is non-null here because imageRel was non-null above.
+    const absImagePath = slideItem!.absLinkPath;
     const startedAt = Date.now();
     let aiMarkdown: string | null = null;
     let aiRetried = false;
@@ -416,8 +461,10 @@ export const pptxHandler: Handler = async ({
   if (hiddenCount > 0) {
     text += `\n\n> **Note:** ${hiddenCount} of ${totalCount} slides in this deck are marked hidden and were skipped during ingestion to stay in sync with the rasterized slide images.\n`;
   }
-  if (embeddedMedia.length > 0) {
-    text += `\n\n## Embedded Media\n\n${embeddedMedia.map((rel) => `![${path.basename(rel)}](${rel})`).join('\n')}\n`;
+  if (embeddedItems.length > 0) {
+    text += `\n\n## Embedded Media\n\n${embeddedItems
+      .map((it) => `![${path.basename(it.storeRel)}](${it.linkRel})`)
+      .join('\n')}\n`;
   }
   if (convertSlidesToImages && slideImagesWarning) {
     text += `\n\n> **Slide rasterization note:** ${slideImagesWarning}\n`;
@@ -435,9 +482,9 @@ export const pptxHandler: Handler = async ({
     slideCount: slides.length,
     totalSlideCount: totalCount,
     hiddenSlideCount: hiddenCount,
-    embeddedMediaCount: embeddedMedia.length,
+    embeddedMediaCount: embeddedItems.length,
     slidesToImagesRequested: Boolean(convertSlidesToImages),
-    renderedSlideCount: slideImages.length,
+    renderedSlideCount: slideItems.length,
     sourceCounts,
   };
   if (slideImagesWarning) metadata.slideImagesWarning = slideImagesWarning;

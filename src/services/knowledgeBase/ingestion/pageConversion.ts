@@ -1,18 +1,24 @@
-// ─── Per-image AI conversion ─────────────────────────────────────────────────
-// Wraps a single Ingestion-CLI `runOneShot` call that converts one image
-// (PDF page render, slide render, embedded DOCX figure, or standalone uploaded
-// image) into clean Markdown.
+// ─── Per-image AI conversion + downscaling helper ──────────────────────────
+// Two responsibilities:
 //
-// Used by all four hybrid handlers (PDF, DOCX, PPTX, passthrough image). The
-// caller supplies the absolute image path and a configured Ingestion adapter;
-// this function builds the unified prompt, runs the CLI, and retries once if
-// the call throws or returns empty/whitespace output.
+//   1. `convertImageToMarkdown` — wraps a single Ingestion-CLI `runOneShot`
+//      call that converts one image (PDF page render, slide render, embedded
+//      DOCX figure, or standalone uploaded image) into clean Markdown. The
+//      caller supplies the absolute image path; this function builds the
+//      unified prompt, runs the CLI, and retries once if the call throws or
+//      returns empty/whitespace output.
 //
-// The CLI reads the image via its filesystem `Read` tool (we set `workingDir`
-// to the image's parent directory and `allowTools: true`). The prompt
-// references the image by basename so it works regardless of absolute path.
+//   2. `ensureAiReadyImage` — write a downscaled PNG sibling next to an
+//      oversized image and return the path the caller should use for both
+//      the AI call AND the link in `text.md`. Handlers run this BEFORE
+//      `convertImageToMarkdown` so the same downscaled file serves both
+//      ingestion-time AI and digestion-time CLI reads. Decode failures fall
+//      through to the original path — the CLI may handle formats that
+//      `@napi-rs/canvas` cannot.
 
 import path from 'path';
+import { promises as fsp } from 'fs';
+import * as napiCanvas from '@napi-rs/canvas';
 import type {
   BaseBackendAdapter,
   RunOneShotOptions,
@@ -38,6 +44,53 @@ export const IMAGE_TO_MARKDOWN_PROMPT_TEMPLATE = (imageBasename: string): string
 /** Default per-image timeout (3 min). Digestion uses 15 min for whole docs. */
 const DEFAULT_TIMEOUT_MS = 3 * 60_000;
 
+/** Cap on the long edge (px) of images sent to a CLI's vision model. Token
+ *  cost scales with pixel count and providers reject inputs over ~5 MB; 2576
+ *  keeps each image under ~4,800 vision tokens for typical aspect ratios.
+ *  Images above this threshold get a `.ai.png` sibling that handlers link to
+ *  from `text.md` (so digestion-time CLI reads also stay under the cap). */
+export const MAX_LONG_EDGE_PX = 2576;
+
+/**
+ * If the source image's long edge exceeds `MAX_LONG_EDGE_PX`, write a
+ * proportionally-scaled PNG to `destPath` and return `destPath`. Otherwise,
+ * or if the source can't be decoded by `@napi-rs/canvas` (SVG, video,
+ * unsupported codec), return `srcPath` unchanged with no write.
+ *
+ * The returned path is what the caller should hand to `convertImageToMarkdown`
+ * AND embed as the markdown link in `text.md`. Re-encoding to PNG drops
+ * EXIF/color-profile/animation metadata on the downscaled copy, but the
+ * original at `srcPath` is never modified — KB Browser still serves the
+ * full-fidelity file for human viewing.
+ */
+export async function ensureAiReadyImage(
+  srcPath: string,
+  destPath: string,
+): Promise<string> {
+  let img: Awaited<ReturnType<typeof napiCanvas.loadImage>>;
+  try {
+    img = await napiCanvas.loadImage(srcPath);
+  } catch {
+    return srcPath;
+  }
+
+  const longEdge = Math.max(img.width, img.height);
+  if (longEdge <= MAX_LONG_EDGE_PX) {
+    return srcPath;
+  }
+
+  const scale = MAX_LONG_EDGE_PX / longEdge;
+  const newWidth = Math.max(1, Math.round(img.width * scale));
+  const newHeight = Math.max(1, Math.round(img.height * scale));
+  const canvas = napiCanvas.createCanvas(newWidth, newHeight);
+  canvas.getContext('2d').drawImage(img, 0, 0, newWidth, newHeight);
+  const buffer = canvas.toBuffer('image/png');
+
+  await fsp.mkdir(path.dirname(destPath), { recursive: true });
+  await fsp.writeFile(destPath, buffer);
+  return destPath;
+}
+
 export interface ConvertImageOptions {
   /** Configured Ingestion CLI adapter. Required. */
   adapter: BaseBackendAdapter;
@@ -58,6 +111,10 @@ export interface ConvertImageResult {
 
 /**
  * Convert a single image to Markdown via the Ingestion CLI.
+ *
+ * The CLI reads the image via its filesystem `Read` tool (we set `workingDir`
+ * to the image's parent directory and `allowTools: true`). The prompt
+ * references the image by basename so it works regardless of absolute path.
  *
  * Retries once if the adapter throws OR returns empty/whitespace output.
  * After two failed attempts, throws the last error (handlers decide whether

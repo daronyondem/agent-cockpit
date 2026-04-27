@@ -1,26 +1,41 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-// ─── Per-image AI conversion tests ──────────────────────────────────────────
-// `convertImageToMarkdown` is a thin retry-once wrapper over a stubbed
-// `BaseBackendAdapter.runOneShot`. We verify:
-//   - Happy path returns adapter output verbatim
-//   - Retry-once on throw, then succeed
-//   - Retry-once on empty output, then succeed
-//   - Two failures throws the last error
-//   - Two empty outputs throws an error
-//   - Prompt references the image by basename
-//   - workingDir is set to the image's parent directory
-//   - allowTools is true (so the CLI can use Read on the image)
+// ─── Per-image AI conversion + downscaling tests ────────────────────────────
+// Two units under test:
+//
+//   `convertImageToMarkdown`: thin retry-once wrapper over a stubbed
+//   `BaseBackendAdapter.runOneShot`. We verify happy path, retry-once on
+//   throw / empty output, two-failure throws, prompt+workingDir+allowTools
+//   plumbing, and option passthrough.
+//
+//   `ensureAiReadyImage`: writes a downscaled `.ai.png` sibling beside an
+//   oversized image and returns the new path; passes through small/undecodable
+//   images. Handlers call this BEFORE `convertImageToMarkdown` and rewrite the
+//   markdown link, so the same downscaled file serves both ingestion-time AI
+//   and digestion-time CLI reads.
 
 import path from 'path';
+import os from 'os';
+import { promises as fsp } from 'fs';
+import * as napiCanvas from '@napi-rs/canvas';
 import {
   BaseBackendAdapter,
   type RunOneShotOptions,
 } from '../src/services/backends/base';
 import {
   convertImageToMarkdown,
+  ensureAiReadyImage,
   IMAGE_TO_MARKDOWN_PROMPT_TEMPLATE,
+  MAX_LONG_EDGE_PX,
 } from '../src/services/knowledgeBase/ingestion/pageConversion';
+
+async function writePng(filePath: string, width: number, height: number): Promise<void> {
+  const canvas = napiCanvas.createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#cccccc';
+  ctx.fillRect(0, 0, width, height);
+  await fsp.writeFile(filePath, canvas.toBuffer('image/png'));
+}
 
 type RunOneShotFn = (prompt: string, opts?: RunOneShotOptions) => Promise<string>;
 
@@ -150,5 +165,76 @@ describe('convertImageToMarkdown', () => {
     await convertImageToMarkdown(IMAGE_PATH, { adapter });
 
     expect(adapter.calls[0].opts?.timeoutMs).toBe(3 * 60_000);
+  });
+});
+
+describe('ensureAiReadyImage', () => {
+  let workDir: string;
+  beforeEach(async () => {
+    workDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'kb-pc-test-'));
+  });
+  afterEach(async () => {
+    await fsp.rm(workDir, { recursive: true, force: true }).catch(() => undefined);
+  });
+
+  test('writes a downscaled PNG sibling and returns its path when long edge exceeds the cap', async () => {
+    const src = path.join(workDir, 'huge.png');
+    const dest = src + '.ai.png';
+    await writePng(src, 3000, 2000);
+
+    const result = await ensureAiReadyImage(src, dest);
+
+    expect(result).toBe(dest);
+    await expect(fsp.access(dest)).resolves.toBeUndefined();
+    const downscaled = await napiCanvas.loadImage(dest);
+    expect(downscaled.width).toBe(MAX_LONG_EDGE_PX);
+    expect(downscaled.height).toBe(Math.round(2000 * (MAX_LONG_EDGE_PX / 3000)));
+    // Original is left untouched.
+    const original = await napiCanvas.loadImage(src);
+    expect(original.width).toBe(3000);
+    expect(original.height).toBe(2000);
+  });
+
+  test('returns the source path with no write when the image fits the cap', async () => {
+    const src = path.join(workDir, 'small.png');
+    const dest = src + '.ai.png';
+    await writePng(src, 800, 600);
+
+    const result = await ensureAiReadyImage(src, dest);
+
+    expect(result).toBe(src);
+    await expect(fsp.access(dest)).rejects.toThrow();
+  });
+
+  test('returns the source path with no write when long edge is exactly the cap', async () => {
+    const src = path.join(workDir, 'edge.png');
+    const dest = src + '.ai.png';
+    await writePng(src, MAX_LONG_EDGE_PX, 100);
+
+    const result = await ensureAiReadyImage(src, dest);
+
+    expect(result).toBe(src);
+    await expect(fsp.access(dest)).rejects.toThrow();
+  });
+
+  test('falls through to the source path when the image cannot be decoded', async () => {
+    const src = '/tmp/no-such-dir/missing.png';
+    const dest = '/tmp/no-such-dir/missing.png.ai.png';
+
+    const result = await ensureAiReadyImage(src, dest);
+
+    expect(result).toBe(src);
+    await expect(fsp.access(dest)).rejects.toThrow();
+  });
+
+  test('creates the destination parent directory if it does not exist', async () => {
+    const src = path.join(workDir, 'huge.png');
+    const dest = path.join(workDir, 'nested', 'sub', 'huge.png.ai.png');
+    await writePng(src, 3000, 2000);
+
+    const result = await ensureAiReadyImage(src, dest);
+
+    expect(result).toBe(dest);
+    await expect(fsp.access(dest)).resolves.toBeUndefined();
   });
 });
