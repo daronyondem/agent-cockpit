@@ -21,7 +21,7 @@ In-flight or pending design proposals that complement (but have not yet been fol
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [design-kb-ingestion-hybrid.md](design-kb-ingestion-hybrid.md) | Draft | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) |
+| [design-kb-ingestion-hybrid.md](design-kb-ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |
 
 ---
 

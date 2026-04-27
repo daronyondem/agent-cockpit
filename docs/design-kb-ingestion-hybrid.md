@@ -4,10 +4,10 @@
 
 | | |
 |--|--|
-| **Status** | Draft — under design review |
+| **Status** | Implemented |
 | **Author** | Daron Yondem |
-| **Last updated** | 2026-04-26 |
-| **Implementation** | Not yet started |
+| **Last updated** | 2026-04-27 |
+| **Implementation** | Shipped across PRs #213–#228 (issue #211). All 8 design PRs landed plus follow-ups for image downscaling (#222), PPTX paragraph structure (#219), and adaptive CLI timeouts (#228). |
 
 ---
 
@@ -541,7 +541,7 @@ flowchart LR
 2. **DOCX width threshold edge cases.** 100px is the chosen cutoff for "decorative." Are there real-world charts narrower than 100px? Probably rare but worth verifying with a few sample docs.
 3. **PPTX without `convertSlidesToImages`.** Should we offer to enable it automatically when an Ingestion CLI is configured, or keep it as a separate user choice? Currently kept separate for clarity, but the dependency is awkward.
 4. **AI converter timeout per call.** ~~Current digestion uses 15 min. For per-page conversion, 2-3 min per call seems more appropriate. Make it a setting?~~ **Resolved.** Per-image timeout bumped to 10 min (`pageConversion.ts:DEFAULT_TIMEOUT_MS`); per-document digestion is now adaptive — `digestTimeoutMs = max(30 min, unitCount × 10 min)` where `unitCount` is `pageCount` (PDFs) or `slideCount` (PPTX), defaulting to the 30 min floor for handlers that don't report a unit count. Not a user-facing setting; the heuristic covers all observed inputs.
-5. **Re-digestion of existing entries.** When this design ships, should existing `pdf/rasterized` raws be auto-reingested under `pdf/rasterized-hybrid` to benefit from the new flow? Or wait for a manual user action?
+5. **Re-digestion of existing entries.** ~~When this design ships, should existing `pdf/rasterized` raws be auto-reingested under `pdf/rasterized-hybrid` to benefit from the new flow? Or wait for a manual user action?~~ **Resolved.** No auto-migration. Users re-upload manually if they want to benefit from the new hybrid flow. Existing `pdf/rasterized` raws keep their old `text.md` (image-only references) and continue to digest under the source-aware rule as `image-only`.
 
 ## 17. Future Work (Out of Scope for This Design)
 
