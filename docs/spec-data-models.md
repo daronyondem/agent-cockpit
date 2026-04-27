@@ -52,7 +52,7 @@ agent-cockpit/
 │       │       ├── pdf.ts              # PDF page-by-page 150 DPI rasterization + hybrid pdfjs/AI per-page
 │       │       ├── docx.ts             # DOCX → GFM markdown via pandoc + per-image AI description (hybrid)
 │       │       ├── pptx.ts             # PPTX per-slide hybrid: XML extract / AI / image-only via signals + LO rasterization
-│       │       └── passthrough.ts      # Text (md/txt/json/...) + image passthrough with media copy
+│       │       └── passthrough.ts      # Text (md/txt/json/...) + hybrid image passthrough (per-image AI description, SVG bypass)
 │       ├── chatService.ts              # Conversation CRUD, messages, sessions
 │       ├── settingsService.ts          # Settings I/O: read, write, legacy migration
 │       └── updateService.ts            # Self-update: version checking, git pull, PM2 restart
