@@ -407,17 +407,19 @@ On settings load:
 ```mermaid
 flowchart LR
     subgraph Workspace[Per workspace]
-        Queue[FIFO upload queue]
-        Queue --> Slot1[Slot 1 → Doc A<br/>page 1 → 2 → ... → N]
-        Queue --> Slot2[Slot 2 → Doc B<br/>page 1 → 2 → ... → N]
+        Queue[Bounded pool · cliConcurrency slots]
+        Queue --> Slot1[Slot 1 → ingest doc A<br/>page 1 → 2 → ... → N]
+        Queue --> Slot2[Slot 2 → digest doc X<br/>reads converted text.md]
         Queue --> SlotN[Slot N<br/>...up to cliConcurrency]
+        Folder[Folder op<br/>createFolder · renameFolder · deleteFolder] -. drain-barrier .-> Queue
     end
 ```
 
 - **Within a single document:** sequential. PDF pages, PPTX slides, DOCX flagged images all process one at a time per document.
 - **Across documents:** up to `cliConcurrency` documents run in parallel per workspace.
-- The same setting governs ingestion, digestion, and dreaming concurrency. All three queues respect it.
-- Today's per-workspace FIFO (effective concurrency = 1) is replaced with a bounded-concurrency pool. The `KbDreamingService` already uses this pattern; `KbIngestionService` and `KbDigestionService` are reworked to match.
+- **Shared budget across pipelines.** `cliConcurrency` is a *single* budget across ingestion + digestion combined for the same workspace — both services hold a reference to the same `WorkspaceTaskQueue` instance. So with `cliConcurrency = 2`, the workspace can have 2 ingestions, or 1 ingestion + 1 digestion, or 2 digestions in flight — never 3 of any combination. Dreaming runs against its own session-driven runner (it already uses `cliConcurrency` for its synthesis batches) and stays independent.
+- **Folder ops are drain barriers.** `createFolder` / `renameFolder` / `deleteFolder` mutate shared structure (`raw_locations` rows reference folder paths) and must not race against in-flight ingestions. When a folder op is dispatched, the queue: (1) stops accepting new work into running slots, (2) waits for all in-flight tasks to settle, (3) runs the folder op alone, (4) resumes normal dispatch. Coarse pause is fine because folder ops are rare manual UI actions; fine-grained per-row locking would be over-engineered.
+- Today's per-workspace FIFO (effective concurrency = 1) is replaced with this bounded-concurrency pool with drain-barrier support. The `KbDreamingService` already uses a chunked-parallel pattern; `KbIngestionService` and `KbDigestionService` are reworked to share a single `WorkspaceTaskQueue` instance.
 
 ## 12. `meta.json` Schema Changes
 

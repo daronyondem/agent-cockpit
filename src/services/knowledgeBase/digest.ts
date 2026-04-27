@@ -44,6 +44,7 @@ import type { BackendRegistry } from '../backends/registry';
 import type { KbDatabase } from './db';
 import type { KbVectorStore } from './vectorStore';
 import { embedBatch, resolveConfig, type EmbeddingConfig } from './embeddings';
+import type { WorkspaceTaskQueueRegistry } from './workspaceTaskQueue';
 
 /** Version bumped whenever the entry frontmatter/format contract changes. */
 export const KB_ENTRY_SCHEMA_VERSION = 1;
@@ -102,6 +103,11 @@ export interface KbDigestionOptions {
   chatService: KbDigestChatService;
   backendRegistry: BackendRegistry;
   emit?: KbDigestEmitter;
+  /**
+   * Per-workspace task queue registry. Shared with `KbIngestionService`
+   * so `cliConcurrency` is a unified budget across both pipelines.
+   */
+  queueRegistry: WorkspaceTaskQueueRegistry;
 }
 
 /** Outcome of one digest run over a single raw file. */
@@ -156,8 +162,11 @@ export class KbDigestionService {
   private readonly chatService: KbDigestChatService;
   private readonly backendRegistry: BackendRegistry;
   private readonly emit?: KbDigestEmitter;
-  /** Per-workspace FIFO promise chain, keyed by workspace hash. */
-  private readonly queues = new Map<string, Promise<unknown>>();
+  /**
+   * Per-workspace bounded-parallelism queue. Shared with the ingestion
+   * service so `cliConcurrency` is a unified budget across pipelines.
+   */
+  private readonly queueRegistry: WorkspaceTaskQueueRegistry;
   /**
    * Per-workspace digestion session. Present while at least one digest
    * task is pending or in flight; cleared when the last task settles.
@@ -193,6 +202,7 @@ export class KbDigestionService {
     this.chatService = opts.chatService;
     this.backendRegistry = opts.backendRegistry;
     this.emit = opts.emit;
+    this.queueRegistry = opts.queueRegistry;
   }
 
   // ── Public API ───────────────────────────────────────────────────────────
@@ -212,6 +222,7 @@ export class KbDigestionService {
   async enqueueDigest(hash: string, rawId: string): Promise<DigestResult> {
     const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
     if (!enabled) throw new KbDigestDisabledError(hash);
+    await this._refreshConcurrency(hash);
     this._trackPending(hash, 1);
     try {
       const startedAt = Date.now();
@@ -245,45 +256,39 @@ export class KbDigestionService {
     const all = [...pending, ...ingested];
     if (all.length === 0) return [];
 
+    await this._refreshConcurrency(hash);
     this._trackPending(hash, all.length);
-    const results: DigestResult[] = [];
-    let processed = 0;
-    try {
-      for (const rawId of all) {
-        // Chain every digest onto the shared per-workspace queue so it
-        // runs serially even when other callers enqueue in parallel.
-        const startedAt = Date.now();
-        // eslint-disable-next-line no-await-in-loop
-        const r = await this._enqueue(hash, async () => this._runDigest(hash, rawId));
-        results.push(r);
-        this._recordTaskDone(hash, Date.now() - startedAt);
-        this._recordEntriesCreated(hash, r.entryIds.length);
-        this._emitChange(hash, new Date().toISOString(), {
-          raw: [rawId],
-          entries: r.entryIds,
-        });
-        this._trackPending(hash, -1);
-        processed += 1;
-      }
-    } catch (err) {
-      // _runDigest never throws — this only fires if the queue promise
-      // itself rejects. Balance the pending count so the session closes.
-      this._trackPending(hash, -(all.length - processed));
-      throw err;
-    }
-    return results;
+    // Dispatch every raw onto the shared bounded-parallelism queue and
+    // collect results as they settle. The queue runs up to
+    // `cliConcurrency` digests in parallel, which is the unified budget
+    // shared with ingestion for this workspace.
+    const dispatched = all.map((rawId) => {
+      const startedAt = Date.now();
+      return this._enqueue(hash, async () => this._runDigest(hash, rawId)).then(
+        (r) => {
+          this._recordTaskDone(hash, Date.now() - startedAt);
+          this._recordEntriesCreated(hash, r.entryIds.length);
+          this._emitChange(hash, new Date().toISOString(), {
+            raw: [rawId],
+            entries: r.entryIds,
+          });
+          this._trackPending(hash, -1);
+          return r;
+        },
+        (err: unknown) => {
+          // _runDigest never throws — this fires only if the queue
+          // promise rejects. Balance pending so the session closes.
+          this._trackPending(hash, -1);
+          throw err;
+        },
+      );
+    });
+    return Promise.all(dispatched);
   }
 
   /** Test hook — wait until every queued digest settles. */
   async waitForIdle(hash: string): Promise<void> {
-    const q = this.queues.get(hash);
-    if (q) {
-      try {
-        await q;
-      } catch {
-        /* per-run errors are captured in DigestResult, not thrown */
-      }
-    }
+    await this.queueRegistry.waitForIdle(hash);
   }
 
   // ── Internals ────────────────────────────────────────────────────────────
@@ -416,14 +421,23 @@ export class KbDigestionService {
     return computeDigestProgress(session);
   }
 
+  /**
+   * Read the current `cliConcurrency` setting and push it to the queue
+   * registry so the workspace's queue picks up budget changes on the
+   * next dispatch.
+   */
+  private async _refreshConcurrency(hash: string): Promise<void> {
+    try {
+      const settings = await this.chatService.getSettings();
+      const n = settings.knowledgeBase?.cliConcurrency ?? 2;
+      this.queueRegistry.setConcurrency(hash, n);
+    } catch {
+      // Settings unavailable — keep the registry's last-known value.
+    }
+  }
+
   private _enqueue<T>(hash: string, task: () => Promise<T>): Promise<T> {
-    const prev = this.queues.get(hash) ?? Promise.resolve();
-    const next = prev.then(task, task);
-    this.queues.set(
-      hash,
-      next.catch(() => undefined),
-    );
-    return next;
+    return this.queueRegistry.get(hash).run(task);
   }
 
   /**

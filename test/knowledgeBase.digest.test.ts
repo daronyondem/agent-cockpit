@@ -39,6 +39,7 @@ import {
   DigestSchemaError,
   KB_ENTRY_SCHEMA_VERSION,
 } from '../src/services/knowledgeBase/digest';
+import { WorkspaceTaskQueueRegistry } from '../src/services/knowledgeBase/workspaceTaskQueue';
 import { BaseBackendAdapter, type RunOneShotOptions } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
 import type { BackendMetadata, KbStateUpdateEvent } from '../src/types';
@@ -124,14 +125,19 @@ beforeEach(async () => {
   backendRegistry.register(backend);
 
   emitted = [];
+  // Single registry shared between ingestion + digestion mirrors the
+  // production wiring in `routes/chat.ts`.
+  const queueRegistry = new WorkspaceTaskQueueRegistry();
   ingestion = new KbIngestionService({
     chatService,
     emit: (h, frame) => emitted.push({ hash: h, frame }),
+    queueRegistry,
   });
   digestion = new KbDigestionService({
     chatService,
     backendRegistry,
     emit: (h, frame) => emitted.push({ hash: h, frame }),
+    queueRegistry,
   });
 
   // Bootstrap workspace with KB enabled.
