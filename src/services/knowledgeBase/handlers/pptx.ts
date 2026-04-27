@@ -49,9 +49,9 @@ interface ExtractedSlide {
    * are filtered before numbering, see `extractPptxSlides`.
    */
   slideNumber: number;
-  /** Joined `<a:t>` runs from the slide body. */
+  /** Slide body paragraphs joined with `\n\n` so bullets/lines survive markdown rendering. */
   body: string;
-  /** Joined `<a:t>` runs from the speaker notes, empty string if none. */
+  /** Speaker-note paragraphs joined with `\n\n`, empty string if none. */
   notes: string;
   /** Raw slide XML (with namespace prefixes intact) for signal detection. */
   rawXml: string;
@@ -106,6 +106,45 @@ function collectTextRuns(node: unknown, bucket: string[]): void {
   }
 }
 
+/**
+ * Walk a parsed PPTX slide/notes tree and emit one string per `<a:p>`
+ * paragraph. PPTX text always lives inside `<a:p>` (titles, bullets, body
+ * paragraphs are all `<a:p>`), so paragraph boundaries are the natural
+ * place to insert line breaks. Without this, bulleted slides flatten into
+ * a single space-joined run and lose their structure entirely.
+ */
+function extractParagraphs(node: unknown): string[] {
+  const out: string[] = [];
+  visit(node, out);
+  return out;
+}
+
+function visit(node: unknown, out: string[]): void {
+  if (node === null || node === undefined) return;
+  if (Array.isArray(node)) {
+    for (const item of node) visit(item, out);
+    return;
+  }
+  if (typeof node !== 'object') return;
+  const obj = node as Record<string, unknown>;
+
+  if ('p' in obj) {
+    // `<a:p>` paragraphs — could be one (object) or many (array).
+    const list = Array.isArray(obj.p) ? obj.p : [obj.p];
+    for (const p of list) {
+      const runs: string[] = [];
+      collectTextRuns(p, runs);
+      const text = runs.join(' ').replace(/\s+/g, ' ').trim();
+      if (text) out.push(text);
+    }
+  }
+
+  for (const [key, value] of Object.entries(obj)) {
+    if (key === 'p') continue;
+    visit(value, out);
+  }
+}
+
 /** Pull slide number out of an entry name like `ppt/slides/slide12.xml`. */
 function slideNumberFromEntry(name: string): number | null {
   const match = /slide(\d+)\.xml$/.exec(name);
@@ -156,27 +195,27 @@ async function extractPptxSlides(buffer: Buffer): Promise<ExtractSlidesResult> {
     }
     displayNumber += 1;
 
-    const bodyBucket: string[] = [];
+    let bodyParagraphs: string[] = [];
     try {
       const parsed = parser.parse(rawXml);
-      collectTextRuns(parsed, bodyBucket);
+      bodyParagraphs = extractParagraphs(parsed);
     } catch {
       // Malformed XML on a single slide shouldn't kill the whole file.
     }
-    const notesBucket: string[] = [];
+    let notesParagraphs: string[] = [];
     const notesEntry = notesEntries.get(num);
     if (notesEntry) {
       try {
         const parsed = parser.parse(notesEntry.getData().toString('utf8'));
-        collectTextRuns(parsed, notesBucket);
+        notesParagraphs = extractParagraphs(parsed);
       } catch {
         // Best-effort — bad notes shouldn't drop the slide.
       }
     }
     slides.push({
       slideNumber: displayNumber,
-      body: bodyBucket.join(' ').replace(/\s+/g, ' ').trim(),
-      notes: notesBucket.join(' ').replace(/\s+/g, ' ').trim(),
+      body: bodyParagraphs.join('\n\n'),
+      notes: notesParagraphs.join('\n\n'),
       rawXml,
     });
   }
@@ -398,7 +437,7 @@ export const pptxHandler: Handler = async ({
     hiddenSlideCount: hiddenCount,
     embeddedMediaCount: embeddedMedia.length,
     slidesToImagesRequested: Boolean(convertSlidesToImages),
-    rasterizedSlideCount: slideImages.length,
+    renderedSlideCount: slideImages.length,
     sourceCounts,
   };
   if (slideImagesWarning) metadata.slideImagesWarning = slideImagesWarning;
