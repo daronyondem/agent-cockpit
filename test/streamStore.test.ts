@@ -302,6 +302,32 @@ test('replay_start is a no-op when no placeholder exists', async () => {
   expect(after.messages).toEqual(before.messages);
 });
 
+test('replayed assistant_message with id matching an existing message replaces in place (no duplicate)', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  // First arrival appends the message normally (streamingMsgId is null on
+  // a fresh socket, so this exercises the append branch).
+  const msg = {
+    id: 'msg-final-1',
+    role: 'assistant',
+    content: 'final reply',
+    timestamp: '2026-04-26T12:00:00.000Z',
+    contentBlocks: [{ type: 'text', content: 'final reply' }],
+  };
+  ws.dispatch({ type: 'assistant_message', message: msg });
+  expect(Store.getState('c1').messages).toHaveLength(1);
+
+  // Server's per-conv buffer replays the same frame on reconnect — must
+  // not produce a second copy.
+  ws.dispatch({ type: 'assistant_message', message: { ...msg, content: 'final reply (replayed)' } });
+
+  const after = Store.getState('c1');
+  expect(after.messages).toHaveLength(1);
+  expect(after.messages[0].id).toBe('msg-final-1');
+  expect(after.messages[0].content).toBe('final reply (replayed)');
+});
+
 test('replay_end is a no-op', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;

@@ -653,16 +653,26 @@
       update(convId, cur => {
         const phId = cur.streamingMsgId;
         const matched = phId && cur.messages.some(m => m.id === phId);
+        const incomingId = frame.message.id;
+        /* Replay path: the server keeps a per-conv buffer of stream events
+           and replays them whenever a fresh WS connects (page reload, sleep
+           wake, network change). After a turn completes streamingMsgId is
+           null, so without this dedupe the replayed assistant_message would
+           append a copy of the message that load() already pulled from disk. */
+        const dupExists = !phId && incomingId && cur.messages.some(m => m.id === incomingId);
+        const mode = phId ? 'replace-placeholder' : dupExists ? 'replace-duplicate' : 'append';
         console.log('[diag]', new Date().toISOString(), 'assistant_message-apply',
           'conv=' + convId.slice(0,8),
           'phId=' + (phId ? String(phId).slice(0,16) : 'null'),
           'matched=' + matched,
-          'incomingId=' + String(frame.message.id || '').slice(0,16),
+          'incomingId=' + String(incomingId || '').slice(0,16),
           'incomingTs=' + (frame.message.timestamp || 'null'),
-          'mode=' + (phId ? 'replace-placeholder' : 'append'));
+          'mode=' + mode);
         const messages = phId
           ? cur.messages.map(m => m.id === phId ? frame.message : m)
-          : [...cur.messages, frame.message];
+          : dupExists
+            ? cur.messages.map(m => m.id === incomingId ? frame.message : m)
+            : [...cur.messages, frame.message];
         return { ...cur, messages, streamingMsgId: null };
       });
       diagSnap(convId, 'assistant_message-after');
