@@ -17,6 +17,8 @@ import { docxHandler } from '../src/services/knowledgeBase/handlers/docx';
 import { pptxHandler } from '../src/services/knowledgeBase/handlers/pptx';
 import * as pandocModule from '../src/services/knowledgeBase/pandoc';
 import * as pdfSignalsModule from '../src/services/knowledgeBase/ingestion/pdfSignals';
+import * as pptxSignalsModule from '../src/services/knowledgeBase/ingestion/pptxSignals';
+import * as pptxSlideRenderModule from '../src/services/knowledgeBase/ingestion/pptxSlideRender';
 import * as napiCanvas from '@napi-rs/canvas';
 import {
   passthroughHandler,
@@ -552,7 +554,26 @@ describe('docxHandler', () => {
 // ── PPTX ────────────────────────────────────────────────────────────────────
 
 describe('pptxHandler', () => {
-  test('extracts slide text, speaker notes, and embedded media', async () => {
+  /** Stub the rasterizer so AI-path tests don't need LibreOffice. Writes
+   *  small real PNGs to `slides/slide-NNN.png` to mirror the production
+   *  contract (the handler then references those paths in text.md). */
+  function stubRasterizer(slideCount: number) {
+    return jest
+      .spyOn(pptxSlideRenderModule, 'rasterizeSlidesViaLibreOffice')
+      .mockImplementation(async (_buf, _name, dir) => {
+        const slidesDir = path.join(dir, 'slides');
+        fs.mkdirSync(slidesDir, { recursive: true });
+        const images: string[] = [];
+        for (let i = 1; i <= slideCount; i++) {
+          const rel = `slides/slide-${String(i).padStart(3, '0')}.png`;
+          fs.writeFileSync(path.join(dir, rel), makePng(160, 120));
+          images.push(rel);
+        }
+        return { images };
+      });
+  }
+
+  test('extracts slide text, speaker notes, and embedded media with hybrid annotations', async () => {
     const buffer = readFixture('sample.pptx');
     const result = await pptxHandler({
       buffer,
@@ -561,7 +582,8 @@ describe('pptxHandler', () => {
         'application/vnd.openxmlformats-officedocument.presentationml.presentation',
       outDir,
     });
-    expect(result.handler).toBe('pptx');
+    // Handler tag matches the renamed hybrid pipeline.
+    expect(result.handler).toBe('pptx/hybrid');
     expect(result.text).toContain('## Slide 1');
     expect(result.text).toContain('## Slide 2');
     expect(result.text).toContain('Deck Title');
@@ -570,11 +592,30 @@ describe('pptxHandler', () => {
     expect(result.text).toContain('### Speaker Notes');
     expect(result.text).toContain('Speaker notes for slide 1');
     expect(result.text).toContain('## Embedded Media');
+    // Plain-text fixture → all slides classify as xml-extract.
+    expect(result.text).toMatch(
+      /^> source: xml-extract \| figures: 0 \| table-likely: false$/m,
+    );
     expect(result.mediaFiles).toHaveLength(1);
     expect(result.mediaFiles[0]).toMatch(/^media\//);
     expect(fs.existsSync(path.join(outDir, result.mediaFiles[0]))).toBe(true);
     expect(result.metadata?.slideCount).toBe(2);
     expect(result.metadata?.slidesToImagesRequested).toBe(false);
+    expect(result.metadata?.rasterizedSlideCount).toBe(0);
+    const sc = result.metadata?.sourceCounts as Record<string, number>;
+    expect(sc['xml-extract']).toBe(2);
+    expect(sc['artificial-intelligence']).toBeUndefined();
+    expect(sc['image-only']).toBeUndefined();
+    const slidesMeta = result.metadata?.slides as Array<{
+      slideNumber: number;
+      source: string;
+      figureCount: number;
+      tableLikely: boolean;
+      hasImage: boolean;
+    }>;
+    expect(slidesMeta).toHaveLength(2);
+    expect(slidesMeta[0].source).toBe('xml-extract');
+    expect(slidesMeta[0].hasImage).toBe(false);
   });
 
   test('skips hidden slides and renumbers survivors to match rasterized PNGs', async () => {
@@ -645,11 +686,187 @@ describe('pptxHandler', () => {
       });
       expect(result.metadata?.slidesToImagesRequested).toBe(true);
       expect(result.metadata?.slideImagesWarning).toMatch(/LibreOffice/i);
+      expect(result.metadata?.rasterizedSlideCount).toBe(0);
       expect(result.text).toMatch(/Slide rasterization note/);
+      // Plain-text fixture is still safe-text → xml-extract regardless of
+      // rasterization availability, so the body content survives.
+      const sc = result.metadata?.sourceCounts as Record<string, number>;
+      expect(sc['xml-extract']).toBe(2);
     } finally {
       process.env.PATH = origPath;
       _resetLibreOfficeCacheForTests();
       fs.rmSync(empty, { recursive: true, force: true });
+    }
+  });
+
+  test('falls back to xml-extract on needs-ai slides when no rasterized image is available', async () => {
+    // convertSlidesToImages is OFF — even on needs-ai slides, we have
+    // nothing else to offer except the XML body, so the source label is
+    // xml-extract with a `note:` explaining why we didn't take the AI path.
+    const signalsSpy = jest
+      .spyOn(pptxSignalsModule, 'extractSlideSignals')
+      .mockReturnValue({ figureCount: 1, tableLikely: true });
+    try {
+      const buffer = readFixture('sample.pptx');
+      const result = await pptxHandler({
+        buffer,
+        filename: 'sample.pptx',
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        outDir,
+      });
+      expect(result.text).toMatch(
+        /^> source: xml-extract \| figures: 1 \| table-likely: true \| note: no slide image available; using XML extraction$/m,
+      );
+      // Body XML text survives.
+      expect(result.text).toContain('Deck Title');
+      // Speaker notes survive.
+      expect(result.text).toContain('Speaker notes for slide 1');
+      const sc = result.metadata?.sourceCounts as Record<string, number>;
+      expect(sc['xml-extract']).toBe(2);
+    } finally {
+      signalsSpy.mockRestore();
+    }
+  });
+
+  test('falls back to image-only when needs-ai slide has rasterized image but no Ingestion CLI', async () => {
+    const signalsSpy = jest
+      .spyOn(pptxSignalsModule, 'extractSlideSignals')
+      .mockReturnValue({ figureCount: 1, tableLikely: false });
+    const rasterSpy = stubRasterizer(2);
+    try {
+      const buffer = readFixture('sample.pptx');
+      const result = await pptxHandler({
+        buffer,
+        filename: 'sample.pptx',
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        outDir,
+        convertSlidesToImages: true,
+        // ingestionAdapter intentionally omitted
+      });
+      expect(result.text).toMatch(
+        /^> source: image-only \| figures: 1 \| table-likely: false \| note: no Ingestion CLI configured$/m,
+      );
+      // Body XML is dropped on image-only (we don't trust it).
+      expect(result.text).not.toContain('Deck Title');
+      expect(result.text).not.toContain('First slide bullet');
+      // Speaker notes survive on image-only — separate text stream.
+      expect(result.text).toContain('Speaker notes for slide 1');
+      // Slide image is linked.
+      expect(result.text).toMatch(/!\[Slide 1\]\(slides\/slide-001\.png\)/);
+      expect(result.text).toMatch(/!\[Slide 2\]\(slides\/slide-002\.png\)/);
+      const sc = result.metadata?.sourceCounts as Record<string, number>;
+      expect(sc['image-only']).toBe(2);
+      expect(result.metadata?.rasterizedSlideCount).toBe(2);
+    } finally {
+      signalsSpy.mockRestore();
+      rasterSpy.mockRestore();
+    }
+  });
+
+  test('calls the Ingestion CLI for needs-ai slides and annotates source: artificial-intelligence', async () => {
+    const signalsSpy = jest
+      .spyOn(pptxSignalsModule, 'extractSlideSignals')
+      .mockReturnValue({ figureCount: 0, tableLikely: true });
+    const rasterSpy = stubRasterizer(2);
+    const adapterCalls: Array<{ prompt: string; opts: any }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string, opts?: any) {
+        adapterCalls.push({ prompt, opts });
+        return '## AI-reconstructed slide\n\n| Q1 | Q2 |\n|----|----|\n| 10 | 20 |';
+      },
+    } as any;
+
+    try {
+      const buffer = readFixture('sample.pptx');
+      const result = await pptxHandler({
+        buffer,
+        filename: 'sample.pptx',
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        outDir,
+        convertSlidesToImages: true,
+        ingestionAdapter: stubAdapter,
+        ingestionModel: 'claude-sonnet-4-6',
+      });
+
+      expect(adapterCalls).toHaveLength(2);
+      expect(adapterCalls[0].prompt).toContain('slide-001.png');
+      expect(adapterCalls[0].opts.model).toBe('claude-sonnet-4-6');
+      expect(adapterCalls[0].opts.allowTools).toBe(true);
+
+      expect(result.text).toMatch(
+        /^> source: artificial-intelligence \| figures: 0 \| table-likely: true$/m,
+      );
+      expect(result.text).toContain('AI-reconstructed slide');
+      // Image link is preserved alongside the AI-generated body.
+      expect(result.text).toMatch(/!\[Slide 1\]\(slides\/slide-001\.png\)/);
+      // Speaker notes still preserved.
+      expect(result.text).toContain('Speaker notes for slide 1');
+      // Original XML body is replaced by AI output, not appended.
+      expect(result.text).not.toContain('Deck Title');
+
+      const sc = result.metadata?.sourceCounts as Record<string, number>;
+      expect(sc['artificial-intelligence']).toBe(2);
+      const slidesMeta = result.metadata?.slides as Array<{
+        source: string;
+        aiCallDurationMs: number | null;
+        aiRetries: number;
+        hasImage: boolean;
+      }>;
+      expect(slidesMeta[0].source).toBe('artificial-intelligence');
+      expect(slidesMeta[0].aiCallDurationMs).toBeGreaterThanOrEqual(0);
+      expect(slidesMeta[0].aiRetries).toBe(0);
+      expect(slidesMeta[0].hasImage).toBe(true);
+    } finally {
+      signalsSpy.mockRestore();
+      rasterSpy.mockRestore();
+    }
+  });
+
+  test('falls back to image-only with notes preserved when AI fails twice', async () => {
+    const signalsSpy = jest
+      .spyOn(pptxSignalsModule, 'extractSlideSignals')
+      .mockReturnValue({ figureCount: 1, tableLikely: false });
+    const rasterSpy = stubRasterizer(2);
+    const stubAdapter = {
+      async runOneShot() {
+        throw new Error('CLI exploded');
+      },
+    } as any;
+
+    try {
+      const buffer = readFixture('sample.pptx');
+      const result = await pptxHandler({
+        buffer,
+        filename: 'sample.pptx',
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        outDir,
+        convertSlidesToImages: true,
+        ingestionAdapter: stubAdapter,
+      });
+      expect(result.text).toMatch(
+        /^> source: image-only \| figures: 1 \| table-likely: false \| note: AI conversion failed after retry$/m,
+      );
+      // Image link survives.
+      expect(result.text).toMatch(/!\[Slide 1\]\(slides\/slide-001\.png\)/);
+      // Speaker notes survive.
+      expect(result.text).toContain('Speaker notes for slide 1');
+      // No fallback to XML body — body is empty for image-only.
+      expect(result.text).not.toContain('Deck Title');
+      const sc = result.metadata?.sourceCounts as Record<string, number>;
+      expect(sc['image-only']).toBe(2);
+      const slidesMeta = result.metadata?.slides as Array<{
+        source: string;
+        aiRetries: number;
+      }>;
+      expect(slidesMeta[0].source).toBe('image-only');
+      expect(slidesMeta[0].aiRetries).toBe(1);
+    } finally {
+      signalsSpy.mockRestore();
+      rasterSpy.mockRestore();
     }
   });
 });
