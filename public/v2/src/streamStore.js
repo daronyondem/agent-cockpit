@@ -654,13 +654,27 @@
         const phId = cur.streamingMsgId;
         const matched = phId && cur.messages.some(m => m.id === phId);
         const incomingId = frame.message.id;
-        /* Replay path: the server keeps a per-conv buffer of stream events
-           and replays them whenever a fresh WS connects (page reload, sleep
-           wake, network change). After a turn completes streamingMsgId is
-           null, so without this dedupe the replayed assistant_message would
-           append a copy of the message that load() already pulled from disk. */
-        const dupExists = !phId && incomingId && cur.messages.some(m => m.id === incomingId);
-        const mode = phId ? 'replace-placeholder' : dupExists ? 'replace-duplicate' : 'append';
+        /* Drop any prior message with the incoming id BEFORE deciding
+           replace-vs-append. The server's per-conv buffer replays every
+           past event whenever a fresh WS connects (page reload, sleep
+           wake, network change, `online` event, visibility revalidation
+           ≥30s). When that replay happens after a turn already completed,
+           the original final message is still in `messages`, the replayed
+           text deltas spin up a NEW placeholder via ensurePlaceholder
+           (because streamingMsgId was cleared by the prior `done`), and
+           the replayed assistant_message would replace that placeholder
+           with a frame whose id matches the original — leaving two
+           entries with the same id in the array. Filtering by id first
+           collapses both replay variants (with or without a fresh
+           placeholder) into a single entry. */
+        const dupExists = incomingId && cur.messages.some(m => m.id === incomingId && m.id !== phId);
+        const cleaned = dupExists
+          ? cur.messages.filter(m => m.id !== incomingId)
+          : cur.messages;
+        const phStillPresent = phId && cleaned.some(m => m.id === phId);
+        const mode = phStillPresent
+          ? (dupExists ? 'replace-placeholder+drop-dup' : 'replace-placeholder')
+          : (dupExists ? 'replace-duplicate' : 'append');
         console.log('[diag]', new Date().toISOString(), 'assistant_message-apply',
           'conv=' + convId.slice(0,8),
           'phId=' + (phId ? String(phId).slice(0,16) : 'null'),
@@ -668,11 +682,9 @@
           'incomingId=' + String(incomingId || '').slice(0,16),
           'incomingTs=' + (frame.message.timestamp || 'null'),
           'mode=' + mode);
-        const messages = phId
-          ? cur.messages.map(m => m.id === phId ? frame.message : m)
-          : dupExists
-            ? cur.messages.map(m => m.id === incomingId ? frame.message : m)
-            : [...cur.messages, frame.message];
+        const messages = phStillPresent
+          ? cleaned.map(m => m.id === phId ? frame.message : m)
+          : [...cleaned, frame.message];
         return { ...cur, messages, streamingMsgId: null };
       });
       diagSnap(convId, 'assistant_message-after');
