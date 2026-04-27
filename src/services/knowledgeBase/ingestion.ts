@@ -42,6 +42,7 @@ import type { HandlerResult } from './handlers/types';
 import type { KbDatabase } from './db';
 import { normalizeFolderPath } from './db';
 import type { BackendRegistry } from '../backends/registry';
+import type { WorkspaceTaskQueueRegistry } from './workspaceTaskQueue';
 
 /** Subset of chatService the orchestrator depends on — keeps tests light. */
 export interface KbIngestionChatService {
@@ -74,6 +75,12 @@ export interface KbIngestionOptions {
    * skip AI conversion and emit `source: image-only` for visual content.
    */
   backendRegistry?: BackendRegistry;
+  /**
+   * Per-workspace task queue registry. Shared with `KbDigestionService`
+   * so `cliConcurrency` is a unified budget across both pipelines per
+   * workspace.
+   */
+  queueRegistry: WorkspaceTaskQueueRegistry;
 }
 
 export interface KbUploadInput {
@@ -141,18 +148,19 @@ export class KbIngestionService {
   private digestTrigger?: KbDigestTrigger;
   private readonly backendRegistry?: BackendRegistry;
   /**
-   * Per-workspace FIFO queue implemented as a chained Promise. All writes
-   * to a workspace's DB and `converted/` dir go through this queue so
-   * there's no read-modify-write races on a single workspace. Cross-
-   * workspace ingestions run in parallel — the Map is keyed by hash.
+   * Per-workspace bounded-parallelism queue. Shared with the digestion
+   * service so `cliConcurrency` is a unified budget across pipelines.
+   * Folder ops dispatch via `runBarrier()` — they wait for in-flight
+   * tasks to settle, run alone, then resume normal dispatch.
    */
-  private readonly queues = new Map<string, Promise<unknown>>();
+  private readonly queueRegistry: WorkspaceTaskQueueRegistry;
 
   constructor(opts: KbIngestionOptions) {
     this.chatService = opts.chatService;
     this.emit = opts.emit;
     this.digestTrigger = opts.digestTrigger;
     this.backendRegistry = opts.backendRegistry;
+    this.queueRegistry = opts.queueRegistry;
   }
 
   /**
@@ -203,6 +211,7 @@ export class KbIngestionService {
     await fsp.mkdir(rawDir, { recursive: true });
     const rawPath = path.join(rawDir, `${rawId}${ext}`);
 
+    await this._refreshConcurrency(hash);
     return this._enqueue(hash, async () => {
       const db = this.chatService.getKbDb(hash);
       if (!db) throw new KbDisabledError(hash);
@@ -322,6 +331,7 @@ export class KbIngestionService {
 
     const normalizedFolder = normalizeFolderPath(folderPath);
 
+    await this._refreshConcurrency(hash);
     return this._enqueue(hash, async () => {
       const db = this.chatService.getKbDb(hash);
       if (!db) return false;
@@ -359,6 +369,7 @@ export class KbIngestionService {
     const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
     if (!enabled) throw new KbDisabledError(hash);
 
+    await this._refreshConcurrency(hash);
     return this._enqueue(hash, async () => {
       const db = this.chatService.getKbDb(hash);
       if (!db) return false;
@@ -388,7 +399,8 @@ export class KbIngestionService {
   async createFolder(hash: string, folderPath: string): Promise<string> {
     const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
     if (!enabled) throw new KbDisabledError(hash);
-    return this._enqueue(hash, async () => {
+    await this._refreshConcurrency(hash);
+    return this._enqueueBarrier(hash, async () => {
       const db = this.chatService.getKbDb(hash);
       if (!db) throw new KbDisabledError(hash);
       const normalized = normalizeFolderPath(folderPath);
@@ -402,7 +414,8 @@ export class KbIngestionService {
   async renameFolder(hash: string, fromPath: string, toPath: string): Promise<void> {
     const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
     if (!enabled) throw new KbDisabledError(hash);
-    return this._enqueue(hash, async () => {
+    await this._refreshConcurrency(hash);
+    return this._enqueueBarrier(hash, async () => {
       const db = this.chatService.getKbDb(hash);
       if (!db) throw new KbDisabledError(hash);
       db.renameFolder(fromPath, toPath);
@@ -430,7 +443,8 @@ export class KbIngestionService {
     const normalized = normalizeFolderPath(folderPath);
     if (normalized === '') throw new KbValidationError('Cannot delete root folder.');
 
-    return this._enqueue(hash, async () => {
+    await this._refreshConcurrency(hash);
+    return this._enqueueBarrier(hash, async () => {
       const db = this.chatService.getKbDb(hash);
       if (!db) throw new KbDisabledError(hash);
       const subtree = db.listFolderSubtree(normalized);
@@ -466,35 +480,40 @@ export class KbIngestionService {
    * the UI reacts to `kb_state_update` frames as work progresses.
    */
   async waitForIdle(hash: string): Promise<void> {
-    const q = this.queues.get(hash);
-    if (q) {
-      try {
-        await q;
-      } catch {
-        // Individual tasks swallow their own errors onto raw rows.
-        // `waitForIdle` shouldn't reject if one of them failed.
-      }
-    }
+    await this.queueRegistry.waitForIdle(hash);
   }
 
   // ── Internals ────────────────────────────────────────────────────────────
 
   /**
-   * Chain `task` onto the per-workspace queue so only one operation runs
-   * at a time for a given workspace. Returns the task's result.
+   * Read the current `cliConcurrency` setting and push it to the queue
+   * registry so the workspace's queue picks up budget changes on the
+   * next dispatch. Cheap — settings are an in-memory snapshot.
    */
+  private async _refreshConcurrency(hash: string): Promise<void> {
+    try {
+      const settings = await this.chatService.getSettings();
+      const n = settings.knowledgeBase?.cliConcurrency ?? 2;
+      this.queueRegistry.setConcurrency(hash, n);
+    } catch {
+      // Settings unavailable — leave the registry's last-known value in
+      // place. Queue defaults to 2 when nothing has been set.
+    }
+  }
+
+  /** Run `task` on the workspace's bounded-parallelism queue. */
   private _enqueue<T>(hash: string, task: () => Promise<T>): Promise<T> {
-    const prev = this.queues.get(hash) ?? Promise.resolve();
-    const next = prev.then(task, task);
-    // Store the chain without the result — the next enqueue only needs
-    // to wait for this one to settle, not consume its value. Attach a
-    // catch so an unhandled rejection in one task doesn't poison the
-    // chain for the next one.
-    this.queues.set(
-      hash,
-      next.catch(() => undefined),
-    );
-    return next;
+    return this.queueRegistry.get(hash).run(task);
+  }
+
+  /**
+   * Run `task` as a drain barrier — waits for all in-flight tasks to
+   * settle, runs alone, then resumes normal dispatch. Used for folder
+   * mutations so an `UPDATE raw_locations` rewrite can't race with an
+   * in-flight ingestion writing into the same folder.
+   */
+  private _enqueueBarrier<T>(hash: string, task: () => Promise<T>): Promise<T> {
+    return this.queueRegistry.get(hash).runBarrier(task);
   }
 
   /**

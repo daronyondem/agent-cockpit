@@ -25,6 +25,7 @@ import {
   KbIngestionService,
   KbLocationConflictError,
 } from '../src/services/knowledgeBase/ingestion';
+import { WorkspaceTaskQueueRegistry } from '../src/services/knowledgeBase/workspaceTaskQueue';
 import type { KbStateUpdateEvent } from '../src/types';
 
 const WORKSPACE_PATH = '/tmp/kb-multi-loc-test';
@@ -58,6 +59,7 @@ beforeEach(async () => {
   ingestion = new KbIngestionService({
     chatService,
     emit: (h, frame) => emitted.push({ hash: h, frame }),
+    queueRegistry: new WorkspaceTaskQueueRegistry(),
   });
   await chatService.createConversation('seed', WORKSPACE_PATH);
   hash = workspaceHash(WORKSPACE_PATH);

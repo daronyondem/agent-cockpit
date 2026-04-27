@@ -19,6 +19,7 @@ import os from 'os';
 import crypto from 'crypto';
 import { ChatService } from '../src/services/chatService';
 import { KbIngestionService, KbDisabledError } from '../src/services/knowledgeBase/ingestion';
+import { WorkspaceTaskQueueRegistry } from '../src/services/knowledgeBase/workspaceTaskQueue';
 import type { KbStateUpdateEvent } from '../src/types';
 
 const WORKSPACE_PATH = '/tmp/kb-ingestion-test';
@@ -41,6 +42,7 @@ beforeEach(async () => {
   ingestion = new KbIngestionService({
     chatService,
     emit: (h, frame) => emitted.push({ hash: h, frame }),
+    queueRegistry: new WorkspaceTaskQueueRegistry(),
   });
   // Bootstrap a workspace with KB enabled.
   await chatService.createConversation('seed', WORKSPACE_PATH);

@@ -27,6 +27,7 @@ import {
 } from '../services/knowledgeBase/digest';
 import { KbDreamService } from '../services/knowledgeBase/dream';
 import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
+import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
 import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
 import type { WsFunctions } from '../ws';
@@ -367,13 +368,21 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     });
   }
 
-  // Knowledge Base ingestion orchestrator. Owns the per-workspace queue
-  // that runs format handlers (pdf/docx/pptx/passthrough) and emits
+  // Per-workspace task queue registry. Shared between the ingestion and
+  // digestion services so `Settings.knowledgeBase.cliConcurrency` is a
+  // unified budget across both pipelines per workspace. Folder ops use
+  // `runBarrier` to drain in-flight ingestions before mutating shared
+  // structure (raw_locations rows that reference folder paths).
+  const kbQueueRegistry = new WorkspaceTaskQueueRegistry();
+
+  // Knowledge Base ingestion orchestrator. Dispatches format handlers
+  // (pdf/docx/pptx/passthrough) onto the shared queue and emits
   // `kb_state_update` frames when the DB changes.
   const kbIngestion = new KbIngestionService({
     chatService,
     emit: broadcastKbStateUpdate,
     backendRegistry,
+    queueRegistry: kbQueueRegistry,
   });
 
   // Knowledge Base digestion orchestrator. Runs the configured Digestion
@@ -383,6 +392,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     chatService,
     backendRegistry,
     emit: broadcastKbStateUpdate,
+    queueRegistry: kbQueueRegistry,
   });
   // Late-bind the circular ingestion ↔ digestion dependency so that
   // files auto-digest on ingestion completion when the workspace has
