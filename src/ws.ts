@@ -229,6 +229,7 @@ export function attachWebSocket(
   function handleConnection(ws: WebSocket, convId: string) {
     // Close any existing WS for this conversation
     const existing = activeWebSockets.get(convId);
+    const hadExisting = !!(existing && existing.readyState === WebSocket.OPEN);
     if (existing && existing.readyState === WebSocket.OPEN) {
       existing.close(1000, 'Replaced by new connection');
     }
@@ -237,10 +238,15 @@ export function attachWebSocket(
 
     // Cancel grace timer — client reconnected
     const buf = convBuffers.get(convId);
+    const hadGrace = !!buf?.graceTimer;
+    const hadCleanup = !!buf?.cleanupTimer;
     if (buf) {
       if (buf.graceTimer) { clearTimeout(buf.graceTimer); buf.graceTimer = null; }
       if (buf.cleanupTimer) { clearTimeout(buf.cleanupTimer); buf.cleanupTimer = null; }
     }
+
+    const eventTypes = buf ? buf.events.map(e => 'type' in e ? e.type : '?').join(',') : '';
+    console.log(`[diag][ws] handleConnection conv=${convId.slice(0,8)} replacedExisting=${hadExisting} bufEvents=${buf?.events.length ?? 0} hadGrace=${hadGrace} hadCleanup=${hadCleanup} activeStreamHas=${activeStreams.has(convId)} types=[${eventTypes}]`);
 
     // If there's a buffer with events, this is a reconnection — replay immediately
     if (buf && buf.events.length > 0) {
@@ -282,7 +288,9 @@ export function attachWebSocket(
       }
     });
 
-    ws.on('close', () => {
+    ws.on('close', (code, reason) => {
+      const wasActive = activeWebSockets.get(convId) === ws;
+      console.log(`[diag][ws] ws-close conv=${convId.slice(0,8)} code=${code} reason="${reason?.toString() || ''}" wasActive=${wasActive} activeStreamHas=${activeStreams.has(convId)}`);
       if (!shuttingDown) {
         console.log(`[ws] Disconnected for conv=${convId}`);
       }
@@ -318,8 +326,12 @@ export function attachWebSocket(
 
     // Send to WS if open
     const ws = activeWebSockets.get(convId);
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(frame));
+    const wsOpen = !!(ws && ws.readyState === WebSocket.OPEN);
+    if (frame.type !== 'text' && frame.type !== 'thinking') {
+      console.log(`[diag][ws] send conv=${convId.slice(0,8)} type=${frame.type} wsOpen=${wsOpen} bufLen=${buf.events.length}`);
+    }
+    if (wsOpen) {
+      ws!.send(JSON.stringify(frame));
       return true;
     }
 
@@ -353,6 +365,11 @@ export function attachWebSocket(
 
   /** Clear the event buffer for a conversation (called before starting a new stream). */
   function clearBuffer(convId: string) {
+    const buf = convBuffers.get(convId);
+    if (buf) {
+      const types = buf.events.map(e => 'type' in e ? e.type : '?').join(',');
+      console.log(`[diag][ws] clearBuffer conv=${convId.slice(0,8)} bufLen=${buf.events.length} types=[${types}]`);
+    }
     deleteBuffer(convId);
   }
 
@@ -362,6 +379,8 @@ export function attachWebSocket(
    *  when no WS is connected at submission time (network-change recovery). */
   function startStreamGracePeriod(convId: string): void {
     const entry = activeStreams.get(convId);
+    const wsOpen = isConnected(convId);
+    console.log(`[diag][ws] startGrace conv=${convId.slice(0,8)} hasEntry=${!!entry} wsOpen=${wsOpen}`);
     if (!entry) return;
     const buf = getOrCreateBuffer(convId);
     if (buf.graceTimer) return;
