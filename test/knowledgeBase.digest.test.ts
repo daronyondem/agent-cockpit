@@ -432,11 +432,11 @@ describe('buildDigestPrompt', () => {
     expect(prompt).toContain('Folder: <root>');
   });
 
-  test('instructs the CLI to open every referenced image (rasterized PDFs)', () => {
-    // Mirrors what the PDF handler emits: a thin markdown index whose only
-    // content is `![Page N](pages/page-NNNN.png)` links. Without an explicit
-    // rule, multimodal CLIs were returning "no body text was extracted"
-    // pointer entries instead of actually reading the page images.
+  test('explains source-aware image-consultation rules per source label', () => {
+    // Hybrid ingestion (issue #211) annotates each page/slide/image section
+    // with a `> source: <label>` blockquote. The digestion prompt must teach
+    // the CLI when to open the accompanying image based on that label —
+    // replacing the blunt "open EVERY image" rule from PR #207.
     const prompt = buildDigestPrompt({
       filename: 'book.pdf',
       folderPath: 'books',
@@ -444,13 +444,29 @@ describe('buildDigestPrompt', () => {
       handler: 'pdf/rasterized',
       mimeType: 'application/pdf',
       convertedTextPath: 'converted/pdfraw/text.md',
-      convertedText: '# book.pdf\n\n## Page 1\n\n![Page 1](pages/page-0001.png)',
+      convertedText: '# book.pdf\n\n## Page 1\n\n> source: pdfjs\n\n![Page 1](pages/page-0001.png)',
       handlerMetadata: { pageCount: 185, rasterDpi: 150 },
     });
-    expect(prompt).toMatch(/image references/i);
-    expect(prompt).toMatch(/MUST open and analyze EVERY referenced image/);
+
+    expect(prompt).toMatch(/`> source: <label>` blockquote/);
+
+    // pdfjs / xml-extract — text reliable, consult image only when needed.
+    expect(prompt).toContain('source: pdfjs');
+    expect(prompt).toContain('source: xml-extract');
+    expect(prompt).toMatch(/Consult the image\s+only when/);
+
+    // artificial-intelligence — markdown primary, open image to verify.
+    expect(prompt).toContain('source: artificial-intelligence');
+    expect(prompt).toMatch(/markdown is your primary source/);
+    expect(prompt).toMatch(/verify a specific table cell, figure detail/);
+
+    // image-only — image IS the content, MUST open.
+    expect(prompt).toContain('source: image-only');
+    expect(prompt).toMatch(/image IS the content/);
+    expect(prompt).toMatch(/MUST open and analyze it/);
+
+    // Path-resolution rule preserved from PR #207.
     expect(prompt).toMatch(/relative to the converted text file's directory/);
-    expect(prompt).toMatch(/page images ARE the content/);
   });
 });
 
