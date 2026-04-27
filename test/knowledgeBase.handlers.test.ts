@@ -17,6 +17,7 @@ import { docxHandler } from '../src/services/knowledgeBase/handlers/docx';
 import { pptxHandler } from '../src/services/knowledgeBase/handlers/pptx';
 import * as pandocModule from '../src/services/knowledgeBase/pandoc';
 import * as pdfSignalsModule from '../src/services/knowledgeBase/ingestion/pdfSignals';
+import * as napiCanvas from '@napi-rs/canvas';
 import {
   passthroughHandler,
   passthroughSupports,
@@ -31,6 +32,17 @@ const FIXTURE_DIR = path.resolve(__dirname, 'fixtures', 'kb');
 
 function readFixture(name: string): Buffer {
   return fs.readFileSync(path.join(FIXTURE_DIR, name));
+}
+
+/** Build a real, decodable PNG of the given dimensions (a flat blue rectangle).
+ *  We need real PNGs for the DOCX width filter — `loadImage` rejects buffers
+ *  that are just the PNG magic bytes. */
+function makePng(width: number, height: number): Buffer {
+  const canvas = napiCanvas.createCanvas(width, height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#3b82f6';
+  ctx.fillRect(0, 0, width, height);
+  return canvas.toBuffer('image/png');
 }
 
 let outDir: string;
@@ -260,29 +272,31 @@ describe('docxHandler', () => {
     if (runPandocSpy) runPandocSpy.mockRestore();
   });
 
-  test('flattens pandoc-extracted media and preserves table markdown', async () => {
+  /** Wire the runPandoc spy to drop a real PNG of the requested size into the
+   *  --extract-media dir and emit one image reference in stdout. */
+  function stubPandocOneImage(width: number, markdownBody: string) {
     runPandocSpy = jest
       .spyOn(pandocModule, 'runPandoc')
       .mockImplementation(async (args) => {
-        // Find the --extract-media flag and simulate what pandoc does:
-        // writes a `media/` subdir under the target with the embedded
-        // image, using its OOXML-relative path.
         const extractArg = (args as string[]).find((a) =>
           a.startsWith('--extract-media='),
         )!;
         const mediaRoot = extractArg.replace('--extract-media=', '');
         const nested = path.join(mediaRoot, 'media');
         fs.mkdirSync(nested, { recursive: true });
-        fs.writeFileSync(path.join(nested, 'image1.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
-        return {
-          stdout:
-            'Hello from the DOCX fixture.\n\n' +
-            'Second paragraph for word count.\n\n' +
-            '| a | b |\n|---|---|\n| 1 | 2 |\n\n' +
-            '![image](media/media/image1.png)\n',
-          stderr: '',
-        };
+        fs.writeFileSync(path.join(nested, 'image1.png'), makePng(width, width));
+        return { stdout: markdownBody, stderr: '' };
       });
+  }
+
+  test('flattens pandoc-extracted media and preserves table markdown', async () => {
+    stubPandocOneImage(
+      300,
+      'Hello from the DOCX fixture.\n\n' +
+        'Second paragraph for word count.\n\n' +
+        '| a | b |\n|---|---|\n| 1 | 2 |\n\n' +
+        '![image](media/media/image1.png)\n',
+    );
 
     const result = await docxHandler({
       buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]), // any bytes — handler just writes to a temp file
@@ -293,7 +307,7 @@ describe('docxHandler', () => {
     });
 
     // Handler identity + title prefix.
-    expect(result.handler).toBe('docx/pandoc');
+    expect(result.handler).toBe('docx/pandoc-hybrid');
     expect(result.text).toContain('# sample.docx');
     expect(result.text).toContain('Hello from the DOCX fixture.');
     expect(result.text).toContain('Second paragraph for word count.');
@@ -320,6 +334,178 @@ describe('docxHandler', () => {
 
     expect(result.metadata?.mediaCount).toBe(1);
     expect(result.metadata?.wordCount).toBeGreaterThan(0);
+    // Width-matching image with no adapter → `no-adapter`, link unchanged.
+    const sc = result.metadata?.sourceCounts as Record<string, number>;
+    expect(sc['no-adapter']).toBe(1);
+    expect(sc['artificial-intelligence']).toBeUndefined();
+    expect(result.text).not.toContain('Image description (source:');
+    const images = result.metadata?.images as Array<{
+      mediaPath: string;
+      width: number | null;
+      source: string;
+    }>;
+    expect(images).toHaveLength(1);
+    expect(images[0].mediaPath).toBe('media/image1.png');
+    expect(images[0].width).toBe(300);
+    expect(images[0].source).toBe('no-adapter');
+  });
+
+  test('skips images narrower than 100px (icons, logos, decorative)', async () => {
+    stubPandocOneImage(
+      80,
+      'Doc with a tiny logo.\n\n![logo](media/media/image1.png)\n',
+    );
+    const stubAdapter = {
+      runOneShot: jest.fn(async () => 'should not be called'),
+    } as any;
+
+    const result = await docxHandler({
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      filename: 'tiny.docx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      outDir,
+      ingestionAdapter: stubAdapter,
+    });
+
+    // Adapter must not be called for sub-threshold images.
+    expect(stubAdapter.runOneShot).not.toHaveBeenCalled();
+    const sc = result.metadata?.sourceCounts as Record<string, number>;
+    expect(sc['too-small']).toBe(1);
+    expect(sc['artificial-intelligence']).toBeUndefined();
+    // Link is preserved as-is, no description block appended.
+    expect(result.text).toContain('![logo](media/image1.png)');
+    expect(result.text).not.toContain('Image description (source:');
+  });
+
+  test('appends an AI description after each describable image', async () => {
+    stubPandocOneImage(
+      400,
+      'Intro paragraph.\n\n![chart](media/media/image1.png)\n\nClosing paragraph.\n',
+    );
+    const adapterCalls: Array<{ prompt: string; opts: any }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string, opts?: any) {
+        adapterCalls.push({ prompt, opts });
+        return 'A line chart showing daily active users\nfrom Jan to Mar 2026, peaking at 12,400.';
+      },
+    } as any;
+
+    const result = await docxHandler({
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      filename: 'sample.docx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      outDir,
+      ingestionAdapter: stubAdapter,
+      ingestionModel: 'claude-sonnet-4-6',
+    });
+
+    expect(adapterCalls).toHaveLength(1);
+    expect(adapterCalls[0].prompt).toContain('image1.png');
+    expect(adapterCalls[0].opts.model).toBe('claude-sonnet-4-6');
+    expect(adapterCalls[0].opts.allowTools).toBe(true);
+
+    const sc = result.metadata?.sourceCounts as Record<string, number>;
+    expect(sc['artificial-intelligence']).toBe(1);
+
+    // The image link is preserved AND followed by the multi-line quoted block.
+    expect(result.text).toContain('![chart](media/image1.png)');
+    expect(result.text).toContain(
+      '> Image description (source: artificial-intelligence): A line chart showing daily active users',
+    );
+    expect(result.text).toContain('> from Jan to Mar 2026, peaking at 12,400.');
+
+    const images = result.metadata?.images as Array<{
+      source: string;
+      width: number | null;
+      aiCallDurationMs: number | null;
+      aiRetries: number;
+    }>;
+    expect(images[0].source).toBe('artificial-intelligence');
+    expect(images[0].width).toBe(400);
+    expect(images[0].aiCallDurationMs).toBeGreaterThanOrEqual(0);
+    expect(images[0].aiRetries).toBe(0);
+  });
+
+  test('rewrites HTML <img> tags (pandoc absolutizes when DOCX has inline styling) and appends AI description', async () => {
+    // Pandoc falls back to raw HTML <img> for images that carry inline width/
+    // height styling — anything markdown's `![](…)` can't represent. The src
+    // gets absolutized to the on-disk path inside the --extract-media dir.
+    runPandocSpy = jest
+      .spyOn(pandocModule, 'runPandoc')
+      .mockImplementation(async (args) => {
+        const extractArg = (args as string[]).find((a) =>
+          a.startsWith('--extract-media='),
+        )!;
+        const mediaRoot = extractArg.replace('--extract-media=', '');
+        const nested = path.join(mediaRoot, 'media');
+        fs.mkdirSync(nested, { recursive: true });
+        const abs = path.join(nested, 'image1.png');
+        fs.writeFileSync(abs, makePng(400, 400));
+        // Emit pandoc's exact HTML-img output shape: absolute path + inline style.
+        const stdout =
+          'Intro paragraph.\n\n' +
+          `<img src="${abs}" style="width:2.05in;height:2.79in" />\n\n` +
+          'Closing paragraph.\n';
+        return { stdout, stderr: '' };
+      });
+    const adapterCalls: Array<{ prompt: string }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string) {
+        adapterCalls.push({ prompt });
+        return 'A line chart showing daily active users.';
+      },
+    } as any;
+
+    const result = await docxHandler({
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      filename: 'styled.docx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      outDir,
+      ingestionAdapter: stubAdapter,
+    });
+
+    expect(adapterCalls).toHaveLength(1);
+    // Path was rewritten to the flattened relative form — no absolute path leaks.
+    expect(result.text).not.toMatch(/src="\/[^"]*media\/media\//);
+    expect(result.text).toContain('src="media/image1.png"');
+    // Inline style is preserved through the rewrite.
+    expect(result.text).toContain('style="width:2.05in;height:2.79in"');
+    // AI description is appended right after the <img> tag.
+    expect(result.text).toContain(
+      '> Image description (source: artificial-intelligence): A line chart showing daily active users.',
+    );
+    const sc = result.metadata?.sourceCounts as Record<string, number>;
+    expect(sc['artificial-intelligence']).toBe(1);
+  });
+
+  test('falls back to bare link when AI description fails twice', async () => {
+    stubPandocOneImage(
+      400,
+      'Intro.\n\n![chart](media/media/image1.png)\n',
+    );
+    const stubAdapter = {
+      async runOneShot() {
+        throw new Error('CLI exploded');
+      },
+    } as any;
+
+    const result = await docxHandler({
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      filename: 'fail.docx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      outDir,
+      ingestionAdapter: stubAdapter,
+    });
+
+    const sc = result.metadata?.sourceCounts as Record<string, number>;
+    expect(sc['ai-failed']).toBe(1);
+    expect(sc['artificial-intelligence']).toBeUndefined();
+    expect(result.text).toContain('![chart](media/image1.png)');
+    expect(result.text).not.toContain('Image description (source:');
   });
 
   test('returns empty mediaFiles when pandoc does not produce any media', async () => {
@@ -341,6 +527,9 @@ describe('docxHandler', () => {
     // We always pre-create the media dir (so we can walk it safely after);
     // but it should be empty and no image refs should leak into the text.
     expect(result.text).not.toContain('![');
+    // No images → empty sourceCounts.
+    expect(result.metadata?.sourceCounts).toEqual({});
+    expect(result.metadata?.images).toEqual([]);
   });
 
   test('propagates pandoc failures so the orchestrator can mark the entry failed', async () => {

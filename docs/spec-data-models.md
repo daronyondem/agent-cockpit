@@ -45,7 +45,7 @@ agent-cockpit/
 │       │   └── handlers/
 │       │       ├── index.ts            # pickHandler dispatch + ingestFile + UnsupportedFileTypeError
 │       │       ├── pdf.ts              # PDF page-by-page 150 DPI rasterization via unpdf + @napi-rs/canvas
-│       │       ├── docx.ts             # DOCX → GFM markdown via pandoc subprocess + flattened embedded media
+│       │       ├── docx.ts             # DOCX → GFM markdown via pandoc + per-image AI description (hybrid)
 │       │       ├── pptx.ts             # PPTX text/notes/media via adm-zip + fast-xml-parser, optional LO rasterization
 │       │       └── passthrough.ts      # Text (md/txt/json/...) + image passthrough with media copy
 │       ├── chatService.ts              # Conversation CRUD, messages, sessions
@@ -422,7 +422,7 @@ CREATE TABLE IF NOT EXISTS raw (
   status        TEXT NOT NULL,      -- 'ingesting'|'ingested'|'digesting'|'digested'|'failed'|'pending-delete'
   byte_length   INTEGER NOT NULL,
   mime_type     TEXT,               -- e.g. 'application/pdf'
-  handler       TEXT,               -- handler tag: 'pdf/rasterized-hybrid', 'docx/pandoc', 'pptx', 'passthrough/text', 'passthrough/image'
+  handler       TEXT,               -- handler tag: 'pdf/rasterized-hybrid', 'docx/pandoc-hybrid', 'pptx', 'passthrough/text', 'passthrough/image'
   uploaded_at   TEXT NOT NULL,      -- ISO 8601
   digested_at   TEXT,               -- ISO 8601 (NULL until digested)
   error_class   TEXT,               -- 'timeout'|'cli_error'|'malformed_output'|'schema_rejection'|'unknown'
