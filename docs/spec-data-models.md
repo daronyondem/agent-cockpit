@@ -42,11 +42,16 @@ agent-cockpit/
 │       │   ├── ingestion.ts            # KbIngestionService: per-workspace FIFO queue, enqueueUpload, deleteRaw, waitForIdle
 │       │   ├── db.ts                   # KbDatabase: per-workspace SQLite layer (better-sqlite3, WAL mode)
 │       │   ├── digest.ts              # KbDigestionService: per-raw CLI digestion, entry parsing, stringifyEntry
+│       │   ├── ingestion/
+│       │   │   ├── pageConversion.ts   # convertImageToMarkdown: shared per-image AI helper (PDF, DOCX, PPTX, passthrough)
+│       │   │   ├── pdfSignals.ts       # PDF per-page figure/table/text-extract signals for hybrid classification
+│       │   │   ├── pptxSignals.ts      # PPTX per-slide figure/chart/table signals (regex over raw namespaced XML)
+│       │   │   └── pptxSlideRender.ts  # LibreOffice + unpdf slide rasterization (extracted for jest.spyOn-based tests)
 │       │   └── handlers/
 │       │       ├── index.ts            # pickHandler dispatch + ingestFile + UnsupportedFileTypeError
-│       │       ├── pdf.ts              # PDF page-by-page 150 DPI rasterization via unpdf + @napi-rs/canvas
+│       │       ├── pdf.ts              # PDF page-by-page 150 DPI rasterization + hybrid pdfjs/AI per-page
 │       │       ├── docx.ts             # DOCX → GFM markdown via pandoc + per-image AI description (hybrid)
-│       │       ├── pptx.ts             # PPTX text/notes/media via adm-zip + fast-xml-parser, optional LO rasterization
+│       │       ├── pptx.ts             # PPTX per-slide hybrid: XML extract / AI / image-only via signals + LO rasterization
 │       │       └── passthrough.ts      # Text (md/txt/json/...) + image passthrough with media copy
 │       ├── chatService.ts              # Conversation CRUD, messages, sessions
 │       ├── settingsService.ts          # Settings I/O: read, write, legacy migration
@@ -422,7 +427,7 @@ CREATE TABLE IF NOT EXISTS raw (
   status        TEXT NOT NULL,      -- 'ingesting'|'ingested'|'digesting'|'digested'|'failed'|'pending-delete'
   byte_length   INTEGER NOT NULL,
   mime_type     TEXT,               -- e.g. 'application/pdf'
-  handler       TEXT,               -- handler tag: 'pdf/rasterized-hybrid', 'docx/pandoc-hybrid', 'pptx', 'passthrough/text', 'passthrough/image'
+  handler       TEXT,               -- handler tag: 'pdf/rasterized-hybrid', 'docx/pandoc-hybrid', 'pptx/hybrid', 'passthrough/text', 'passthrough/image'
   uploaded_at   TEXT NOT NULL,      -- ISO 8601
   digested_at   TEXT,               -- ISO 8601 (NULL until digested)
   error_class   TEXT,               -- 'timeout'|'cli_error'|'malformed_output'|'schema_rejection'|'unknown'
@@ -840,7 +845,7 @@ interface ExternalSessionEvent {
 | Folder segment max | 128 chars | db.ts | Per-segment length limit |
 | Slug max | 80 chars | digest.ts | Entry slug max length |
 | Tag max | 40 chars | digest.ts | Tag max length |
-| Upload size limit | 200 MB | chat.ts (multer) | Per-file upload cap |
+| Upload size limit | 1 GB | chat.ts (multer) | Per-file upload cap |
 | God node entry threshold | max(avg × 3, 10) | db.ts | Entries to flag as god node |
 | God node connection threshold | max(avg × 3, 3) | db.ts | Connections to flag as god node |
 

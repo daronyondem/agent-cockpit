@@ -2108,13 +2108,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   //
   // We use in-memory multer storage because the orchestrator needs the
   // buffer to compute the sha256 rawId *before* deciding where on disk
-  // the file belongs. 200 MB comfortably fits real-world PPTX decks and
+  // the file belongs. 1 GB comfortably fits real-world PPTX decks and
   // media-heavy PDFs — the conversation-attachment endpoint keeps its
   // own smaller limit since those uploads are a different use case.
-  const KB_UPLOAD_LIMIT_MB = 200;
+  const KB_UPLOAD_LIMIT_GB = 1;
   const kbUpload = multer({
     storage: multer.memoryStorage(),
-    limits: { fileSize: KB_UPLOAD_LIMIT_MB * 1024 * 1024, files: 1 },
+    limits: { fileSize: KB_UPLOAD_LIMIT_GB * 1024 * 1024 * 1024, files: 1 },
   });
 
   // Multer throws `LIMIT_FILE_SIZE` (and friends) via `next(err)` BEFORE
@@ -2127,7 +2127,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     kbUpload.single('file')(req, res, (err: unknown) => {
       if (err instanceof multer.MulterError) {
         const msg = err.code === 'LIMIT_FILE_SIZE'
-          ? `File exceeds the ${KB_UPLOAD_LIMIT_MB} MB upload limit.`
+          ? `File exceeds the ${KB_UPLOAD_LIMIT_GB} GB upload limit.`
           : err.message;
         res.status(400).json({ error: msg });
         return;
