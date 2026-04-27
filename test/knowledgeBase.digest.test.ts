@@ -753,16 +753,29 @@ Body.`;
 
   test('mid-session enqueue bumps total without resetting avg', async () => {
     const rawA = await seedRaw('alpha', 'a.md');
-    let rawBId: string | null = null;
-    let firstDone = false;
+    const rawBId = await seedRaw('beta', 'b.md');
+
+    // Gate the first digest's CLI call so the second enqueue is guaranteed
+    // to land while the session is still open. The previous form relied on
+    // a 5 ms timer winning the race against `seedRaw('beta')` on a slow CI
+    // runner — when it didn't, the first session drained before the second
+    // enqueue and `total` never reached 2.
+    let releaseFirst!: () => void;
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let signalFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      signalFirstStarted = resolve;
+    });
 
     backend.runOneShotImpl = async (prompt) => {
       const isA = prompt.includes('a.md');
-      // When the first (alpha) digest is mid-flight, stage a second raw
-      // and enqueue it so the still-open session sees the bump.
-      if (isA && !firstDone) {
-        firstDone = true;
+      if (isA) {
+        signalFirstStarted();
+        await firstHeld;
       }
+      // 10 ms keeps avgMsPerItem > 0 once digests complete.
       await new Promise((r) => setTimeout(r, 10));
       return `---
 title: ${isA ? 'A' : 'B'}
@@ -774,12 +787,15 @@ Body.`;
     };
 
     emitted.length = 0;
-    // Kick off the first digest; while it's running we'll queue a second.
     const firstPromise = digestion.enqueueDigest(hash, rawA);
-    // Let the runOneShot handler start; then enqueue a second raw.
-    await new Promise((r) => setTimeout(r, 5));
-    rawBId = await seedRaw('beta', 'b.md');
+    await firstStarted;
     const secondPromise = digestion.enqueueDigest(hash, rawBId);
+    // Spin until the session has registered the second raw (total = 2).
+    // Deterministic: not time-based, so CI machine speed can't race.
+    while (digestion.getSessionProgress(hash)?.total !== 2) {
+      await new Promise((r) => setImmediate(r));
+    }
+    releaseFirst();
     await Promise.all([firstPromise, secondPromise]);
 
     const progress = extractProgressFrames(emitted);
