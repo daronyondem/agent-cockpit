@@ -270,6 +270,25 @@ const IMAGE_MIME_BY_EXT: Record<string, string> = {
 
 const MAX_IMAGE_ATTACHMENTS = 5;
 
+// True when `basename` appears in `prompt` not as a prefix/suffix of a
+// longer filename. Required because filename chars (letters/digits/`.`/`_`/`-`)
+// flow into each other: e.g. `foo.png` is a substring of `foo.png.ai.png`,
+// so a naive `includes` would attach both files when only the longer one is
+// the intended target — overflowing Kiro's 10 MB attachment cap.
+function basenameAppearsAsToken(prompt: string, basename: string): boolean {
+  const isFilenameChar = (c: string) => /[A-Za-z0-9._-]/.test(c);
+  let from = 0;
+  while (true) {
+    const idx = prompt.indexOf(basename, from);
+    if (idx < 0) return false;
+    const before = idx === 0 ? '' : prompt[idx - 1];
+    const afterIdx = idx + basename.length;
+    const after = afterIdx >= prompt.length ? '' : prompt[afterIdx];
+    if (!isFilenameChar(before) && !isFilenameChar(after)) return true;
+    from = idx + 1;
+  }
+}
+
 export async function collectImageContentBlocks(
   prompt: string,
   workingDir: string | undefined,
@@ -287,7 +306,7 @@ export async function collectImageContentBlocks(
     const ext = path.extname(entry).toLowerCase();
     const mimeType = IMAGE_MIME_BY_EXT[ext];
     if (!mimeType) continue;
-    if (!prompt.includes(entry)) continue;
+    if (!basenameAppearsAsToken(prompt, entry)) continue;
     try {
       const filePath = path.join(workingDir, entry);
       const buf = await fsp.readFile(filePath);

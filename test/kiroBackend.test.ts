@@ -754,6 +754,28 @@ describe('collectImageContentBlocks', () => {
     const blocks = await collectImageContentBlocks(prompt, tmpDir);
     expect(blocks).toHaveLength(5);
   });
+
+  test('does not attach a basename that is only a prefix of the referenced filename', async () => {
+    // Reproduces the .ai.png sibling regression: only `foo.png.ai.png` is
+    // mentioned in the prompt, but `foo.png` is also on disk. Naive
+    // substring matching would attach both — over Kiro's 10 MB cap.
+    const aiBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xa1, 0xa2, 0xa3]);
+    const origBytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xb1, 0xb2, 0xb3]);
+    fs.writeFileSync(path.join(tmpDir, 'foo.png'), origBytes);
+    fs.writeFileSync(path.join(tmpDir, 'foo.png.ai.png'), aiBytes);
+    const blocks = await collectImageContentBlocks('Read `foo.png.ai.png` now.', tmpDir);
+    expect(blocks).toEqual([
+      { type: 'image', mimeType: 'image/png', data: aiBytes.toString('base64') },
+    ]);
+  });
+
+  test('does not attach a basename that is only a suffix of the referenced filename', async () => {
+    fs.writeFileSync(path.join(tmpDir, 'page.png'), Buffer.from([0x01]));
+    fs.writeFileSync(path.join(tmpDir, 'cover-page.png'), Buffer.from([0x02]));
+    const blocks = await collectImageContentBlocks('Read `cover-page.png` now.', tmpDir);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].data).toBe(Buffer.from([0x02]).toString('base64'));
+  });
 });
 
 describe('KiroAdapter.runOneShot image attachment', () => {
