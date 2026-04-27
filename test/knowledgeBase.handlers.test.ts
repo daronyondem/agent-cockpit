@@ -956,7 +956,7 @@ describe('passthroughHandler', () => {
     expect(result.metadata?.byteLength).toBe(MAX + 500);
   });
 
-  test('copies image files into media/ and embeds a reference', async () => {
+  test('copies image files into media/ and annotates source: image-only when no Ingestion CLI is configured', async () => {
     const png = Buffer.from([
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
     ]);
@@ -968,8 +968,95 @@ describe('passthroughHandler', () => {
     });
     expect(result.handler).toBe('passthrough/image');
     expect(result.mediaFiles).toEqual(['media/pic.png']);
+    expect(result.text).toMatch(/^> source: image-only \| note: no Ingestion CLI configured$/m);
     expect(result.text).toContain('![pic.png](media/pic.png)');
     expect(fs.existsSync(path.join(outDir, 'media', 'pic.png'))).toBe(true);
+    expect(result.metadata?.source).toBe('image-only');
+    const sc = result.metadata?.sourceCounts as Record<string, number>;
+    expect(sc['image-only']).toBe(1);
+    expect(sc['artificial-intelligence']).toBeUndefined();
+  });
+
+  test('calls the Ingestion CLI for image uploads and inlines AI Markdown above the image link', async () => {
+    const png = makePng(120, 80);
+    const adapterCalls: Array<{ prompt: string; opts: any }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string, opts?: any) {
+        adapterCalls.push({ prompt, opts });
+        return '## Whiteboard sketch\n\nA blue rectangle on a white background.';
+      },
+    } as any;
+    const result = await passthroughHandler({
+      buffer: png,
+      filename: 'sketch.png',
+      mimeType: 'image/png',
+      outDir,
+      ingestionAdapter: stubAdapter,
+      ingestionModel: 'claude-sonnet-4-6',
+    });
+    expect(adapterCalls).toHaveLength(1);
+    expect(adapterCalls[0].prompt).toContain('sketch.png');
+    expect(adapterCalls[0].opts.model).toBe('claude-sonnet-4-6');
+    expect(adapterCalls[0].opts.allowTools).toBe(true);
+    expect(result.text).toMatch(/^> source: artificial-intelligence$/m);
+    expect(result.text).toContain('Whiteboard sketch');
+    expect(result.text).toContain('A blue rectangle');
+    // AI body comes BEFORE the image link, then the image link still anchors the file.
+    const aiIdx = result.text.indexOf('Whiteboard sketch');
+    const imgIdx = result.text.indexOf('![sketch.png](media/sketch.png)');
+    expect(aiIdx).toBeGreaterThan(-1);
+    expect(imgIdx).toBeGreaterThan(aiIdx);
+    expect(result.metadata?.source).toBe('artificial-intelligence');
+    expect((result.metadata?.sourceCounts as Record<string, number>)['artificial-intelligence']).toBe(1);
+    expect(result.metadata?.aiRetries).toBe(0);
+    expect(typeof result.metadata?.aiCallDurationMs).toBe('number');
+  });
+
+  test('falls back to source: image-only when AI conversion fails after retry', async () => {
+    const png = makePng(60, 60);
+    const stubAdapter = {
+      async runOneShot() {
+        throw new Error('CLI exploded');
+      },
+    } as any;
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const result = await passthroughHandler({
+        buffer: png,
+        filename: 'broken.png',
+        mimeType: 'image/png',
+        outDir,
+        ingestionAdapter: stubAdapter,
+      });
+      expect(result.text).toMatch(/^> source: image-only \| note: AI conversion failed after retry$/m);
+      expect(result.text).toContain('![broken.png](media/broken.png)');
+      expect(result.metadata?.source).toBe('image-only');
+      expect(result.metadata?.aiRetries).toBe(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test('skips AI for SVG uploads and falls back to source: image-only', async () => {
+    const svg = Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="red"/></svg>');
+    const adapterCalls: Array<{ prompt: string; opts: any }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string, opts?: any) {
+        adapterCalls.push({ prompt, opts });
+        return 'should not be called';
+      },
+    } as any;
+    const result = await passthroughHandler({
+      buffer: svg,
+      filename: 'icon.svg',
+      mimeType: 'image/svg+xml',
+      outDir,
+      ingestionAdapter: stubAdapter,
+    });
+    expect(adapterCalls).toHaveLength(0);
+    expect(result.text).toMatch(/^> source: image-only \| note: SVG not eligible for AI conversion$/m);
+    expect(result.text).toContain('![icon.svg](media/icon.svg)');
+    expect(result.metadata?.source).toBe('image-only');
   });
 
   test('passthroughSupports matches known extensions', () => {
