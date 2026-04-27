@@ -993,6 +993,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     if (!content || typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ error: 'Message content required' });
     }
+    console.log(`[diag][chat] POST /message conv=${convId.slice(0,8)} contentLen=${content.length} activeStreamHas=${activeStreams.has(convId)} wsConnected=${wsFns?.isConnected(convId) ?? '?'}`);
 
     const conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
@@ -1150,6 +1151,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     });
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
     activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });
+    console.log(`[diag][chat] activeStreams.set conv=${convId.slice(0,8)} backend=${backendId} userMsgId=${userMsg?.id ?? 'null'} userMsgTs=${userMsg?.timestamp ?? 'null'}`);
 
     // Always pipe the stream — if no WS is connected yet (e.g. the user
     // arrived via a stale page after a long sleep / network change), the
