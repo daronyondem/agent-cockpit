@@ -601,7 +601,7 @@ describe('pptxHandler', () => {
     expect(fs.existsSync(path.join(outDir, result.mediaFiles[0]))).toBe(true);
     expect(result.metadata?.slideCount).toBe(2);
     expect(result.metadata?.slidesToImagesRequested).toBe(false);
-    expect(result.metadata?.rasterizedSlideCount).toBe(0);
+    expect(result.metadata?.renderedSlideCount).toBe(0);
     const sc = result.metadata?.sourceCounts as Record<string, number>;
     expect(sc['xml-extract']).toBe(2);
     expect(sc['artificial-intelligence']).toBeUndefined();
@@ -616,6 +616,49 @@ describe('pptxHandler', () => {
     expect(slidesMeta).toHaveLength(2);
     expect(slidesMeta[0].source).toBe('xml-extract');
     expect(slidesMeta[0].hasImage).toBe(false);
+  });
+
+  test('preserves paragraph boundaries on xml-extract slides (bullets stay on separate lines)', async () => {
+    // Synthesize a slide with four `<a:p>` paragraphs in one text body — the
+    // common case for a bullet list. Before the paragraph-aware walker, all
+    // four runs collapsed to a single space-joined line in `text.md`, which
+    // destroyed the bullet structure for any slide that didn't trigger the
+    // AI path. This test pins the fix.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const AdmZip = require('adm-zip');
+    const zip = new AdmZip();
+    const slideXml = `<?xml version="1.0" encoding="UTF-8"?>
+<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"
+       xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">
+  <p:cSld><p:spTree>
+    <p:sp><p:txBody>
+      <a:p><a:r><a:t>Essentials for high-performance agents</a:t></a:r></a:p>
+      <a:p><a:r><a:t>Rich, connected context</a:t></a:r></a:p>
+      <a:p><a:r><a:t>Unified access to data and signals</a:t></a:r></a:p>
+      <a:p><a:r><a:t>Governance, observability, and trust</a:t></a:r></a:p>
+    </p:txBody></p:sp>
+  </p:spTree></p:cSld>
+</p:sld>`;
+    zip.addFile('ppt/slides/slide1.xml', Buffer.from(slideXml));
+    const buffer: Buffer = zip.toBuffer();
+
+    const result = await pptxHandler({
+      buffer,
+      filename: 'paragraphs.pptx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      outDir,
+    });
+
+    // Every paragraph survives as its own line/block, separated by blank
+    // lines so markdown renders them as paragraphs.
+    expect(result.text).toMatch(
+      /Essentials for high-performance agents\n\nRich, connected context\n\nUnified access to data and signals\n\nGovernance, observability, and trust/,
+    );
+    // And the old flat-join must NOT appear anywhere.
+    expect(result.text).not.toMatch(
+      /Essentials for high-performance agents Rich, connected context/,
+    );
   });
 
   test('skips hidden slides and renumbers survivors to match rasterized PNGs', async () => {
@@ -686,7 +729,7 @@ describe('pptxHandler', () => {
       });
       expect(result.metadata?.slidesToImagesRequested).toBe(true);
       expect(result.metadata?.slideImagesWarning).toMatch(/LibreOffice/i);
-      expect(result.metadata?.rasterizedSlideCount).toBe(0);
+      expect(result.metadata?.renderedSlideCount).toBe(0);
       expect(result.text).toMatch(/Slide rasterization note/);
       // Plain-text fixture is still safe-text → xml-extract regardless of
       // rasterization availability, so the body content survives.
@@ -758,7 +801,7 @@ describe('pptxHandler', () => {
       expect(result.text).toMatch(/!\[Slide 2\]\(slides\/slide-002\.png\)/);
       const sc = result.metadata?.sourceCounts as Record<string, number>;
       expect(sc['image-only']).toBe(2);
-      expect(result.metadata?.rasterizedSlideCount).toBe(2);
+      expect(result.metadata?.renderedSlideCount).toBe(2);
     } finally {
       signalsSpy.mockRestore();
       rasterSpy.mockRestore();
