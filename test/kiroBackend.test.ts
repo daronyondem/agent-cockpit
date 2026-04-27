@@ -1,9 +1,10 @@
 import { BaseBackendAdapter } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
-import { KiroAdapter, extractKiroToolDetails, collectImageContentBlocks } from '../src/services/backends/kiro';
+import { KiroAdapter, extractKiroToolDetails, collectImageContentBlocks, pngHasAlpha, reencodeForKiro, KIRO_MAX_LONG_EDGE_PX } from '../src/services/backends/kiro';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as napiCanvas from '@napi-rs/canvas';
 import type { BackendMetadata, SendMessageResult } from '../src/types';
 
 // ── KiroAdapter metadata ────────────────────────────────────────────────────
@@ -683,6 +684,43 @@ describe('KiroAdapter.runOneShot', () => {
     // Don't respond to anything — let the timeout fire
     await expect(resultPromise).rejects.toThrow(/timed out after 100ms/);
   });
+
+  test('surfaces JSON-RPC error code and data in the rejected error message', async () => {
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp' });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    sim.respond(newReq.id, { sessionId: 'sess-err' });
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+
+    // Emit a JSON-RPC error response with code AND data — the AcpClient should
+    // capture both onto the rejected Error so the diagnostic surfaces upstream.
+    sim.proc.stdout.emit('data', Buffer.from(JSON.stringify({
+      jsonrpc: '2.0',
+      id: promptReq.id,
+      error: {
+        code: -32603,
+        message: 'Internal error',
+        data: { reason: 'Prompt is too long', tokens: 250000 },
+      },
+    }) + '\n'));
+
+    await expect(resultPromise).rejects.toThrow(/code=-32603/);
+    await expect(resultPromise).rejects.toThrow(/Prompt is too long/);
+  });
 });
 
 // ── collectImageContentBlocks ──────────────────────────────────────────────
@@ -775,6 +813,126 @@ describe('collectImageContentBlocks', () => {
     const blocks = await collectImageContentBlocks('Read `cover-page.png` now.', tmpDir);
     expect(blocks).toHaveLength(1);
     expect(blocks[0].data).toBe(Buffer.from([0x02]).toString('base64'));
+  });
+
+  test('flattens RGBA PNG attachments to JPEG before encoding', async () => {
+    const canvas = napiCanvas.createCanvas(8, 8);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'rgba(255,0,0,0.5)';
+    ctx.fillRect(0, 0, 8, 8);
+    const rgbaPng = canvas.toBuffer('image/png');
+    expect(rgbaPng[25]).toBe(6); // sanity: source is color type 6 (RGBA)
+    fs.writeFileSync(path.join(tmpDir, 'pic.png'), rgbaPng);
+
+    const blocks = await collectImageContentBlocks('Look at `pic.png`', tmpDir);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].mimeType).toBe('image/jpeg');
+    const decoded = Buffer.from(blocks[0].data, 'base64');
+    expect(decoded[0]).toBe(0xff);
+    expect(decoded[1]).toBe(0xd8); // JPEG SOI marker
+  });
+
+  test('downscales oversized image attachments to fit Kiro long-edge cap', async () => {
+    // Large no-alpha image → dimension-only re-encode path. Kept just above
+    // the cap to bound canvas memory usage across the full test file.
+    const canvas = napiCanvas.createCanvas(2000, 1000);
+    canvas.getContext('2d').fillRect(0, 0, 2000, 1000);
+    const bigJpeg = canvas.toBuffer('image/jpeg', 92);
+    fs.writeFileSync(path.join(tmpDir, 'big.jpg'), bigJpeg);
+
+    const blocks = await collectImageContentBlocks('Look at `big.jpg`', tmpDir);
+    expect(blocks).toHaveLength(1);
+    expect(blocks[0].mimeType).toBe('image/jpeg');
+    const decoded = await napiCanvas.loadImage(Buffer.from(blocks[0].data, 'base64'));
+    expect(Math.max(decoded.width, decoded.height)).toBe(KIRO_MAX_LONG_EDGE_PX);
+  });
+});
+
+describe('pngHasAlpha', () => {
+  test('returns true for color type 6 (RGBA)', () => {
+    const canvas = napiCanvas.createCanvas(2, 2);
+    canvas.getContext('2d').fillRect(0, 0, 2, 2);
+    const buf = canvas.toBuffer('image/png');
+    expect(buf[25]).toBe(6);
+    expect(pngHasAlpha(buf)).toBe(true);
+  });
+
+  test('returns true for color type 4 (grayscale + alpha)', () => {
+    // Synthesize a minimal PNG buffer with the IHDR color-type byte set to 4.
+    // We only need the first 26 bytes for the helper to inspect.
+    const buf = Buffer.alloc(26);
+    buf[0] = 0x89; buf[1] = 0x50; buf[2] = 0x4e; buf[3] = 0x47;
+    buf[25] = 4;
+    expect(pngHasAlpha(buf)).toBe(true);
+  });
+
+  test('returns false for color type 2 (RGB)', () => {
+    const buf = Buffer.alloc(26);
+    buf[0] = 0x89; buf[1] = 0x50; buf[2] = 0x4e; buf[3] = 0x47;
+    buf[25] = 2;
+    expect(pngHasAlpha(buf)).toBe(false);
+  });
+
+  test('returns false for non-PNG buffers', () => {
+    const jpeg = Buffer.from([0xff, 0xd8, 0xff, 0xe0, ...new Array(22).fill(0)]);
+    expect(pngHasAlpha(jpeg)).toBe(false);
+  });
+
+  test('returns false for buffers shorter than the IHDR color-type byte', () => {
+    expect(pngHasAlpha(Buffer.from([0x89, 0x50, 0x4e, 0x47]))).toBe(false);
+  });
+});
+
+describe('reencodeForKiro', () => {
+  test('produces a JPEG buffer from a small RGBA PNG (alpha-flatten path)', async () => {
+    const canvas = napiCanvas.createCanvas(4, 4);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = 'rgba(0,128,255,0.7)';
+    ctx.fillRect(0, 0, 4, 4);
+    const rgba = canvas.toBuffer('image/png');
+
+    const out = await reencodeForKiro(rgba);
+    expect(out).not.toBeNull();
+    expect(out!.mimeType).toBe('image/jpeg');
+    expect(out!.buffer[0]).toBe(0xff);
+    expect(out!.buffer[1]).toBe(0xd8);
+    // 4x4 input is well below the cap, so dimensions are preserved.
+    const decoded = await napiCanvas.loadImage(out!.buffer);
+    expect(decoded.width).toBe(4);
+    expect(decoded.height).toBe(4);
+  });
+
+  test('downscales when long edge exceeds KIRO_MAX_LONG_EDGE_PX', async () => {
+    // 2000x1000 is comfortably above the 1568 cap; small enough to keep the
+    // jest worker's canvas memory footprint sane across all tests in this file.
+    const canvas = napiCanvas.createCanvas(2000, 1000);
+    canvas.getContext('2d').fillRect(0, 0, 2000, 1000);
+    const big = canvas.toBuffer('image/jpeg', 92);
+
+    const out = await reencodeForKiro(big);
+    expect(out).not.toBeNull();
+    expect(out!.mimeType).toBe('image/jpeg');
+    const decoded = await napiCanvas.loadImage(out!.buffer);
+    expect(Math.max(decoded.width, decoded.height)).toBe(KIRO_MAX_LONG_EDGE_PX);
+    // Aspect ratio preserved (2000:1000 → 1568:784).
+    expect(decoded.width).toBe(1568);
+    expect(decoded.height).toBe(784);
+  });
+
+  test('returns null for an in-range non-alpha image (caller keeps original)', async () => {
+    // Canvas-emitted JPEG: no alpha channel, well below the dimension cap.
+    const canvas = napiCanvas.createCanvas(800, 600);
+    canvas.getContext('2d').fillRect(0, 0, 800, 600);
+    const small = canvas.toBuffer('image/jpeg', 92);
+
+    const out = await reencodeForKiro(small);
+    expect(out).toBeNull();
+  });
+
+  test('returns null for an undecodable buffer', async () => {
+    const garbage = Buffer.from('not an image at all');
+    const out = await reencodeForKiro(garbage);
+    expect(out).toBeNull();
   });
 });
 
