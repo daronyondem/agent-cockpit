@@ -159,12 +159,12 @@ describe('convertImageToMarkdown', () => {
     expect(opts?.timeoutMs).toBe(60_000);
   });
 
-  test('default timeout is 3 minutes when not specified', async () => {
+  test('default timeout is 10 minutes when not specified', async () => {
     const adapter = new StubAdapter(async () => 'ok');
 
     await convertImageToMarkdown(IMAGE_PATH, { adapter });
 
-    expect(adapter.calls[0].opts?.timeoutMs).toBe(3 * 60_000);
+    expect(adapter.calls[0].opts?.timeoutMs).toBe(10 * 60_000);
   });
 });
 

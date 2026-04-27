@@ -41,8 +41,9 @@ export const IMAGE_TO_MARKDOWN_PROMPT_TEMPLATE = (imageBasename: string): string
 - Include captions or labels that accompany figures/tables.
 - Output Markdown only. No preamble, no explanation, no code fences around the result.`;
 
-/** Default per-image timeout (3 min). Digestion uses 15 min for whole docs. */
-const DEFAULT_TIMEOUT_MS = 3 * 60_000;
+/** Default per-image timeout (10 min). Digestion uses an adaptive
+ *  `max(30 min, pageCount × 10 min)` for whole-document calls. */
+const DEFAULT_TIMEOUT_MS = 10 * 60_000;
 
 /** Cap on the long edge (px) of images sent to a CLI's vision model. Token
  *  cost scales with pixel count and providers reject inputs over ~5 MB; 2576

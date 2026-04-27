@@ -574,11 +574,23 @@ export class KbDigestionService {
       substep: { rawId, text: 'Running CLI analysis\u2026' },
     });
 
+    // Adaptive timeout: scale with the document's unit count so large
+    // multi-hundred-page PDFs aren't killed mid-run, but small docs still
+    // bail quickly on stalls. `pageCount` (PDFs) and `slideCount` (PPTX)
+    // are written by hybrid handlers; other formats fall through to the
+    // 30-minute floor.
+    const handlerMeta = convertedMeta.metadata as Record<string, unknown> | undefined;
+    const unitCount =
+      typeof handlerMeta?.pageCount === 'number' ? handlerMeta.pageCount :
+      typeof handlerMeta?.slideCount === 'number' ? handlerMeta.slideCount :
+      0;
+    const digestTimeoutMs = Math.max(30 * 60_000, unitCount * 10 * 60_000);
+
     let rawOutput = '';
     const runOptions: RunOneShotOptions = {
       model: cliModel,
       effort: cliEffort,
-      timeoutMs: 15 * 60_000, // 15 min — large rasterized PDFs can take a long time
+      timeoutMs: digestTimeoutMs,
       workingDir: this.chatService.getKbKnowledgeDir(hash),
       allowTools: true,
     };

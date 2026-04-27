@@ -1019,3 +1019,55 @@ Substep body.`;
     expect(texts.some((t) => /Pars/i.test(t))).toBe(true);
   });
 });
+
+// ─── Adaptive digest timeout ────────────────────────────────────────────────
+
+describe('adaptive digest timeout', () => {
+  // Helper: overwrite the converted meta.json after seedRaw so the digest
+  // pipeline reads the desired handler metadata without needing a real
+  // PDF/PPTX handler in the test path.
+  async function seedWithMeta(metadata: Record<string, unknown>): Promise<string> {
+    const rawId = await seedRaw('body', 'doc.md');
+    const metaPath = path.join(chatService.getKbConvertedDir(hash), rawId, 'meta.json');
+    fs.writeFileSync(metaPath, JSON.stringify({ metadata }));
+    return rawId;
+  }
+
+  function stubMinimalEntry() {
+    backend.runOneShotImpl = async () => `---
+title: T
+slug: t
+summary: s
+tags: []
+---
+body.`;
+  }
+
+  test('falls back to 30-minute floor when no pageCount/slideCount is present', async () => {
+    const rawId = await seedWithMeta({});
+    stubMinimalEntry();
+    await digestion.enqueueDigest(hash, rawId);
+    expect(backend.calls[0].opts?.timeoutMs).toBe(30 * 60_000);
+  });
+
+  test('scales to pageCount × 10 minutes for large PDFs', async () => {
+    const rawId = await seedWithMeta({ pageCount: 185, rasterDpi: 150 });
+    stubMinimalEntry();
+    await digestion.enqueueDigest(hash, rawId);
+    expect(backend.calls[0].opts?.timeoutMs).toBe(185 * 10 * 60_000);
+  });
+
+  test('uses slideCount × 10 minutes for PPTX', async () => {
+    const rawId = await seedWithMeta({ slideCount: 50 });
+    stubMinimalEntry();
+    await digestion.enqueueDigest(hash, rawId);
+    expect(backend.calls[0].opts?.timeoutMs).toBe(50 * 10 * 60_000);
+  });
+
+  test('keeps the 30-minute floor when the unit count is small', async () => {
+    const rawId = await seedWithMeta({ pageCount: 2 });
+    stubMinimalEntry();
+    await digestion.enqueueDigest(hash, rawId);
+    expect(backend.calls[0].opts?.timeoutMs).toBe(30 * 60_000);
+  });
+});

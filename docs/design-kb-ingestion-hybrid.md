@@ -540,7 +540,7 @@ flowchart LR
 1. **`tableLikely` heuristic threshold tuning.** What X-alignment tolerance and minimum row count should trigger `tableLikely=true`? Empirically tune on a corpus of real PDFs.
 2. **DOCX width threshold edge cases.** 100px is the chosen cutoff for "decorative." Are there real-world charts narrower than 100px? Probably rare but worth verifying with a few sample docs.
 3. **PPTX without `convertSlidesToImages`.** Should we offer to enable it automatically when an Ingestion CLI is configured, or keep it as a separate user choice? Currently kept separate for clarity, but the dependency is awkward.
-4. **AI converter timeout per call.** Current digestion uses 15 min. For per-page conversion, 2-3 min per call seems more appropriate. Make it a setting?
+4. **AI converter timeout per call.** ~~Current digestion uses 15 min. For per-page conversion, 2-3 min per call seems more appropriate. Make it a setting?~~ **Resolved.** Per-image timeout bumped to 10 min (`pageConversion.ts:DEFAULT_TIMEOUT_MS`); per-document digestion is now adaptive — `digestTimeoutMs = max(30 min, unitCount × 10 min)` where `unitCount` is `pageCount` (PDFs) or `slideCount` (PPTX), defaulting to the 30 min floor for handlers that don't report a unit count. Not a user-facing setting; the heuristic covers all observed inputs.
 5. **Re-digestion of existing entries.** When this design ships, should existing `pdf/rasterized` raws be auto-reingested under `pdf/rasterized-hybrid` to benefit from the new flow? Or wait for a manual user action?
 
 ## 17. Future Work (Out of Scope for This Design)

@@ -830,7 +830,7 @@ interface ExternalSessionEvent {
 | `SYNTHESIS_BATCH_SIZE` | 10 | dream.ts | Entries per synthesis CLI batch |
 | `EMBED_BATCH_SIZE` | 50 | dream.ts | Texts per Ollama embedding call |
 | `DREAM_TIMEOUT_MS` | 1,200,000 (20 min) | dream.ts | Per-CLI-call timeout |
-| `DIGEST_TIMEOUT_MS` | 900,000 (15 min) | digest.ts | Per-CLI-call timeout |
+| `digestTimeoutMs` | adaptive: `max(30 min, pageCount × 10 min)` | digest.ts | Per-CLI-call timeout, scales with handler `pageCount`/`slideCount` |
 | `DISCOVERY_CANDIDATE_CAP` | 50 | dream.ts | Max connection candidates per run |
 | `DISCOVERY_BATCH_SIZE` | 5 | dream.ts | Candidates per discovery CLI batch |
 | `DISCOVERY_EMBEDDING_TOP_K` | 10 | dream.ts | Embedding similarity search limit |
