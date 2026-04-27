@@ -845,7 +845,7 @@ interface ExternalSessionEvent {
 | Folder segment max | 128 chars | db.ts | Per-segment length limit |
 | Slug max | 80 chars | digest.ts | Entry slug max length |
 | Tag max | 40 chars | digest.ts | Tag max length |
-| Upload size limit | 200 MB | chat.ts (multer) | Per-file upload cap |
+| Upload size limit | 1 GB | chat.ts (multer) | Per-file upload cap |
 | God node entry threshold | max(avg × 3, 10) | db.ts | Entries to flag as god node |
 | God node connection threshold | max(avg × 3, 3) | db.ts | Connections to flag as god node |
 
