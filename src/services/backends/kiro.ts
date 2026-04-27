@@ -2,6 +2,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import { promises as fsp } from 'fs';
 import path from 'path';
 import os from 'os';
+import * as napiCanvas from '@napi-rs/canvas';
 import { BaseBackendAdapter, type RunOneShotOptions } from './base';
 import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUtils';
 import type {
@@ -273,6 +274,66 @@ const IMAGE_MIME_BY_EXT: Record<string, string> = {
 
 const MAX_IMAGE_ATTACHMENTS = 5;
 
+// Kiro routes through AWS Bedrock for Anthropic models. Empirically, Bedrock's
+// Opus 4.7 deployment rejects images at the documented Anthropic-API max of
+// 2576 px on the long edge (`ValidationException` wrapped as JSON-RPC -32603),
+// so for Kiro attachments we cap at the prior-Opus 1568 px limit which Bedrock
+// has had longer to support. KB ingestion's `MAX_LONG_EDGE_PX = 2576` is left
+// untouched — the higher cap is correct for Claude Code (direct Anthropic API).
+export const KIRO_MAX_LONG_EDGE_PX = 1568;
+
+// True if `buf` is a PNG with an alpha channel (color type 4 = grayscale+alpha,
+// 6 = RGBA). The PNG color-type byte sits at fixed offset 25: 8-byte signature
+// + 4-byte chunk length + 4-byte chunk type ("IHDR") + 4-byte width +
+// 4-byte height + 1-byte bit depth = 25. RGBA PNGs are one of the input shapes
+// that triggers Bedrock's `ValidationException` so we re-encode through JPEG
+// (which has no alpha channel) before attaching.
+export function pngHasAlpha(buf: Buffer): boolean {
+  if (buf.length < 26) return false;
+  if (buf[0] !== 0x89 || buf[1] !== 0x50 || buf[2] !== 0x4e || buf[3] !== 0x47) return false;
+  const colorType = buf[25];
+  return colorType === 4 || colorType === 6;
+}
+
+// Re-encode `buf` as JPEG@92 over a white background, downscaling so the long
+// edge fits within `KIRO_MAX_LONG_EDGE_PX`. Returns `null` when no transform
+// is needed (image is non-alpha and within the dimension cap), and also when
+// decoding/encoding fails — in both cases the caller should send the original
+// bytes.
+//
+// Both gates are required: empirical testing showed Bedrock rejects RGBA PNG
+// at 2576 px AND at 1568 px, and rejects RGB JPEG at 2576 px — only RGB JPEG
+// at 1568 px is accepted. JPEG (no alpha channel) covers the alpha gate; the
+// downscale + white background covers the dimension gate.
+export async function reencodeForKiro(
+  buf: Buffer,
+): Promise<{ buffer: Buffer; mimeType: string } | null> {
+  // Cheap pre-flight: any real image (PNG/JPEG/GIF/WebP) is well over 64 bytes
+  // even for 1x1 dimensions. Skipping `loadImage` for tiny buffers avoids
+  // unnecessary native-decoder work on synthetic test fixtures and malformed
+  // attachments.
+  if (buf.length < 64) return null;
+  const hasAlpha = pngHasAlpha(buf);
+  let img: Awaited<ReturnType<typeof napiCanvas.loadImage>>;
+  try {
+    img = await napiCanvas.loadImage(buf);
+  } catch {
+    return null;
+  }
+  const longEdge = Math.max(img.width, img.height);
+  const tooLarge = longEdge > KIRO_MAX_LONG_EDGE_PX;
+  if (!hasAlpha && !tooLarge) return null;
+  const scale = tooLarge ? KIRO_MAX_LONG_EDGE_PX / longEdge : 1;
+  const w = Math.max(1, Math.round(img.width * scale));
+  const h = Math.max(1, Math.round(img.height * scale));
+  const canvas = napiCanvas.createCanvas(w, h);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'white';
+  ctx.fillRect(0, 0, w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  return { buffer: canvas.toBuffer('image/jpeg', 92), mimeType: 'image/jpeg' };
+}
+
 // True when `basename` appears in `prompt` not as a prefix/suffix of a
 // longer filename. Required because filename chars (letters/digits/`.`/`_`/`-`)
 // flow into each other: e.g. `foo.png` is a substring of `foo.png.ai.png`,
@@ -313,7 +374,14 @@ export async function collectImageContentBlocks(
     try {
       const filePath = path.join(workingDir, entry);
       const buf = await fsp.readFile(filePath);
-      blocks.push({ type: 'image', mimeType, data: buf.toString('base64') });
+      let outBuf: Buffer = buf;
+      let outMime = mimeType;
+      const reencoded = await reencodeForKiro(buf);
+      if (reencoded) {
+        outBuf = reencoded.buffer;
+        outMime = reencoded.mimeType;
+      }
+      blocks.push({ type: 'image', mimeType: outMime, data: outBuf.toString('base64') });
     } catch {
       // skip unreadable files
     }
