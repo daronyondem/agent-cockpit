@@ -33,7 +33,10 @@ import { promises as fsp } from 'fs';
 import * as napiCanvas from '@napi-rs/canvas';
 import { runPandoc } from '../pandoc';
 import type { Handler, HandlerResult } from './types';
-import { convertImageToMarkdown } from '../ingestion/pageConversion';
+import {
+  convertImageToMarkdown,
+  ensureAiReadyImage,
+} from '../ingestion/pageConversion';
 
 /** Below this pixel width an image is treated as decorative and not described. */
 const MIN_DESCRIBABLE_WIDTH = 100;
@@ -183,9 +186,11 @@ export const docxHandler: Handler = async ({
     }
 
     // Per-image classification + AI description pass. Order matches `mediaFiles`
-    // so the metadata reflects the order pandoc emitted them.
+    // so the metadata reflects the order pandoc emitted them. We snapshot the
+    // list first because we may append `.ai.png` siblings during the loop.
     const imageRecords: ImageRecord[] = [];
-    for (const rel of mediaFiles) {
+    const originalMediaRels = mediaFiles.slice();
+    for (const rel of originalMediaRels) {
       const abs = path.join(outDir, rel);
       let width: number | null = null;
       try {
@@ -208,9 +213,25 @@ export const docxHandler: Handler = async ({
         continue;
       }
 
+      // For describable images, write a `.ai.png` sibling when the long edge
+      // exceeds the vision-token cap and rewrite this image's references in
+      // the markdown to point at the sibling. The AI call also uses the
+      // sibling. The original is preserved on disk for KB Browser.
+      let aiAbs = abs;
+      let aiRel = rel;
+      const sidecarAbs = abs + '.ai.png';
+      const sidecarRel = rel + '.ai.png';
+      const resolved = await ensureAiReadyImage(abs, sidecarAbs);
+      if (resolved !== abs) {
+        aiAbs = sidecarAbs;
+        aiRel = sidecarRel;
+        mediaFiles.push(sidecarRel);
+        markdown = rewriteRefsToSibling(markdown, rel, sidecarRel);
+      }
+
       if (!ingestionAdapter) {
         imageRecords.push({
-          mediaPath: rel,
+          mediaPath: aiRel,
           width,
           source: 'no-adapter',
           aiCallDurationMs: null,
@@ -224,7 +245,7 @@ export const docxHandler: Handler = async ({
       let retried = false;
       let aiError: string | null = null;
       try {
-        const result = await convertImageToMarkdown(abs, {
+        const result = await convertImageToMarkdown(aiAbs, {
           adapter: ingestionAdapter,
           model: ingestionModel,
           effort: ingestionEffort,
@@ -237,18 +258,18 @@ export const docxHandler: Handler = async ({
       const aiCallDurationMs = Date.now() - startedAt;
 
       if (description !== null) {
-        markdown = augmentImageReference(markdown, rel, description);
+        markdown = augmentImageReference(markdown, aiRel, description);
         imageRecords.push({
-          mediaPath: rel,
+          mediaPath: aiRel,
           width,
           source: 'artificial-intelligence',
           aiCallDurationMs,
           aiRetries: retried ? 1 : 0,
         });
       } else {
-        console.warn(`[kb/docx] AI description failed for ${rel} of "${filename}": ${aiError}`);
+        console.warn(`[kb/docx] AI description failed for ${aiRel} of "${filename}": ${aiError}`);
         imageRecords.push({
-          mediaPath: rel,
+          mediaPath: aiRel,
           width,
           source: 'ai-failed',
           aiCallDurationMs,
@@ -306,6 +327,19 @@ function findFlattenedRel(src: string, mediaFiles: string[]): string | null {
       return mBase === flatBase || mBase.startsWith(stem + '-');
     }) ?? null
   );
+}
+
+/**
+ * Replace every link target equal to `oldRel` with `newRel` in the markdown.
+ * Handles both pandoc output forms — `![alt](oldRel)` and `<img src="oldRel">`.
+ * Used after an oversized image's `.ai.png` sibling is written so digestion
+ * follows the link to the downscaled copy that fits the vision-token cap.
+ */
+function rewriteRefsToSibling(markdown: string, oldRel: string, newRel: string): string {
+  const escaped = oldRel.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const mdRe = new RegExp(`(!\\[[^\\]]*\\]\\()${escaped}(\\))`, 'g');
+  const htmlRe = new RegExp(`(<img\\b[^>]*?\\bsrc=")${escaped}("[^>]*?>)`, 'gi');
+  return markdown.replace(mdRe, `$1${newRel}$2`).replace(htmlRe, `$1${newRel}$2`);
 }
 
 /**

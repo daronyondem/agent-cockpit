@@ -15,7 +15,10 @@
 import path from 'path';
 import { promises as fsp } from 'fs';
 import type { Handler, HandlerResult } from './types';
-import { convertImageToMarkdown } from '../ingestion/pageConversion';
+import {
+  convertImageToMarkdown,
+  ensureAiReadyImage,
+} from '../ingestion/pageConversion';
 
 const TEXT_EXTS = new Set([
   '.txt',
@@ -104,6 +107,18 @@ export const passthroughHandler: Handler = async ({
     await fsp.writeFile(mediaPath, buffer);
     const relMedia = path.join('media', safeName);
 
+    // If the image's long edge is over the vision-token cap, write a
+    // downscaled `.ai.png` sibling and reference *that* from `text.md` —
+    // both ingestion-time AI and digestion-time CLI reads stay under the
+    // cap. SVG and other formats `@napi-rs/canvas` can't decode pass
+    // through unchanged.
+    const aiSidecarAbs = mediaPath + '.ai.png';
+    const aiSidecarRel = relMedia + '.ai.png';
+    const aiPath = await ensureAiReadyImage(mediaPath, aiSidecarAbs);
+    const downscaled = aiPath !== mediaPath;
+    const linkRel = downscaled ? aiSidecarRel : relMedia;
+    const mediaFiles = downscaled ? [relMedia, aiSidecarRel] : [relMedia];
+
     const aiEligible = AI_ELIGIBLE_IMAGE_EXTS.has(ext);
     let source: ImageSource = 'image-only';
     let aiMarkdown: string | null = null;
@@ -118,7 +133,7 @@ export const passthroughHandler: Handler = async ({
     } else {
       const startedAt = Date.now();
       try {
-        const result = await convertImageToMarkdown(mediaPath, {
+        const result = await convertImageToMarkdown(aiPath, {
           adapter: ingestionAdapter,
           model: ingestionModel,
           effort: ingestionEffort,
@@ -140,14 +155,14 @@ export const passthroughHandler: Handler = async ({
     if (aiMarkdown) {
       lines.push(aiMarkdown.trim(), '');
     }
-    lines.push(`![${filename}](${relMedia})`);
+    lines.push(`![${filename}](${linkRel})`);
     const text = lines.join('\n') + '\n';
 
     const sourceCounts: Record<string, number> = { [source]: 1 };
 
     return {
       text,
-      mediaFiles: [relMedia],
+      mediaFiles,
       handler: 'passthrough/image',
       metadata: {
         byteLength: buffer.byteLength,
@@ -155,6 +170,7 @@ export const passthroughHandler: Handler = async ({
         sourceCounts,
         aiCallDurationMs,
         aiRetries,
+        ...(downscaled ? { downscaled: true } : {}),
         ...(note ? { note } : {}),
       },
     };

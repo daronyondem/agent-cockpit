@@ -35,7 +35,10 @@ import {
   type PageSignals,
   type PdfPageProxyLike,
 } from '../ingestion/pdfSignals';
-import { convertImageToMarkdown } from '../ingestion/pageConversion';
+import {
+  convertImageToMarkdown,
+  ensureAiReadyImage,
+} from '../ingestion/pageConversion';
 
 const TARGET_SCALE = 150 / 72;
 
@@ -85,6 +88,12 @@ export const pdfHandler: Handler = async ({
     const absImagePath = path.join(outDir, rel);
 
     let renderError: string | null = null;
+    // Path used for both the AI call and the `text.md` link. If the
+    // rendered page is over the vision-token cap, `ensureAiReadyImage`
+    // writes a `.ai.png` sibling and we route AI + markdown there;
+    // otherwise both stay on the original PNG.
+    let aiAbsPath = absImagePath;
+    let aiRel = rel;
     try {
       const pngBuffer = await renderPageAsImage(pdf, pageNumber, {
         canvasImport,
@@ -93,6 +102,14 @@ export const pdfHandler: Handler = async ({
       await fsp.writeFile(absImagePath, Buffer.from(pngBuffer));
       mediaFiles.push(rel);
       renderedPageNumbers.push(pageNumber);
+      const sidecarAbs = absImagePath + '.ai.png';
+      const sidecarRel = rel + '.ai.png';
+      const resolved = await ensureAiReadyImage(absImagePath, sidecarAbs);
+      if (resolved !== absImagePath) {
+        aiAbsPath = sidecarAbs;
+        aiRel = sidecarRel;
+        mediaFiles.push(sidecarRel);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`[kb/pdf] Failed to rasterize page ${pageNumber} of "${filename}": ${message}`);
@@ -139,7 +156,7 @@ export const pdfHandler: Handler = async ({
         aiCallDurationMs: null,
         aiRetries: 0,
       });
-      pageBodies.push(buildSection(pageNumber, 'pdfjs', signals, signals.extractedText, rel));
+      pageBodies.push(buildSection(pageNumber, 'pdfjs', signals, signals.extractedText, aiRel));
       continue;
     }
 
@@ -153,7 +170,7 @@ export const pdfHandler: Handler = async ({
         aiCallDurationMs: null,
         aiRetries: 0,
       });
-      pageBodies.push(buildSection(pageNumber, 'image-only', signals, '', rel));
+      pageBodies.push(buildSection(pageNumber, 'image-only', signals, '', aiRel));
       continue;
     }
 
@@ -162,7 +179,7 @@ export const pdfHandler: Handler = async ({
     let aiRetried = false;
     let aiError: string | null = null;
     try {
-      const result = await convertImageToMarkdown(absImagePath, {
+      const result = await convertImageToMarkdown(aiAbsPath, {
         adapter: ingestionAdapter,
         model: ingestionModel,
         effort: ingestionEffort,
@@ -184,7 +201,7 @@ export const pdfHandler: Handler = async ({
         aiCallDurationMs,
         aiRetries: aiRetried ? 1 : 0,
       });
-      pageBodies.push(buildSection(pageNumber, 'artificial-intelligence', signals, aiMarkdown, rel));
+      pageBodies.push(buildSection(pageNumber, 'artificial-intelligence', signals, aiMarkdown, aiRel));
     } else {
       console.warn(`[kb/pdf] AI conversion failed for page ${pageNumber} of "${filename}": ${aiError}`);
       pageRecords.push({
@@ -199,7 +216,7 @@ export const pdfHandler: Handler = async ({
       pageBodies.push(
         `## Page ${pageNumber}\n` +
         `> source: image-only | note: AI conversion failed after retry\n\n` +
-        `![Page ${pageNumber}](${rel})`,
+        `![Page ${pageNumber}](${aiRel})`,
       );
     }
   }

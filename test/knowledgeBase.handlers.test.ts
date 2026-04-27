@@ -483,6 +483,78 @@ describe('docxHandler', () => {
     expect(sc['artificial-intelligence']).toBe(1);
   });
 
+  test('writes a .ai.png sibling and rewrites both markdown and HTML <img> refs when an embedded image exceeds the vision-token cap', async () => {
+    runPandocSpy = jest
+      .spyOn(pandocModule, 'runPandoc')
+      .mockImplementation(async (args) => {
+        const extractArg = (args as string[]).find((a) =>
+          a.startsWith('--extract-media='),
+        )!;
+        const mediaRoot = extractArg.replace('--extract-media=', '');
+        const nested = path.join(mediaRoot, 'media');
+        fs.mkdirSync(nested, { recursive: true });
+        const abs = path.join(nested, 'image1.png');
+        fs.writeFileSync(abs, makePng(3000, 2000));
+        const stdout =
+          'Intro paragraph.\n\n' +
+          '![chart](media/media/image1.png)\n\n' +
+          `<img src="${abs}" style="width:3.0in" />\n\n` +
+          'Closing paragraph.\n';
+        return { stdout, stderr: '' };
+      });
+    const adapterCalls: Array<{ prompt: string; opts: any }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string, opts?: any) {
+        adapterCalls.push({ prompt, opts });
+        return 'A wide chart showing daily active users.';
+      },
+    } as any;
+
+    const result = await docxHandler({
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04]),
+      filename: 'wide.docx',
+      mimeType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      outDir,
+      ingestionAdapter: stubAdapter,
+    });
+
+    // Original is preserved on disk for KB Browser.
+    expect(fs.existsSync(path.join(outDir, 'media', 'image1.png'))).toBe(true);
+    // `.ai.png` sibling was written and clamped to the cap.
+    const sidecarAbs = path.join(outDir, 'media', 'image1.png.ai.png');
+    expect(fs.existsSync(sidecarAbs)).toBe(true);
+    const sidecarImg = await napiCanvas.loadImage(sidecarAbs);
+    expect(Math.max(sidecarImg.width, sidecarImg.height)).toBe(2576);
+
+    // Both link forms rewritten — `media/image1.png` no longer appears as a link target.
+    expect(result.text).toContain('![chart](media/image1.png.ai.png)');
+    expect(result.text).toContain('src="media/image1.png.ai.png"');
+    // Inline style still preserved.
+    expect(result.text).toContain('style="width:3.0in"');
+    // No bare reference to the original — only the `.ai.png` versions appear in links.
+    expect(result.text).not.toMatch(/!\[chart\]\(media\/image1\.png\)/);
+    expect(result.text).not.toMatch(/src="media\/image1\.png"/);
+
+    // AI call read from the sidecar.
+    expect(adapterCalls).toHaveLength(1);
+    expect(adapterCalls[0].prompt).toContain('image1.png.ai.png');
+
+    // Image description block appears (immediately after the rewritten ref).
+    expect(result.text).toContain(
+      '> Image description (source: artificial-intelligence): A wide chart showing daily active users.',
+    );
+
+    // mediaFiles tracks both original and sibling.
+    expect(result.mediaFiles).toEqual(['media/image1.png', 'media/image1.png.ai.png']);
+    const images = result.metadata?.images as Array<{
+      mediaPath: string;
+      source: string;
+    }>;
+    expect(images[0].mediaPath).toBe('media/image1.png.ai.png');
+    expect(images[0].source).toBe('artificial-intelligence');
+  });
+
   test('falls back to bare link when AI description fails twice', async () => {
     stubPandocOneImage(
       400,
@@ -868,6 +940,66 @@ describe('pptxHandler', () => {
     }
   });
 
+  test('writes .ai.png siblings for oversized rasterized slides and rewrites the slide image link', async () => {
+    const signalsSpy = jest
+      .spyOn(pptxSignalsModule, 'extractSlideSignals')
+      .mockReturnValue({ figureCount: 0, tableLikely: true });
+    // Custom rasterizer: write a 3000×2000 slide so it exceeds the cap.
+    const rasterSpy = jest
+      .spyOn(pptxSlideRenderModule, 'rasterizeSlidesViaLibreOffice')
+      .mockImplementation(async (_buf, _name, dir) => {
+        const slidesDir = path.join(dir, 'slides');
+        fs.mkdirSync(slidesDir, { recursive: true });
+        const rel = 'slides/slide-001.png';
+        fs.writeFileSync(path.join(dir, rel), makePng(3000, 2000));
+        return { images: [rel] };
+      });
+    const adapterCalls: Array<{ prompt: string; opts: any }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string, opts?: any) {
+        adapterCalls.push({ prompt, opts });
+        return '## AI-reconstructed slide';
+      },
+    } as any;
+
+    try {
+      const buffer = readFixture('sample.pptx');
+      const result = await pptxHandler({
+        buffer,
+        filename: 'sample.pptx',
+        mimeType:
+          'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        outDir,
+        convertSlidesToImages: true,
+        ingestionAdapter: stubAdapter,
+      });
+
+      // Original slide PNG preserved.
+      expect(fs.existsSync(path.join(outDir, 'slides/slide-001.png'))).toBe(true);
+      // `.ai.png` sibling written and clamped.
+      const sidecarAbs = path.join(outDir, 'slides/slide-001.png.ai.png');
+      expect(fs.existsSync(sidecarAbs)).toBe(true);
+      const sidecarImg = await napiCanvas.loadImage(sidecarAbs);
+      expect(Math.max(sidecarImg.width, sidecarImg.height)).toBe(2576);
+
+      // Markdown link points at the sidecar.
+      expect(result.text).toContain('![Slide 1](slides/slide-001.png.ai.png)');
+      expect(result.text).not.toContain('![Slide 1](slides/slide-001.png)');
+
+      // AI call used the sidecar path.
+      expect(adapterCalls[0].prompt).toContain('slide-001.png.ai.png');
+
+      // mediaFiles includes both original and sibling for slide 1; slide 2's
+      // sibling depends on whether the fixture's second slide was sent — only
+      // slide 1 is rasterized in this test, so only one pair.
+      expect(result.mediaFiles).toContain('slides/slide-001.png');
+      expect(result.mediaFiles).toContain('slides/slide-001.png.ai.png');
+    } finally {
+      signalsSpy.mockRestore();
+      rasterSpy.mockRestore();
+    }
+  });
+
   test('falls back to image-only with notes preserved when AI fails twice', async () => {
     const signalsSpy = jest
       .spyOn(pptxSignalsModule, 'extractSlideSignals')
@@ -957,9 +1089,10 @@ describe('passthroughHandler', () => {
   });
 
   test('copies image files into media/ and annotates source: image-only when no Ingestion CLI is configured', async () => {
-    const png = Buffer.from([
-      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-    ]);
+    // Use a real, decodable PNG — `ensureAiReadyImage` calls `loadImage` to
+    // measure the long edge, and napi-rs/canvas can hard-crash the worker on
+    // malformed inputs.
+    const png = makePng(120, 80);
     const result = await passthroughHandler({
       buffer: png,
       filename: 'pic.png',
@@ -1035,6 +1168,50 @@ describe('passthroughHandler', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+
+  test('writes a downscaled .ai.png sibling and rewrites the markdown link when the image exceeds the vision-token cap', async () => {
+    const png = makePng(3000, 2000);
+    const adapterCalls: Array<{ prompt: string; opts: any }> = [];
+    const stubAdapter = {
+      async runOneShot(prompt: string, opts?: any) {
+        adapterCalls.push({ prompt, opts });
+        return '## Big diagram';
+      },
+    } as any;
+
+    const result = await passthroughHandler({
+      buffer: png,
+      filename: 'huge.png',
+      mimeType: 'image/png',
+      outDir,
+      ingestionAdapter: stubAdapter,
+    });
+
+    // Original is preserved untouched on disk.
+    const originalAbs = path.join(outDir, 'media', 'huge.png');
+    expect(fs.existsSync(originalAbs)).toBe(true);
+    const originalImg = await napiCanvas.loadImage(originalAbs);
+    expect(originalImg.width).toBe(3000);
+
+    // `.ai.png` sibling is written and clamped to the cap.
+    const sidecarAbs = path.join(outDir, 'media', 'huge.png.ai.png');
+    expect(fs.existsSync(sidecarAbs)).toBe(true);
+    const sidecarImg = await napiCanvas.loadImage(sidecarAbs);
+    expect(Math.max(sidecarImg.width, sidecarImg.height)).toBe(2576);
+
+    // Markdown link points at the sidecar; original is no longer referenced.
+    expect(result.text).toContain('![huge.png](media/huge.png.ai.png)');
+    expect(result.text).not.toContain('![huge.png](media/huge.png)');
+
+    // AI call read from the sidecar, not the original.
+    expect(adapterCalls).toHaveLength(1);
+    expect(adapterCalls[0].prompt).toContain('huge.png.ai.png');
+    expect(adapterCalls[0].opts.workingDir).toBe(path.join(outDir, 'media'));
+
+    // Both files reported in mediaFiles so the orchestrator/UI tracks both.
+    expect(result.mediaFiles).toEqual(['media/huge.png', 'media/huge.png.ai.png']);
+    expect(result.metadata?.downscaled).toBe(true);
   });
 
   test('skips AI for SVG uploads and falls back to source: image-only', async () => {
