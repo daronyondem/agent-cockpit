@@ -463,9 +463,10 @@ function CodexPlanUsageSection({ data }){
 }
 
 function CodexTokenCard({ usage, planUsage }){
-  const input  = usage.inputTokens  || 0;
-  const output = usage.outputTokens || 0;
-  const total  = input + output;
+  const input     = usage.inputTokens     || 0;
+  const output    = usage.outputTokens    || 0;
+  const cacheRead = usage.cacheReadTokens || 0;
+  const total     = input + output;
   const pctRaw = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
   const pct    = pctRaw == null ? 0 : pctRaw;
   const pctStr = pct.toFixed(2) + '%';
@@ -491,12 +492,15 @@ function CodexTokenCard({ usage, planUsage }){
           </div>
         </div>
       ) : null}
-      {total > 0 ? (
+      {total > 0 || cacheRead > 0 ? (
         <div className="tt-section">
           <div className="tt-section-label">Tokens</div>
           <div className="tt-rows">
             <div className="tt-kv"><span>Input</span><b>{_fmtInt(input)}</b></div>
             <div className="tt-kv"><span>Output</span><b>{_fmtInt(output)}</b></div>
+            {cacheRead > 0 && (
+              <div className="tt-kv"><span>Cache read</span><b>{_fmtInt(cacheRead)}</b></div>
+            )}
           </div>
         </div>
       ) : null}
