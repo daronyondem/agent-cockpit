@@ -529,6 +529,17 @@ interface CodexProcessEntry {
   idleTimer: NodeJS.Timeout | null;
   /** Hash of the mcpServers list this process was spawned with, or '' if none. */
   mcpHash: string;
+  /**
+   * Last `total.totalTokens` we emitted a usage event for. Codex re-emits a
+   * `thread/tokenUsage/updated` notification at every turn boundary that
+   * mirrors the prior turn's final state — `last_token_usage` and
+   * `total_token_usage` are byte-for-byte identical to the previous event.
+   * Without filtering, the cockpit's `+=` aggregator double-counts one turn's
+   * worth of tokens at every transition. Tracking the last emitted total per
+   * app-server process (which is per-conversation) lets us drop these
+   * duplicates while preserving genuine per-API-call updates within a turn.
+   */
+  lastTotalTokens: number;
 }
 
 // ── App Server JSON-RPC Client ──────────────────────────────────────────────
@@ -977,6 +988,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       threadId: null,
       idleTimer: null,
       mcpHash,
+      lastTotalTokens: 0,
     });
     this._resetIdleTimer(conversationId);
 
@@ -1288,6 +1300,14 @@ export class CodexAdapter extends BaseBackendAdapter {
               modelContextWindow: number | null;
             } }).tokenUsage;
             if (!tokenUsage) break;
+            // Drop stale events: Codex re-emits the prior turn's final state
+            // at every turn boundary with byte-identical `last` and `total`.
+            // Filtering on cumulative `total.totalTokens` catches them without
+            // losing genuine intra-turn updates (each real API call advances
+            // total).
+            const totalTokens = tokenUsage.total.totalTokens || 0;
+            if (totalTokens === entry.lastTotalTokens) break;
+            entry.lastTotalTokens = totalTokens;
             yield {
               type: 'usage',
               usage: deriveCodexUsage(tokenUsage),
