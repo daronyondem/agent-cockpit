@@ -153,7 +153,7 @@ Together these guarantee that a workspace index always parses on disk and that c
       cacheWriteTokens: number,
       costUsd: number,
       credits?: number,                // Kiro only: accumulated credits consumed (fractional)
-      contextUsagePercentage?: number  // Kiro only: context window usage snapshot (0–100)
+      contextUsagePercentage?: number  // Kiro/Codex: context window usage snapshot (0–100)
     }|null,
     usageByBackend: {            // Per-backend usage breakdown (keyed by backend id)
       [backendId]: Usage

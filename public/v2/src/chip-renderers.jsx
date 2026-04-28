@@ -24,6 +24,17 @@ function _fmtCost(c){
 function _fmtInt(n){
   return (n || 0).toLocaleString();
 }
+function _usageTotalTokens(usage){
+  if (!usage) return 0;
+  return (usage.inputTokens || 0)
+    + (usage.outputTokens || 0)
+    + (usage.cacheReadTokens || 0)
+    + (usage.cacheWriteTokens || 0);
+}
+function _usageFreshTokens(usage){
+  if (!usage) return 0;
+  return (usage.inputTokens || 0) + (usage.outputTokens || 0);
+}
 
 /* Plan-tier labels arrive as `default_claude_max_20x` / `default_claude_pro`
    etc. Strip the prefix, then title-case the remainder so "max_20x" renders
@@ -163,7 +174,8 @@ function ClaudeCodeTokenCard({ usage, planUsage }){
   const output     = usage.outputTokens     || 0;
   const cacheRead  = usage.cacheReadTokens  || 0;
   const cacheWrite = usage.cacheWriteTokens || 0;
-  const total      = input + output;
+  const freshTotal = _usageFreshTokens(usage);
+  const total      = _usageTotalTokens(usage);
   const cost       = typeof usage.costUsd === 'number' ? usage.costUsd : 0;
   return (
     <>
@@ -172,12 +184,15 @@ function ClaudeCodeTokenCard({ usage, planUsage }){
       </div>
       <h4 className="tt-h">
         {_fmtTokensShort(total)} tokens
+        {freshTotal > 0 && freshTotal !== total ? (
+          <span className="u-dim"> · {_fmtTokensShort(freshTotal)} fresh</span>
+        ) : null}
         {cost > 0 ? <span className="u-dim"> · ${_fmtCost(cost)}</span> : null}
       </h4>
       <div className="tt-section">
         <div className="tt-section-label">Breakdown</div>
         <div className="tt-rows">
-          <div className="tt-kv"><span>Input</span><b>{_fmtInt(input)}</b></div>
+          <div className="tt-kv"><span>Fresh input</span><b>{_fmtInt(input)}</b></div>
           <div className="tt-kv"><span>Output</span><b>{_fmtInt(output)}</b></div>
           {cacheRead > 0 && (
             <div className="tt-kv"><span>Cache read</span><b>{_fmtInt(cacheRead)}</b></div>
@@ -463,10 +478,12 @@ function CodexPlanUsageSection({ data }){
 }
 
 function CodexTokenCard({ usage, planUsage }){
-  const input     = usage.inputTokens     || 0;
-  const output    = usage.outputTokens    || 0;
-  const cacheRead = usage.cacheReadTokens || 0;
-  const total     = input + output;
+  const input      = usage.inputTokens      || 0;
+  const output     = usage.outputTokens     || 0;
+  const cacheRead  = usage.cacheReadTokens  || 0;
+  const cacheWrite = usage.cacheWriteTokens || 0;
+  const freshTotal = _usageFreshTokens(usage);
+  const total      = _usageTotalTokens(usage);
   const pctRaw = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
   const pct    = pctRaw == null ? 0 : pctRaw;
   const pctStr = pct.toFixed(2) + '%';
@@ -479,6 +496,9 @@ function CodexTokenCard({ usage, planUsage }){
         {pctRaw != null ? <>{pctStr} context</> : <>{_fmtTokensShort(total)} tokens</>}
         {pctRaw != null && total > 0 ? (
           <span className="u-dim"> · {_fmtTokensShort(total)} tokens</span>
+        ) : null}
+        {freshTotal > 0 && freshTotal !== total ? (
+          <span className="u-dim"> · {_fmtTokensShort(freshTotal)} fresh</span>
         ) : null}
       </h4>
       {pctRaw != null ? (
@@ -496,10 +516,13 @@ function CodexTokenCard({ usage, planUsage }){
         <div className="tt-section">
           <div className="tt-section-label">Tokens</div>
           <div className="tt-rows">
-            <div className="tt-kv"><span>Input</span><b>{_fmtInt(input)}</b></div>
+            <div className="tt-kv"><span>Fresh input</span><b>{_fmtInt(input)}</b></div>
             <div className="tt-kv"><span>Output</span><b>{_fmtInt(output)}</b></div>
             {cacheRead > 0 && (
               <div className="tt-kv"><span>Cache read</span><b>{_fmtInt(cacheRead)}</b></div>
+            )}
+            {cacheWrite > 0 && (
+              <div className="tt-kv"><span>Cache write</span><b>{_fmtInt(cacheWrite)}</b></div>
             )}
           </div>
         </div>
@@ -539,7 +562,7 @@ function DefaultTokenCard({ usage }){
 const CHIP_RENDERERS = {
   'claude-code': {
     renderChipText(usage){
-      const total = (usage.inputTokens || 0) + (usage.outputTokens || 0);
+      const total = _usageTotalTokens(usage);
       if (total === 0) return null;
       const cost = typeof usage.costUsd === 'number' ? usage.costUsd : 0;
       const tokensLabel = _fmtTokensShort(total);
@@ -565,7 +588,7 @@ const CHIP_RENDERERS = {
   },
   'codex': {
     renderChipText(usage){
-      const total = (usage.inputTokens || 0) + (usage.outputTokens || 0);
+      const total = _usageTotalTokens(usage);
       const pct   = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
       if (pct == null && total === 0) return null;
       const tokensLabel = total > 0 ? _fmtTokensShort(total) : '';
