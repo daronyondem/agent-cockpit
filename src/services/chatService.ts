@@ -564,6 +564,7 @@ export class ChatService {
       if (!result) return;
       const { index, convEntry } = result;
       convEntry.title = newTitle;
+      convEntry.titleManuallySet = true;
       await this._writeWorkspaceIndex(hash, index);
     });
     return this.getConversation(id);
@@ -766,7 +767,7 @@ export class ChatService {
       const activeSession = convEntry.sessions.find(s => s.active);
       const sessionNumber = activeSession ? activeSession.number : 1;
 
-      if (role === 'user' && convEntry.title === 'New Chat' && sessionNumber <= 1) {
+      if (role === 'user' && convEntry.title === 'New Chat' && sessionNumber <= 1 && !convEntry.titleManuallySet) {
         convEntry.title = content.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
       }
 
@@ -848,6 +849,9 @@ export class ChatService {
     // addMessage during active streams.
     const conv = await this._getConvFromIndex(convId);
     if (!conv) return null;
+    // Skip auto-titling once the user has manually renamed: the adapter
+    // round-trip is wasted work and we'd just overwrite the manual rename.
+    if (conv.convEntry.titleManuallySet) return conv.convEntry.title;
     const adapter = this._backendRegistry?.get(conv.convEntry.backend || 'claude-code');
     const fallback = userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
     let newTitle: string;
@@ -868,6 +872,9 @@ export class ChatService {
       const result = await this._getConvFromIndex(convId);
       if (!result) return null;
       const { index, convEntry } = result;
+      // Re-check inside the lock: a manual rename may have landed between the
+      // outer read above and acquiring the lock here. Don't clobber it.
+      if (convEntry.titleManuallySet) return convEntry.title;
       convEntry.title = newTitle;
       await this._writeWorkspaceIndex(hash, index);
       return newTitle;
@@ -961,7 +968,11 @@ export class ChatService {
       // the new session's first turn reports fresh usage.
       if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
       convEntry.currentSessionId = newSessionId;
-      convEntry.title = 'New Chat';
+      // Preserve a user-set title across resets; only auto-titled conversations
+      // get stamped back to "New Chat" so the next session can re-derive a title.
+      if (!convEntry.titleManuallySet) {
+        convEntry.title = 'New Chat';
+      }
       convEntry.sessions.push({
         number: newSessionNumber,
         sessionId: newSessionId,

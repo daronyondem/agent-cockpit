@@ -139,6 +139,7 @@ Together these guarantee that a workspace index always parses on disk and that c
   conversations: [{
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
+    titleManuallySet?: boolean, // true once `renameConversation()` has run. Locks the title against all automatic mutations (resetSession, addMessage's first-message snapshot, generateAndUpdateTitle). Absent when the title is still auto-managed.
     backend: string,            // 'claude-code'
     model?: string,             // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
     effort?: string,            // Adaptive reasoning effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. `xhigh` is Opus 4.7-only; `max` is Opus 4.6+ only. Silently downgraded when the current model doesn't support the stored level.

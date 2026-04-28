@@ -180,6 +180,14 @@ export interface QueuedMessage {
 export interface ConversationEntry {
   id: string;
   title: string;
+  /**
+   * True once the user has manually renamed the conversation via PUT
+   * /conversations/:id. Locks the title against all automatic mutations
+   * (resetSession's "New Chat" stamp, addMessage's first-message snapshot,
+   * generateAndUpdateTitle's LLM-generated title) so a manual rename
+   * survives session resets and subsequent activity.
+   */
+  titleManuallySet?: boolean;
   backend: string;
   model?: string;
   /** Adaptive reasoning effort level for supported models. */
