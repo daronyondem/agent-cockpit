@@ -8,7 +8,10 @@
   "scripts": {
     "start": "tsx server.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-vm-modules node_modules/.bin/jest"
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "adr:new": "node scripts/adr-new.js",
+    "adr:index": "node scripts/adr-index.js",
+    "adr:lint": "node scripts/adr-lint.js"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.4.4",
