@@ -711,6 +711,55 @@ describe('clearStreamError', () => {
   });
 });
 
+describe('stopStream', () => {
+  test('sends a single { type: "abort" } frame over the conv WS while streaming', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    api.fetch.mockResolvedValueOnce(makeResponse({ userMessage: null }));
+
+    const sent: string[] = [];
+    (ws as any).send = (data: string) => { sent.push(data); };
+
+    await Store.send('c1', 'hello');
+    expect(Store.getState('c1').streaming).toBe(true);
+
+    Store.stopStream('c1');
+
+    expect(sent).toEqual([JSON.stringify({ type: 'abort' })]);
+  });
+
+  test('no-op when not streaming', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+
+    const sent: string[] = [];
+    (ws as any).send = (data: string) => { sent.push(data); };
+
+    expect(Store.getState('c1').streaming).toBe(false);
+    Store.stopStream('c1');
+
+    expect(sent).toEqual([]);
+  });
+
+  test('no-op when WS is closed even if streaming flag is set', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    api.fetch.mockResolvedValueOnce(makeResponse({ userMessage: null }));
+
+    const sent: string[] = [];
+    (ws as any).send = (data: string) => { sent.push(data); };
+
+    Store.send('c1', 'hello');
+    ws.close();
+
+    Store.stopStream('c1');
+
+    expect(sent).toEqual([]);
+  });
+});
+
 /* Draft localStorage persistence (#33) — the composer text + completed
    uploads are mirrored to `ac:v2:draft:<convId>` so a tab crash doesn't
    lose work. Save is debounced 150 ms; clear fires on successful send and

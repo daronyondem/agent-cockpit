@@ -817,6 +817,10 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
     StreamStore.setInput(convId, '');
     StreamStore.clearPendingAttachments(convId);
   }
+  function doStop(){
+    if (!streaming) return;
+    StreamStore.stopStream(convId);
+  }
 
   async function handleDownload(){
     window.open(AgentApi.chatUrl('conversations/' + encodeURIComponent(convId) + '/download'), '_blank', 'noopener');
@@ -1135,16 +1139,27 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
               </span>
               <ComposerNotifIcon conv={conv} convId={convId}/>
               {streaming ? (
-                <button
-                  className="send stop"
-                  onClick={doEnqueue}
-                  disabled={!canEnqueue}
-                  title={canEnqueue ? 'Queue behind current run' : 'Agent is running'}
-                  aria-label="Queue behind current run"
-                  style={!canEnqueue ? {opacity:.5,cursor:"not-allowed"} : undefined}
-                >
-                  {Ico.stop(14)}
-                </button>
+                hasContent ? (
+                  <button
+                    className="send"
+                    onClick={doEnqueue}
+                    disabled={!canEnqueue}
+                    title={canEnqueue ? 'Queue behind current run' : 'Agent is running'}
+                    aria-label="Queue behind current run"
+                    style={!canEnqueue ? {opacity:.5,cursor:"not-allowed"} : undefined}
+                  >
+                    {Ico.up(14)}
+                  </button>
+                ) : (
+                  <button
+                    className="send stop"
+                    onClick={doStop}
+                    title="Stop agent"
+                    aria-label="Stop agent"
+                  >
+                    {Ico.stop(14)}
+                  </button>
+                )
               ) : (
                 <button
                   className="send"
