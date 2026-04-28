@@ -169,6 +169,64 @@ describe('renameConversation', () => {
   test('returns null for non-existent id', async () => {
     expect(await service.renameConversation('nope', 'Name')).toBeNull();
   });
+
+  test('persists titleManuallySet flag in workspace index', async () => {
+    const conv = await service.createConversation('Old Name', '/tmp/rename-flag');
+    await service.renameConversation(conv.id, 'Manual Name');
+
+    const hash = workspaceHash('/tmp/rename-flag');
+    const index = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json'), 'utf8'
+    ));
+    const entry = index.conversations.find((c: any) => c.id === conv.id);
+    expect(entry.titleManuallySet).toBe(true);
+  });
+
+  test('does not set titleManuallySet on createConversation', async () => {
+    const conv = await service.createConversation('Initial Title', '/tmp/create-flag');
+
+    const hash = workspaceHash('/tmp/create-flag');
+    const index = JSON.parse(fs.readFileSync(
+      path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'index.json'), 'utf8'
+    ));
+    const entry = index.conversations.find((c: any) => c.id === conv.id);
+    expect(entry.titleManuallySet).toBeUndefined();
+  });
+
+  test('manual rename survives a session reset', async () => {
+    (service as any)._generateSessionSummary = async (_msgs: any, fb: string) => fb;
+    const conv = await service.createConversation('Old Name');
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    await service.renameConversation(conv.id, 'Manual Name');
+
+    const result = await service.resetSession(conv.id);
+    expect(result!.conversation.title).toBe('Manual Name');
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.title).toBe('Manual Name');
+  });
+
+  test('manual rename survives first-message auto-titling', async () => {
+    const conv = await service.createConversation();
+    expect(conv.title).toBe('New Chat');
+    await service.renameConversation(conv.id, 'Manual Name');
+
+    await service.addMessage(conv.id, 'user', 'This message would normally become the title', 'claude-code');
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.title).toBe('Manual Name');
+  });
+
+  test('manual rename survives generateAndUpdateTitle', async () => {
+    const conv = await service.createConversation('Old Title');
+    await service.renameConversation(conv.id, 'Manual Name');
+
+    const returned = await service.generateAndUpdateTitle(conv.id, 'Some user message');
+    expect(returned).toBe('Manual Name');
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.title).toBe('Manual Name');
+  });
 });
 
 describe('deleteConversation', () => {
