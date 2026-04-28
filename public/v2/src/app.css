@@ -2811,6 +2811,21 @@ body{
   border-radius: var(--r-sm);
   cursor: zoom-in;
 }
+.prose table{
+  border-collapse: collapse;
+  margin: 10px 0;
+  font-size: 14px;
+}
+.prose table th, .prose table td{
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+.prose table th{
+  background: var(--surface-2);
+  font-weight: 600;
+}
 .kb-lightbox{
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;
