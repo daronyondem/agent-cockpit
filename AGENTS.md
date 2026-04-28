@@ -72,6 +72,7 @@ Always use pm2:
 
 - Use the GitHub CLI (`gh`) for GitHub interactions: creating PRs, reading PR/issue state, commenting, requesting reviews, applying labels, and checking CI. Use local `git` for local repository operations such as status, diff, branch, add, commit, and push.
 - Do not use GitHub web/API connectors for normal repository work unless `gh` cannot perform the required action or the user explicitly asks for a different tool.
+- Submit normal ready-for-review pull requests. Do not create draft PRs unless the user explicitly asks for a draft.
 - All commits, PRs, issue comments, and other GitHub-visible activity must be authored as Daron Yondem using the configured local git/GitHub account.
 - Do NOT mention AI assistants, agents, automation, or generated output in commit messages, PR bodies, issue comments, branch names, or release notes.
 - Do NOT add tool-generated co-author lines in commit messages.
