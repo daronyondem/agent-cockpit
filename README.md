@@ -269,6 +269,13 @@ Codex connects via the Codex App Server protocol — JSON-RPC 2.0 over stdin/std
 - Per-turn token usage tracking via `thread/tokenUsage/updated`
 - Permission auto-approval for all tool calls and patches
 
+To run Codex with full elevated permissions, set these in `.env` or your PM2 `ecosystem.config.js`:
+
+```bash
+CODEX_APPROVAL_POLICY=never
+CODEX_SANDBOX_MODE=danger-full-access
+```
+
 Ensure `codex` is installed (`npm install -g @openai/codex`) and authenticated (`codex login` or `OPENAI_API_KEY`) before selecting Codex as a backend.
 
 ## Adding a New Backend
