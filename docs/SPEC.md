@@ -31,6 +31,12 @@ Engineering notes that capture empirical findings — not proposals or specs, bu
 |----------|-------------|
 | [notes-kiro-bedrock-parity.md](notes-kiro-bedrock-parity.md) | Differences observed between Kiro (AWS Bedrock-routed) and Claude Code (direct Anthropic API) for Opus 4.7 — image format/dimension caps, ACP stream termination, JSON-RPC error extraction, etc. |
 
+### Architecture Decision Records
+
+ADRs capture *why* the system is shaped the way it is — the decision made, the alternatives considered, and the tradeoffs accepted. The SPEC documents above describe *what is true now*; ADRs describe *why we chose this and what we rejected*. SPEC sections should cross-link to the ADRs that shaped them, and vice versa, but should not duplicate the rationale.
+
+See [docs/adr/README.md](adr/README.md) for the index and [ADR-0001](adr/0001-record-architecture-decisions.md) for the practice itself. Authoring guidance lives in [CLAUDE.md](../CLAUDE.md#architecture-decision-records-adrs).
+
 ---
 
 ## 1. Overview

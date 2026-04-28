@@ -1,0 +1,39 @@
+name: ADR
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/adr/**'
+      - 'scripts/adr-*.js'
+      - 'scripts/lib/adr-*.js'
+      - '.github/workflows/adr.yml'
+
+jobs:
+  adr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Regenerate ADR index
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          node scripts/adr-index.js
+          if [[ -n "$(git status --porcelain docs/adr/README.md)" ]]; then
+            git add docs/adr/README.md
+            git commit -m "chore(adr): regenerate index"
+            git push origin HEAD:${{ github.head_ref }}
+          fi
+
+      - name: Lint ADRs
+        run: node scripts/adr-lint.js
