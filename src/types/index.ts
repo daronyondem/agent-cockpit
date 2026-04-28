@@ -930,6 +930,9 @@ export interface SendMessageResult {
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
+export type CodexApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never';
+export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+
 export interface AppConfig {
   PORT: number;
   SESSION_SECRET: string;
@@ -942,6 +945,8 @@ export interface AppConfig {
   ALLOWED_EMAIL: string;
   DEFAULT_WORKSPACE: string;
   BASE_PATH: string;
+  CODEX_APPROVAL_POLICY: CodexApprovalPolicy;
+  CODEX_SANDBOX_MODE: CodexSandboxMode;
 }
 
 // ── Express Extensions ───────────────────────────────────────────────────────

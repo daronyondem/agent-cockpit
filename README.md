@@ -122,6 +122,8 @@ npm start
 | `BASE_PATH` | No | `''` | URL base path for reverse proxy deployments |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
 | `CODEX_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing the Codex `app-server` process |
+| `CODEX_APPROVAL_POLICY` | No | `on-request` | Codex approval policy for interactive threads (`untrusted`, `on-failure`, `on-request`, `never`) |
+| `CODEX_SANDBOX_MODE` | No | `workspace-write` | Codex sandbox mode for interactive threads (`read-only`, `workspace-write`, `danger-full-access`). Use `CODEX_APPROVAL_POLICY=never` with `CODEX_SANDBOX_MODE=danger-full-access` to run Codex with full elevated permissions. |
 
 *\* At least one OAuth provider (Google or GitHub) must be fully configured. You can set up one or both.*
 

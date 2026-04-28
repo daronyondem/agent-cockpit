@@ -15,6 +15,8 @@ import type {
   Message,
   ToolDetail,
   Usage,
+  CodexApprovalPolicy,
+  CodexSandboxMode,
 } from '../../types';
 
 // ── Icon ────────────────────────────────────────────────────────────────────
@@ -24,9 +26,22 @@ const CODEX_ICON = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" 
 // ── Configuration ────────────────────────────────────���──────────────────────
 
 const CODEX_IDLE_TIMEOUT_MS = parseInt(process.env.CODEX_IDLE_TIMEOUT_MS || '', 10) || 600_000;
+const DEFAULT_CODEX_APPROVAL_POLICY: CodexApprovalPolicy = 'on-request';
+const DEFAULT_CODEX_SANDBOX_MODE: CodexSandboxMode = 'workspace-write';
 
 // Used as the polite-shutdown deadline before SIGKILL during process kill.
 const PROCESS_KILL_GRACE_MS = 1_000;
+
+function codexUsesFullAccess(approvalPolicy: CodexApprovalPolicy, sandbox: CodexSandboxMode): boolean {
+  return approvalPolicy === 'never' && sandbox === 'danger-full-access';
+}
+
+export function buildCodexThreadSecurityParams(
+  approvalPolicy: CodexApprovalPolicy = DEFAULT_CODEX_APPROVAL_POLICY,
+  sandbox: CodexSandboxMode = DEFAULT_CODEX_SANDBOX_MODE,
+): { approvalPolicy: CodexApprovalPolicy; sandbox: CodexSandboxMode } {
+  return { approvalPolicy, sandbox };
+}
 
 // ── MCP injection helpers ───────────────────────────────────────────────────
 //
@@ -656,10 +671,14 @@ class CodexAppServerClient {
 export class CodexAdapter extends BaseBackendAdapter {
   private processes: Map<string, CodexProcessEntry> = new Map();
   private modelCache: ModelOption[] | null = null;
+  private readonly approvalPolicy: CodexApprovalPolicy;
+  private readonly sandbox: CodexSandboxMode;
 
-  constructor(options: { workingDir?: string } = {}) {
+  constructor(options: { workingDir?: string; approvalPolicy?: CodexApprovalPolicy; sandbox?: CodexSandboxMode } = {}) {
     super(options);
     this.workingDir = options.workingDir || path.resolve(os.homedir(), '.codex', 'workspace');
+    this.approvalPolicy = options.approvalPolicy || DEFAULT_CODEX_APPROVAL_POLICY;
+    this.sandbox = options.sandbox || DEFAULT_CODEX_SANDBOX_MODE;
 
     // Best-effort dynamic model discovery in the background. Failure (CLI
     // missing, auth missing, network blocked) is not fatal — the picker
@@ -1009,8 +1028,7 @@ export class CodexAdapter extends BaseBackendAdapter {
         const cleanPrompt = sanitizeSystemPrompt(systemPrompt);
         const startParams: Record<string, unknown> = {
           cwd,
-          approvalPolicy: 'on-request',
-          sandbox: 'workspace-write',
+          ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
           experimentalRawEvents: false,
           persistExtendedHistory: false,
         };
@@ -1033,8 +1051,7 @@ export class CodexAdapter extends BaseBackendAdapter {
         const resumeParams: Record<string, unknown> = {
           threadId: externalSessionId,
           cwd,
-          approvalPolicy: 'on-request',
-          sandbox: 'workspace-write',
+          ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
           excludeTurns: true,
           persistExtendedHistory: false,
         };
@@ -1052,8 +1069,7 @@ export class CodexAdapter extends BaseBackendAdapter {
           // Fall back to a fresh thread so the conversation isn't dead-ended
           const startParams: Record<string, unknown> = {
             cwd,
-            approvalPolicy: 'on-request',
-            sandbox: 'workspace-write',
+            ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
             experimentalRawEvents: false,
             persistExtendedHistory: false,
           };
@@ -1353,7 +1369,15 @@ export class CodexAdapter extends BaseBackendAdapter {
 
     const configArgs = await buildCodexConfigArgs(mcpServersForCodex);
 
-    const args = ['exec', '--full-auto', '--skip-git-repo-check', '-C', cwd, ...configArgs];
+    const args = ['exec'];
+    if (codexUsesFullAccess(this.approvalPolicy, this.sandbox)) {
+      args.push('--dangerously-bypass-approvals-and-sandbox');
+    } else if (this.approvalPolicy === DEFAULT_CODEX_APPROVAL_POLICY && this.sandbox === DEFAULT_CODEX_SANDBOX_MODE) {
+      args.push('--full-auto');
+    } else {
+      args.push('--ask-for-approval', this.approvalPolicy, '--sandbox', this.sandbox);
+    }
+    args.push('--skip-git-repo-check', '-C', cwd, ...configArgs);
     if (model) {
       args.push('-m', model);
     }

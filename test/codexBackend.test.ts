@@ -8,11 +8,26 @@ import {
   recordSpawnAgentReceivers,
   isParentTurnCompleted,
   deriveCodexUsage,
+  buildCodexThreadSecurityParams,
 } from '../src/services/backends/codex';
 
 // ── CodexAdapter metadata ───────────────────────────────────────────────────
 
 describe('CodexAdapter', () => {
+  test('buildCodexThreadSecurityParams defaults to the interactive sandbox policy', () => {
+    expect(buildCodexThreadSecurityParams()).toEqual({
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
+    });
+  });
+
+  test('buildCodexThreadSecurityParams supports full access policy', () => {
+    expect(buildCodexThreadSecurityParams('never', 'danger-full-access')).toEqual({
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
+    });
+  });
+
   test('metadata has correct shape', () => {
     const adapter = new CodexAdapter({ workingDir: '/tmp' });
     const meta = adapter.metadata;
@@ -521,6 +536,74 @@ describe('CodexAdapter generateTitle', () => {
 // drive the callback synchronously.
 
 describe('CodexAdapter.runOneShot', () => {
+  test('uses existing full-auto exec mode by default', async () => {
+    let capturedArgs: string[] | null = null;
+    let resultPromise!: Promise<string>;
+
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: () => ({
+          on: () => {},
+          stdout: { on: () => {} },
+          stderr: { on: () => {} },
+          stdin: { write: () => true, end: () => {} },
+          kill: () => {},
+          killed: false,
+          exitCode: null,
+        }),
+        execFile: (_cmd: string, args: string[], _opts: object, cb: (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void) => {
+          capturedArgs = args;
+          setImmediate(() => cb(null, 'ok', ''));
+          return { stdin: { end: () => {} } };
+        },
+      }));
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp' });
+    });
+
+    await resultPromise;
+    expect(capturedArgs).not.toBeNull();
+    expect(capturedArgs).toContain('--full-auto');
+    expect(capturedArgs).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+  });
+
+  test('uses full bypass exec mode when configured for full access', async () => {
+    let capturedArgs: string[] | null = null;
+    let resultPromise!: Promise<string>;
+
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: () => ({
+          on: () => {},
+          stdout: { on: () => {} },
+          stderr: { on: () => {} },
+          stdin: { write: () => true, end: () => {} },
+          kill: () => {},
+          killed: false,
+          exitCode: null,
+        }),
+        execFile: (_cmd: string, args: string[], _opts: object, cb: (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void) => {
+          capturedArgs = args;
+          setImmediate(() => cb(null, 'ok', ''));
+          return { stdin: { end: () => {} } };
+        },
+      }));
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({
+        workingDir: '/tmp',
+        approvalPolicy: 'never',
+        sandbox: 'danger-full-access',
+      });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp' });
+    });
+
+    await resultPromise;
+    expect(capturedArgs).not.toBeNull();
+    expect(capturedArgs).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(capturedArgs).not.toContain('--full-auto');
+  });
+
   test('returns trimmed stdout on success', async () => {
     let resultPromise!: Promise<string>;
 

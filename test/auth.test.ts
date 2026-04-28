@@ -116,6 +116,8 @@ const baseConfig: AppConfig = {
   ALLOWED_EMAIL: 'test@example.com',
   DEFAULT_WORKSPACE: '/tmp',
   BASE_PATH: '/tmp',
+  CODEX_APPROVAL_POLICY: 'on-request',
+  CODEX_SANDBOX_MODE: 'workspace-write',
 };
 
 function buildAuthApp(configOverrides: Partial<AppConfig> = {}): express.Express {

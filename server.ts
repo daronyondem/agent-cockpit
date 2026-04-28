@@ -89,7 +89,11 @@ app.get('/api/me', meHandler);
 const backendRegistry = new BackendRegistry();
 backendRegistry.register(new ClaudeCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 backendRegistry.register(new KiroAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
-backendRegistry.register(new CodexAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
+backendRegistry.register(new CodexAdapter({
+  workingDir: config.DEFAULT_WORKSPACE,
+  approvalPolicy: config.CODEX_APPROVAL_POLICY,
+  sandbox: config.CODEX_SANDBOX_MODE,
+}));
 
 const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
 const updateService = new UpdateService(__dirname);
