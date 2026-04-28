@@ -1271,6 +1271,20 @@
     setTimeout(() => { sendWireContent(convId, wireContent); }, 0);
   }
 
+  /* Best-effort: ask the server to abort the in-flight CLI stream by sending
+     `{ type: 'abort' }` over the open WebSocket (handled in src/ws.ts). The
+     backend kills the process; the adapter yields `error: 'Aborted by user'`
+     followed by `done`, which flow through `handleFrame` like any other
+     terminal frames. No-op if the conversation isn't streaming or the WS
+     isn't open — the user only sees the stop affordance while streaming, so
+     either condition means the click already raced the stream's natural end. */
+  function stopStream(convId){
+    const s = states.get(convId);
+    if (!s || !s.streaming) return;
+    if (!s.ws || s.ws.readyState !== WebSocket.OPEN) return;
+    try { s.ws.send(JSON.stringify({ type: 'abort' })); } catch {}
+  }
+
   /* Clear a stream error so the conversation returns to idle. When
      `resumeQueue` is true and the queue is non-empty, re-trigger the drainer
      — the head of the queue resumes immediately. Called from the
@@ -1594,6 +1608,7 @@
     updateQueueItem,
     clearQueue,
     resumeSuspendedQueue,
+    stopStream,
     clearStreamError,
     clearAllStreamErrors,
     reset,
