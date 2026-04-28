@@ -122,6 +122,8 @@ npm start
 | `BASE_PATH` | No | `''` | URL base path for reverse proxy deployments |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
 | `CODEX_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing the Codex `app-server` process |
+| `CODEX_APPROVAL_POLICY` | No | `on-request` | Codex approval policy for interactive threads (`untrusted`, `on-failure`, `on-request`, `never`) |
+| `CODEX_SANDBOX_MODE` | No | `workspace-write` | Codex sandbox mode for interactive threads (`read-only`, `workspace-write`, `danger-full-access`). Use `CODEX_APPROVAL_POLICY=never` with `CODEX_SANDBOX_MODE=danger-full-access` to run Codex with full elevated permissions. |
 
 *\* At least one OAuth provider (Google or GitHub) must be fully configured. You can set up one or both.*
 
@@ -266,6 +268,13 @@ Codex connects via the Codex App Server protocol — JSON-RPC 2.0 over stdin/std
 - MCP server injection via `-c mcp_servers.<name>.{command,args,env}=…` overrides at spawn time, so your real `~/.codex/` is used unchanged for auth, sessions, and config
 - Per-turn token usage tracking via `thread/tokenUsage/updated`
 - Permission auto-approval for all tool calls and patches
+
+To run Codex with full elevated permissions, set these in `.env` or your PM2 `ecosystem.config.js`:
+
+```bash
+CODEX_APPROVAL_POLICY=never
+CODEX_SANDBOX_MODE=danger-full-access
+```
 
 Ensure `codex` is installed (`npm install -g @openai/codex`) and authenticated (`codex login` or `OPENAI_API_KEY`) before selecting Codex as a backend.
 
