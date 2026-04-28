@@ -7,6 +7,7 @@ import {
   eventIsFromChildThread,
   recordSpawnAgentReceivers,
   isParentTurnCompleted,
+  deriveCodexUsage,
 } from '../src/services/backends/codex';
 
 // ── CodexAdapter metadata ───────────────────────────────────────────────────
@@ -679,5 +680,80 @@ describe('CodexAdapter.runOneShot', () => {
     await resultPromise;
     expect(capturedArgs).not.toBeNull();
     expect(capturedArgs!.includes('-c')).toBe(false);
+  });
+});
+
+// ── deriveCodexUsage ────────────────────────────────────────────────────────
+
+describe('deriveCodexUsage', () => {
+  test('inputTokens is fresh (uncached) input only — accumulating across turns must not double-count history', () => {
+    // Simulate three turns of a Codex conversation with a 272k context window.
+    // Each turn re-sends the full prior context as cached input; only ~5k of
+    // new content per turn is truly "fresh" (the user's message + prior
+    // assistant output that hadn't been cache-written yet).
+    const t1 = deriveCodexUsage({
+      last: { totalTokens: 6000, inputTokens: 5000, cachedInputTokens: 0, outputTokens: 1000 },
+      total: { totalTokens: 6000, inputTokens: 5000, cachedInputTokens: 0, outputTokens: 1000 },
+      modelContextWindow: 272_000,
+    });
+    const t2 = deriveCodexUsage({
+      last: { totalTokens: 13_000, inputTokens: 11_000, cachedInputTokens: 5000, outputTokens: 2000 },
+      total: { totalTokens: 19_000, inputTokens: 16_000, cachedInputTokens: 5000, outputTokens: 3000 },
+      modelContextWindow: 272_000,
+    });
+    const t3 = deriveCodexUsage({
+      last: { totalTokens: 21_000, inputTokens: 18_000, cachedInputTokens: 11_000, outputTokens: 3000 },
+      total: { totalTokens: 40_000, inputTokens: 34_000, cachedInputTokens: 16_000, outputTokens: 6000 },
+      modelContextWindow: 272_000,
+    });
+    // Fresh input per turn = last.inputTokens - last.cachedInputTokens
+    expect(t1.inputTokens).toBe(5000);  // 5000 - 0
+    expect(t2.inputTokens).toBe(6000);  // 11000 - 5000
+    expect(t3.inputTokens).toBe(7000);  // 18000 - 11000
+    // Output is per-turn (no overlap), accumulates cleanly
+    expect(t1.outputTokens).toBe(1000);
+    expect(t2.outputTokens).toBe(2000);
+    expect(t3.outputTokens).toBe(3000);
+    // Cache-read tracks the cached portion of this turn's prompt
+    expect(t1.cacheReadTokens).toBe(0);
+    expect(t2.cacheReadTokens).toBe(5000);
+    expect(t3.cacheReadTokens).toBe(11_000);
+  });
+
+  test('contextUsagePercentage is a snapshot of the current turn, never cumulative — must stay 0–100 in normal use', () => {
+    // 10 turns each filling ~270k of a 272k window. Pre-fix bug used
+    // total.totalTokens here and reported 1000%+; correct behavior is to
+    // reflect *this turn's* context size.
+    const usage = deriveCodexUsage({
+      last: { totalTokens: 270_000, inputTokens: 268_000, cachedInputTokens: 250_000, outputTokens: 2000 },
+      total: { totalTokens: 2_700_000, inputTokens: 2_680_000, cachedInputTokens: 2_500_000, outputTokens: 20_000 },
+      modelContextWindow: 272_000,
+    });
+    expect(usage.contextUsagePercentage).toBe(99); // 270000 / 272000 ≈ 99.26 → round → 99
+  });
+
+  test('contextUsagePercentage is undefined when modelContextWindow is null or zero', () => {
+    const noWindow = deriveCodexUsage({
+      last: { totalTokens: 5000, inputTokens: 4000, cachedInputTokens: 0, outputTokens: 1000 },
+      total: { totalTokens: 5000, inputTokens: 4000, cachedInputTokens: 0, outputTokens: 1000 },
+      modelContextWindow: null,
+    });
+    expect(noWindow.contextUsagePercentage).toBeUndefined();
+
+    const zeroWindow = deriveCodexUsage({
+      last: { totalTokens: 5000, inputTokens: 4000, cachedInputTokens: 0, outputTokens: 1000 },
+      total: { totalTokens: 5000, inputTokens: 4000, cachedInputTokens: 0, outputTokens: 1000 },
+      modelContextWindow: 0,
+    });
+    expect(zeroWindow.contextUsagePercentage).toBeUndefined();
+  });
+
+  test('clamps inputTokens to 0 if cached exceeds raw input (defensive against malformed input)', () => {
+    const usage = deriveCodexUsage({
+      last: { totalTokens: 5000, inputTokens: 4000, cachedInputTokens: 5000, outputTokens: 1000 },
+      total: { totalTokens: 5000, inputTokens: 4000, cachedInputTokens: 5000, outputTokens: 1000 },
+      modelContextWindow: 272_000,
+    });
+    expect(usage.inputTokens).toBe(0);
   });
 });
