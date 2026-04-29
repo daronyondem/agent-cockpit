@@ -132,8 +132,8 @@ export interface SessionHistoryItem {
 
 // ── Conversations ────────────────────────────────────────────────────────────
 
-/** Adaptive reasoning effort level. `xhigh` is Opus 4.7 only; `max` is Opus 4.6+ only. */
-export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+/** Adaptive reasoning effort level. Supported values are model/backend-specific. */
+export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
 /**
  * Broad type grouping for an attachment, used by the composer to pick an icon
@@ -870,7 +870,9 @@ export interface ModelOption {
   /**
    * Adaptive reasoning effort levels this model supports. Omit for models
    * without effort support (e.g. Haiku). UI uses presence of this field to
-   * decide whether to show the effort dropdown.
+   * decide whether to show the effort dropdown. Values are backend/model-
+   * specific; Codex may expose `none` / `minimal`, while Claude Code exposes
+   * `max` on supported Opus models.
    */
   supportedEffortLevels?: EffortLevel[];
 }

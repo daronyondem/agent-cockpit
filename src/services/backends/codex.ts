@@ -17,6 +17,7 @@ import type {
   Usage,
   CodexApprovalPolicy,
   CodexSandboxMode,
+  EffortLevel,
 } from '../../types';
 
 // ── Icon ────────────────────────────────────────────────────────────────────
@@ -28,6 +29,8 @@ const CODEX_ICON = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" 
 const CODEX_IDLE_TIMEOUT_MS = parseInt(process.env.CODEX_IDLE_TIMEOUT_MS || '', 10) || 600_000;
 const DEFAULT_CODEX_APPROVAL_POLICY: CodexApprovalPolicy = 'on-request';
 const DEFAULT_CODEX_SANDBOX_MODE: CodexSandboxMode = 'workspace-write';
+const CODEX_SUPPORTED_EFFORTS: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
+const CODEX_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh'];
 
 // Used as the polite-shutdown deadline before SIGKILL during process kill.
 const PROCESS_KILL_GRACE_MS = 1_000;
@@ -121,6 +124,7 @@ const FALLBACK_MODELS: ModelOption[] = [
     description: 'Latest GPT — default model for codex',
     costTier: 'high',
     default: true,
+    supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
   },
   {
     id: 'gpt-5.5-codex',
@@ -128,6 +132,7 @@ const FALLBACK_MODELS: ModelOption[] = [
     family: 'gpt',
     description: 'Codex-tuned variant — optimized for agentic coding tasks',
     costTier: 'high',
+    supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
   },
   {
     id: 'gpt-5.5-mini',
@@ -135,6 +140,7 @@ const FALLBACK_MODELS: ModelOption[] = [
     family: 'gpt',
     description: 'Smaller and faster — good for simple tasks',
     costTier: 'low',
+    supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
   },
 ];
 
@@ -513,12 +519,83 @@ interface PendingUserInput {
 }
 
 interface ModelListResult {
-  data: Array<{
-    id: string;
-    displayName?: string;
-    description?: string;
-    isDefault?: boolean;
-  }>;
+  data: CodexModelListEntry[];
+}
+
+interface CodexReasoningEffortOption {
+  reasoningEffort?: string;
+  effort?: string;
+  description?: string;
+}
+
+interface CodexModelListEntry {
+  id?: string;
+  model?: string;
+  slug?: string;
+  displayName?: string;
+  display_name?: string;
+  description?: string;
+  isDefault?: boolean;
+  is_default?: boolean;
+  supportedReasoningEfforts?: CodexReasoningEffortOption[];
+  supported_reasoning_levels?: CodexReasoningEffortOption[];
+  defaultReasoningEffort?: string;
+  default_reasoning_level?: string;
+}
+
+function isEffortLevel(v: unknown): v is EffortLevel {
+  return typeof v === 'string' && (['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as string[]).includes(v);
+}
+
+function normalizeCodexEfforts(raw: unknown): EffortLevel[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const levels: EffortLevel[] = [];
+  for (const item of raw) {
+    const value = typeof item === 'string'
+      ? item
+      : (item as CodexReasoningEffortOption | undefined)?.reasoningEffort
+        || (item as CodexReasoningEffortOption | undefined)?.effort;
+    if (isEffortLevel(value) && CODEX_SUPPORTED_EFFORTS.includes(value) && !levels.includes(value)) {
+      levels.push(value);
+    }
+  }
+  return levels.length > 0 ? levels : undefined;
+}
+
+export function normalizeCodexModelOption(m: CodexModelListEntry): ModelOption | null {
+  const id = m.id || m.model || m.slug;
+  if (!id) return null;
+  const supportedEffortLevels = normalizeCodexEfforts(m.supportedReasoningEfforts || m.supported_reasoning_levels);
+  return {
+    id,
+    label: m.displayName || m.display_name || id,
+    family: 'gpt',
+    description: m.description || '',
+    // Codex doesn't surface costTier — display all as medium so the
+    // picker doesn't lie. Users can still see token usage per turn.
+    costTier: 'medium',
+    default: m.isDefault || m.is_default || false,
+    ...(supportedEffortLevels ? { supportedEffortLevels } : {}),
+  };
+}
+
+export function codexModelSupportsEffort(models: ModelOption[] | undefined, model: string | undefined, effort: EffortLevel | undefined): boolean {
+  if (!model || !effort) return false;
+  const modelOption = models?.find((m) => m.id === model);
+  return !!modelOption?.supportedEffortLevels?.includes(effort);
+}
+
+export function buildCodexTurnStartParams(
+  threadId: string,
+  input: unknown[],
+  model: string | undefined,
+  effort: EffortLevel | undefined,
+  models: ModelOption[] | undefined,
+): Record<string, unknown> {
+  const params: Record<string, unknown> = { threadId, input };
+  if (model) params.model = model;
+  if (codexModelSupportsEffort(models, model, effort)) params.effort = effort;
+  return params;
 }
 
 interface CodexProcessEntry {
@@ -899,18 +976,11 @@ export class CodexAdapter extends BaseBackendAdapter {
       }) as ModelListResult;
 
       if (result && Array.isArray(result.data) && result.data.length > 0) {
-        this.modelCache = result.data.map((m) => ({
-          id: m.id,
-          label: m.displayName || m.id,
-          family: 'gpt',
-          description: m.description || '',
-          // Codex doesn't surface costTier — display all as medium so the
-          // picker doesn't lie. Users can still see token usage per turn.
-          costTier: 'medium' as const,
-          default: m.isDefault || false,
-        }));
+        this.modelCache = result.data
+          .map(normalizeCodexModelOption)
+          .filter((m): m is ModelOption => m !== null);
         // Ensure exactly one default
-        if (!this.modelCache.some((m) => m.default)) {
+        if (this.modelCache.length > 0 && !this.modelCache.some((m) => m.default)) {
           this.modelCache[0].default = true;
         }
       }
@@ -1009,7 +1079,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       subagentByThreadId: Map<string, string>;
     },
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model, mcpServers } = options;
+    const { sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model, effort, mcpServers } = options;
     const convId = conversationId || sessionId;
     const cwd = workingDir || this.workingDir || os.homedir();
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
@@ -1103,11 +1173,7 @@ export class CodexAdapter extends BaseBackendAdapter {
 
       // ── Build turn input ─────────────────────────────────────────────
       const userInput = [{ type: 'text', text: message, text_elements: [] }];
-      const turnParams: Record<string, unknown> = {
-        threadId,
-        input: userInput,
-      };
-      if (model) turnParams.model = model;
+      const turnParams = buildCodexTurnStartParams(threadId, userInput, model, effort, this.metadata.models);
 
       // ── Send turn ────────────────────────────────────────────────────
       console.log(`[codex] turn/start thread=${threadId} promptLen=${message.length}`);
@@ -1383,7 +1449,7 @@ export class CodexAdapter extends BaseBackendAdapter {
    * user authenticated via ChatGPT OAuth or API key works identically here.
    */
   private async _execOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { timeoutMs = 60000, workingDir, model, mcpServers } = options;
+    const { timeoutMs = 60000, workingDir, model, effort, mcpServers } = options;
     const cwd = workingDir || this.workingDir || os.homedir();
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
 
@@ -1398,6 +1464,9 @@ export class CodexAdapter extends BaseBackendAdapter {
       args.push('--ask-for-approval', this.approvalPolicy, '--sandbox', this.sandbox);
     }
     args.push('--skip-git-repo-check', '-C', cwd, ...configArgs);
+    if (codexModelSupportsEffort(this.metadata.models, model, effort)) {
+      args.push('-c', `model_reasoning_effort=${tomlEscapeString(effort!)}`);
+    }
     if (model) {
       args.push('-m', model);
     }
