@@ -70,7 +70,7 @@ The queue is also included in the `GET /conversations/:id` response as `messageQ
 ```
 GET /backends
 ```
-Returns `{ backends: [{ id, label, icon, capabilities, models? }] }` — metadata for every registered adapter. The optional `models` array lists available models: `[{ id, label, family, description?, costTier?, default?, supportedEffortLevels? }]`. `supportedEffortLevels` is an optional array of `'low' | 'medium' | 'high' | 'xhigh' | 'max'` indicating which adaptive reasoning levels the model accepts; the UI uses its presence to decide whether to show the effort dropdown. The `xhigh` level is currently Opus 4.7-only; `max` is Opus 4.6+ only. Backends without model selection (e.g. Kiro) omit the `models` field entirely.
+Returns `{ backends: [{ id, label, icon, capabilities, models? }] }` — metadata for every registered adapter. The optional `models` array lists available models: `[{ id, label, family, description?, costTier?, default?, supportedEffortLevels? }]`. `supportedEffortLevels` is an optional array of `'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'` indicating which adaptive reasoning levels the model accepts; the UI uses its presence to decide whether to show the effort dropdown. Values are backend/model-specific: Codex may expose protocol-only `none` / `minimal`, while Claude Code exposes `max` on supported Opus models. Backends without model selection (e.g. Kiro) omit the `models` field entirely.
 
 ## 3.7 Messaging and Streaming
 
@@ -80,7 +80,7 @@ POST /conversations/:id/message  [CSRF]
 Body: { content: string, backend?: string, model?: string, effort?: string }
 ```
 - Saves user message, updates backend and/or model if changed
-- If `effort` differs from the stored value, updates it (and silently downgrades when the current model doesn't support the requested level)
+- If `effort` differs from the stored value, updates it. Unsupported requests fall back to `high` when the current model supports it, then the model's first supported effort level.
 - Determines if new CLI session (`messageCount === 0`) or resume
 - New sessions: prepends workspace context injection (not stored in messages)
 - Spawns CLI process, stores in `activeStreams` map

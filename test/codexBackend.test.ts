@@ -1,5 +1,6 @@
 import { BaseBackendAdapter } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
+import type { ModelOption } from '../src/types';
 import {
   CodexAdapter,
   extractCodexToolDetails,
@@ -9,6 +10,8 @@ import {
   isParentTurnCompleted,
   deriveCodexUsage,
   buildCodexThreadSecurityParams,
+  normalizeCodexModelOption,
+  buildCodexTurnStartParams,
 } from '../src/services/backends/codex';
 
 // ── CodexAdapter metadata ───────────────────────────────────────────────────
@@ -52,7 +55,74 @@ describe('CodexAdapter', () => {
     // Exactly one default model
     expect(models!.filter((m) => m.default).length).toBe(1);
     // Fallback list includes the GPT family
-    expect(models!.find((m) => m.id === 'gpt-5.5')).toBeDefined();
+    const gpt55 = models!.find((m) => m.id === 'gpt-5.5');
+    expect(gpt55).toBeDefined();
+    expect(gpt55!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh']);
+  });
+
+  test('normalizes Codex model/list reasoning effort metadata', () => {
+    const model = normalizeCodexModelOption({
+      id: 'gpt-5.5',
+      displayName: 'GPT-5.5',
+      description: 'Frontier model',
+      isDefault: true,
+      defaultReasoningEffort: 'medium',
+      supportedReasoningEfforts: [
+        { reasoningEffort: 'none', description: 'No reasoning' },
+        { reasoningEffort: 'minimal', description: 'Minimal reasoning' },
+        { reasoningEffort: 'low', description: 'Low reasoning' },
+        { reasoningEffort: 'high', description: 'High reasoning' },
+        { reasoningEffort: 'xhigh', description: 'Extra high reasoning' },
+      ],
+    });
+
+    expect(model).toEqual({
+      id: 'gpt-5.5',
+      label: 'GPT-5.5',
+      family: 'gpt',
+      description: 'Frontier model',
+      costTier: 'medium',
+      default: true,
+      supportedEffortLevels: ['none', 'minimal', 'low', 'high', 'xhigh'],
+    });
+  });
+
+  test('normalizes debug-style Codex reasoning metadata defensively', () => {
+    const model = normalizeCodexModelOption({
+      slug: 'gpt-5.4',
+      display_name: 'GPT-5.4',
+      supported_reasoning_levels: [
+        { effort: 'low' },
+        { effort: 'medium' },
+        { effort: 'high' },
+        { effort: 'xhigh' },
+        { effort: 'unsupported-value' },
+      ],
+    });
+
+    expect(model!.id).toBe('gpt-5.4');
+    expect(model!.label).toBe('GPT-5.4');
+    expect(model!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh']);
+  });
+
+  test('buildCodexTurnStartParams forwards supported effort only', () => {
+    const models = [
+      { id: 'gpt-5.5', label: 'GPT-5.5', family: 'gpt', supportedEffortLevels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+      { id: 'basic', label: 'Basic', family: 'gpt' },
+    ] satisfies ModelOption[];
+    const input = [{ type: 'text', text: 'hello', text_elements: [] }];
+
+    expect(buildCodexTurnStartParams('t1', input, 'gpt-5.5', 'minimal', models)).toEqual({
+      threadId: 't1',
+      input,
+      model: 'gpt-5.5',
+      effort: 'minimal',
+    });
+    expect(buildCodexTurnStartParams('t1', input, 'basic', 'minimal', models)).toEqual({
+      threadId: 't1',
+      input,
+      model: 'basic',
+    });
   });
 
   test('stdinInput is true (Codex accepts mid-turn user input via turn/steer)', () => {
@@ -692,6 +762,39 @@ describe('CodexAdapter.runOneShot', () => {
     const idx = capturedArgs!.indexOf('-m');
     expect(idx).toBeGreaterThan(-1);
     expect(capturedArgs![idx + 1]).toBe('gpt-5.5-codex');
+  });
+
+  test('forwards supported effort option as model_reasoning_effort config to codex exec', async () => {
+    let capturedArgs: string[] | null = null;
+    let resultPromise!: Promise<string>;
+
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: () => ({
+          on: () => {},
+          stdout: { on: () => {} },
+          stderr: { on: () => {} },
+          stdin: { write: () => true, end: () => {} },
+          kill: () => {},
+          killed: false,
+          exitCode: null,
+        }),
+        execFile: (_cmd: string, args: string[], _opts: object, cb: (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void) => {
+          capturedArgs = args;
+          setImmediate(() => cb(null, 'ok', ''));
+          return { stdin: { end: () => {} } };
+        },
+      }));
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp', model: 'gpt-5.5', effort: 'xhigh' });
+    });
+
+    await resultPromise;
+    expect(capturedArgs).not.toBeNull();
+    const configIdx = capturedArgs!.indexOf('-c');
+    expect(configIdx).toBeGreaterThan(-1);
+    expect(capturedArgs![configIdx + 1]).toBe('model_reasoning_effort="xhigh"');
   });
 
   test('passes mcpServers as -c flags when mcpServers are provided', async () => {

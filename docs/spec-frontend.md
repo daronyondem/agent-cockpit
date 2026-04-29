@@ -163,7 +163,7 @@ V2 is the production UI. The legacy vanilla-JS UI at `/index.html` is preserved 
   **Composer pickers (`ComposerPicks` + `PickChip`):** the chip row below the textarea renders three cascading pickers — **Backend**, **Model**, **Effort** — sourced from `AgentApi.getBackendsCached()` (one fetch per session for the static `BackendMetadata[]` registry). Each chip is a `PickChip` that visually matches the legacy deck styling (label + bold current value + chevron glyph) but layers a transparent native `<select>` on top via absolute positioning so a single click opens the OS-native dropdown — keeping the full keyboard/a11y behavior of `<select>` without reimplementing a popover. Options read off the registry:
   - **Backend** — `backends[].label` as visible label, `backends[].id` as value. Disabled (no options) until the fetch resolves.
   - **Model** — only the models of the currently selected backend (`backend.models[]`). Disabled when the backend exposes no models (some backends are model-less). Each option renders `costTierDot(tier)` (● for `high`, ◐ for `mid`, ○ for `low`/unknown) followed by `m.label` so users can gauge cost at a glance.
-  - **Effort** — only the `supportedEffortLevels` of the currently selected model. Disabled when the model doesn't expose effort levels. Human labels (`low` → "Low", `xhigh` → "Extra high", `max` → "Max") come from a local map.
+  - **Effort** — only the `supportedEffortLevels` of the currently selected model. Disabled when the model doesn't expose effort levels. Values are backend/model-specific and may include Codex-only `none` / `minimal`, common `low` / `medium` / `high` / `xhigh`, and Claude-only `max`.
 
   **Cascade reconciliation** — a `useEffect` inside `ComposerPicks` watches `(backends, composerBackend, composerModel, composerEffort)` and pushes reconciled values to the store whenever the catalog shifts under the user's selection:
   - If `composerBackend` isn't in the registry (e.g. a deleted backend still persisted on the conv record), snap to the first backend.
@@ -358,7 +358,7 @@ Tabbed layout with five tabs:
 - System prompt textarea (global)
 - Default backend selector (also auto-updated when user sends a message with a different backend)
 - Default model selector (shown only when the selected backend has models; auto-updated with backend changes)
-- **Default Effort selector** (shown only when the default model declares `supportedEffortLevels`; options are dynamically built from the model's supported list — e.g. Opus 4.7 shows `low/medium/high/xhigh/max`, Opus 4.6 shows `low/medium/high/max`, Sonnet shows `low/medium/high`, Haiku hides the row entirely). Changing the default model to one without effort support drops `defaultEffort` on save.
+- **Default Effort selector** (shown only when the default model declares `supportedEffortLevels`; options are dynamically built from the selected backend/model's supported list — e.g. Codex may show `none/minimal/low/medium/high/xhigh`, Opus 4.7 shows `low/medium/high/xhigh/max`, Sonnet shows `low/medium/high`, Haiku hides the row entirely). Changing the default model to one without effort support drops `defaultEffort` on save.
 - Working directory
 
 **Usage Stats tab:**

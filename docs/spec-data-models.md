@@ -142,7 +142,7 @@ Together these guarantee that a workspace index always parses on disk and that c
     titleManuallySet?: boolean, // true once `renameConversation()` has run. Locks the title against all automatic mutations (resetSession, addMessage's first-message snapshot, generateAndUpdateTitle). Absent when the title is still auto-managed.
     backend: string,            // 'claude-code'
     model?: string,             // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
-    effort?: string,            // Adaptive reasoning effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. `xhigh` is Opus 4.7-only; `max` is Opus 4.6+ only. Silently downgraded when the current model doesn't support the stored level.
+    effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
     currentSessionId: string,   // UUID of the active CLI session
     lastActivity: string,       // ISO 8601, updated on every message
     lastMessage: string|null,   // First 100 chars of last message content
@@ -332,7 +332,7 @@ Flat object assembled from workspace index + active session file:
   title: string,
   backend: string,
   model?: string,               // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5')
-  effort?: string,              // Adaptive reasoning effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  effort?: string,              // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   workingDir: string,           // The workspace path
   currentSessionId: string,
   sessionNumber: number,        // Active session number

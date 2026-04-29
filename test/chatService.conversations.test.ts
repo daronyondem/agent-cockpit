@@ -546,6 +546,8 @@ describe('effort selection', () => {
           models: [
             { id: 'opus', label: 'Opus', family: 'opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] },
             { id: 'sonnet', label: 'Sonnet', family: 'sonnet', default: true, supportedEffortLevels: ['low', 'medium', 'high'] },
+            { id: 'codex', label: 'Codex', family: 'gpt', supportedEffortLevels: ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'] },
+            { id: 'low-only', label: 'Low Only', family: 'gpt', supportedEffortLevels: ['low'] },
             { id: 'haiku', label: 'Haiku', family: 'haiku' },
           ],
         };
@@ -616,6 +618,16 @@ describe('effort selection', () => {
     expect(loaded!.effort).toBe('high');
   });
 
+  test('unsupported effort prefers high before lower supported levels', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'codex', 'max');
+    expect(conv.effort).toBe('high');
+  });
+
+  test('unsupported effort falls back to first supported level when high is unavailable', async () => {
+    const conv = await svc.createConversation('T', undefined, 'claude-code', 'low-only', 'high');
+    expect(conv.effort).toBe('low');
+  });
+
   test('updateConversationEffort clears effort with null', async () => {
     const conv = await svc.createConversation('T', undefined, 'claude-code', 'opus', 'max');
     await svc.updateConversationEffort(conv.id, null);
@@ -631,4 +643,3 @@ describe('effort selection', () => {
 });
 
 // ── Messages ─────────────────────────────────────────────────────────────────
-

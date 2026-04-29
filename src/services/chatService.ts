@@ -453,8 +453,8 @@ export class ChatService {
   /**
    * Returns the effort value that should be stored on a conversation given its
    * backend, model, and a requested effort. If the backend/model pair doesn't
-   * support the requested level, the result is silently downgraded (to the
-   * highest supported level below the request) or cleared if nothing matches.
+   * support the requested level, the result falls back to `high` when
+   * available, then the first supported level, or clears if nothing matches.
    */
   private _effectiveEffort(backend: string, model: string | undefined, requested: EffortLevel | undefined): EffortLevel | undefined {
     if (!requested || !model) return undefined;
@@ -463,14 +463,7 @@ export class ChatService {
     const supported = modelOption?.supportedEffortLevels;
     if (!supported || supported.length === 0) return undefined;
     if (supported.includes(requested)) return requested;
-    // Downgrade: pick the highest supported level that is <= the request.
-    const order: EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
-    const requestedIdx = order.indexOf(requested);
-    for (let i = requestedIdx - 1; i >= 0; i--) {
-      if (supported.includes(order[i])) return order[i];
-    }
-    // Nothing at or below the request is supported — fall back to the first
-    // supported level rather than dropping it entirely.
+    if (supported.includes('high')) return 'high';
     return supported[0];
   }
 
