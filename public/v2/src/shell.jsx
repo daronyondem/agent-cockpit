@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Sidebar, Ico, AgentApi, StreamStore, KbBrowser, FilesBrowser, DialogProvider, useDialog, ToastProvider, useToasts, marked, DOMPurify, UpdateModal, RestartOverlay, WorkspaceSettingsModal, SessionsModal */
+/* global React, ReactDOM, Sidebar, Ico, AgentApi, StreamStore, KbBrowser, FilesBrowser, DialogProvider, useDialog, ToastProvider, useToasts, marked, DOMPurify, FileLinkUtils, UpdateModal, RestartOverlay, WorkspaceSettingsModal, SessionsModal */
 
 /* Agent Cockpit v2 — real app entry.
    PR 4a scope: long-conversation rendering — progress-breadcrumb
@@ -27,6 +27,7 @@ const AgentIndexContext = React.createContext({ agentIds: new Set(), childrenByA
 const FileViewerContext = React.createContext({
   wsHash: null,
   convId: null,
+  workingDir: null,
   openFileViewer: null,
   openLightbox: null,
 });
@@ -984,7 +985,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
               No messages yet. Say hello below.
             </div>
           )}
-          <FileViewerContext.Provider value={{ wsHash: conv.workspaceHash || null, convId, openFileViewer, openLightbox }}>
+          <FileViewerContext.Provider value={{ wsHash: conv.workspaceHash || null, convId, workingDir: conv.workingDir || null, openFileViewer, openLightbox }}>
           <AgentIndexProvider messages={messages}>
             {collapseProgressRuns(messages).map(entry => {
               if (entry.kind === 'plain') {
@@ -1189,6 +1190,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
           viewPath={fileViewer.viewPath}
           imageUrl={fileViewer.imageUrl}
           displayPath={fileViewer.displayPath || fileViewer.filename}
+          line={fileViewer.line || null}
           onClose={closeFileViewer}
         />
       ) : null}
@@ -1591,16 +1593,34 @@ function renderSegment(seg, key){
   return null;
 }
 
+function buildWorkspaceFileDescriptor(ref, wsHash){
+  if (!ref || !ref.filePath || !wsHash) return null;
+  const filename = (ref.filePath.split('/').pop() || ref.filePath);
+  const basePath = 'workspaces/' + encodeURIComponent(wsHash) + '/files?path=' + encodeURIComponent(ref.filePath);
+  const viewPath = basePath + '&mode=view';
+  const downloadUrl = AgentApi.chatUrl(basePath + '&mode=download');
+  const isImage = CHAT_IMAGE_EXTS.test(filename);
+  return {
+    filename,
+    viewPath,
+    imageUrl: isImage ? downloadUrl : null,
+    displayPath: ref.filePath,
+    line: ref.line || null,
+    column: ref.column || null,
+  };
+}
+
 function TextSegment({ content }){
-  const { wsHash, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
+  const { wsHash, workingDir, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
   const { cleaned, files } = extractFileDeliveries(content);
   const proseRef = React.useRef(null);
 
   /* After marked emits `.code-block` chrome, hljs highlights each `pre code`
      that hasn't been processed yet, and a delegated click handler wires the
-     Copy + Show more buttons plus the image-lightbox interception. Re-runs
-     when content changes during streaming. Images inside `<a>` are skipped
-     so a linked image still navigates instead of zooming. */
+     Copy + Show more buttons, local workspace file-link previews, and the
+     image-lightbox interception. Re-runs when content changes during
+     streaming. Images inside `<a>` are skipped so a linked image still
+     navigates instead of zooming. */
   React.useEffect(() => {
     const root = proseRef.current;
     if (!root) return;
@@ -1632,16 +1652,35 @@ function TextSegment({ content }){
         toggleBtn.textContent = block.classList.contains('collapsed') ? 'Show more' : 'Show less';
         return;
       }
-      if (e.target.closest && e.target.closest('a')) return;
+      const link = e.target.closest && e.target.closest('a[href]');
+      if (link && root.contains(link)) {
+        const ref = FileLinkUtils && FileLinkUtils.resolveLocalFileHref
+          ? FileLinkUtils.resolveLocalFileHref(link.getAttribute('href'), workingDir)
+          : null;
+        const descriptor = buildWorkspaceFileDescriptor(ref, wsHash);
+        if (descriptor && openFileViewer) {
+          e.preventDefault();
+          openFileViewer(descriptor);
+        }
+        return;
+      }
       const img = e.target.closest && e.target.closest('img');
       if (img && img.src && openLightbox) {
         e.preventDefault();
         openLightbox(img.src, img.alt || '');
       }
     }
+    root.querySelectorAll('a[href]').forEach(link => {
+      const ref = FileLinkUtils && FileLinkUtils.resolveLocalFileHref
+        ? FileLinkUtils.resolveLocalFileHref(link.getAttribute('href'), workingDir)
+        : null;
+      if (!ref) return;
+      link.classList.add('local-file-link');
+      link.title = ref.line ? `Preview ${ref.filePath}:${ref.line}` : `Preview ${ref.filePath}`;
+    });
     root.addEventListener('click', onClick);
     return () => root.removeEventListener('click', onClick);
-  }, [cleaned, openLightbox]);
+  }, [cleaned, openFileViewer, openLightbox, workingDir, wsHash]);
 
   return (
     <>
@@ -2878,13 +2917,47 @@ function DreamStepper({ progress }){
 
 const CHAT_IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 
+function FileViewerCode({ content, language, line }){
+  const targetRef = React.useRef(null);
+  React.useEffect(() => {
+    if (!line || !targetRef.current) return;
+    targetRef.current.scrollIntoView({ block: 'center' });
+  }, [content, line]);
+
+  if (!line) {
+    return <pre className="file-viewer-pre"><code className={language ? 'language-' + language : ''}>{content}</code></pre>;
+  }
+
+  const lines = String(content || '').split('\n');
+  return (
+    <pre className="file-viewer-pre file-viewer-lines">
+      <code className={language ? 'language-' + language : ''}>
+        {lines.map((text, i) => {
+          const n = i + 1;
+          const active = n === line;
+          return (
+            <span
+              key={n}
+              ref={active ? targetRef : null}
+              className={"file-viewer-line" + (active ? " is-target" : "")}
+            >
+              <span className="file-viewer-line-no">{n}</span>
+              <span className="file-viewer-line-text">{text || ' '}</span>
+            </span>
+          );
+        })}
+      </code>
+    </pre>
+  );
+}
+
 /* Right-slide file preview panel. Opens when the user clicks "View" on a
    file card (FILE_DELIVERY from assistant or [Uploaded files: …] from user).
    Caller builds URLs and passes a descriptor; panel renders the image
    inline if `imageUrl` is set, otherwise fetches `viewPath` (a path
    relative to `/api/chat/`) for text. Closed by the X button or when the
    conv changes. */
-function FileViewerPanel({ filename, viewPath, imageUrl, displayPath, onClose }){
+function FileViewerPanel({ filename, viewPath, imageUrl, displayPath, line, onClose }){
   const isImage = !!imageUrl;
   const [state, setState] = React.useState({ loading: !isImage, error: null, content: '', language: '' });
 
@@ -2913,7 +2986,7 @@ function FileViewerPanel({ filename, viewPath, imageUrl, displayPath, onClose })
   return (
     <aside className="file-viewer" role="dialog" aria-label={`File preview: ${filename}`}>
       <div className="file-viewer-head">
-        <span className="file-viewer-title" title={displayPath || filename}>{filename}</span>
+        <span className="file-viewer-title" title={displayPath || filename}>{filename}{line ? `:${line}` : ''}</span>
         <button className="file-viewer-close" type="button" onClick={onClose} title="Close" aria-label="Close">{Ico.x ? Ico.x(14) : '×'}</button>
       </div>
       <div className="file-viewer-body">
@@ -2924,7 +2997,7 @@ function FileViewerPanel({ filename, viewPath, imageUrl, displayPath, onClose })
         ) : state.error ? (
           <div className="u-err" style={{padding:'12px'}}>{state.error}</div>
         ) : (
-          <pre className="file-viewer-pre"><code className={state.language ? 'language-' + state.language : ''}>{state.content}</code></pre>
+          <FileViewerCode content={state.content} language={state.language} line={line}/>
         )}
       </div>
     </aside>
