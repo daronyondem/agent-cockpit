@@ -1664,8 +1664,25 @@ function buildWorkspaceFileDescriptor(ref, wsHash){
   };
 }
 
+function buildConversationArtifactDescriptor(ref, convId){
+  if (!ref || !ref.filename || !convId) return null;
+  const filename = ref.filename;
+  const basePath = 'conversations/' + encodeURIComponent(convId) + '/files/' + encodeURIComponent(filename);
+  const viewPath = basePath + '?mode=view';
+  const downloadUrl = AgentApi.chatUrl(basePath + '?mode=download');
+  const isImage = CHAT_IMAGE_EXTS.test(filename);
+  return {
+    filename,
+    viewPath,
+    imageUrl: isImage ? downloadUrl : null,
+    displayPath: ref.filePath || filename,
+    line: ref.line || null,
+    column: ref.column || null,
+  };
+}
+
 function TextSegment({ content }){
-  const { wsHash, workingDir, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
+  const { wsHash, convId, workingDir, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
   const { cleaned, files } = extractFileDeliveries(content);
   const proseRef = React.useRef(null);
 
@@ -1708,8 +1725,18 @@ function TextSegment({ content }){
       }
       const link = e.target.closest && e.target.closest('a[href]');
       if (link && root.contains(link)) {
+        const href = link.getAttribute('href');
+        const artifactRef = FileLinkUtils && FileLinkUtils.resolveConversationArtifactHref
+          ? FileLinkUtils.resolveConversationArtifactHref(href, convId)
+          : null;
+        const artifactDescriptor = buildConversationArtifactDescriptor(artifactRef, convId);
+        if (artifactDescriptor && openFileViewer) {
+          e.preventDefault();
+          openFileViewer(artifactDescriptor);
+          return;
+        }
         const ref = FileLinkUtils && FileLinkUtils.resolveLocalFileHref
-          ? FileLinkUtils.resolveLocalFileHref(link.getAttribute('href'), workingDir)
+          ? FileLinkUtils.resolveLocalFileHref(href, workingDir)
           : null;
         const descriptor = buildWorkspaceFileDescriptor(ref, wsHash);
         if (descriptor && openFileViewer) {
@@ -1725,8 +1752,17 @@ function TextSegment({ content }){
       }
     }
     root.querySelectorAll('a[href]').forEach(link => {
+      const href = link.getAttribute('href');
+      const artifactRef = FileLinkUtils && FileLinkUtils.resolveConversationArtifactHref
+        ? FileLinkUtils.resolveConversationArtifactHref(href, convId)
+        : null;
+      if (artifactRef) {
+        link.classList.add('local-file-link');
+        link.title = artifactRef.line ? `Preview ${artifactRef.filename}:${artifactRef.line}` : `Preview ${artifactRef.filename}`;
+        return;
+      }
       const ref = FileLinkUtils && FileLinkUtils.resolveLocalFileHref
-        ? FileLinkUtils.resolveLocalFileHref(link.getAttribute('href'), workingDir)
+        ? FileLinkUtils.resolveLocalFileHref(href, workingDir)
         : null;
       if (!ref) return;
       link.classList.add('local-file-link');
@@ -1734,7 +1770,7 @@ function TextSegment({ content }){
     });
     root.addEventListener('click', onClick);
     return () => root.removeEventListener('click', onClick);
-  }, [cleaned, openFileViewer, openLightbox, workingDir, wsHash]);
+  }, [cleaned, convId, openFileViewer, openLightbox, workingDir, wsHash]);
 
   return (
     <>

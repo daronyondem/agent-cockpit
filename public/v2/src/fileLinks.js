@@ -80,8 +80,32 @@
     };
   }
 
+  function resolveConversationArtifactHref(rawHref, convId){
+    const id = String(convId || '').trim();
+    if (!id) return null;
+    const hrefPath = pathFromHref(rawHref);
+    if (!hrefPath || hasParentTraversal(hrefPath)) return null;
+    const parsed = splitLineSuffix(hrefPath);
+    if (!parsed.filePath || !parsed.filePath.startsWith('/')) return null;
+
+    const marker = '/data/chat/artifacts/' + id + '/';
+    const markerIndex = parsed.filePath.indexOf(marker);
+    if (markerIndex < 0) return null;
+
+    const filename = parsed.filePath.slice(markerIndex + marker.length);
+    if (!filename || filename.includes('/') || filename.includes('\\')) return null;
+
+    return {
+      filePath: parsed.filePath,
+      filename,
+      line: parsed.line,
+      column: parsed.column,
+    };
+  }
+
   return {
     resolveLocalFileHref,
+    resolveConversationArtifactHref,
     _private: {
       pathFromHref,
       splitLineSuffix,
