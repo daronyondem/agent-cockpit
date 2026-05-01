@@ -207,12 +207,46 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
   return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
 }
 
-export function destroyChatRouterEnv(env: ChatRouterEnv): Promise<void> {
-  return new Promise<void>((resolve) => {
-    env.wsShutdown();
-    env.server.close(() => {
-      fs.rmSync(env.tmpDir, { recursive: true, force: true });
-      resolve();
+async function removeTmpDirWithRetry(tmpDir: string): Promise<void> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOTEMPTY' && code !== 'EBUSY' && code !== 'EPERM') throw err;
+
+      lastError = err;
+      await new Promise((resolve) => setTimeout(resolve, 25 * (attempt + 1)));
+    }
+  }
+
+  throw lastError;
+}
+
+async function waitForActiveStreamsToDrain(activeStreams: Map<string, ActiveStreamEntry>): Promise<void> {
+  const deadline = Date.now() + 2000;
+
+  while (activeStreams.size > 0) {
+    if (Date.now() > deadline) {
+      for (const entry of activeStreams.values()) entry.abort();
+      throw new Error(`Timed out waiting for ${activeStreams.size} active chat stream(s) to finish`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+export async function destroyChatRouterEnv(env: ChatRouterEnv): Promise<void> {
+  await waitForActiveStreamsToDrain(env.activeStreams);
+  env.wsShutdown();
+  await new Promise<void>((resolve, reject) => {
+    env.server.close((err?: Error) => {
+      if (err) reject(err);
+      else resolve();
     });
   });
+  await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+  await removeTmpDirWithRetry(env.tmpDir);
 }
