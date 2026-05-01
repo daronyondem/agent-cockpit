@@ -30,7 +30,7 @@ import { KbDreamService } from '../services/knowledgeBase/dream';
 import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
-import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel } from '../types';
+import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, StreamErrorSource, MemoryUpdateEvent } from '../types';
 import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
@@ -50,10 +50,18 @@ interface ProcessStreamDeps {
   chatService: ChatService;
 }
 
+interface PendingMessageSend {
+  abortRequested?: {
+    message: string;
+    source: 'abort';
+    at: string;
+  };
+}
+
 /**
  * Processes a CLI stream, accumulating state and emitting typed frames.
- * Transport-agnostic: the caller provides `emit` (WS send)
- * and `isClosed` (checks if the connection is gone).
+ * Transport-agnostic: the caller provides `emit` (WS send/buffer)
+ * and `isClosed` (checks whether this server-owned stream was cancelled).
  */
 export async function processStream(
   convId: string,
@@ -159,6 +167,85 @@ export async function processStream(
     });
   }
 
+  let terminalErrorPersisted = false;
+  let terminalErrorSeen = false;
+  let doneEmitted = false;
+
+  async function flushAccumulatedAssistant(turn: 'progress' | 'final' = 'progress', forceEmit = false): Promise<void> {
+    const finalToolActivity = computeToolDurations(toolActivityAccumulator);
+    const finalBlocks = finalizeBlocks(finalToolActivity);
+    const text = fullResponse.trim() || resultText?.trim() || '';
+    const hasPartialState = !!text || !!thinkingText.trim() || finalToolActivity.length > 0 || finalBlocks.length > 0;
+    if (!hasPartialState) return;
+
+    const blocksToPersist = [...finalBlocks];
+    if (!fullResponse.trim() && resultText?.trim()) {
+      blocksToPersist.push({ type: 'text', content: resultText.trim() });
+    }
+
+    const assistantMsg = await chatService.addMessage(
+      convId,
+      'assistant',
+      text || 'Partial assistant output before stream failure',
+      backend,
+      thinkingText.trim() || null,
+      finalToolActivity.length > 0 ? finalToolActivity : undefined,
+      turn,
+      blocksToPersist.length > 0 ? blocksToPersist : undefined,
+    );
+    if (assistantMsg && (forceEmit || !isClosed())) emit({ type: 'assistant_message', message: assistantMsg });
+    if (text) maybeUpdateTitle();
+
+    fullResponse = '';
+    thinkingText = '';
+    resultText = null;
+    toolActivityAccumulator = [];
+    blocks = [];
+  }
+
+  async function persistTerminalError(message: string, source: StreamErrorSource, forceEmit = false): Promise<void> {
+    if (terminalErrorPersisted) return;
+    terminalErrorPersisted = true;
+    await flushAccumulatedAssistant('progress', forceEmit);
+    const errorMsg = await chatService.addStreamErrorMessage(convId, backend, message, source);
+    if (errorMsg && (forceEmit || !isClosed())) emit({ type: 'assistant_message', message: errorMsg });
+  }
+
+  async function finalizeTerminalError(message: string, source: StreamErrorSource, forceEmit = false): Promise<void> {
+    if (entry.terminalFinalizing) return entry.terminalFinalizing;
+    entry.terminalFinalizing = (async () => {
+      terminalErrorSeen = true;
+      await persistTerminalError(message, source, forceEmit);
+      const shouldEmitTerminal = forceEmit || !isClosed();
+      if (shouldEmitTerminal) emit({ type: 'error', error: message, terminal: true, source });
+      if (shouldEmitTerminal && !doneEmitted) {
+        if (titleUpdatePromise) await titleUpdatePromise;
+        doneEmitted = true;
+        emit({ type: 'done' });
+      }
+    })();
+    return entry.terminalFinalizing;
+  }
+
+  let abortFinalizePromise: Promise<void> | null = null;
+  entry.finalizeAbort = async () => {
+    if (entry.terminalFinalizing) return entry.terminalFinalizing;
+    if (abortFinalizePromise) return abortFinalizePromise;
+    abortFinalizePromise = (async () => {
+      if (entry.terminalFinalizing) {
+        await entry.terminalFinalizing;
+        return;
+      }
+      const abort = entry.abortRequested || {
+        message: 'Aborted by user',
+        source: 'abort' as StreamErrorSource,
+        at: new Date().toISOString(),
+      };
+      await finalizeTerminalError(abort.message, abort.source, true);
+    })();
+    return abortFinalizePromise;
+  };
+
   function maybeUpdateTitle() {
     if (titleUpdateTriggered || !entry.needsTitleUpdate || !entry.titleUpdateMessage) return;
     titleUpdateTriggered = true;
@@ -177,6 +264,16 @@ export async function processStream(
   try {
     for await (const event of stream) {
       if (isClosed()) break;
+      entry.lastEventAt = new Date().toISOString();
+      if (entry.abortRequested && !terminalErrorSeen) {
+        if (entry.finalizeAbort) {
+          await entry.finalizeAbort();
+        } else {
+          await finalizeTerminalError(entry.abortRequested.message, entry.abortRequested.source);
+        }
+        break;
+      }
+      if (terminalErrorSeen && event.type !== 'done') continue;
 
       if (event.type === 'text') {
         fullResponse += event.content;
@@ -284,17 +381,29 @@ export async function processStream(
         }
       } else if (event.type === 'error') {
         console.error(`[chat] Stream error for conv=${convId}:`, event.error);
-        emit({ type: 'error', error: event.error });
+        if (event.terminal === false) {
+          emit({ type: 'error', error: event.error, terminal: false, source: event.source || 'backend' });
+        } else {
+          await finalizeTerminalError(event.error, event.source || 'backend');
+          break;
+        }
       } else if (event.type === 'done') {
         const apiErrPattern = /^API Error:\s*\d{3}\s/;
         const finalToolActivity = computeToolDurations(toolActivityAccumulator);
         const finalToolActivityArg = finalToolActivity.length > 0 ? finalToolActivity : undefined;
         const finalBlocks = finalizeBlocks(finalToolActivity);
         const finalBlocksArg = finalBlocks.length > 0 ? finalBlocks : undefined;
-        if (fullResponse.trim()) {
+        if (terminalErrorPersisted) {
+          console.log(`[chat] Stream done for conv=${convId} after terminal error`);
+        } else if (fullResponse.trim()) {
           if (apiErrPattern.test(fullResponse.trim())) {
-            console.log(`[chat] Stream done for conv=${convId}, detected API error in text — not saving as message`);
-            emit({ type: 'error', error: fullResponse.trim() });
+            const apiError = fullResponse.trim();
+            console.log(`[chat] Stream done for conv=${convId}, detected API error in text — saving stream error`);
+            fullResponse = '';
+            thinkingText = '';
+            toolActivityAccumulator = [];
+            blocks = [];
+            await finalizeTerminalError(apiError, 'backend');
           } else {
             console.log(`[chat] Stream done for conv=${convId}, saving final segment len=${fullResponse.trim().length}, tools=${finalToolActivity.length}, blocks=${finalBlocks.length}`);
             const assistantMsg = await chatService.addMessage(convId, 'assistant', fullResponse.trim(), backend, thinkingText.trim() || null, finalToolActivityArg, 'final', finalBlocksArg);
@@ -319,14 +428,21 @@ export async function processStream(
         toolActivityAccumulator = [];
         blocks = [];
         if (titleUpdatePromise) await titleUpdatePromise;
-        emit({ type: 'done' });
+        if (!doneEmitted) {
+          emit({ type: 'done' });
+          doneEmitted = true;
+        }
       }
+    }
+    if (terminalErrorPersisted && !doneEmitted && !isClosed()) {
+      if (titleUpdatePromise) await titleUpdatePromise;
+      emit({ type: 'done' });
+      doneEmitted = true;
     }
   } catch (err: unknown) {
     console.error(`[chat] Stream exception for conv=${convId}:`, err);
     if (!isClosed()) {
-      emit({ type: 'error', error: (err as Error).message });
-      emit({ type: 'done' });
+      await finalizeTerminalError((err as Error).message, 'server');
     }
   } finally {
     onDone();
@@ -349,6 +465,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   const packageJson = require('../../package.json');
 
   const activeStreams = new Map<string, ActiveStreamEntry>();
+  const pendingMessageSends = new Map<string, PendingMessageSend>();
   const memoryWatcher = new MemoryWatcher();
   const cliProfileAuth = new CliProfileAuthService(chatService.baseDir);
   // Per-conversation map of last-known memory file fingerprints (filename → sha-ish)
@@ -356,6 +473,95 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // Cleared when the watcher is unwatched so a re-watched conversation starts fresh.
   const memoryFingerprints = new Map<string, Map<string, string>>();
   let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected' | 'startStreamGracePeriod'> | null = null;
+
+  function hasInFlightTurn(convId: string): boolean {
+    return activeStreams.has(convId) || pendingMessageSends.has(convId);
+  }
+
+  function hasAnyInFlightTurn(): boolean {
+    return activeStreams.size > 0 || pendingMessageSends.size > 0;
+  }
+
+  function requestPendingAbort(convId: string): boolean {
+    const pending = pendingMessageSends.get(convId);
+    if (!pending) return false;
+    if (!pending.abortRequested) {
+      pending.abortRequested = {
+        message: 'Aborted by user',
+        source: 'abort',
+        at: new Date().toISOString(),
+      };
+    }
+    return true;
+  }
+
+  async function finalizePendingAbortIfRequested(convId: string, backend: string, pending: PendingMessageSend): Promise<boolean> {
+    const abort = pending.abortRequested;
+    if (!abort) return false;
+    if (wsFns) wsFns.clearBuffer(convId);
+    const errorMsg = await chatService.addStreamErrorMessage(convId, backend, abort.message, abort.source);
+    if (wsFns && errorMsg) wsFns.send(convId, { type: 'assistant_message', message: errorMsg });
+    if (wsFns) {
+      wsFns.send(convId, { type: 'error', error: abort.message, terminal: true, source: abort.source });
+      wsFns.send(convId, { type: 'done' });
+    }
+    memoryMcp.revokeMemoryMcpSession(convId);
+    kbSearchMcp.revokeKbSearchSession(convId);
+    return true;
+  }
+
+  async function abortActiveStream(convId: string): Promise<boolean> {
+    const entry = activeStreams.get(convId);
+    if (!entry) return false;
+
+    const message = 'Aborted by user';
+    const terminalAlreadyFinalizing = !!entry.terminalFinalizing;
+    if (!entry.abortRequested) {
+      entry.abortRequested = { message, source: 'abort', at: new Date().toISOString() };
+      if (!terminalAlreadyFinalizing) {
+        console.log(`[chat] Aborting active stream for conv=${convId}`);
+
+        try {
+          entry.abort();
+        } catch (err: unknown) {
+          console.warn(`[chat] Stream abort threw for conv=${convId}:`, (err as Error).message);
+        }
+
+        if (wsFns) wsFns.clearBuffer(convId);
+      }
+    }
+
+    try {
+      if (!entry.abortFinalizing) {
+        entry.abortFinalizing = (async () => {
+          if (entry.finalizeAbort) {
+            await entry.finalizeAbort();
+          } else {
+            const errorMsg = await chatService.addStreamErrorMessage(convId, entry.backend, message, 'abort');
+            if (wsFns && errorMsg) wsFns.send(convId, { type: 'assistant_message', message: errorMsg });
+            if (wsFns) {
+              wsFns.send(convId, { type: 'error', error: message, terminal: true, source: 'abort' });
+              wsFns.send(convId, { type: 'done' });
+            }
+          }
+        })();
+      }
+      await entry.abortFinalizing;
+    } catch (err: unknown) {
+      console.error(`[chat] Failed to persist stream abort for conv=${convId}:`, (err as Error).message);
+      if (wsFns) {
+        wsFns.send(convId, { type: 'error', error: message, terminal: true, source: 'abort' });
+        wsFns.send(convId, { type: 'done' });
+      }
+    }
+
+    if (activeStreams.get(convId) === entry) {
+      activeStreams.delete(convId);
+    }
+    memoryWatcher.unwatch(convId);
+    memoryFingerprints.delete(convId);
+    return true;
+  }
 
   /**
    * Fan out a `kb_state_update` frame to every conversation with an OPEN
@@ -365,6 +571,17 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
    * conversation (e.g. after uploading files via the KB Browser).
    */
   function broadcastKbStateUpdate(hash: string, frame: import('../types').KbStateUpdateEvent): void {
+    if (!wsFns) return;
+    const sent = new Set<string>();
+    wsFns.forEachConnected((convId) => {
+      if (chatService.getWorkspaceHashForConv(convId) !== hash) return;
+      if (sent.has(convId)) return;
+      sent.add(convId);
+      wsFns!.send(convId, frame);
+    });
+  }
+
+  function broadcastMemoryUpdate(hash: string, frame: MemoryUpdateEvent): void {
     if (!wsFns) return;
     const sent = new Set<string>();
     wsFns.forEachConnected((convId) => {
@@ -428,7 +645,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   const memoryMcp: MemoryMcpServer = createMemoryMcpServer({
     chatService,
     backendRegistry,
-    getWsFns: () => wsFns,
+    emitMemoryUpdate: broadcastMemoryUpdate,
   });
   router.use('/mcp', memoryMcp.router);
 
@@ -567,7 +784,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     if (!updateService) return res.status(501).json({ error: 'Update service not available' });
     try {
       const result = await updateService.triggerUpdate({
-        hasActiveStreams: () => activeStreams.size > 0,
+        hasActiveStreams: hasAnyInFlightTurn,
       });
       res.json(result);
     } catch (err: unknown) {
@@ -584,7 +801,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     if (!updateService) return res.status(501).json({ error: 'Update service not available' });
     try {
       const result = await updateService.restart({
-        hasActiveStreams: () => activeStreams.size > 0,
+        hasActiveStreams: hasAnyInFlightTurn,
       });
       if (result.success) {
         res.json(result);
@@ -718,7 +935,14 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // has not yet returned — a conversation is listed here while its stream is
   // running OR paused awaiting user input (plan approval / question).
   router.get('/active-streams', (_req: Request, res: Response) => {
-    res.json({ ids: Array.from(activeStreams.keys()) });
+    const streams = Array.from(activeStreams.entries()).map(([id, entry]) => ({
+      id,
+      backend: entry.backend,
+      startedAt: entry.startedAt || null,
+      lastEventAt: entry.lastEventAt || entry.startedAt || null,
+      connected: wsFns ? wsFns.isConnected(id) : false,
+    }));
+    res.json({ ids: streams.map(s => s.id), streams });
   });
 
   // ── Get single conversation ────────────────────────────────────────────────
@@ -790,11 +1014,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   router.delete('/conversations/:id', csrfGuard, async (req: Request, res: Response) => {
     try {
       const convId = param(req, 'id');
+      if (pendingMessageSends.has(convId)) {
+        return res.status(409).json({ error: 'Conversation is already streaming' });
+      }
       const entry = activeStreams.get(convId);
       if (entry) {
         entry.abort();
         activeStreams.delete(convId);
       }
+      if (wsFns) wsFns.clearBuffer(convId);
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
       memoryMcp.revokeMemoryMcpSession(convId);
@@ -811,11 +1039,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   router.patch('/conversations/:id/archive', csrfGuard, async (req: Request, res: Response) => {
     try {
       const convId = param(req, 'id');
+      if (pendingMessageSends.has(convId)) {
+        return res.status(409).json({ error: 'Conversation is already streaming' });
+      }
       const entry = activeStreams.get(convId);
       if (entry) {
         entry.abort();
         activeStreams.delete(convId);
       }
+      if (wsFns) wsFns.clearBuffer(convId);
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
       const ok = await chatService.archiveConversation(convId);
@@ -885,8 +1117,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
               return res.status(400).json({ error: 'each attachment must be an object' });
             }
             const am = a as { name?: unknown; path?: unknown };
-            if (typeof am.name !== 'string' || typeof am.path !== 'string') {
-              return res.status(400).json({ error: 'each attachment must have string name and path' });
+            if (typeof am.name !== 'string' || typeof am.path !== 'string' || am.path.trim() === '') {
+              return res.status(400).json({ error: 'each attachment must have string name and non-empty path' });
             }
           }
         }
@@ -971,7 +1203,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   router.post('/conversations/:id/reset', csrfGuard, async (req: Request, res: Response) => {
     try {
       const convId = param(req, 'id');
-      if (activeStreams.has(convId)) {
+      if (hasInFlightTurn(convId)) {
         return res.status(409).json({ error: 'Cannot reset session while streaming' });
       }
       // Capture the current backend BEFORE resetting the session, so
@@ -1067,6 +1299,23 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   });
 
+  router.post('/conversations/:id/abort', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const convId = param(req, 'id');
+      const conv = await chatService.getConversation(convId);
+      if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+
+      let aborted = await abortActiveStream(convId);
+      if (!aborted) aborted = requestPendingAbort(convId);
+      if (!aborted) {
+        return res.json({ ok: true, aborted: false });
+      }
+      res.json({ ok: true, aborted: true });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Send message + stream response ────────────────────────────────────────
   router.post('/conversations/:id/message', csrfGuard, async (req: Request, res: Response) => {
     const convId = param(req, 'id');
@@ -1085,24 +1334,30 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
     let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
-
-    try {
-      if (cliProfileId) {
-        if (cliProfileId !== conv.cliProfileId) {
-          if (conv.messages.length > 0) {
-            return res.status(409).json({ error: 'Cannot switch CLI profile after the active session has messages' });
-          }
-          await chatService.updateConversationCliProfile(convId, cliProfileId);
-        }
-      } else if (backend && backend !== conv.backend) {
-        await chatService.updateConversationBackend(convId, backend);
-      }
-    } catch (err: unknown) {
-      if (isCliProfileResolutionError(err)) {
-        return res.status(400).json({ error: (err as Error).message });
-      }
-      throw err;
+    if (hasInFlightTurn(convId)) {
+      return res.status(409).json({ error: 'Conversation is already streaming' });
     }
+
+    const pendingMessageSend: PendingMessageSend = {};
+    pendingMessageSends.set(convId, pendingMessageSend);
+    try {
+      try {
+        if (cliProfileId) {
+          if (cliProfileId !== conv.cliProfileId) {
+            if (conv.messages.length > 0) {
+              return res.status(409).json({ error: 'Cannot switch CLI profile after the active session has messages' });
+            }
+            await chatService.updateConversationCliProfile(convId, cliProfileId);
+          }
+        } else if (backend && backend !== conv.backend) {
+          await chatService.updateConversationBackend(convId, backend);
+        }
+      } catch (err: unknown) {
+        if (isCliProfileResolutionError(err)) {
+          return res.status(400).json({ error: (err as Error).message });
+        }
+        throw err;
+      }
     if (model !== undefined && model !== (conv.model || undefined)) {
       await chatService.updateConversationModel(convId, model || null);
     }
@@ -1125,6 +1380,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       return res.status(400).json({ error: `CLI profile vendor ${backendId} does not match backend ${backend}` });
     }
     const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backendId);
+    if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
+      return res.json({ userMessage: userMsg, streamReady: false, aborted: true });
+    }
 
     const isNewSession = conv.messages.length === 0;
 
@@ -1226,6 +1484,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       systemPrompt = parts.join('\n\n');
     }
 
+    if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
+      return res.json({ userMessage: userMsg, streamReady: false, aborted: true });
+    }
+
     const adapter = backendRegistry.get(backendId);
     if (!adapter) {
       return res.status(400).json({ error: `Unknown backend: ${backendId}` });
@@ -1246,10 +1508,17 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       console.log(`[kbSearchMcp] Issued token for conv=${convId} backend=${backendId}`);
     }
 
+    if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
+      return res.json({ userMessage: userMsg, streamReady: false, aborted: true });
+    }
+
     console.log(`[chat] Starting CLI stream for conv=${convId} session=${conv.currentSessionId} isNew=${isNewSession} backend=${backendId} workingDir=${conv.workingDir || 'default'}`);
     // Re-fetch conversation so we pick up any effort downgrade triggered by a
     // model change in this same request.
     const refreshedConv = await chatService.getConversation(convId);
+    if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
+      return res.json({ userMessage: userMsg, streamReady: false, aborted: true });
+    }
     const effectiveEffort = effort !== undefined
       ? (refreshedConv?.effort || undefined)
       : (conv.effort || undefined);
@@ -1267,17 +1536,19 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       mcpServers,
     });
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
-    activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null });
+    const startedAt = new Date().toISOString();
+    activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null, startedAt, lastEventAt: startedAt });
+    const activeEntry = activeStreams.get(convId)!;
     console.log(`[diag][chat] activeStreams.set conv=${convId.slice(0,8)} backend=${backendId} userMsgId=${userMsg?.id ?? 'null'} userMsgTs=${userMsg?.timestamp ?? 'null'}`);
 
     // Always pipe the stream — if no WS is connected yet (e.g. the user
     // arrived via a stale page after a long sleep / network change), the
     // stream still runs and frames buffer until either a reconnect replays
-    // them or the grace period expires and synthesizes error+done.
+    // them or the backend emits a terminal result/error.
     if (wsFns) {
       wsFns.clearBuffer(convId); // Fresh buffer for the new stream
-      // Kick the grace period if no WS is connected at submission time so
-      // processStream's isStreamAlive() stays true while frames buffer.
+      // Mark disconnected buffering if no WS is connected at submission time.
+      // CLI lifetime is owned by activeStreams, not by browser transport.
       if (!wsFns.isConnected(convId)) {
         wsFns.startStreamGracePeriod(convId);
       }
@@ -1298,7 +1569,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         ? await chatService.getWorkspaceMemoryEnabled(watchWorkspaceHash)
         : false;
       const watchWorkspacePath = conv.workingDir || adapter.workingDir || null;
-      if (memoryOnForWatch && watchWorkspacePath) {
+      if (memoryOnForWatch && watchWorkspaceHash && watchWorkspacePath) {
         const memDir = adapter.getMemoryDir(watchWorkspacePath, { cliProfile: runtime.profile });
         if (memDir) {
           // `fs.watch` requires the directory to exist — on brand new
@@ -1319,14 +1590,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
                 const nextFp = fingerprintMemoryFiles(snapshot);
                 const changedFiles = diffFingerprints(memoryFingerprints.get(convId), nextFp);
                 memoryFingerprints.set(convId, nextFp);
-                if (wsFns && wsFns.isConnected(convId)) {
-                  wsFns.send(convId, {
-                    type: 'memory_update',
-                    capturedAt: snapshot.capturedAt,
-                    fileCount: snapshot.files.length,
-                    changedFiles,
-                  });
-                }
+                broadcastMemoryUpdate(watchWorkspaceHash, {
+                  type: 'memory_update',
+                  capturedAt: snapshot.capturedAt,
+                  fileCount: snapshot.files.length,
+                  changedFiles,
+                });
               }
             } catch (err: unknown) {
               console.error(`[memoryWatcher] capture failed for conv=${convId}:`, (err as Error).message);
@@ -1337,11 +1606,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
       processStream(
         convId,
-        activeStreams.get(convId)!,
+        activeEntry,
         (frame) => { wsFns!.send(convId, frame); },
-        () => !wsFns!.isStreamAlive(convId),
+        () => activeStreams.get(convId) !== activeEntry,
         () => {
-          activeStreams.delete(convId);
+          if (activeStreams.get(convId) === activeEntry) {
+            activeStreams.delete(convId);
+          }
           memoryWatcher.unwatch(convId);
           memoryFingerprints.delete(convId);
           if (backendId === 'claude-code') {
@@ -1356,16 +1627,21 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       ).catch((err) => {
         console.error(`[chat] WS stream error for conv=${convId}:`, err);
         if (wsFns) {
-          wsFns.send(convId, { type: 'error', error: (err as Error).message });
+          wsFns.send(convId, { type: 'error', error: (err as Error).message, terminal: true, source: 'server' });
           wsFns.send(convId, { type: 'done' });
         }
-        activeStreams.delete(convId);
+        if (activeStreams.get(convId) === activeEntry) {
+          activeStreams.delete(convId);
+        }
         memoryWatcher.unwatch(convId);
         memoryFingerprints.delete(convId);
       });
     }
 
     res.json({ userMessage: userMsg, streamReady: true });
+    } finally {
+      pendingMessageSends.delete(convId);
+    }
   });
 
   router.post('/conversations/:id/input', csrfGuard, async (req: Request, res: Response) => {
@@ -2127,19 +2403,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
       const snapshot = await chatService.getWorkspaceMemory(hash);
 
-      // Notify any connected WebSocket so open memory panels refresh.
-      if (wsFns) {
-        for (const [convId] of activeStreams) {
-          if (chatService.getWorkspaceHashForConv(convId) === hash && wsFns.isConnected(convId)) {
-            wsFns.send(convId, {
-              type: 'memory_update',
-              capturedAt: snapshot?.capturedAt || new Date().toISOString(),
-              fileCount: snapshot?.files.length || 0,
-              changedFiles: [relPath],
-            });
-          }
-        }
-      }
+      // Notify connected conversations in this workspace so open memory panels refresh.
+      broadcastMemoryUpdate(hash, {
+        type: 'memory_update',
+        capturedAt: snapshot?.capturedAt || new Date().toISOString(),
+        fileCount: snapshot?.files.length || 0,
+        changedFiles: [relPath],
+      });
 
       res.json({ ok: true, snapshot });
     } catch (err: unknown) {
@@ -2160,19 +2430,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       const deleted = await chatService.clearWorkspaceMemory(hash);
       const snapshot = await chatService.getWorkspaceMemory(hash);
 
-      // Notify any connected WebSocket so open memory panels refresh.
-      if (wsFns) {
-        for (const [convId] of activeStreams) {
-          if (chatService.getWorkspaceHashForConv(convId) === hash && wsFns.isConnected(convId)) {
-            wsFns.send(convId, {
-              type: 'memory_update',
-              capturedAt: snapshot?.capturedAt || new Date().toISOString(),
-              fileCount: snapshot?.files.length || 0,
-              changedFiles: [],
-            });
-          }
-        }
-      }
+      // Notify connected conversations in this workspace so open memory panels refresh.
+      broadcastMemoryUpdate(hash, {
+        type: 'memory_update',
+        capturedAt: snapshot?.capturedAt || new Date().toISOString(),
+        fileCount: snapshot?.files.length || 0,
+        changedFiles: [],
+      });
 
       res.json({ ok: true, deleted, snapshot });
     } catch (err: unknown) {
@@ -3063,5 +3327,5 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     wsFns = fns;
   }
 
-  return { router, shutdown, activeStreams, setWsFunctions, memoryMcp };
+  return { router, shutdown, activeStreams, setWsFunctions, abortActiveStream, memoryMcp };
 }

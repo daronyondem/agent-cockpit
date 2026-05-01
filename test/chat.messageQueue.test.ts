@@ -78,6 +78,14 @@ describe('Message Queue API', () => {
     expect(res.status).toBe(400);
   });
 
+  test('PUT /conversations/:id/queue rejects blank attachment paths', async () => {
+    const conv = (await env.request('POST', '/api/chat/conversations', { title: 'Queue Test' })).body;
+    const res = await env.request('PUT', `/api/chat/conversations/${conv.id}/queue`, {
+      queue: [{ content: 'bad', attachments: [{ name: 'x', path: '   ' }] }],
+    });
+    expect(res.status).toBe(400);
+  });
+
   test('PUT /conversations/:id/queue returns 404 for unknown conversation', async () => {
     const res = await env.request('PUT', '/api/chat/conversations/nonexistent/queue', { queue: [{ content: 'msg' }] });
     expect(res.status).toBe(404);

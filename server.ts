@@ -100,7 +100,8 @@ const updateService = new UpdateService(__dirname);
 const claudePlanUsageService = new ClaudePlanUsageService(__dirname);
 const kiroPlanUsageService = new KiroPlanUsageService(__dirname);
 const codexPlanUsageService = new CodexPlanUsageService(__dirname);
-const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
+const chatResult = createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
+const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = chatResult;
 app.use('/api/chat', chatRouter);
 
 // V2 is the default UI. Root redirects to /v2/; /legacy/ keeps the
@@ -200,6 +201,7 @@ chatService.initialize().then(async () => {
     sessionStore,
     sessionSecret: config.SESSION_SECRET,
     activeStreams,
+    abortStream: chatResult.abortActiveStream,
   });
   setWsFunctions(wsFns);
 

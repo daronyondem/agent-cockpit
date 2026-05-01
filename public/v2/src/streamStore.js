@@ -55,6 +55,11 @@
    *   loaded: boolean,
    *   ws: WebSocket | null,
    *   wsOpening: Promise<void> | null,
+   *   wsReconnectAttempts: number,
+   *   wsReconnectTimer: number | null,
+   *   lastFrameAt: number | null,
+   *   replayActive: boolean,
+   *   reconcileTimer: number | null,
    *   uiState: 'streaming' | 'awaiting' | 'error' | null,
    *   unread: boolean,
    *   pendingInteraction: PendingInteraction | null,
@@ -103,7 +108,12 @@
      `chatWriteDraftToStorage`). */
   const DRAFT_KEY_PREFIX = 'ac:v2:draft:';
   const DRAFT_DEBOUNCE_MS = 150;
+  const RECONNECT_MAX_ATTEMPTS = 5;
+  const RECONNECT_BASE_MS = 1000;
+  const RECONNECT_MAX_MS = 10000;
+  const RECONCILE_AFTER_OPEN_MS = 150;
   const draftSaveTimers = new Map();
+  const queuePersistStates = new Map();
 
   function draftKey(convId){ return DRAFT_KEY_PREFIX + convId; }
 
@@ -201,6 +211,11 @@
       loaded: false,
       ws: null,
       wsOpening: null,
+      wsReconnectAttempts: 0,
+      wsReconnectTimer: null,
+      lastFrameAt: null,
+      replayActive: false,
+      reconcileTimer: null,
       uiState: null,
       unread: false,
       pendingInteraction: null,
@@ -339,7 +354,7 @@
     for (const id of ids) {
       const cur = states.get(id);
       if (cur && cur.ws) continue; // real WS already tracking state
-      update(id, { uiState: 'streaming' });
+      update(id, { streaming: true, uiState: 'streaming', streamError: null });
     }
   }
 
@@ -425,12 +440,27 @@
     return { content: content.slice(0, match.index).replace(/\s+$/, ''), attachments };
   }
 
+  function activeStreamErrorFromMessages(messages){
+    if (!Array.isArray(messages)) return null;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const msg = messages[i];
+      if (!msg || typeof msg !== 'object') continue;
+      if (msg.role === 'assistant' && msg.streamError) {
+        return msg.streamError.message || msg.content || 'Stream error';
+      }
+      if (msg.role === 'assistant' || msg.role === 'user') return null;
+    }
+    return null;
+  }
+
   async function load(convId){
     const s = ensureState(convId);
     if (s.loaded || s.loadError) return;
     try {
       const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId));
       const data = await res.json();
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      const persistedStreamError = activeStreamErrorFromMessages(messages);
       const restoredQueue = Array.isArray(data.messageQueue) ? data.messageQueue : [];
       /* Tab-crash draft rehydration — only restore if the in-memory composer
          hasn't been touched (empty input + no pending files). If the user has
@@ -445,9 +475,11 @@
       update(convId, cur => ({
         ...cur,
         conv: data,
-        messages: Array.isArray(data.messages) ? data.messages : [],
+        messages,
         usage: data.sessionUsage || null,
         queue: restoredQueue,
+        streamError: persistedStreamError,
+        uiState: persistedStreamError ? 'error' : cur.uiState,
         /* Mark a non-empty restored queue as suspended so the auto-drainer
            bails until the user explicitly resumes or clears. Mirrors V1
            `conversations.js:715`: queue items restored from a previous
@@ -471,6 +503,108 @@
     }
   }
 
+  function clearReconnectTimer(convId){
+    const s = states.get(convId);
+    if (!s || !s.wsReconnectTimer) return;
+    clearTimeout(s.wsReconnectTimer);
+    update(convId, { wsReconnectTimer: null });
+  }
+
+  function clearReconcileTimer(convId){
+    const s = states.get(convId);
+    if (!s || !s.reconcileTimer) return;
+    clearTimeout(s.reconcileTimer);
+    update(convId, { reconcileTimer: null });
+  }
+
+  function scheduleReconnect(convId){
+    const s = states.get(convId);
+    if (!s) return;
+    if (!(s.streaming || s.uiState === 'streaming')) return;
+    if (s.wsReconnectTimer) return;
+    const attempts = s.wsReconnectAttempts || 0;
+    if (attempts >= RECONNECT_MAX_ATTEMPTS) {
+      update(convId, {
+        streamError: 'WebSocket reconnect failed',
+        uiState: 'error',
+        wsReconnectTimer: null,
+      });
+      return;
+    }
+    const delay = Math.min(RECONNECT_BASE_MS * Math.pow(2, attempts), RECONNECT_MAX_MS);
+    const timer = setTimeout(() => {
+      update(convId, cur => ({
+        ...cur,
+        wsReconnectTimer: null,
+        wsReconnectAttempts: (cur.wsReconnectAttempts || 0) + 1,
+      }));
+      ensureWsOpen(convId).catch(() => {
+        scheduleReconnect(convId);
+      });
+    }, delay);
+    update(convId, { wsReconnectTimer: timer });
+  }
+
+  async function reconcileActiveStream(convId, ws){
+    const s = states.get(convId);
+    if (!s || s.ws !== ws) return;
+    if (!(s.streaming || s.uiState === 'streaming')) return;
+    let ids;
+    try {
+      ids = await AgentApi.getActiveStreams();
+    } catch {
+      return;
+    }
+    const cur = states.get(convId);
+    if (!cur || cur.ws !== ws) return;
+    if (Array.isArray(ids) && ids.includes(convId)) return;
+    try {
+      await refreshConversationFromServer(convId);
+    } catch {
+      // Best-effort backstop only. Normal replay remains the primary path.
+    }
+  }
+
+  async function refreshConversationFromServer(convId, opts){
+    const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId));
+    const data = await res.json();
+    const messages = Array.isArray(data.messages) ? data.messages : [];
+    const persistedStreamError = activeStreamErrorFromMessages(messages);
+    const fallbackStreamError = opts && typeof opts.streamError === 'string' ? opts.streamError : null;
+    const streamError = persistedStreamError || fallbackStreamError;
+    update(convId, next => ({
+      ...next,
+      conv: data,
+      messages,
+      usage: data.sessionUsage || null,
+      queue: Array.isArray(data.messageQueue) ? data.messageQueue : next.queue,
+      streaming: false,
+      streamingMsgId: null,
+      pendingInteraction: null,
+      planModeActive: false,
+      replayActive: false,
+      reconcileTimer: null,
+      wsReconnectAttempts: 0,
+      streamError,
+      uiState: streamError ? 'error' : null,
+    }));
+    if (!streamError) drainQueueIfReady(convId);
+  }
+
+  function scheduleReconcileActiveStream(convId, ws){
+    const s = states.get(convId);
+    if (!s || s.ws !== ws) return;
+    if (!(s.streaming || s.uiState === 'streaming')) return;
+    clearReconcileTimer(convId);
+    const timer = setTimeout(() => {
+      const cur = states.get(convId);
+      if (!cur || cur.ws !== ws || cur.replayActive) return;
+      update(convId, { reconcileTimer: null });
+      reconcileActiveStream(convId, ws);
+    }, RECONCILE_AFTER_OPEN_MS);
+    update(convId, { reconcileTimer: timer });
+  }
+
   function ensureWsOpen(convId){
     const s = ensureState(convId);
     if (s.ws && (s.ws.readyState === WebSocket.OPEN || s.ws.readyState === WebSocket.CONNECTING)) {
@@ -479,20 +613,58 @@
     console.log('[diag]', new Date().toISOString(), 'ensureWsOpen-new', 'conv=' + convId.slice(0,8));
     const ws = new WebSocket(AgentApi.chatWsUrl(convId));
     const opening = new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('WebSocket connect timed out')), 5000);
-      ws.addEventListener('open', () => { clearTimeout(timer); console.log('[diag]', new Date().toISOString(), 'ws-open', 'conv=' + convId.slice(0,8)); resolve(); }, { once: true });
-      ws.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket failed')); }, { once: true });
+      let settled = false;
+      const fail = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        const cur = states.get(convId);
+        if (cur && cur.ws === ws) {
+          update(convId, { ws: null, wsOpening: null, replayActive: false });
+        }
+        try { ws.close(1000, 'open failed'); } catch {}
+        reject(err);
+      };
+      const timer = setTimeout(() => fail(new Error('WebSocket connect timed out')), 5000);
+      ws.addEventListener('open', () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        console.log('[diag]', new Date().toISOString(), 'ws-open', 'conv=' + convId.slice(0,8));
+        const cur = states.get(convId);
+        if (cur && cur.ws === ws) {
+          clearReconnectTimer(convId);
+          update(convId, {
+            wsOpening: null,
+            wsReconnectAttempts: 0,
+            lastFrameAt: Date.now(),
+          });
+          scheduleReconcileActiveStream(convId, ws);
+        }
+        resolve();
+      }, { once: true });
+      ws.addEventListener('error', () => { fail(new Error('WebSocket failed')); }, { once: true });
     });
     ws.onmessage = (evt) => {
       let frame;
       try { frame = JSON.parse(evt.data); } catch { return; }
       handleFrame(convId, frame);
     };
-    ws.onerror = () => { console.log('[diag]', new Date().toISOString(), 'ws-error', 'conv=' + convId.slice(0,8)); update(convId, { streamError: 'WebSocket error', uiState: 'error' }); };
+    ws.onerror = () => {
+      console.log('[diag]', new Date().toISOString(), 'ws-error', 'conv=' + convId.slice(0,8));
+    };
     ws.onclose = (ev) => {
       console.log('[diag]', new Date().toISOString(), 'ws-close', 'conv=' + convId.slice(0,8), 'code=' + (ev?.code ?? '?'), 'reason=' + (ev?.reason || ''));
       const cur = states.get(convId);
-      if (cur && cur.ws === ws) update(convId, { ws: null, wsOpening: null });
+      if (!cur || cur.ws !== ws) return;
+      clearReconcileTimer(convId);
+      update(convId, { ws: null, wsOpening: null, replayActive: false });
+      const reason = ev?.reason || '';
+      const deliberate = ev?.code === 1000 && (reason === 'user request' || reason === 'Replaced by new connection');
+      const revalidating = ev?.code === 4000 || reason === 'revalidating';
+      if (!deliberate && !revalidating && (cur.streaming || cur.uiState === 'streaming')) {
+        scheduleReconnect(convId);
+      }
     };
     update(convId, { ws, wsOpening: opening });
     return opening;
@@ -613,6 +785,7 @@
     if (!frame || typeof frame !== 'object') return;
     const s = states.get(convId);
     if (!s) return;
+    update(convId, { lastFrameAt: Date.now() });
     if (frame.type !== 'text' && frame.type !== 'thinking') {
       console.log('[diag]', new Date().toISOString(), 'frame', 'conv=' + convId.slice(0,8), 'type=' + frame.type,
         frame.message ? ('msgId=' + String(frame.message.id || '').slice(0,16)) : '');
@@ -723,6 +896,7 @@
         'conv=' + convId.slice(0,8),
         'bufferedEvents=' + (frame.bufferedEvents ?? '?'));
       diagSnap(convId, 'replay_start-before');
+      clearReconcileTimer(convId);
       /* Server is about to replay the full per-conv WS buffer (ws.ts
          replayBuffer). Wipe the streaming placeholder's contentBlocks and
          any partial accumulated interaction state so the replayed frames
@@ -731,9 +905,10 @@
          the same placeholder id. Backend-agnostic — buffer is transport
          layer, affects both Claude Code and Kiro. */
       update(convId, cur => {
-        if (!cur.streamingMsgId) return cur;
+        if (!cur.streamingMsgId) return { ...cur, replayActive: true };
         return {
           ...cur,
+          replayActive: true,
           messages: cur.messages.map(m =>
             m.id === cur.streamingMsgId ? { ...m, contentBlocks: [], content: '' } : m
           ),
@@ -745,8 +920,11 @@
     }
     if (frame.type === 'replay_end') {
       diagSnap(convId, 'replay_end-after');
-      /* No-op — state was rebuilt during replay by the normal frame
-         handlers; React subscribers re-render on each update. */
+      update(convId, { replayActive: false });
+      const cur = states.get(convId);
+      if (cur && cur.ws && (cur.streaming || cur.uiState === 'streaming')) {
+        scheduleReconcileActiveStream(convId, cur.ws);
+      }
       return;
     }
     if (frame.type === 'title_updated' && typeof frame.title === 'string') {
@@ -763,15 +941,23 @@
     }
     if (frame.type === 'error') {
       const msg = typeof frame.error === 'string' ? frame.error : 'Stream error';
+      if (frame.terminal === false) {
+        console.warn('[stream-warning]', msg);
+        return;
+      }
       update(convId, { streamError: msg, uiState: 'error', pendingInteraction: null, planModeActive: false });
       return;
     }
     if (frame.type === 'done') {
+      const wasLocallyStreaming = !!states.get(convId)?.streaming;
+      clearReconnectTimer(convId);
+      clearReconcileTimer(convId);
       /* Flag conversation unread when a response completes on a non-active
          conv and we're landing in the idle resting state (no error, no
          pending interaction). The server persists via PATCH /unread so the
          dot survives reload. */
-      const markUnreadNow = convId !== activeConvId
+      const markUnreadNow = wasLocallyStreaming
+        && convId !== activeConvId
         && !states.get(convId)?.streamError
         && !states.get(convId)?.pendingInteraction;
       update(convId, cur => ({
@@ -779,6 +965,8 @@
         streaming: false,
         streamingMsgId: null,
         planModeActive: false,
+        replayActive: false,
+        wsReconnectAttempts: 0,
         uiState: cur.streamError
           ? 'error'
           : cur.pendingInteraction ? 'awaiting' : null,
@@ -789,11 +977,11 @@
       }
       /* Poll the profile-aware plan usage store once per turn. Server floors
          actual upstream API calls; these reads only fan out cached snapshots. */
-      refreshPlanUsageForSnapshot(states.get(convId) || s);
+      if (wasLocallyStreaming) refreshPlanUsageForSnapshot(states.get(convId) || s);
       /* Auto-drain queue — if the just-finished run leaves us idle (no
          pending plan/question, no stream error) and there's a queued
          message, pop the head and send it. */
-      drainQueueIfReady(convId);
+      if (wasLocallyStreaming) drainQueueIfReady(convId);
       return;
     }
     if (frame.type === 'memory_update') {
@@ -977,6 +1165,20 @@
          still has the user's content. */
       clearDraft(convId);
     } catch (err) {
+      if (err && err.status === 409) {
+        update(convId, cur => ({
+          ...cur,
+          streamError: null,
+          streaming: true,
+          streamingMsgId: null,
+          uiState: 'streaming',
+          messages: cur.messages.filter(m => m.id !== tempUserId && m.id !== tempAssistId),
+          pendingAttachments: attsSnapshot,
+          input: inputSnapshot,
+        }));
+        ensureWsOpen(convId).catch(() => {});
+        return;
+      }
       update(convId, cur => ({
         ...cur,
         streamError: err.message || String(err),
@@ -1173,22 +1375,61 @@
     }
   }
 
-  async function persistQueue(convId, queue){
+  function strippedQueueForPersist(queue){
     /* Strip client-only `inFlight` markers before persisting — the server
        already sees the in-flight head as drained. Without this filter, an
        enqueue during a live send would re-seed the in-flight item on the
        server, causing a duplicate send after the current one completes. */
-    const stripped = (queue || [])
+    return (queue || [])
       .filter(q => q && !q.inFlight)
       .map(q => ({ content: q.content, attachments: q.attachments }));
+  }
+
+  async function drainQueuePersistRequests(convId, state){
+    state.inFlight = true;
     try {
-      await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/queue', {
-        method: 'PUT',
-        body: { queue: stripped },
-      });
-    } catch (err) {
-      update(convId, { streamError: err.message || String(err) });
+      while (state.pending) {
+        const request = state.pending;
+        state.pending = null;
+        try {
+          if (request.method === 'DELETE') {
+            await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/queue', { method: 'DELETE' });
+          } else {
+            await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/queue', {
+              method: 'PUT',
+              body: { queue: request.queue },
+            });
+          }
+        } catch (err) {
+          update(convId, { streamError: err.message || String(err) });
+        }
+      }
+    } finally {
+      state.inFlight = false;
+      const waiters = state.waiters.splice(0);
+      waiters.forEach(resolve => resolve());
+      if (!state.pending) queuePersistStates.delete(convId);
     }
+  }
+
+  function enqueueQueuePersistRequest(convId, request){
+    let state = queuePersistStates.get(convId);
+    if (!state) {
+      state = { inFlight: false, pending: null, waiters: [] };
+      queuePersistStates.set(convId, state);
+    }
+    state.pending = request;
+    if (state.inFlight) {
+      return new Promise(resolve => { state.waiters.push(resolve); });
+    }
+    return drainQueuePersistRequests(convId, state);
+  }
+
+  async function persistQueue(convId, queue){
+    await enqueueQueuePersistRequest(convId, {
+      method: 'PUT',
+      queue: strippedQueueForPersist(queue),
+    });
   }
 
   async function enqueue(convId, content, attachments){
@@ -1251,11 +1492,7 @@
 
   async function clearQueue(convId){
     update(convId, { queue: [], queueSuspended: false });
-    try {
-      await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/queue', { method: 'DELETE' });
-    } catch (err) {
-      update(convId, { streamError: err.message || String(err) });
-    }
+    await enqueueQueuePersistRequest(convId, { method: 'DELETE' });
   }
 
   /* Called from the suspended-queue banner. Clears the suspended flag and
@@ -1289,26 +1526,57 @@
        swap its badge to "Sending…" and hide the mutating actions while the
        send is in flight. The flag is cleared when the pending user message
        appears in the feed (sendWireContent), or on error. Mirrors V1
-       `public/js/streaming.js:29`. Server-side queue state strips the
-       in-flight head — the server already has the short rest persisted. */
+       `public/js/streaming.js:29`. Server persistence is handled by
+       `sendWireContent` once `/message` accepts the send, or after rollback
+       restores the head. */
     update(convId, { queue: [{ ...head, inFlight: true }, ...rest] });
-    persistQueue(convId, rest).catch(() => {});
-    const wireContent = composeWireContent(head);
-    setTimeout(() => { sendWireContent(convId, wireContent); }, 0);
+    setTimeout(() => { sendWireContent(convId, head); }, 0);
   }
 
-  /* Best-effort: ask the server to abort the in-flight CLI stream by sending
-     `{ type: 'abort' }` over the open WebSocket (handled in src/ws.ts). The
-     backend kills the process; the adapter yields `error: 'Aborted by user'`
-     followed by `done`, which flow through `handleFrame` like any other
-     terminal frames. No-op if the conversation isn't streaming or the WS
-     isn't open — the user only sees the stop affordance while streaming, so
-     either condition means the click already raced the stream's natural end. */
-  function stopStream(convId){
+  /* Best-effort: ask the server to abort the in-flight CLI stream through
+     REST so Stop works even when browser WebSocket transport is disconnected.
+     The server also emits terminal abort frames for any connected/reconnecting
+     socket; the local state update below covers the no-socket case. */
+  async function stopStream(convId){
     const s = states.get(convId);
-    if (!s || !s.streaming) return;
-    if (!s.ws || s.ws.readyState !== WebSocket.OPEN) return;
-    try { s.ws.send(JSON.stringify({ type: 'abort' })); } catch {}
+    if (!s || !s.streaming) return false;
+    const applyAbortFallback = () => {
+      update(convId, cur => ({
+        ...cur,
+        streamError: 'Aborted by user',
+        streaming: false,
+        streamingMsgId: null,
+        pendingInteraction: null,
+        planModeActive: false,
+        replayActive: false,
+        uiState: 'error',
+        messages: cur.streamingMsgId
+          ? cur.messages.filter(m => m.id !== cur.streamingMsgId)
+          : cur.messages,
+      }));
+    };
+    try {
+      const result = await AgentApi.abortConversation(convId);
+      if (result && result.aborted === false) {
+        await refreshConversationFromServer(convId);
+        return false;
+      }
+      clearReconnectTimer(convId);
+      clearReconcileTimer(convId);
+      applyAbortFallback();
+      try {
+        await refreshConversationFromServer(convId, { streamError: 'Aborted by user' });
+      } catch (_) {
+        // Local abort fallback above is authoritative enough to unstick the UI.
+      }
+      return true;
+    } catch (err) {
+      update(convId, {
+        streamError: err.message || String(err),
+        uiState: 'error',
+      });
+      return false;
+    }
   }
 
   /* Clear a stream error so the conversation returns to idle. When
@@ -1338,20 +1606,40 @@
   /* Internal — send an already-composed wire-format content string (used by
      the queue drainer; bypasses the pendingAttachments pipeline since the
      attachments were uploaded when the message was queued). */
-  async function sendWireContent(convId, content){
+  async function sendWireContent(convId, queuedMessage){
     const s = states.get(convId);
     if (!s || s.sending || s.streaming) return;
+    const originalHead = queuedMessage && typeof queuedMessage === 'object'
+      ? {
+          content: queuedMessage.content || '',
+          attachments: Array.isArray(queuedMessage.attachments) ? queuedMessage.attachments : undefined,
+      }
+      : { content: String(queuedMessage || ''), attachments: undefined };
+    const content = composeWireContent(originalHead);
     if (!content) return;
+    const currentQueueTail = (queue) => Array.isArray(queue) ? queue.filter(q => q && !q.inFlight) : [];
+    const persistCurrentQueueTail = () => {
+      const latest = states.get(convId);
+      persistQueue(convId, currentQueueTail(latest && latest.queue)).catch(() => {});
+    };
+    const restoreQueueAfterFailure = (buildState) => {
+      let restoredQueue = [];
+      update(convId, cur => {
+        restoredQueue = [originalHead, ...currentQueueTail(cur.queue)];
+        return buildState(cur, restoredQueue);
+      });
+      persistQueue(convId, restoredQueue).catch(() => {});
+    };
 
     update(convId, { sending: true, streamError: null, pendingInteraction: null });
     try {
       await ensureWsOpen(convId);
     } catch (err) {
-      update(convId, cur => ({
+      restoreQueueAfterFailure((cur, restoredQueue) => ({
         ...cur,
         streamError: err.message || String(err),
         sending: false,
-        queue: Array.isArray(cur.queue) ? cur.queue.filter(q => !q.inFlight) : [],
+        queue: restoredQueue,
       }));
       return;
     }
@@ -1396,13 +1684,28 @@
         }));
         bumpConvListActivity(convId, authoritativeUser.timestamp);
       }
+      persistCurrentQueueTail();
     } catch (err) {
-      update(convId, cur => ({
+      if (err && err.status === 409) {
+        restoreQueueAfterFailure((cur, restoredQueue) => ({
+          ...cur,
+          streamError: null,
+          streaming: true,
+          streamingMsgId: null,
+          uiState: 'streaming',
+          queue: restoredQueue,
+          messages: cur.messages.filter(m => m.id !== tempUserId && m.id !== tempAssistId),
+        }));
+        ensureWsOpen(convId).catch(() => {});
+        return;
+      }
+      restoreQueueAfterFailure((cur, restoredQueue) => ({
         ...cur,
         streamError: err.message || String(err),
         streaming: false,
         streamingMsgId: null,
         uiState: 'error',
+        queue: restoredQueue,
         messages: cur.messages.filter(m => m.id !== tempUserId && m.id !== tempAssistId),
       }));
     } finally {
@@ -1425,6 +1728,7 @@
         queue: Array.isArray(data.messageQueue) ? data.messageQueue : [],
         usage: data.sessionUsage || null,
         streamError: null,
+        streaming: false,
         streamingMsgId: null,
         pendingInteraction: null,
         uiState: null,
@@ -1565,8 +1869,8 @@
      The server then receives a /message but no client-driven WS frames,
      and the conversation looks "in-progress" forever after a refresh.
 
-     We force a fresh socket per conv: closing triggers the server's grace
-     period (60s buffer of pending events) and the immediate reopen replays
+     We force a fresh socket per conv: closing is transport-only, accepted CLI
+     streams keep running server-side, and the immediate reopen replays
      anything buffered. The replay handler in handleFrame() wipes the
      streaming placeholder's contentBlocks so duplicate frames don't double
      up. */

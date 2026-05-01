@@ -250,6 +250,13 @@ describe('WebSocket streaming', () => {
     // env.activeStreams should be cleared after abort
     expect(env.activeStreams.has(conv.id)).toBe(false);
     expect(aborted).toBe(true);
+
+    const saved = await env.chatService.getConversation(conv.id);
+    const assistant = saved?.messages.filter(m => m.role === 'assistant') || [];
+    expect(assistant[assistant.length - 1].streamError).toEqual({
+      message: 'Aborted by user',
+      source: 'abort',
+    });
     ws.close();
   });
 
@@ -336,7 +343,7 @@ describe('WebSocket reconnection', () => {
     ws1.close();
     await new Promise(resolve => setTimeout(resolve, 100));
 
-    // CLI should still be alive (grace period)
+    // CLI should still be alive after browser transport disconnects.
     expect(env.activeStreams.has(conv.id)).toBe(true);
 
     // Reconnect — set up message listener BEFORE open so we don't miss replay
@@ -380,7 +387,134 @@ describe('WebSocket reconnection', () => {
     ws2.close();
   });
 
-  test('CLI survives WS disconnect during grace period', async () => {
+  test('cleans completed replay buffer even when WebSocket is connected at done', async () => {
+    await destroyChatRouterEnv(env);
+    env = await createChatRouterEnv({ bufferCleanupMs: 50 });
+
+    const conv = await env.chatService.createConversation('Connected Done Cleanup');
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'short run', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws1 = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws1);
+
+    const postRes = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'finish while connected',
+      backend: 'claude-code',
+    });
+    expect(postRes.status).toBe(200);
+    const events = await eventsPromise;
+    expect(events.some(e => e.type === 'done')).toBe(true);
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+    ws1.close();
+
+    const ws2 = await env.connectWs(conv.id);
+    const reconnectEvents: any[] = [];
+    await new Promise<void>(resolve => {
+      setTimeout(() => resolve(), 100);
+      ws2.on('message', (data) => {
+        try { reconnectEvents.push(JSON.parse(data.toString())); } catch {}
+      });
+    });
+
+    expect(reconnectEvents.some(e => e.type === 'replay_start')).toBe(false);
+    ws2.close();
+  });
+
+  test('uses configured cleanup timeout after replaying a completed buffer', async () => {
+    await destroyChatRouterEnv(env);
+    env = await createChatRouterEnv({ bufferCleanupMs: 50 });
+
+    const conv = await env.chatService.createConversation('Replay Cleanup Timeout');
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'buffered completion', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const postRes = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'finish before connect',
+      backend: 'claude-code',
+    });
+    expect(postRes.status).toBe(200);
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const port = (env.server.address() as any).port;
+    const ws1 = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${conv.id}/ws`);
+    const replayed: any[] = [];
+    const gotReplayEnd = new Promise<void>((resolve) => {
+      ws1.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        replayed.push(event);
+        if (event.type === 'replay_end') resolve();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws1.on('open', () => resolve());
+      ws1.on('error', reject);
+    });
+    await gotReplayEnd;
+    expect(replayed.some(e => e.type === 'replay_start')).toBe(true);
+    ws1.close();
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const ws2 = await env.connectWs(conv.id);
+    const secondConnectEvents: any[] = [];
+    await new Promise<void>(resolve => {
+      setTimeout(() => resolve(), 100);
+      ws2.on('message', (data) => {
+        try { secondConnectEvents.push(JSON.parse(data.toString())); } catch {}
+      });
+    });
+
+    expect(secondConnectEvents.some(e => e.type === 'replay_start')).toBe(false);
+    ws2.close();
+  });
+
+  test('explicit reconnect replays buffer created after WebSocket connection', async () => {
+    const conv = await env.chatService.createConversation('Explicit Reconnect Fresh Buffer');
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'created-after-connect', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(conv.id);
+    const gotDone = new Promise<void>((resolve) => {
+      ws.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        if (event.type === 'done') resolve();
+      });
+    });
+
+    const postRes = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'buffer after connect',
+      backend: 'claude-code',
+    });
+    expect(postRes.status).toBe(200);
+    await gotDone;
+
+    const replayEvents: any[] = [];
+    const gotReplayEnd = new Promise<void>((resolve) => {
+      ws.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        replayEvents.push(event);
+        if (event.type === 'replay_end') resolve();
+      });
+    });
+    ws.send(JSON.stringify({ type: 'reconnect' }));
+    await gotReplayEnd;
+
+    expect(replayEvents[0]).toMatchObject({ type: 'replay_start', bufferedEvents: expect.any(Number) });
+    expect(replayEvents.some(e => e.type === 'text' && e.content === 'created-after-connect')).toBe(true);
+    expect(replayEvents.some(e => e.type === 'done')).toBe(true);
+    ws.close();
+  });
+
+  test('CLI survives WS disconnect without abort timer', async () => {
     const conv = await env.chatService.createConversation('WS Grace');
 
     let unblock: () => void;
@@ -402,7 +536,7 @@ describe('WebSocket reconnection', () => {
 
     const ws = await env.connectWs(conv.id);
     await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
-      content: 'test grace',
+      content: 'test disconnect',
       backend: 'claude-code',
     });
 
@@ -576,6 +710,79 @@ describe('WebSocket reconnection', () => {
 
     ws2.close();
   });
+
+  test('does not replay live-only KB state frames after reconnect', async () => {
+    const conv = await env.chatService.createConversation('Live KB Frame');
+    const ws1 = await env.connectWs(conv.id);
+    const gotLiveFrame = new Promise<void>((resolve) => {
+      ws1.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        if (event.type === 'kb_state_update') resolve();
+      });
+    });
+
+    env.wsFns.send(conv.id, {
+      type: 'kb_state_update',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+      changed: { synthesis: true },
+    });
+    await gotLiveFrame;
+    await new Promise<void>(resolve => {
+      ws1.once('close', () => resolve());
+      ws1.close();
+    });
+
+    const ws2 = await env.connectWs(conv.id);
+    const reconnectEvents: any[] = [];
+    await new Promise<void>(resolve => {
+      setTimeout(() => resolve(), 100);
+      ws2.on('message', (data) => {
+        try { reconnectEvents.push(JSON.parse(data.toString())); } catch {}
+      });
+    });
+
+    expect(reconnectEvents.some(e => e.type === 'replay_start')).toBe(false);
+    expect(reconnectEvents.some(e => e.type === 'kb_state_update')).toBe(false);
+    ws2.close();
+  });
+
+  test('idle connected workspace conversation receives memory_update on memory delete', async () => {
+    const conv = await env.chatService.createConversation('Idle Memory Fanout', '/tmp/ws-idle-memory-fanout');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    const relPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: drop\ndescription: drop me\ntype: user\n---\n\nDrop.',
+      source: 'memory-note',
+      filenameHint: 'drop',
+    });
+
+    const ws = await env.connectWs(conv.id);
+    expect(env.activeStreams.has(conv.id)).toBe(false);
+
+    const gotMemoryUpdate = new Promise<any>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timed out waiting for memory_update')), 1000);
+      ws.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        if (event.type === 'memory_update') {
+          clearTimeout(timer);
+          resolve(event);
+        }
+      });
+    });
+
+    const res = await env.request(
+      'DELETE',
+      `/api/chat/workspaces/${hash}/memory/entries/${encodeURIComponent(relPath)}`,
+    );
+    expect(res.status).toBe(200);
+
+    const frame = await gotMemoryUpdate;
+    expect(frame).toMatchObject({
+      type: 'memory_update',
+      fileCount: 0,
+      changedFiles: [relPath],
+    });
+    ws.close();
+  });
 });
 
 // ── POST without WebSocket — network-change recovery ──────────────────────
@@ -627,12 +834,11 @@ describe('POST /message without an open WebSocket', () => {
     ws.close();
   });
 
-  test('grace expiry without reconnect emits synthetic error+done into the buffer', async () => {
-    // Use a short grace period so the test runs quickly.
+  test('CLI continues beyond old disconnect grace and replays buffered completion on reconnect', async () => {
     await destroyChatRouterEnv(env);
     env = await createChatRouterEnv({ gracePeriodMs: 200 });
 
-    const conv = await env.chatService.createConversation('Grace Expiry');
+    const conv = await env.chatService.createConversation('No Grace Abort');
 
     let aborted = false;
     let unblock: () => void;
@@ -652,23 +858,21 @@ describe('POST /message without an open WebSocket', () => {
       };
     };
 
-    // POST without a WS — stream starts and grace timer is armed.
     const postRes = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
-      content: 'no reconnect',
+      content: 'client away',
       backend: 'claude-code',
     });
     expect(postRes.status).toBe(200);
 
-    // Wait for grace period (200ms) plus margin so the timer fires.
     await new Promise(resolve => setTimeout(resolve, 500));
 
-    // Stream should have been aborted and removed from activeStreams.
-    expect(aborted).toBe(true);
+    expect(aborted).toBe(false);
+    expect(env.activeStreams.has(conv.id)).toBe(true);
+
+    unblock!();
+    await new Promise(resolve => setTimeout(resolve, 100));
     expect(env.activeStreams.has(conv.id)).toBe(false);
 
-    // Reconnect — buffer should contain the synthetic error + done so the UI
-    // can recover from "in-progress" state on a refresh. Listener registered
-    // BEFORE 'open' so the replay isn't missed.
     const port = (env.server.address() as any).port;
     const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${conv.id}/ws`);
     const events: any[] = [];
@@ -686,9 +890,10 @@ describe('POST /message without an open WebSocket', () => {
     await gotReplayEnd;
 
     expect(events[0].type).toBe('replay_start');
+    const textEvent = events.find(e => e.type === 'text' && e.content === 'partial');
+    expect(textEvent).toBeDefined();
     const errorEvent = events.find(e => e.type === 'error');
-    expect(errorEvent).toBeDefined();
-    expect(errorEvent.error).toMatch(/grace period/i);
+    expect(errorEvent).toBeUndefined();
     const doneEvent = events.find(e => e.type === 'done');
     expect(doneEvent).toBeDefined();
 
@@ -697,4 +902,3 @@ describe('POST /message without an open WebSocket', () => {
 });
 
 // ── Message Queue Persistence ──────────────────────────────────────────────
-

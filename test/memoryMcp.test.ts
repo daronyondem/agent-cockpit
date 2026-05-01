@@ -86,7 +86,6 @@ beforeEach(async () => {
   memoryMcp = createMemoryMcpServer({
     chatService: service,
     backendRegistry: registry,
-    getWsFns: () => null,
   });
 });
 
@@ -715,20 +714,18 @@ describe('POST /mcp/memory/notes — edge cases', () => {
     expect(res.body.filename).toBeTruthy();
   });
 
-  test('fires WebSocket memory_update when WS is connected', async () => {
+  test('emits workspace memory_update after memory_note write', async () => {
     const hash = workspaceHash('/tmp/mem-post-ws');
     await service.createConversation('conv-post-ws', '/tmp/mem-post-ws');
     await service.setWorkspaceMemoryEnabled(hash, true);
 
-    // Build a memoryMcp instance with a mock WS that reports connected.
-    const wsSendCalls: any[] = [];
+    const memoryUpdateCalls: any[] = [];
     const wsMemoryMcp = createMemoryMcpServer({
       chatService: service,
       backendRegistry: registry,
-      getWsFns: () => ({
-        isConnected: (convId: string) => convId === 'conv-post-ws',
-        send: (convId: string, payload: any) => { wsSendCalls.push({ convId, payload }); return true; },
-      }),
+      emitMemoryUpdate: (workspaceHash, payload) => {
+        memoryUpdateCalls.push({ workspaceHash, payload });
+      },
     });
 
     const session = wsMemoryMcp.issueMemoryMcpSession('conv-post-ws', hash);
@@ -749,11 +746,49 @@ WS body.
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
 
-    // Verify the WebSocket was notified.
-    expect(wsSendCalls).toHaveLength(1);
-    expect(wsSendCalls[0].convId).toBe('conv-post-ws');
-    expect(wsSendCalls[0].payload.type).toBe('memory_update');
-    expect(wsSendCalls[0].payload.fileCount).toBeGreaterThanOrEqual(1);
-    expect(wsSendCalls[0].payload.changedFiles).toHaveLength(1);
+    expect(memoryUpdateCalls).toHaveLength(1);
+    expect(memoryUpdateCalls[0].workspaceHash).toBe(hash);
+    expect(memoryUpdateCalls[0].payload.type).toBe('memory_update');
+    expect(memoryUpdateCalls[0].payload.fileCount).toBeGreaterThanOrEqual(1);
+    expect(memoryUpdateCalls[0].payload.changedFiles).toHaveLength(1);
+  });
+
+  test('emits workspace memory_update after session extraction saves entries', async () => {
+    const hash = workspaceHash('/tmp/mem-extract-ws');
+    await service.createConversation('conv-extract-ws', '/tmp/mem-extract-ws');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const memoryUpdateCalls: any[] = [];
+    const wsMemoryMcp = createMemoryMcpServer({
+      chatService: service,
+      backendRegistry: registry,
+      emitMemoryUpdate: (workspaceHash, payload) => {
+        memoryUpdateCalls.push({ workspaceHash, payload });
+      },
+    });
+
+    stubCli.queueResponse(`---
+name: extracted_ws_note
+description: extracted note with ws
+type: feedback
+---
+
+Extracted body.
+`);
+
+    const count = await wsMemoryMcp.extractMemoryFromSession({
+      workspaceHash: hash,
+      conversationId: 'conv-extract-ws',
+      messages: [{ role: 'user', content: 'remember this' } as any],
+    });
+
+    expect(count).toBe(1);
+    expect(memoryUpdateCalls).toHaveLength(1);
+    expect(memoryUpdateCalls[0].workspaceHash).toBe(hash);
+    expect(memoryUpdateCalls[0].payload).toMatchObject({
+      type: 'memory_update',
+      fileCount: 1,
+    });
+    expect(memoryUpdateCalls[0].payload.changedFiles).toHaveLength(1);
   });
 });

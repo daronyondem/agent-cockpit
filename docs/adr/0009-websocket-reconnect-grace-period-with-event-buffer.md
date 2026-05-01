@@ -1,10 +1,10 @@
 ---
 id: 0009
 title: WebSocket reconnect grace period with server-side event buffering
-status: Accepted
+status: Superseded
 date: 2026-04-28
 supersedes: []
-superseded-by: null
+superseded-by: 0016
 tags: [websocket, streaming, reliability, historical]
 affects:
   - src/ws.ts

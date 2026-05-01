@@ -23,8 +23,8 @@
 //          markdown entry or emit `SKIP:<filename>` when the note is a
 //          duplicate of an existing memory.
 //        - On success, writes the entry via `chatService.addMemoryNoteEntry`
-//          and notifies any connected WebSocket with a `memory_update` frame
-//          so open memory panels refresh in place.
+//          and emits a workspace-scoped `memory_update` frame so open
+//          memory panels refresh in place.
 //
 // The separation of concerns here is deliberate:
 //   - The CLI spoken to via MCP ("the user's CLI") knows *when* to call
@@ -37,10 +37,9 @@
 import express from 'express';
 import crypto from 'crypto';
 import path from 'path';
-import type { Request, Response, Message } from '../../types';
+import type { Request, Response, Message, MemoryUpdateEvent } from '../../types';
 import type { ChatService } from '../chatService';
 import type { BackendRegistry } from '../backends/registry';
-import type { WsFunctions } from '../../ws';
 import { parseFrontmatter } from '../backends/claudeCode';
 
 // ── Session registry ────────────────────────────────────────────────────────
@@ -232,12 +231,23 @@ function nameFromFrontmatter(content: string): string | null {
 interface CreateMemoryMcpDeps {
   chatService: ChatService;
   backendRegistry: BackendRegistry;
-  getWsFns: () => Pick<WsFunctions, 'send' | 'isConnected'> | null;
+  emitMemoryUpdate?: (workspaceHash: string, frame: MemoryUpdateEvent) => void;
 }
 
-export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }: CreateMemoryMcpDeps) {
+export function createMemoryMcpServer({ chatService, backendRegistry, emitMemoryUpdate }: CreateMemoryMcpDeps) {
   const sessions = new Map<string, MemoryMcpSession>(); // token → session
   const byConversation = new Map<string, string>(); // convId → token
+
+  async function emitFreshMemoryUpdate(hash: string, changedFiles: string[]): Promise<void> {
+    if (!emitMemoryUpdate) return;
+    const freshSnapshot = await chatService.getWorkspaceMemory(hash);
+    emitMemoryUpdate(hash, {
+      type: 'memory_update',
+      capturedAt: freshSnapshot?.capturedAt || new Date().toISOString(),
+      fileCount: freshSnapshot?.files.length || 0,
+      changedFiles,
+    });
+  }
 
   /**
    * Issue (or re-use) a token + `mcpServers` entry for a non-Claude
@@ -426,17 +436,8 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
         filenameHint,
       });
 
-      // Fire a WebSocket update so any open memory panel refreshes.
-      const freshSnapshot = await chatService.getWorkspaceMemory(hash);
-      const wsFns = getWsFns();
-      if (wsFns && wsFns.isConnected(session.conversationId)) {
-        wsFns.send(session.conversationId, {
-          type: 'memory_update',
-          capturedAt: freshSnapshot?.capturedAt || new Date().toISOString(),
-          fileCount: freshSnapshot?.files.length || 0,
-          changedFiles: [relPath],
-        });
-      }
+      // Fire a workspace-scoped WebSocket update so any open memory panel refreshes.
+      await emitFreshMemoryUpdate(hash, [relPath]);
 
       return res.json({ ok: true, filename: relPath });
     } catch (err: unknown) {
@@ -550,16 +551,7 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
 
       if (savedCount > 0) {
         console.log(`[memoryMcp] extract: saved ${savedCount} entry(ies) for conv=${conversationId}`);
-        const freshSnapshot = await chatService.getWorkspaceMemory(hash);
-        const wsFns = getWsFns();
-        if (wsFns && wsFns.isConnected(conversationId)) {
-          wsFns.send(conversationId, {
-            type: 'memory_update',
-            capturedAt: freshSnapshot?.capturedAt || new Date().toISOString(),
-            fileCount: freshSnapshot?.files.length || 0,
-            changedFiles: savedRelPaths,
-          });
-        }
+        await emitFreshMemoryUpdate(hash, savedRelPaths);
       }
 
       return savedCount;
