@@ -371,7 +371,11 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
 
       // Resolve the configured Memory CLI.
       const settings = await chatService.getSettings();
-      const cliId = settings.memory?.cliBackend || settings.defaultBackend || 'claude-code';
+      const memoryRuntime = await chatService.resolveCliProfileRuntime(
+        settings.memory?.cliProfileId,
+        settings.memory?.cliBackend || settings.defaultBackend || 'claude-code',
+      );
+      const cliId = memoryRuntime.backendId;
       const adapter = backendRegistry.get(cliId);
       if (!adapter) {
         return res.status(500).json({ error: `Memory CLI not registered: ${cliId}` });
@@ -390,6 +394,7 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
           model: settings.memory?.cliModel,
           effort: settings.memory?.cliEffort,
           timeoutMs: 90_000,
+          cliProfile: memoryRuntime.profile,
         });
       } catch (err: unknown) {
         console.error(`[memoryMcp] Memory CLI (${cliId}) failed:`, (err as Error).message);
@@ -486,7 +491,11 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
 
       // Resolve the Memory CLI.
       const settings = await chatService.getSettings();
-      const cliId = settings.memory?.cliBackend || settings.defaultBackend || 'claude-code';
+      const memoryRuntime = await chatService.resolveCliProfileRuntime(
+        settings.memory?.cliProfileId,
+        settings.memory?.cliBackend || settings.defaultBackend || 'claude-code',
+      );
+      const cliId = memoryRuntime.backendId;
       const adapter = backendRegistry.get(cliId);
       if (!adapter) {
         console.error(`[memoryMcp] extract: Memory CLI not registered: ${cliId}`);
@@ -500,6 +509,7 @@ export function createMemoryMcpServer({ chatService, backendRegistry, getWsFns }
           model: settings.memory?.cliModel,
           effort: settings.memory?.cliEffort,
           timeoutMs: 120_000,
+          cliProfile: memoryRuntime.profile,
         });
       } catch (err: unknown) {
         console.error(`[memoryMcp] extract: Memory CLI (${cliId}) failed:`, (err as Error).message);

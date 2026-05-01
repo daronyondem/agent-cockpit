@@ -6,7 +6,13 @@ import type {
   Message,
   MemorySnapshot,
   EffortLevel,
+  CliProfile,
 } from '../../types';
+
+export interface BackendCallOptions {
+  /** Full CLI profile for adapters that support profile-isolated runtimes. */
+  cliProfile?: CliProfile;
+}
 
 export interface RunOneShotOptions {
   /** Optional model override; backends ignore if unsupported. */
@@ -32,6 +38,8 @@ export interface RunOneShotOptions {
    * Backends that don't support MCP in one-shot mode ignore this.
    */
   mcpServers?: McpServerConfig[];
+  /** Full CLI profile for adapters that support profile-isolated runtimes. */
+  cliProfile?: CliProfile;
 }
 
 /**
@@ -52,6 +60,10 @@ export class BaseBackendAdapter {
     throw new Error('BaseBackendAdapter.metadata must be implemented by subclass');
   }
 
+  async getMetadata(_options?: BackendCallOptions): Promise<BackendMetadata> {
+    return this.metadata;
+  }
+
   sendMessage(_message: string, _options?: SendMessageOptions): SendMessageResult {
     throw new Error('BaseBackendAdapter.sendMessage must be implemented by subclass');
   }
@@ -59,11 +71,12 @@ export class BaseBackendAdapter {
   async generateSummary(
     _messages: Pick<Message, 'role' | 'content'>[],
     _fallback: string,
+    _options?: BackendCallOptions,
   ): Promise<string> {
     throw new Error('BaseBackendAdapter.generateSummary must be implemented by subclass');
   }
 
-  async generateTitle(userMessage: string, fallback: string): Promise<string> {
+  async generateTitle(userMessage: string, fallback: string, _options?: BackendCallOptions): Promise<string> {
     return fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
   }
 
@@ -103,7 +116,7 @@ export class BaseBackendAdapter {
    * no memory exists for this workspace.  Called by ChatService on
    * session reset to persist memory at the workspace level.
    */
-  async extractMemory(_workspacePath: string): Promise<MemorySnapshot | null> {
+  async extractMemory(_workspacePath: string, _options?: BackendCallOptions): Promise<MemorySnapshot | null> {
     return null;
   }
 
@@ -117,7 +130,7 @@ export class BaseBackendAdapter {
    * implement `extractMemory` should also implement this so the watcher
    * can track their memory live.
    */
-  getMemoryDir(_workspacePath: string): string | null {
+  getMemoryDir(_workspacePath: string, _options?: BackendCallOptions): string | null {
     return null;
   }
 }

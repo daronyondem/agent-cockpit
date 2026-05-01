@@ -1,8 +1,8 @@
-/* global React, AgentApi, useDialog, useToasts */
+/* global React, AgentApi, Ico, useDialog, useToasts */
 
 /* SettingsScreen — full-screen modal-swap pane for V2 app settings.
-   Mirrors the V1 5-tab layout (General / Memory / Knowledge Base / Usage /
-   Server) backed by `GET/PUT /settings` plus `GET /backends`, `GET /usage-stats`
+   Mirrors the V1 layout (General / CLI Config / Memory / Knowledge Base /
+   Usage / Server) backed by `GET/PUT /settings` plus `GET /backends`, `GET /usage-stats`
    (+ DELETE), and `POST /server/restart`. All form tabs share a single
    in-memory `settings` object; clicking Save on any form tab POSTs the full
    merged shape so the user doesn't have to remember to save from one specific
@@ -10,11 +10,74 @@
 
 const SETTINGS_TABS = [
   { id: 'general', label: 'General' },
+  { id: 'cli',     label: 'CLI Config' },
   { id: 'memory',  label: 'Memory' },
   { id: 'kb',      label: 'Knowledge Base' },
   { id: 'usage',   label: 'Usage' },
   { id: 'server',  label: 'Server' },
 ];
+
+const CLI_VENDOR_OPTIONS = [
+  { id: 'codex', label: 'Codex' },
+  { id: 'claude-code', label: 'Claude Code' },
+  { id: 'kiro', label: 'Kiro' },
+];
+
+function cliVendorLabel(vendor){
+  const opt = CLI_VENDOR_OPTIONS.find(o => o.id === vendor);
+  return opt ? opt.label : (vendor || 'CLI');
+}
+
+function isServerConfiguredProfile(profile){
+  return !!(profile && typeof profile.id === 'string' && profile.id.startsWith('server-configured-'));
+}
+
+function normalizeUiProfile(profile){
+  const next = { ...profile };
+  if (next.authMode !== 'account') {
+    delete next.configDir;
+    delete next.env;
+  }
+  if (next.vendor === 'kiro') {
+    next.authMode = 'server-configured';
+    delete next.command;
+    delete next.configDir;
+    delete next.env;
+  }
+  return next;
+}
+
+function cliDefaultCommand(vendor){
+  return vendor === 'codex' ? 'codex' : vendor === 'kiro' ? 'kiro-cli' : 'claude';
+}
+
+function cliSelfConfiguredHome(vendor){
+  if (vendor === 'codex') return '~/.codex';
+  if (vendor === 'claude-code') return '~/.claude';
+  return 'the server Kiro CLI account';
+}
+
+function parseEnvJson(text){
+  const trimmed = (text || '').trim();
+  if (!trimmed) return { env: undefined };
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (err) {
+    return { error: err.message || 'Invalid JSON' };
+  }
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+    return { error: 'Environment must be a JSON object.' };
+  }
+  const env = {};
+  for (const [key, value] of Object.entries(parsed)) {
+    if (!key || typeof value !== 'string') {
+      return { error: 'Environment keys and values must be strings.' };
+    }
+    env[key] = value;
+  }
+  return { env };
+}
 
 /* Apply the chosen theme to the root element so the user sees a live preview
    while picking. 'system' resolves to the OS preference. The persistence
@@ -61,6 +124,43 @@ function effortLevelsForModel(backends, backendId, modelId){
   const m = models.find(x => x.id === modelId);
   if (!m || !Array.isArray(m.supportedEffortLevels)) return [];
   return m.supportedEffortLevels;
+}
+function backendIconFor(backends, backendId){
+  const b = (backends || []).find(x => x.id === backendId);
+  return (b && b.icon) || null;
+}
+function backendForProfile(backends, profileBackends, profile){
+  if (!profile) return null;
+  return (profileBackends && profileBackends[profile.id])
+    || (backends || []).find(b => b.id === profile.vendor)
+    || null;
+}
+function modelsForProfile(backends, profileBackends, profile){
+  const b = backendForProfile(backends, profileBackends, profile);
+  return (b && Array.isArray(b.models)) ? b.models : [];
+}
+function effortLevelsForProfile(backends, profileBackends, profile, modelId){
+  const models = modelsForProfile(backends, profileBackends, profile);
+  const m = models.find(x => x.id === modelId);
+  if (!m || !Array.isArray(m.supportedEffortLevels)) return [];
+  return m.supportedEffortLevels;
+}
+function activeCliProfiles(settings){
+  return Array.isArray(settings && settings.cliProfiles)
+    ? settings.cliProfiles.filter(p => p && !p.disabled)
+    : [];
+}
+function profileForBackend(profiles, backendId){
+  if (!backendId) return null;
+  return profiles.find(p => p.id === 'server-configured-' + backendId)
+    || profiles.find(p => p.vendor === backendId)
+    || null;
+}
+function profileForSetting(profiles, profileId, backendId, fallbackBackend){
+  return (profileId ? profiles.find(p => p.id === profileId) : null)
+    || profileForBackend(profiles, backendId)
+    || profileForBackend(profiles, fallbackBackend)
+    || null;
 }
 function defaultEffortFor(levels){
   if (!levels || !levels.length) return undefined;
@@ -118,6 +218,7 @@ function SettingsScreen({ onClose }){
   const [tab, setTab] = React.useState('general');
   const [settings, setSettings] = React.useState(null);
   const [backends, setBackends] = React.useState([]);
+  const [profileBackends, setProfileBackends] = React.useState({});
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
@@ -147,6 +248,16 @@ function SettingsScreen({ onClose }){
       return { ...prev, ...u };
     });
   }
+
+  const loadProfileBackend = React.useCallback((profileId) => {
+    if (!profileId || profileBackends[profileId]) return;
+    AgentApi.getCliProfileMetadata(profileId)
+      .then((backend) => {
+        if (!backend) return;
+        setProfileBackends(prev => ({ ...prev, [profileId]: backend }));
+      })
+      .catch(() => {});
+  }, [profileBackends]);
 
   async function save(anchor){
     if (!settings) return;
@@ -187,9 +298,10 @@ function SettingsScreen({ onClose }){
           ? <div className="u-dim" style={{padding:'16px'}}>Loading…</div>
           : loadError
             ? <div className="u-err" style={{padding:'16px'}}>{loadError}</div>
-            : tab === 'general' ? <GeneralTab settings={settings} backends={backends} onPatch={patch} onSave={save} saving={saving}/>
-            : tab === 'memory'  ? <SettingsMemoryTab settings={settings} backends={backends} onPatch={patch} onSave={save} saving={saving}/>
-            : tab === 'kb'      ? <SettingsKbTab settings={settings} backends={backends} onPatch={patch} onSave={save} saving={saving}/>
+            : tab === 'general' ? <GeneralTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
+            : tab === 'cli'     ? <CliProfilesTab settings={settings} backends={backends} onPatch={patch} onSave={save} saving={saving}/>
+            : tab === 'memory'  ? <SettingsMemoryTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
+            : tab === 'kb'      ? <SettingsKbTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'usage'   ? <UsageTab/>
             : tab === 'server'  ? <ServerTab/>
             : null}
@@ -201,23 +313,49 @@ window.SettingsScreen = SettingsScreen;
 
 /* ──────────────────── General tab ──────────────────── */
 
-function GeneralTab({ settings, backends, onPatch, onSave, saving }){
-  const backendId = settings.defaultBackend || (backends[0] && backends[0].id) || '';
-  const models = modelsForBackend(backends, backendId);
+function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
+  const profiles = activeCliProfiles(settings);
+  const selectedProfile = profiles.find(p => p.id === settings.defaultCliProfileId)
+    || profiles.find(p => p.vendor === settings.defaultBackend)
+    || null;
+  const backendId = (selectedProfile && selectedProfile.vendor) || settings.defaultBackend || (backends[0] && backends[0].id) || '';
+  React.useEffect(() => {
+    if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
+  }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
+  const models = selectedProfile
+    ? modelsForProfile(backends, profileBackends, selectedProfile)
+    : modelsForBackend(backends, backendId);
   const modelId = settings.defaultModel || defaultModelId(models) || '';
-  const efforts = effortLevelsForModel(backends, backendId, modelId);
+  const efforts = selectedProfile
+    ? effortLevelsForProfile(backends, profileBackends, selectedProfile, modelId)
+    : effortLevelsForModel(backends, backendId, modelId);
   const effort = settings.defaultEffort || defaultEffortFor(efforts) || '';
 
-  /* Switching backend resets model + effort to that backend's defaults so we
-     never carry a model id into a backend that doesn't support it. */
+  /* Switching profile/backend resets model + effort to that vendor's defaults
+     so we never carry a model id into a backend that doesn't support it. */
+  function onProfileChange(v){
+    const profile = profiles.find(p => p.id === v);
+    if (!profile) return;
+    const m = modelsForProfile(backends, profileBackends, profile);
+    const newModel = defaultModelId(m);
+    const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
+    onPatch({
+      defaultCliProfileId: profile.id,
+      defaultBackend: profile.vendor,
+      defaultModel: newModel,
+      defaultEffort: defaultEffortFor(e),
+    });
+  }
   function onBackendChange(v){
     const m = modelsForBackend(backends, v);
     const newModel = defaultModelId(m);
     const e = effortLevelsForModel(backends, v, newModel);
-    onPatch({ defaultBackend: v, defaultModel: newModel, defaultEffort: defaultEffortFor(e) });
+    onPatch({ defaultCliProfileId: undefined, defaultBackend: v, defaultModel: newModel, defaultEffort: defaultEffortFor(e) });
   }
   function onModelChange(v){
-    const e = effortLevelsForModel(backends, backendId, v);
+    const e = selectedProfile
+      ? effortLevelsForProfile(backends, profileBackends, selectedProfile, v)
+      : effortLevelsForModel(backends, backendId, v);
     onPatch({ defaultModel: v, defaultEffort: defaultEffortFor(e) });
   }
 
@@ -244,12 +382,21 @@ function GeneralTab({ settings, backends, onPatch, onSave, saving }){
           ]}
         />
       </Field>
-      <Field label="Default backend">
-        <select value={backendId} onChange={(e) => onBackendChange(e.target.value)}>
-          {backends.length === 0 ? <option value="">No backends available</option> : null}
-          {backends.map(b => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
-        </select>
-      </Field>
+      {profiles.length ? (
+        <Field label="Default CLI profile">
+          <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
+            {!selectedProfile ? <option value="">Select a profile</option> : null}
+            {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </Field>
+      ) : (
+        <Field label="Default backend">
+          <select value={backendId} onChange={(e) => onBackendChange(e.target.value)}>
+            {backends.length === 0 ? <option value="">No backends available</option> : null}
+            {backends.map(b => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
+          </select>
+        </Field>
+      )}
       {models.length ? (
         <Field label="Default model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
@@ -281,41 +428,529 @@ function GeneralTab({ settings, backends, onPatch, onSave, saving }){
   );
 }
 
+/* ──────────────────── CLI Config tab ──────────────────── */
+
+function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
+  const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
+  const [expandedProfileId, setExpandedProfileId] = React.useState(() => (profiles[0] && profiles[0].id) || null);
+  const [envTextById, setEnvTextById] = React.useState({});
+  const [envErrorsById, setEnvErrorsById] = React.useState({});
+  const [authStateById, setAuthStateById] = React.useState({});
+  const [authBusyById, setAuthBusyById] = React.useState({});
+  const mountedRef = React.useRef(true);
+  const hasEnvErrors = Object.values(envErrorsById).some(Boolean);
+  const enabledCount = profiles.filter(profile => profile && !profile.disabled).length;
+
+  React.useEffect(() => {
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  React.useEffect(() => {
+    setEnvTextById(prev => {
+      const next = {};
+      for (const profile of profiles) {
+        next[profile.id] = prev[profile.id] !== undefined
+          ? prev[profile.id]
+          : profile.env ? JSON.stringify(profile.env, null, 2) : '';
+      }
+      return next;
+    });
+    setEnvErrorsById(prev => {
+      const next = {};
+      for (const profile of profiles) {
+        if (prev[profile.id]) next[profile.id] = prev[profile.id];
+      }
+      return next;
+    });
+  }, [profiles.map(p => p.id).join('|')]);
+
+  React.useEffect(() => {
+    setExpandedProfileId(current => {
+      if (profiles.length === 0) return null;
+      if (current && profiles.some(profile => profile.id === current)) return current;
+      return profiles[0].id;
+    });
+  }, [profiles.map(p => p.id).join('|')]);
+
+  function patchProfile(id, updater){
+    onPatch(prev => {
+      const list = Array.isArray(prev.cliProfiles) ? prev.cliProfiles : [];
+      let changedProfile = null;
+      const nextProfiles = list.map(profile => {
+        if (profile.id !== id) return profile;
+        const patch = typeof updater === 'function' ? updater(profile) : updater;
+        changedProfile = normalizeUiProfile({
+          ...profile,
+          ...patch,
+          updatedAt: new Date().toISOString(),
+        });
+        return changedProfile;
+      });
+      const next = { cliProfiles: nextProfiles };
+      if (prev.defaultCliProfileId === id && changedProfile) {
+        next.defaultBackend = changedProfile.vendor;
+        if (changedProfile.disabled) next.defaultCliProfileId = undefined;
+      }
+      return next;
+    });
+  }
+
+  function addProfile(){
+    const now = new Date().toISOString();
+    const vendor = 'claude-code';
+    const id = `profile-${vendor}-${Date.now().toString(36)}`;
+    const profile = {
+      id,
+      name: `${cliVendorLabel(vendor)} Profile`,
+      vendor,
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    onPatch(prev => ({
+      cliProfiles: [...(Array.isArray(prev.cliProfiles) ? prev.cliProfiles : []), profile],
+    }));
+    setExpandedProfileId(id);
+  }
+
+  function deleteProfile(id){
+    onPatch(prev => {
+      const next = {
+        cliProfiles: (Array.isArray(prev.cliProfiles) ? prev.cliProfiles : []).filter(profile => profile.id !== id),
+      };
+      if (prev.defaultCliProfileId === id) next.defaultCliProfileId = undefined;
+      return next;
+    });
+  }
+
+  function toggleExpanded(id){
+    setExpandedProfileId(current => current === id ? null : id);
+  }
+
+  function onCardHeadKeyDown(event, id){
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    toggleExpanded(id);
+  }
+
+  function onVendorChange(profile, vendor){
+    setEnvErrorsById(prev => ({ ...prev, [profile.id]: '' }));
+    if (vendor === 'kiro') {
+      setEnvTextById(prev => ({ ...prev, [profile.id]: '' }));
+    }
+    patchProfile(profile.id, current => {
+      const next = {
+        vendor,
+        authMode: vendor === 'kiro' ? 'server-configured' : current.authMode,
+      };
+      if (vendor === 'kiro') {
+        next.command = undefined;
+        next.configDir = undefined;
+        next.env = undefined;
+      }
+      return next;
+    });
+  }
+
+  function onSetupModeChange(profile, authMode){
+    if (authMode === 'server-configured') {
+      setEnvTextById(prev => ({ ...prev, [profile.id]: '' }));
+      setEnvErrorsById(prev => ({ ...prev, [profile.id]: '' }));
+      patchProfile(profile.id, { authMode, configDir: undefined, env: undefined });
+    } else {
+      patchProfile(profile.id, { authMode });
+    }
+  }
+
+  function onEnvChange(profile, text){
+    setEnvTextById(prev => ({ ...prev, [profile.id]: text }));
+    const parsed = parseEnvJson(text);
+    setEnvErrorsById(prev => ({ ...prev, [profile.id]: parsed.error || '' }));
+    if (!parsed.error) {
+      patchProfile(profile.id, { env: parsed.env });
+    }
+  }
+
+  function mergeSettingsFromAuthResponse(response){
+    if (response && response.settings) onPatch(response.settings);
+  }
+
+  function setProfileAuthState(profileId, patch){
+    if (!mountedRef.current) return;
+    setAuthStateById(prev => ({ ...prev, [profileId]: patch }));
+  }
+
+  function setProfileAuthBusy(profileId, busy){
+    if (!mountedRef.current) return;
+    setAuthBusyById(prev => ({ ...prev, [profileId]: busy }));
+  }
+
+  async function checkProfileAuth(profile){
+    if (hasEnvErrors || saving || authBusyById[profile.id]) return;
+    setProfileAuthBusy(profile.id, true);
+    setProfileAuthState(profile.id, { kind: 'check', status: 'running', message: 'Checking CLI status…' });
+    try {
+      await onSave(null);
+      const response = await AgentApi.settings.testCliProfile(profile.id);
+      mergeSettingsFromAuthResponse(response);
+      setProfileAuthState(profile.id, { kind: 'check', status: response.result.status, result: response.result });
+    } catch (err) {
+      setProfileAuthState(profile.id, { kind: 'check', status: 'error', error: err.message || String(err) });
+    } finally {
+      setProfileAuthBusy(profile.id, false);
+    }
+  }
+
+  async function startProfileAuth(profile){
+    if (hasEnvErrors || saving || authBusyById[profile.id]) return;
+    setProfileAuthBusy(profile.id, true);
+    setProfileAuthState(profile.id, { kind: 'job', status: 'running', message: 'Starting authentication…' });
+    try {
+      await onSave(null);
+      const response = await AgentApi.settings.startCliProfileAuth(profile.id);
+      mergeSettingsFromAuthResponse(response);
+      setProfileAuthState(profile.id, { kind: 'job', status: response.job.status, job: response.job });
+      pollProfileAuthJob(profile.id, response.job.id);
+    } catch (err) {
+      setProfileAuthState(profile.id, { kind: 'job', status: 'error', error: err.message || String(err) });
+    } finally {
+      setProfileAuthBusy(profile.id, false);
+    }
+  }
+
+  async function pollProfileAuthJob(profileId, jobId){
+    try {
+      const response = await AgentApi.settings.getCliProfileAuthJob(jobId);
+      const job = response.job;
+      setProfileAuthState(profileId, { kind: 'job', status: job.status, job });
+      if (job.status === 'running' && mountedRef.current) {
+        window.setTimeout(() => pollProfileAuthJob(profileId, jobId), 1000);
+      }
+    } catch (err) {
+      setProfileAuthState(profileId, { kind: 'job', status: 'error', error: err.message || String(err) });
+    }
+  }
+
+  async function cancelProfileAuth(profile){
+    const state = authStateById[profile.id];
+    const jobId = state && state.job && state.job.id;
+    if (!jobId) return;
+    setProfileAuthBusy(profile.id, true);
+    try {
+      const response = await AgentApi.settings.cancelCliProfileAuth(jobId);
+      setProfileAuthState(profile.id, { kind: 'job', status: response.job.status, job: response.job });
+    } catch (err) {
+      setProfileAuthState(profile.id, { kind: 'job', status: 'error', error: err.message || String(err) });
+    } finally {
+      setProfileAuthBusy(profile.id, false);
+    }
+  }
+
+  function authStateLabel(state){
+    if (!state) return 'not checked';
+    if (state.message) return state.message;
+    if (state.error) return 'error';
+    if (state.kind === 'check' && state.result) {
+      if (state.result.authenticated === true) return 'authenticated';
+      if (state.result.status === 'not-authenticated') return 'not authenticated';
+      return state.result.status || 'checked';
+    }
+    if (state.job) return state.job.status;
+    return state.status || 'unknown';
+  }
+
+  function authStateText(state){
+    if (!state) return '';
+    if (state.error) return state.error;
+    if (state.result) {
+      return [state.result.error, state.result.output].filter(Boolean).join('\n').trim();
+    }
+    if (state.job) {
+      return (state.job.events || [])
+        .map(event => `[${event.type}] ${event.text}`)
+        .join('\n')
+        .trim();
+    }
+    return state.message || '';
+  }
+
+  return (
+    <div className="settings-form settings-form-wide">
+      <div className="cli-pane-head">
+        <div>
+          <h3 className="pane-title">CLI config profiles</h3>
+          <p className="cli-blurb">
+            Profiles are named CLI runtimes used by new conversations. <b>Self-configured</b> profiles use CLI state already present on this server; <b>account profiles</b> use the directory and environment you provide here.
+          </p>
+        </div>
+        <div className="cli-counter u-mono">
+          <span><b>{enabledCount}</b> enabled</span>
+          <span className="sep">·</span>
+          <span><b>{profiles.length}</b> total</span>
+        </div>
+      </div>
+
+      <div className="cli-list">
+        {profiles.length === 0 ? (
+          <div className="settings-empty u-dim">No CLI profiles are configured yet.</div>
+        ) : profiles.map(profile => {
+          const isKiro = profile.vendor === 'kiro';
+          const isServerProfile = isServerConfiguredProfile(profile);
+          const isAccount = !isKiro && profile.authMode === 'account';
+          const vendorIcon = backendIconFor(backends, profile.vendor);
+          const expanded = expandedProfileId === profile.id;
+          const setupLabel = isAccount ? 'Account profile' : 'Self-configured';
+          const envError = envErrorsById[profile.id];
+          const authState = authStateById[profile.id];
+          const authBusy = !!authBusyById[profile.id];
+          const authRunning = !!(authState && authState.job && authState.job.status === 'running');
+          const authText = authStateText(authState);
+          return (
+            <div className={`cli-card ${expanded ? 'is-open' : ''} ${profile.disabled ? 'is-off' : ''}`} key={profile.id}>
+              <div
+                className="cli-card-head"
+                role="button"
+                tabIndex={0}
+                aria-expanded={expanded ? 'true' : 'false'}
+                onClick={() => toggleExpanded(profile.id)}
+                onKeyDown={(e) => onCardHeadKeyDown(e, profile.id)}
+              >
+                <div className="cli-card-head-main">
+                  <div className="cli-card-name">
+                    <span className="chev" data-open={expanded ? 'true' : 'false'}>{Ico.chev(12)}</span>
+                    {vendorIcon ? <span className="cli-vendor-icon" aria-hidden="true" dangerouslySetInnerHTML={{__html: vendorIcon}}/> : null}
+                    <b>{profile.name || profile.id}</b>
+                  </div>
+                  <div className="cli-card-meta u-mono">
+                    <span>{cliVendorLabel(profile.vendor)}</span>
+                    <span className="sep">·</span>
+                    <span>{setupLabel}</span>
+                    {profile.command ? (
+                      <>
+                        <span className="sep">·</span>
+                        <code>{profile.command}</code>
+                      </>
+                    ) : null}
+                  </div>
+                </div>
+                <div className="cli-card-head-side" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
+                  <label className="toggle">
+                    <input
+                      type="checkbox"
+                      checked={!profile.disabled}
+                      onChange={(e) => patchProfile(profile.id, { disabled: !e.target.checked })}
+                    />
+                    <span className="tgl"/>
+                    <span className="tgl-lbl">{profile.disabled ? 'Disabled' : 'Enabled'}</span>
+                  </label>
+                  <button
+                    type="button"
+                    className="iconbtn-lg cli-del"
+                    title={isServerProfile ? 'Server-configured profiles cannot be deleted' : 'Delete profile'}
+                    disabled={isServerProfile}
+                    onClick={() => deleteProfile(profile.id)}
+                  >
+                    {Ico.trash(13)}
+                  </button>
+                </div>
+              </div>
+
+              {expanded ? (
+                <div className="cli-card-body">
+                  <div className="cli-profile-grid">
+                    <Field label="Name">
+                      <input
+                        className="inp"
+                        value={profile.name || ''}
+                        onChange={(e) => patchProfile(profile.id, { name: e.target.value })}
+                      />
+                    </Field>
+                    <Field label="Vendor">
+                      <div className="settings-select-wrap">
+                        <select
+                          value={profile.vendor}
+                          disabled={isServerProfile}
+                          onChange={(e) => onVendorChange(profile, e.target.value)}
+                        >
+                          {CLI_VENDOR_OPTIONS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                        </select>
+                        {Ico.chevD(12)}
+                      </div>
+                    </Field>
+                  </div>
+                  <div className="cli-profile-grid">
+                    <Field label="Setup mode" hint={isKiro ? 'Kiro is self-configured only for now.' : undefined}>
+                      <div className="settings-select-wrap">
+                        <select
+                          value={isKiro ? 'server-configured' : (profile.authMode || 'server-configured')}
+                          disabled={isKiro}
+                          onChange={(e) => onSetupModeChange(profile, e.target.value)}
+                        >
+                          <option value="server-configured">Self-configured</option>
+                          <option value="account">Account profile</option>
+                        </select>
+                        {Ico.chevD(12)}
+                      </div>
+                    </Field>
+                    {!isKiro ? (
+                      <Field label="Command" hint="Optional executable override. Leave blank for the vendor default.">
+                        <input
+                          className="inp u-mono"
+                          value={profile.command || ''}
+                          placeholder={cliDefaultCommand(profile.vendor)}
+                          onChange={(e) => patchProfile(profile.id, { command: e.target.value || undefined })}
+                        />
+                      </Field>
+                    ) : null}
+                  </div>
+
+                  {isAccount ? (
+                    <>
+                      <Field label="Config directory" hint={profile.vendor === 'codex' ? 'Maps to CODEX_HOME at runtime.' : 'Maps to CLAUDE_CONFIG_DIR at runtime.'}>
+                        <input
+                          className="inp u-mono"
+                          value={profile.configDir || ''}
+                          placeholder={profile.vendor === 'codex' ? '/Users/server/.codex-account' : '/Users/server/.claude-account'}
+                          onChange={(e) => patchProfile(profile.id, { configDir: e.target.value || undefined })}
+                        />
+                      </Field>
+                      <Field label="Environment overrides" hint="Optional JSON object. Values must be strings.">
+                        <textarea
+                          className="ta"
+                          rows={5}
+                          value={envTextById[profile.id] || ''}
+                          placeholder={'{\n  "EXAMPLE": "value"\n}'}
+                          onChange={(e) => onEnvChange(profile, e.target.value)}
+                        />
+                        {envError ? <span className="settings-field-hint u-err">{envError}</span> : null}
+                      </Field>
+                      <div className="cli-auth-box">
+                        <div className="cli-auth-head">
+                          <div>
+                            <b>Account authentication</b>
+                            <span className="u-dim">Runs the vendor login flow on the server with this profile's config directory.</span>
+                          </div>
+                          <span className={`cli-auth-status ${authRunning ? 'running' : ''}`}>{authStateLabel(authState)}</span>
+                        </div>
+                        <div className="cli-auth-actions">
+                          <button
+                            type="button"
+                            className="btn"
+                            disabled={saving || hasEnvErrors || authBusy || authRunning}
+                            onClick={() => checkProfileAuth(profile)}
+                          >Check CLI</button>
+                          <button
+                            type="button"
+                            className="btn primary"
+                            disabled={saving || hasEnvErrors || authBusy || authRunning}
+                            onClick={() => startProfileAuth(profile)}
+                          >Authenticate</button>
+                          {authRunning ? (
+                            <button
+                              type="button"
+                              className="btn ghost"
+                              disabled={authBusy}
+                              onClick={() => cancelProfileAuth(profile)}
+                            >Cancel</button>
+                          ) : null}
+                        </div>
+                        {authText ? <pre className="cli-auth-log">{authText}</pre> : null}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="cli-self-note">
+                      <span className="dot-ok"/>
+                      <div>
+                        <b>Uses CLI state already on this server.</b>
+                        <div className="u-dim" style={{fontSize: 12, marginTop: 2}}>
+                          {isKiro ? (
+                            <>Configure Kiro on the server and use this self-configured profile. Kiro does not expose a dedicated account/config directory override yet.</>
+                          ) : (
+                            <>Self-configured profiles inherit the host's existing <code>{cliSelfConfiguredHome(profile.vendor)}</code> directory and shell environment. No directory or env overrides needed.</>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+
+        <button type="button" className="cli-add" onClick={addProfile}>
+          {Ico.plus(14)}
+          <span>Add CLI profile</span>
+          <span className="u-mono u-dim cli-add-hint">name · vendor · setup mode</span>
+        </button>
+      </div>
+
+      <div className="pane-foot">
+        <span className="u-dim u-mono" style={{fontSize:11}}>stored in global settings</span>
+        <span style={{flex:1}}/>
+        <button className="btn primary" disabled={saving || hasEnvErrors} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>
+        {hasEnvErrors ? <span className="settings-field-hint u-err">Fix environment JSON before saving.</span> : null}
+      </div>
+    </div>
+  );
+}
+
 /* ──────────────────── Memory tab ──────────────────── */
 
-function SettingsMemoryTab({ settings, backends, onPatch, onSave, saving }){
+function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
   const mem = settings.memory || {};
+  const profiles = activeCliProfiles(settings);
   const fallbackBackend = settings.defaultBackend || (backends[0] && backends[0].id) || '';
-  const backendId = mem.cliBackend || fallbackBackend;
-  const models = modelsForBackend(backends, backendId);
+  const selectedProfile = profiles.find(p => p.id === mem.cliProfileId)
+    || profileForBackend(profiles, mem.cliBackend)
+    || profiles.find(p => p.id === settings.defaultCliProfileId)
+    || profileForBackend(profiles, fallbackBackend)
+    || null;
+  React.useEffect(() => {
+    if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
+  }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
+  const models = selectedProfile
+    ? modelsForProfile(backends, profileBackends, selectedProfile)
+    : modelsForBackend(backends, fallbackBackend);
   const modelId = mem.cliModel || defaultModelId(models) || '';
-  const efforts = effortLevelsForModel(backends, backendId, modelId);
+  const efforts = selectedProfile
+    ? effortLevelsForProfile(backends, profileBackends, selectedProfile, modelId)
+    : effortLevelsForModel(backends, fallbackBackend, modelId);
   const effort = mem.cliEffort || defaultEffortFor(efforts) || '';
 
   function patchMem(next){
     onPatch(prev => ({ memory: { ...(prev.memory || {}), ...next } }));
   }
-  function onBackendChange(v){
-    const m = modelsForBackend(backends, v);
+  function onProfileChange(v){
+    const profile = profiles.find(p => p.id === v);
+    if (!profile) return;
+    const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
-    const e = effortLevelsForModel(backends, v, newModel);
-    patchMem({ cliBackend: v, cliModel: newModel, cliEffort: defaultEffortFor(e) });
+    const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
+    patchMem({
+      cliProfileId: profile.id,
+      cliBackend: profile.vendor,
+      cliModel: newModel,
+      cliEffort: defaultEffortFor(e),
+    });
   }
   function onModelChange(v){
-    const e = effortLevelsForModel(backends, backendId, v);
+    const e = selectedProfile
+      ? effortLevelsForProfile(backends, profileBackends, selectedProfile, v)
+      : effortLevelsForModel(backends, fallbackBackend, v);
     patchMem({ cliModel: v, cliEffort: defaultEffortFor(e) });
   }
 
   return (
     <div className="settings-form">
       <p className="settings-desc u-dim">
-        Backend used by the workspace memory CLI when generating CLAUDE.md and related files.
-        Falls back to the default backend when unset.
+        CLI profile used by the workspace memory helper when formatting and deduping captured notes.
+        Falls back to the default profile when unset.
       </p>
-      <Field label="Memory CLI backend">
-        <select value={backendId} onChange={(e) => onBackendChange(e.target.value)}>
-          {backends.length === 0 ? <option value="">No backends available</option> : null}
-          {backends.map(b => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
+      <Field label="Memory CLI profile">
+        <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
+          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
+          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </Field>
       {models.length ? (
@@ -343,29 +978,40 @@ function SettingsMemoryTab({ settings, backends, onPatch, onSave, saving }){
 
 /* ──────────────────── Knowledge Base tab ──────────────────── */
 
-function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
+function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
   const kb = settings.knowledgeBase || {};
+  const profiles = activeCliProfiles(settings);
   const fallbackBackend = settings.defaultBackend || (backends[0] && backends[0].id) || '';
 
   // Ingestion picks (vision-capable CLI for AI-assisted page/slide/image conversion)
-  const igBackend = kb.ingestionCliBackend || '';
-  const igModels = modelsForBackend(backends, igBackend);
+  const igProfile = (kb.ingestionCliProfileId || kb.ingestionCliBackend)
+    ? profileForSetting(profiles, kb.ingestionCliProfileId, kb.ingestionCliBackend, '')
+    : null;
+  const igModels = igProfile ? modelsForProfile(backends, profileBackends, igProfile) : [];
   const igModel = kb.ingestionCliModel || defaultModelId(igModels) || '';
-  const igEfforts = effortLevelsForModel(backends, igBackend, igModel);
+  const igEfforts = igProfile ? effortLevelsForProfile(backends, profileBackends, igProfile, igModel) : [];
   const igEffort = kb.ingestionCliEffort || defaultEffortFor(igEfforts) || '';
 
   // Digestion picks
-  const dgBackend = kb.digestionCliBackend || fallbackBackend;
-  const dgModels = modelsForBackend(backends, dgBackend);
+  const dgProfile = profileForSetting(profiles, kb.digestionCliProfileId, kb.digestionCliBackend, fallbackBackend);
+  const dgModels = dgProfile
+    ? modelsForProfile(backends, profileBackends, dgProfile)
+    : modelsForBackend(backends, fallbackBackend);
   const dgModel = kb.digestionCliModel || defaultModelId(dgModels) || '';
-  const dgEfforts = effortLevelsForModel(backends, dgBackend, dgModel);
+  const dgEfforts = dgProfile
+    ? effortLevelsForProfile(backends, profileBackends, dgProfile, dgModel)
+    : effortLevelsForModel(backends, fallbackBackend, dgModel);
   const dgEffort = kb.digestionCliEffort || defaultEffortFor(dgEfforts) || '';
 
   // Dreaming picks
-  const drBackend = kb.dreamingCliBackend || fallbackBackend;
-  const drModels = modelsForBackend(backends, drBackend);
+  const drProfile = profileForSetting(profiles, kb.dreamingCliProfileId, kb.dreamingCliBackend, fallbackBackend);
+  const drModels = drProfile
+    ? modelsForProfile(backends, profileBackends, drProfile)
+    : modelsForBackend(backends, fallbackBackend);
   const drModel = kb.dreamingCliModel || defaultModelId(drModels) || '';
-  const drEfforts = effortLevelsForModel(backends, drBackend, drModel);
+  const drEfforts = drProfile
+    ? effortLevelsForProfile(backends, profileBackends, drProfile, drModel)
+    : effortLevelsForModel(backends, fallbackBackend, drModel);
   const drEffort = kb.dreamingCliEffort || defaultEffortFor(drEfforts) || '';
 
   const concurrency = Number.isFinite(kb.cliConcurrency) ? kb.cliConcurrency : 2;
@@ -379,38 +1025,58 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
     AgentApi.kb.pandocStatus().then(setPandoc).catch(() => setPandoc({ available: false }));
     AgentApi.kb.libreOfficeStatus().then(setLibreOffice).catch(() => setLibreOffice({ available: false }));
   }, []);
+  React.useEffect(() => {
+    [igProfile, dgProfile, drProfile].forEach(profile => {
+      if (profile && loadProfileBackend) loadProfileBackend(profile.id);
+    });
+  }, [igProfile && igProfile.id, dgProfile && dgProfile.id, drProfile && drProfile.id, loadProfileBackend]);
 
   function patchKb(next){
     onPatch(prev => ({ knowledgeBase: { ...(prev.knowledgeBase || {}), ...next } }));
   }
-  function onIgBackend(v){
-    const m = modelsForBackend(backends, v);
+  function onIgProfile(v){
+    if (!v) {
+      patchKb({
+        ingestionCliProfileId: undefined,
+        ingestionCliBackend: undefined,
+        ingestionCliModel: undefined,
+        ingestionCliEffort: undefined,
+      });
+      return;
+    }
+    const profile = profiles.find(p => p.id === v);
+    if (!profile) return;
+    const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
-    const e = effortLevelsForModel(backends, v, newModel);
-    patchKb({ ingestionCliBackend: v, ingestionCliModel: newModel, ingestionCliEffort: defaultEffortFor(e) });
+    const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
+    patchKb({ ingestionCliProfileId: profile.id, ingestionCliBackend: profile.vendor, ingestionCliModel: newModel, ingestionCliEffort: defaultEffortFor(e) });
   }
   function onIgModel(v){
-    const e = effortLevelsForModel(backends, igBackend, v);
+    const e = igProfile ? effortLevelsForProfile(backends, profileBackends, igProfile, v) : [];
     patchKb({ ingestionCliModel: v, ingestionCliEffort: defaultEffortFor(e) });
   }
-  function onDgBackend(v){
-    const m = modelsForBackend(backends, v);
+  function onDgProfile(v){
+    const profile = profiles.find(p => p.id === v);
+    if (!profile) return;
+    const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
-    const e = effortLevelsForModel(backends, v, newModel);
-    patchKb({ digestionCliBackend: v, digestionCliModel: newModel, digestionCliEffort: defaultEffortFor(e) });
+    const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
+    patchKb({ digestionCliProfileId: profile.id, digestionCliBackend: profile.vendor, digestionCliModel: newModel, digestionCliEffort: defaultEffortFor(e) });
   }
   function onDgModel(v){
-    const e = effortLevelsForModel(backends, dgBackend, v);
+    const e = dgProfile ? effortLevelsForProfile(backends, profileBackends, dgProfile, v) : effortLevelsForModel(backends, fallbackBackend, v);
     patchKb({ digestionCliModel: v, digestionCliEffort: defaultEffortFor(e) });
   }
-  function onDrBackend(v){
-    const m = modelsForBackend(backends, v);
+  function onDrProfile(v){
+    const profile = profiles.find(p => p.id === v);
+    if (!profile) return;
+    const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
-    const e = effortLevelsForModel(backends, v, newModel);
-    patchKb({ dreamingCliBackend: v, dreamingCliModel: newModel, dreamingCliEffort: defaultEffortFor(e) });
+    const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
+    patchKb({ dreamingCliProfileId: profile.id, dreamingCliBackend: profile.vendor, dreamingCliModel: newModel, dreamingCliEffort: defaultEffortFor(e) });
   }
   function onDrModel(v){
-    const e = effortLevelsForModel(backends, drBackend, v);
+    const e = drProfile ? effortLevelsForProfile(backends, profileBackends, drProfile, v) : effortLevelsForModel(backends, fallbackBackend, v);
     patchKb({ dreamingCliModel: v, dreamingCliEffort: defaultEffortFor(e) });
   }
   function onConcurrency(v){
@@ -457,20 +1123,20 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
         uploaded images into clean Markdown. Leave blank to skip AI-assisted conversion;
         flagged content falls back to image-only references.
       </p>
-      <Field label="Ingestion CLI backend">
-        <select value={igBackend} onChange={(e) => onIgBackend(e.target.value)}>
+      <Field label="Ingestion CLI profile">
+        <select value={igProfile ? igProfile.id : ''} onChange={(e) => onIgProfile(e.target.value)}>
           <option value="">— None (skip AI conversion) —</option>
-          {backends.map(b => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
+          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </Field>
-      {igBackend && igModels.length ? (
+      {igProfile && igModels.length ? (
         <Field label="Ingestion model">
           <select value={igModel} onChange={(e) => onIgModel(e.target.value)}>
             {igModels.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
           </select>
         </Field>
       ) : null}
-      {igBackend && igEfforts.length ? (
+      {igProfile && igEfforts.length ? (
         <Field label="Ingestion effort">
           <Seg
             value={igEffort}
@@ -481,10 +1147,10 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
       ) : null}
 
       <div className="settings-section-title">Digestion</div>
-      <Field label="Digestion CLI backend">
-        <select value={dgBackend} onChange={(e) => onDgBackend(e.target.value)}>
-          {backends.length === 0 ? <option value="">No backends available</option> : null}
-          {backends.map(b => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
+      <Field label="Digestion CLI profile">
+        <select value={dgProfile ? dgProfile.id : ''} onChange={(e) => onDgProfile(e.target.value)}>
+          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
+          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </Field>
       {dgModels.length ? (
@@ -505,10 +1171,10 @@ function SettingsKbTab({ settings, backends, onPatch, onSave, saving }){
       ) : null}
 
       <div className="settings-section-title">Dreaming</div>
-      <Field label="Dreaming CLI backend">
-        <select value={drBackend} onChange={(e) => onDrBackend(e.target.value)}>
-          {backends.length === 0 ? <option value="">No backends available</option> : null}
-          {backends.map(b => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
+      <Field label="Dreaming CLI profile">
+        <select value={drProfile ? drProfile.id : ''} onChange={(e) => onDrProfile(e.target.value)}>
+          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
+          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </Field>
       {drModels.length ? (

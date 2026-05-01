@@ -59,6 +59,7 @@
    *   unread: boolean,
    *   pendingInteraction: PendingInteraction | null,
    *   respondPending: boolean,
+   *   composerCliProfileId: string | null,
    *   composerBackend: string | null,
    *   composerModel: string | null,
    *   composerEffort: string | null,
@@ -204,6 +205,7 @@
       unread: false,
       pendingInteraction: null,
       respondPending: false,
+      composerCliProfileId: null,
       composerBackend: null,
       composerModel: null,
       composerEffort: null,
@@ -455,6 +457,7 @@
         loaded: true,
         /* Hydrate composer picker state from the conv record only if the user
            hasn't already touched it this session. Null = never-touched. */
+        composerCliProfileId: cur.composerCliProfileId != null ? cur.composerCliProfileId : (data.cliProfileId || null),
         composerBackend: cur.composerBackend != null ? cur.composerBackend : (data.backend || null),
         composerModel:   cur.composerModel   != null ? cur.composerModel   : (data.model   || null),
         composerEffort:  cur.composerEffort  != null ? cur.composerEffort  : (data.effort  || null),
@@ -587,6 +590,23 @@
       });
       return { ...cur, messages: next };
     });
+  }
+
+  function refreshPlanUsageForSnapshot(snapshot){
+    const conv = snapshot && snapshot.conv;
+    if (!conv) return;
+    const cliProfileId = conv.cliProfileId || null;
+    const store = conv.backend === 'claude-code' ? window.PlanUsageStore
+      : conv.backend === 'kiro'        ? window.KiroPlanUsageStore
+      : conv.backend === 'codex'       ? window.CodexPlanUsageStore
+      : null;
+    if (!store || typeof store.refresh !== 'function') return;
+    store.refresh(cliProfileId);
+    /* The server starts profile plan-usage refresh after it emits `done`.
+       Read the cache again shortly after so the tooltip picks up the
+       just-refreshed profile snapshot instead of racing the first read. */
+    window.setTimeout(() => store.refresh(cliProfileId), 2500);
+    window.setTimeout(() => store.refresh(cliProfileId), 10000);
   }
 
   function handleFrame(convId, frame){
@@ -767,16 +787,9 @@
       if (markUnreadNow) {
         AgentApi.markConversationUnread(convId, true).catch(() => {});
       }
-      /* Poll the per-backend plan usage store once per turn. Server floors
-         the actual API hit at 10 min; this just asks for the cached
-         snapshot and fans it out to the ContextChip tooltip. */
-      if (s.conv && s.conv.backend === 'claude-code' && window.PlanUsageStore) {
-        window.PlanUsageStore.refresh();
-      } else if (s.conv && s.conv.backend === 'kiro' && window.KiroPlanUsageStore) {
-        window.KiroPlanUsageStore.refresh();
-      } else if (s.conv && s.conv.backend === 'codex' && window.CodexPlanUsageStore) {
-        window.CodexPlanUsageStore.refresh();
-      }
+      /* Poll the profile-aware plan usage store once per turn. Server floors
+         actual upstream API calls; these reads only fan out cached snapshots. */
+      refreshPlanUsageForSnapshot(states.get(convId) || s);
       /* Auto-drain queue — if the just-finished run leaves us idle (no
          pending plan/question, no stream error) and there's a queued
          message, pop the head and send it. */
@@ -912,6 +925,7 @@
     const now = new Date().toISOString();
     const tempUserId = 'pending-user-' + Date.now();
     const tempAssistId = 'pending-assistant-' + Date.now();
+    const sendCliProfileId = s.composerCliProfileId || (s.conv && s.conv.cliProfileId) || '';
     const sendBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
     const sendModel = s.composerModel || null;
     const sendEffort = s.composerEffort || null;
@@ -932,6 +946,7 @@
 
     try {
       const body = { content };
+      if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
       if (sendEffort)  body.effort  = sendEffort;
@@ -949,6 +964,7 @@
              record matches its truth after a backend/model/effort change. */
           conv: cur.conv ? {
             ...cur.conv,
+            cliProfileId: sendCliProfileId || cur.conv.cliProfileId,
             backend: sendBackend || cur.conv.backend,
             model:   sendModel   !== null ? sendModel   : cur.conv.model,
             effort:  sendEffort  !== null ? sendEffort  : cur.conv.effort,
@@ -1115,6 +1131,16 @@
     const s = states.get(convId);
     if (!s || s.composerBackend === value) return;
     update(convId, { composerBackend: value || null });
+  }
+  function setComposerCliProfile(convId, profileId, backendId){
+    const s = states.get(convId);
+    if (!s) return;
+    update(convId, {
+      composerCliProfileId: profileId || null,
+      composerBackend: backendId || null,
+      composerModel: null,
+      composerEffort: null,
+    });
   }
   function setComposerModel(convId, value){
     const s = states.get(convId);
@@ -1333,6 +1359,7 @@
     const now = new Date().toISOString();
     const tempUserId = 'pending-user-' + Date.now();
     const tempAssistId = 'pending-assistant-' + Date.now();
+    const sendCliProfileId = s.composerCliProfileId || (s.conv && s.conv.cliProfileId) || '';
     const sendBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
     const sendModel = s.composerModel || null;
     const sendEffort = s.composerEffort || null;
@@ -1352,6 +1379,7 @@
 
     try {
       const body = { content };
+      if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
       if (sendEffort)  body.effort  = sendEffort;
@@ -1594,6 +1622,7 @@
     send,
     respond,
     setInput,
+    setComposerCliProfile,
     setComposerBackend,
     setComposerModel,
     setComposerEffort,

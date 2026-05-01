@@ -53,6 +53,7 @@ agent-cockpit/
 │       │       ├── docx.ts             # DOCX → GFM markdown via pandoc + per-image AI description (hybrid)
 │       │       ├── pptx.ts             # PPTX per-slide hybrid: XML extract / AI / image-only via signals + LO rasterization
 │       │       └── passthrough.ts      # Text (md/txt/json/...) + hybrid image passthrough (per-image AI description, SVG bypass)
+│       ├── cliProfiles.ts              # CLI profile helpers: server-configured profile IDs/defaults and runtime resolver
 │       ├── chatService.ts              # Conversation CRUD, messages, sessions
 │       ├── settingsService.ts          # Settings I/O: read, write, legacy migration
 │       └── updateService.ts            # Self-update: version checking, git pull, PM2 restart
@@ -104,7 +105,7 @@ agent-cockpit/
     │   │       ├── session-1.json      # Archived session
     │   │       └── session-N.json      # Active session (updated every message)
     │   ├── artifacts/{convId}/         # Per-conversation uploaded files
-    │   ├── settings.json               # User settings
+    │   ├── settings.json               # User settings, including CLI profile definitions
     │   └── usage-ledger.json           # Daily per-backend token usage ledger
     └── sessions/                       # Express session JSON files (24h TTL)
 ```
@@ -140,7 +141,8 @@ Together these guarantee that a workspace index always parses on disk and that c
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
     titleManuallySet?: boolean, // true once `renameConversation()` has run. Locks the title against all automatic mutations (resetSession, addMessage's first-message snapshot, generateAndUpdateTitle). Absent when the title is still auto-managed.
-    backend: string,            // 'claude-code'
+    backend: string,            // Backend vendor id: 'claude-code' | 'kiro' | 'codex'. Kept during the CLI-profile transition for back-compat and synchronized from the selected profile's vendor.
+    cliProfileId?: string,      // Runtime CLI profile selected for this conversation. When present, runtime adapter selection resolves through Settings.cliProfiles[id].vendor.
     model?: string,             // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
     effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
     currentSessionId: string,   // UUID of the active CLI session
@@ -370,21 +372,36 @@ Daily per-backend/model token usage records for global statistics:
   "sendBehavior": "enter",
   "systemPrompt": "",
   "defaultBackend": "claude-code",
+  "defaultCliProfileId": "server-configured-claude-code",
+  "cliProfiles": [
+    {
+      "id": "server-configured-claude-code",
+      "name": "Claude Code (Server Configured)",
+      "vendor": "claude-code",
+      "authMode": "server-configured",
+      "createdAt": "2026-04-29T00:00:00.000Z",
+      "updatedAt": "2026-04-29T00:00:00.000Z"
+    }
+  ],
   "defaultModel": "claude-sonnet-4-6",
   "defaultEffort": "high",
   "workingDirectory": "",
   "memory": {
+    "cliProfileId": "server-configured-claude-code",
     "cliBackend": "claude-code",
     "cliModel": "claude-sonnet-4-6",
     "cliEffort": "high"
   },
   "knowledgeBase": {
+    "ingestionCliProfileId": "server-configured-claude-code",
     "ingestionCliBackend": "claude-code",
     "ingestionCliModel": "claude-sonnet-4-6",
     "ingestionCliEffort": "high",
+    "digestionCliProfileId": "server-configured-claude-code",
     "digestionCliBackend": "claude-code",
     "digestionCliModel": "claude-sonnet-4-6",
     "digestionCliEffort": "high",
+    "dreamingCliProfileId": "server-configured-claude-code",
     "dreamingCliBackend": "claude-code",
     "dreamingCliModel": "claude-opus-4-7",
     "dreamingCliEffort": "high",
@@ -396,15 +413,23 @@ Daily per-backend/model token usage records for global statistics:
 }
 ```
 
+`cliProfiles` is the global list of runnable CLI identities. The current implementation supports server-configured and account/custom profiles for Codex and Claude Code, and resolves `cliProfileId → CliProfile.vendor → backend adapter` at runtime. Server-configured profiles preserve existing behavior where each adapter uses the server user's already-configured CLI state. Codex profiles apply `command`, merged `env`, and `configDir → CODEX_HOME` for `codex app-server`, `codex exec`, MCP config collision reads, Codex plan usage, and remote auth jobs. Claude Code profiles apply `command`, merged `env`, and `configDir → CLAUDE_CONFIG_DIR` for streaming, one-shots, native memory path resolution/capture, Claude plan usage, and remote auth jobs. For both implemented vendors, `configDir` takes precedence over the matching env key when both are present. If a Codex or Claude Code account profile starts a remote auth check/job without a `configDir`, the server persists a deterministic default under `data/cli-profiles/<slug>-<sha1>/` so authentication and later runtime spawns use the same isolated config/auth home. Kiro profiles are self-configured only: `SettingsService.saveSettings()` forces `authMode: "server-configured"` and strips `command`, `configDir`, and `env` because `kiro-cli` has no dedicated documented profile directory override and isolating via `HOME` changes unrelated process behavior. Deterministic server-configured IDs are `server-configured-claude-code`, `server-configured-kiro`, and `server-configured-codex`. `SettingsService.getSettings()` ensures the default backend has a matching server-configured profile in memory.
+
+`defaultCliProfileId` points at the profile used by the V2 UI for new conversations. New conversations still accept/return `backend` for compatibility. `ChatService.createConversation()` accepts an optional `cliProfileId`; when supplied, the profile vendor becomes the stored `backend`, and a conflicting explicit `backend` is rejected. When neither profile nor backend is supplied, the service uses `settings.defaultCliProfileId` when valid. When only a backend is supplied, the service derives `cliProfileId` from the selected backend's server-configured profile.
+
+`memory.cliProfileId` selects the profile used by the Memory CLI for `memory_note` formatting/deduping and post-session extraction. `memory.cliBackend` is retained as a legacy fallback and is kept aligned to the selected profile vendor on settings save. If `cliProfileId` is absent, runtime resolution falls back to `cliBackend`, then `defaultBackend`.
+
 `defaultEffort` is the default adaptive reasoning level for new conversations. It only applies when the chosen model matches `defaultModel` AND the model supports that effort level; otherwise the per-conversation selection falls back to `high` (or, defensively, the first supported level of the chosen model). The settings modal only renders the **Default Effort** field when `defaultBackend`/`defaultModel` resolve to a model that declares `supportedEffortLevels`; changing the default model to one without effort support drops `defaultEffort` on save.
 
 The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the start of each new session. It is additive — Claude Code's built-in system prompt is preserved. Legacy `customInstructions` objects in the JSON file are auto-migrated to `systemPrompt` on first read by `SettingsService`; the `customInstructions` field no longer exists in the `Settings` type.
 
-The `memory` block configures the globally-shared **Memory CLI** used for `memory_note` MCP processing and post-session extraction (see Section 5 — Workspace Memory).
+The `memory` block configures the globally-shared **Memory CLI profile** used for `memory_note` MCP processing and post-session extraction (see Section 5 — Workspace Memory).
 
-The `knowledgeBase` block configures the globally-shared **Ingestion CLI**, **Digestion CLI**, and **Dreaming CLI** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). Digestion + Dreaming default to `defaultBackend` when unset. The Ingestion CLI is opt-in (must be vision-capable, currently used for AI-assisted page/slide/image conversion at ingest time); leaving it unset falls back to image-only references for visual content. `cliConcurrency` (default 2) caps how many documents are processed in parallel by ingestion, digestion, and dreaming pipelines per workspace; within a single document, work stays sequential. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
+The `knowledgeBase` block configures the globally-shared **Ingestion CLI profile**, **Digestion CLI profile**, and **Dreaming CLI profile** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). The matching legacy `*CliBackend` fields are retained as fallbacks and are aligned to the selected profile vendors on save. Ingestion is opt-in (must be vision-capable, currently used for AI-assisted page/slide/image conversion at ingest time); leaving it unset falls back to image-only references for visual content. Digestion and Dreaming require a configured profile/backend before they run. `cliConcurrency` (default 2) caps how many documents are processed in parallel by ingestion, digestion, and dreaming pipelines per workspace; within a single document, work stays sequential. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
 
 **Migration:** `dreamingConcurrency` was renamed to `cliConcurrency` in the hybrid-ingestion design (PR 1). On read, `SettingsService.getSettings()` copies `dreamingConcurrency` forward to `cliConcurrency` when the new key is missing — disk state is left untouched until the next save. Existing settings files load without warnings; the deprecated `dreamingConcurrency` field stays on the `Settings` type for one release cycle, then is removed.
+
+**CLI profile migration:** On startup, `ChatService.initialize()` scans every workspace index and assigns `cliProfileId` to existing conversations that only have a `backend`. It creates matching server-configured profile records in settings for every vendor seen in existing conversations. The migration does not change `backend`, model, effort, sessions, or any runtime CLI behavior.
 
 ## KB SQLite Schema (Complete)
 

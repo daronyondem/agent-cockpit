@@ -104,10 +104,45 @@ function BackendsProvider({ children }){
 }
 function useBackendList(){ return React.useContext(BackendsContext); }
 
+/* CLI profiles live in Settings. They change rarely, but Settings can save
+   them without a page reload, so this provider refetches on the save event. */
+const CliProfilesContext = React.createContext({ profiles: [], defaultCliProfileId: null });
+function CliProfilesProvider({ children }){
+  const [state, setState] = React.useState({ profiles: [], defaultCliProfileId: null });
+  React.useEffect(() => {
+    let cancelled = false;
+    function applySettings(s){
+      if (cancelled) return;
+      setState({
+        profiles: Array.isArray(s && s.cliProfiles) ? s.cliProfiles : [],
+        defaultCliProfileId: (s && s.defaultCliProfileId) || null,
+      });
+    }
+    AgentApi.getSettingsCached().then(applySettings).catch(() => {});
+    const onSaved = (ev) => {
+      if (ev && ev.detail) applySettings(ev.detail);
+      else AgentApi.settings.get().then(applySettings).catch(() => {});
+    };
+    window.addEventListener('agent-cockpit-settings-saved', onSaved);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('agent-cockpit-settings-saved', onSaved);
+    };
+  }, []);
+  return <CliProfilesContext.Provider value={state}>{children}</CliProfilesContext.Provider>;
+}
+function useCliProfileSettings(){ return React.useContext(CliProfilesContext); }
+
 function backendIconFor(backends, backendId){
   if (!backendId) return null;
   const b = (backends || []).find(x => x.id === backendId);
   return (b && b.icon) || null;
+}
+
+function BackendInlineIcon({ backends, backendId, className }){
+  const icon = backendIconFor(backends, backendId);
+  if (!icon) return null;
+  return <span className={className || 'backend-inline-icon'} aria-hidden="true" dangerouslySetInnerHTML={{__html: icon}}/>;
 }
 
 /* Renders the avatar for an assistant message. When the backend exposes an
@@ -403,13 +438,16 @@ function App(){
     setCreatingConv(true);
     try {
       let defaultBackend = null;
+      let defaultCliProfileId = null;
       try {
-        const settings = await AgentApi.settings.get();
+        const settings = await AgentApi.getSettingsCached();
         defaultBackend = settings && settings.defaultBackend ? settings.defaultBackend : null;
+        defaultCliProfileId = settings && settings.defaultCliProfileId ? settings.defaultCliProfileId : null;
       } catch { /* best-effort — server falls back to its own default */ }
       const body = {};
       if (workingDir) body.workingDir = workingDir;
-      if (defaultBackend) body.backend = defaultBackend;
+      if (defaultCliProfileId) body.cliProfileId = defaultCliProfileId;
+      else if (defaultBackend) body.backend = defaultBackend;
       const conv = await AgentApi.createConversation(body);
       StreamStore.prependConvListItem(conv);
       setFolderPickerOpen(false);
@@ -527,6 +565,7 @@ function EmptyMain(){
 function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSettings }){
   const state = useConversationState(convId);
   const backends = useBackendList();
+  const { profiles: cliProfiles } = useCliProfileSettings();
   const dialog = useDialog();
   const toast = useToasts();
   const feedRef = React.useRef(null);
@@ -568,6 +607,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
   const messages = state ? state.messages : [];
   const streaming = state ? state.streaming : false;
   const streamingMsgId = state ? state.streamingMsgId : null;
+  const profileLocked = messages.length > 0;
 
   /* Elapsed = time since the preceding user message in the feed. Walks
      backward from each assistant message; caps at 1 h to match V1
@@ -660,6 +700,17 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
     ? conv.workingDir.split('/').filter(Boolean).slice(-2).join('/')
     : 'workspace';
   const awaiting = !!pendingInteraction;
+  const topbarCliProfileId = profileLocked
+    ? (conv.cliProfileId || null)
+    : (state.composerCliProfileId || conv.cliProfileId || null);
+  const topbarProfile = topbarCliProfileId
+    ? cliProfiles.find(profile => profile && profile.id === topbarCliProfileId)
+    : null;
+  const topbarBackendId = topbarProfile
+    ? topbarProfile.vendor
+    : profileLocked
+      ? conv.backend
+      : (state.composerBackend || conv.backend);
   const hasContent = !!(input || '').trim() || hasDoneFiles;
   const canSend = hasContent && !sending && !streaming && !awaiting && !hasUploadingFiles;
   /* While the agent is streaming, Enter enqueues instead of sending. The
@@ -963,7 +1014,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
           )}
         </div>
         <div className="right">
-          {usage ? <ContextChip backendId={conv.backend} usage={usage}/> : null}
+          {usage ? <ContextChip backendId={topbarBackendId} cliProfileId={topbarCliProfileId} usage={usage}/> : null}
           <button className="btn ghost" onClick={handleDownload} title="Download as markdown">↓ Download</button>
           <button className="btn ghost" onClick={(e) => handleReset(e.currentTarget)} disabled={streaming || sending || resetting} title="Reset session">{resetting ? '↺ Resetting…' : '↺ Reset'}</button>
           <button className="btn ghost" onClick={() => setSessionsOpen(true)} title="Session history">{Ico.clock(12)} Sessions</button>
@@ -1119,9 +1170,12 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
               <ComposerPicks
                 convId={convId}
                 backends={backends}
+                cliProfiles={cliProfiles}
+                composerCliProfileId={state.composerCliProfileId || conv.cliProfileId || null}
                 composerBackend={state.composerBackend || conv.backend || null}
                 composerModel={state.composerModel || conv.model || null}
                 composerEffort={state.composerEffort || conv.effort || null}
+                profileLocked={profileLocked}
                 disabled={awaiting || sending}
               />
               <span className="attach">
@@ -2055,7 +2109,7 @@ function collapseProgressRuns(messages){
   return out;
 }
 
-function ContextChip({ backendId, usage }){
+function ContextChip({ backendId, cliProfileId, usage }){
   const renderer = getChipRenderer(backendId);
   /* Subscribe to the per-backend plan usage store so the tooltip reflects
      the latest cached snapshot. Each store is a singleton; the server
@@ -2066,14 +2120,27 @@ function ContextChip({ backendId, usage }){
     : backendId === 'kiro'        ? window.KiroPlanUsageStore
     : backendId === 'codex'       ? window.CodexPlanUsageStore
     : null;
-  const [planUsage, setPlanUsage] = React.useState(() => store ? store.get() : null);
+  const profileKey = cliProfileId || '';
+  const [planUsageState, setPlanUsageState] = React.useState(() => ({
+    key: profileKey,
+    data: store ? store.get(cliProfileId) : null,
+  }));
   React.useEffect(() => {
-    if (!store) { setPlanUsage(null); return; }
-    setPlanUsage(store.get());
-    const unsub = store.subscribe(setPlanUsage);
-    store.refresh();
+    if (!store) {
+      setPlanUsageState({ key: profileKey, data: null });
+      return;
+    }
+    setPlanUsageState({ key: profileKey, data: store.get(cliProfileId) });
+    const unsub = store.subscribe(
+      data => setPlanUsageState({ key: profileKey, data }),
+      cliProfileId,
+    );
+    store.refresh(cliProfileId);
     return unsub;
-  }, [backendId, store]);
+  }, [backendId, store, profileKey]);
+  const planUsage = planUsageState.key === profileKey
+    ? planUsageState.data
+    : (store ? store.get(cliProfileId) : null);
   const chipText = renderer.renderChipText(usage);
   if (chipText == null) return null;
   const card = renderer.renderTooltipCard(usage, { planUsage });
@@ -2113,12 +2180,38 @@ function formatMsgElapsed(ms){
   return `${min}m ${sec < 10 ? '0' : ''}${sec}s`;
 }
 
-/* Three cascading pickers below the composer: Backend → Model → Effort.
+/* Three cascading pickers below the composer: Profile → Model → Effort.
    Values flush to the server with the next /message POST (see StreamStore.send).
    Each chip wraps a transparent native <select> so we get native dropdown
    UX, keyboard/a11y for free, and the chip's pixel styling from the deck. */
-function ComposerPicks({ convId, backends, composerBackend, composerModel, composerEffort, disabled }){
-  const backend = backends.find(b => b.id === composerBackend) || null;
+function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, profileLocked, disabled }){
+  const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled) : [];
+  const selectedProfile = activeProfiles.find(p => p.id === composerCliProfileId)
+    || (composerBackend ? activeProfiles.find(p => p.vendor === composerBackend) : null)
+    || null;
+  const effectiveBackendId = selectedProfile ? selectedProfile.vendor : composerBackend;
+  const [profileBackend, setProfileBackend] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!selectedProfile) {
+      setProfileBackend(null);
+      return;
+    }
+    let cancelled = false;
+    setProfileBackend(null);
+    AgentApi.getCliProfileMetadata(selectedProfile.id)
+      .then(backend => {
+        if (!cancelled) setProfileBackend(backend || null);
+      })
+      .catch(() => {
+        if (!cancelled) setProfileBackend(null);
+      });
+    return () => { cancelled = true; };
+  }, [selectedProfile && selectedProfile.id]);
+
+  const backend = (selectedProfile && profileBackend && profileBackend.id === selectedProfile.vendor)
+    ? profileBackend
+    : (backends.find(b => b.id === effectiveBackendId) || null);
   const backendModels = (backend && Array.isArray(backend.models)) ? backend.models : [];
   const model = backendModels.find(m => m.id === composerModel)
     || backendModels.find(m => m.default)
@@ -2130,7 +2223,7 @@ function ComposerPicks({ convId, backends, composerBackend, composerModel, compo
     : (effortLevels.includes('high') ? 'high' : (effortLevels[0] || null));
 
   /* If picker state drifted out of the backend's catalog (e.g. backend change
-     invalidated the chosen model), push the reconciled value back down so
+      invalidated the chosen model), push the reconciled value back down so
      the next send uses a valid pair. */
   React.useEffect(() => {
     if (backend && model && composerModel !== model.id) {
@@ -2147,15 +2240,32 @@ function ComposerPicks({ convId, backends, composerBackend, composerModel, compo
 
   return (
     <span className="picks">
-      <PickChip
-        label="Backend"
-        value={backend ? backend.label : (composerBackend || '—')}
-        disabled={disabled}
-        options={backends.map(b => ({ value: b.id, label: b.label }))}
-        currentValue={backend ? backend.id : ''}
-        onChange={v => StreamStore.setComposerBackend(convId, v)}
-        title="Backend"
-      />
+      {activeProfiles.length > 0 ? (
+        <PickChip
+          label="Profile"
+          value={selectedProfile ? selectedProfile.name : (composerCliProfileId || '—')}
+          disabled={disabled || profileLocked}
+          options={activeProfiles.map(p => ({ value: p.id, label: p.name }))}
+          currentValue={selectedProfile ? selectedProfile.id : ''}
+          icon={selectedProfile ? <BackendInlineIcon backends={backends} backendId={selectedProfile.vendor}/> : null}
+          onChange={v => {
+            const profile = activeProfiles.find(p => p.id === v);
+            if (profile) StreamStore.setComposerCliProfile(convId, profile.id, profile.vendor);
+          }}
+          title={profileLocked ? 'CLI profile locked for this session' : 'CLI Profile'}
+        />
+      ) : (
+        <PickChip
+          label="Backend"
+          value={backend ? backend.label : (composerBackend || '—')}
+          disabled={disabled || profileLocked}
+          options={backends.map(b => ({ value: b.id, label: b.label }))}
+          currentValue={backend ? backend.id : ''}
+          icon={backend ? <BackendInlineIcon backends={backends} backendId={backend.id}/> : null}
+          onChange={v => StreamStore.setComposerBackend(convId, v)}
+          title={profileLocked ? 'Backend locked for this session' : 'Backend'}
+        />
+      )}
       {backendModels.length > 0 ? (
         <PickChip
           label="Model"
@@ -2188,9 +2298,10 @@ function costTierDot(tier){
   return '';
 }
 
-function PickChip({ label, value, options, currentValue, onChange, disabled, title }){
+function PickChip({ label, value, options, currentValue, onChange, disabled, title, icon }){
   return (
     <span className="pick" title={title} aria-disabled={disabled ? 'true' : 'false'}>
+      {icon ? <span className="pick-icon">{icon}</span> : null}
       <span>{label}</span> <b>{value}</b>
       <span className="chev">{Ico.chevD(10)}</span>
       <select
@@ -3184,5 +3295,5 @@ function QuestionCard({ convId, question, options, respondPending }){
 }
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <DialogProvider><ToastProvider><BackendsProvider><App/></BackendsProvider></ToastProvider></DialogProvider>
+  <DialogProvider><ToastProvider><BackendsProvider><CliProfilesProvider><App/></CliProfilesProvider></BackendsProvider></ToastProvider></DialogProvider>
 );

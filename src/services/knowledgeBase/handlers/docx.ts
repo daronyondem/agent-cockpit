@@ -83,6 +83,7 @@ export const docxHandler: Handler = async ({
   filename,
   outDir,
   ingestionAdapter,
+  ingestionCliProfile,
   ingestionModel,
   ingestionEffort,
 }): Promise<HandlerResult> => {
@@ -247,6 +248,7 @@ export const docxHandler: Handler = async ({
       try {
         const result = await convertImageToMarkdown(aiAbs, {
           adapter: ingestionAdapter,
+          cliProfile: ingestionCliProfile,
           model: ingestionModel,
           effort: ingestionEffort,
         });

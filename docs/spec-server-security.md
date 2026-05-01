@@ -23,6 +23,8 @@
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
 | `BASE_PATH` | No | `''` | URL base path prefix (for reverse proxy deployments) |
 
+`src/config/index.ts` loads `.env` through `dotenv`. Outside tests, `.env` values override already-present process environment values so PM2-managed local deployments can pin runtime config from the repo's `.env`. When `NODE_ENV === 'test'`, dotenv does **not** override explicit process env values; subprocess tests such as graceful shutdown can pass an isolated `PORT` without being clobbered by a developer `.env` that points at a running PM2 app.
+
 ## 5.2 Server Initialization Order
 
 **File:** `server.ts`
@@ -108,6 +110,8 @@ Re-entrancy is guarded by a `reAuthInFlightRef` — overlapping 401s on concurre
 - `csrfGuard` (route-level, POST/PUT/DELETE): validates `x-csrf-token` header or `req.body._csrf` against session token. Returns `403` on mismatch.
 - `GET /api/csrf-token`: returns `{ csrfToken }` from session
 - `GET /api/me`: returns `{ displayName, email, provider }` (all nullable) from `req.user`. Same auth gating as other `/api/*` routes.
+
+CLI profile remote-auth endpoints that spawn local CLI processes are CSRF-protected (`POST /api/chat/cli-profiles/:id/test`, `POST /api/chat/cli-profiles/:id/auth/start`, and auth-job cancel). They only accept saved Codex/Claude Code account profiles, run with that profile's command/env/config directory, and redact common bearer/access/refresh/API-key patterns from stdout/stderr before exposing job events to the browser. Kiro remote auth is intentionally blocked while Kiro lacks a safe dedicated config-home override.
 
 ## 5.5 Security Headers
 

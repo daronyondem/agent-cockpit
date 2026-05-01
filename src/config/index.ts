@@ -1,7 +1,7 @@
 import dotenv from 'dotenv';
 import type { AppConfig, CodexApprovalPolicy, CodexSandboxMode } from '../types';
 
-dotenv.config({ override: true });
+dotenv.config({ override: process.env.NODE_ENV !== 'test' });
 
 const CODEX_APPROVAL_POLICIES: CodexApprovalPolicy[] = ['untrusted', 'on-failure', 'on-request', 'never'];
 const CODEX_SANDBOX_MODES: CodexSandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];

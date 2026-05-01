@@ -41,6 +41,7 @@ import type {
 } from '../../types';
 import type { BaseBackendAdapter, RunOneShotOptions } from '../backends/base';
 import type { BackendRegistry } from '../backends/registry';
+import type { CliProfileRuntime } from '../cliProfiles';
 import type { KbDatabase } from './db';
 import type { KbVectorStore } from './vectorStore';
 import { embedBatch, resolveConfig, type EmbeddingConfig } from './embeddings';
@@ -85,6 +86,10 @@ export interface KbDigestChatService {
   getWorkspaceKbAutoDigest(hash: string): Promise<boolean>;
   getKbDb(hash: string): KbDatabase | null;
   getSettings(): Promise<Settings>;
+  resolveCliProfileRuntime?(
+    cliProfileId: string | undefined | null,
+    fallbackBackend?: string | null,
+  ): Promise<CliProfileRuntime>;
   getKbConvertedDir(hash: string): string;
   getKbEntriesDir(hash: string): string;
   getKbRawDir(hash: string): string;
@@ -541,18 +546,27 @@ export class KbDigestionService {
     const firstLoc = locations[0] ?? { folderPath: '', filename: 'unknown' };
 
     const settings = await this.chatService.getSettings();
+    const cliProfileId = settings.knowledgeBase?.digestionCliProfileId;
     const cliBackend = settings.knowledgeBase?.digestionCliBackend;
     const cliModel = settings.knowledgeBase?.digestionCliModel;
     const cliEffort = settings.knowledgeBase?.digestionCliEffort;
 
-    if (!cliBackend) {
+    if (!cliProfileId && !cliBackend) {
       return this._failRaw(hash, rawId, db, 'unknown',
-        'No Digestion CLI is configured. Set one under Settings → Knowledge Base.');
+        'No Digestion CLI profile is configured. Set one under Settings → Knowledge Base.');
     }
-    const adapter: BaseBackendAdapter | null = this.backendRegistry.get(cliBackend);
+    let runtime: CliProfileRuntime;
+    try {
+      runtime = this.chatService.resolveCliProfileRuntime
+        ? await this.chatService.resolveCliProfileRuntime(cliProfileId, cliBackend || undefined)
+        : { backendId: cliBackend || '' };
+    } catch (err: unknown) {
+      return this._failRaw(hash, rawId, db, 'unknown', (err as Error).message);
+    }
+    const adapter: BaseBackendAdapter | null = this.backendRegistry.get(runtime.backendId);
     if (!adapter) {
       return this._failRaw(hash, rawId, db, 'unknown',
-        `Configured Digestion CLI "${cliBackend}" is not registered.`);
+        `Configured Digestion CLI profile "${runtime.cliProfileId || runtime.backendId}" uses unregistered backend "${runtime.backendId}".`);
     }
 
     const prompt = buildDigestPrompt({
@@ -593,6 +607,7 @@ export class KbDigestionService {
       timeoutMs: digestTimeoutMs,
       workingDir: this.chatService.getKbKnowledgeDir(hash),
       allowTools: true,
+      cliProfile: runtime.profile,
     };
     try {
       rawOutput = await adapter.runOneShot(prompt, runOptions);

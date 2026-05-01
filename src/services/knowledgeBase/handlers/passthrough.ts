@@ -71,6 +71,7 @@ export const passthroughHandler: Handler = async ({
   filename,
   outDir,
   ingestionAdapter,
+  ingestionCliProfile,
   ingestionModel,
   ingestionEffort,
 }): Promise<HandlerResult> => {
@@ -135,6 +136,7 @@ export const passthroughHandler: Handler = async ({
       try {
         const result = await convertImageToMarkdown(aiPath, {
           adapter: ingestionAdapter,
+          cliProfile: ingestionCliProfile,
           model: ingestionModel,
           effort: ingestionEffort,
         });

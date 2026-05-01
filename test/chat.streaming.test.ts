@@ -3,7 +3,18 @@
 import fs from 'fs';
 import path from 'path';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
-import type { StreamEvent } from '../src/types';
+import { MockBackendAdapter } from './helpers/mockBackendAdapter';
+import type { BackendMetadata, StreamEvent } from '../src/types';
+
+class KiroMockBackend extends MockBackendAdapter {
+  get metadata(): BackendMetadata {
+    return {
+      ...super.metadata,
+      id: 'kiro',
+      label: 'Kiro',
+    };
+  }
+}
 
 let env: ChatRouterEnv;
 
@@ -1478,5 +1489,148 @@ describe('sendMessage options passthrough', () => {
   });
 });
 
-// ── PATCH /conversations/:id/archive ─────────────────────────────────────────
+// ── CLI profile runtime selection ───────────────────────────────────────────
 
+describe('CLI profile runtime selection', () => {
+  test('creates and sends through the selected profile vendor adapter', async () => {
+    const kiroBackend = new KiroMockBackend();
+    env.backendRegistry.register(kiroBackend);
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      cliProfiles: [
+        ...(settings.cliProfiles || []),
+        {
+          id: 'profile-kiro-work',
+          name: 'Kiro Work',
+          vendor: 'kiro',
+          authMode: 'server-configured',
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const createRes = await env.request('POST', '/api/chat/conversations', {
+      title: 'Profile Chat',
+      cliProfileId: 'profile-kiro-work',
+    });
+    expect(createRes.status).toBe(200);
+    expect(createRes.body.backend).toBe('kiro');
+    expect(createRes.body.cliProfileId).toBe('profile-kiro-work');
+
+    kiroBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(createRes.body.id);
+    const eventsPromise = env.readWsEvents(ws);
+    const sendRes = await env.request('POST', `/api/chat/conversations/${createRes.body.id}/message`, {
+      content: 'Hello from profile',
+    });
+    await eventsPromise;
+
+    expect(sendRes.status).toBe(200);
+    expect(kiroBackend._lastOptions!.cliProfileId).toBe('profile-kiro-work');
+    expect(kiroBackend._lastMessage).toContain('Hello from profile');
+    expect(env.mockBackend._lastMessage).toBeNull();
+
+    const loaded = await env.chatService.getConversation(createRes.body.id);
+    expect(loaded!.backend).toBe('kiro');
+    expect(loaded!.cliProfileId).toBe('profile-kiro-work');
+  });
+
+  test('returns 400 when creating with an unknown CLI profile', async () => {
+    const res = await env.request('POST', '/api/chat/conversations', {
+      title: 'Unknown Profile',
+      cliProfileId: 'missing-profile',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('CLI profile not found: missing-profile');
+  });
+
+  test('rejects message requests with mismatched backend and CLI profile', async () => {
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      cliProfiles: [
+        ...(settings.cliProfiles || []),
+        {
+          id: 'profile-kiro-mismatch',
+          name: 'Kiro Mismatch',
+          vendor: 'kiro',
+          authMode: 'server-configured',
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+    });
+    const conv = await env.chatService.createConversation(
+      'Mismatch Test',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      'profile-kiro-mismatch',
+    );
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Should not send',
+      cliProfileId: 'profile-kiro-mismatch',
+      backend: 'claude-code',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('CLI profile vendor kiro does not match backend claude-code');
+    expect(env.mockBackend._lastMessage).toBeNull();
+  });
+
+  test('allows profile selection before the first message and blocks it after messages exist', async () => {
+    const kiroBackend = new KiroMockBackend();
+    env.backendRegistry.register(kiroBackend);
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      cliProfiles: [
+        ...(settings.cliProfiles || []),
+        {
+          id: 'profile-kiro-switch',
+          name: 'Kiro Switch',
+          vendor: 'kiro',
+          authMode: 'server-configured',
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+    });
+
+    const conv = await env.chatService.createConversation('Switch Test');
+    kiroBackend.setMockEvents([
+      { type: 'text', content: 'Hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+    const firstSend = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Use Kiro before first message',
+      cliProfileId: 'profile-kiro-switch',
+    });
+    await eventsPromise;
+
+    expect(firstSend.status).toBe(200);
+    expect(kiroBackend._lastOptions!.cliProfileId).toBe('profile-kiro-switch');
+
+    const blocked = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Try switching later',
+      cliProfileId: 'server-configured-claude-code',
+    });
+
+    expect(blocked.status).toBe(409);
+    expect(blocked.body.error).toBe('Cannot switch CLI profile after the active session has messages');
+  });
+});
+
+// ── PATCH /conversations/:id/archive ─────────────────────────────────────────

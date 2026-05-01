@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import fs from 'fs';
 import crypto from 'crypto';
-import { BaseBackendAdapter, type RunOneShotOptions } from './base';
+import { BaseBackendAdapter, type BackendCallOptions, type RunOneShotOptions } from './base';
 import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUtils';
 import type {
   BackendMetadata,
@@ -18,6 +18,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  CliProfile,
 } from '../../types';
 
 // ── Icon ────────────────────────────────────────────────────────────────────
@@ -35,6 +36,44 @@ const CODEX_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh']
 // Used as the polite-shutdown deadline before SIGKILL during process kill.
 const PROCESS_KILL_GRACE_MS = 1_000;
 
+export interface CodexCliRuntime {
+  command: string;
+  env: NodeJS.ProcessEnv;
+  configDir?: string;
+  profileKey: string;
+}
+
+export function resolveCodexCliRuntime(profile?: CliProfile): CodexCliRuntime {
+  if (profile && profile.vendor !== 'codex') {
+    throw new Error(`CLI profile vendor ${profile.vendor} is not codex`);
+  }
+  const command = profile?.command?.trim() || 'codex';
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (profile?.env) {
+    for (const [key, value] of Object.entries(profile.env)) {
+      env[key] = value;
+    }
+  }
+  const configDir = profile?.configDir?.trim() || undefined;
+  if (configDir) {
+    env.CODEX_HOME = configDir;
+  }
+
+  const hash = crypto.createHash('sha1').update(JSON.stringify({
+    id: profile?.id || null,
+    command,
+    configDir: configDir || null,
+    env: profile?.env || {},
+  })).digest('hex').slice(0, 12);
+
+  return {
+    command,
+    env,
+    ...(configDir ? { configDir } : {}),
+    profileKey: profile ? `${profile.id}:${hash}` : `server-configured:${hash}`,
+  };
+}
+
 function codexUsesFullAccess(approvalPolicy: CodexApprovalPolicy, sandbox: CodexSandboxMode): boolean {
   return approvalPolicy === 'never' && sandbox === 'danger-full-access';
 }
@@ -49,13 +88,11 @@ export function buildCodexThreadSecurityParams(
 // ── MCP injection helpers ───────────────────────────────────────────────────
 //
 // Codex configures MCP servers via `[mcp_servers.<name>]` sections in its
-// config.toml. Rather than redirect `CODEX_HOME` (which would also redirect
-// where Codex stores its session rollouts and break `thread/resume` after a
-// process respawn), we inject cockpit-managed servers via repeated `-c
-// mcp_servers.<name>.{command,args,env}=…` flags on the `codex app-server`
-// invocation. Codex still loads auth, sessions, plugins, etc. from the user's
-// real `~/.codex/`, so resume works and the cockpit's threads are visible to
-// the user's standalone CLI.
+// config.toml. We inject cockpit-managed servers via repeated `-c
+// mcp_servers.<name>.{command,args,env}=…` flags on the Codex invocation.
+// Server-configured profiles leave `CODEX_HOME` alone, so Codex uses the
+// server user's normal `~/.codex/`; account profiles can set `configDir`,
+// which maps to `CODEX_HOME` and isolates auth/config/session state.
 
 function tomlEscapeString(v: string): string {
   return '"' + v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r').replace(/\t/g, '\\t') + '"';
@@ -77,13 +114,16 @@ function hashMcpServers(servers: McpServerConfig[]): string {
   return crypto.createHash('sha1').update(JSON.stringify(sorted)).digest('hex').slice(0, 12);
 }
 
-async function buildCodexConfigArgs(mcpServers: McpServerConfig[]): Promise<string[]> {
+async function buildCodexConfigArgs(
+  mcpServers: McpServerConfig[],
+  runtime: CodexCliRuntime = resolveCodexCliRuntime(),
+): Promise<string[]> {
   if (mcpServers.length === 0) return [];
 
   // Read user's config.toml only for collision detection — we never edit it.
   // If the user has a `[mcp_servers.<name>]` section that matches one we'd
   // inject, the user's wins (we skip ours and warn).
-  const userConfigPath = path.join(os.homedir(), '.codex', 'config.toml');
+  const userConfigPath = path.join(runtime.configDir || path.join(os.homedir(), '.codex'), 'config.toml');
   let userConfig = '';
   try {
     userConfig = await fs.promises.readFile(userConfigPath, 'utf-8');
@@ -606,6 +646,8 @@ interface CodexProcessEntry {
   idleTimer: NodeJS.Timeout | null;
   /** Hash of the mcpServers list this process was spawned with, or '' if none. */
   mcpHash: string;
+  /** Hash of the Codex command/config/env profile used to spawn this process. */
+  profileKey: string;
   /**
    * Last `total.totalTokens` we emitted a usage event for. Codex re-emits a
    * `thread/tokenUsage/updated` notification at every turn boundary that
@@ -759,6 +801,8 @@ class CodexAppServerClient {
 export class CodexAdapter extends BaseBackendAdapter {
   private processes: Map<string, CodexProcessEntry> = new Map();
   private modelCache: ModelOption[] | null = null;
+  private profileModelCache: Map<string, ModelOption[]> = new Map();
+  private modelRefreshes: Map<string, Promise<ModelOption[]>> = new Map();
   private readonly approvalPolicy: CodexApprovalPolicy;
   private readonly sandbox: CodexSandboxMode;
 
@@ -795,6 +839,14 @@ export class CodexAdapter extends BaseBackendAdapter {
         stdinInput: true,
       },
       models: this.modelCache || FALLBACK_MODELS,
+    };
+  }
+
+  async getMetadata(options: BackendCallOptions = {}): Promise<BackendMetadata> {
+    const models = await this._getModels(options.cliProfile);
+    return {
+      ...this.metadata,
+      models,
     };
   }
 
@@ -892,7 +944,11 @@ export class CodexAdapter extends BaseBackendAdapter {
     return { stream, abort, sendInput };
   }
 
-  async generateSummary(messages: Pick<Message, 'role' | 'content'>[], fallback: string): Promise<string> {
+  async generateSummary(
+    messages: Pick<Message, 'role' | 'content'>[],
+    fallback: string,
+    options: BackendCallOptions = {},
+  ): Promise<string> {
     if (!messages || messages.length === 0) return fallback || 'Empty session';
     try {
       let sessionText = '';
@@ -904,7 +960,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       }
       const prompt = `Summarize the following chat session in one concise sentence (100-150 characters max). Only output the summary, nothing else:\n\n${sessionText}`;
 
-      const out = await this._execOneShot(prompt, { timeoutMs: 30000 });
+      const out = await this._execOneShot(prompt, { timeoutMs: 30000, cliProfile: options.cliProfile });
       if (!out) return fallback || `Session (${messages.length} messages)`;
       return out.substring(0, 200);
     } catch {
@@ -912,7 +968,7 @@ export class CodexAdapter extends BaseBackendAdapter {
     }
   }
 
-  async generateTitle(userMessage: string, fallback: string): Promise<string> {
+  async generateTitle(userMessage: string, fallback: string, options: BackendCallOptions = {}): Promise<string> {
     if (!userMessage || typeof userMessage !== 'string' || !userMessage.trim()) {
       return fallback || 'New Chat';
     }
@@ -921,7 +977,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       const truncated = userMessage.substring(0, 2000);
       const prompt = `Generate a short, descriptive title (max 8 words) for a conversation that starts with this user message. Only output the title text, nothing else — no quotes, no prefix:\n\n${truncated}`;
 
-      const out = await this._execOneShot(prompt, { timeoutMs: 30000 });
+      const out = await this._execOneShot(prompt, { timeoutMs: 30000, cliProfile: options.cliProfile });
       if (!out) return titleFallback();
       return out.substring(0, 80);
     } catch {
@@ -932,9 +988,8 @@ export class CodexAdapter extends BaseBackendAdapter {
   /**
    * Run a one-shot prompt via `codex exec` and return the model's final
    * answer text. Used by the Memory MCP server, KB digestion, generateTitle,
-   * and generateSummary. `codex exec` shares `~/.codex/auth.json` with
-   * interactive `codex`, so subscription users authenticated via ChatGPT
-   * OAuth work identically to API-key users.
+   * and generateSummary. `codex exec` uses the selected profile's runtime
+   * env; account profiles set `CODEX_HOME` so OAuth/API-key state is isolated.
    */
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
     return this._execOneShot(prompt, options);
@@ -942,10 +997,51 @@ export class CodexAdapter extends BaseBackendAdapter {
 
   // ── Private: model discovery ──────────────────────────────────────────────
 
-  private async _refreshModels(): Promise<void> {
-    const proc = spawn('codex', ['app-server'], {
+  private _cacheModels(runtime: CodexCliRuntime, models: ModelOption[]): void {
+    if (runtime.profileKey.startsWith('server-configured:')) {
+      this.modelCache = models;
+    } else {
+      this.profileModelCache.set(runtime.profileKey, models);
+    }
+  }
+
+  private _cachedModels(runtime: CodexCliRuntime): ModelOption[] | null {
+    if (runtime.profileKey.startsWith('server-configured:')) {
+      return this.modelCache;
+    }
+    return this.profileModelCache.get(runtime.profileKey) || null;
+  }
+
+  private _modelsFor(profile?: CliProfile): ModelOption[] {
+    const runtime = resolveCodexCliRuntime(profile);
+    return this._cachedModels(runtime) || FALLBACK_MODELS;
+  }
+
+  private async _getModels(profile?: CliProfile): Promise<ModelOption[]> {
+    const runtime = resolveCodexCliRuntime(profile);
+    const cached = this._cachedModels(runtime);
+    if (cached && cached.length > 0) return cached;
+
+    let refresh = this.modelRefreshes.get(runtime.profileKey);
+    if (!refresh) {
+      refresh = this._refreshModels(profile);
+      this.modelRefreshes.set(runtime.profileKey, refresh);
+      refresh.finally(() => this.modelRefreshes.delete(runtime.profileKey)).catch(() => {});
+    }
+
+    try {
+      return await refresh;
+    } catch (err) {
+      console.warn(`[codex] model/list refresh failed: ${(err as Error).message || err}`);
+      return this._cachedModels(runtime) || FALLBACK_MODELS;
+    }
+  }
+
+  private async _refreshModels(profile?: CliProfile): Promise<ModelOption[]> {
+    const runtime = resolveCodexCliRuntime(profile);
+    const proc = spawn(runtime.command, ['app-server'], {
       stdio: ['pipe', 'pipe', 'pipe'],
-      env: { ...process.env },
+      env: runtime.env,
     });
 
     let spawnFailed = false;
@@ -963,7 +1059,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       // Wait one tick so the spawn ENOENT event has a chance to fire before
       // we try to write to stdin and crash with EPIPE.
       await new Promise<void>((r) => setImmediate(r));
-      if (spawnFailed) return;
+      if (spawnFailed) return this._cachedModels(runtime) || FALLBACK_MODELS;
 
       const client = new CodexAppServerClient(proc);
       await client.request('initialize', {
@@ -976,14 +1072,19 @@ export class CodexAdapter extends BaseBackendAdapter {
       }) as ModelListResult;
 
       if (result && Array.isArray(result.data) && result.data.length > 0) {
-        this.modelCache = result.data
+        const models = result.data
           .map(normalizeCodexModelOption)
           .filter((m): m is ModelOption => m !== null);
         // Ensure exactly one default
-        if (this.modelCache.length > 0 && !this.modelCache.some((m) => m.default)) {
-          this.modelCache[0].default = true;
+        if (models.length > 0 && !models.some((m) => m.default)) {
+          models[0].default = true;
+        }
+        if (models.length > 0) {
+          this._cacheModels(runtime, models);
+          return models;
         }
       }
+      return this._cachedModels(runtime) || FALLBACK_MODELS;
     } finally {
       clearTimeout(killTimer);
       if (!proc.killed) proc.kill('SIGTERM');
@@ -1006,10 +1107,18 @@ export class CodexAdapter extends BaseBackendAdapter {
   private async _getOrSpawnClient(
     conversationId: string,
     mcpServers: McpServerConfig[] = [],
+    profile?: CliProfile,
   ): Promise<CodexAppServerClient> {
+    const runtime = resolveCodexCliRuntime(profile);
     const mcpHash = hashMcpServers(mcpServers);
     const existing = this.processes.get(conversationId);
-    if (existing && !existing.proc.killed && existing.proc.exitCode === null && existing.mcpHash === mcpHash) {
+    if (
+      existing
+      && !existing.proc.killed
+      && existing.proc.exitCode === null
+      && existing.mcpHash === mcpHash
+      && existing.profileKey === runtime.profileKey
+    ) {
       this._resetIdleTimer(conversationId);
       return existing.client;
     }
@@ -1018,19 +1127,23 @@ export class CodexAdapter extends BaseBackendAdapter {
       if (existing.mcpHash !== mcpHash) {
         console.log(`[codex] MCP set changed for conv=${conversationId}, respawning app-server`);
       }
+      if (existing.profileKey !== runtime.profileKey) {
+        console.log(`[codex] CLI profile changed for conv=${conversationId}, respawning app-server`);
+      }
       if (existing.idleTimer) clearTimeout(existing.idleTimer);
       existing.proc.kill('SIGTERM');
       this.processes.delete(conversationId);
     }
 
-    const configArgs = await buildCodexConfigArgs(mcpServers);
+    const configArgs = await buildCodexConfigArgs(mcpServers, runtime);
     if (configArgs.length > 0) {
       console.log(`[codex] Injecting ${mcpServers.length} MCP server(s) via -c flags for conv=${conversationId}`);
     }
 
     console.log(`[codex] Spawning codex app-server for conv=${conversationId}`);
-    const proc = spawn('codex', ['app-server', ...configArgs], {
+    const proc = spawn(runtime.command, ['app-server', ...configArgs], {
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: runtime.env,
     });
 
     proc.on('error', (err) => {
@@ -1058,6 +1171,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       threadId: null,
       idleTimer: null,
       mcpHash,
+      profileKey: runtime.profileKey,
       lastTotalTokens: 0,
     });
     this._resetIdleTimer(conversationId);
@@ -1079,14 +1193,14 @@ export class CodexAdapter extends BaseBackendAdapter {
       subagentByThreadId: Map<string, string>;
     },
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model, effort, mcpServers } = options;
+    const { sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model, effort, mcpServers, cliProfile } = options;
     const convId = conversationId || sessionId;
     const cwd = workingDir || this.workingDir || os.homedir();
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
 
     let client: CodexAppServerClient;
     try {
-      client = await this._getOrSpawnClient(convId, mcpServersForCodex);
+      client = await this._getOrSpawnClient(convId, mcpServersForCodex, cliProfile);
       state.client = client;
     } catch (err) {
       const errMsg = (err as Error).message;
@@ -1173,7 +1287,8 @@ export class CodexAdapter extends BaseBackendAdapter {
 
       // ── Build turn input ─────────────────────────────────────────────
       const userInput = [{ type: 'text', text: message, text_elements: [] }];
-      const turnParams = buildCodexTurnStartParams(threadId, userInput, model, effort, this.metadata.models);
+      const modelCatalog = this._modelsFor(cliProfile);
+      const turnParams = buildCodexTurnStartParams(threadId, userInput, model, effort, modelCatalog);
 
       // ── Send turn ────────────────────────────────────────────────────
       console.log(`[codex] turn/start thread=${threadId} promptLen=${message.length}`);
@@ -1445,15 +1560,16 @@ export class CodexAdapter extends BaseBackendAdapter {
    *
    * `codex exec` is a dedicated non-interactive subcommand that prints the
    * model's final text answer on stdout (no streaming protocol parsing
-   * needed). It shares `~/.codex/auth.json` with interactive `codex`, so a
-   * user authenticated via ChatGPT OAuth or API key works identically here.
+   * needed). It uses the selected profile's runtime env; account profiles set
+   * `CODEX_HOME` so OAuth/API-key state is isolated.
    */
   private async _execOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { timeoutMs = 60000, workingDir, model, effort, mcpServers } = options;
+    const { timeoutMs = 60000, workingDir, model, effort, mcpServers, cliProfile } = options;
+    const runtime = resolveCodexCliRuntime(cliProfile);
     const cwd = workingDir || this.workingDir || os.homedir();
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
 
-    const configArgs = await buildCodexConfigArgs(mcpServersForCodex);
+    const configArgs = await buildCodexConfigArgs(mcpServersForCodex, runtime);
 
     const args = ['exec'];
     if (codexUsesFullAccess(this.approvalPolicy, this.sandbox)) {
@@ -1464,7 +1580,8 @@ export class CodexAdapter extends BaseBackendAdapter {
       args.push('--ask-for-approval', this.approvalPolicy, '--sandbox', this.sandbox);
     }
     args.push('--skip-git-repo-check', '-C', cwd, ...configArgs);
-    if (codexModelSupportsEffort(this.metadata.models, model, effort)) {
+    const modelCatalog = this._cachedModels(runtime) || FALLBACK_MODELS;
+    if (codexModelSupportsEffort(modelCatalog, model, effort)) {
       args.push('-c', `model_reasoning_effort=${tomlEscapeString(effort!)}`);
     }
     if (model) {
@@ -1474,9 +1591,9 @@ export class CodexAdapter extends BaseBackendAdapter {
 
     return new Promise<string>((resolve, reject) => {
       const child = execFile(
-        'codex',
+        runtime.command,
         args,
-        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
+        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: runtime.env },
         (err, stdout, stderr) => {
           if (err) {
             const execErr = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string };

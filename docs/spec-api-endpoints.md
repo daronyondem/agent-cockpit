@@ -32,7 +32,7 @@ Recursively deletes directory. Refuses filesystem root. Returns `{ deleted, pare
 |--------|------|------|-------------|
 | GET | `/conversations?q=<search>&archived=true` | — | List all, sorted by `updatedAt` desc. Each summary includes `workspaceHash` and `workspaceKbEnabled` (mirrors the workspace-level KB toggle so the sidebar can gate the KB button). Pass `archived=true` to list only archived conversations (default: active only). |
 | GET | `/conversations/:id` | — | Full conversation object. `404` if not found. Includes `archived: true` when the conversation has been archived (field is absent for active convs) so the frontend topbar can swap Archive → Unarchive + Delete without a separate list round-trip. When KB is enabled for the conversation's workspace, the response is augmented with a `kb` block: `{ enabled, dreamingNeeded, pendingEntries, dreamingStatus, failedItems }` — used by the frontend dream banner to show synthesis status without a separate round-trip. |
-| POST | `/conversations` | Yes | `{ title?, workingDir?, backend? }` → creates conversation with initial session. `backend` defaults to the server's default backend. |
+| POST | `/conversations` | Yes | `{ title?, workingDir?, backend?, cliProfileId?, model?, effort? }` → creates conversation with initial session. When `cliProfileId` is omitted and `backend` is omitted, the service uses `settings.defaultCliProfileId` when present, otherwise the server's default backend. When `cliProfileId` is supplied, the profile's vendor becomes the stored backend; missing/disabled profiles return `400`, and an explicit `backend` that does not match the profile vendor returns `400`. |
 | PUT | `/conversations/:id` | Yes | `{ title }` → rename. `404` if not found. |
 | DELETE | `/conversations/:id` | Yes | Aborts active stream, removes from workspace index, deletes session folder + artifacts. Works on both active and archived conversations. |
 | PATCH | `/conversations/:id/archive` | Yes | Sets `archived: true` on the conversation. Aborts active stream. Files remain on disk. `404` if not found. |
@@ -63,7 +63,7 @@ The queue is also included in the `GET /conversations/:id` response as `messageQ
 |--------|------|------|-------------|
 | GET | `/conversations/:id/sessions` | — | Session list with `isCurrent` flag and `summary`. |
 | GET | `/conversations/:id/sessions/:num/messages` | — | Messages for a specific session. `400`/`404` on error. |
-| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session, resets title to "New Chat", clears message queue. `409` if streaming. Clears any stale WebSocket event buffer for the conversation. After archiving, invokes `captureWorkspaceMemory(convId, endingBackend)` so the ending backend's native memory is mirrored to `workspaces/{hash}/memory/`, then runs post-session extraction via `memoryMcp.extractMemoryFromSession` for every backend (including Claude Code) — the Memory CLI scans the just-ended transcript and writes any new memory notes into `memory/files/notes/`. Both steps are best-effort — failures do not block the reset. Also calls `memoryMcp.revokeMemoryMcpSession(convId)` and `kbSearchMcp.revokeKbSearchSession(convId)` to rotate the MCP tokens for the next session. Returns `{ conversation, newSessionNumber, archivedSession }`. |
+| POST | `/conversations/:id/reset` | Yes | Archives active session (generates LLM summary), creates new session, resets title to "New Chat", clears message queue. `409` if streaming. The ending backend is resolved through `cliProfileId` when present; missing/disabled profiles return `400`. Clears any stale WebSocket event buffer for the conversation. After archiving, invokes `captureWorkspaceMemory(convId, endingBackend)` so the ending backend's native memory is mirrored to `workspaces/{hash}/memory/`, then runs post-session extraction via `memoryMcp.extractMemoryFromSession` for every backend (including Claude Code) — the Memory CLI scans the just-ended transcript and writes any new memory notes into `memory/files/notes/`. Both steps are best-effort — failures do not block the reset. Also calls `memoryMcp.revokeMemoryMcpSession(convId)` and `kbSearchMcp.revokeKbSearchSession(convId)` to rotate the MCP tokens for the next session. Returns `{ conversation, newSessionNumber, archivedSession }`. |
 
 ## 3.6 Backends
 
@@ -72,14 +72,21 @@ GET /backends
 ```
 Returns `{ backends: [{ id, label, icon, capabilities, models? }] }` — metadata for every registered adapter. The optional `models` array lists available models: `[{ id, label, family, description?, costTier?, default?, supportedEffortLevels? }]`. `supportedEffortLevels` is an optional array of `'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'` indicating which adaptive reasoning levels the model accepts; the UI uses its presence to decide whether to show the effort dropdown. Values are backend/model-specific: Codex may expose protocol-only `none` / `minimal`, while Claude Code exposes `max` on supported Opus models. Backends without model selection (e.g. Kiro) omit the `models` field entirely.
 
+```
+GET /cli-profiles/:profileId/metadata
+```
+Resolves the CLI profile through settings, then calls the vendor adapter's async `getMetadata({ cliProfile })`. Returns `{ profileId, backend }` where `backend` has the same shape as one entry from `/backends`, but its `models` can be profile-specific. Missing/disabled profiles return `400`. An unregistered profile vendor returns `500`. Codex uses this route to run `model/list` under the selected profile's `command`/`env`/`CODEX_HOME` and cache that catalog by profile runtime.
+
 ## 3.7 Messaging and Streaming
 
 **Send message:**
 ```
 POST /conversations/:id/message  [CSRF]
-Body: { content: string, backend?: string, model?: string, effort?: string }
+Body: { content: string, backend?: string, cliProfileId?: string, model?: string, effort?: string }
 ```
-- Saves user message, updates backend and/or model if changed
+- Saves user message, updates backend/profile and/or model if changed
+- Resolves `cliProfileId` through settings and uses the profile vendor as the runtime adapter. Missing/disabled profiles return `400`. If both `cliProfileId` and `backend` are supplied, the backend must match the profile vendor or the route returns `400`.
+- Profile switching is allowed only before the active session has messages. A different `cliProfileId` after messages exist returns `409`; switching after reset is allowed because the new active session is empty.
 - If `effort` differs from the stored value, updates it. Unsupported requests fall back to `high` when the current model supports it, then the model's first supported effort level.
 - Determines if new CLI session (`messageCount === 0`) or resume
 - New sessions: prepends workspace context injection (not stored in messages)
@@ -181,10 +188,10 @@ POST /conversations/:id/attachments/ocr  [CSRF]
 Content-Type: application/json
 Body: { path: string }
 ```
-One-shot OCR for an image attachment. Resolves the conversation's configured backend (`backend`/`model`/`effort`) and calls `adapter.runOneShot(prompt, { allowTools: true, model, effort, workingDir, timeoutMs: 90_000 })` with a fixed prompt that asks for clean Markdown including proper Markdown tables (`| col | col |` with `|---|---|` separator) and italic placeholders (`*[diagram: …]*`) for any non-text visuals the model cannot transcribe. The throwaway invocation does not touch the active session. Returns `{ markdown: string }` on success.
+One-shot OCR for an image attachment. Resolves the conversation's configured CLI profile to a vendor backend (falling back to `backend` when no profile is present), then calls `adapter.runOneShot(prompt, { allowTools: true, model, effort, workingDir, timeoutMs: 90_000, cliProfile })` with a fixed prompt that asks for clean Markdown including proper Markdown tables (`| col | col |` with `|---|---|` separator) and italic placeholders (`*[diagram: …]*`) for any non-text visuals the model cannot transcribe. The throwaway invocation does not touch the active session. Returns `{ markdown: string }` on success.
 
 Errors:
-- `400` — missing/invalid `path`, path resolves outside the conversation's `data/chat/artifacts/{id}/` dir (path-confinement check), or the attachment kind is not `image`.
+- `400` — missing/invalid `path`, path resolves outside the conversation's `data/chat/artifacts/{id}/` dir (path-confinement check), attachment kind is not `image`, or the conversation's `cliProfileId` cannot be resolved.
 - `404` — file not present on disk, or conversation not found.
 - `500` — backend not registered.
 - `502` — `runOneShot` threw, or returned empty output (after trim).
@@ -203,8 +210,14 @@ Path traversal guard. No CSRF (used by `<img>` tags and file badge cards).
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
-| GET | `/settings` | — | Returns settings (defaults if file missing). |
-| PUT | `/settings` | Yes | Writes full body to `settings.json`. |
+| GET | `/settings` | — | Returns settings (defaults if file missing), including `cliProfiles` and `defaultCliProfileId` server-configured defaults for the selected backend. |
+| PUT | `/settings` | Yes | Normalizes and writes the full body to `settings.json`. CLI profile normalization drops invalid vendors/profile IDs, strips non-string env values, synchronizes `defaultBackend` from a valid `defaultCliProfileId`, clears invalid/disabled defaults, aligns Memory/KB legacy `*CliBackend` fields to selected `*CliProfileId` vendors, and forces Kiro profiles to self-configured mode with no `command`, `configDir`, or `env`. |
+| POST | `/cli-profiles/:id/test` | Yes | Runs the vendor auth/status command for an account profile and returns `{ result, profile, settings? }`. Supported for Codex and Claude Code account profiles. If the profile has no `configDir`, the server creates and persists a default profile directory under `data/cli-profiles/` before running the check. When the profile's vendor adapter is registered, the route also calls `adapter.getMetadata({ cliProfile })` to warm/read the profile-specific model catalog and adds `modelsAvailable`, `modelCount`, or `modelListError` to `result`. Kiro and self-configured profiles return `400`. |
+| POST | `/cli-profiles/:id/auth/start` | Yes | Starts a short-lived remote authentication job for a Codex or Claude Code account profile and returns `{ job, profile, settings? }`. Codex runs `codex login --device-auth` with `CODEX_HOME` set from the profile; Claude Code runs `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR` set from the profile. Output is redacted and stored in the in-memory job snapshot for polling. One running job per profile is allowed. Jobs time out after 15 minutes by default, matching device-code expiry expectations. When the login process exits `0`, the server polls the vendor status command (`codex login status` or `claude auth status --json`) before marking the job `succeeded`; if status never verifies, the job becomes `failed` with the last redacted status output. |
+| GET | `/cli-profiles/auth-jobs/:jobId` | — | Returns `{ job }` for a recent in-memory CLI auth job. Job snapshots include `status`, timestamps, command/args, redacted stdout/stderr/info events, and exit details. Unknown jobs return `404`. |
+| POST | `/cli-profiles/auth-jobs/:jobId/cancel` | Yes | Cancels a running auth job by sending `SIGTERM` to the spawned login process and returns the updated `{ job }`. Unknown jobs return `404`. |
+
+Conversation responses from `POST /conversations`, `GET /conversations/:id`, and rows returned by `GET /conversations` include `cliProfileId` when present. When no explicit profile is supplied, the server derives it from the selected backend as `server-configured-<vendor>`. When a profile is present, runtime adapter selection resolves through that profile's vendor while the `backend` field remains synchronized for compatibility.
 
 ## 3.10 Usage Statistics
 
@@ -307,11 +320,11 @@ Constants (defined in `src/routes/chat.ts`):
 
 ## 3.14 Claude Code Plan Usage
 
-Account-wide Claude Code plan usage snapshot (5-hour session %, weekly %, per-model breakdown, reset times, plan tier, optional extra-credit balance). Surfaced in the ContextChip tooltip on Claude Code conversations.
+Account-wide Claude Code plan usage snapshot (5-hour session %, weekly %, per-model breakdown, reset times, plan tier, optional extra-credit balance). Surfaced in the ContextChip tooltip on Claude Code conversations. The default route reads the server-configured Claude cache; an optional `cliProfileId` reads the selected Claude profile cache.
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
-| GET | `/plan-usage` | — | Returns the last cached snapshot. **Does not trigger a refresh.** Response: `{ fetchedAt: string \| null, planTier: string \| null, subscriptionType: string \| null, rateLimits: RateLimits \| null, lastError: string \| null, stale: boolean }`. `fetchedAt` is ISO-8601 of the last successful fetch (`null` before the first ever fetch). `planTier` mirrors the OAuth credential's `rateLimitTier` (e.g. `default_claude_max_20x`). `subscriptionType` mirrors the credential's `subscriptionType` (e.g. `max`). `lastError` is the last fetch failure message (`token-expired`, HTTP 4xx/5xx, or network error) — cleared on success. `stale: true` when `Date.now() - fetchedAt > 15 min` or no fetch has landed yet. |
+| GET | `/plan-usage?cliProfileId=<id>` | — | Returns the last cached snapshot. **Does not trigger a refresh.** Omitting `cliProfileId` reads the server-configured Claude Code cache from `data/claude-plan-usage.json`. Supplying `cliProfileId` resolves that profile, requires `vendor: "claude-code"` and not disabled, then reads the profile cache from `data/claude-plan-usage/<encoded-profile-id>.json`; missing/disabled/non-Claude profiles return `400 { error }`. Response: `{ fetchedAt: string \| null, planTier: string \| null, subscriptionType: string \| null, rateLimits: RateLimits \| null, lastError: string \| null, stale: boolean }`. `fetchedAt` is ISO-8601 of the last successful fetch (`null` before the first ever fetch). `planTier` mirrors the OAuth credential's `rateLimitTier` (e.g. `default_claude_max_20x`). `subscriptionType` mirrors the credential's `subscriptionType` (e.g. `max`). `lastError` is the last fetch failure message (`token-expired`, HTTP 4xx/5xx, or network error) — cleared on success. `stale: true` when `Date.now() - fetchedAt > 15 min` or no fetch has landed yet. |
 
 **`RateLimits` shape** — every field optional and nullable; the `/api/oauth/usage` upstream ships new buckets under codenames (`seven_day_omelette`, `seven_day_cowork`, `iguana_necktie`, `omelette_promotional`) before they land with stable names, so the response is stored verbatim and the client derives labels for unknown keys.
 
@@ -333,7 +346,7 @@ Account-wide Claude Code plan usage snapshot (5-hour session %, weekly %, per-mo
 }
 ```
 
-**Refresh trigger policy:** The service behind this endpoint refreshes opportunistically from two triggers — server startup (once, via `init()` + `maybeRefresh('server-start')`) and after each Claude Code assistant turn (`onDone` callback in the chat router calls `maybeRefresh('turn-done')`). A floor of 10 minutes between attempts (tracked by last attempt time, not last success) protects against rate-limit retry storms. The HTTP route itself never forces a fetch — it only reads the cache. Other backends (Kiro, etc.) do not trigger refreshes.
+**Refresh trigger policy:** The service behind this endpoint refreshes opportunistically from two triggers — server startup for the default server-configured runtime (once, via `init()` + `maybeRefresh('server-start')`) and after each Claude Code assistant turn (`onDone` callback in the chat router calls `maybeRefresh('turn-done', runtime.profile)`). A floor of 10 minutes between attempts is tracked per cache key/profile and by last attempt time, not last success, protecting against rate-limit retry storms. The HTTP route itself never forces a fetch — it only reads the selected cache. Plain server-configured profiles share the default cache for compatibility with the current ContextChip UI. Other backends (Kiro, etc.) do not trigger refreshes.
 
 See Section 4 (`ClaudePlanUsageService`) for the caching, credential resolution, and HTTP semantics.
 
@@ -386,11 +399,11 @@ See Section 4 (`KiroPlanUsageService`) for the caching, SQLite credential resolu
 
 ## 3.16 Codex Plan Usage
 
-Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pro / Business / Enterprise / etc.), 5-hour rate-limit window utilization, weekly rate-limit window utilization, and optional credit balance. Surfaced in the ContextChip tooltip on Codex conversations. The service spawns a one-shot `codex app-server` and calls its `account/read` + `account/rateLimits/read` JSON-RPC methods — it does **not** piggyback on the long-lived `app-server` instance owned by `CodexAdapter` (the latter is bound to a specific conversation thread).
+Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pro / Business / Enterprise / etc.), 5-hour rate-limit window utilization, weekly rate-limit window utilization, and optional credit balance. Surfaced in the ContextChip tooltip on Codex conversations. The service spawns a one-shot Codex `app-server` using the server-configured runtime or the requested Codex CLI profile and calls its `account/read` + `account/rateLimits/read` JSON-RPC methods — it does **not** piggyback on the long-lived `app-server` instance owned by `CodexAdapter` (the latter is bound to a specific conversation thread).
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
-| GET | `/codex-plan-usage` | — | Returns the last cached snapshot. **Does not trigger a refresh.** Response: `{ fetchedAt: string \| null, account: CodexAccount \| null, rateLimits: CodexRateLimits \| null, lastError: string \| null, stale: boolean }`. `fetchedAt` is ISO-8601 of the last successful fetch (`null` before the first ever fetch). `lastError` is the last fetch failure message (`codex app-server unavailable: …` for missing CLI, RPC error string, or `codex app-server closed`) — cleared on success. `stale: true` when `Date.now() - fetchedAt > 15 min` or no successful fetch has landed yet. |
+| GET | `/codex-plan-usage?cliProfileId=<id>` | — | Returns the last cached snapshot. **Does not trigger a refresh.** Omitting `cliProfileId` reads the server-configured Codex cache from `data/codex-plan-usage.json`. Supplying `cliProfileId` resolves that profile, requires `vendor: "codex"` and not disabled, then reads the profile cache from `data/codex-plan-usage/<encoded-profile-id>.json`; missing/disabled/non-Codex profiles return `400 { error }`. Response: `{ fetchedAt: string \| null, account: CodexAccount \| null, rateLimits: CodexRateLimits \| null, lastError: string \| null, stale: boolean }`. `fetchedAt` is ISO-8601 of the last successful fetch (`null` before the first ever fetch). `lastError` is the last fetch failure message (`<command> app-server unavailable: …` for missing CLI, RPC error string, or `codex app-server closed`) — cleared on success. `stale: true` when `Date.now() - fetchedAt > 15 min` or no successful fetch has landed yet. |
 
 **`CodexAccount` shape** — normalized from the `account/read` RPC response (`raw.account`):
 
@@ -432,7 +445,7 @@ Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pr
 
 **Window slot semantics:** The frontend keys bar labels off `windowDurationMins` (300 → "5h session", 10080 → "Weekly"), not slot order. A future Codex API change that swaps `primary` / `secondary` won't mislabel the bars.
 
-**Refresh trigger policy:** The service refreshes opportunistically from two triggers — server startup (once, via `init()` + `maybeRefresh('server-start')`) and after each Codex assistant turn (`onDone` callback in the chat router calls `maybeRefresh('turn-done')`). A floor of 10 minutes between attempts (tracked by last attempt time, not last success) protects against rate-limit retry storms. The HTTP route itself never forces a fetch — it only reads the cache. Other backends (Claude Code, Kiro) do not trigger this service's refreshes.
+**Refresh trigger policy:** The service refreshes opportunistically from two triggers — server startup for the default server-configured runtime (once, via `init()` + `maybeRefresh('server-start')`) and after each Codex assistant turn (`onDone` callback in the chat router calls `maybeRefresh('turn-done', runtime.profile)`). A floor of 10 minutes between attempts is tracked per cache key/profile and by last attempt time, not last success, protecting against rate-limit retry storms. The HTTP route itself never forces a fetch — it only reads the selected cache. Other backends (Claude Code, Kiro) do not trigger this service's refreshes.
 
 See Section 4.6 (`CodexPlanUsageService`) for the spawn / RPC / kill semantics.
 

@@ -12,6 +12,7 @@ import {
   buildCodexThreadSecurityParams,
   normalizeCodexModelOption,
   buildCodexTurnStartParams,
+  resolveCodexCliRuntime,
 } from '../src/services/backends/codex';
 
 // ── CodexAdapter metadata ───────────────────────────────────────────────────
@@ -47,6 +48,36 @@ describe('CodexAdapter', () => {
     });
   });
 
+  test('resolveCodexCliRuntime maps profile configDir to CODEX_HOME and honors command/env', () => {
+    const runtime = resolveCodexCliRuntime({
+      id: 'profile-codex-work',
+      name: 'Codex Work',
+      vendor: 'codex',
+      command: '/opt/codex/bin/codex',
+      authMode: 'account',
+      configDir: '/tmp/codex-work-home',
+      env: { OPENAI_BASE_URL: 'https://example.test', CODEX_HOME: '/tmp/ignored' },
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    });
+
+    expect(runtime.command).toBe('/opt/codex/bin/codex');
+    expect(runtime.env.OPENAI_BASE_URL).toBe('https://example.test');
+    expect(runtime.env.CODEX_HOME).toBe('/tmp/codex-work-home');
+    expect(runtime.profileKey).toContain('profile-codex-work:');
+  });
+
+  test('resolveCodexCliRuntime rejects non-Codex profiles', () => {
+    expect(() => resolveCodexCliRuntime({
+      id: 'profile-claude',
+      name: 'Claude',
+      vendor: 'claude-code',
+      authMode: 'server-configured',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    })).toThrow('CLI profile vendor claude-code is not codex');
+  });
+
   test('metadata.models is populated immediately with fallback list', () => {
     const adapter = new CodexAdapter({ workingDir: '/tmp' });
     const models = adapter.metadata.models;
@@ -58,6 +89,84 @@ describe('CodexAdapter', () => {
     const gpt55 = models!.find((m) => m.id === 'gpt-5.5');
     expect(gpt55).toBeDefined();
     expect(gpt55!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh']);
+  });
+
+  test('getMetadata discovers and caches models per Codex profile runtime', async () => {
+    let capturedCommand: string | null = null;
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    let metadataPromise!: Promise<Awaited<ReturnType<CodexAdapter['getMetadata']>>>;
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        return {
+          spawn: (cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv }) => {
+            capturedCommand = cmd;
+            capturedEnv = opts.env;
+            const proc = new EventEmitter();
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.killed = false;
+            proc.exitCode = null;
+            proc.stdin = {
+              write: (line: string) => {
+                const req = JSON.parse(line);
+                if (req.method === 'initialize') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: {},
+                  }) + '\n')));
+                } else if (req.method === 'model/list') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: {
+                      data: [{
+                        id: 'gpt-profile-only',
+                        displayName: 'GPT Profile Only',
+                        isDefault: true,
+                        supportedReasoningEfforts: [{ reasoningEffort: 'minimal' }],
+                      }],
+                    },
+                  }) + '\n')));
+                }
+                return true;
+              },
+              end: () => {},
+            };
+            proc.kill = () => {
+              proc.killed = true;
+              proc.emit('close', 0, null);
+            };
+            expect(args).toEqual(['app-server']);
+            return proc;
+          },
+          execFile: () => ({ stdin: { end: () => {} } }),
+        };
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      metadataPromise = adapter.getMetadata({
+        cliProfile: {
+          id: 'profile-codex-models',
+          name: 'Codex Models',
+          vendor: 'codex',
+          command: '/opt/codex/bin/codex',
+          authMode: 'account',
+          configDir: '/tmp/codex-models-home',
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      });
+    });
+
+    const metadata = await metadataPromise;
+    jest.dontMock('child_process');
+    expect(capturedCommand).toBe('/opt/codex/bin/codex');
+    expect(capturedEnv?.CODEX_HOME).toBe('/tmp/codex-models-home');
+    expect(metadata.models?.map((m) => m.id)).toEqual(['gpt-profile-only']);
+    expect(metadata.models?.[0].supportedEffortLevels).toEqual(['minimal']);
   });
 
   test('normalizes Codex model/list reasoning effort metadata', () => {
@@ -835,6 +944,53 @@ describe('CodexAdapter.runOneShot', () => {
     expect(cValues.some((v) => v === 'mcp_servers.memory.command="node"')).toBe(true);
     expect(cValues.some((v) => v === 'mcp_servers.memory.args=["/tmp/mem.js"]')).toBe(true);
     expect(cValues.some((v) => v.startsWith('mcp_servers.memory.env=') && v.includes('TOKEN = "abc"'))).toBe(true);
+  });
+
+  test('uses Codex profile command, env, and CODEX_HOME for codex exec', async () => {
+    let capturedCmd: string | null = null;
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    let resultPromise!: Promise<string>;
+
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: () => ({
+          on: () => {},
+          stdout: { on: () => {} },
+          stderr: { on: () => {} },
+          stdin: { write: () => true, end: () => {} },
+          kill: () => {},
+          killed: false,
+          exitCode: null,
+        }),
+        execFile: (cmd: string, _args: string[], opts: { env?: NodeJS.ProcessEnv }, cb: (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void) => {
+          capturedCmd = cmd;
+          capturedEnv = opts.env;
+          setImmediate(() => cb(null, 'ok', ''));
+          return { stdin: { end: () => {} } };
+        },
+      }));
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', {
+        workingDir: '/tmp',
+        cliProfile: {
+          id: 'profile-codex-work',
+          name: 'Codex Work',
+          vendor: 'codex',
+          command: '/opt/codex/bin/codex',
+          authMode: 'account',
+          configDir: '/tmp/codex-work-home',
+          env: { OPENAI_BASE_URL: 'https://example.test' },
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      });
+    });
+
+    await resultPromise;
+    expect(capturedCmd).toBe('/opt/codex/bin/codex');
+    expect(capturedEnv?.OPENAI_BASE_URL).toBe('https://example.test');
+    expect(capturedEnv?.CODEX_HOME).toBe('/tmp/codex-work-home');
   });
 
   test('does not pass any -c flags when no mcpServers are provided', async () => {

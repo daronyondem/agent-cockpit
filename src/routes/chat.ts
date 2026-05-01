@@ -11,6 +11,7 @@ import type { UpdateService } from '../services/updateService';
 import type { ClaudePlanUsageService } from '../services/claudePlanUsageService';
 import type { KiroPlanUsageService } from '../services/kiroPlanUsageService';
 import type { CodexPlanUsageService } from '../services/codexPlanUsageService';
+import { CliProfileAuthService } from '../services/cliProfileAuthService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
 import { detectLibreOffice } from '../services/knowledgeBase/libreOffice';
@@ -36,6 +37,11 @@ import type { WsFunctions } from '../ws';
 function param(req: Request, name: string): string {
   const val = req.params[name];
   return Array.isArray(val) ? val[0] : val;
+}
+
+function isCliProfileResolutionError(err: unknown): boolean {
+  const message = (err as Error).message || '';
+  return message.startsWith('CLI profile') || message.includes('CLI profile vendor');
 }
 
 // ── Stream processing ────────────────────────────────────────────────────────
@@ -344,6 +350,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
   const activeStreams = new Map<string, ActiveStreamEntry>();
   const memoryWatcher = new MemoryWatcher();
+  const cliProfileAuth = new CliProfileAuthService(chatService.baseDir);
   // Per-conversation map of last-known memory file fingerprints (filename → sha-ish)
   // used by the watcher to compute `changedFiles` for the `memory_update` WS frame.
   // Cleared when the watcher is unwatched so a re-watched conversation starts fresh.
@@ -451,6 +458,27 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     res.json({ backends: backendRegistry.list() });
   });
 
+  router.get('/cli-profiles/:profileId/metadata', async (req: Request, res: Response) => {
+    try {
+      const profileId = param(req, 'profileId');
+      const runtime = await chatService.resolveCliProfileRuntime(profileId);
+      const adapter = backendRegistry.get(runtime.backendId);
+      if (!adapter) {
+        return res.status(500).json({ error: `CLI profile backend not registered: ${runtime.backendId}` });
+      }
+      const backend = await adapter.getMetadata({ cliProfile: runtime.profile });
+      res.json({
+        profileId: runtime.cliProfileId || profileId,
+        backend,
+      });
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Version ─────────────────────────────────────────────────────────────────
   router.get('/version', (_req: Request, res: Response) => {
     const status = updateService ? updateService.getStatus() : {} as Record<string, unknown>;
@@ -472,8 +500,23 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // ClaudePlanUsageService cache. Never triggers a refresh itself — those
   // happen opportunistically on server start and after each Claude Code
   // assistant turn (wired in server.ts and in the stream onDone below).
-  router.get('/plan-usage', (_req: Request, res: Response) => {
-    res.json(claudePlanUsageService.getCached());
+  router.get('/plan-usage', async (req: Request, res: Response) => {
+    try {
+      const rawProfileId = req.query.cliProfileId;
+      const cliProfileId = typeof rawProfileId === 'string' ? rawProfileId : undefined;
+      if (!cliProfileId) return res.json(claudePlanUsageService.getCached());
+
+      const runtime = await chatService.resolveCliProfileRuntime(cliProfileId, 'claude-code');
+      if (runtime.backendId !== 'claude-code') {
+        return res.status(400).json({ error: `CLI profile vendor ${runtime.backendId} is not claude-code` });
+      }
+      res.json(claudePlanUsageService.getCached(runtime.profile));
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // ── Kiro plan usage ────────────────────────────────────────────────────────
@@ -489,8 +532,23 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // `account/read` + `account/rateLimits/read` snapshot from
   // CodexPlanUsageService. Refreshes happen on server start and after
   // each Codex turn (see stream onDone below).
-  router.get('/codex-plan-usage', (_req: Request, res: Response) => {
-    res.json(codexPlanUsageService.getCached());
+  router.get('/codex-plan-usage', async (req: Request, res: Response) => {
+    try {
+      const rawProfileId = req.query.cliProfileId;
+      const cliProfileId = typeof rawProfileId === 'string' ? rawProfileId : undefined;
+      if (!cliProfileId) return res.json(codexPlanUsageService.getCached());
+
+      const runtime = await chatService.resolveCliProfileRuntime(cliProfileId, 'codex');
+      if (runtime.backendId !== 'codex') {
+        return res.status(400).json({ error: `CLI profile vendor ${runtime.backendId} is not codex` });
+      }
+      res.json(codexPlanUsageService.getCached(runtime.profile));
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
   });
 
   // ── Manual version check ────────────────────────────────────────────────────
@@ -706,9 +764,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         req.body.backend,
         req.body.model,
         req.body.effort,
+        req.body.cliProfileId,
       );
       res.json(conv);
     } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -915,7 +977,17 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       // Capture the current backend BEFORE resetting the session, so
       // memory is extracted from whichever CLI the ending session used.
       const preConv = await chatService.getConversation(convId);
-      const endingBackend = preConv?.backend || null;
+      let endingRuntime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>> | null = null;
+      if (preConv) {
+        try {
+          endingRuntime = await chatService.resolveCliProfileRuntime(preConv.cliProfileId, preConv.backend);
+        } catch (err: unknown) {
+          if (isCliProfileResolutionError(err)) {
+            return res.status(400).json({ error: (err as Error).message });
+          }
+          throw err;
+        }
+      }
 
       // Clear any stale event buffer so a subsequent WS connection
       // doesn't replay old-session events into the new session.
@@ -932,10 +1004,11 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       const memoryOnForReset = resetWsHash
         ? await chatService.getWorkspaceMemoryEnabled(resetWsHash)
         : false;
-      if (endingBackend && memoryOnForReset) {
+      if (endingRuntime && memoryOnForReset) {
+        const endingBackend = endingRuntime.backendId;
         console.log(`[memory] reset handler: attempting capture for conv=${convId} backend=${endingBackend}`);
         try {
-          const snapshot = await chatService.captureWorkspaceMemory(convId, endingBackend);
+          const snapshot = await chatService.captureWorkspaceMemory(convId, endingBackend, endingRuntime.profile);
           if (snapshot) {
             console.log(`[memory] captured ${snapshot.files.length} memory file(s) for conv=${convId} backend=${endingBackend}`);
           } else {
@@ -966,7 +1039,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
             console.error(`[memory] post-session extraction failed for conv=${convId}:`, (err as Error).message);
           }
         }
-      } else if (!endingBackend) {
+      } else if (!endingRuntime) {
         console.log(`[memory] reset handler: no ending backend for conv=${convId}, skipping capture`);
       } else {
         console.log(`[memory] reset handler: memory disabled for conv=${convId}, skipping capture`);
@@ -975,7 +1048,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       // Let the backend adapter clean up per-conversation state (e.g. ACP processes)
       const conv = await chatService.getConversation(convId);
       if (conv) {
-        const adapter = backendRegistry.get(conv.backend);
+        const runtime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
+        const adapter = backendRegistry.get(runtime.backendId);
         if (adapter) adapter.onSessionReset(convId);
       }
 
@@ -986,6 +1060,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
       res.json(result);
     } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -993,11 +1070,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // ── Send message + stream response ────────────────────────────────────────
   router.post('/conversations/:id/message', csrfGuard, async (req: Request, res: Response) => {
     const convId = param(req, 'id');
-    const { content, backend, model, effort } = req.body as {
+    const { content, backend, model, effort, cliProfileId } = req.body as {
       content?: string;
       backend?: string;
       model?: string;
       effort?: EffortLevel;
+      cliProfileId?: string;
     };
 
     if (!content || typeof content !== 'string' || !content.trim()) {
@@ -1005,11 +1083,25 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
     console.log(`[diag][chat] POST /message conv=${convId.slice(0,8)} contentLen=${content.length} activeStreamHas=${activeStreams.has(convId)} wsConnected=${wsFns?.isConnected(convId) ?? '?'}`);
 
-    const conv = await chatService.getConversation(convId);
+    let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
 
-    if (backend && backend !== conv.backend) {
-      await chatService.updateConversationBackend(convId, backend);
+    try {
+      if (cliProfileId) {
+        if (cliProfileId !== conv.cliProfileId) {
+          if (conv.messages.length > 0) {
+            return res.status(409).json({ error: 'Cannot switch CLI profile after the active session has messages' });
+          }
+          await chatService.updateConversationCliProfile(convId, cliProfileId);
+        }
+      } else if (backend && backend !== conv.backend) {
+        await chatService.updateConversationBackend(convId, backend);
+      }
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      throw err;
     }
     if (model !== undefined && model !== (conv.model || undefined)) {
       await chatService.updateConversationModel(convId, model || null);
@@ -1017,12 +1109,25 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     if (effort !== undefined && effort !== (conv.effort || undefined)) {
       await chatService.updateConversationEffort(convId, effort || null);
     }
+    conv = (await chatService.getConversation(convId))!;
 
-    const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backend || conv.backend);
+    let runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
+    try {
+      runtime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      throw err;
+    }
+    const backendId = runtime.backendId;
+    if (cliProfileId && backend && backend !== backendId) {
+      return res.status(400).json({ error: `CLI profile vendor ${backendId} does not match backend ${backend}` });
+    }
+    const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backendId);
 
     const isNewSession = conv.messages.length === 0;
 
-    const backendId = backend || conv.backend;
     const wsHashForSend = chatService.getWorkspaceHashForConv(convId);
     const memoryEnabledForSend = wsHashForSend
       ? await chatService.getWorkspaceMemoryEnabled(wsHashForSend)
@@ -1151,6 +1256,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     const { stream, abort, sendInput } = adapter.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
       conversationId: convId,
+      cliProfileId: runtime.cliProfileId || refreshedConv?.cliProfileId || conv.cliProfileId || undefined,
+      cliProfile: runtime.profile,
       isNewSession,
       workingDir: conv.workingDir || null,
       systemPrompt,
@@ -1192,7 +1299,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         : false;
       const watchWorkspacePath = conv.workingDir || adapter.workingDir || null;
       if (memoryOnForWatch && watchWorkspacePath) {
-        const memDir = adapter.getMemoryDir(watchWorkspacePath);
+        const memDir = adapter.getMemoryDir(watchWorkspacePath, { cliProfile: runtime.profile });
         if (memDir) {
           // `fs.watch` requires the directory to exist — on brand new
           // workspaces where the CLI hasn't written any memory yet the
@@ -1206,7 +1313,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           }
           memoryWatcher.watch(convId, memDir, async () => {
             try {
-              const snapshot = await chatService.captureWorkspaceMemory(convId, backendId);
+              const snapshot = await chatService.captureWorkspaceMemory(convId, backendId, runtime.profile);
               if (snapshot) {
                 console.log(`[memoryWatcher] re-captured ${snapshot.files.length} memory file(s) for conv=${convId} backend=${backendId}`);
                 const nextFp = fingerprintMemoryFiles(snapshot);
@@ -1238,11 +1345,11 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           memoryWatcher.unwatch(convId);
           memoryFingerprints.delete(convId);
           if (backendId === 'claude-code') {
-            claudePlanUsageService.maybeRefresh('turn-done');
+            claudePlanUsageService.maybeRefresh('turn-done', runtime.profile);
           } else if (backendId === 'kiro') {
             kiroPlanUsageService.maybeRefresh('turn-done');
           } else if (backendId === 'codex') {
-            codexPlanUsageService.maybeRefresh('turn-done');
+            codexPlanUsageService.maybeRefresh('turn-done', runtime.profile);
           }
         },
         { chatService },
@@ -1403,7 +1510,16 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
     const conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
-    const backendId = conv.backend || 'claude-code';
+    let runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
+    try {
+      runtime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      throw err;
+    }
+    const backendId = runtime.backendId;
     const adapter = backendRegistry.get(backendId);
     if (!adapter) {
       return res.status(500).json({ error: `Backend not registered: ${backendId}` });
@@ -1423,6 +1539,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         timeoutMs: 90_000,
         allowTools: true,
         workingDir: conv.workingDir || undefined,
+        cliProfile: runtime.profile,
       });
       const cleaned = (markdown || '').trim();
       if (!cleaned) {
@@ -2861,6 +2978,74 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   });
 
+  // ── CLI profile auth jobs ────────────────────────────────────────────────
+  router.post('/cli-profiles/:id/test', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const settings = await chatService.getSettings();
+      const prepared = cliProfileAuth.profileWithAuthDefaults(settings, param(req, 'id'));
+      const savedSettings = prepared.changed
+        ? await chatService.saveSettings(prepared.settings)
+        : settings;
+      const profile = savedSettings.cliProfiles?.find(candidate => candidate.id === prepared.profile.id) || prepared.profile;
+      const result = await cliProfileAuth.checkProfile(profile);
+      try {
+        const runtime = await chatService.resolveCliProfileRuntime(profile.id);
+        const adapter = backendRegistry.get(runtime.backendId);
+        if (adapter) {
+          const metadata = await adapter.getMetadata({ cliProfile: runtime.profile });
+          const modelCount = Array.isArray(metadata.models) ? metadata.models.length : 0;
+          result.modelsAvailable = modelCount > 0;
+          result.modelCount = modelCount;
+        }
+      } catch (metadataErr: unknown) {
+        result.modelListError = (metadataErr as Error).message || String(metadataErr);
+      }
+      res.json({
+        result,
+        profile,
+        ...(prepared.changed ? { settings: savedSettings } : {}),
+      });
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/cli-profiles/:id/auth/start', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const settings = await chatService.getSettings();
+      const prepared = cliProfileAuth.profileWithAuthDefaults(settings, param(req, 'id'));
+      const savedSettings = prepared.changed
+        ? await chatService.saveSettings(prepared.settings)
+        : settings;
+      const profile = savedSettings.cliProfiles?.find(candidate => candidate.id === prepared.profile.id) || prepared.profile;
+      const job = await cliProfileAuth.startAuth(profile);
+      res.json({
+        job,
+        profile,
+        ...(prepared.changed ? { settings: savedSettings } : {}),
+      });
+    } catch (err: unknown) {
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get('/cli-profiles/auth-jobs/:jobId', async (req: Request, res: Response) => {
+    const job = cliProfileAuth.getJob(param(req, 'jobId'));
+    if (!job) {
+      res.status(404).json({ error: 'Auth job not found' });
+      return;
+    }
+    res.json({ job });
+  });
+
+  router.post('/cli-profiles/auth-jobs/:jobId/cancel', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      res.json({ job: cliProfileAuth.cancelJob(param(req, 'jobId')) });
+    } catch (err: unknown) {
+      res.status(404).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Shutdown helper ────────────────────────────────────────────────────────
   function shutdown() {
     for (const [convId, entry] of activeStreams) {
@@ -2870,6 +3055,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     activeStreams.clear();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
+    cliProfileAuth.shutdown();
     if (updateService) updateService.stop();
   }
 

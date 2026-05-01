@@ -7,7 +7,8 @@ import { ChatService } from '../src/services/chatService';
 import { workspaceHash } from './helpers/workspace';
 import { BackendRegistry } from '../src/services/backends/registry';
 import { BaseBackendAdapter } from '../src/services/backends/base';
-import type { BackendMetadata, SendMessageOptions, SendMessageResult, Message } from '../src/types';
+import type { BackendMetadata, CliProfile, SendMessageOptions, SendMessageResult, Message } from '../src/types';
+import { serverConfiguredCliProfileId } from '../src/services/cliProfiles';
 
 const DEFAULT_WORKSPACE = '/tmp/test-workspace';
 
@@ -32,6 +33,7 @@ describe('createConversation', () => {
     expect(conv.sessionNumber).toBe(1);
     expect(conv.currentSessionId).toBeDefined();
     expect(conv.backend).toBe('claude-code');
+    expect(conv.cliProfileId).toBe(serverConfiguredCliProfileId('claude-code'));
   });
 
   test('creates with custom title and working dir', async () => {
@@ -73,13 +75,174 @@ describe('createConversation', () => {
   test('creates with explicit backend parameter', async () => {
     const conv = await service.createConversation('Kiro Chat', '/tmp/work', 'kiro');
     expect(conv.backend).toBe('kiro');
+    expect(conv.cliProfileId).toBe(serverConfiguredCliProfileId('kiro'));
     const retrieved = await service.getConversation(conv.id);
     expect(retrieved!.backend).toBe('kiro');
+    expect(retrieved!.cliProfileId).toBe(serverConfiguredCliProfileId('kiro'));
+
+    const settings = await service.getSettings();
+    expect(settings.cliProfiles).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: serverConfiguredCliProfileId('kiro'),
+          vendor: 'kiro',
+          authMode: 'server-configured',
+        }),
+      ]),
+    );
+  });
+
+  test('creates with an explicit CLI profile and resolves its vendor backend', async () => {
+    const settings = await service.getSettings();
+    const profile: CliProfile = {
+      id: 'profile-kiro-work',
+      name: 'Kiro Work',
+      vendor: 'kiro',
+      authMode: 'server-configured',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+    await service.saveSettings({
+      ...settings,
+      cliProfiles: [...(settings.cliProfiles || []), profile],
+    });
+
+    const conv = await service.createConversation(
+      'Profile Chat',
+      '/tmp/profile-work',
+      undefined,
+      undefined,
+      undefined,
+      profile.id,
+    );
+
+    expect(conv.backend).toBe('kiro');
+    expect(conv.cliProfileId).toBe(profile.id);
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.backend).toBe('kiro');
+    expect(loaded!.cliProfileId).toBe(profile.id);
+  });
+
+  test('rejects an unknown CLI profile on create', async () => {
+    await expect(
+      service.createConversation('Bad Profile', undefined, undefined, undefined, undefined, 'missing-profile'),
+    ).rejects.toThrow('CLI profile not found: missing-profile');
+  });
+
+  test('rejects backend mismatch when creating with a CLI profile', async () => {
+    const settings = await service.getSettings();
+    const profile: CliProfile = {
+      id: 'profile-kiro-mismatch',
+      name: 'Kiro Mismatch',
+      vendor: 'kiro',
+      authMode: 'server-configured',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+    await service.saveSettings({
+      ...settings,
+      cliProfiles: [...(settings.cliProfiles || []), profile],
+    });
+
+    await expect(
+      service.createConversation('Mismatch', undefined, 'claude-code', undefined, undefined, profile.id),
+    ).rejects.toThrow('CLI profile vendor kiro does not match backend claude-code');
   });
 
   test('backend defaults to claude-code when not specified', async () => {
     const conv = await service.createConversation('Default Backend');
     expect(conv.backend).toBe('claude-code');
+    expect(conv.cliProfileId).toBe(serverConfiguredCliProfileId('claude-code'));
+  });
+
+  test('uses defaultCliProfileId when creating without explicit backend/profile', async () => {
+    const settings = await service.getSettings();
+    const profile: CliProfile = {
+      id: 'profile-codex-default',
+      name: 'Codex Default',
+      vendor: 'codex',
+      authMode: 'account',
+      configDir: '/tmp/codex-default',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+    await service.saveSettings({
+      ...settings,
+      defaultCliProfileId: profile.id,
+      cliProfiles: [...(settings.cliProfiles || []), profile],
+    });
+
+    const conv = await service.createConversation('Default Profile');
+
+    expect(conv.backend).toBe('codex');
+    expect(conv.cliProfileId).toBe(profile.id);
+  });
+
+  test('migrates existing vendor-only conversations to server-configured profiles on initialize', async () => {
+    const migrateTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-cli-profile-migrate-'));
+    try {
+      const ws = '/tmp/cli-profile-migrate';
+      const hash = workspaceHash(ws);
+      const workspaceDir = path.join(migrateTmp, 'data', 'chat', 'workspaces', hash);
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      fs.writeFileSync(path.join(workspaceDir, 'index.json'), JSON.stringify({
+        workspacePath: ws,
+        conversations: [
+          {
+            id: 'conv-codex',
+            title: 'Codex legacy',
+            backend: 'codex',
+            currentSessionId: 'session-codex',
+            lastActivity: '2026-04-29T00:00:00.000Z',
+            lastMessage: null,
+            sessions: [{
+              number: 1,
+              sessionId: 'session-codex',
+              summary: null,
+              active: true,
+              messageCount: 0,
+              startedAt: '2026-04-29T00:00:00.000Z',
+              endedAt: null,
+            }],
+          },
+          {
+            id: 'conv-kiro',
+            title: 'Kiro legacy',
+            backend: 'kiro',
+            currentSessionId: 'session-kiro',
+            lastActivity: '2026-04-29T00:00:00.000Z',
+            lastMessage: null,
+            sessions: [{
+              number: 1,
+              sessionId: 'session-kiro',
+              summary: null,
+              active: true,
+              messageCount: 0,
+              startedAt: '2026-04-29T00:00:00.000Z',
+              endedAt: null,
+            }],
+          },
+        ],
+      }, null, 2));
+
+      const migrating = new ChatService(migrateTmp, { defaultWorkspace: DEFAULT_WORKSPACE });
+      await migrating.initialize();
+
+      const index = JSON.parse(fs.readFileSync(path.join(workspaceDir, 'index.json'), 'utf8'));
+      expect(index.conversations[0].cliProfileId).toBe(serverConfiguredCliProfileId('codex'));
+      expect(index.conversations[1].cliProfileId).toBe(serverConfiguredCliProfileId('kiro'));
+
+      const settings = await migrating.getSettings();
+      expect(settings.cliProfiles).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: serverConfiguredCliProfileId('codex'), vendor: 'codex' }),
+          expect.objectContaining({ id: serverConfiguredCliProfileId('kiro'), vendor: 'kiro' }),
+        ]),
+      );
+    } finally {
+      fs.rmSync(migrateTmp, { recursive: true, force: true });
+    }
   });
 });
 
@@ -480,6 +643,54 @@ describe('updateConversationBackend', () => {
 
     const usage = await service.getUsage(conv.id);
     expect(usage!.contextUsagePercentage).toBe(42);
+  });
+});
+
+describe('updateConversationCliProfile', () => {
+  test('updates backend and profile in the workspace index', async () => {
+    const settings = await service.getSettings();
+    const profile: CliProfile = {
+      id: 'profile-kiro-switch',
+      name: 'Kiro Switch',
+      vendor: 'kiro',
+      authMode: 'server-configured',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+    await service.saveSettings({
+      ...settings,
+      cliProfiles: [...(settings.cliProfiles || []), profile],
+    });
+    const conv = await service.createConversation('Test');
+
+    await service.updateConversationCliProfile(conv.id, profile.id);
+
+    const loaded = await service.getConversation(conv.id);
+    expect(loaded!.backend).toBe('kiro');
+    expect(loaded!.cliProfileId).toBe(profile.id);
+  });
+
+  test('clears contextUsagePercentage when profile changes vendor', async () => {
+    const settings = await service.getSettings();
+    const profile: CliProfile = {
+      id: 'profile-kiro-usage',
+      name: 'Kiro Usage',
+      vendor: 'kiro',
+      authMode: 'server-configured',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+    await service.saveSettings({
+      ...settings,
+      cliProfiles: [...(settings.cliProfiles || []), profile],
+    });
+    const conv = await service.createConversation('Test');
+    await service.addUsage(conv.id, { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, contextUsagePercentage: 42 }, 'claude-code');
+
+    await service.updateConversationCliProfile(conv.id, profile.id);
+
+    const usage = await service.getUsage(conv.id);
+    expect(usage!.contextUsagePercentage).toBeUndefined();
   });
 });
 

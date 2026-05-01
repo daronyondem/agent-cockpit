@@ -4,6 +4,14 @@ import path from 'path';
 import crypto from 'crypto';
 import type { BackendRegistry } from './backends/registry';
 import { SettingsService } from './settingsService';
+import {
+  cliProfileIdForBackend,
+  type CliProfileRuntime,
+  ensureServerConfiguredCliProfiles,
+  isCliVendor,
+  resolveCliProfileRuntime,
+  serverConfiguredCliProfileId,
+} from './cliProfiles';
 import { parseFrontmatter as parseMemoryFrontmatter } from './backends/claudeCode';
 import type {
   ContentBlock,
@@ -29,6 +37,7 @@ import type {
   AttachmentMeta,
   AttachmentKind,
   QueuedMessage,
+  CliProfile,
 } from '../types';
 import {
   openKbDatabase,
@@ -270,7 +279,67 @@ export class ChatService {
     if (fs.existsSync(this._legacyConversationsDir)) {
       await this._migrateToWorkspaces();
     }
+    await this._migrateCliProfiles();
     await this._buildLookupMap();
+  }
+
+  private async _migrateCliProfiles(): Promise<void> {
+    const usedVendors = new Set<string>();
+    let dirs: string[];
+    try {
+      dirs = await fsp.readdir(this.workspacesDir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+
+    for (const hash of dirs) {
+      if (hash.startsWith('.')) continue;
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index || !Array.isArray(index.conversations)) continue;
+
+      let changed = false;
+      for (const conv of index.conversations) {
+        if (!isCliVendor(conv.backend)) continue;
+        usedVendors.add(conv.backend);
+        if (!conv.cliProfileId) {
+          conv.cliProfileId = serverConfiguredCliProfileId(conv.backend);
+          changed = true;
+        }
+      }
+
+      if (changed) {
+        await this._writeWorkspaceIndex(hash, index);
+      }
+    }
+
+    await this._ensureServerConfiguredCliProfiles(usedVendors);
+  }
+
+  private async _ensureServerConfiguredCliProfiles(vendors: Iterable<string | undefined | null>): Promise<void> {
+    const settings = await this._settingsService.getSettings();
+    const ensured = ensureServerConfiguredCliProfiles(settings, vendors);
+    if (ensured.changed) {
+      await this._settingsService.saveSettings(ensured.settings);
+    }
+  }
+
+  async resolveCliProfileRuntime(
+    cliProfileId: string | undefined | null,
+    fallbackBackend?: string | null,
+  ): Promise<CliProfileRuntime> {
+    const settings = await this._settingsService.getSettings();
+    const resolved = resolveCliProfileRuntime(settings, cliProfileId, fallbackBackend || settings.defaultBackend || 'claude-code');
+    if (resolved.error || !resolved.runtime) {
+      throw new Error(resolved.error || 'Unable to resolve CLI profile');
+    }
+    return resolved.runtime;
+  }
+
+  private async _resolveRuntimeForConversation(
+    conv: Pick<ConversationEntry, 'backend' | 'cliProfileId'>,
+  ): Promise<CliProfileRuntime> {
+    return this.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
   }
 
   private async _buildLookupMap(): Promise<void> {
@@ -368,12 +437,12 @@ export class ChatService {
   private async _generateSessionSummary(
     messages: Pick<Message, 'role' | 'content'>[],
     fallback: string,
-    backendId?: string,
+    runtime?: CliProfileRuntime,
   ): Promise<string> {
     if (!messages || messages.length === 0) return fallback || 'Empty session';
-    const adapter = this._backendRegistry?.get(backendId || 'claude-code');
+    const adapter = this._backendRegistry?.get(runtime?.backendId || 'claude-code');
     if (adapter) {
-      return adapter.generateSummary(messages, fallback);
+      return adapter.generateSummary(messages, fallback, { cliProfile: runtime?.profile });
     }
     return fallback || `Session (${messages.length} messages)`;
   }
@@ -386,12 +455,33 @@ export class ChatService {
     backend?: string,
     model?: string,
     effort?: EffortLevel,
+    cliProfileId?: string,
   ): Promise<Conversation> {
     const id = this._newId();
     const now = new Date().toISOString();
     const sessionId = this._newId();
     const workspacePath = workingDir || this._defaultWorkspace;
     const hash = this._workspaceHash(workspacePath);
+    const defaultBackend = this._backendRegistry?.getDefault()?.metadata.id || 'claude-code';
+    const settings = await this._settingsService.getSettings();
+    const requestedCliProfileId = cliProfileId || (!backend ? settings.defaultCliProfileId : undefined);
+    const resolved = resolveCliProfileRuntime(
+      settings,
+      requestedCliProfileId,
+      backend || settings.defaultBackend || defaultBackend,
+    );
+    if (resolved.error || !resolved.runtime) {
+      throw new Error(resolved.error || 'Unable to resolve CLI profile');
+    }
+    const runtime = resolved.runtime;
+    const resolvedBackend = runtime.backendId;
+    if (backend && backend !== resolvedBackend) {
+      throw new Error(`CLI profile vendor ${resolvedBackend} does not match backend ${backend}`);
+    }
+    const resolvedCliProfileId = runtime.cliProfileId || cliProfileIdForBackend(resolvedBackend);
+    if (!runtime.cliProfileId && resolvedCliProfileId) {
+      await this._ensureServerConfiguredCliProfiles([resolvedBackend]);
+    }
 
     return this._indexLock.run(hash, async () => {
       let index = await this._readWorkspaceIndex(hash);
@@ -399,13 +489,12 @@ export class ChatService {
         index = { workspacePath, conversations: [] };
       }
 
-      const defaultBackend = this._backendRegistry?.getDefault()?.metadata.id || 'claude-code';
-      const resolvedBackend = backend || defaultBackend;
       const effective = this._effectiveEffort(resolvedBackend, model, effort);
       const convEntry: ConversationEntry = {
         id,
         title: title || 'New Chat',
         backend: resolvedBackend,
+        ...(resolvedCliProfileId ? { cliProfileId: resolvedCliProfileId } : {}),
         model: model || undefined,
         effort: effective,
         currentSessionId: sessionId,
@@ -439,6 +528,7 @@ export class ChatService {
         id,
         title: convEntry.title,
         backend: convEntry.backend,
+        cliProfileId: convEntry.cliProfileId,
         model: convEntry.model,
         effort: convEntry.effort,
         workingDir: workspacePath,
@@ -492,6 +582,7 @@ export class ChatService {
       id: convEntry.id,
       title: convEntry.title,
       backend: convEntry.backend,
+      cliProfileId: convEntry.cliProfileId,
       model: convEntry.model,
       effort: convEntry.effort,
       workingDir: index.workspacePath,
@@ -531,6 +622,7 @@ export class ChatService {
           title: conv.title,
           updatedAt: conv.lastActivity,
           backend: conv.backend,
+          cliProfileId: conv.cliProfileId,
           model: conv.model,
           effort: conv.effort,
           workingDir: index.workspacePath,
@@ -642,16 +734,46 @@ export class ChatService {
   async updateConversationBackend(convId: string, backend: string): Promise<void> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return;
+    const cliProfileId = cliProfileIdForBackend(backend);
+    if (cliProfileId) {
+      await this._ensureServerConfiguredCliProfiles([backend]);
+    }
     await this._indexLock.run(hash, async () => {
       const result = await this._getConvFromIndex(convId);
       if (!result) return;
       const { index, convEntry } = result;
       const prevBackend = convEntry.backend;
       convEntry.backend = backend;
+      if (cliProfileId) {
+        convEntry.cliProfileId = cliProfileId;
+      } else {
+        delete convEntry.cliProfileId;
+      }
       // contextUsagePercentage is a live snapshot from the backend (Kiro-only
       // today), not a cumulative value. Clear it on backend switch so a stale
       // Kiro percentage doesn't bleed into a Claude Code chip (or vice versa).
       if (prevBackend !== backend) {
+        if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
+        const activeSession = convEntry.sessions.find(s => s.active);
+        if (activeSession?.usage) activeSession.usage.contextUsagePercentage = undefined;
+      }
+      await this._writeWorkspaceIndex(hash, index);
+    });
+  }
+
+  async updateConversationCliProfile(convId: string, cliProfileId: string): Promise<void> {
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return;
+    const runtime = await this.resolveCliProfileRuntime(cliProfileId);
+
+    await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return;
+      const { index, convEntry } = result;
+      const prevBackend = convEntry.backend;
+      convEntry.backend = runtime.backendId;
+      convEntry.cliProfileId = runtime.cliProfileId;
+      if (prevBackend !== runtime.backendId) {
         if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
         const activeSession = convEntry.sessions.find(s => s.active);
         if (activeSession?.usage) activeSession.usage.contextUsagePercentage = undefined;
@@ -845,11 +967,12 @@ export class ChatService {
     // Skip auto-titling once the user has manually renamed: the adapter
     // round-trip is wasted work and we'd just overwrite the manual rename.
     if (conv.convEntry.titleManuallySet) return conv.convEntry.title;
-    const adapter = this._backendRegistry?.get(conv.convEntry.backend || 'claude-code');
+    const runtime = await this._resolveRuntimeForConversation(conv.convEntry);
+    const adapter = this._backendRegistry?.get(runtime.backendId);
     const fallback = userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
     let newTitle: string;
     if (adapter && typeof adapter.generateTitle === 'function') {
-      newTitle = await adapter.generateTitle(userMessage, fallback);
+      newTitle = await adapter.generateTitle(userMessage, fallback, { cliProfile: runtime.profile });
     } else {
       newTitle = fallback;
     }
@@ -940,7 +1063,8 @@ export class ChatService {
       const currentMessages = sessionFile ? sessionFile.messages : [];
 
       const fallback = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
-      const summary = await this._generateSessionSummary(currentMessages, fallback, convEntry.backend);
+      const summaryRuntime = await this._resolveRuntimeForConversation(convEntry);
+      const summary = await this._generateSessionSummary(currentMessages, fallback, summaryRuntime);
 
       activeSession.active = false;
       activeSession.summary = summary;
@@ -1535,6 +1659,7 @@ export class ChatService {
   async captureWorkspaceMemory(
     convId: string,
     backendId: string,
+    cliProfile?: CliProfile,
   ): Promise<MemorySnapshot | null> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) {
@@ -1556,7 +1681,7 @@ export class ChatService {
     console.log(`[memory] extracting for conv=${convId} backend=${backendId} workspacePath=${index.workspacePath}`);
     let snapshot: MemorySnapshot | null = null;
     try {
-      snapshot = await adapter.extractMemory(index.workspacePath);
+      snapshot = await adapter.extractMemory(index.workspacePath, { cliProfile });
     } catch (err: unknown) {
       console.error(`[memory] extractMemory threw for backend=${backendId} workspacePath=${index.workspacePath}:`, (err as Error).message);
       return null;

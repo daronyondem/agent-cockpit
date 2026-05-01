@@ -9,7 +9,7 @@
 // and emitting WS frames.
 
 import type { BaseBackendAdapter } from '../../backends/base';
-import type { EffortLevel } from '../../../types';
+import type { EffortLevel, CliProfile } from '../../../types';
 
 /** Result of converting a raw file into a digestible form. */
 export interface HandlerResult {
@@ -71,6 +71,8 @@ export interface HandlerInput {
    * output for visual content in that case.
    */
   ingestionAdapter?: BaseBackendAdapter;
+  /** Resolved CLI profile for account-isolated ingestion calls. */
+  ingestionCliProfile?: CliProfile;
   /** Optional Ingestion CLI model override (must be vision-capable). */
   ingestionModel?: string;
   /** Optional Ingestion CLI reasoning effort. */

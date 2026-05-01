@@ -3,7 +3,8 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { BaseBackendAdapter, type RunOneShotOptions } from './base';
+import crypto from 'crypto';
+import { BaseBackendAdapter, type BackendCallOptions, type RunOneShotOptions } from './base';
 import {
   sanitizeSystemPrompt,
   isApiError,
@@ -23,6 +24,7 @@ import type {
   MemorySnapshot,
   MemoryFile,
   MemoryType,
+  CliProfile,
 } from '../../types';
 
 // Re-export shared helpers for backwards compatibility with existing imports
@@ -38,6 +40,45 @@ function filterStdinWarning(stderr: string): string {
     .filter(l => !l.includes('no stdin data received'))
     .join('\n')
     .trim();
+}
+
+export interface ClaudeCliRuntime {
+  command: string;
+  env: NodeJS.ProcessEnv;
+  configDir?: string;
+  profileKey: string;
+}
+
+export function resolveClaudeCliRuntime(profile?: CliProfile): ClaudeCliRuntime {
+  if (profile && profile.vendor !== 'claude-code') {
+    throw new Error(`CLI profile vendor ${profile.vendor} is not claude-code`);
+  }
+  const command = profile?.command?.trim() || 'claude';
+  const env: NodeJS.ProcessEnv = { ...process.env };
+  if (profile?.env) {
+    for (const [key, value] of Object.entries(profile.env)) {
+      env[key] = value;
+    }
+  }
+  const envConfigDir = profile?.env?.CLAUDE_CONFIG_DIR?.trim() || undefined;
+  const configDir = profile?.configDir?.trim() || envConfigDir || undefined;
+  if (configDir) {
+    env.CLAUDE_CONFIG_DIR = configDir;
+  }
+
+  const hash = crypto.createHash('sha1').update(JSON.stringify({
+    id: profile?.id || null,
+    command,
+    configDir: configDir || null,
+    env: profile?.env || {},
+  })).digest('hex').slice(0, 12);
+
+  return {
+    command,
+    env,
+    ...(configDir ? { configDir } : {}),
+    profileKey: profile ? `${profile.id}:${hash}` : `server-configured:${hash}`,
+  };
 }
 
 // ── Adapter ─────────────────────────────────────────────────────────────────
@@ -123,7 +164,11 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     return { stream, abort, sendInput };
   }
 
-  async generateSummary(messages: Pick<Message, 'role' | 'content'>[], fallback: string): Promise<string> {
+  async generateSummary(
+    messages: Pick<Message, 'role' | 'content'>[],
+    fallback: string,
+    options: BackendCallOptions = {},
+  ): Promise<string> {
     if (!messages || messages.length === 0) return fallback || 'Empty session';
     try {
       let sessionText = '';
@@ -135,34 +180,29 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       }
       const prompt = `Summarize the following chat session in one concise sentence (100-150 characters max). Only output the summary, nothing else:\n\n${sessionText}`;
 
-      return await new Promise<string>((resolve) => {
-        const child = execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
-          if (err || !stdout.trim()) {
-            resolve(fallback || `Session (${messages.length} messages)`);
-          } else {
-            resolve(stdout.trim().substring(0, 200));
-          }
-        });
-        child.stdin?.end();
-      });
+      const out = await this.runOneShot(prompt, { timeoutMs: 30000, cliProfile: options.cliProfile });
+      if (!out) return fallback || `Session (${messages.length} messages)`;
+      return out.substring(0, 200);
     } catch {
       return fallback || `Session (${messages.length} messages)`;
     }
   }
 
-  getMemoryDir(workspacePath: string): string | null {
+  getMemoryDir(workspacePath: string, options: BackendCallOptions = {}): string | null {
     if (!workspacePath) return null;
+    const runtime = resolveClaudeCliRuntime(options.cliProfile);
     // Canonicalize worktrees to the main repo path so all worktrees of
     // one repo share a single memory directory.
     const canonicalPath = resolveCanonicalWorkspacePath(workspacePath);
-    return resolveClaudeMemoryDir(canonicalPath);
+    return resolveClaudeMemoryDir(canonicalPath, runtime.configDir);
   }
 
-  async extractMemory(workspacePath: string): Promise<MemorySnapshot | null> {
+  async extractMemory(workspacePath: string, options: BackendCallOptions = {}): Promise<MemorySnapshot | null> {
     if (!workspacePath) {
       console.log('[memory] ClaudeCode.extractMemory: empty workspacePath');
       return null;
     }
+    const runtime = resolveClaudeCliRuntime(options.cliProfile);
     // If the workspace is a git worktree, resolve to the main repo's path
     // so all worktrees of the same repo share one memory directory.
     // Non-git workspaces and main repos pass through unchanged.
@@ -170,7 +210,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     if (canonicalPath !== workspacePath) {
       console.log(`[memory] ClaudeCode.extractMemory: canonicalized worktree ${workspacePath} -> ${canonicalPath}`);
     }
-    const memDir = resolveClaudeMemoryDir(canonicalPath);
+    const memDir = resolveClaudeMemoryDir(canonicalPath, runtime.configDir);
     if (!memDir) {
       const sanitized = canonicalPath.replace(/[^a-zA-Z0-9]/g, '-');
       console.log(`[memory] ClaudeCode.extractMemory: no memory dir found for workspacePath=${canonicalPath} (sanitized=${sanitized})`);
@@ -231,7 +271,8 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
    * server when Claude Code is the configured Memory CLI.
    */
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { model, effort, timeoutMs = 60000, workingDir, allowTools, mcpServers } = options;
+    const { model, effort, timeoutMs = 60000, workingDir, allowTools, mcpServers, cliProfile } = options;
+    const runtime = resolveClaudeCliRuntime(cliProfile);
     const args = ['--print', '-p', prompt];
     // Digestion / Dreaming need to read every file under the workspace
     // KB directory; they run with `allowTools: true` so Claude's
@@ -253,9 +294,9 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     }
     return await new Promise<string>((resolve, reject) => {
       const child = execFile(
-        'claude',
+        runtime.command,
         args,
-        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined },
+        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined, env: runtime.env },
         (err, stdout, stderr) => {
           if (err) {
             // Filter the stdin warning — it's not the real error.
@@ -282,26 +323,20 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     });
   }
 
-  async generateTitle(userMessage: string, fallback: string): Promise<string> {
+  async generateTitle(userMessage: string, fallback: string, options: BackendCallOptions = {}): Promise<string> {
     if (!userMessage || typeof userMessage !== 'string' || !userMessage.trim()) {
       return fallback || 'New Chat';
     }
+    const titleFallback = () => fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
     try {
       const truncated = userMessage.substring(0, 2000);
       const prompt = `Generate a short, descriptive title (max 8 words) for a conversation that starts with this user message. Only output the title text, nothing else — no quotes, no prefix:\n\n${truncated}`;
 
-      return await new Promise<string>((resolve) => {
-        const child = execFile('claude', ['--print', '-p', prompt], { timeout: 30000 }, (err, stdout) => {
-          if (err || !stdout.trim()) {
-            resolve(fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat');
-          } else {
-            resolve(stdout.trim().substring(0, 80));
-          }
-        });
-        child.stdin?.end();
-      });
+      const out = await this.runOneShot(prompt, { timeoutMs: 30000, cliProfile: options.cliProfile });
+      if (!out) return titleFallback();
+      return out.substring(0, 80);
     } catch {
-      return fallback || userMessage.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
+      return titleFallback();
     }
   }
 
@@ -312,7 +347,8 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     options: SendMessageOptions,
     state: StreamState,
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, isNewSession, workingDir, systemPrompt, model, effort, mcpServers } = options;
+    const { sessionId, isNewSession, workingDir, systemPrompt, model, effort, mcpServers, cliProfile } = options;
+    const runtime = resolveClaudeCliRuntime(cliProfile);
 
     const args = [
       '--print',
@@ -358,11 +394,11 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
 
     try {
       const cwd = workingDir || this.workingDir || undefined;
-      console.log(`[claudeCode] spawning claude, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} systemPromptLen=${(systemPrompt || '').length} cwd=${cwd}`);
-      const proc = spawn('claude', args, {
+      console.log(`[claudeCode] spawning ${runtime.command}, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} systemPromptLen=${(systemPrompt || '').length} cwd=${cwd}`);
+      const proc = spawn(runtime.command, args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: { ...process.env },
+        env: runtime.env,
       });
 
       state.proc = proc;
@@ -698,6 +734,8 @@ export function resolveCanonicalWorkspacePath(workspacePath: string): string {
 /**
  * Claude Code stores per-project memory under:
  *   ~/.claude/projects/{sanitized-path}/memory/
+ * or, for profiles with `configDir`:
+ *   {configDir}/projects/{sanitized-path}/memory/
  *
  * The sanitized path is produced by replacing every non-alphanumeric
  * character in the absolute workspace path with `-`.  For long paths
@@ -713,12 +751,13 @@ export function resolveCanonicalWorkspacePath(workspacePath: string): string {
  * in that case the watcher can't attach until a session-reset capture
  * reveals the real dirname.
  */
-export function resolveClaudeMemoryDir(workspacePath: string): string | null {
+export function resolveClaudeMemoryDir(workspacePath: string, configDir?: string): string | null {
   // Prefer $HOME env var over os.homedir() so tests can sandbox the
   // lookup by pointing HOME at a temp directory — os.homedir() caches
-  // its result in some runtimes and ignores later env-var changes.
+  // its result in some runtimes and ignores later env-var changes. A
+  // profile configDir mirrors Claude Code's CLAUDE_CONFIG_DIR behavior.
   const home = process.env.HOME || os.homedir();
-  const projectsDir = path.join(home, '.claude', 'projects');
+  const projectsDir = path.join(configDir || path.join(home, '.claude'), 'projects');
   const sanitized = workspacePath.replace(/[^a-zA-Z0-9]/g, '-');
 
   // Short paths: the sanitized name is the exact dirname, so return

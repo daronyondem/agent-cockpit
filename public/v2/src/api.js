@@ -37,6 +37,10 @@
     onSessionExpired: null,
     _backendsCache: null,
     _backendsPromise: null,
+    _settingsCache: null,
+    _settingsPromise: null,
+    _profileMetadataCache: new Map(),
+    _profileMetadataPromise: new Map(),
   };
 
   async function fetchCsrfToken(){
@@ -187,8 +191,9 @@
      Code assistant turn, floor-throttled to once per 10 minutes. The
      endpoint itself never triggers a fetch — it just returns the cached
      snapshot with a `stale` boolean. */
-  async function getClaudePlanUsage(){
-    const res = await chatFetch('plan-usage');
+  async function getClaudePlanUsage(cliProfileId){
+    const qs = cliProfileId ? `?cliProfileId=${encodeURIComponent(cliProfileId)}` : '';
+    const res = await chatFetch('plan-usage' + qs);
     return res.json();
   }
 
@@ -203,8 +208,9 @@
   /* Codex plan usage (ChatGPT plan tier + 5-hour/weekly rate-limit
      utilization from `codex app-server`'s `account/read` and
      `account/rateLimits/read` RPCs). Same contract as the others. */
-  async function getCodexPlanUsage(){
-    const res = await chatFetch('codex-plan-usage');
+  async function getCodexPlanUsage(cliProfileId){
+    const qs = cliProfileId ? `?cliProfileId=${encodeURIComponent(cliProfileId)}` : '';
+    const res = await chatFetch('codex-plan-usage' + qs);
     return res.json();
   }
 
@@ -222,6 +228,49 @@
       throw err;
     });
     return state._backendsPromise;
+  }
+
+  function clearProfileMetadataCache(){
+    state._profileMetadataCache.clear();
+    state._profileMetadataPromise.clear();
+  }
+
+  function getCliProfileMetadata(profileId){
+    if (!profileId) return Promise.reject(new Error('profileId is required'));
+    if (state._profileMetadataCache.has(profileId)) {
+      return Promise.resolve(state._profileMetadataCache.get(profileId));
+    }
+    if (state._profileMetadataPromise.has(profileId)) {
+      return state._profileMetadataPromise.get(profileId);
+    }
+    const promise = chatFetch('cli-profiles/' + encodeURIComponent(profileId) + '/metadata')
+      .then(r => r.json())
+      .then(data => {
+        const backend = data && data.backend ? data.backend : null;
+        state._profileMetadataCache.set(profileId, backend);
+        state._profileMetadataPromise.delete(profileId);
+        return backend;
+      })
+      .catch(err => {
+        state._profileMetadataPromise.delete(profileId);
+        throw err;
+      });
+    state._profileMetadataPromise.set(profileId, promise);
+    return promise;
+  }
+
+  function getSettingsCached(){
+    if (state._settingsCache) return Promise.resolve(state._settingsCache);
+    if (state._settingsPromise) return state._settingsPromise;
+    state._settingsPromise = chatFetch('settings').then(r => r.json()).then(data => {
+      state._settingsCache = data || {};
+      state._settingsPromise = null;
+      return state._settingsCache;
+    }).catch(err => {
+      state._settingsPromise = null;
+      throw err;
+    });
+    return state._settingsPromise;
   }
 
   async function kbFetch(hash, path, opts){
@@ -505,12 +554,49 @@
      `clearUsageStats` drive the Usage tab. `restartServer` kicks pm2 (server
      replies 409 if any stream is active). */
   const SettingsApi = {
-    get: () => chatFetch('settings').then(r => r.json()),
-    save: (settings) => chatFetch('settings', { method: 'PUT', body: settings || {} }).then(r => r.json()),
+    get: () => chatFetch('settings').then(r => r.json()).then(data => {
+      state._settingsCache = data || {};
+      return state._settingsCache;
+    }),
+    save: (settings) => chatFetch('settings', { method: 'PUT', body: settings || {} }).then(r => r.json()).then(data => {
+      state._settingsCache = data || {};
+      clearProfileMetadataCache();
+      window.dispatchEvent(new CustomEvent('agent-cockpit-settings-saved', { detail: state._settingsCache }));
+      return state._settingsCache;
+    }),
     backends: () => chatFetch('backends').then(r => r.json()),
     usageStats: () => chatFetch('usage-stats').then(r => r.json()),
     clearUsageStats: () => chatFetch('usage-stats', { method: 'DELETE' }).then(r => r.json()),
     restartServer: () => chatFetch('server/restart', { method: 'POST', body: {} }).then(r => r.json()),
+    testCliProfile: (profileId) => chatFetch(
+      'cli-profiles/' + encodeURIComponent(profileId) + '/test',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()).then(data => {
+      if (data && data.settings) {
+        state._settingsCache = data.settings;
+        clearProfileMetadataCache();
+        window.dispatchEvent(new CustomEvent('agent-cockpit-settings-saved', { detail: state._settingsCache }));
+      }
+      return data;
+    }),
+    startCliProfileAuth: (profileId) => chatFetch(
+      'cli-profiles/' + encodeURIComponent(profileId) + '/auth/start',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()).then(data => {
+      if (data && data.settings) {
+        state._settingsCache = data.settings;
+        clearProfileMetadataCache();
+        window.dispatchEvent(new CustomEvent('agent-cockpit-settings-saved', { detail: state._settingsCache }));
+      }
+      return data;
+    }),
+    getCliProfileAuthJob: (jobId) => chatFetch(
+      'cli-profiles/auth-jobs/' + encodeURIComponent(jobId),
+    ).then(r => r.json()),
+    cancelCliProfileAuth: (jobId) => chatFetch(
+      'cli-profiles/auth-jobs/' + encodeURIComponent(jobId) + '/cancel',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
   };
 
   /* Per-conversation file attachments. The composer's attachment tray drives
@@ -614,6 +700,8 @@
     mkdirDir,
     rmdirDir,
     getBackendsCached,
+    getSettingsCached,
+    getCliProfileMetadata,
     setSessionExpiredHandler: (fn) => { state.onSessionExpired = fn; },
     // Invalidates the cached CSRF token — called after a silent re-auth,
     // since the new session has a new csrfToken and the old cached value

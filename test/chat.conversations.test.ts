@@ -297,6 +297,29 @@ describe('GET /backends', () => {
   });
 });
 
+describe('GET /cli-profiles/:profileId/metadata', () => {
+  test('returns backend metadata for a CLI profile', async () => {
+    const settings = await env.chatService.getSettings();
+    const profileId = settings.defaultCliProfileId!;
+
+    const res = await env.request('GET', `/api/chat/cli-profiles/${encodeURIComponent(profileId)}/metadata`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.profileId).toBe(profileId);
+    expect(res.body.backend.id).toBe('claude-code');
+    expect(res.body.backend.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'sonnet' }),
+    ]));
+  });
+
+  test('returns 400 for an unknown CLI profile', async () => {
+    const res = await env.request('GET', '/api/chat/cli-profiles/missing-profile/metadata');
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('CLI profile not found');
+  });
+});
+
 // ── POST /conversations/:id/reset ─────────────────────────────────────────
 
 describe('POST /conversations/:id/reset', () => {
@@ -354,4 +377,3 @@ describe('POST /conversations/:id/reset', () => {
 });
 
 // ── File delivery endpoint ──────────────────────────────────────────────────
-

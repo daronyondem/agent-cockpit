@@ -61,6 +61,7 @@ export const pdfHandler: Handler = async ({
   filename,
   outDir,
   ingestionAdapter,
+  ingestionCliProfile,
   ingestionModel,
   ingestionEffort,
 }): Promise<HandlerResult> => {
@@ -181,6 +182,7 @@ export const pdfHandler: Handler = async ({
     try {
       const result = await convertImageToMarkdown(aiAbsPath, {
         adapter: ingestionAdapter,
+        cliProfile: ingestionCliProfile,
         model: ingestionModel,
         effort: ingestionEffort,
       });
