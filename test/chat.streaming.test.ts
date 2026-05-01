@@ -21,6 +21,104 @@ let env: ChatRouterEnv;
 beforeEach(async () => { env = await createChatRouterEnv(); });
 afterEach(async () => { await destroyChatRouterEnv(env); });
 
+describe('Terminal stream errors', () => {
+  test('persists partial output before stream-error message and emits synthetic done', async () => {
+    const conv = await env.chatService.createConversation('Terminal Error');
+
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'partial answer', streaming: true },
+      { type: 'error', error: 'usage limit reached' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'trigger error',
+      backend: 'claude-code',
+    });
+    expect(res.status).toBe(200);
+
+    const events = await eventsPromise;
+    expect(events.find((e: any) => e.type === 'error')?.error).toBe('usage limit reached');
+    expect(events.find((e: any) => e.type === 'done')).toBeDefined();
+
+    const saved = await env.chatService.getConversation(conv.id);
+    const assistant = saved?.messages.filter(m => m.role === 'assistant') || [];
+    expect(assistant.map(m => m.content)).toEqual([
+      'partial answer',
+      'Stream failed: usage limit reached',
+    ]);
+    expect(assistant[1].streamError).toEqual({ message: 'usage limit reached', source: 'backend' });
+  });
+
+  test('terminal error ends processStream even if backend iterator does not yield done', async () => {
+    const conv = await env.chatService.createConversation('Terminal Error No Done');
+
+    let released = false;
+    const never = new Promise<void>(() => {});
+    env.mockBackend.sendMessage = function() {
+      async function* createStream() {
+        yield { type: 'error', error: 'fatal without done' } as StreamEvent;
+        await never;
+        released = true;
+      }
+      return {
+        stream: createStream(),
+        abort: () => {},
+        sendInput: () => {},
+      };
+    };
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'trigger stuck error',
+      backend: 'claude-code',
+    });
+    expect(res.status).toBe(200);
+
+    const events = await eventsPromise;
+    expect(events.find((e: any) => e.type === 'error')).toMatchObject({
+      error: 'fatal without done',
+      terminal: true,
+    });
+    expect(events.find((e: any) => e.type === 'done')).toBeDefined();
+    expect(env.activeStreams.has(conv.id)).toBe(false);
+    expect(released).toBe(false);
+  });
+
+  test('non-terminal adapter warning does not persist stream error or stop final save', async () => {
+    const conv = await env.chatService.createConversation('Warning Error');
+
+    env.mockBackend.setMockEvents([
+      { type: 'error', error: 'model unavailable, using default', terminal: false },
+      { type: 'text', content: 'final answer', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'warn then continue',
+      backend: 'claude-code',
+    });
+    expect(res.status).toBe(200);
+
+    const events = await eventsPromise;
+    const warning = events.find((e: any) => e.type === 'error');
+    expect(warning).toMatchObject({ error: 'model unavailable, using default', terminal: false });
+
+    const saved = await env.chatService.getConversation(conv.id);
+    const assistant = saved?.messages.filter(m => m.role === 'assistant') || [];
+    expect(assistant).toHaveLength(1);
+    expect(assistant[0].content).toBe('final answer');
+    expect(assistant[0].streamError).toBeUndefined();
+  });
+});
+
 describe('Tool activity forwarding', () => {
   test('forwards enriched tool_activity fields via WebSocket', async () => {
     const conv = await env.chatService.createConversation('Test');

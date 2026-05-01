@@ -8,8 +8,9 @@ interface AttachWebSocketOpts {
   sessionStore: Store;
   sessionSecret: string;
   activeStreams: Map<string, ActiveStreamEntry>;
-  /** Override the WebSocket reconnect grace period (default 60_000 ms).
-   *  Used by tests so grace-expiry behavior can be exercised quickly. */
+  abortStream?: (convId: string) => Promise<boolean> | boolean;
+  bufferCleanupMs?: number;
+  /** Deprecated compatibility override. Disconnect no longer aborts streams. */
   gracePeriodMs?: number;
 }
 
@@ -21,24 +22,18 @@ export interface WsFunctions {
   clearBuffer: (convId: string) => void;
   /** Invoke `cb` for each conversation with an OPEN WebSocket. */
   forEachConnected: (cb: (convId: string) => void) => void;
-  /** Start (or no-op if already running) the grace period for an active
-   *  stream that has no live WebSocket. Used by the POST /message handler
-   *  when no client WS is connected at submission time so the stream still
-   *  runs and buffers; if the client never reconnects within the grace
-   *  window, the stream is aborted and synthetic error+done frames are
-   *  buffered so a later reconnect (e.g. page refresh) sees the closure. */
+  /** Mark an active stream as disconnected from browser transport. Kept as a
+   *  compatibility name; it only enables buffering and never aborts a CLI stream. */
   startStreamGracePeriod: (convId: string) => void;
 }
 
 // ── Event buffer for reconnection ──────────────────────────────────────────
 
-const GRACE_PERIOD_MS = 60_000;
 const BUFFER_CLEANUP_MS = 60_000;
-const MAX_BUFFER_SIZE = 1000;
+const MAX_BUFFER_SIZE = 5000;
 
 interface ConvBuffer {
   events: WsServerFrame[];
-  graceTimer: ReturnType<typeof setTimeout> | null;
   cleanupTimer: ReturnType<typeof setTimeout> | null;
 }
 
@@ -74,14 +69,18 @@ function extractConvId(url: string | undefined): string | null {
   return match ? match[1] : null;
 }
 
+function shouldBufferFrame(frame: WsServerFrame): boolean {
+  return frame.type !== 'kb_state_update' && frame.type !== 'memory_update';
+}
+
 // ── Main ───────────────────────────────────────────────────────────────────
 
 export function attachWebSocket(
   server: http.Server,
   opts: AttachWebSocketOpts,
 ): WsFunctions {
-  const { sessionStore, sessionSecret, activeStreams } = opts;
-  const gracePeriodMs = opts.gracePeriodMs ?? GRACE_PERIOD_MS;
+  const { sessionStore, sessionSecret, activeStreams, abortStream } = opts;
+  const bufferCleanupMs = opts.bufferCleanupMs ?? BUFFER_CLEANUP_MS;
 
   const wss = new WebSocketServer({ noServer: true });
   const activeWebSockets = new Map<string, WebSocket>();
@@ -108,14 +107,13 @@ export function attachWebSocket(
   function getOrCreateBuffer(convId: string): ConvBuffer {
     let buf = convBuffers.get(convId);
     if (!buf) {
-      buf = { events: [], graceTimer: null, cleanupTimer: null };
+      buf = { events: [], cleanupTimer: null };
       convBuffers.set(convId, buf);
     }
     return buf;
   }
 
   function clearBufferTimers(buf: ConvBuffer) {
-    if (buf.graceTimer) { clearTimeout(buf.graceTimer); buf.graceTimer = null; }
     if (buf.cleanupTimer) { clearTimeout(buf.cleanupTimer); buf.cleanupTimer = null; }
   }
 
@@ -142,7 +140,7 @@ export function attachWebSocket(
     const streamDone = buf.events.some(e => 'type' in e && e.type === 'done');
     if (streamDone) {
       clearBufferTimers(buf);
-      buf.cleanupTimer = setTimeout(() => { deleteBuffer(convId); }, BUFFER_CLEANUP_MS);
+      buf.cleanupTimer = setTimeout(() => { deleteBuffer(convId); }, bufferCleanupMs);
     }
   }
 
@@ -236,17 +234,15 @@ export function attachWebSocket(
     activeWebSockets.set(convId, ws);
     aliveMap.set(ws, true);
 
-    // Cancel grace timer — client reconnected
+    // Cancel post-completion cleanup so the reconnected client can replay.
     const buf = convBuffers.get(convId);
-    const hadGrace = !!buf?.graceTimer;
     const hadCleanup = !!buf?.cleanupTimer;
     if (buf) {
-      if (buf.graceTimer) { clearTimeout(buf.graceTimer); buf.graceTimer = null; }
       if (buf.cleanupTimer) { clearTimeout(buf.cleanupTimer); buf.cleanupTimer = null; }
     }
 
     const eventTypes = buf ? buf.events.map(e => 'type' in e ? e.type : '?').join(',') : '';
-    console.log(`[diag][ws] handleConnection conv=${convId.slice(0,8)} replacedExisting=${hadExisting} bufEvents=${buf?.events.length ?? 0} hadGrace=${hadGrace} hadCleanup=${hadCleanup} activeStreamHas=${activeStreams.has(convId)} types=[${eventTypes}]`);
+    console.log(`[diag][ws] handleConnection conv=${convId.slice(0,8)} replacedExisting=${hadExisting} bufEvents=${buf?.events.length ?? 0} hadCleanup=${hadCleanup} activeStreamHas=${activeStreams.has(convId)} types=[${eventTypes}]`);
 
     // If there's a buffer with events, this is a reconnection — replay immediately
     if (buf && buf.events.length > 0) {
@@ -271,15 +267,24 @@ export function attachWebSocket(
             entry.sendInput(frame.text);
           }
         } else if (frame.type === 'abort') {
-          if (entry) {
-            console.log(`[ws] Aborting stream for conv=${convId}`);
-            entry.abort();
-            activeStreams.delete(convId);
+          if (abortStream) {
+            void Promise.resolve(abortStream(convId)).catch((err: unknown) => {
+              console.error(`[ws] Abort failed for conv=${convId}:`, (err as Error).message);
+            });
+          } else {
+            if (entry) {
+              console.log(`[ws] Aborting stream for conv=${convId}`);
+              entry.abort();
+              activeStreams.delete(convId);
+            }
+            deleteBuffer(convId);
+            send(convId, { type: 'error', error: 'Aborted by user', terminal: true, source: 'abort' });
+            send(convId, { type: 'done' });
           }
-          deleteBuffer(convId);
         } else if (frame.type === 'reconnect') {
           // Client explicitly requests replay (e.g. after page load while stream is active)
-          if (buf && buf.events.length > 0) {
+          const currentBuf = convBuffers.get(convId);
+          if (currentBuf && currentBuf.events.length > 0) {
             replayBuffer(ws, convId);
           }
         }
@@ -290,14 +295,15 @@ export function attachWebSocket(
 
     ws.on('close', (code, reason) => {
       const wasActive = activeWebSockets.get(convId) === ws;
+      if (!wasActive) return;
       console.log(`[diag][ws] ws-close conv=${convId.slice(0,8)} code=${code} reason="${reason?.toString() || ''}" wasActive=${wasActive} activeStreamHas=${activeStreams.has(convId)}`);
       if (!shuttingDown) {
         console.log(`[ws] Disconnected for conv=${convId}`);
       }
-      if (activeWebSockets.get(convId) === ws) {
-        activeWebSockets.delete(convId);
+      activeWebSockets.delete(convId);
+      if (activeStreams.has(convId)) {
+        startStreamGracePeriod(convId);
       }
-      startStreamGracePeriod(convId);
     });
 
     ws.on('error', (err) => {
@@ -307,20 +313,25 @@ export function attachWebSocket(
 
   // ── Public API ────────────────────────────────────────────────────────────
 
-  /** Buffer the event and send to WS if connected. Returns true if buffered. */
+  /** Buffer replayable stream events and send to WS if connected. */
   function send(convId: string, frame: WsServerFrame): boolean {
-    const buf = getOrCreateBuffer(convId);
+    const replayable = shouldBufferFrame(frame);
+    let buf = replayable ? getOrCreateBuffer(convId) : convBuffers.get(convId);
 
-    // Append to buffer (ring buffer: drop oldest if at cap)
-    buf.events.push(frame);
-    if (buf.events.length > MAX_BUFFER_SIZE) {
-      buf.events.shift();
-    }
+    if (replayable && buf) {
+      // Append to buffer (ring buffer: drop oldest if at cap)
+      buf.events.push(frame);
+      if (buf.events.length > MAX_BUFFER_SIZE) {
+        buf.events.shift();
+      }
 
-    // If stream just finished (done event) and no WS is connected, start cleanup timer
-    if (frame.type === 'done' && !isConnected(convId)) {
-      if (!buf.cleanupTimer) {
-        buf.cleanupTimer = setTimeout(() => { deleteBuffer(convId); }, BUFFER_CLEANUP_MS);
+      // If stream just finished, start cleanup timer regardless of transport
+      // state. Completed replay buffers are short-lived recovery data, not
+      // conversation history.
+      if (frame.type === 'done') {
+        if (!buf.cleanupTimer) {
+          buf.cleanupTimer = setTimeout(() => { deleteBuffer(convId); }, bufferCleanupMs);
+        }
       }
     }
 
@@ -328,15 +339,16 @@ export function attachWebSocket(
     const ws = activeWebSockets.get(convId);
     const wsOpen = !!(ws && ws.readyState === WebSocket.OPEN);
     if (frame.type !== 'text' && frame.type !== 'thinking') {
-      console.log(`[diag][ws] send conv=${convId.slice(0,8)} type=${frame.type} wsOpen=${wsOpen} bufLen=${buf.events.length}`);
+      console.log(`[diag][ws] send conv=${convId.slice(0,8)} type=${frame.type} wsOpen=${wsOpen} replayable=${replayable} bufLen=${buf?.events.length ?? 0}`);
     }
     if (wsOpen) {
       ws!.send(JSON.stringify(frame));
       return true;
     }
 
-    // Buffered but no WS to send to — that's fine during grace period
-    return true;
+    // Replayable frames are buffered even with no WS. Side-channel frames
+    // are live-only triggers; persisted state is their source of truth.
+    return replayable;
   }
 
   /** True if a WebSocket is currently open for this conversation. */
@@ -352,15 +364,9 @@ export function attachWebSocket(
     }
   }
 
-  /**
-   * True if the stream should keep running: WS is open OR we're in a grace
-   * period (buffer exists with an active grace timer). Used by processStream's
-   * isClosed callback.
-   */
+  /** True if the server still owns an active CLI stream for this conversation. */
   function isStreamAlive(convId: string): boolean {
-    if (isConnected(convId)) return true;
-    const buf = convBuffers.get(convId);
-    return !!buf && buf.graceTimer !== null;
+    return activeStreams.has(convId);
   }
 
   /** Clear the event buffer for a conversation (called before starting a new stream). */
@@ -373,33 +379,13 @@ export function attachWebSocket(
     deleteBuffer(convId);
   }
 
-  /** Start the grace period for an active stream with no live WS. Idempotent —
-   *  no-op if a grace timer is already running for this conv. Called both from
-   *  the WS close handler (existing path) and from the POST /message handler
-   *  when no WS is connected at submission time (network-change recovery). */
+  /** Mark an active stream as disconnected so frames buffer for replay. */
   function startStreamGracePeriod(convId: string): void {
     const entry = activeStreams.get(convId);
     const wsOpen = isConnected(convId);
-    console.log(`[diag][ws] startGrace conv=${convId.slice(0,8)} hasEntry=${!!entry} wsOpen=${wsOpen}`);
+    console.log(`[diag][ws] markDisconnected conv=${convId.slice(0,8)} hasEntry=${!!entry} wsOpen=${wsOpen}`);
     if (!entry) return;
-    const buf = getOrCreateBuffer(convId);
-    if (buf.graceTimer) return;
-    console.log(`[ws] Starting ${gracePeriodMs / 1000}s grace period for conv=${convId}`);
-    buf.graceTimer = setTimeout(() => {
-      console.log(`[ws] Grace period expired for conv=${convId}, aborting CLI`);
-      buf.graceTimer = null;
-      const staleEntry = activeStreams.get(convId);
-      if (staleEntry) {
-        staleEntry.abort();
-        activeStreams.delete(convId);
-      }
-      // Buffer synthetic error+done so a future reconnect (page refresh
-      // after long sleep / network change) sees the closure and clears
-      // its "in-progress" UI state. send() schedules the cleanup timer
-      // when it sees a `done` with no live WS.
-      send(convId, { type: 'error', error: 'WebSocket reconnect grace period expired' });
-      send(convId, { type: 'done' });
-    }, gracePeriodMs);
+    getOrCreateBuffer(convId);
   }
 
   function shutdown() {

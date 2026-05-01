@@ -8,7 +8,7 @@ import os from 'os';
 import WebSocket from 'ws';
 import { ChatService } from '../../src/services/chatService';
 import { createChatRouter } from '../../src/routes/chat';
-import { attachWebSocket } from '../../src/ws';
+import { attachWebSocket, type WsFunctions } from '../../src/ws';
 import { BackendRegistry } from '../../src/services/backends/registry';
 import type { ActiveStreamEntry } from '../../src/types';
 import { MockBackendAdapter } from './mockBackendAdapter';
@@ -31,6 +31,7 @@ export interface ChatRouterEnv {
   server: http.Server;
   baseUrl: string;
   activeStreams: Map<string, ActiveStreamEntry>;
+  wsFns: WsFunctions;
   wsShutdown: () => void;
   request(method: string, urlPath: string, body?: any): Promise<HttpResult>;
   multipartRequest(method: string, urlPath: string, field: string, filename: string, contentType: string, content: Buffer): Promise<HttpResult>;
@@ -39,8 +40,10 @@ export interface ChatRouterEnv {
 }
 
 export interface CreateChatRouterEnvOpts {
-  /** Override the WebSocket reconnect grace period for grace-expiry tests. */
+  /** Deprecated compatibility option; disconnect no longer aborts active streams. */
   gracePeriodMs?: number;
+  bufferCleanupMs?: number;
+  updateService?: any;
 }
 
 /** Build an isolated Express + WebSocket test server with a fresh ChatService,
@@ -76,7 +79,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     getCached: () => ({ fetchedAt: null, account: null, rateLimits: null, lastError: null, stale: true }),
     maybeRefresh: async () => {},
   } as any;
-  const chatResult = createChatRouter({ chatService, backendRegistry, updateService: null as any, claudePlanUsageService: mockPlanUsage, kiroPlanUsageService: mockKiroPlanUsage, codexPlanUsageService: mockCodexPlanUsage });
+  const chatResult = createChatRouter({ chatService, backendRegistry, updateService: opts.updateService ?? null as any, claudePlanUsageService: mockPlanUsage, kiroPlanUsageService: mockKiroPlanUsage, codexPlanUsageService: mockCodexPlanUsage });
   const { activeStreams } = chatResult;
   app.use('/api/chat', chatResult.router);
 
@@ -90,7 +93,14 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     set: (_sid: string, _session: any, cb?: (err?: any) => void) => cb?.(),
     destroy: (_sid: string, cb?: (err?: any) => void) => cb?.(),
   } as any;
-  const wsResult = attachWebSocket(server, { sessionStore: mockStore, sessionSecret: 'test-secret', activeStreams, gracePeriodMs: opts.gracePeriodMs });
+  const wsResult = attachWebSocket(server, {
+    sessionStore: mockStore,
+    sessionSecret: 'test-secret',
+    activeStreams,
+    abortStream: chatResult.abortActiveStream,
+    bufferCleanupMs: opts.bufferCleanupMs,
+    gracePeriodMs: opts.gracePeriodMs,
+  });
   const wsShutdown = wsResult.shutdown;
   chatResult.setWsFunctions(wsResult);
 
@@ -204,7 +214,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     });
   };
 
-  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
+  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
 }
 
 async function removeTmpDirWithRetry(tmpDir: string): Promise<void> {

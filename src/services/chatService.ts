@@ -38,6 +38,7 @@ import type {
   AttachmentKind,
   QueuedMessage,
   CliProfile,
+  StreamErrorSource,
 } from '../types';
 import {
   openKbDatabase,
@@ -847,6 +848,7 @@ export class ChatService {
     toolActivity?: ToolActivity[],
     turn?: 'progress' | 'final',
     contentBlocks?: ContentBlock[],
+    opts?: { streamError?: Message['streamError'] },
   ): Promise<Message | null> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return null;
@@ -873,6 +875,10 @@ export class ChatService {
 
       if (contentBlocks && contentBlocks.length > 0 && role === 'assistant') {
         msg.contentBlocks = contentBlocks;
+      }
+
+      if (opts?.streamError && role === 'assistant') {
+        msg.streamError = opts.streamError;
       }
 
       if (turn && role === 'assistant') {
@@ -908,6 +914,26 @@ export class ChatService {
 
       return msg;
     });
+  }
+
+  async addStreamErrorMessage(
+    convId: string,
+    backend: string,
+    message: string,
+    source: StreamErrorSource = 'backend',
+  ): Promise<Message | null> {
+    const content = `Stream failed: ${message}`;
+    return this.addMessage(
+      convId,
+      'assistant',
+      content,
+      backend,
+      null,
+      undefined,
+      'final',
+      undefined,
+      { streamError: { message, source } },
+    );
   }
 
   async updateMessageContent(convId: string, messageId: string, newContent: string): Promise<EditMessageResult | null> {
@@ -1192,6 +1218,9 @@ export class ChatService {
       const time = new Date(msg.timestamp).toLocaleString();
       lines.push(`### ${role} — ${time}`);
       if (msg.backend) lines.push(`*Backend: ${msg.backend}*`);
+      if (msg.streamError) {
+        lines.push(`*Stream error${msg.streamError.source ? ` (${msg.streamError.source})` : ''}: ${msg.streamError.message}*`);
+      }
       lines.push(``);
       lines.push(msg.content);
       lines.push(``);
@@ -1229,6 +1258,9 @@ export class ChatService {
         const time = new Date(msg.timestamp).toLocaleString();
         lines.push(`### ${role} — ${time}`);
         if (msg.backend) lines.push(`*Backend: ${msg.backend}*`);
+        if (msg.streamError) {
+          lines.push(`*Stream error${msg.streamError.source ? ` (${msg.streamError.source})` : ''}: ${msg.streamError.message}*`);
+        }
         lines.push(``);
         lines.push(msg.content);
         lines.push(``);

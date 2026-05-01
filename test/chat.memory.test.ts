@@ -227,6 +227,58 @@ describe('memory_update WebSocket frame', () => {
     expect(typeof memUpdate.capturedAt).toBe('string');
   });
 
+  test('idle connected workspace conversation receives memory_update from another conversation memory capture', async () => {
+    const memDir = makeMockMemoryDir();
+    const workspacePath = '/tmp/ws-mem-fanout';
+    writeMemoryFile(memDir, 'one.md', 'first');
+
+    const activeConv = await env.chatService.createConversation('Active', workspacePath);
+    const idleConv = await env.chatService.createConversation('Idle', workspacePath);
+    const hash = env.chatService.getWorkspaceHashForConv(activeConv.id)!;
+    expect(env.chatService.getWorkspaceHashForConv(idleConv.id)).toBe(hash);
+    await env.chatService.setWorkspaceMemoryEnabled(hash, true);
+
+    env.mockBackend.setMockMemoryDir(memDir);
+    env.mockBackend.setStreamDelayMs(900);
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const idleWs = await env.connectWs(idleConv.id);
+    const idleMemoryUpdate = new Promise<any>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error('Timed out waiting for idle memory_update')), 3000);
+      idleWs.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        if (event.type === 'memory_update') {
+          clearTimeout(timer);
+          resolve(event);
+        }
+      });
+    });
+
+    const activeWs = await env.connectWs(activeConv.id);
+    const activeEventsPromise = env.readWsEvents(activeWs, 5000);
+
+    await env.request('POST', `/api/chat/conversations/${activeConv.id}/message`, {
+      content: 'hello',
+      backend: 'claude-code',
+    });
+
+    await new Promise((r) => setTimeout(r, 100));
+    writeMemoryFile(memDir, 'two.md', 'second');
+
+    const frame = await idleMemoryUpdate;
+    const activeEvents = await activeEventsPromise;
+    idleWs.close();
+    fs.rmSync(memDir, { recursive: true, force: true });
+
+    expect(activeEvents.find((e) => e.type === 'memory_update')).toBeDefined();
+    expect(frame.type).toBe('memory_update');
+    expect(frame.fileCount).toBe(2);
+    expect(frame.changedFiles).toEqual(expect.arrayContaining(['one.md', 'two.md']));
+  });
+
   test('changedFiles only includes files that changed since previous frame', async () => {
     const memDir = makeMockMemoryDir();
     writeMemoryFile(memDir, 'a.md', 'A');

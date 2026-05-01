@@ -48,7 +48,7 @@
 15. Call `chatService.initialize()` (migration + lookup map)
 16. Start UpdateService (version polling)
 17. Listen on configured PORT
-18. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`
+18. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is authoritative for active CLI turns; WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
 19. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
 
 ### Graceful Shutdown

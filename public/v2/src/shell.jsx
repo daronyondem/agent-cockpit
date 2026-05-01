@@ -1404,7 +1404,7 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs }){
   const showActions = hasContent && !isStreaming;
 
   return (
-    <div className={`msg ${isUser ? 'msg-user' : 'msg-agent'}`}>
+    <div className={`msg ${isUser ? 'msg-user' : 'msg-agent'} ${message.streamError ? 'msg-stream-error' : ''}`}>
       {isUser ? (
         <span className="avatar">DY</span>
       ) : (

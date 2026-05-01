@@ -939,7 +939,7 @@ export class KiroAdapter extends BaseBackendAdapter {
         } catch (err) {
           const reason = (err as Error).message;
           console.warn(`[kiro] Failed to set model (${reason}), continuing with default`);
-          yield { type: 'error', error: `Failed to switch to model "${options.model}" — ${reason === 'timeout' ? 'Kiro did not respond (model may be unavailable)' : reason}. Using default model.` };
+          yield { type: 'error', error: `Failed to switch to model "${options.model}" — ${reason === 'timeout' ? 'Kiro did not respond (model may be unavailable)' : reason}. Using default model.`, terminal: false, source: 'backend' };
         }
       }
 

@@ -87,6 +87,14 @@ export interface Message {
    */
   contentBlocks?: ContentBlock[];
   /**
+   * Assistant messages only. Marks a durable terminal stream failure that
+   * should render as an error outcome rather than a normal assistant reply.
+   */
+  streamError?: {
+    message: string;
+    source?: StreamErrorSource;
+  };
+  /**
    * Assistant messages only. `progress` = intermediate segment saved at a
    * `turn_boundary` (agent still has more tool work to do). `final` = last
    * segment of the agent run saved at `done`. Absent on user/system messages
@@ -494,6 +502,12 @@ export interface UsageEvent {
 export interface ErrorEvent {
   type: 'error';
   error: string;
+  /**
+   * `false` means a non-fatal adapter warning. Omitted/true means the error
+   * ends the current CLI turn.
+   */
+  terminal?: boolean;
+  source?: StreamErrorSource;
 }
 
 export interface DoneEvent {
@@ -544,6 +558,8 @@ export type StreamEvent =
   | ExternalSessionEvent
   | MemoryUpdateEvent
   | KbStateUpdateEvent;
+
+export type StreamErrorSource = 'backend' | 'transport' | 'abort' | 'server';
 
 // ── Workspace Memory ─────────────────────────────────────────────────────────
 
@@ -1085,6 +1101,16 @@ export interface ActiveStreamEntry {
   backend: string;
   needsTitleUpdate: boolean;
   titleUpdateMessage: string | null;
+  startedAt?: string;
+  lastEventAt?: string;
+  abortRequested?: {
+    message: string;
+    source: StreamErrorSource;
+    at: string;
+  };
+  abortFinalizing?: Promise<void>;
+  finalizeAbort?: () => Promise<void>;
+  terminalFinalizing?: Promise<void>;
 }
 
 // ── Tool Detail Extraction ───────────────────────────────────────────────────

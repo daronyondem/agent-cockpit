@@ -2,6 +2,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import WebSocket from 'ws';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
 import type { StreamEvent, ActiveStreamEntry } from '../src/types';
 
@@ -9,6 +10,50 @@ let env: ChatRouterEnv;
 
 beforeEach(async () => { env = await createChatRouterEnv(); });
 afterEach(async () => { await destroyChatRouterEnv(env); });
+
+async function startPendingMessage(content = 'first') {
+  const conv = await env.chatService.createConversation('Pending Send Guard');
+  let releaseUserAdd!: () => void;
+  let markUserAddStarted!: () => void;
+  let sendCalls = 0;
+  const userAddGate = new Promise<void>(resolve => { releaseUserAdd = resolve; });
+  const userAddStarted = new Promise<void>(resolve => { markUserAddStarted = resolve; });
+
+  const originalAddMessage = env.chatService.addMessage.bind(env.chatService);
+  let userAddAttempts = 0;
+  env.chatService.addMessage = (async (...args: Parameters<typeof env.chatService.addMessage>) => {
+    if (args[1] === 'user') {
+      userAddAttempts += 1;
+      if (userAddAttempts === 1) {
+        markUserAddStarted();
+        await userAddGate;
+      }
+    }
+    return originalAddMessage(...args);
+  }) as typeof env.chatService.addMessage;
+
+  env.mockBackend.sendMessage = function() {
+    sendCalls += 1;
+    return {
+      stream: (async function*() { yield { type: 'done' } as StreamEvent; })(),
+      abort: () => {},
+      sendInput: () => {},
+    };
+  };
+
+  const sendPromise = env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+    content,
+    backend: 'claude-code',
+  });
+  await userAddStarted;
+
+  return {
+    conv,
+    releaseUserAdd,
+    sendPromise,
+    sendCalls: () => sendCalls,
+  };
+}
 
 describe('PATCH /conversations/:id/archive', () => {
   test('archives a conversation', async () => {
@@ -135,6 +180,8 @@ describe('GET /active-streams', () => {
       backend: 'claude-code',
       needsTitleUpdate: false,
       titleUpdateMessage: null,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      lastEventAt: '2026-01-01T00:00:01.000Z',
     });
     env.activeStreams.set(c1.id, makeEntry());
     env.activeStreams.set(c2.id, makeEntry());
@@ -144,9 +191,384 @@ describe('GET /active-streams', () => {
     expect(res.body.ids).toEqual(expect.arrayContaining([c1.id, c2.id]));
     expect(res.body.ids).toHaveLength(2);
     expect(res.body.ids).not.toContain(c3.id);
+    expect(res.body.streams).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: c1.id,
+        backend: 'claude-code',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        lastEventAt: '2026-01-01T00:00:01.000Z',
+        connected: false,
+      }),
+    ]));
 
     env.activeStreams.delete(c1.id);
     env.activeStreams.delete(c2.id);
+  });
+});
+
+describe('POST /conversations/:id/abort', () => {
+  test('aborts active stream without requiring an open WebSocket and buffers terminal abort frames', async () => {
+    const conv = await env.chatService.createConversation('REST Abort');
+    let aborted = false;
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    env.mockBackend.sendMessage = function() {
+      async function* createStream() {
+        yield { type: 'text', content: 'working', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { aborted = true; unblock!(); },
+        sendInput: () => {},
+      };
+    };
+
+    const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'start',
+      backend: 'claude-code',
+    });
+    expect(send.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(env.activeStreams.has(conv.id)).toBe(true);
+
+    const abort = await env.request('POST', `/api/chat/conversations/${conv.id}/abort`, {});
+    expect(abort.status).toBe(200);
+    expect(abort.body).toEqual({ ok: true, aborted: true });
+    expect(aborted).toBe(true);
+    expect(env.activeStreams.has(conv.id)).toBe(false);
+
+    const saved = await env.chatService.getConversation(conv.id);
+    const assistant = saved?.messages.filter(m => m.role === 'assistant') || [];
+    expect(assistant.map(m => m.content)).toEqual([
+      'working',
+      'Stream failed: Aborted by user',
+    ]);
+    expect(assistant[1].streamError).toEqual({ message: 'Aborted by user', source: 'abort' });
+
+    const port = (env.server.address() as any).port;
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${conv.id}/ws`);
+    const events: any[] = [];
+    const gotDone = new Promise<void>((resolve) => {
+      ws.on('message', (data) => {
+        const event = JSON.parse(data.toString());
+        events.push(event);
+        if (event.type === 'done') resolve();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.on('open', () => resolve());
+      ws.on('error', reject);
+    });
+    await gotDone;
+    expect(events.find((e: any) => e.type === 'assistant_message' && e.message?.streamError)?.message?.streamError).toEqual({
+      message: 'Aborted by user',
+      source: 'abort',
+    });
+    expect(events.find((e: any) => e.type === 'error')).toMatchObject({
+      error: 'Aborted by user',
+      terminal: true,
+      source: 'abort',
+    });
+    expect(events.find((e: any) => e.type === 'done')).toBeDefined();
+    ws.close();
+  });
+
+  test('is idempotent when no stream is active and 404s unknown conversations', async () => {
+    const conv = await env.chatService.createConversation('REST Abort Idle');
+    const idle = await env.request('POST', `/api/chat/conversations/${conv.id}/abort`, {});
+    expect(idle.status).toBe(200);
+    expect(idle.body).toEqual({ ok: true, aborted: false });
+
+    const missing = await env.request('POST', '/api/chat/conversations/missing/abort', {});
+    expect(missing.status).toBe(404);
+  });
+
+  test('handles concurrent abort requests without duplicate backend aborts or stream-error messages', async () => {
+    const conv = await env.chatService.createConversation('REST Abort Race');
+    let abortCalls = 0;
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    env.mockBackend.sendMessage = function() {
+      async function* createStream() {
+        yield { type: 'text', content: 'working', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { abortCalls += 1; unblock!(); },
+        sendInput: () => {},
+      };
+    };
+
+    const originalAddStreamErrorMessage = env.chatService.addStreamErrorMessage.bind(env.chatService);
+    env.chatService.addStreamErrorMessage = (async (...args: Parameters<typeof env.chatService.addStreamErrorMessage>) => {
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return originalAddStreamErrorMessage(...args);
+    }) as typeof env.chatService.addStreamErrorMessage;
+
+    const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'start',
+      backend: 'claude-code',
+    });
+    expect(send.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(env.activeStreams.has(conv.id)).toBe(true);
+
+    const [first, second] = await Promise.all([
+      env.request('POST', `/api/chat/conversations/${conv.id}/abort`, {}),
+      env.request('POST', `/api/chat/conversations/${conv.id}/abort`, {}),
+    ]);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    expect(abortCalls).toBe(1);
+
+    const saved = await env.chatService.getConversation(conv.id);
+    const streamErrors = (saved?.messages || []).filter(m => m.streamError);
+    expect(streamErrors).toHaveLength(1);
+    expect(streamErrors[0].streamError).toEqual({ message: 'Aborted by user', source: 'abort' });
+  });
+
+  test('does not replace an in-flight terminal backend error with a late abort', async () => {
+    const conv = await env.chatService.createConversation('REST Abort Terminal Race');
+    let abortCalls = 0;
+    env.mockBackend.sendMessage = function() {
+      async function* createStream() {
+        yield { type: 'text', content: 'partial', streaming: true } as StreamEvent;
+        yield { type: 'error', error: 'usage limit reached', source: 'backend' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { abortCalls += 1; },
+        sendInput: () => {},
+      };
+    };
+
+    const originalAddStreamErrorMessage = env.chatService.addStreamErrorMessage.bind(env.chatService);
+    let releasePersist!: () => void;
+    let markPersistStarted!: () => void;
+    const persistGate = new Promise<void>(resolve => { releasePersist = resolve; });
+    const persistStarted = new Promise<void>(resolve => { markPersistStarted = resolve; });
+    env.chatService.addStreamErrorMessage = (async (...args: Parameters<typeof env.chatService.addStreamErrorMessage>) => {
+      markPersistStarted();
+      await persistGate;
+      return originalAddStreamErrorMessage(...args);
+    }) as typeof env.chatService.addStreamErrorMessage;
+
+    const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'start',
+      backend: 'claude-code',
+    });
+    expect(send.status).toBe(200);
+    await persistStarted;
+    expect(env.activeStreams.has(conv.id)).toBe(true);
+
+    const abortPromise = env.request('POST', `/api/chat/conversations/${conv.id}/abort`, {});
+    await new Promise(resolve => setTimeout(resolve, 25));
+    expect(abortCalls).toBe(0);
+
+    releasePersist();
+    const abort = await abortPromise;
+    expect(abort.status).toBe(200);
+    expect(abort.body).toEqual({ ok: true, aborted: true });
+
+    const saved = await env.chatService.getConversation(conv.id);
+    const streamErrors = (saved?.messages || []).filter(m => m.streamError);
+    expect(streamErrors).toHaveLength(1);
+    expect(streamErrors[0].streamError).toEqual({ message: 'usage limit reached', source: 'backend' });
+    expect(env.activeStreams.has(conv.id)).toBe(false);
+  });
+});
+
+describe('pending message send lifecycle guards', () => {
+  test('abort marks a pending send cancelled before the backend stream starts', async () => {
+    const pending = await startPendingMessage('stop before stream');
+
+    const abort = await env.request('POST', `/api/chat/conversations/${pending.conv.id}/abort`, {});
+    expect(abort.status).toBe(200);
+    expect(abort.body).toEqual({ ok: true, aborted: true });
+
+    pending.releaseUserAdd();
+    const send = await pending.sendPromise;
+    expect(send.status).toBe(200);
+    expect(send.body.streamReady).toBe(false);
+    expect(send.body.aborted).toBe(true);
+    expect(pending.sendCalls()).toBe(0);
+    expect(env.activeStreams.has(pending.conv.id)).toBe(false);
+
+    const saved = await env.chatService.getConversation(pending.conv.id);
+    expect(saved?.messages.filter(m => m.role === 'user').map(m => m.content)).toEqual(['stop before stream']);
+    const streamErrors = (saved?.messages || []).filter(m => m.streamError);
+    expect(streamErrors).toHaveLength(1);
+    expect(streamErrors[0].streamError).toEqual({ message: 'Aborted by user', source: 'abort' });
+  });
+
+  test('reset, archive, and delete reject while a send is still pending', async () => {
+    const pending = await startPendingMessage('block mutations');
+
+    const reset = await env.request('POST', `/api/chat/conversations/${pending.conv.id}/reset`, {});
+    expect(reset.status).toBe(409);
+    expect(reset.body.error).toBe('Cannot reset session while streaming');
+
+    const archive = await env.request('PATCH', `/api/chat/conversations/${pending.conv.id}/archive`, {});
+    expect(archive.status).toBe(409);
+    expect(archive.body.error).toBe('Conversation is already streaming');
+
+    const del = await env.request('DELETE', `/api/chat/conversations/${pending.conv.id}`);
+    expect(del.status).toBe(409);
+    expect(del.body.error).toBe('Conversation is already streaming');
+
+    pending.releaseUserAdd();
+    const send = await pending.sendPromise;
+    expect(send.status).toBe(200);
+    expect(pending.sendCalls()).toBe(1);
+  });
+
+  test('update and restart guards include pending sends', async () => {
+    await destroyChatRouterEnv(env);
+    const fakeUpdateService = {
+      triggerUpdate: jest.fn(async (opts: { hasActiveStreams?: () => boolean }) => (
+        opts.hasActiveStreams?.()
+          ? { success: false, steps: [], error: 'Cannot update while conversations are actively running.' }
+          : { success: true, steps: [] }
+      )),
+      restart: jest.fn(async (opts: { hasActiveStreams?: () => boolean }) => (
+        opts.hasActiveStreams?.()
+          ? { success: false, steps: [], error: 'Cannot restart while conversations are actively running.' }
+          : { success: true, steps: [] }
+      )),
+      stop: jest.fn(),
+    };
+    env = await createChatRouterEnv({ updateService: fakeUpdateService });
+    const pending = await startPendingMessage('block restart');
+
+    const update = await env.request('POST', '/api/chat/update-trigger', {});
+    expect(update.status).toBe(200);
+    expect(update.body.success).toBe(false);
+    expect(fakeUpdateService.triggerUpdate).toHaveBeenCalled();
+
+    const restart = await env.request('POST', '/api/chat/server/restart', {});
+    expect(restart.status).toBe(409);
+    expect(restart.body.success).toBe(false);
+    expect(fakeUpdateService.restart).toHaveBeenCalled();
+
+    pending.releaseUserAdd();
+    const send = await pending.sendPromise;
+    expect(send.status).toBe(200);
+  });
+});
+
+describe('POST /conversations/:id/message active-stream guard', () => {
+  test('concurrent sends only persist one user message and start one stream', async () => {
+    const conv = await env.chatService.createConversation('Concurrent Send Guard');
+
+    let releaseFirstAdd!: () => void;
+    let markFirstAddStarted!: () => void;
+    let unblock!: () => void;
+    let sendCalls = 0;
+    const firstAddGate = new Promise<void>(resolve => { releaseFirstAdd = resolve; });
+    const firstAddStarted = new Promise<void>(resolve => { markFirstAddStarted = resolve; });
+    const blockPromise = new Promise<void>(resolve => { unblock = resolve; });
+
+    const originalAddMessage = env.chatService.addMessage.bind(env.chatService);
+    let userAddAttempts = 0;
+    env.chatService.addMessage = (async (...args: Parameters<typeof env.chatService.addMessage>) => {
+      if (args[1] === 'user') {
+        userAddAttempts += 1;
+        if (userAddAttempts === 1) {
+          markFirstAddStarted();
+          await firstAddGate;
+        }
+      }
+      return originalAddMessage(...args);
+    }) as typeof env.chatService.addMessage;
+
+    env.mockBackend.sendMessage = function() {
+      sendCalls += 1;
+      async function* createStream() {
+        yield { type: 'text', content: 'working', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { unblock(); },
+        sendInput: () => {},
+      };
+    };
+
+    const firstPromise = env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'first',
+      backend: 'claude-code',
+    });
+    await firstAddStarted;
+
+    const secondPromise = env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'second',
+      backend: 'claude-code',
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 25));
+    releaseFirstAdd();
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+
+    expect([first.status, second.status].sort()).toEqual([200, 409]);
+    expect(sendCalls).toBe(1);
+
+    const during = await env.chatService.getConversation(conv.id);
+    expect(during?.messages.filter(m => m.role === 'user').map(m => m.content)).toEqual(['first']);
+
+    unblock();
+    await new Promise(resolve => setTimeout(resolve, 100));
+  });
+
+  test('returns 409 before persisting duplicate user message or mutating send settings', async () => {
+    const conv = await env.chatService.createConversation('Active Send Guard', undefined, 'claude-code', 'sonnet', 'medium');
+
+    let unblock: () => void;
+    const blockPromise = new Promise<void>(r => { unblock = r; });
+    env.mockBackend.sendMessage = function() {
+      async function* createStream() {
+        yield { type: 'text', content: 'working', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { unblock!(); },
+        sendInput: () => {},
+      };
+    };
+
+    const first = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'first',
+      backend: 'claude-code',
+      model: 'opus',
+      effort: 'high',
+    });
+    expect(first.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(env.activeStreams.has(conv.id)).toBe(true);
+
+    const second = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'second',
+      backend: 'kiro',
+      model: 'kiro-model',
+      effort: 'low',
+    });
+    expect(second.status).toBe(409);
+
+    const during = await env.chatService.getConversation(conv.id);
+    expect(during?.messages.filter(m => m.role === 'user').map(m => m.content)).toEqual(['first']);
+    expect(during?.backend).toBe('claude-code');
+    expect(during?.model).toBe('opus');
+    expect(during?.effort).toBe('high');
+
+    unblock!();
+    await new Promise(resolve => setTimeout(resolve, 100));
   });
 });
 
@@ -751,4 +1173,3 @@ describe('Usage stats endpoints', () => {
 });
 
 // ── WebSocket streaming ─────────────────────────────────────────────────────
-

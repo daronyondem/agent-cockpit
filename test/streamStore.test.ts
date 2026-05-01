@@ -20,6 +20,8 @@ class FakeWS {
   static CONNECTING = 0;
   static OPEN = 1;
   static CLOSED = 3;
+  static autoOpen = true;
+  private listeners: Record<string, Array<() => void>> = {};
   onmessage: ((e: { data: string }) => void) | null = null;
   onerror: ((e: Event) => void) | null = null;
   onclose: ((e: Event) => void) | null = null;
@@ -27,16 +29,27 @@ class FakeWS {
     fakeWSInstance = this;
   }
   addEventListener(type: string, cb: () => void, _opts?: unknown) {
+    this.listeners[type] = this.listeners[type] || [];
+    this.listeners[type].push(cb);
     if (type === 'open') {
-      queueMicrotask(() => { this.readyState = FakeWS.OPEN; cb(); });
+      queueMicrotask(() => {
+        if (!FakeWS.autoOpen || this.readyState === FakeWS.CLOSED) return;
+        this.readyState = FakeWS.OPEN;
+        cb();
+      });
     }
   }
-  close() {
+  close(code?: number, reason?: string) {
     this.readyState = FakeWS.CLOSED;
-    if (this.onclose) this.onclose({} as Event);
+    if (this.onclose) this.onclose({ code, reason } as unknown as Event);
   }
   dispatch(frame: Record<string, unknown>) {
     if (this.onmessage) this.onmessage({ data: JSON.stringify(frame) });
+  }
+  failOpen() {
+    this.readyState = FakeWS.CLOSED;
+    for (const cb of this.listeners.error || []) cb();
+    if (this.onerror) this.onerror(new Event('error'));
   }
 }
 
@@ -51,6 +64,7 @@ function loadStore() {
 
 beforeEach(() => {
   fakeWSInstance = null;
+  FakeWS.autoOpen = true;
   delete (window as any).StreamStore;
 
   (global as any).WebSocket = FakeWS;
@@ -59,6 +73,8 @@ beforeEach(() => {
   (global as any).AgentApi = {
     chatWsUrl: (id: string) => `ws://test/conv/${id}`,
     fetch: jest.fn(),
+    abortConversation: jest.fn().mockResolvedValue({ ok: true, aborted: true }),
+    getActiveStreams: jest.fn().mockResolvedValue([]),
     markConversationUnread: jest.fn().mockResolvedValue({}),
   };
   (window as any).AgentApi = (global as any).AgentApi;
@@ -72,6 +88,34 @@ async function openWs(convId: string) {
   await new Promise<void>(r => queueMicrotask(() => r()));
   await p;
   return fakeWSInstance!;
+}
+
+async function startAcceptedStream(convId: string, ws: FakeWS) {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    userMessage: {
+      id: `user-${convId}`,
+      role: 'user',
+      content: 'active stream',
+      backend: 'claude-code',
+      timestamp: '2026-05-01T12:00:00.000Z',
+    },
+  }));
+  await Store.send(convId, 'active stream');
+  ws.dispatch({
+    type: 'assistant_message',
+    message: {
+      id: `assistant-${convId}`,
+      role: 'assistant',
+      content: 'active reply',
+      backend: 'claude-code',
+      timestamp: '2026-05-01T12:00:01.000Z',
+      contentBlocks: [{ type: 'text', content: 'active reply' }],
+    },
+  });
+  expect(Store.getState(convId).streaming).toBe(true);
+  api.fetch.mockReset();
 }
 
 test('plan-exit frame sets pendingInteraction and uiState=awaiting', async () => {
@@ -178,6 +222,31 @@ test('error frame clears pendingInteraction and flips uiState to error', async (
   expect(state.pendingInteraction).toBeNull();
   expect(state.uiState).toBe('error');
   expect(state.streamError).toBe('boom');
+});
+
+test('non-terminal error frame does not flip uiState to error', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  ws.dispatch({ type: 'error', error: 'model switch warning', terminal: false });
+
+  const state = Store.getState('c1');
+  expect(state.streamError).toBeNull();
+  expect(state.uiState).toBeNull();
+});
+
+test('hydrateActiveStreams marks server-active conversations as streaming and blocks send', async () => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  api.getActiveStreams.mockResolvedValueOnce(['c1']);
+
+  await Store.hydrateActiveStreams();
+
+  expect(Store.getState('c1').streaming).toBe(true);
+  expect(Store.getState('c1').uiState).toBe('streaming');
+
+  await Store.send('c1', 'should not post');
+  expect(api.fetch).not.toHaveBeenCalled();
 });
 
 test('done frame preserves pendingInteraction and sets uiState=awaiting', async () => {
@@ -482,6 +551,12 @@ describe('attachment + queue helpers', () => {
 });
 
 describe('queue', () => {
+  function queuePutBodies(api: any) {
+    return api.fetch.mock.calls
+      .filter((call: unknown[]) => call[0] === 'conversations/c1/queue' && (call[1] as any)?.method === 'PUT')
+      .map((call: unknown[]) => (call[1] as any).body.queue);
+  }
+
   test('enqueue optimistically updates state and PUTs /queue', async () => {
     await openWs('c1');
     const Store = (window as any).StreamStore;
@@ -544,10 +619,11 @@ describe('queue', () => {
     const Store = (window as any).StreamStore;
     const api = (global as any).AgentApi;
 
+    await startAcceptedStream('c1', ws);
     api.fetch
       .mockResolvedValueOnce(makeResponse({ ok: true }))            // enqueue PUT
-      .mockResolvedValueOnce(makeResponse({ ok: true }))            // drainer persist PUT
-      .mockResolvedValueOnce(makeResponse({ userMessage: null }));  // drainer POST /message
+      .mockResolvedValueOnce(makeResponse({ userMessage: null }))   // drainer POST /message
+      .mockResolvedValueOnce(makeResponse({ ok: true }));           // drainer persist PUT
 
     await Store.enqueue('c1', 'queued text', [
       { name: 'x.png', path: '/tmp/x.png', kind: 'image' },
@@ -566,11 +642,129 @@ describe('queue', () => {
     expect(Store.getState('c1').queue).toEqual([]);
   });
 
+  test('queued send success persists edits made to later queue items while head is in flight', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    let resolvePost!: (value: unknown) => void;
+    const postPromise = new Promise(resolve => { resolvePost = resolve; });
+
+    await startAcceptedStream('c1', ws);
+    api.fetch.mockImplementation((url: string) => {
+      if (url === 'conversations/c1/message') return postPromise;
+      return Promise.resolve(makeResponse({ ok: true }));
+    });
+
+    await Store.enqueue('c1', 'head', []);
+    await Store.enqueue('c1', 'tail', []);
+
+    ws.dispatch({ type: 'done' });
+    await new Promise(r => setTimeout(r, 5));
+    expect(api.fetch.mock.calls.some((call: unknown[]) => call[0] === 'conversations/c1/message')).toBe(true);
+    expect(Store.getState('c1').queue).toEqual([{ content: 'tail', attachments: [] }]);
+
+    await Store.updateQueueItem('c1', 0, { content: 'edited tail' });
+    resolvePost(makeResponse({ userMessage: null }));
+    await new Promise(r => setTimeout(r, 5));
+
+    expect(Store.getState('c1').queue).toEqual([{ content: 'edited tail', attachments: [] }]);
+    const bodies = queuePutBodies(api);
+    expect(bodies[bodies.length - 1]).toEqual([{ content: 'edited tail', attachments: [] }]);
+  });
+
+  test('queued send 409 restores original head with attachments and active-stream state', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    const err = new Error('Conversation is already streaming') as Error & { status?: number };
+    err.status = 409;
+
+    await startAcceptedStream('c1', ws);
+    api.fetch
+      .mockResolvedValueOnce(makeResponse({ ok: true }))
+      .mockRejectedValueOnce(err);
+
+    const attachment = { name: 'x.png', path: '/tmp/x.png', kind: 'image' };
+    await Store.enqueue('c1', 'queued text', [attachment]);
+
+    ws.dispatch({ type: 'done' });
+    await new Promise(r => setTimeout(r, 5));
+
+    const state = Store.getState('c1');
+    expect(state.queue).toEqual([{ content: 'queued text', attachments: [attachment] }]);
+    expect(state.streaming).toBe(true);
+    expect(state.uiState).toBe('streaming');
+    expect(state.streamError).toBeNull();
+    expect(state.messages.some((m: any) => String(m.id).startsWith('pending-'))).toBe(false);
+  });
+
+  test('queued send 409 preserves edits made to later queue items while head is in flight', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    const err = new Error('Conversation is already streaming') as Error & { status?: number };
+    err.status = 409;
+    let rejectPost!: (err: Error) => void;
+    const postPromise = new Promise((_resolve, reject) => { rejectPost = reject; });
+
+    await startAcceptedStream('c1', ws);
+    api.fetch.mockImplementation((url: string) => {
+      if (url === 'conversations/c1/message') return postPromise;
+      return Promise.resolve(makeResponse({ ok: true }));
+    });
+
+    await Store.enqueue('c1', 'head', []);
+    await Store.enqueue('c1', 'tail', []);
+
+    ws.dispatch({ type: 'done' });
+    await new Promise(r => setTimeout(r, 5));
+    expect(api.fetch.mock.calls.some((call: unknown[]) => call[0] === 'conversations/c1/message')).toBe(true);
+    expect(Store.getState('c1').queue).toEqual([{ content: 'tail', attachments: [] }]);
+
+    await Store.updateQueueItem('c1', 0, { content: 'edited tail' });
+    rejectPost(err);
+    await new Promise(r => setTimeout(r, 5));
+
+    expect(Store.getState('c1').queue).toEqual([
+      { content: 'head', attachments: [] },
+      { content: 'edited tail', attachments: [] },
+    ]);
+    const bodies = queuePutBodies(api);
+    expect(bodies[bodies.length - 1]).toEqual([
+      { content: 'head', attachments: [] },
+      { content: 'edited tail', attachments: [] },
+    ]);
+  });
+
+  test('queued send restores and persists head when WebSocket open fails before POST', async () => {
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    FakeWS.autoOpen = false;
+    api.fetch.mockImplementation(() => Promise.resolve(makeResponse({ ok: true })));
+
+    await Store.enqueue('c1', 'head', []);
+    Store.resumeSuspendedQueue('c1');
+    await new Promise(r => setTimeout(r, 5));
+
+    expect(fakeWSInstance).toBeTruthy();
+    fakeWSInstance!.failOpen();
+    await new Promise(r => setTimeout(r, 5));
+
+    const state = Store.getState('c1');
+    expect(state.queue).toEqual([{ content: 'head', attachments: [] }]);
+    expect(state.sending).toBe(false);
+    expect(state.streamError).toBe('WebSocket failed');
+    expect(api.fetch.mock.calls.some((call: unknown[]) => call[0] === 'conversations/c1/message')).toBe(false);
+    const bodies = queuePutBodies(api);
+    expect(bodies[bodies.length - 1]).toEqual([{ content: 'head', attachments: [] }]);
+  });
+
   test('done frame does NOT drain queue when pendingInteraction is set', async () => {
     const ws = await openWs('c1');
     const Store = (window as any).StreamStore;
     const api = (global as any).AgentApi;
 
+    await startAcceptedStream('c1', ws);
     api.fetch.mockResolvedValueOnce(makeResponse({ ok: true })); // enqueue PUT only
 
     await Store.enqueue('c1', 'queued text', []);
@@ -585,6 +779,27 @@ describe('queue', () => {
 
     // Queue untouched, no POST /message.
     expect(Store.getState('c1').queue).toEqual([{ content: 'queued text', attachments: [] }]);
+    expect(api.fetch.mock.calls.some((c: unknown[]) => c[0] === 'conversations/c1/message')).toBe(false);
+  });
+
+  test('replayed done after completion does NOT drain queue added after the original completion', async () => {
+    const ws = await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    await startAcceptedStream('c1', ws);
+    ws.dispatch({ type: 'done' });
+    expect(Store.getState('c1').streaming).toBe(false);
+
+    api.fetch.mockResolvedValueOnce(makeResponse({ ok: true })); // enqueue PUT only
+    await Store.enqueue('c1', 'queued after done', []);
+
+    ws.dispatch({ type: 'replay_start', bufferedEvents: 1 });
+    ws.dispatch({ type: 'done' });
+    ws.dispatch({ type: 'replay_end' });
+    await new Promise(r => setTimeout(r, 5));
+
+    expect(Store.getState('c1').queue).toEqual([{ content: 'queued after done', attachments: [] }]);
     expect(api.fetch.mock.calls.some((c: unknown[]) => c[0] === 'conversations/c1/message')).toBe(false);
   });
 
@@ -628,6 +843,41 @@ describe('queue', () => {
 
     expect(Store.getState('c1').queue).toEqual([
       { content: 'edited', attachments: atts },
+    ]);
+  });
+
+  test('queue persistence coalesces in-flight PUTs so latest queue wins', async () => {
+    await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    let resolveFirstPut!: (value: unknown) => void;
+    const firstPut = new Promise(resolve => { resolveFirstPut = resolve; });
+    let queuePutCount = 0;
+
+    api.fetch.mockImplementation((url: string, opts: any) => {
+      if (url === 'conversations/c1/queue' && opts?.method === 'PUT') {
+        queuePutCount += 1;
+        if (queuePutCount === 1) return firstPut;
+      }
+      return Promise.resolve(makeResponse({ ok: true }));
+    });
+
+    const enqueuePromise = Store.enqueue('c1', 'original', []);
+    await Promise.resolve();
+    expect(queuePutCount).toBe(1);
+
+    const updatePromise = Store.updateQueueItem('c1', 0, { content: 'latest' });
+    await Promise.resolve();
+    expect(queuePutCount).toBe(1);
+
+    resolveFirstPut(makeResponse({ ok: true }));
+    await Promise.all([enqueuePromise, updatePromise]);
+
+    const bodies = queuePutBodies(api);
+    expect(queuePutCount).toBe(2);
+    expect(bodies).toEqual([
+      [{ content: 'original', attachments: [] }],
+      [{ content: 'latest', attachments: [] }],
     ]);
   });
 
@@ -739,51 +989,151 @@ describe('clearStreamError', () => {
 });
 
 describe('stopStream', () => {
-  test('sends a single { type: "abort" } frame over the conv WS while streaming', async () => {
+  test('POSTs REST abort and clears local streaming state while streaming', async () => {
     const ws = await openWs('c1');
     const Store = (window as any).StreamStore;
     const api = (global as any).AgentApi;
-    api.fetch.mockResolvedValueOnce(makeResponse({ userMessage: null }));
-
-    const sent: string[] = [];
-    (ws as any).send = (data: string) => { sent.push(data); };
+    const abortMessage = {
+      id: 'a1',
+      role: 'assistant',
+      content: 'Stream failed: Aborted by user',
+      streamError: { message: 'Aborted by user', source: 'abort' },
+    };
+    api.fetch
+      .mockResolvedValueOnce(makeResponse({ userMessage: null }))
+      .mockResolvedValueOnce(makeResponse({
+        id: 'c1',
+        messages: [
+          { id: 'u1', role: 'user', content: 'hello' },
+          abortMessage,
+        ],
+        messageQueue: [],
+        sessionUsage: null,
+      }));
 
     await Store.send('c1', 'hello');
     expect(Store.getState('c1').streaming).toBe(true);
 
-    Store.stopStream('c1');
+    await Store.stopStream('c1');
 
-    expect(sent).toEqual([JSON.stringify({ type: 'abort' })]);
+    expect(api.abortConversation).toHaveBeenCalledWith('c1');
+    expect(Store.getState('c1').streaming).toBe(false);
+    expect(Store.getState('c1').streamError).toBe('Aborted by user');
+    expect(Store.getState('c1').uiState).toBe('error');
+    expect(Store.getState('c1').messages.some((m: any) => String(m.id).startsWith('pending-'))).toBe(false);
+
+    ws.dispatch({ type: 'assistant_message', message: abortMessage });
+    expect(Store.getState('c1').messages.filter((m: any) => m.id === 'a1')).toHaveLength(1);
   });
 
   test('no-op when not streaming', async () => {
-    const ws = await openWs('c1');
+    await openWs('c1');
     const Store = (window as any).StreamStore;
-
-    const sent: string[] = [];
-    (ws as any).send = (data: string) => { sent.push(data); };
+    const api = (global as any).AgentApi;
 
     expect(Store.getState('c1').streaming).toBe(false);
-    Store.stopStream('c1');
+    await Store.stopStream('c1');
 
-    expect(sent).toEqual([]);
+    expect(api.abortConversation).not.toHaveBeenCalled();
   });
 
-  test('no-op when WS is closed even if streaming flag is set', async () => {
+  test('uses REST abort when WS is closed but server stream is still active', async () => {
     const ws = await openWs('c1');
     const Store = (window as any).StreamStore;
     const api = (global as any).AgentApi;
-    api.fetch.mockResolvedValueOnce(makeResponse({ userMessage: null }));
+    api.fetch
+      .mockResolvedValueOnce(makeResponse({ userMessage: null }))
+      .mockResolvedValueOnce(makeResponse({
+        id: 'c1',
+        messages: [{
+          id: 'a1',
+          role: 'assistant',
+          content: 'Stream failed: Aborted by user',
+          streamError: { message: 'Aborted by user', source: 'abort' },
+        }],
+        messageQueue: [],
+        sessionUsage: null,
+      }));
 
-    const sent: string[] = [];
-    (ws as any).send = (data: string) => { sent.push(data); };
-
-    Store.send('c1', 'hello');
+    await Store.send('c1', 'hello');
     ws.close();
 
-    Store.stopStream('c1');
+    await Store.stopStream('c1');
 
-    expect(sent).toEqual([]);
+    expect(api.abortConversation).toHaveBeenCalledWith('c1');
+    expect(Store.getState('c1').streaming).toBe(false);
+    expect(Store.getState('c1').messages.some((m: any) => String(m.id).startsWith('pending-'))).toBe(false);
+  });
+
+  test('successful REST abort unsticks local UI even when refetch fails', async () => {
+    await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    api.fetch
+      .mockResolvedValueOnce(makeResponse({ userMessage: null }))
+      .mockRejectedValueOnce(new Error('refetch failed'));
+    api.abortConversation.mockResolvedValueOnce({ ok: true, aborted: true });
+
+    await Store.send('c1', 'hello');
+    const assistantId = Store.getState('c1').streamingMsgId;
+    expect(Store.getState('c1').streaming).toBe(true);
+
+    await Store.stopStream('c1');
+
+    const state = Store.getState('c1');
+    expect(api.abortConversation).toHaveBeenCalledWith('c1');
+    expect(state.streaming).toBe(false);
+    expect(state.streamingMsgId).toBeNull();
+    expect(state.streamError).toBe('Aborted by user');
+    expect(state.uiState).toBe('error');
+    expect(state.messages.some((m: any) => m.id === assistantId)).toBe(false);
+  });
+
+  test('refreshes conversation when REST abort finds no active stream', async () => {
+    await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    api.fetch
+      .mockResolvedValueOnce(makeResponse({ userMessage: null }))
+      .mockResolvedValueOnce(makeResponse({ id: 'c1', messages: [{ id: 'm1', role: 'assistant', content: 'done' }], messageQueue: [], sessionUsage: null }));
+    api.abortConversation.mockResolvedValueOnce({ ok: true, aborted: false });
+
+    await Store.send('c1', 'hello');
+    await Store.stopStream('c1');
+
+    const state = Store.getState('c1');
+    expect(state.streaming).toBe(false);
+    expect(state.messages).toEqual([{ id: 'm1', role: 'assistant', content: 'done' }]);
+  });
+
+  test('refresh after natural-completion race preserves durable streamError and does not drain queue', async () => {
+    await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    api.fetch
+      .mockResolvedValueOnce(makeResponse({ userMessage: null }))
+      .mockResolvedValueOnce(makeResponse({
+        id: 'c1',
+        messages: [{
+          id: 'e1',
+          role: 'assistant',
+          content: 'Stream failed: usage limit reached',
+          streamError: { message: 'usage limit reached', source: 'backend' },
+        }],
+        messageQueue: [{ content: 'queued', attachments: [] }],
+        sessionUsage: null,
+      }));
+    api.abortConversation.mockResolvedValueOnce({ ok: true, aborted: false });
+
+    await Store.send('c1', 'hello');
+    await Store.stopStream('c1');
+
+    const state = Store.getState('c1');
+    expect(state.streaming).toBe(false);
+    expect(state.streamError).toBe('usage limit reached');
+    expect(state.uiState).toBe('error');
+    expect(state.queue).toEqual([{ content: 'queued', attachments: [] }]);
+    expect(api.fetch.mock.calls.filter((call: unknown[]) => call[0] === 'conversations/c1/message')).toHaveLength(1);
   });
 });
 
@@ -860,6 +1210,55 @@ describe('draft persistence', () => {
     expect(state.pendingAttachments[0].restored).toBe(true);
   });
 
+  test('load() rehydrates active streamError from final persisted stream-error message', async () => {
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    api.fetch.mockResolvedValueOnce(makeResponse({
+      id: 'c1',
+      messages: [
+        {
+          id: 'e1',
+          role: 'assistant',
+          content: 'Stream failed: usage limit reached',
+          streamError: { message: 'usage limit reached', source: 'backend' },
+        },
+      ],
+      messageQueue: [],
+    }));
+
+    await Store.load('c1');
+
+    const state = Store.getState('c1');
+    expect(state.streamError).toBe('usage limit reached');
+    expect(state.uiState).toBe('error');
+  });
+
+  test('load() ignores older stream-error messages followed by normal conversation activity', async () => {
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    api.fetch.mockResolvedValueOnce(makeResponse({
+      id: 'c1',
+      messages: [
+        {
+          id: 'e1',
+          role: 'assistant',
+          content: 'Stream failed: old failure',
+          streamError: { message: 'old failure', source: 'backend' },
+        },
+        { id: 'u2', role: 'user', content: 'continue' },
+      ],
+      messageQueue: [],
+    }));
+
+    await Store.load('c1');
+
+    const state = Store.getState('c1');
+    expect(state.streamError).toBeNull();
+    expect(state.uiState).toBeNull();
+  });
+
   test('load() does NOT overwrite a live composer', async () => {
     await openWs('c1');
     const Store = (window as any).StreamStore;
@@ -903,6 +1302,26 @@ describe('draft persistence', () => {
     expect(JSON.parse(raw!)).toEqual({ text: 'my message', attachments: [] });
   });
 
+  test('POST 409 rolls back optimistic send and returns to active-stream state', async () => {
+    await openWs('c1');
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+
+    Store.setInput('c1', 'raced message');
+    const err = new Error('Conversation is already streaming') as Error & { status?: number };
+    err.status = 409;
+    api.fetch.mockRejectedValueOnce(err);
+
+    await Store.send('c1', 'raced message');
+
+    const state = Store.getState('c1');
+    expect(state.input).toBe('raced message');
+    expect(state.streaming).toBe(true);
+    expect(state.uiState).toBe('streaming');
+    expect(state.streamError).toBeNull();
+    expect(state.messages.some((m: any) => String(m.id).startsWith('pending-'))).toBe(false);
+  });
+
   /* clearAllStreamErrors (called by the shell after a silent re-auth)
      sweeps streamError on every conv that has one so stale session-expired
      error cards disappear once the session is back. */
@@ -933,6 +1352,7 @@ describe('unread', () => {
     const api = (global as any).AgentApi;
 
     Store.setActiveConvId('other');
+    await startAcceptedStream('c1', ws);
 
     ws.dispatch({ type: 'done' });
 
@@ -947,6 +1367,7 @@ describe('unread', () => {
     const api = (global as any).AgentApi;
 
     Store.setActiveConvId('c1');
+    await startAcceptedStream('c1', ws);
 
     ws.dispatch({ type: 'done' });
 
@@ -961,6 +1382,7 @@ describe('unread', () => {
     const api = (global as any).AgentApi;
 
     Store.setActiveConvId('other');
+    await startAcceptedStream('c1', ws);
 
     ws.dispatch({
       type: 'tool_activity', tool: 'ExitPlanMode',
@@ -979,6 +1401,7 @@ describe('unread', () => {
     const api = (global as any).AgentApi;
 
     Store.setActiveConvId('other');
+    await startAcceptedStream('c1', ws);
 
     ws.dispatch({ type: 'error', error: 'boom' });
     ws.dispatch({ type: 'done' });
@@ -994,6 +1417,7 @@ describe('unread', () => {
     const api = (global as any).AgentApi;
 
     Store.setActiveConvId('other');
+    await startAcceptedStream('c1', ws);
     ws.dispatch({ type: 'done' });
     expect(Store.getState('c1').unread).toBe(true);
     api.markConversationUnread.mockClear();
@@ -1044,6 +1468,42 @@ describe('unread', () => {
 // ── WebSocket revalidation on network change / sleep ───────────────────────
 
 describe('WebSocket revalidation', () => {
+  test('failed WebSocket open clears stale socket state so retry can create a new socket', async () => {
+    const Store = (window as any).StreamStore;
+    FakeWS.autoOpen = false;
+
+    const firstOpen = Store.ensureWsOpen('c1');
+    const firstWs = fakeWSInstance!;
+    firstWs.failOpen();
+    await expect(firstOpen).rejects.toThrow('WebSocket failed');
+    expect(Store.getState('c1').ws).toBeNull();
+    expect(Store.getState('c1').wsOpening).toBeNull();
+
+    FakeWS.autoOpen = true;
+    await Store.ensureWsOpen('c1');
+    expect(fakeWSInstance).not.toBe(firstWs);
+    expect(fakeWSInstance!.readyState).toBe(FakeWS.OPEN);
+  });
+
+  test('unexpected close during streaming schedules reconnect', async () => {
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    api.getActiveStreams.mockResolvedValueOnce(['c1']);
+
+    await Store.hydrateActiveStreams();
+    api.getActiveStreams.mockResolvedValue(['c1']);
+    const initialWs = await openWs('c1');
+
+    initialWs.close(1006, 'network lost');
+    expect(Store.getState('c1').ws).toBeNull();
+
+    await new Promise(r => setTimeout(r, 1100));
+    await new Promise<void>(r => queueMicrotask(() => r()));
+
+    expect(fakeWSInstance).not.toBe(initialWs);
+    expect(fakeWSInstance!.readyState).toBe(FakeWS.OPEN);
+  });
+
   test('revalidateAllSockets closes the existing socket and opens a fresh one', async () => {
     const initialWs = await openWs('c1');
     const Store = (window as any).StreamStore;

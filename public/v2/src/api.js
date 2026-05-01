@@ -80,11 +80,15 @@
     const res = await fetch(chatUrl(path), Object.assign({}, opts, { headers, body, credentials: 'same-origin' }));
     if (res.status === 401) {
       if (state.onSessionExpired) state.onSessionExpired();
-      throw new Error('Session expired');
+      const e = new Error('Session expired');
+      e.status = res.status;
+      throw e;
     }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || res.statusText || `HTTP ${res.status}`);
+      const e = new Error(err.error || res.statusText || `HTTP ${res.status}`);
+      e.status = res.status;
+      throw e;
     }
     return res;
   }
@@ -157,6 +161,11 @@
 
   async function deleteConversation(id){
     const res = await chatFetch('conversations/' + encodeURIComponent(id), { method: 'DELETE' });
+    return res.json().catch(() => ({}));
+  }
+
+  async function abortConversation(id){
+    const res = await chatFetch('conversations/' + encodeURIComponent(id) + '/abort', { method: 'POST', body: {} });
     return res.json().catch(() => ({}));
   }
 
@@ -689,6 +698,7 @@
     markConversationUnread,
     renameConversation,
     deleteConversation,
+    abortConversation,
     getVersion,
     getUpdateStatus,
     checkVersion,

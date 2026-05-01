@@ -235,6 +235,12 @@ Together these guarantee that a workspace index always parses on disk and that c
                                 //   for back-compat. Absent on legacy messages written
                                 //   before this field existed (the renderer falls back to
                                 //   the legacy fields in that case). See ContentBlock below.
+  streamError?: {               // Assistant only. Marks a durable terminal stream failure.
+    message: string,            // Raw terminal backend/server error message.
+    source?: 'backend'|'transport'|'abort'|'server'
+                                // Error source. Terminal backend/server failures are
+                                // persisted; non-terminal warning frames are not.
+  }
 }
 ```
 
@@ -270,6 +276,47 @@ Ordering rules:
   `toolActivity[]` filtering behavior).
 - `tool_outcomes` patches the matching tool block in place by
   `activity.id`, updating `outcome` and `status`.
+
+### Stream Error Events
+
+Backend adapters may emit WebSocket stream errors with terminal metadata:
+
+```javascript
+{
+  type: 'error',
+  error: string,
+  terminal?: boolean, // omitted/true = ends the CLI turn; false = warning
+  source?: 'backend'|'transport'|'abort'|'server'
+}
+```
+
+Terminal errors are persisted as assistant messages with `streamError` and
+`turn: 'final'`. Non-terminal warnings, such as Kiro model-switch fallback
+warnings, are forwarded to the client but do not create `Message.streamError`,
+do not end the stream, and do not unblock the queue.
+
+Explicit aborts persist the same shape with `source: 'abort'`. When the
+streaming loop has already accumulated assistant output, that partial assistant
+message is saved before the abort `streamError` message. If a backend/server
+terminal error is already being finalized when an abort request arrives, the
+original backend/server `streamError` remains authoritative.
+
+### ActiveStreamSummary
+
+Returned by `GET /api/chat/active-streams` for server-owned CLI turns:
+
+```typescript
+interface ActiveStreamSummary {
+  id: string;                 // Conversation ID
+  backend: string;            // Runtime backend handling the active turn
+  startedAt: string | null;   // ISO timestamp when the server accepted the turn
+  lastEventAt: string | null; // ISO timestamp of the latest backend stream event
+  connected: boolean;         // true when a browser WebSocket is currently open
+}
+```
+
+`ids: string[]` remains in the same response for hydration compatibility; it is
+the projection of `streams[].id`.
 
 ### AttachmentMeta
 
