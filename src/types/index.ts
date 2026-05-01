@@ -189,6 +189,12 @@ export interface ConversationEntry {
    */
   titleManuallySet?: boolean;
   backend: string;
+  /**
+   * Runtime CLI profile selected for this conversation. Phase 1 stores
+   * server-configured profiles that preserve the existing vendor behavior;
+   * later phases resolve this ID to account/config/env-specific CLI runtime.
+   */
+  cliProfileId?: string;
   model?: string;
   /** Adaptive reasoning effort level for supported models. */
   effort?: EffortLevel;
@@ -255,6 +261,7 @@ export interface Conversation {
   id: string;
   title: string;
   backend: string;
+  cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
   workingDir: string;
@@ -290,6 +297,7 @@ export interface ConversationListItem {
   title: string;
   updatedAt: string;
   backend: string;
+  cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
   workingDir: string;
@@ -306,11 +314,35 @@ export interface ConversationListItem {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
+export type CliVendor = 'codex' | 'claude-code' | 'kiro';
+export type CliAuthMode = 'server-configured' | 'account';
+
+export interface CliProfile {
+  id: string;
+  name: string;
+  vendor: CliVendor;
+  /** Optional executable override. When omitted, the vendor default command is used. */
+  command?: string;
+  /** Server-configured keeps current server-side CLI state; account means Cockpit owns setup for this profile. */
+  authMode: CliAuthMode;
+  /** Optional vendor config/auth directory for account-isolated profiles. */
+  configDir?: string;
+  /** Optional runtime environment overrides applied when spawning this profile's CLI. */
+  env?: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
+  disabled?: boolean;
+}
+
 export interface Settings {
   theme: 'light' | 'dark' | 'system';
   sendBehavior: 'enter' | 'ctrlEnter';
   systemPrompt: string;
   defaultBackend: string;
+  /** Runtime CLI profiles available for conversations and background CLI tasks. */
+  cliProfiles?: CliProfile[];
+  /** Default profile for new conversations once the UI switches from raw backend selection to profile selection. */
+  defaultCliProfileId?: string;
   defaultModel?: string;
   /** Default adaptive reasoning effort. Only applies when defaultBackend/model supports it. */
   defaultEffort?: EffortLevel;
@@ -321,9 +353,12 @@ export interface Settings {
    *       classifies/dedupes, and formats them with frontmatter.
    *   (b) post-session extraction — reads non-Claude session transcripts and
    *       writes new memory entries.
-   * The CLI selected here must be a registered backend (e.g. 'claude-code').
+   * The CLI selected here should be a CLI profile. `cliBackend` is retained
+   * as a legacy fallback for settings written before CLI profiles existed.
    */
   memory?: {
+    cliProfileId?: string;
+    /** @deprecated Use cliProfileId. */
     cliBackend?: string;
     cliModel?: string;
     cliEffort?: EffortLevel;
@@ -338,18 +373,24 @@ export interface Settings {
    *   - Digestion: runs once per raw file to produce structured entries.
    *   - Dreaming: manually invoked to synthesize entries into a coherent
    *     knowledge graph. Incremental by default, full rebuild on demand.
-   * All three must be registered backends. Shape mirrors `memory` so the
-   * config surface stays consistent. `convertSlidesToImages` opts into
+   * All three should point at CLI profiles. Legacy `*CliBackend` fields are
+   * retained as fallbacks for older settings files. `convertSlidesToImages` opts into
    * the LibreOffice-backed PPTX slide rasterization path (global, not
    * per-workspace).
    */
   knowledgeBase?: {
+    ingestionCliProfileId?: string;
+    /** @deprecated Use ingestionCliProfileId. */
     ingestionCliBackend?: string;
     ingestionCliModel?: string;
     ingestionCliEffort?: EffortLevel;
+    digestionCliProfileId?: string;
+    /** @deprecated Use digestionCliProfileId. */
     digestionCliBackend?: string;
     digestionCliModel?: string;
     digestionCliEffort?: EffortLevel;
+    dreamingCliProfileId?: string;
+    /** @deprecated Use dreamingCliProfileId. */
     dreamingCliBackend?: string;
     dreamingCliModel?: string;
     dreamingCliEffort?: EffortLevel;
@@ -904,6 +945,10 @@ export interface SendMessageOptions {
   sessionId: string;
   /** Stable conversation ID (does not change on session reset). */
   conversationId?: string;
+  /** Runtime CLI profile selected for the conversation. */
+  cliProfileId?: string;
+  /** Full profile record for adapters that support profile-isolated runtimes. */
+  cliProfile?: CliProfile;
   isNewSession: boolean;
   workingDir: string | null;
   systemPrompt: string;

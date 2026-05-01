@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { SettingsService } from '../src/services/settingsService';
+import { serverConfiguredCliProfileId } from '../src/services/cliProfiles';
 
 let tmpDir: string;
 let service: SettingsService;
@@ -25,6 +26,15 @@ describe('settings', () => {
     expect(settings.theme).toBe('system');
     expect(settings.sendBehavior).toBe('enter');
     expect(settings.defaultBackend).toBe('claude-code');
+    expect(settings.defaultCliProfileId).toBe(serverConfiguredCliProfileId('claude-code'));
+    expect(settings.cliProfiles).toEqual([
+      expect.objectContaining({
+        id: serverConfiguredCliProfileId('claude-code'),
+        name: 'Claude Code (Server Configured)',
+        vendor: 'claude-code',
+        authMode: 'server-configured',
+      }),
+    ]);
     expect(settings.systemPrompt).toBe('');
     expect((settings as any).customInstructions).toBeUndefined();
   });
@@ -105,5 +115,122 @@ describe('settings', () => {
 
     const loaded = await service.getSettings();
     expect(loaded.knowledgeBase?.cliConcurrency).toBe(7);
+  });
+
+  test('adds server-configured profile for persisted default backend on read', async () => {
+    await service.saveSettings({
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
+      defaultBackend: 'codex',
+    } as any);
+
+    const loaded = await service.getSettings();
+    expect(loaded.defaultCliProfileId).toBe(serverConfiguredCliProfileId('codex'));
+    expect(loaded.cliProfiles).toEqual([
+      expect.objectContaining({
+        id: serverConfiguredCliProfileId('codex'),
+        name: 'Codex (Server Configured)',
+        vendor: 'codex',
+        authMode: 'server-configured',
+      }),
+    ]);
+  });
+
+  test('saving a default CLI profile keeps defaultBackend aligned', async () => {
+    const settings = await service.getSettings();
+    const profile = {
+      id: 'profile-codex-work',
+      name: 'Codex Work',
+      vendor: 'codex',
+      authMode: 'account',
+      configDir: '/tmp/codex-work',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+
+    const saved = await service.saveSettings({
+      ...settings,
+      defaultCliProfileId: profile.id,
+      cliProfiles: [...(settings.cliProfiles || []), profile],
+    } as any);
+
+    expect(saved.defaultBackend).toBe('codex');
+    expect(saved.defaultCliProfileId).toBe(profile.id);
+  });
+
+  test('saving a disabled default CLI profile clears the default profile', async () => {
+    const settings = await service.getSettings();
+    const defaultProfileId = serverConfiguredCliProfileId('claude-code');
+
+    const saved = await service.saveSettings({
+      ...settings,
+      defaultCliProfileId: defaultProfileId,
+      cliProfiles: (settings.cliProfiles || []).map((profile) => (
+        profile.id === defaultProfileId ? { ...profile, disabled: true } : profile
+      )),
+    } as any);
+
+    expect(saved.defaultCliProfileId).toBeUndefined();
+  });
+
+  test('saving a Kiro profile forces self-configured mode', async () => {
+    const settings = await service.getSettings();
+    const saved = await service.saveSettings({
+      ...settings,
+      cliProfiles: [
+        ...(settings.cliProfiles || []),
+        {
+          id: 'profile-kiro-work',
+          name: 'Kiro Work',
+          vendor: 'kiro',
+          authMode: 'account',
+          command: '/custom/kiro-cli',
+          configDir: '/tmp/kiro-work',
+          env: { HOME: '/tmp/kiro-work' },
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+    } as any);
+
+    const profile = saved.cliProfiles!.find((p) => p.id === 'profile-kiro-work')!;
+    expect(profile.authMode).toBe('server-configured');
+    expect(profile.command).toBeUndefined();
+    expect(profile.configDir).toBeUndefined();
+    expect(profile.env).toBeUndefined();
+  });
+
+  test('saving Memory and KB CLI profile selections keeps legacy backend fields aligned', async () => {
+    const settings = await service.getSettings();
+    const profile = {
+      id: 'profile-codex-kb',
+      name: 'Codex KB',
+      vendor: 'codex',
+      authMode: 'account',
+      configDir: '/tmp/codex-kb',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+
+    const saved = await service.saveSettings({
+      ...settings,
+      cliProfiles: [...(settings.cliProfiles || []), profile],
+      memory: { cliProfileId: profile.id, cliBackend: 'claude-code' },
+      knowledgeBase: {
+        ingestionCliProfileId: profile.id,
+        ingestionCliBackend: 'claude-code',
+        digestionCliProfileId: profile.id,
+        digestionCliBackend: 'claude-code',
+        dreamingCliProfileId: profile.id,
+        dreamingCliBackend: 'claude-code',
+      },
+    } as any);
+
+    expect(saved.memory?.cliProfileId).toBe(profile.id);
+    expect(saved.memory?.cliBackend).toBe('codex');
+    expect(saved.knowledgeBase?.ingestionCliBackend).toBe('codex');
+    expect(saved.knowledgeBase?.digestionCliBackend).toBe('codex');
+    expect(saved.knowledgeBase?.dreamingCliBackend).toBe('codex');
   });
 });

@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from 'child_process';
 import fsp from 'fs/promises';
 import path from 'path';
 import { atomicWriteFile } from '../utils/atomicWrite';
+import type { CliProfile } from '../types';
+import { resolveCodexCliRuntime } from './backends/codex';
 
 // Codex's `app-server` exposes `account/read` and `account/rateLimits/read`
 // over JSON-RPC. Both share the OAuth credentials in `~/.codex/auth.json`,
@@ -57,12 +59,17 @@ export interface CodexPlanUsageResponse extends CodexPlanUsageSnapshot {
 
 export class CodexPlanUsageService {
   private _cacheFile: string;
+  private _profileCacheDir: string;
   private _snapshot: CodexPlanUsageSnapshot;
   private _lastAttemptAt = 0;
   private _inFlight: Promise<void> | null = null;
+  private _profileSnapshots = new Map<string, CodexPlanUsageSnapshot>();
+  private _profileLastAttemptAt = new Map<string, number>();
+  private _profileInFlight = new Map<string, Promise<void>>();
 
   constructor(appRoot: string) {
     this._cacheFile = path.join(appRoot, 'data', 'codex-plan-usage.json');
+    this._profileCacheDir = path.join(appRoot, 'data', 'codex-plan-usage');
     this._snapshot = {
       fetchedAt: null,
       account: null,
@@ -72,32 +79,18 @@ export class CodexPlanUsageService {
   }
 
   async init(): Promise<void> {
-    try {
-      const raw = await fsp.readFile(this._cacheFile, 'utf8');
-      const parsed = JSON.parse(raw);
-      this._snapshot = {
-        fetchedAt: typeof parsed.fetchedAt === 'string' ? parsed.fetchedAt : null,
-        account: parsed.account ?? null,
-        rateLimits: parsed.rateLimits ?? null,
-        lastError: typeof parsed.lastError === 'string' ? parsed.lastError : null,
-      };
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
-        console.warn('[codexPlanUsage] Failed to load cache:', (err as Error).message);
-      }
-    }
+    this._snapshot = await this._loadSnapshot(this._cacheFile);
+    await this._loadProfileSnapshots();
   }
 
-  getCached(): CodexPlanUsageResponse {
-    const now = Date.now();
-    const fetchedAtMs = this._snapshot.fetchedAt
-      ? new Date(this._snapshot.fetchedAt).getTime()
-      : null;
-    const stale = fetchedAtMs == null || now - fetchedAtMs > STALE_AFTER_MS;
-    return { ...this._snapshot, stale };
+  getCached(profile?: CliProfile): CodexPlanUsageResponse {
+    if (!profile || this._usesDefaultCache(profile)) return this._withStale(this._snapshot);
+    const snapshot = profile ? this._getProfileSnapshot(profile) : this._snapshot;
+    return this._withStale(snapshot);
   }
 
-  maybeRefresh(reason: string): Promise<void> {
+  maybeRefresh(reason: string, profile?: CliProfile): Promise<void> {
+    if (profile && !this._usesDefaultCache(profile)) return this._maybeRefreshProfile(reason, profile);
     const now = Date.now();
     if (this._inFlight) return this._inFlight;
     if (this._lastAttemptAt && now - this._lastAttemptAt < REFRESH_MIN_INTERVAL_MS) {
@@ -108,6 +101,100 @@ export class CodexPlanUsageService {
       this._inFlight = null;
     });
     return this._inFlight;
+  }
+
+  private _withStale(snapshot: CodexPlanUsageSnapshot): CodexPlanUsageResponse {
+    const now = Date.now();
+    const fetchedAtMs = snapshot.fetchedAt
+      ? new Date(snapshot.fetchedAt).getTime()
+      : null;
+    const stale = fetchedAtMs == null || now - fetchedAtMs > STALE_AFTER_MS;
+    return { ...snapshot, stale };
+  }
+
+  private _emptySnapshot(): CodexPlanUsageSnapshot {
+    return {
+      fetchedAt: null,
+      account: null,
+      rateLimits: null,
+      lastError: null,
+    };
+  }
+
+  private _usesDefaultCache(profile: CliProfile): boolean {
+    return profile.authMode === 'server-configured'
+      && !profile.command
+      && !profile.configDir
+      && (!profile.env || Object.keys(profile.env).length === 0);
+  }
+
+  private _profileKey(profile: CliProfile): string {
+    return encodeURIComponent(profile.id);
+  }
+
+  private _profileCacheFile(profile: CliProfile): string {
+    return path.join(this._profileCacheDir, `${this._profileKey(profile)}.json`);
+  }
+
+  private _getProfileSnapshot(profile: CliProfile): CodexPlanUsageSnapshot {
+    const key = this._profileKey(profile);
+    let snapshot = this._profileSnapshots.get(key);
+    if (!snapshot) {
+      snapshot = this._emptySnapshot();
+      this._profileSnapshots.set(key, snapshot);
+    }
+    return snapshot;
+  }
+
+  private async _loadSnapshot(file: string): Promise<CodexPlanUsageSnapshot> {
+    try {
+      const raw = await fsp.readFile(file, 'utf8');
+      const parsed = JSON.parse(raw);
+      return {
+        fetchedAt: typeof parsed.fetchedAt === 'string' ? parsed.fetchedAt : null,
+        account: parsed.account ?? null,
+        rateLimits: parsed.rateLimits ?? null,
+        lastError: typeof parsed.lastError === 'string' ? parsed.lastError : null,
+      };
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn('[codexPlanUsage] Failed to load cache:', (err as Error).message);
+      }
+      return this._emptySnapshot();
+    }
+  }
+
+  private async _loadProfileSnapshots(): Promise<void> {
+    try {
+      const filenames = await fsp.readdir(this._profileCacheDir);
+      for (const filename of filenames) {
+        if (!filename.endsWith('.json')) continue;
+        const key = filename.slice(0, -'.json'.length);
+        const snapshot = await this._loadSnapshot(path.join(this._profileCacheDir, filename));
+        this._profileSnapshots.set(key, snapshot);
+      }
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        console.warn('[codexPlanUsage] Failed to load profile caches:', (err as Error).message);
+      }
+    }
+  }
+
+  private async _maybeRefreshProfile(reason: string, profile: CliProfile): Promise<void> {
+    const key = this._profileKey(profile);
+    const now = Date.now();
+    const inFlight = this._profileInFlight.get(key);
+    if (inFlight) return inFlight;
+    const lastAttemptAt = this._profileLastAttemptAt.get(key) || 0;
+    if (lastAttemptAt && now - lastAttemptAt < REFRESH_MIN_INTERVAL_MS) {
+      return Promise.resolve();
+    }
+    this._profileLastAttemptAt.set(key, now);
+    const promise = this._refreshProfile(reason, profile).finally(() => {
+      this._profileInFlight.delete(key);
+    });
+    this._profileInFlight.set(key, promise);
+    return promise;
   }
 
   private async _refresh(reason: string): Promise<void> {
@@ -129,10 +216,38 @@ export class CodexPlanUsageService {
     }
   }
 
-  private async _persist(): Promise<void> {
+  private async _refreshProfile(reason: string, profile: CliProfile): Promise<void> {
+    const key = this._profileKey(profile);
+    const file = this._profileCacheFile(profile);
+    const current = this._profileSnapshots.get(key) || await this._loadSnapshot(file);
     try {
-      await fsp.mkdir(path.dirname(this._cacheFile), { recursive: true });
-      await atomicWriteFile(this._cacheFile, JSON.stringify(this._snapshot, null, 2));
+      const { account, rateLimits } = await fetchFromAppServer(profile);
+      const next = {
+        fetchedAt: new Date().toISOString(),
+        account,
+        rateLimits,
+        lastError: null,
+      };
+      this._profileSnapshots.set(key, next);
+      await this._persistSnapshot(file, next);
+      console.log(`[codexPlanUsage] refresh(${reason}) ok profile=${profile.id}`);
+    } catch (err: unknown) {
+      const msg = (err as Error).message || String(err);
+      const next = { ...current, lastError: msg };
+      this._profileSnapshots.set(key, next);
+      await this._persistSnapshot(file, next);
+      console.warn(`[codexPlanUsage] refresh(${reason}) failed profile=${profile.id}: ${msg}`);
+    }
+  }
+
+  private async _persist(): Promise<void> {
+    await this._persistSnapshot(this._cacheFile, this._snapshot);
+  }
+
+  private async _persistSnapshot(file: string, snapshot: CodexPlanUsageSnapshot): Promise<void> {
+    try {
+      await fsp.mkdir(path.dirname(file), { recursive: true });
+      await atomicWriteFile(file, JSON.stringify(snapshot, null, 2));
     } catch (err: unknown) {
       console.warn('[codexPlanUsage] Failed to persist cache:', (err as Error).message);
     }
@@ -144,12 +259,13 @@ interface FetchResult {
   rateLimits: CodexRateLimits | null;
 }
 
-async function fetchFromAppServer(): Promise<FetchResult> {
+async function fetchFromAppServer(profile?: CliProfile): Promise<FetchResult> {
+  const runtime = resolveCodexCliRuntime(profile);
   let proc: ChildProcess;
   try {
-    proc = spawn('codex', ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'] });
+    proc = spawn(runtime.command, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], env: runtime.env });
   } catch (err: unknown) {
-    throw new Error(`spawn codex app-server failed: ${(err as Error).message}`);
+    throw new Error(`spawn ${runtime.command} app-server failed: ${(err as Error).message}`);
   }
 
   let spawnFailed: Error | null = null;
@@ -165,7 +281,7 @@ async function fetchFromAppServer(): Promise<FetchResult> {
     // when `codex` isn't installed) before we try to write to stdin.
     await new Promise<void>((r) => setImmediate(r));
     if (spawnFailed) {
-      throw new Error(`codex app-server unavailable: ${(spawnFailed as Error).message}`);
+      throw new Error(`${runtime.command} app-server unavailable: ${(spawnFailed as Error).message}`);
     }
 
     const client = new RpcClient(proc);

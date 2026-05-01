@@ -311,6 +311,7 @@ export const pptxHandler: Handler = async ({
   outDir,
   convertSlidesToImages,
   ingestionAdapter,
+  ingestionCliProfile,
   ingestionModel,
   ingestionEffort,
 }): Promise<HandlerResult> => {
@@ -416,6 +417,7 @@ export const pptxHandler: Handler = async ({
     try {
       const result = await convertImageToMarkdown(absImagePath, {
         adapter: ingestionAdapter,
+        cliProfile: ingestionCliProfile,
         model: ingestionModel,
         effort: ingestionEffort,
       });

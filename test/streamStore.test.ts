@@ -249,6 +249,33 @@ test('respond() with mode:message clears pendingInteraction and sends as new mes
   expect(state.streaming).toBe(true);
 });
 
+test('send() posts selected CLI profile with its vendor backend', async () => {
+  await openWs('c1');
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+
+  Store.setComposerCliProfile('c1', 'profile-codex-main', 'codex');
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    userMessage: {
+      id: 'u1',
+      role: 'user',
+      content: 'hello',
+      backend: 'codex',
+      timestamp: '2026-04-29T12:00:00.000Z',
+    },
+  }));
+
+  await Store.send('c1', 'hello');
+
+  expect(api.fetch).toHaveBeenCalledTimes(1);
+  expect(api.fetch.mock.calls[0][0]).toBe('conversations/c1/message');
+  expect(api.fetch.mock.calls[0][1].body).toEqual({
+    content: 'hello',
+    cliProfileId: 'profile-codex-main',
+    backend: 'codex',
+  });
+});
+
 test('replay_start wipes placeholder contentBlocks so replayed frames rebuild cleanly', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;
@@ -1086,4 +1113,3 @@ describe('WebSocket revalidation', () => {
     dateSpy.mockRestore();
   });
 });
-

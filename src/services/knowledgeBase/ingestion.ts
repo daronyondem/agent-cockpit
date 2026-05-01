@@ -42,6 +42,7 @@ import type { HandlerResult } from './handlers/types';
 import type { KbDatabase } from './db';
 import { normalizeFolderPath } from './db';
 import type { BackendRegistry } from '../backends/registry';
+import type { CliProfileRuntime } from '../cliProfiles';
 import type { WorkspaceTaskQueueRegistry } from './workspaceTaskQueue';
 
 /** Subset of chatService the orchestrator depends on — keeps tests light. */
@@ -50,6 +51,10 @@ export interface KbIngestionChatService {
   getWorkspaceKbAutoDigest(hash: string): Promise<boolean>;
   getKbDb(hash: string): KbDatabase | null;
   getSettings(): Promise<Settings>;
+  resolveCliProfileRuntime?(
+    cliProfileId: string | undefined | null,
+    fallbackBackend?: string | null,
+  ): Promise<CliProfileRuntime>;
   getKbRawDir(hash: string): string;
   getKbConvertedDir(hash: string): string;
   getKbEntriesDir(hash: string): string;
@@ -652,15 +657,31 @@ export class KbIngestionService {
 
       const settings = await this.chatService.getSettings();
       const convertSlidesToImages = Boolean(settings.knowledgeBase?.convertSlidesToImages);
+      const ingestionCliProfileId = settings.knowledgeBase?.ingestionCliProfileId;
       const ingestionCliBackend = settings.knowledgeBase?.ingestionCliBackend;
-      const ingestionAdapter =
-        ingestionCliBackend && this.backendRegistry
-          ? this.backendRegistry.get(ingestionCliBackend) ?? undefined
-          : undefined;
-      if (ingestionCliBackend && !ingestionAdapter) {
+      let ingestionRuntime: CliProfileRuntime | null = null;
+      let ingestionAdapter =
+        undefined as ReturnType<BackendRegistry['get']> | undefined;
+      if ((ingestionCliProfileId || ingestionCliBackend) && this.backendRegistry) {
+        try {
+          ingestionRuntime = this.chatService.resolveCliProfileRuntime
+            ? await this.chatService.resolveCliProfileRuntime(
+              ingestionCliProfileId,
+              ingestionCliBackend || undefined,
+            )
+            : { backendId: ingestionCliBackend || '' };
+          ingestionAdapter = this.backendRegistry.get(ingestionRuntime.backendId) ?? undefined;
+        } catch (err: unknown) {
+          console.warn(
+            `[kb/ingest] Configured Ingestion CLI profile could not be resolved: ${(err as Error).message}; ` +
+            `skipping AI conversion for this raw.`,
+          );
+        }
+      }
+      if (ingestionRuntime && !ingestionAdapter) {
         console.warn(
-          `[kb/ingest] Configured Ingestion CLI "${ingestionCliBackend}" is not registered; ` +
-          `skipping AI conversion for this raw.`,
+          `[kb/ingest] Configured Ingestion CLI profile "${ingestionRuntime.cliProfileId || ingestionRuntime.backendId}" ` +
+          `uses unregistered backend "${ingestionRuntime.backendId}"; skipping AI conversion for this raw.`,
         );
       }
 
@@ -679,6 +700,7 @@ export class KbIngestionService {
           outDir,
           convertSlidesToImages,
           ingestionAdapter: ingestionAdapter ?? undefined,
+          ingestionCliProfile: ingestionRuntime?.profile,
           ingestionModel: settings.knowledgeBase?.ingestionCliModel,
           ingestionEffort: settings.knowledgeBase?.ingestionCliEffort,
         });

@@ -6,6 +6,7 @@ import { BackendRegistry } from '../src/services/backends/registry';
 import {
   ClaudeCodeAdapter,
   parseFrontmatter,
+  resolveClaudeCliRuntime,
   resolveClaudeMemoryDir,
   resolveCanonicalWorkspacePath,
   mcpServersToClaudeConfigJson,
@@ -205,6 +206,37 @@ describe('ClaudeCodeAdapter', () => {
     expect(meta.models!.find(m => m.id === 'sonnet[1m]')).toBeUndefined();
   });
 
+  test('resolveClaudeCliRuntime maps profile configDir to CLAUDE_CONFIG_DIR and honors command/env', () => {
+    const runtime = resolveClaudeCliRuntime({
+      id: 'profile-claude-work',
+      name: 'Claude Work',
+      vendor: 'claude-code',
+      command: '/opt/claude/bin/claude',
+      authMode: 'account',
+      configDir: '/tmp/claude-work-home',
+      env: { ANTHROPIC_BASE_URL: 'https://example.test', CLAUDE_CONFIG_DIR: '/tmp/ignored' },
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    });
+
+    expect(runtime.command).toBe('/opt/claude/bin/claude');
+    expect(runtime.env.ANTHROPIC_BASE_URL).toBe('https://example.test');
+    expect(runtime.env.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-work-home');
+    expect(runtime.configDir).toBe('/tmp/claude-work-home');
+    expect(runtime.profileKey).toContain('profile-claude-work:');
+  });
+
+  test('resolveClaudeCliRuntime rejects non-Claude profiles', () => {
+    expect(() => resolveClaudeCliRuntime({
+      id: 'profile-codex',
+      name: 'Codex',
+      vendor: 'codex',
+      authMode: 'server-configured',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    })).toThrow('CLI profile vendor codex is not claude-code');
+  });
+
   test('uses default working directory', () => {
     const adapter = new ClaudeCodeAdapter();
     expect(adapter.workingDir).toContain('.openclaw');
@@ -318,6 +350,57 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     const idx = capturedArgs!.indexOf('--model');
     expect(idx).toBeGreaterThan(-1);
     expect(capturedArgs![idx + 1]).toBe('claude-opus-4-7');
+  });
+
+  test('uses Claude profile command, env, and CLAUDE_CONFIG_DIR for streaming', async () => {
+    let capturedCmd: string | null = null;
+    let capturedEnv: NodeJS.ProcessEnv | undefined;
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (cmd: string, _args: string[], opts: { env?: NodeJS.ProcessEnv }) => {
+          capturedCmd = cmd;
+          capturedEnv = opts.env;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-profile',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        cliProfile: {
+          id: 'profile-claude-work',
+          name: 'Claude Work',
+          vendor: 'claude-code',
+          command: '/opt/claude/bin/claude',
+          authMode: 'account',
+          configDir: '/tmp/claude-work-home',
+          env: { ANTHROPIC_BASE_URL: 'https://example.test' },
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      });
+      streamRef = stream;
+    });
+
+    for await (const event of streamRef!) {
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedCmd).toBe('/opt/claude/bin/claude');
+    expect(capturedEnv?.ANTHROPIC_BASE_URL).toBe('https://example.test');
+    expect(capturedEnv?.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-work-home');
   });
 
   test('omits --model flag when model option is not set', async () => {
@@ -1426,6 +1509,51 @@ describe('ClaudeCodeAdapter runOneShot', () => {
     expect(capturedOpts.cwd).toBe('/some/workspace');
   });
 
+  test('uses Claude profile command, env, and CLAUDE_CONFIG_DIR for one-shot calls', async () => {
+    let capturedCmd: string | null = null;
+    let capturedOpts: any;
+    let result: Promise<string> | undefined;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        execFile: (cmd: string, _args: string[], opts: any, cb: any) => {
+          capturedCmd = cmd;
+          capturedOpts = opts;
+          cb(null, 'ok', '');
+          return { stdin: { end: () => {} } };
+        },
+        spawn: () => {
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          return proc;
+        },
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      result = adapter.runOneShot('test prompt', {
+        cliProfile: {
+          id: 'profile-claude-work',
+          name: 'Claude Work',
+          vendor: 'claude-code',
+          command: '/opt/claude/bin/claude',
+          authMode: 'account',
+          configDir: '/tmp/claude-work-home',
+          env: { ANTHROPIC_BASE_URL: 'https://example.test' },
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      });
+    });
+
+    await expect(result!).resolves.toBe('ok');
+    expect(capturedCmd).toBe('/opt/claude/bin/claude');
+    expect(capturedOpts.env.ANTHROPIC_BASE_URL).toBe('https://example.test');
+    expect(capturedOpts.env.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-work-home');
+  });
+
   test('always includes --print -p flags with the prompt', async () => {
     let capturedArgs: string[] | undefined;
     jest.isolateModules(() => {
@@ -1803,6 +1931,15 @@ describe('ClaudeCodeAdapter.extractMemory', () => {
     }
   }
 
+  function mkProfileMemory(configDir: string, workspace: string, files: Record<string, string>): void {
+    const sanitized = workspace.replace(/[^a-zA-Z0-9]/g, '-');
+    const full = path.join(configDir, 'projects', sanitized, 'memory');
+    fs.mkdirSync(full, { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      fs.writeFileSync(path.join(full, name), content, 'utf8');
+    }
+  }
+
   test('returns null when no memory directory exists', async () => {
     const snapshot = await adapter.extractMemory('/tmp/no-memory-here');
     expect(snapshot).toBeNull();
@@ -1845,6 +1982,40 @@ Backend engineer with deep Go experience.
     expect(byName['feedback_testing.md'].description).toBe('use real DB not mocks');
     expect(byName['user_role.md'].type).toBe('user');
     expect(snapshot!.capturedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  test('extracts memory from profile configDir when supplied', async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-profile-config-'));
+    try {
+      mkProfileMemory(configDir, '/tmp/profile-memtest', {
+        'MEMORY.md': '- [Profile](project_profile.md) — profile scoped\n',
+        'project_profile.md': `---
+name: profile-memory
+description: profile scoped memory
+type: project
+---
+
+Profile scoped body.
+`,
+      });
+
+      const snapshot = await adapter.extractMemory('/tmp/profile-memtest', {
+        cliProfile: {
+          id: 'profile-claude-work',
+          name: 'Claude Work',
+          vendor: 'claude-code',
+          authMode: 'account',
+          configDir,
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      });
+      expect(snapshot).not.toBeNull();
+      expect(snapshot!.sourcePath).toBe(path.join(configDir, 'projects', '-tmp-profile-memtest', 'memory'));
+      expect(snapshot!.files[0].type).toBe('project');
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true });
+    }
   });
 
   test('returns null when only non-md files are present', async () => {
@@ -1941,6 +2112,16 @@ describe('ClaudeCodeAdapter.getMemoryDir', () => {
     return full;
   }
 
+  function mkProfileMemory(configDir: string, workspace: string, files: Record<string, string>): string {
+    const sanitized = workspace.replace(/[^a-zA-Z0-9]/g, '-');
+    const full = path.join(configDir, 'projects', sanitized, 'memory');
+    fs.mkdirSync(full, { recursive: true });
+    for (const [name, content] of Object.entries(files)) {
+      fs.writeFileSync(path.join(full, name), content, 'utf8');
+    }
+    return full;
+  }
+
   test('returns null for empty workspacePath', () => {
     expect(adapter.getMemoryDir('')).toBeNull();
   });
@@ -1961,6 +2142,28 @@ describe('ClaudeCodeAdapter.getMemoryDir', () => {
       'feedback_x.md': '---\ntype: feedback\n---\nbody\n',
     });
     expect(adapter.getMemoryDir('/tmp/mem-getter')).toBe(expected);
+  });
+
+  test('resolves memory dir under profile configDir when supplied', () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-profile-config-'));
+    try {
+      const expected = mkProfileMemory(configDir, '/tmp/profile-mem-getter', {
+        'MEMORY.md': '- profile\n',
+      });
+      expect(adapter.getMemoryDir('/tmp/profile-mem-getter', {
+        cliProfile: {
+          id: 'profile-claude-work',
+          name: 'Claude Work',
+          vendor: 'claude-code',
+          authMode: 'account',
+          configDir,
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      })).toBe(expected);
+    } finally {
+      fs.rmSync(configDir, { recursive: true, force: true });
+    }
   });
 
   test('worktree workspaces resolve to the main repo memory dir', () => {

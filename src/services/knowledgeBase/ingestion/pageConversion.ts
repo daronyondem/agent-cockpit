@@ -23,7 +23,7 @@ import type {
   BaseBackendAdapter,
   RunOneShotOptions,
 } from '../../backends/base';
-import type { EffortLevel } from '../../../types';
+import type { EffortLevel, CliProfile } from '../../../types';
 
 /**
  * Unified prompt used by every AI conversion call site (PDF page, DOCX
@@ -99,6 +99,8 @@ export interface ConvertImageOptions {
   model?: string;
   /** Optional reasoning effort. */
   effort?: EffortLevel;
+  /** Resolved CLI profile for account-isolated ingestion calls. */
+  cliProfile?: CliProfile;
   /** Per-image hard timeout. Defaults to 3 min. */
   timeoutMs?: number;
 }
@@ -134,6 +136,7 @@ export async function convertImageToMarkdown(
     timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     workingDir,
     allowTools: true,
+    cliProfile: opts.cliProfile,
   };
 
   let lastError: unknown = null;

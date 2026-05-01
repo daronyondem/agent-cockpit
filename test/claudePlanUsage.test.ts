@@ -197,6 +197,69 @@ describe('ClaudePlanUsageService', () => {
       expect(onDisk.rateLimits).toEqual(USAGE_BODY);
     });
 
+    test('plain server-configured profile uses the default cache', async () => {
+      readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson({ accessToken: 'server-token' }) }]);
+      const fetchFn = mockFetchOk(USAGE_BODY);
+      const profile = {
+        id: 'server-configured-claude-code',
+        name: 'Claude Code (Server Configured)',
+        vendor: 'claude-code' as const,
+        authMode: 'server-configured' as const,
+        createdAt: '2026-04-29T00:00:00.000Z',
+        updatedAt: '2026-04-29T00:00:00.000Z',
+      };
+
+      await service.maybeRefresh('server-profile', profile);
+
+      expect(fetchFn).toHaveBeenCalledWith(
+        'https://api.anthropic.com/api/oauth/usage',
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'Authorization': 'Bearer server-token' }),
+        }),
+      );
+      expect(service.getCached().rateLimits).toEqual(USAGE_BODY);
+      expect(service.getCached(profile).rateLimits).toEqual(USAGE_BODY);
+      expect(fs.existsSync(path.join(tmpDir, 'data', 'claude-plan-usage', 'server-configured-claude-code.json'))).toBe(false);
+    });
+
+    test('uses Claude profile configDir credentials and stores profile cache separately', async () => {
+      const profileConfigDir = '/tmp/claude-work-home';
+      const profileCredentialsPath = path.join(profileConfigDir, '.credentials.json');
+      readSpy = mockReadFile([
+        { path: profileCredentialsPath, content: validCredsJson({ accessToken: 'profile-token', rateLimitTier: 'work_20x' }) },
+      ]);
+      const fetchFn = mockFetchOk(USAGE_BODY);
+      const profile = {
+        id: 'profile-claude-work',
+        name: 'Claude Work',
+        vendor: 'claude-code' as const,
+        command: '/opt/claude/bin/claude',
+        authMode: 'account' as const,
+        configDir: profileConfigDir,
+        env: { ANTHROPIC_BASE_URL: 'https://example.test' },
+        createdAt: '2026-04-29T00:00:00.000Z',
+        updatedAt: '2026-04-29T00:00:00.000Z',
+      };
+
+      await service.maybeRefresh('profile-test', profile);
+      const cached = service.getCached(profile);
+
+      expect(fetchFn).toHaveBeenCalledWith(
+        'https://api.anthropic.com/api/oauth/usage',
+        expect.objectContaining({
+          headers: expect.objectContaining({ 'Authorization': 'Bearer profile-token' }),
+        }),
+      );
+      expect(cached.planTier).toBe('work_20x');
+      expect(cached.rateLimits).toEqual(USAGE_BODY);
+      expect(service.getCached().rateLimits).toBeNull();
+
+      const profileCache = path.join(tmpDir, 'data', 'claude-plan-usage', 'profile-claude-work.json');
+      const onDisk = JSON.parse(fs.readFileSync(profileCache, 'utf8'));
+      expect(onDisk.planTier).toBe('work_20x');
+      expect(onDisk.rateLimits).toEqual(USAGE_BODY);
+    });
+
     test('sends bearer token + anthropic-beta header', async () => {
       readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson({ accessToken: 'my-token' }) }]);
       const fetchFn = mockFetchOk(USAGE_BODY);

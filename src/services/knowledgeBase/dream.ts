@@ -30,6 +30,7 @@ import type {
 } from '../../types';
 import type { BaseBackendAdapter, RunOneShotOptions } from '../backends/base';
 import type { BackendRegistry } from '../backends/registry';
+import type { CliProfileRuntime } from '../cliProfiles';
 import type { KbDatabase } from './db';
 import type { KbVectorStore } from './vectorStore';
 import {
@@ -371,6 +372,10 @@ export interface KbDreamChatService {
   getWorkspaceKbEnabled(hash: string): Promise<boolean>;
   getKbDb(hash: string): KbDatabase | null;
   getSettings(): Promise<Settings>;
+  resolveCliProfileRuntime?(
+    cliProfileId: string | undefined | null,
+    fallbackBackend?: string | null,
+  ): Promise<CliProfileRuntime>;
   getKbKnowledgeDir(hash: string): string;
   getKbEntriesDir(hash: string): string;
   getKbSynthesisDir(hash: string): string;
@@ -520,8 +525,8 @@ export class KbDreamService {
       }
 
       const settings = await this.chatService.getSettings();
-      const adapter = this._getAdapter(settings);
-      const baseRunOptions = this._buildRunOptions(hash, settings);
+      const { adapter, runtime } = await this._resolveCli(settings);
+      const baseRunOptions = this._buildRunOptions(hash, settings, runtime);
       const runOptionsWithMcp = { ...baseRunOptions, mcpServers: mcpSession.mcpServers };
       const concurrency = settings.knowledgeBase?.cliConcurrency ?? DEFAULT_CONCURRENCY;
       const strongThreshold = settings.knowledgeBase?.dreamingStrongMatchThreshold ?? DEFAULT_STRONG_THRESHOLD;
@@ -1295,21 +1300,25 @@ export class KbDreamService {
     }
   }
 
-  private _getAdapter(settings: Settings): BaseBackendAdapter {
+  private async _resolveCli(settings: Settings): Promise<{ adapter: BaseBackendAdapter; runtime: CliProfileRuntime }> {
+    const cliProfileId = settings.knowledgeBase?.dreamingCliProfileId;
     const backendId = settings.knowledgeBase?.dreamingCliBackend;
-    if (!backendId) {
+    if (!cliProfileId && !backendId) {
       throw new Error(
-        'No Dreaming CLI backend configured. Set a backend in Knowledge Base settings.',
+        'No Dreaming CLI backend configured. Set a profile in Knowledge Base settings.',
       );
     }
-    const adapter = this.backendRegistry.get(backendId);
+    const runtime = this.chatService.resolveCliProfileRuntime
+      ? await this.chatService.resolveCliProfileRuntime(cliProfileId, backendId || undefined)
+      : { backendId: backendId || '' };
+    const adapter = this.backendRegistry.get(runtime.backendId);
     if (!adapter) {
-      throw new Error(`Dreaming CLI backend "${backendId}" is not registered.`);
+      throw new Error(`Dreaming CLI backend "${runtime.backendId}" is not registered for profile "${runtime.cliProfileId || runtime.backendId}".`);
     }
-    return adapter;
+    return { adapter, runtime };
   }
 
-  private _buildRunOptions(hash: string, settings: Settings): RunOneShotOptions {
+  private _buildRunOptions(hash: string, settings: Settings, runtime: CliProfileRuntime): RunOneShotOptions {
     const kb = settings.knowledgeBase;
     const knowledgeDir = this.chatService.getKbKnowledgeDir(hash);
     return {
@@ -1318,6 +1327,7 @@ export class KbDreamService {
       timeoutMs: DREAM_TIMEOUT_MS,
       workingDir: knowledgeDir,
       allowTools: true,
+      cliProfile: runtime.profile,
       // Stash the hash in a way we can retrieve it later.
       _workspaceHash: hash,
     } as RunOneShotOptions & { _workspaceHash: string };

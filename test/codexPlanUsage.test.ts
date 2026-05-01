@@ -327,5 +327,71 @@ describe('CodexPlanUsageService', () => {
       expect(cached.account?.planType).toBe('pro');
       log.mockRestore();
     });
+
+    test('uses Codex profile command/env and stores profile cache separately', async () => {
+      setupMockProc({
+        responses: {
+          initialize: {},
+          'account/read': ACCOUNT_RESULT,
+          'account/rateLimits/read': RATE_LIMITS_RESULT,
+        },
+      });
+      const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+      const profile = {
+        id: 'profile-codex-work',
+        name: 'Codex Work',
+        vendor: 'codex' as const,
+        command: '/opt/codex/bin/codex',
+        authMode: 'account' as const,
+        configDir: '/tmp/codex-work-home',
+        env: { OPENAI_BASE_URL: 'https://example.test' },
+        createdAt: '2026-04-29T00:00:00.000Z',
+        updatedAt: '2026-04-29T00:00:00.000Z',
+      };
+
+      await service.maybeRefresh('profile-test', profile);
+      const cached = service.getCached(profile);
+
+      expect(mockSpawnFn).toHaveBeenCalledWith('/opt/codex/bin/codex', ['app-server'], expect.objectContaining({
+        env: expect.objectContaining({
+          CODEX_HOME: '/tmp/codex-work-home',
+          OPENAI_BASE_URL: 'https://example.test',
+        }),
+      }));
+      expect(cached.account?.email).toBe('user@example.com');
+      expect(service.getCached().account).toBeNull();
+
+      const profileCache = path.join(tmpDir, 'data', 'codex-plan-usage', 'profile-codex-work.json');
+      const onDisk = JSON.parse(fs.readFileSync(profileCache, 'utf8'));
+      expect(onDisk.account.email).toBe('user@example.com');
+      log.mockRestore();
+    });
+
+    test('plain server-configured profile uses the default cache', async () => {
+      setupMockProc({
+        responses: {
+          initialize: {},
+          'account/read': ACCOUNT_RESULT,
+          'account/rateLimits/read': RATE_LIMITS_RESULT,
+        },
+      });
+      const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+      const profile = {
+        id: 'server-configured-codex',
+        name: 'Codex (Server Configured)',
+        vendor: 'codex' as const,
+        authMode: 'server-configured' as const,
+        createdAt: '2026-04-29T00:00:00.000Z',
+        updatedAt: '2026-04-29T00:00:00.000Z',
+      };
+
+      await service.maybeRefresh('default-cache', profile);
+      const cached = service.getCached(profile);
+
+      expect(cached.account?.email).toBe('user@example.com');
+      expect(service.getCached().account?.email).toBe('user@example.com');
+      expect(fs.existsSync(path.join(tmpDir, 'data', 'codex-plan-usage', 'server-configured-codex.json'))).toBe(false);
+      log.mockRestore();
+    });
   });
 });
