@@ -34,6 +34,7 @@ export interface ChatRouterEnv {
   activeStreams: Map<string, ActiveStreamEntry>;
   streamJobs: StreamJobRegistry;
   reconcileInterruptedJobs: () => Promise<{ interrupted: number; removed: number }>;
+  chatShutdown: () => Promise<void>;
   wsFns: WsFunctions;
   wsShutdown: () => void;
   request(method: string, urlPath: string, body?: any): Promise<HttpResult>;
@@ -84,7 +85,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
   } as any;
   const chatResult = createChatRouter({ chatService, backendRegistry, updateService: opts.updateService ?? null as any, claudePlanUsageService: mockPlanUsage, kiroPlanUsageService: mockKiroPlanUsage, codexPlanUsageService: mockCodexPlanUsage });
   await chatResult.reconcileInterruptedJobs();
-  const { activeStreams, streamJobs, reconcileInterruptedJobs } = chatResult;
+  const { activeStreams, streamJobs, reconcileInterruptedJobs, shutdown: chatShutdown } = chatResult;
   app.use('/api/chat', chatResult.router);
 
   const server = await new Promise<http.Server>((resolve) => {
@@ -218,7 +219,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     });
   };
 
-  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, streamJobs, reconcileInterruptedJobs, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
+  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, streamJobs, reconcileInterruptedJobs, chatShutdown, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
 }
 
 async function removeTmpDirWithRetry(tmpDir: string): Promise<void> {
