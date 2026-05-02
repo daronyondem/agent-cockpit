@@ -104,9 +104,7 @@
   /* Draft localStorage persistence — survives tab crash / reload so the user
      doesn't lose a half-written message. Only text + *completed* attachments
      (those with a server path) are persisted; in-flight uploads can't be
-     serialized since the File bytes would need to replay. Mirrors V1
-     `public/js/conversations.js:562-631` (`chatSerializeDraftFiles` +
-     `chatWriteDraftToStorage`). */
+     serialized since the File bytes would need to replay. */
   const DRAFT_KEY_PREFIX = 'ac:v2:draft:';
   const DRAFT_DEBOUNCE_MS = 150;
   const RECONNECT_MAX_ATTEMPTS = 5;
@@ -1522,8 +1520,7 @@
   }
 
   /* Called from the suspended-queue banner. Clears the suspended flag and
-     kicks the drainer, which will send the head of the restored queue.
-     Mirrors V1 `public/js/streaming.js:58-66`. */
+     kicks the drainer, which will send the head of the restored queue. */
   function resumeSuspendedQueue(convId){
     const s = states.get(convId);
     if (!s) return;
@@ -1551,10 +1548,9 @@
     /* Keep the head in the queue with `inFlight: true` so `QueueRow` can
        swap its badge to "Sending…" and hide the mutating actions while the
        send is in flight. The flag is cleared when the pending user message
-       appears in the feed (sendWireContent), or on error. Mirrors V1
-       `public/js/streaming.js:29`. Server persistence is handled by
-       `sendWireContent` once `/message` accepts the send, or after rollback
-       restores the head. */
+       appears in the feed (sendWireContent), or on error. Server persistence
+       is handled by `sendWireContent` once `/message` accepts the send, or
+       after rollback restores the head. */
     update(convId, { queue: [{ ...head, inFlight: true }, ...rest] });
     setTimeout(() => { sendWireContent(convId, head); }, 0);
   }

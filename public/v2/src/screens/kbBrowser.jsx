@@ -1005,8 +1005,7 @@ function rawIsProcessing(state){
    throw a redeclaration `SyntaxError` and fail to load this whole file. */
 const KB_UPLOAD_CONCURRENCY = 3;
 const KB_UPLOAD_DISMISS_MS = 1500;
-/* OS-generated junk — never upload. Mirrors V1 `KB_UPLOAD_SKIP_FILES`
-   (public/js/main.js:3402). Match is case-insensitive; AppleDouble
+/* OS-generated junk — never upload. Match is case-insensitive; AppleDouble
    resource forks (`._*`) are caught by prefix. */
 const KB_UPLOAD_SKIP_FILES = new Set([
   'thumbs.db', 'desktop.ini', '.ds_store', '._ds_store',
@@ -1458,10 +1457,9 @@ function KbRawTab({ hash, kbState, onStateUpdate }){
   }, [toast]);
 
   /* beforeunload guard — warn before tab close / nav while the upload
-     queue has active items. Mirrors V1 `_chatKbBeforeUnload`
-     (public/js/main.js:3394). Listener only attached while the queue
-     actually has `queued` / `uploading` rows; cleanup auto-detaches as
-     the drain finishes. */
+     queue has active items. Listener only attached while the queue actually
+     has `queued` / `uploading` rows; cleanup auto-detaches as the drain
+     finishes. */
   React.useEffect(() => {
     const active = queue.some(q => q.status === 'queued' || q.status === 'uploading' || q.status === 'retrying');
     if (!active) return;
@@ -1475,7 +1473,7 @@ function KbRawTab({ hash, kbState, onStateUpdate }){
 
   /* Digestion-complete banner (#20) — driven by the `changed.digestion`
      block on `kb_state_update` WS frames. streamStore fans these out via
-     `ac:kb-state-update` CustomEvents. Mirrors V1 main.js:1938-1948:
+     `ac:kb-state-update` CustomEvents:
        - active:true → clear any stale banner (new session started).
        - active:false & entriesCreated>0 → snapshot into `digestComplete`.
        - active:false & entriesCreated===0 → no-op (empty digest). */
@@ -1507,8 +1505,7 @@ function KbRawTab({ hash, kbState, onStateUpdate }){
     setQueue(prev => prev.filter(it => it.status === 'queued' || it.status === 'uploading'));
   }
 
-  /* Queue controls — mirror V1 `chatKbPauseQueue` / `chatKbResumeQueue` /
-     `chatKbCancelQueue` / `chatKbRetryFailed` (public/js/main.js:3539-3587).
+  /* Queue controls:
      - Pause freezes new starts; in-flight items finish on their own.
      - Cancel aborts in-flight XHRs and marks remaining items 'cancelled'.
      - Retry failed flips 'error' items back to 'queued' for re-drain. */
@@ -2004,10 +2001,10 @@ function KbRawRow({ raw, onDigest, onDelete }){
   );
 }
 
-/* Per-workspace embedding configuration form. Mirrors the legacy V1 settings
-   tab — Model / Ollama Host / Dimensions inputs, Test Connection + Save
-   buttons, inline health pill. Backend defaults apply when fields are blank
-   on save (model: nomic-embed-text, host: http://localhost:11434, dims: 768). */
+/* Per-workspace embedding configuration form: Model / Ollama Host /
+   Dimensions inputs, Test Connection + Save buttons, inline health pill.
+   Backend defaults apply when fields are blank on save (model:
+   nomic-embed-text, host: http://localhost:11434, dims: 768). */
 const KB_EMB_DEFAULTS = {
   model: 'nomic-embed-text',
   ollamaHost: 'http://localhost:11434',

@@ -498,7 +498,7 @@ A new `KbErrorClass` value `ingestion_cli_error` is added for unrecoverable Inge
 - **`src/services/knowledgeBase/digest.ts`** — `buildDigestPrompt` updates the image-reference rule per §9.
 - **`src/services/knowledgeBase/dreaming.ts`** — concurrency setting renamed in code from `dreamingConcurrency` to `cliConcurrency`.
 - **`src/types/index.ts`** — `Settings.knowledgeBase` schema additions.
-- **`public/v2/src/screens/settingsScreen.jsx`** + **`public/js/main.js`** — new Ingestion CLI block + concurrency relocation.
+- **`public/v2/src/screens/settingsScreen.jsx`** — Ingestion CLI block + concurrency relocation.
 
 ## 15. Implementation Sequence
 

@@ -1,15 +1,43 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { EventEmitter } from 'events';
 import { MemoryWatcher } from '../src/services/memoryWatcher';
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
 
-// Debounce window for tests. We use a short window so tests run quickly,
-// but one long enough that a deliberate "wait 2× debounce then check"
-// step is still reliable on CI.
+// Debounce window for tests. Change-event tests use a fake fs.watch source so
+// they exercise MemoryWatcher's debounce logic without OS watcher timing noise.
 const TEST_DEBOUNCE_MS = 60;
-const WAIT_FOR_FIRE_MS = TEST_DEBOUNCE_MS * 3;
+const WAIT_FOR_FIRE_MS = TEST_DEBOUNCE_MS * 5;
+
+interface FakeWatchControl {
+  emitChange(filename: string | Buffer | null, watcherIndex?: number): void;
+}
+
+async function withFakeFsWatch(fn: (control: FakeWatchControl) => Promise<void>): Promise<void> {
+  const fakeWatchers: EventEmitter[] = [];
+  const watchSpy = jest.spyOn(fs, 'watch').mockImplementation((() => {
+    const fake = new EventEmitter() as EventEmitter & { close: jest.Mock };
+    fake.close = jest.fn();
+    fakeWatchers.push(fake);
+    return fake;
+  }) as unknown as typeof fs.watch);
+
+  const control: FakeWatchControl = {
+    emitChange(filename: string | Buffer | null, watcherIndex = 0): void {
+      const fake = fakeWatchers[watcherIndex];
+      if (!fake) throw new Error(`Missing fake watcher at index ${watcherIndex}`);
+      fake.emit('change', 'rename', filename);
+    },
+  };
+
+  try {
+    await fn(control);
+  } finally {
+    watchSpy.mockRestore();
+  }
+}
 
 describe('MemoryWatcher', () => {
   let tmpDir: string;
@@ -84,136 +112,152 @@ describe('MemoryWatcher', () => {
   // ── Change detection + debounce ──────────────────────────────────────────
 
   test('fires onChange when a new .md file is created', async () => {
-    const onChange = jest.fn();
-    watcher.watch('k1', tmpDir, onChange);
+    await withFakeFsWatch(async ({ emitChange }) => {
+      const onChange = jest.fn();
+      watcher.watch('k1', tmpDir, onChange);
 
-    fs.writeFileSync(path.join(tmpDir, 'feedback_x.md'), '---\ntype: feedback\n---\nhi\n');
-    await sleep(WAIT_FOR_FIRE_MS);
+      emitChange('feedback_x.md');
+      await sleep(WAIT_FOR_FIRE_MS);
 
-    expect(onChange).toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalled();
+    });
   });
 
   test('fires onChange when an existing .md file is updated', async () => {
-    const file = path.join(tmpDir, 'user_role.md');
-    fs.writeFileSync(file, 'initial');
-    const onChange = jest.fn();
-    watcher.watch('k1', tmpDir, onChange);
+    await withFakeFsWatch(async ({ emitChange }) => {
+      const onChange = jest.fn();
+      watcher.watch('k1', tmpDir, onChange);
 
-    fs.writeFileSync(file, 'updated');
-    await sleep(WAIT_FOR_FIRE_MS);
+      emitChange('user_role.md');
+      await sleep(WAIT_FOR_FIRE_MS);
 
-    expect(onChange).toHaveBeenCalled();
+      expect(onChange).toHaveBeenCalled();
+    });
   });
 
   test('ignores non-.md file changes', async () => {
-    const onChange = jest.fn();
-    watcher.watch('k1', tmpDir, onChange);
+    await withFakeFsWatch(async ({ emitChange }) => {
+      const onChange = jest.fn();
+      watcher.watch('k1', tmpDir, onChange);
 
-    fs.writeFileSync(path.join(tmpDir, 'notes.txt'), 'text file');
-    fs.writeFileSync(path.join(tmpDir, 'data.json'), '{}');
-    await sleep(WAIT_FOR_FIRE_MS);
+      emitChange('notes.txt');
+      emitChange('data.json');
+      await sleep(WAIT_FOR_FIRE_MS);
 
-    expect(onChange).not.toHaveBeenCalled();
+      expect(onChange).not.toHaveBeenCalled();
+    });
   });
 
   test('debounces rapid bursts into a single onChange call', async () => {
-    const onChange = jest.fn();
-    watcher.watch('k1', tmpDir, onChange);
+    await withFakeFsWatch(async ({ emitChange }) => {
+      const onChange = jest.fn();
+      watcher.watch('k1', tmpDir, onChange);
 
-    // Simulate Claude Code's extraction agent writing several files
-    // in quick succession at the end of a turn.
-    fs.writeFileSync(path.join(tmpDir, 'user_role.md'), 'a');
-    fs.writeFileSync(path.join(tmpDir, 'feedback_a.md'), 'b');
-    fs.writeFileSync(path.join(tmpDir, 'project_x.md'), 'c');
-    fs.writeFileSync(path.join(tmpDir, 'reference_y.md'), 'd');
+      // Simulate Claude Code's extraction agent writing several files
+      // in quick succession at the end of a turn.
+      emitChange('user_role.md');
+      emitChange('feedback_a.md');
+      emitChange('project_x.md');
+      emitChange('reference_y.md');
 
-    await sleep(WAIT_FOR_FIRE_MS);
+      await sleep(WAIT_FOR_FIRE_MS);
 
-    expect(onChange).toHaveBeenCalledTimes(1);
+      expect(onChange).toHaveBeenCalledTimes(1);
+    });
   });
 
   test('fires again after the debounce window closes', async () => {
-    const onChange = jest.fn();
-    watcher.watch('k1', tmpDir, onChange);
+    await withFakeFsWatch(async ({ emitChange }) => {
+      const onChange = jest.fn();
+      watcher.watch('k1', tmpDir, onChange);
 
-    fs.writeFileSync(path.join(tmpDir, 'feedback_a.md'), 'first');
-    await sleep(WAIT_FOR_FIRE_MS);
-    expect(onChange).toHaveBeenCalledTimes(1);
+      emitChange('feedback_a.md');
+      await sleep(WAIT_FOR_FIRE_MS);
+      expect(onChange).toHaveBeenCalledTimes(1);
 
-    fs.writeFileSync(path.join(tmpDir, 'feedback_b.md'), 'second');
-    await sleep(WAIT_FOR_FIRE_MS);
-    expect(onChange).toHaveBeenCalledTimes(2);
+      emitChange('feedback_b.md');
+      await sleep(WAIT_FOR_FIRE_MS);
+      expect(onChange).toHaveBeenCalledTimes(2);
+    });
   });
 
   test('does not fire onChange after unwatch during the debounce window', async () => {
-    const onChange = jest.fn();
-    watcher.watch('k1', tmpDir, onChange);
+    await withFakeFsWatch(async ({ emitChange }) => {
+      const onChange = jest.fn();
+      watcher.watch('k1', tmpDir, onChange);
 
-    fs.writeFileSync(path.join(tmpDir, 'user_role.md'), 'hi');
-    // Unwatch before the debounce timer fires.
-    await sleep(TEST_DEBOUNCE_MS / 4);
-    watcher.unwatch('k1');
-    await sleep(WAIT_FOR_FIRE_MS);
+      emitChange('user_role.md');
+      // Unwatch before the debounce timer fires.
+      await sleep(TEST_DEBOUNCE_MS / 4);
+      watcher.unwatch('k1');
+      await sleep(WAIT_FOR_FIRE_MS);
 
-    expect(onChange).not.toHaveBeenCalled();
+      expect(onChange).not.toHaveBeenCalled();
+    });
   });
 
   test('multiple keys watching different dirs fire independently', async () => {
-    const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-watcher-b-'));
-    try {
-      const onA = jest.fn();
-      const onB = jest.fn();
-      watcher.watch('a', tmpDir, onA);
-      watcher.watch('b', dir2, onB);
+    await withFakeFsWatch(async ({ emitChange }) => {
+      const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'mem-watcher-b-'));
+      try {
+        const onA = jest.fn();
+        const onB = jest.fn();
+        watcher.watch('a', tmpDir, onA);
+        watcher.watch('b', dir2, onB);
 
-      fs.writeFileSync(path.join(tmpDir, 'user_role.md'), 'x');
-      await sleep(WAIT_FOR_FIRE_MS);
+        emitChange('user_role.md', 0);
+        await sleep(WAIT_FOR_FIRE_MS);
 
-      expect(onA).toHaveBeenCalledTimes(1);
-      expect(onB).not.toHaveBeenCalled();
+        expect(onA).toHaveBeenCalledTimes(1);
+        expect(onB).not.toHaveBeenCalled();
 
-      fs.writeFileSync(path.join(dir2, 'feedback_y.md'), 'y');
-      await sleep(WAIT_FOR_FIRE_MS);
+        emitChange('feedback_y.md', 1);
+        await sleep(WAIT_FOR_FIRE_MS);
 
-      expect(onA).toHaveBeenCalledTimes(1);
-      expect(onB).toHaveBeenCalledTimes(1);
-    } finally {
-      fs.rmSync(dir2, { recursive: true, force: true });
-    }
+        expect(onA).toHaveBeenCalledTimes(1);
+        expect(onB).toHaveBeenCalledTimes(1);
+      } finally {
+        fs.rmSync(dir2, { recursive: true, force: true });
+      }
+    });
   });
 
   test('swallows onChange handler errors without crashing the watcher', async () => {
-    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    const onChange = jest.fn().mockImplementation(() => {
-      throw new Error('boom');
+    await withFakeFsWatch(async ({ emitChange }) => {
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const onChange = jest.fn().mockImplementation(() => {
+        throw new Error('boom');
+      });
+      watcher.watch('k1', tmpDir, onChange);
+
+      emitChange('feedback_x.md');
+      await sleep(WAIT_FOR_FIRE_MS);
+
+      expect(onChange).toHaveBeenCalled();
+      expect(watcher.isWatching('k1')).toBe(true);
+
+      // A second change still fires despite the previous throw.
+      emitChange('feedback_y.md');
+      await sleep(WAIT_FOR_FIRE_MS);
+      expect(onChange).toHaveBeenCalledTimes(2);
+
+      errSpy.mockRestore();
     });
-    watcher.watch('k1', tmpDir, onChange);
-
-    fs.writeFileSync(path.join(tmpDir, 'feedback_x.md'), 'hi');
-    await sleep(WAIT_FOR_FIRE_MS);
-
-    expect(onChange).toHaveBeenCalled();
-    expect(watcher.isWatching('k1')).toBe(true);
-
-    // A second change still fires despite the previous throw.
-    fs.writeFileSync(path.join(tmpDir, 'feedback_y.md'), 'ho');
-    await sleep(WAIT_FOR_FIRE_MS);
-    expect(onChange).toHaveBeenCalledTimes(2);
-
-    errSpy.mockRestore();
   });
 
   test('swallows async onChange rejections without crashing the watcher', async () => {
-    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
-    const onChange = jest.fn().mockRejectedValue(new Error('async boom'));
-    watcher.watch('k1', tmpDir, onChange);
+    await withFakeFsWatch(async ({ emitChange }) => {
+      const errSpy = jest.spyOn(console, 'error').mockImplementation(() => {});
+      const onChange = jest.fn().mockRejectedValue(new Error('async boom'));
+      watcher.watch('k1', tmpDir, onChange);
 
-    fs.writeFileSync(path.join(tmpDir, 'user_role.md'), 'hi');
-    await sleep(WAIT_FOR_FIRE_MS);
+      emitChange('user_role.md');
+      await sleep(WAIT_FOR_FIRE_MS);
 
-    expect(onChange).toHaveBeenCalled();
-    expect(watcher.isWatching('k1')).toBe(true);
+      expect(onChange).toHaveBeenCalled();
+      expect(watcher.isWatching('k1')).toBe(true);
 
-    errSpy.mockRestore();
+      errSpy.mockRestore();
+    });
   });
 });

@@ -1,8 +1,8 @@
 /* global React, Ico, AgentApi, useDialog, useToasts */
 
 /* ---------- WorkspaceSettingsModal — per-workspace settings dialog. ---------- */
-/* Mirrors V1's chatShowWorkspaceSettings (public/js/main.js:1253). Opens from
-   the gear button next to each workspace group in the sidebar. Three tabs:
+/* Opens from the gear button next to each workspace group in the sidebar.
+   Three tabs:
      - Instructions: free-form system-prompt prefix (Save button).
      - Memory: enable toggle (immediate-save) + grouped browser with per-file
        delete and a "Clear all" footer. Refetches snapshot after each mutation.

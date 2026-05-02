@@ -1640,7 +1640,7 @@ body{
 .composer-foot .pick b{ color: var(--text); font-weight: 600; }
 .composer-foot .pick .chev{ opacity: .5; display: inline-flex; }
 /* Transparent native <select> overlay: lets the OS/browser render the
-   dropdown list while the chip keeps its deck styling. */
+   dropdown list while the chip keeps its styled shell. */
 .composer-foot .pick-select{
   position: absolute; inset: 0;
   width: 100%; height: 100%;
@@ -4111,17 +4111,14 @@ body{
   border-color: color-mix(in oklch, var(--status-error), transparent 60%);
 }
 
-/* Theme-aware override for the deck's `.seg` active pill — the base rule
-   hardcodes deck colors (#CFCFD4/#0A0A0B) that look wrong against the app
-   surface; here we map the active state to the standard text/bg tokens so
-   it has correct contrast in both light and dark themes. */
+/* Theme-aware override for active segmented-control pills. */
 .settings-shell .seg button[aria-pressed="true"]{
   background: var(--text); color: var(--bg);
 }
 
 /* Usage tab layout — wider than `.settings-form` so the bars + table get
    room to breathe. Everything else (`.stat-grid`, `.stat`, `.pane-block`,
-   `.bars`, `.tbl`) reuses the deck's existing rule blocks. */
+   `.bars`, `.tbl`) reuses shared dashboard rule blocks. */
 .settings-usage{
   display: flex; flex-direction: column; gap: 16px;
   padding: 22px 26px;
@@ -4267,178 +4264,6 @@ body{
   border: 0; color: #fff; cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   background: var(--accent);
-}
-
-/* ---------- tokens/components grid on system page ---------- */
-.sys-page{
-  min-height: 100vh;
-  background: #0A0A0B;
-  color: #CFCFD4;
-  padding: 40px 48px 100px;
-  font-family: "General Sans", system-ui, sans-serif;
-}
-.sys-page.light{ background: #F6F1E7; color: #1a1613; }
-.sys-h1{ font-family: "Instrument Serif", Georgia, serif; font-size: 42px; font-weight: 500; letter-spacing: -.01em; margin: 0 0 8px; }
-.sys-sub{ color: #8a8e98; max-width: 720px; line-height: 1.55; font-size: 13.5px; margin: 0 0 28px; }
-.sys-grid{ display: grid; grid-template-columns: repeat(12, 1fr); gap: 18px; margin-top: 18px; }
-.sys-card{
-  grid-column: span 4;
-  background: #13151B;
-  border: 1px solid rgba(255,255,255,.06);
-  border-radius: 14px;
-  padding: 18px;
-}
-.sys-page.light .sys-card{ background: #FBF7EE; border-color: rgba(30,25,18,.08); }
-.sys-card h4{ font-family: "JetBrains Mono", monospace; font-size: 10.5px; letter-spacing: .14em; text-transform: uppercase; margin: 0 0 12px; color: #95A0B0; }
-.sys-card.span-6{ grid-column: span 6; }
-.sys-card.span-12{ grid-column: span 12; }
-.swatches{ display: grid; grid-template-columns: repeat(6, 1fr); gap: 8px; }
-.swatch{ display: flex; flex-direction: column; gap: 4px; font-family: "JetBrains Mono", monospace; font-size: 10.5px; }
-.swatch .chip{ height: 42px; border-radius: 8px; border: 1px solid rgba(255,255,255,.06); }
-.sys-page.light .swatch .chip{ border-color: rgba(30,25,18,.08); }
-.swatch .lbl{ display: flex; justify-content: space-between; }
-.swatch .lbl b{ color: #CFCFD4; font-weight: 500; }
-.sys-page.light .swatch .lbl b{ color: #1A1613; }
-.type-sample{ padding: 12px 0; border-top: 1px dashed rgba(255,255,255,.08); }
-.type-sample:first-of-type{ border-top: 0; }
-.type-sample .tag{ font-family: "JetBrains Mono", monospace; font-size: 10.5px; color: #7A8597; margin-bottom: 4px; }
-.scale-row{ display: grid; grid-template-columns: 80px 1fr; gap: 12px; padding: 6px 0; font-family: "JetBrains Mono", monospace; font-size: 11.5px; }
-.scale-row b{ color: #02A6F5; }
-.scale-row .bar{ height: 14px; background: #02A6F5; border-radius: 3px; }
-
-
-/* ============================================================
-   Full-surface deck shell (app2)
-   ============================================================ */
-body:has(.deck){ background:#0A0A0B; }
-.deck{
-  min-height:100vh;
-  display:grid;
-  grid-template-rows:auto 1fr auto;
-  background:#0A0A0B;
-  color:#CFCFD4;
-  font-family: "General Sans", system-ui, sans-serif;
-}
-.deck-head{
-  display:flex; align-items:center; gap:14px;
-  padding:12px 22px;
-  border-bottom:1px solid rgba(255,255,255,.06);
-  background:#0A0A0B;
-  position:sticky; top:0; z-index:10;
-}
-.deck-title{
-  display:flex; align-items:baseline; gap:8px;
-  font-size:13px;
-}
-.deck-title b{ font-weight:600; color:#F2ECE0; letter-spacing:-.005em; }
-.deck-title .deck-group{ color:#95A0B0; font-size:11px; letter-spacing:.1em; text-transform:uppercase; }
-.deck-title .deck-slide-title{
-  font-size:12.5px; color:#CFCFD4; margin-left:8px;
-  font-family: "JetBrains Mono", monospace;
-}
-.deck-ctrls{ margin-left:auto; display:flex; align-items:center; gap:10px; }
-.deck-counter{
-  font-size:11px; color:#7A8597;
-  padding:4px 8px; border:1px solid rgba(255,255,255,.08);
-  border-radius:6px; background:rgba(255,255,255,.04);
-}
-
-.deck-view{
-  overflow:auto; padding:24px 32px;
-  background:
-    radial-gradient(1200px 600px at 20% -10%, rgba(2,166,245,.05), transparent 60%),
-    #0A0A0B;
-}
-.surface-frame{
-  height: calc(100vh - 168px);
-  min-height: 640px;
-  border-radius:16px;
-  overflow:hidden;
-  border:1px solid rgba(255,255,255,.06);
-  box-shadow:
-    0 1px 0 rgba(255,255,255,.03) inset,
-    0 30px 60px -30px rgba(0,0,0,.55),
-    0 80px 120px -60px rgba(0,0,0,.4);
-  background: var(--bg);
-  color: var(--text);
-  max-width: 1480px; margin: 0 auto;
-}
-.surface-frame.mobile{
-  width: 420px; margin: 12px auto;
-  height: calc(100vh - 200px);
-  min-height: 640px; max-height: 860px;
-  border-radius: 28px;
-}
-
-.deck-nav{
-  display:flex; align-items:center; gap:10px;
-  padding:10px 22px;
-  border-top:1px solid rgba(255,255,255,.06);
-  background:#0A0A0B;
-}
-.nav-btn{
-  appearance:none; border:1px solid rgba(255,255,255,.08);
-  background:rgba(255,255,255,.04);
-  color:#CFCFD4;
-  font: inherit; font-size:12px;
-  padding:6px 10px; border-radius:6px; cursor:pointer;
-}
-.nav-btn:hover{ background:rgba(255,255,255,.08); }
-.nav-scrubber{
-  flex:1; display:flex; align-items:center; gap:4px;
-  justify-content:center;
-}
-.nav-scrubber .dot{
-  width:10px; height:8px; border-radius:2px;
-  background:rgba(255,255,255,.14);
-  border:0; cursor:pointer;
-}
-.nav-scrubber .dot:hover{ background:rgba(255,255,255,.3); }
-.nav-scrubber .dot.active{ background:#02A6F5; width:22px; }
-.nav-scrubber .dot.hidden{ display:none; }
-
-/* Overview slide */
-.ov-page{
-  max-width:1080px; margin:0 auto; padding:16px 8px 48px;
-}
-.ov-eyebrow{
-  font-family: "JetBrains Mono", monospace;
-  font-size:11px; letter-spacing:.18em; text-transform:uppercase;
-  color:#95A0B0;
-}
-.ov-h1{
-  font-family:"Instrument Serif", Georgia, serif;
-  font-size:58px; letter-spacing:-.015em; font-weight:500;
-  line-height:1.05; color:#F2ECE0; margin:0 0 12px;
-}
-.ov-sub{
-  max-width:720px; line-height:1.6; font-size:14.5px; color:#95A0B0;
-  margin:0 0 30px;
-}
-.ov-sub b{ color:#CFCFD4; font-weight:600; }
-.ov-grid{
-  display:grid; grid-template-columns: repeat(3, 1fr); gap:24px;
-}
-.ov-col h4{
-  font-family:"JetBrains Mono", monospace;
-  font-size:10.5px; letter-spacing:.14em; text-transform:uppercase;
-  color:#7A8597; margin:0 0 10px;
-}
-.ov-item{
-  display:grid; grid-template-columns:auto 1fr auto;
-  align-items:center; gap:10px;
-  width:100%; text-align:left;
-  padding:10px 12px; border:1px solid rgba(255,255,255,.06);
-  background:#13151B; color:#CFCFD4;
-  border-radius:10px; margin-bottom:6px; cursor:pointer;
-  font:inherit; font-size:13.5px;
-}
-.ov-item:hover{ border-color:rgba(2,166,245,.35); color:#F2ECE0; }
-.ov-num{ color:#02A6F5; font-size:11px; }
-.ov-arrow{ color:#7A8597; }
-.ov-foot{
-  margin-top:40px; display:flex; gap:18px; flex-wrap:wrap;
-  font-size:11px; color:#7A8597;
 }
 
 /* ============================================================

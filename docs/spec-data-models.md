@@ -58,21 +58,17 @@ agent-cockpit/
 │       ├── settingsService.ts          # Settings I/O: read, write, legacy migration
 │       └── updateService.ts            # Self-update: version checking, git pull, PM2 restart
 ├── public/
-│   ├── index.html                      # HTML shell
-│   ├── styles.css                      # All CSS with light/dark theme
-│   └── js/                             # Frontend ES modules (no build step)
-│       ├── main.js                     # Entry point: init, event wiring, settings, sessions, update, shortcuts
-│       ├── state.js                    # Shared mutable state object, API helpers, constants
-│       ├── utils.js                    # Pure utilities: HTML escape, formatting
-│       ├── theme.js                    # Theme detection, toggle, persistence
-│       ├── modal.js                    # Generic modal show/close
-│       ├── backends.js                 # Backend loading, selection, icons, capabilities
-│       ├── websocket.js                # WebSocket connect, reconnect, send, disconnect
-│       ├── rendering.js                # Message/content rendering, markdown, lightbox, code, streaming UI, timers
-│       ├── conversations.js            # Sidebar, conversation CRUD, file uploads, drafts, queue UI, context menu
-│       ├── streaming.js                # Message sending, stream event handling, plan approval, user questions, queue processing
-│       └── memory.js                   # Workspace memory panel: fetch + render the saved snapshot, group by type, expand file bodies
-│       (KB Browser UI lives inside main.js for now — see Section 6 → Knowledge Base Browser)
+│   ├── favicon.svg
+│   ├── logo-*.svg                      # Brand assets used by login, sidebar, and assistant avatars
+│   ├── icons/*.svg                     # Source/reference icon assets
+│   └── v2/
+│       ├── index.html                  # V2 app entry
+│       └── src/                        # V2 React/Babel prototype sources and styles
+│           ├── api.js                  # CSRF-aware REST/WebSocket client helpers
+│           ├── streamStore.js          # Per-conversation streaming, queue, draft, and WebSocket state
+│           ├── shell.jsx               # Root app shell, sidebar wiring, chat surface
+│           ├── screens/                # Real V2 screens: KB, files, settings
+│           └── *.css / *.jsx / *.js    # Shared primitives, dialogs, tooltips, plan usage stores, modals
 ├── test/                               # Jest test suite (TypeScript via ts-jest)
 └── data/                               # Runtime data (gitignored, created at startup)
     ├── chat/

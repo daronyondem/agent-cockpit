@@ -104,11 +104,9 @@ const chatResult = createChatRouter({ chatService, backendRegistry, updateServic
 const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = chatResult;
 app.use('/api/chat', chatRouter);
 
-// V2 is the default UI. Root redirects to /v2/; /legacy/ keeps the
-// previous vanilla-JS UI reachable (served from public/index.html via
-// express.static) as a fallback during the cutover.
+// V2 is the default UI. Keep the root redirect stable until the URL
+// promotion work moves the V2 app out of public/v2/.
 app.get('/', (_req: Request, res: Response): void => { res.redirect('/v2/'); });
-app.get(['/legacy', '/legacy/'], (_req: Request, res: Response): void => { res.redirect('/index.html'); });
 
 app.use(express.static(path.join(__dirname, 'public')));
 

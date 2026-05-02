@@ -92,8 +92,6 @@ On the next process start, normal durable job reconciliation converts those fina
 
 **`meHandler` (`GET /api/me`):** Returns `{ displayName: string | null, email: string | null, provider: 'google' | 'github' | null }` from `req.user`. The endpoint sits behind `requireAuth`, so unauthenticated non-local callers get the standard `401 { error: "Not authenticated" }`. Local-bypass requests that arrive without a user object get `200` with all three fields set to `null`, so the v2 sidebar footer can render a neutral placeholder in localhost dev sessions instead of failing the fetch.
 
-**V1 frontend session-expired handling:** When any API request returns `401`, `chatFetch` / `fetchCsrfToken` / the streaming send path each call `chatShowSessionExpired()` (in `public/js/state.js`), which renders a modal overlay (`#chat-session-expired-overlay`) with a "Sign in again" button pointing at `./auth/login`. The overlay is idempotent — calling it repeatedly does not stack overlays. Drafts are preserved by existing `draftState.js` localStorage persistence and survive the sign-in redirect.
-
 **V2 frontend silent re-auth:** When `AgentApi.chatFetch` sees a 401, it invokes the handler registered via `AgentApi.setSessionExpiredHandler`. The shell wires this (see `public/v2/src/shell.jsx`) to a popup flow:
 
 1. `dialog.confirm` with "Sign in" / "Cancel" — if the user declines, nothing happens.
@@ -123,19 +121,19 @@ CLI profile remote-auth endpoints that spawn local CLI processes are CSRF-protec
 Helmet with CSP directives:
 ```
 default-src: 'self'
-script-src: 'self', 'unsafe-inline', https://cdnjs.cloudflare.com, https://esm.sh, https://unpkg.com
+script-src: 'self', 'unsafe-inline', https://cdnjs.cloudflare.com, https://unpkg.com
 script-src-attr: 'unsafe-inline'
 style-src: 'self', 'unsafe-inline', https://cdnjs.cloudflare.com, https://fonts.googleapis.com, https://api.fontshare.com
 font-src: 'self', data:, https://fonts.gstatic.com, https://api.fontshare.com, https://cdn.fontshare.com
 img-src: 'self', data:, blob:
-connect-src: 'self', https://esm.sh, https://unpkg.com
+connect-src: 'self', https://unpkg.com
 object-src: 'none'
 base-uri: 'self'
 frame-ancestors: 'none'
 form-action: 'self'
 ```
 
-`unpkg.com` (script) + `fonts.googleapis.com` / `api.fontshare.com` (style) + `fonts.gstatic.com` / `api.fontshare.com` / `cdn.fontshare.com` (font) are allowlisted for the `/v2/` redesign preview (React + Babel Standalone from unpkg; General Sans / Instrument Serif / JetBrains Mono from Google Fonts + Fontshare). These entries can be narrowed after the v2 cutover if the vendored-asset alternative is chosen.
+`unpkg.com` (script/connect) and `cdnjs.cloudflare.com` (script/style) are allowlisted for the current `/v2/` runtime because React, ReactDOM, Babel Standalone, marked, DOMPurify, and highlight.js still load from CDNs until the production build step lands. `fonts.googleapis.com` / `api.fontshare.com` (style) and `fonts.gstatic.com` / `api.fontshare.com` / `cdn.fontshare.com` (font) are allowlisted for JetBrains Mono, Instrument Serif, and General Sans. The former `esm.sh` allowlist was removed with the V1-only 3D graph.
 
 Cross-Origin Embedder Policy: disabled.
 
