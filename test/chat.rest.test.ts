@@ -204,6 +204,31 @@ describe('GET /active-streams', () => {
     env.activeStreams.delete(c1.id);
     env.activeStreams.delete(c2.id);
   });
+
+  test('includes durable accepted jobs before a runtime stream is attached', async () => {
+    const conv = await env.chatService.createConversation('Durable Pending');
+    await env.streamJobs.create({
+      state: 'accepted',
+      conversationId: conv.id,
+      sessionId: conv.currentSessionId,
+      backend: 'claude-code',
+      workingDir: conv.workingDir,
+    });
+
+    const res = await env.request('GET', '/api/chat/active-streams');
+    expect(res.status).toBe(200);
+    expect(res.body.ids).toContain(conv.id);
+    expect(res.body.streams).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: conv.id,
+        backend: 'claude-code',
+        state: 'accepted',
+        connected: false,
+      }),
+    ]));
+
+    await env.streamJobs.deleteActiveForConversation(conv.id);
+  });
 });
 
 describe('POST /conversations/:id/abort', () => {
@@ -384,6 +409,26 @@ describe('POST /conversations/:id/abort', () => {
 });
 
 describe('pending message send lifecycle guards', () => {
+  test('persists a durable job during the pre-stream setup window', async () => {
+    const pending = await startPendingMessage('durable setup');
+
+    const jobs = await env.streamJobs.listActive();
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      state: 'preparing',
+      conversationId: pending.conv.id,
+      sessionId: pending.conv.currentSessionId,
+      backend: 'claude-code',
+    });
+    expect(jobs[0].userMessageId).toBeUndefined();
+
+    pending.releaseUserAdd();
+    const send = await pending.sendPromise;
+    expect(send.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(await env.streamJobs.listActive()).toEqual([]);
+  });
+
   test('abort marks a pending send cancelled before the backend stream starts', async () => {
     const pending = await startPendingMessage('stop before stream');
 
@@ -404,6 +449,7 @@ describe('pending message send lifecycle guards', () => {
     const streamErrors = (saved?.messages || []).filter(m => m.streamError);
     expect(streamErrors).toHaveLength(1);
     expect(streamErrors[0].streamError).toEqual({ message: 'Aborted by user', source: 'abort' });
+    expect(await env.streamJobs.listActive()).toEqual([]);
   });
 
   test('reset, archive, and delete reject while a send is still pending', async () => {
@@ -458,6 +504,65 @@ describe('pending message send lifecycle guards', () => {
     pending.releaseUserAdd();
     const send = await pending.sendPromise;
     expect(send.status).toBe(200);
+  });
+});
+
+describe('durable stream job reconciliation', () => {
+  test('marks unrecoverable active jobs interrupted without re-sending the prompt', async () => {
+    const conv = await env.chatService.createConversation('Restarted Job');
+    const user = await env.chatService.addMessage(conv.id, 'user', 'work that was running', 'claude-code');
+    await env.streamJobs.create({
+      state: 'running',
+      conversationId: conv.id,
+      sessionId: conv.currentSessionId,
+      userMessageId: user!.id,
+      backend: 'claude-code',
+      workingDir: conv.workingDir,
+      startedAt: '2026-01-01T00:00:00.000Z',
+      lastEventAt: '2026-01-01T00:00:01.000Z',
+    });
+
+    const result = await env.reconcileInterruptedJobs();
+    expect(result).toEqual({ interrupted: 1, removed: 0 });
+    expect(env.mockBackend._lastMessage).toBeNull();
+
+    const saved = await env.chatService.getConversation(conv.id);
+    const streamErrors = (saved?.messages || []).filter(m => m.streamError);
+    expect(streamErrors).toHaveLength(1);
+    expect(streamErrors[0].streamError).toEqual({
+      message: 'Interrupted by server restart',
+      source: 'server',
+    });
+    expect(await env.streamJobs.listActive()).toEqual([]);
+
+    const active = await env.request('GET', '/api/chat/active-streams');
+    expect(active.body.ids).not.toContain(conv.id);
+  });
+
+  test('reconciliation is idempotent when the interruption message already exists', async () => {
+    const conv = await env.chatService.createConversation('Restarted Job Once');
+    const user = await env.chatService.addMessage(conv.id, 'user', 'work that was running', 'claude-code');
+    await env.chatService.addStreamErrorMessage(conv.id, 'claude-code', 'Interrupted by server restart', 'server');
+    await env.streamJobs.create({
+      state: 'finalizing',
+      conversationId: conv.id,
+      sessionId: conv.currentSessionId,
+      userMessageId: user!.id,
+      backend: 'claude-code',
+      terminalError: {
+        message: 'Interrupted by server restart',
+        source: 'server',
+        at: '2026-01-01T00:00:02.000Z',
+      },
+    });
+
+    const result = await env.reconcileInterruptedJobs();
+    expect(result).toEqual({ interrupted: 1, removed: 0 });
+
+    const saved = await env.chatService.getConversation(conv.id);
+    const streamErrors = (saved?.messages || []).filter(m => m.streamError);
+    expect(streamErrors).toHaveLength(1);
+    expect(await env.streamJobs.listActive()).toEqual([]);
   });
 });
 

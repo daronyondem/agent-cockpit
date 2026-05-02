@@ -60,6 +60,31 @@ function extractUploadedFiles(text){
   return { cleaned, paths };
 }
 
+function streamErrorMessageText(message){
+  if (!message || !message.streamError) return null;
+  const err = message.streamError;
+  if (err && typeof err.message === 'string' && err.message) return err.message;
+  return typeof message.content === 'string' && message.content ? message.content : 'Stream error';
+}
+
+/* The server persists terminal stream failures as assistant messages so reloads
+   and restart reconciliation can recover the error state. While that state is
+   active, ChatLive renders the styled StreamErrorCard at the foot of the feed;
+   this helper identifies the persisted marker backing that card so it does not
+   also appear as a second assistant bubble. */
+function activeStreamErrorMessageId(messages, activeError){
+  if (!activeError || !Array.isArray(messages)) return null;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const msg = messages[i];
+    if (!msg || typeof msg !== 'object') continue;
+    if (msg.role === 'assistant' && msg.streamError) {
+      return streamErrorMessageText(msg) === activeError ? (msg.id || null) : null;
+    }
+    if (msg.role === 'assistant' || msg.role === 'user') return null;
+  }
+  return null;
+}
+
 /* Subscribe to a single conversation's state in the StreamStore. Returns
    the current ConvState snapshot (or null when no convId is selected). */
 function useConversationState(convId){
@@ -605,9 +630,20 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
   }, [editingTitle]);
 
   const messages = state ? state.messages : [];
+  const activeStreamError = state ? state.streamError : null;
   const streaming = state ? state.streaming : false;
   const streamingMsgId = state ? state.streamingMsgId : null;
   const profileLocked = messages.length > 0;
+  const hiddenStreamErrorMessageId = React.useMemo(
+    () => activeStreamErrorMessageId(messages, activeStreamError),
+    [messages, activeStreamError]
+  );
+  const feedMessages = React.useMemo(
+    () => hiddenStreamErrorMessageId
+      ? messages.filter(m => m.id !== hiddenStreamErrorMessageId)
+      : messages,
+    [messages, hiddenStreamErrorMessageId]
+  );
 
   /* Elapsed = time since the preceding user message in the feed. Walks
      backward from each assistant message; caps at 1 h to match V1
@@ -1037,8 +1073,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
             </div>
           )}
           <FileViewerContext.Provider value={{ wsHash: conv.workspaceHash || null, convId, workingDir: conv.workingDir || null, openFileViewer, openLightbox }}>
-          <AgentIndexProvider messages={messages}>
-            {collapseProgressRuns(messages).map(entry => {
+          <AgentIndexProvider messages={feedMessages}>
+            {collapseProgressRuns(feedMessages).map(entry => {
               if (entry.kind === 'plain') {
                 if (entry.message.role === 'memory') {
                   return (

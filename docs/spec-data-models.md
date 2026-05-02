@@ -76,6 +76,7 @@ agent-cockpit/
 ├── test/                               # Jest test suite (TypeScript via ts-jest)
 └── data/                               # Runtime data (gitignored, created at startup)
     ├── chat/
+    │   ├── stream-jobs.json            # Durable active CLI turn registry for server-restart reconciliation
     │   ├── workspaces/{hash}/          # Workspace-based storage (see below)
     │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled` and `kbEnabled` flags)
     │   │   ├── memory/                 # Per-workspace memory store (opt-in per workspace)
@@ -308,6 +309,8 @@ Returned by `GET /api/chat/active-streams` for server-owned CLI turns:
 ```typescript
 interface ActiveStreamSummary {
   id: string;                 // Conversation ID
+  jobId?: string | null;      // Durable stream job ID when known
+  state?: StreamJobState;     // Durable lifecycle state (`running` for runtime-only test entries)
   backend: string;            // Runtime backend handling the active turn
   startedAt: string | null;   // ISO timestamp when the server accepted the turn
   lastEventAt: string | null; // ISO timestamp of the latest backend stream event
@@ -317,6 +320,62 @@ interface ActiveStreamSummary {
 
 `ids: string[]` remains in the same response for hydration compatibility; it is
 the projection of `streams[].id`.
+
+### Durable Stream Jobs
+
+`data/chat/stream-jobs.json` is an operational registry of active accepted CLI
+turns. It is written atomically and contains only non-terminal jobs; completion,
+explicit abort finalization, delete/archive cleanup, and startup reconciliation
+remove jobs once the transcript is the durable source of truth.
+
+```typescript
+type StreamJobState =
+  | 'accepted'        // POST /message accepted; user message may not exist yet
+  | 'preparing'       // request is resolving profile/context/MCP setup
+  | 'running'         // backend stream object is attached in activeStreams
+  | 'abort_requested' // Stop was requested before terminal finalization
+  | 'finalizing';     // terminal error/abort/restart marker is being persisted
+
+interface StreamJobTerminalInfo {
+  message: string;
+  source: 'backend'|'transport'|'abort'|'server';
+  at: string;
+}
+
+interface DurableStreamJob {
+  id: string;
+  state: StreamJobState;
+  conversationId: string;
+  sessionId: string;
+  userMessageId?: string|null;
+  backend: string;
+  cliProfileId?: string|null;
+  model?: string|null;
+  effort?: string|null;
+  workingDir?: string|null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string|null;
+  lastEventAt?: string|null;
+  abortRequested?: StreamJobTerminalInfo|null;
+  terminalError?: StreamJobTerminalInfo|null;
+}
+
+interface StreamJobFile {
+  version: 1;
+  jobs: DurableStreamJob[];
+}
+```
+
+On startup, any job left in `accepted`, `preparing`, `running`,
+`abort_requested`, or `finalizing` is reconciled before the server listens. If
+the recorded `userMessageId` still exists, the server appends one terminal
+assistant `streamError`; otherwise it removes the job without transcript noise.
+Plain active jobs use `message: "Interrupted by server restart"` and
+`source: "server"`. Jobs that already carry `abortRequested` or
+`terminalError` persist that recorded terminal reason instead. Reconciliation is
+idempotent: if the matching terminal `streamError` is already the final
+message, no duplicate is appended.
 
 ### AttachmentMeta
 

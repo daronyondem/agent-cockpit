@@ -124,6 +124,11 @@ function checkPort(port: number): Promise<boolean> {
 
 // Initialize workspace storage and run any pending migrations
 chatService.initialize().then(async () => {
+  const reconciledJobs = await chatResult.reconcileInterruptedJobs();
+  if (reconciledJobs.interrupted > 0 || reconciledJobs.removed > 0) {
+    console.log(`[startup] Reconciled stream jobs: interrupted=${reconciledJobs.interrupted} removed=${reconciledJobs.removed}`);
+  }
+
   const portFree = await checkPort(config.PORT);
   if (!portFree) {
     console.error(
