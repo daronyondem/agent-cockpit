@@ -10,6 +10,12 @@ import { BaseBackendAdapter } from '../src/services/backends/base';
 import type { BackendMetadata, SendMessageOptions, SendMessageResult, Message } from '../src/types';
 
 const DEFAULT_WORKSPACE = '/tmp/test-workspace';
+const TEST_RESUME_CAPABILITIES: BackendMetadata['resumeCapabilities'] = {
+  activeTurnResume: 'unsupported',
+  activeTurnResumeReason: 'Test adapter does not support active turn reattach.',
+  sessionResume: 'unsupported',
+  sessionResumeReason: 'Test adapter does not model session resume.',
+};
 
 let tmpDir: string;
 let service: ChatService;
@@ -250,7 +256,7 @@ describe('generateAndUpdateTitle', () => {
   test('uses adapter generateTitle when available', async () => {
     class TitleAdapter extends BaseBackendAdapter {
       get metadata(): BackendMetadata {
-        return { id: 'claude-code', label: 'Test', icon: null, capabilities: {} as any };
+        return { id: 'claude-code', label: 'Test', icon: null, capabilities: {} as any, resumeCapabilities: TEST_RESUME_CAPABILITIES };
       }
       sendMessage(_message: string, _options?: SendMessageOptions): SendMessageResult {
         return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} };
@@ -287,7 +293,7 @@ describe('generateAndUpdateTitle', () => {
   test('hard-cuts adapter-returned title to 8 words', async () => {
     class LongTitleAdapter extends BaseBackendAdapter {
       get metadata(): BackendMetadata {
-        return { id: 'claude-code', label: 'Test', icon: null, capabilities: {} as any };
+        return { id: 'claude-code', label: 'Test', icon: null, capabilities: {} as any, resumeCapabilities: TEST_RESUME_CAPABILITIES };
       }
       sendMessage(_message: string, _options?: SendMessageOptions): SendMessageResult {
         return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} };

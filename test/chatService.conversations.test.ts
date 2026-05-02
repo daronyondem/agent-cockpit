@@ -11,6 +11,12 @@ import type { BackendMetadata, CliProfile, SendMessageOptions, SendMessageResult
 import { serverConfiguredCliProfileId } from '../src/services/cliProfiles';
 
 const DEFAULT_WORKSPACE = '/tmp/test-workspace';
+const TEST_RESUME_CAPABILITIES: BackendMetadata['resumeCapabilities'] = {
+  activeTurnResume: 'unsupported',
+  activeTurnResumeReason: 'Test adapter does not support active turn reattach.',
+  sessionResume: 'unsupported',
+  sessionResumeReason: 'Test adapter does not model session resume.',
+};
 
 let tmpDir: string;
 let service: ChatService;
@@ -754,6 +760,7 @@ describe('effort selection', () => {
             userQuestions: true,
             stdinInput: true,
           },
+          resumeCapabilities: TEST_RESUME_CAPABILITIES,
           models: [
             { id: 'opus', label: 'Opus', family: 'opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] },
             { id: 'sonnet', label: 'Sonnet', family: 'sonnet', default: true, supportedEffortLevels: ['low', 'medium', 'high'] },

@@ -216,12 +216,13 @@ test('error frame clears pendingInteraction and flips uiState to error', async (
   });
   expect(Store.getState('c1').pendingInteraction).not.toBeNull();
 
-  ws.dispatch({ type: 'error', error: 'boom' });
+  ws.dispatch({ type: 'error', error: 'boom', source: 'backend' });
 
   const state = Store.getState('c1');
   expect(state.pendingInteraction).toBeNull();
   expect(state.uiState).toBe('error');
   expect(state.streamError).toBe('boom');
+  expect(state.streamErrorSource).toBe('backend');
 });
 
 test('non-terminal error frame does not flip uiState to error', async () => {
@@ -909,14 +910,16 @@ describe('clearStreamError', () => {
     (window as any).StreamStore; // already loaded
     // Trigger an error frame.
     const ws = fakeWSInstance!;
-    ws.dispatch({ type: 'error', error: 'boom' });
+    ws.dispatch({ type: 'error', error: 'boom', source: 'server' });
 
     expect(Store.getState('c1').streamError).toBe('boom');
+    expect(Store.getState('c1').streamErrorSource).toBe('server');
 
     Store.clearStreamError('c1');
 
     const s = Store.getState('c1');
     expect(s.streamError).toBeNull();
+    expect(s.streamErrorSource).toBeNull();
     expect(s.uiState).toBeNull();
     // Queue is not drained when resumeQueue is not requested.
     expect(s.queue).toEqual([{ content: 'later', attachments: [] }]);
@@ -1019,6 +1022,7 @@ describe('stopStream', () => {
     expect(api.abortConversation).toHaveBeenCalledWith('c1');
     expect(Store.getState('c1').streaming).toBe(false);
     expect(Store.getState('c1').streamError).toBe('Aborted by user');
+    expect(Store.getState('c1').streamErrorSource).toBe('abort');
     expect(Store.getState('c1').uiState).toBe('error');
     expect(Store.getState('c1').messages.some((m: any) => String(m.id).startsWith('pending-'))).toBe(false);
 
@@ -1085,6 +1089,7 @@ describe('stopStream', () => {
     expect(state.streaming).toBe(false);
     expect(state.streamingMsgId).toBeNull();
     expect(state.streamError).toBe('Aborted by user');
+    expect(state.streamErrorSource).toBe('abort');
     expect(state.uiState).toBe('error');
     expect(state.messages.some((m: any) => m.id === assistantId)).toBe(false);
   });
@@ -1231,6 +1236,7 @@ describe('draft persistence', () => {
 
     const state = Store.getState('c1');
     expect(state.streamError).toBe('usage limit reached');
+    expect(state.streamErrorSource).toBe('backend');
     expect(state.uiState).toBe('error');
   });
 

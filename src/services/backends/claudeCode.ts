@@ -107,6 +107,12 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
         userQuestions: true,
         stdinInput: true,
       },
+      resumeCapabilities: {
+        activeTurnResume: 'unsupported',
+        activeTurnResumeReason: 'Claude Code --resume starts a new CLI invocation from session history; it does not reattach to a lost in-flight process/stdout stream.',
+        sessionResume: 'supported',
+        sessionResumeReason: 'Follow-up turns reuse the cockpit session id with --resume so Claude Code can continue from prior persisted session context.',
+      },
       models: [
         {
           id: 'claude-opus-4-7',
@@ -594,6 +600,8 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           resolveWait = null;
         }
       });
+
+      textQueue.push({ type: 'backend_runtime', processId: proc.pid ?? null });
 
       while (true) {
         if (state.aborted) {

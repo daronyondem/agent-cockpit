@@ -14,6 +14,12 @@ import {
 import type { BackendMetadata, SendMessageResult } from '../src/types';
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
+const TEST_RESUME_CAPABILITIES: BackendMetadata['resumeCapabilities'] = {
+  activeTurnResume: 'unsupported',
+  activeTurnResumeReason: 'Test adapter does not support active turn reattach.',
+  sessionResume: 'unsupported',
+  sessionResumeReason: 'Test adapter does not model session resume.',
+};
 
 // ── BaseBackendAdapter ─────────────────────────────────────────────────────
 
@@ -95,6 +101,10 @@ describe('BackendRegistry', () => {
     expect(list[0].id).toBe('claude-code');
     expect(list[0].label).toBe('Claude Code');
     expect(list[0].capabilities.thinking).toBe(true);
+    expect(list[0].resumeCapabilities).toMatchObject({
+      activeTurnResume: 'unsupported',
+      sessionResume: 'supported',
+    });
     expect(list[0].icon).toContain('<svg');
   });
 
@@ -115,7 +125,7 @@ describe('BackendRegistry', () => {
   test('register multiple adapters', () => {
     class FakeAdapter extends BaseBackendAdapter {
       get metadata(): BackendMetadata {
-        return { id: 'fake', label: 'Fake', icon: null, capabilities: {} as any };
+        return { id: 'fake', label: 'Fake', icon: null, capabilities: {} as any, resumeCapabilities: TEST_RESUME_CAPABILITIES };
       }
       sendMessage(): SendMessageResult { return { stream: (async function*() {})(), abort: () => {}, sendInput: () => {} }; }
       async generateSummary(_msgs: any[], fb: string) { return fb; }
@@ -310,6 +320,45 @@ describe('ClaudeCodeAdapter sendMessage', () => {
 
     expect(events.some(e => e.type === 'error')).toBe(false);
     expect(events[events.length - 1].type).toBe('done');
+  });
+
+  test('emits backend runtime process id for durable job diagnostics', async () => {
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: () => {
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.pid = 4242;
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => proc.emit('close', 0, null), 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-runtime-pid',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef!) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'backend_runtime', processId: 4242 },
+    ]));
   });
 
   test('passes --model flag when model option is set', async () => {

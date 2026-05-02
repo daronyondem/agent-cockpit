@@ -50,6 +50,7 @@
    *   streaming: boolean,
    *   loadError: string | null,
    *   streamError: string | null,
+   *   streamErrorSource: string | null,
    *   usage: object | null,
    *   streamingMsgId: string | null,
    *   loaded: boolean,
@@ -206,6 +207,7 @@
       streaming: false,
       loadError: null,
       streamError: null,
+      streamErrorSource: null,
       usage: null,
       streamingMsgId: null,
       loaded: false,
@@ -354,7 +356,7 @@
     for (const id of ids) {
       const cur = states.get(id);
       if (cur && cur.ws) continue; // real WS already tracking state
-      update(id, { streaming: true, uiState: 'streaming', streamError: null });
+      update(id, { streaming: true, uiState: 'streaming', streamError: null, streamErrorSource: null });
     }
   }
 
@@ -440,13 +442,23 @@
     return { content: content.slice(0, match.index).replace(/\s+$/, ''), attachments };
   }
 
+  function streamErrorInfoFromMessage(msg){
+    if (!msg || typeof msg !== 'object' || !msg.streamError) return null;
+    const err = msg.streamError;
+    const message = err && typeof err.message === 'string' && err.message
+      ? err.message
+      : (typeof msg.content === 'string' && msg.content ? msg.content : 'Stream error');
+    const source = err && typeof err.source === 'string' ? err.source : null;
+    return { message, source };
+  }
+
   function activeStreamErrorFromMessages(messages){
     if (!Array.isArray(messages)) return null;
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (!msg || typeof msg !== 'object') continue;
       if (msg.role === 'assistant' && msg.streamError) {
-        return msg.streamError.message || msg.content || 'Stream error';
+        return streamErrorInfoFromMessage(msg);
       }
       if (msg.role === 'assistant' || msg.role === 'user') return null;
     }
@@ -478,7 +490,8 @@
         messages,
         usage: data.sessionUsage || null,
         queue: restoredQueue,
-        streamError: persistedStreamError,
+        streamError: persistedStreamError ? persistedStreamError.message : null,
+        streamErrorSource: persistedStreamError ? persistedStreamError.source : null,
         uiState: persistedStreamError ? 'error' : cur.uiState,
         /* Mark a non-empty restored queue as suspended so the auto-drainer
            bails until the user explicitly resumes or clears. Mirrors V1
@@ -526,6 +539,7 @@
     if (attempts >= RECONNECT_MAX_ATTEMPTS) {
       update(convId, {
         streamError: 'WebSocket reconnect failed',
+        streamErrorSource: null,
         uiState: 'error',
         wsReconnectTimer: null,
       });
@@ -570,8 +584,11 @@
     const data = await res.json();
     const messages = Array.isArray(data.messages) ? data.messages : [];
     const persistedStreamError = activeStreamErrorFromMessages(messages);
-    const fallbackStreamError = opts && typeof opts.streamError === 'string' ? opts.streamError : null;
-    const streamError = persistedStreamError || fallbackStreamError;
+    const fallbackStreamError = opts && typeof opts.streamError === 'string'
+      ? { message: opts.streamError, source: typeof opts.streamErrorSource === 'string' ? opts.streamErrorSource : null }
+      : null;
+    const streamErrorInfo = persistedStreamError || fallbackStreamError;
+    const streamError = streamErrorInfo ? streamErrorInfo.message : null;
     update(convId, next => ({
       ...next,
       conv: data,
@@ -586,6 +603,7 @@
       reconcileTimer: null,
       wsReconnectAttempts: 0,
       streamError,
+      streamErrorSource: streamErrorInfo ? streamErrorInfo.source : null,
       uiState: streamError ? 'error' : null,
     }));
     if (!streamError) drainQueueIfReady(convId);
@@ -945,7 +963,13 @@
         console.warn('[stream-warning]', msg);
         return;
       }
-      update(convId, { streamError: msg, uiState: 'error', pendingInteraction: null, planModeActive: false });
+      update(convId, {
+        streamError: msg,
+        streamErrorSource: typeof frame.source === 'string' ? frame.source : null,
+        uiState: 'error',
+        pendingInteraction: null,
+        planModeActive: false,
+      });
       return;
     }
     if (frame.type === 'done') {
@@ -1101,12 +1125,12 @@
        wiped state. On POST failure we keep this copy intact for refresh. */
     flushDraftNow(convId);
 
-    update(convId, { sending: true, streamError: null, pendingInteraction: null, pendingAttachments: [] });
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [] });
 
     try {
       await ensureWsOpen(convId);
     } catch (err) {
-      update(convId, { streamError: err.message || String(err), sending: false, pendingAttachments: attsSnapshot, input: inputSnapshot });
+      update(convId, { streamError: err.message || String(err), streamErrorSource: null, sending: false, pendingAttachments: attsSnapshot, input: inputSnapshot });
       return;
     }
 
@@ -1169,6 +1193,7 @@
         update(convId, cur => ({
           ...cur,
           streamError: null,
+          streamErrorSource: null,
           streaming: true,
           streamingMsgId: null,
           uiState: 'streaming',
@@ -1182,6 +1207,7 @@
       update(convId, cur => ({
         ...cur,
         streamError: err.message || String(err),
+        streamErrorSource: null,
         streaming: false,
         streamingMsgId: null,
         uiState: 'error',
@@ -1370,7 +1396,7 @@
       update(convId, { queue });
       return queue;
     } catch (err) {
-      update(convId, { streamError: err.message || String(err) });
+      update(convId, { streamError: err.message || String(err), streamErrorSource: null });
       return s.queue || [];
     }
   }
@@ -1401,7 +1427,7 @@
             });
           }
         } catch (err) {
-          update(convId, { streamError: err.message || String(err) });
+          update(convId, { streamError: err.message || String(err), streamErrorSource: null });
         }
       }
     } finally {
@@ -1544,6 +1570,7 @@
       update(convId, cur => ({
         ...cur,
         streamError: 'Aborted by user',
+        streamErrorSource: 'abort',
         streaming: false,
         streamingMsgId: null,
         pendingInteraction: null,
@@ -1565,7 +1592,7 @@
       clearReconcileTimer(convId);
       applyAbortFallback();
       try {
-        await refreshConversationFromServer(convId, { streamError: 'Aborted by user' });
+        await refreshConversationFromServer(convId, { streamError: 'Aborted by user', streamErrorSource: 'abort' });
       } catch (_) {
         // Local abort fallback above is authoritative enough to unstick the UI.
       }
@@ -1573,6 +1600,7 @@
     } catch (err) {
       update(convId, {
         streamError: err.message || String(err),
+        streamErrorSource: null,
         uiState: 'error',
       });
       return false;
@@ -1589,6 +1617,7 @@
     update(convId, cur => ({
       ...cur,
       streamError: null,
+      streamErrorSource: null,
       uiState: cur.pendingInteraction ? 'awaiting' : null,
     }));
     if (opts && opts.resumeQueue) drainQueueIfReady(convId);
@@ -1631,13 +1660,14 @@
       persistQueue(convId, restoredQueue).catch(() => {});
     };
 
-    update(convId, { sending: true, streamError: null, pendingInteraction: null });
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null });
     try {
       await ensureWsOpen(convId);
     } catch (err) {
       restoreQueueAfterFailure((cur, restoredQueue) => ({
         ...cur,
         streamError: err.message || String(err),
+        streamErrorSource: null,
         sending: false,
         queue: restoredQueue,
       }));
@@ -1690,6 +1720,7 @@
         restoreQueueAfterFailure((cur, restoredQueue) => ({
           ...cur,
           streamError: null,
+          streamErrorSource: null,
           streaming: true,
           streamingMsgId: null,
           uiState: 'streaming',
@@ -1702,6 +1733,7 @@
       restoreQueueAfterFailure((cur, restoredQueue) => ({
         ...cur,
         streamError: err.message || String(err),
+        streamErrorSource: null,
         streaming: false,
         streamingMsgId: null,
         uiState: 'error',
@@ -1728,6 +1760,7 @@
         queue: Array.isArray(data.messageQueue) ? data.messageQueue : [],
         usage: data.sessionUsage || null,
         streamError: null,
+        streamErrorSource: null,
         streaming: false,
         streamingMsgId: null,
         pendingInteraction: null,
@@ -1741,7 +1774,7 @@
       }
       return true;
     } catch (err) {
-      update(convId, { streamError: err.message || String(err), resetting: false });
+      update(convId, { streamError: err.message || String(err), streamErrorSource: null, resetting: false });
       return false;
     }
   }
@@ -1769,7 +1802,7 @@
       const data = await res.json();
       mode = data && data.mode;
     } catch (err) {
-      update(convId, { streamError: err.message || String(err), respondPending: false, uiState: 'error' });
+      update(convId, { streamError: err.message || String(err), streamErrorSource: null, respondPending: false, uiState: 'error' });
       return;
     }
 
@@ -1855,7 +1888,7 @@
       removeConvListItem(convId);
       return true;
     } catch (err) {
-      update(convId, { streamError: err.message || String(err) });
+      update(convId, { streamError: err.message || String(err), streamErrorSource: null });
       return false;
     }
   }

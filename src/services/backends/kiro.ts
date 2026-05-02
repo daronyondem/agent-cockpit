@@ -413,6 +413,12 @@ export class KiroAdapter extends BaseBackendAdapter {
         userQuestions: false,
         stdinInput: false,
       },
+      resumeCapabilities: {
+        activeTurnResume: 'unsupported',
+        activeTurnResumeReason: 'Kiro session/load restores session history for a later prompt, but ACP does not expose a cockpit-owned way to reattach to the exact in-flight session/prompt response stream.',
+        sessionResume: 'supported',
+        sessionResumeReason: 'The adapter persists Kiro session IDs via external_session and uses session/load after process respawn before sending the next prompt.',
+      },
       models: [
         {
           id: 'auto',
@@ -518,6 +524,15 @@ export class KiroAdapter extends BaseBackendAdapter {
     this.processes.clear();
   }
 
+  private _terminateProcess(conversationId: string): void {
+    const entry = this.processes.get(conversationId);
+    if (!entry) return;
+    if (entry.idleTimer) clearTimeout(entry.idleTimer);
+    entry.client.stopNotifications();
+    entry.client.kill();
+    this.processes.delete(conversationId);
+  }
+
   onSessionReset(conversationId: string): void {
     // Clean up session mapping
     for (const [key, _] of this.sessionMap) {
@@ -526,12 +541,7 @@ export class KiroAdapter extends BaseBackendAdapter {
       // The ACP process is the important thing to clean up.
     }
 
-    const acpEntry = this.processes.get(conversationId);
-    if (acpEntry) {
-      if (acpEntry.idleTimer) clearTimeout(acpEntry.idleTimer);
-      acpEntry.proc.kill('SIGTERM');
-      this.processes.delete(conversationId);
-    }
+    this._terminateProcess(conversationId);
   }
 
   sendMessage(message: string, options: SendMessageOptions = {} as SendMessageOptions): SendMessageResult {
@@ -545,12 +555,14 @@ export class KiroAdapter extends BaseBackendAdapter {
 
     const abort = () => {
       aborted = true;
+      const convId = options.conversationId || options.sessionId;
       if (currentClient && !currentClient.isClosed) {
         const kiroSessionId = this.sessionMap.get(options.sessionId);
         if (kiroSessionId) {
           currentClient.request('session/cancel', { sessionId: kiroSessionId }).catch(() => {});
         }
       }
+      this._terminateProcess(convId);
     };
 
     const sendInput = (_text: string) => {
@@ -922,6 +934,12 @@ export class KiroAdapter extends BaseBackendAdapter {
         acpEntry.loadedSessionId = kiroSessionId;
       }
 
+      yield {
+        type: 'backend_runtime',
+        externalSessionId: kiroSessionId,
+        processId: acpEntry?.proc.pid ?? null,
+      };
+
       // ── Model selection ──────────────────────────────────────────────
       // session/set_model is silently ignored (no response) if sessionId is
       // wrong or model is unsupported, so we race against a timeout to avoid
@@ -960,6 +978,7 @@ export class KiroAdapter extends BaseBackendAdapter {
       // `stopReason` IS the end-of-turn signal; Kiro does NOT emit a
       // `session/update` with `sessionUpdate: 'turn_end'` on the ACP
       // channel. Once the response arrives, stop notifications immediately.
+      let promptFailure: string | null = null;
       client.request('session/prompt', {
         sessionId: kiroSessionId,
         prompt: [{ type: 'text', text: promptText }],
@@ -979,6 +998,7 @@ export class KiroAdapter extends BaseBackendAdapter {
             dataPart = ' | data: <unstringifiable>';
           }
         }
+        promptFailure = `Kiro prompt failed: ${e.message}${codePart}${dataPart}`;
         console.warn(`[kiro] session/prompt failed for session=${kiroSessionId}: ${e.message}${codePart}${dataPart}`);
         client.stopNotifications();
       });
@@ -1178,6 +1198,9 @@ export class KiroAdapter extends BaseBackendAdapter {
 
       // Notification loop exited — session/prompt response arrived and
       // called stopNotifications(), or the ACP process closed.
+      if (promptFailure && !state.aborted) {
+        yield { type: 'error', error: promptFailure, source: 'backend' };
+      }
       yield { type: 'done' };
     } catch (err) {
       yield { type: 'error', error: `Kiro error: ${(err as Error).message}` };

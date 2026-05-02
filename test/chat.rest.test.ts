@@ -233,6 +233,80 @@ describe('GET /active-streams', () => {
 
     await env.streamJobs.deleteActiveForConversation(conv.id);
   });
+
+  test('includes backend runtime identifiers recorded by the active job', async () => {
+    const conv = await env.chatService.createConversation('Runtime Metadata');
+    let unblock!: () => void;
+    const blockPromise = new Promise<void>(resolve => { unblock = resolve; });
+    env.mockBackend.sendMessage = function() {
+      async function* createStream() {
+        yield { type: 'external_session', sessionId: 'backend-session-1' } as StreamEvent;
+        yield { type: 'backend_runtime', activeTurnId: 'turn-1', processId: 1234 } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { unblock(); },
+        sendInput: () => {},
+      };
+    };
+
+    const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'start',
+      backend: 'claude-code',
+    });
+    expect(send.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const jobs = await env.streamJobs.listActive();
+    expect(jobs).toEqual([
+      expect.objectContaining({
+        conversationId: conv.id,
+        runtime: {
+          externalSessionId: 'backend-session-1',
+          activeTurnId: 'turn-1',
+          processId: 1234,
+        },
+      }),
+    ]);
+
+    const active = await env.request('GET', '/api/chat/active-streams');
+    expect(active.status).toBe(200);
+    expect(active.body.streams).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: conv.id,
+        runtime: {
+          externalSessionId: 'backend-session-1',
+          activeTurnId: 'turn-1',
+          processId: 1234,
+        },
+      }),
+    ]));
+
+    const saved = await env.chatService.getConversation(conv.id);
+    expect(saved?.externalSessionId).toBe('backend-session-1');
+
+    unblock();
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(await env.streamJobs.listActive()).toEqual([]);
+  });
+});
+
+describe('GET /backends', () => {
+  test('exposes backend resume capability metadata', async () => {
+    const res = await env.request('GET', '/api/chat/backends');
+    expect(res.status).toBe(200);
+    expect(res.body.backends).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'claude-code',
+        resumeCapabilities: expect.objectContaining({
+          activeTurnResume: 'unsupported',
+          sessionResume: 'supported',
+        }),
+      }),
+    ]));
+  });
 });
 
 describe('POST /conversations/:id/abort', () => {
