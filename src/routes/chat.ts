@@ -32,7 +32,7 @@ import { KbDreamService } from '../services/knowledgeBase/dream';
 import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
-import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, StreamErrorSource, MemoryUpdateEvent } from '../types';
+import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, StreamErrorSource, MemoryUpdateEvent, StreamJobRuntimeInfo } from '../types';
 import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
@@ -183,6 +183,15 @@ export async function processStream(
       entry.jobId = undefined;
     } catch (err: unknown) {
       console.warn(`[chat] Failed to delete completed stream job for conv=${convId}:`, (err as Error).message);
+    }
+  }
+
+  async function recordJobRuntimeInfo(runtime: StreamJobRuntimeInfo): Promise<void> {
+    if (!deps.streamSupervisor || !deps.jobId) return;
+    try {
+      await deps.streamSupervisor.recordRuntimeInfo(deps.jobId, runtime);
+    } catch (err: unknown) {
+      console.warn(`[chat] Failed to record stream runtime info for conv=${convId}:`, (err as Error).message);
     }
   }
 
@@ -395,6 +404,22 @@ export async function processStream(
         } catch (err: unknown) {
           console.warn(`[chat] Failed to persist externalSessionId for conv=${convId}:`, (err as Error).message);
         }
+        await recordJobRuntimeInfo({ externalSessionId: event.sessionId });
+      } else if (event.type === 'backend_runtime') {
+        // Backend-specific turn/process identifiers are operational metadata
+        // for durable supervision. They are not user-visible stream frames.
+        if (event.externalSessionId) {
+          try {
+            await chatService.setExternalSessionId(convId, event.externalSessionId);
+          } catch (err: unknown) {
+            console.warn(`[chat] Failed to persist externalSessionId for conv=${convId}:`, (err as Error).message);
+          }
+        }
+        await recordJobRuntimeInfo({
+          externalSessionId: event.externalSessionId,
+          activeTurnId: event.activeTurnId,
+          processId: event.processId,
+        });
       } else if (event.type === 'usage') {
         const skipLedger = backend === 'kiro';
         const updated = await chatService.addUsage(convId, event.usage, backend, event.model, { skipLedger });
@@ -1022,6 +1047,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         connected: boolean;
         runtimeAttached: boolean;
         pending: boolean;
+        runtime: StreamJobRuntimeInfo | null;
       }>();
 
       for (const job of await streamJobs.listActive()) {
@@ -1035,6 +1061,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           connected: wsFns ? wsFns.isConnected(job.conversationId) : false,
           runtimeAttached: activeStreams.has(job.conversationId),
           pending: pendingMessageSends.has(job.conversationId),
+          runtime: job.runtime || null,
         });
       }
 
@@ -1050,6 +1077,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           connected: wsFns ? wsFns.isConnected(id) : false,
           runtimeAttached: true,
           pending: existing?.pending || false,
+          runtime: existing?.runtime || null,
         });
       }
 

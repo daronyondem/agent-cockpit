@@ -36,6 +36,62 @@ describe('WebSocket streaming', () => {
     expect(doneEvent).toBeDefined();
   });
 
+  test('records backend runtime without forwarding it over WebSocket', async () => {
+    const conv = await env.chatService.createConversation('WS Runtime Metadata');
+    let unblock!: () => void;
+    const blockPromise = new Promise<void>(resolve => { unblock = resolve; });
+    env.mockBackend.sendMessage = function() {
+      async function* createStream() {
+        yield { type: 'backend_runtime', externalSessionId: 'backend-session-1', activeTurnId: 'turn-1', processId: 1234 } as StreamEvent;
+        yield { type: 'text', content: 'visible', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { unblock(); },
+        sendInput: () => {},
+      };
+    };
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+
+    const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'runtime metadata',
+      backend: 'claude-code',
+    });
+    expect(send.status).toBe(200);
+
+    let jobs: Awaited<ReturnType<typeof env.streamJobs.listActive>> = [];
+    try {
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        jobs = await env.streamJobs.listActive();
+        if (jobs.some(job => job.conversationId === conv.id && job.runtime?.activeTurnId === 'turn-1')) break;
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+
+      expect(jobs).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          conversationId: conv.id,
+          runtime: {
+            externalSessionId: 'backend-session-1',
+            activeTurnId: 'turn-1',
+            processId: 1234,
+          },
+        }),
+      ]));
+    } finally {
+      unblock();
+    }
+
+    const events = await eventsPromise;
+    expect(events.some((e: any) => e.type === 'backend_runtime')).toBe(false);
+    expect(events.find((e: any) => e.type === 'text')?.content).toBe('visible');
+    expect(events.some((e: any) => e.type === 'done')).toBe(true);
+  });
+
   test('receives tool_activity and tool_outcomes via WebSocket', async () => {
     const conv = await env.chatService.createConversation('WS Tools');
 

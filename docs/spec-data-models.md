@@ -315,6 +315,9 @@ interface ActiveStreamSummary {
   startedAt: string | null;   // ISO timestamp when the server accepted the turn
   lastEventAt: string | null; // ISO timestamp of the latest backend stream event
   connected: boolean;         // true when a browser WebSocket is currently open
+  runtimeAttached: boolean;   // true when this process owns a backend iterator
+  pending: boolean;           // true during accepted/preparing before an iterator exists
+  runtime: StreamJobRuntimeInfo | null; // Backend runtime IDs recorded for this active job
 }
 ```
 
@@ -342,6 +345,12 @@ interface StreamJobTerminalInfo {
   at: string;
 }
 
+interface StreamJobRuntimeInfo {
+  externalSessionId?: string|null; // Backend-managed session/thread id
+  activeTurnId?: string|null;      // Backend-managed active turn id, when exposed
+  processId?: number|null;         // Local child process id, diagnostic only
+}
+
 interface DurableStreamJob {
   id: string;
   state: StreamJobState;
@@ -357,6 +366,7 @@ interface DurableStreamJob {
   updatedAt: string;
   startedAt?: string|null;
   lastEventAt?: string|null;
+  runtime?: StreamJobRuntimeInfo|null;
   abortRequested?: StreamJobTerminalInfo|null;
   terminalError?: StreamJobTerminalInfo|null;
 }
@@ -382,6 +392,18 @@ and runtime-attached jobs `finalizing` with
 `message: "Interrupted by server shutdown"` and `source: "server"` before
 aborting process-local backend handles. Those jobs remain in the file so the
 next startup reconciliation pass uses the same durable terminal path.
+
+`runtime` is operational metadata, not an audit log. `processStream` writes
+`runtime.externalSessionId` when it consumes an adapter's `external_session`
+event, and merges `backend_runtime` events carrying process IDs and backend
+active-turn IDs. Claude Code, Kiro, and Codex emit `processId` when their local
+child process is available; Codex records the app-server turn id from the
+`turn/start` response path, emits it as `backend_runtime.activeTurnId` from
+that path, and dedupes `turn/started` if the notification is also emitted.
+Today those identifiers support diagnostics and
+next-turn rehydration only; startup reconciliation still does not re-send
+prompts or reattach to an in-flight turn unless a backend explicitly advertises
+active-turn resume support.
 
 ### AttachmentMeta
 
@@ -956,6 +978,13 @@ interface KbStateUpdateEvent {
 interface ExternalSessionEvent {
   type: 'external_session';
   sessionId: string;  // Backend-managed session ID; opaque to the cockpit
+}
+
+interface BackendRuntimeEvent {
+  type: 'backend_runtime';
+  externalSessionId?: string|null;
+  activeTurnId?: string|null;
+  processId?: number|null;
 }
 ```
 

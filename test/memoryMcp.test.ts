@@ -20,6 +20,13 @@ function workspaceHash(p: string): string {
   return crypto.createHash('sha256').update(p).digest('hex').substring(0, 16);
 }
 
+const TEST_RESUME_CAPABILITIES: BackendMetadata['resumeCapabilities'] = {
+  activeTurnResume: 'unsupported',
+  activeTurnResumeReason: 'Test adapter does not support active turn reattach.',
+  sessionResume: 'unsupported',
+  sessionResumeReason: 'Test adapter does not model session resume.',
+};
+
 // ── Test adapter that stubs runOneShot ─────────────────────────────────────
 
 class StubMemoryCli extends BaseBackendAdapter {
@@ -35,6 +42,7 @@ class StubMemoryCli extends BaseBackendAdapter {
         thinking: false, planMode: false, agents: false,
         toolActivity: false, userQuestions: false, stdinInput: false,
       },
+      resumeCapabilities: TEST_RESUME_CAPABILITIES,
     };
   }
   sendMessage(_msg: string, _opts?: SendMessageOptions): SendMessageResult {

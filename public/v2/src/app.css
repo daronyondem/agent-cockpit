@@ -3356,6 +3356,11 @@ body{
   background: color-mix(in oklch, var(--status-error), transparent 94%);
   padding: 10px 12px;
 }
+.err-card.err-card-abort{
+  border-color: color-mix(in oklch, var(--status-awaiting), transparent 68%);
+  border-left-color: var(--status-awaiting);
+  background: color-mix(in oklch, var(--status-awaiting), transparent 95%);
+}
 .err-head{
   display: flex; align-items: center; gap: 8px;
   font-family: var(--mono-font); font-size: 11px;
@@ -3363,11 +3368,15 @@ body{
   color: var(--status-error);
   margin-bottom: 8px;
 }
+.err-card-abort .err-head{ color: var(--text-2); }
 .err-head .dot{ width: 6px; height: 6px; border-radius: 999px; display: inline-block; }
 .err-actions{
   display: flex; align-items: center; gap: 8px;
   padding-top: 8px; margin-top: 8px;
   border-top: 1px solid color-mix(in oklch, var(--status-error), transparent 80%);
+}
+.err-card-abort .err-actions{
+  border-top-color: color-mix(in oklch, var(--status-awaiting), transparent 82%);
 }
 
 /* ---------- Session expired overlay ---------- */

@@ -529,6 +529,23 @@ export interface ExternalSessionEvent {
 }
 
 /**
+ * Optional backend runtime identifiers for the currently running turn. These
+ * are persisted on the durable stream job while it is active so future
+ * backend-specific resume work has the identifiers it needs without replaying
+ * the user prompt. The event is server-side only and is not forwarded to the
+ * browser.
+ */
+export interface BackendRuntimeEvent {
+  type: 'backend_runtime';
+  /** Backend-managed conversation/session/thread id, when separate from cockpit ids. */
+  externalSessionId?: string | null;
+  /** Backend-managed active turn id, when the backend exposes one. */
+  activeTurnId?: string | null;
+  /** Local process id for process-backed backends. Diagnostic only. */
+  processId?: number | null;
+}
+
+/**
  * Fired when the real-time MemoryWatcher re-captures workspace memory
  * during an active stream. Lightweight payload — the frontend uses this
  * only as a trigger to show a "memory updated" pill and to refresh the
@@ -556,6 +573,7 @@ export type StreamEvent =
   | ErrorEvent
   | DoneEvent
   | ExternalSessionEvent
+  | BackendRuntimeEvent
   | MemoryUpdateEvent
   | KbStateUpdateEvent;
 
@@ -576,6 +594,12 @@ export interface StreamJobTerminalInfo {
   at: string;
 }
 
+export interface StreamJobRuntimeInfo {
+  externalSessionId?: string | null;
+  activeTurnId?: string | null;
+  processId?: number | null;
+}
+
 export interface DurableStreamJob {
   id: string;
   state: StreamJobState;
@@ -591,6 +615,7 @@ export interface DurableStreamJob {
   updatedAt: string;
   startedAt?: string | null;
   lastEventAt?: string | null;
+  runtime?: StreamJobRuntimeInfo | null;
   abortRequested?: StreamJobTerminalInfo | null;
   terminalError?: StreamJobTerminalInfo | null;
 }
@@ -956,6 +981,26 @@ export interface BackendCapabilities {
   stdinInput: boolean;
 }
 
+export type BackendActiveTurnResumeSupport = 'unsupported' | 'supported';
+export type BackendSessionResumeSupport = 'unsupported' | 'supported';
+
+export interface BackendResumeCapabilities {
+  /**
+   * Whether Agent Cockpit can safely reattach to the same in-flight backend
+   * turn after the cockpit server process restarts, without resending the
+   * prompt or duplicating tool side effects.
+   */
+  activeTurnResume: BackendActiveTurnResumeSupport;
+  activeTurnResumeReason: string;
+  /**
+   * Whether the backend can resume later session/thread context on the next
+   * user turn after a process respawn. This is deliberately weaker than active
+   * turn resume.
+   */
+  sessionResume: BackendSessionResumeSupport;
+  sessionResumeReason: string;
+}
+
 export interface ModelOption {
   id: string;
   label: string;
@@ -978,6 +1023,7 @@ export interface BackendMetadata {
   label: string;
   icon: string | null;
   capabilities: BackendCapabilities;
+  resumeCapabilities: BackendResumeCapabilities;
   models?: ModelOption[];
 }
 

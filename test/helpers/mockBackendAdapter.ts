@@ -29,6 +29,12 @@ export class MockBackendAdapter extends BaseBackendAdapter {
       label: 'Claude Code',
       icon: null,
       capabilities: { thinking: true, planMode: true, agents: true, toolActivity: true, userQuestions: true, stdinInput: true },
+      resumeCapabilities: {
+        activeTurnResume: 'unsupported',
+        activeTurnResumeReason: 'Mock backend does not model reattaching to an in-flight turn.',
+        sessionResume: 'supported',
+        sessionResumeReason: 'Mock backend can reuse the cockpit session id for follow-up test turns.',
+      },
       models: [
         { id: 'opus', label: 'Opus', family: 'opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] },
         { id: 'sonnet', label: 'Sonnet', family: 'sonnet', default: true, supportedEffortLevels: ['low', 'medium', 'high'] },

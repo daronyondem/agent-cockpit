@@ -838,6 +838,12 @@ export class CodexAdapter extends BaseBackendAdapter {
         userQuestions: true,
         stdinInput: true,
       },
+      resumeCapabilities: {
+        activeTurnResume: 'unsupported',
+        activeTurnResumeReason: 'Codex thread/resume restores the thread for a later turn, but the adapter does not have a safe protocol path to reattach to a turn already running before the cockpit process restarted.',
+        sessionResume: 'supported',
+        sessionResumeReason: 'The adapter persists Codex thread IDs via external_session and uses thread/resume after process respawn before starting the next turn.',
+      },
       models: this.modelCache || FALLBACK_MODELS,
     };
   }
@@ -1284,6 +1290,11 @@ export class CodexAdapter extends BaseBackendAdapter {
       }
 
       state.threadId = threadId;
+      yield {
+        type: 'backend_runtime',
+        externalSessionId: threadId,
+        processId: entry.proc.pid ?? null,
+      };
 
       // ── Build turn input ─────────────────────────────────────────────
       const userInput = [{ type: 'text', text: message, text_elements: [] }];
@@ -1295,11 +1306,42 @@ export class CodexAdapter extends BaseBackendAdapter {
 
       let turnEnded = false;
       let turnError: Error | null = null;
+      let emittedRuntimeTurnId: string | null = null;
+      let responseTurnId: string | null = null;
+      let resolveRuntimeEvent: (() => void) | null = null;
+      const pendingRuntimeEvents: StreamEvent[] = [];
+      const emitRuntimeTurnId = (turnId: string): StreamEvent | null => {
+        if (emittedRuntimeTurnId === turnId) return null;
+        state.turnId = turnId;
+        emittedRuntimeTurnId = turnId;
+        return {
+          type: 'backend_runtime',
+          externalSessionId: state.threadId,
+          activeTurnId: turnId,
+          processId: entry.proc.pid ?? null,
+        };
+      };
+      const enqueueRuntimeTurnId = (turnId: string): void => {
+        const event = emitRuntimeTurnId(turnId);
+        if (!event) return;
+        pendingRuntimeEvents.push(event);
+        resolveRuntimeEvent?.();
+        resolveRuntimeEvent = null;
+      };
+      const waitForRuntimeEvent = async (): Promise<StreamEvent> => {
+        const event = pendingRuntimeEvents.shift();
+        if (event) return event;
+        await new Promise<void>((resolve) => {
+          resolveRuntimeEvent = resolve;
+        });
+        return pendingRuntimeEvents.shift()!;
+      };
 
-      client.request('turn/start', turnParams)
+      const turnStartPromise = client.request('turn/start', turnParams)
         .then((resp) => {
           const turnResp = resp as TurnStartResult;
-          state.turnId = turnResp.turn.id;
+          responseTurnId = turnResp.turn.id;
+          enqueueRuntimeTurnId(responseTurnId);
           // Acceptance — turn/completed notification will arrive separately
         })
         .catch((err: Error) => {
@@ -1310,8 +1352,26 @@ export class CodexAdapter extends BaseBackendAdapter {
 
       // ── Stream notifications ─────────────────────────────────────────
       const toolByItemId: Map<string, string> = new Map();
+      const notificationIterator = client.notifications()[Symbol.asyncIterator]();
+      let nextNotification = notificationIterator.next();
+      let nextRuntimeEvent = waitForRuntimeEvent();
 
-      for await (const notification of client.notifications()) {
+      while (true) {
+        const next = await Promise.race([
+          nextNotification.then((result) => ({ type: 'notification' as const, result })),
+          nextRuntimeEvent.then((event) => ({ type: 'runtime_event' as const, event })),
+        ]);
+
+        if (next.type === 'runtime_event') {
+          yield next.event;
+          nextRuntimeEvent = waitForRuntimeEvent();
+          continue;
+        }
+
+        if (next.result.done) break;
+        const notification = next.result.value;
+        nextNotification = notificationIterator.next();
+
         if (state.aborted) {
           yield { type: 'error', error: 'Aborted by user' };
           yield { type: 'done' };
@@ -1385,7 +1445,10 @@ export class CodexAdapter extends BaseBackendAdapter {
         switch (method) {
           case 'turn/started': {
             const turnId = (params as { turnId?: string }).turnId;
-            if (turnId) state.turnId = turnId;
+            if (turnId) {
+              const event = emitRuntimeTurnId(turnId);
+              if (event) yield event;
+            }
             break;
           }
 
@@ -1539,6 +1602,15 @@ export class CodexAdapter extends BaseBackendAdapter {
       if (turnError) {
         const err = turnError as Error;
         yield { type: 'error', error: `Codex turn failed: ${err.message}` };
+      }
+
+      await turnStartPromise;
+      while (pendingRuntimeEvents.length > 0) {
+        yield pendingRuntimeEvents.shift()!;
+      }
+      if (responseTurnId) {
+        const event = emitRuntimeTurnId(responseTurnId);
+        if (event) yield event;
       }
 
       if (!turnEnded) {

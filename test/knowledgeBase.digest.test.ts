@@ -46,6 +46,12 @@ import type { BackendMetadata, KbStateUpdateEvent } from '../src/types';
 
 const WORKSPACE_PATH = '/tmp/kb-digest-test';
 const STUB_BACKEND_ID = 'stub-digester';
+const TEST_RESUME_CAPABILITIES: BackendMetadata['resumeCapabilities'] = {
+  activeTurnResume: 'unsupported',
+  activeTurnResumeReason: 'Test stub does not expose active-turn reattach.',
+  sessionResume: 'unsupported',
+  sessionResumeReason: 'Test stub does not expose backend session resume.',
+};
 
 function workspaceHash(p: string): string {
   return crypto.createHash('sha256').update(p).digest('hex').substring(0, 16);
@@ -78,6 +84,7 @@ class StubBackend extends BaseBackendAdapter {
         supportsMemory: false,
         supportsOneShot: true,
       },
+      resumeCapabilities: TEST_RESUME_CAPABILITIES,
     } as unknown as BackendMetadata;
   }
 

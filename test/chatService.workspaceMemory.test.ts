@@ -10,6 +10,12 @@ import { BaseBackendAdapter } from '../src/services/backends/base';
 import type { BackendMetadata, SendMessageResult, Message, MemorySnapshot } from '../src/types';
 
 const DEFAULT_WORKSPACE = '/tmp/test-workspace';
+const TEST_RESUME_CAPABILITIES: BackendMetadata['resumeCapabilities'] = {
+  activeTurnResume: 'unsupported',
+  activeTurnResumeReason: 'Test adapter does not support active turn reattach.',
+  sessionResume: 'unsupported',
+  sessionResumeReason: 'Test adapter does not model session resume.',
+};
 
 let tmpDir: string;
 let service: ChatService;
@@ -300,6 +306,7 @@ Body.
             thinking: false, planMode: false, agents: false,
             toolActivity: false, userQuestions: false, stdinInput: false,
           },
+          resumeCapabilities: TEST_RESUME_CAPABILITIES,
         };
       }
       sendMessage(_m: string): SendMessageResult {
@@ -345,6 +352,7 @@ Body.
             thinking: false, planMode: false, agents: false,
             toolActivity: false, userQuestions: false, stdinInput: false,
           },
+          resumeCapabilities: TEST_RESUME_CAPABILITIES,
         };
       }
       sendMessage(_m: string): SendMessageResult {
@@ -378,6 +386,7 @@ Body.
             thinking: false, planMode: false, agents: false,
             toolActivity: false, userQuestions: false, stdinInput: false,
           },
+          resumeCapabilities: TEST_RESUME_CAPABILITIES,
         };
       }
       sendMessage(_m: string): SendMessageResult {
@@ -405,4 +414,3 @@ Body.
 });
 
 // ── Attachment + Queue Migration Helpers ───────────────────────────────────
-

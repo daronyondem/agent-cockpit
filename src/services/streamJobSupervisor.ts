@@ -3,6 +3,7 @@ import { StreamJobRegistry } from './streamJobRegistry';
 import type {
   ActiveStreamEntry,
   DurableStreamJob,
+  StreamJobRuntimeInfo,
   StreamJobTerminalInfo,
   StreamErrorSource,
 } from '../types';
@@ -88,6 +89,16 @@ export class StreamJobSupervisor {
 
   async markRunning(jobId: string, patch: JobPatch = {}): Promise<DurableStreamJob | null> {
     return this.registry.update(jobId, { ...patch, state: 'running' });
+  }
+
+  async recordRuntimeInfo(jobId: string, patch: StreamJobRuntimeInfo): Promise<DurableStreamJob | null> {
+    const existing = await this.registry.get(jobId);
+    if (!existing) return null;
+    const runtime: StreamJobRuntimeInfo = { ...(existing.runtime || {}) };
+    if (patch.externalSessionId !== undefined) runtime.externalSessionId = patch.externalSessionId;
+    if (patch.activeTurnId !== undefined) runtime.activeTurnId = patch.activeTurnId;
+    if (patch.processId !== undefined) runtime.processId = patch.processId;
+    return this.registry.update(jobId, { runtime });
   }
 
   async requestPendingAbort(conversationId: string, message = 'Aborted by user'): Promise<boolean> {

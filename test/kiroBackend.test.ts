@@ -24,6 +24,9 @@ describe('KiroAdapter', () => {
       userQuestions: false,
       stdinInput: false,
     });
+    expect(meta.resumeCapabilities.activeTurnResume).toBe('unsupported');
+    expect(meta.resumeCapabilities.sessionResume).toBe('supported');
+    expect(meta.resumeCapabilities.activeTurnResumeReason).toContain('session/load');
   });
 
   test('metadata.models is populated immediately with hardcoded list', () => {
@@ -121,6 +124,365 @@ describe('KiroAdapter', () => {
 
     // Abort to prevent the stream from hanging
     abort();
+  });
+
+  test('sendMessage emits backend runtime session and process identifiers', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+    let sim!: {
+      proc: any;
+      requestLog: Array<{ id: number; method: string; params?: Record<string, unknown> }>;
+      respond: (id: number, result: unknown) => void;
+    };
+
+    function findRequest(method: string) {
+      return sim.requestLog.find((req) => req.method === method);
+    }
+
+    async function waitForRequest(method: string) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 1000) {
+        const req = findRequest(method);
+        if (req) return req;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error(`Timed out waiting for ${method}`);
+    }
+
+    jest.isolateModules(() => {
+      const { EventEmitter } = require('events');
+      const proc = new EventEmitter();
+      proc.pid = 5151;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.killed = false;
+      proc.exitCode = null;
+      proc.kill = () => {
+        proc.killed = true;
+        proc.exitCode = 0;
+        setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+      };
+
+      let lineBuf = '';
+      const requestLog: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [];
+      proc.stdin = {
+        write: (s: string) => {
+          lineBuf += s;
+          const lines = lineBuf.split('\n');
+          lineBuf = lines.pop()!;
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const msg = JSON.parse(line);
+            if (msg.method && msg.id != null) requestLog.push(msg);
+          }
+          return true;
+        },
+        destroyed: false,
+      };
+      sim = {
+        proc,
+        requestLog,
+        respond: (id, result) => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n'));
+        },
+      };
+
+      jest.doMock('child_process', () => ({ spawn: () => sim.proc }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-session-runtime',
+        conversationId: 'test-conv-runtime',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const eventsPromise = (async () => {
+      const events: any[] = [];
+      for await (const event of streamRef) {
+        events.push(event);
+        if (event.type === 'done') break;
+      }
+      return events;
+    })();
+
+    sim.respond((await waitForRequest('initialize')).id, {});
+    sim.respond((await waitForRequest('session/new')).id, { sessionId: 'kiro-session-1' });
+    sim.respond((await waitForRequest('session/prompt')).id, { stopReason: 'end_turn' });
+
+    const events = await eventsPromise;
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'external_session', sessionId: 'kiro-session-1' },
+      { type: 'backend_runtime', externalSessionId: 'kiro-session-1', processId: 5151 },
+    ]));
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
+  test('sendMessage surfaces session/prompt rejections as stream errors', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+    let sim!: {
+      proc: any;
+      requestLog: Array<{ id: number; method: string; params?: Record<string, unknown> }>;
+      respond: (id: number, result: unknown) => void;
+      rejectRequest: (id: number, message: string, data?: unknown) => void;
+    };
+
+    function findRequest(method: string) {
+      return sim.requestLog.find((req) => req.method === method);
+    }
+
+    async function waitForRequest(method: string) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 1000) {
+        const req = findRequest(method);
+        if (req) return req;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error(`Timed out waiting for ${method}`);
+    }
+
+    jest.isolateModules(() => {
+      const { EventEmitter } = require('events');
+      const proc = new EventEmitter() as any;
+      proc.pid = 5152;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.killed = false;
+      proc.exitCode = null;
+      proc.kill = () => {
+        proc.killed = true;
+        proc.exitCode = 0;
+        setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+      };
+
+      let lineBuf = '';
+      const requestLog: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [];
+      proc.stdin = {
+        write: (s: string) => {
+          lineBuf += s;
+          const lines = lineBuf.split('\n');
+          lineBuf = lines.pop()!;
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const msg = JSON.parse(line);
+            if (msg.method && msg.id != null) requestLog.push(msg);
+          }
+          return true;
+        },
+        destroyed: false,
+      };
+      sim = {
+        proc,
+        requestLog,
+        respond: (id, result) => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n'));
+        },
+        rejectRequest: (id, message, data) => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({
+            jsonrpc: '2.0',
+            id,
+            error: { code: -32603, message, data },
+          }) + '\n'));
+        },
+      };
+
+      jest.doMock('child_process', () => ({ spawn: () => sim.proc }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-session-prompt-error',
+        conversationId: 'test-conv-prompt-error',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const eventsPromise = (async () => {
+      const events: any[] = [];
+      for await (const event of streamRef) {
+        events.push(event);
+        if (event.type === 'done') break;
+      }
+      return events;
+    })();
+
+    sim.respond((await waitForRequest('initialize')).id, {});
+    sim.respond((await waitForRequest('session/new')).id, { sessionId: 'kiro-session-prompt-error' });
+    const promptReq = await waitForRequest('session/prompt');
+    sim.rejectRequest(promptReq.id, 'Internal error', 'Prompt already in progress');
+
+    const events = await eventsPromise;
+    expect(events).toEqual(expect.arrayContaining([
+      {
+        type: 'error',
+        error: expect.stringContaining('Prompt already in progress'),
+        source: 'backend',
+      },
+      { type: 'done' },
+    ]));
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
+  test('abort terminates the active ACP process so the next message reloads the session on a fresh process', async () => {
+    type Sim = ReturnType<typeof createSimulator>;
+
+    function createSimulator(pid: number) {
+      const { EventEmitter } = require('events');
+      const proc = new EventEmitter() as any;
+      proc.pid = pid;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.killed = false;
+      proc.exitCode = null;
+      proc.kill = () => {
+        if (!proc.killed) {
+          proc.killed = true;
+          proc.exitCode = 0;
+          setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+        }
+      };
+
+      let lineBuf = '';
+      const requestLog: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [];
+      proc.stdin = {
+        write: (s: string) => {
+          lineBuf += s;
+          const lines = lineBuf.split('\n');
+          lineBuf = lines.pop()!;
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const msg = JSON.parse(line);
+            if (msg.method && msg.id != null) requestLog.push(msg);
+          }
+          return true;
+        },
+        destroyed: false,
+      };
+
+      const sim = {
+        proc,
+        requestLog,
+        respond: (id: number, result: unknown) => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n'));
+        },
+        notify: (method: string, params?: unknown, id?: number) => {
+          const msg: Record<string, unknown> = { jsonrpc: '2.0', method, params };
+          if (id != null) msg.id = id;
+          proc.stdout.emit('data', Buffer.from(JSON.stringify(msg) + '\n'));
+        },
+        sessionUpdate: (sessionId: string, update: Record<string, unknown>) => {
+          sim.notify('session/update', { sessionId, update });
+        },
+        findRequest: (method: string) => requestLog.find((req) => req.method === method),
+      };
+
+      return sim;
+    }
+
+    async function waitForSim(sims: Sim[], index: number, timeoutMs = 1000): Promise<Sim> {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        if (sims[index]) return sims[index];
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error(`Timed out waiting for simulator ${index}`);
+    }
+
+    async function waitForRequest(sim: Sim, method: string, timeoutMs = 1000) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < timeoutMs) {
+        const req = sim.findRequest(method);
+        if (req) return req;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error(`Timed out waiting for ${method}`);
+    }
+
+    async function collectEvents(stream: AsyncGenerator<any>) {
+      const events: any[] = [];
+      for await (const event of stream) {
+        events.push(event);
+        if (event.type === 'done') break;
+      }
+      return events;
+    }
+
+    let adapterRef!: { sendMessage: (message: string, options: any) => SendMessageResult; shutdown: () => void };
+    const sims: Sim[] = [];
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => ({
+        spawn: () => {
+          const sim = createSimulator(6100 + sims.length);
+          sims.push(sim);
+          return sim.proc;
+        },
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      adapterRef = new IsolatedAdapter({ workingDir: '/tmp' });
+    });
+
+    const first = adapterRef.sendMessage('first', {
+      sessionId: 'cockpit-session',
+      conversationId: 'conv-1',
+      isNewSession: true,
+      workingDir: '/tmp',
+      systemPrompt: '',
+    });
+    const firstEventsPromise = collectEvents(first.stream);
+    const sim1 = await waitForSim(sims, 0);
+    sim1.respond((await waitForRequest(sim1, 'initialize')).id, {});
+    sim1.respond((await waitForRequest(sim1, 'session/new')).id, { sessionId: 'kiro-session-1' });
+    await waitForRequest(sim1, 'session/prompt');
+
+    first.abort();
+
+    const cancelReq = await waitForRequest(sim1, 'session/cancel');
+    expect((cancelReq.params as { sessionId: string }).sessionId).toBe('kiro-session-1');
+    expect(sim1.proc.killed).toBe(true);
+    await expect(firstEventsPromise).resolves.toEqual(expect.arrayContaining([{ type: 'done' }]));
+
+    const second = adapterRef.sendMessage('hi', {
+      sessionId: 'cockpit-session',
+      conversationId: 'conv-1',
+      isNewSession: false,
+      workingDir: '/tmp',
+      systemPrompt: '',
+      externalSessionId: 'kiro-session-1',
+    });
+    const secondEventsPromise = collectEvents(second.stream);
+    const sim2 = await waitForSim(sims, 1);
+    sim2.respond((await waitForRequest(sim2, 'initialize')).id, {});
+    const loadReq = await waitForRequest(sim2, 'session/load');
+    expect((loadReq.params as { sessionId: string }).sessionId).toBe('kiro-session-1');
+    sim2.respond(loadReq.id, {});
+    const promptReq = await waitForRequest(sim2, 'session/prompt');
+    expect(((promptReq.params as { prompt: Array<{ text: string }> }).prompt[0]).text).toBe('hi');
+    sim2.sessionUpdate('kiro-session-1', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'hello again' },
+    });
+    sim2.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    const secondEvents = await secondEventsPromise;
+    expect(secondEvents).toEqual(expect.arrayContaining([
+      { type: 'backend_runtime', externalSessionId: 'kiro-session-1', processId: 6101 },
+      { type: 'text', content: 'hello again', streaming: true },
+      { type: 'done' },
+    ]));
+
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
   });
 });
 

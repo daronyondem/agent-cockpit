@@ -67,22 +67,39 @@ function streamErrorMessageText(message){
   return typeof message.content === 'string' && message.content ? message.content : 'Stream error';
 }
 
+function streamErrorMessageSource(message){
+  if (!message || !message.streamError) return null;
+  const err = message.streamError;
+  return err && typeof err.source === 'string' ? err.source : null;
+}
+
 /* The server persists terminal stream failures as assistant messages so reloads
    and restart reconciliation can recover the error state. While that state is
-   active, ChatLive renders the styled StreamErrorCard at the foot of the feed;
-   this helper identifies the persisted marker backing that card so it does not
-   also appear as a second assistant bubble. */
-function activeStreamErrorMessageId(messages, activeError){
-  if (!activeError || !Array.isArray(messages)) return null;
+   active, ChatLive renders the styled StreamErrorCard at the foot of the feed.
+   User aborts are intentional cancellations, so their durable marker remains
+   hidden even after the notice is dismissed instead of turning into a second
+   assistant bubble. */
+function hiddenStreamErrorMessageIds(messages, activeError, activeSource){
+  const ids = new Set();
+  if (!Array.isArray(messages)) return ids;
+  for (const msg of messages) {
+    if (msg && msg.id && msg.role === 'assistant' && msg.streamError && streamErrorMessageSource(msg) === 'abort') {
+      ids.add(msg.id);
+    }
+  }
+  if (!activeError) return ids;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (!msg || typeof msg !== 'object') continue;
     if (msg.role === 'assistant' && msg.streamError) {
-      return streamErrorMessageText(msg) === activeError ? (msg.id || null) : null;
+      const source = streamErrorMessageSource(msg);
+      const sourceMatches = !activeSource || !source || source === activeSource;
+      if (streamErrorMessageText(msg) === activeError && sourceMatches && msg.id) ids.add(msg.id);
+      return ids;
     }
-    if (msg.role === 'assistant' || msg.role === 'user') return null;
+    if (msg.role === 'assistant' || msg.role === 'user') return ids;
   }
-  return null;
+  return ids;
 }
 
 /* Subscribe to a single conversation's state in the StreamStore. Returns
@@ -631,18 +648,19 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
 
   const messages = state ? state.messages : [];
   const activeStreamError = state ? state.streamError : null;
+  const activeStreamErrorSource = state ? state.streamErrorSource : null;
   const streaming = state ? state.streaming : false;
   const streamingMsgId = state ? state.streamingMsgId : null;
   const profileLocked = messages.length > 0;
-  const hiddenStreamErrorMessageId = React.useMemo(
-    () => activeStreamErrorMessageId(messages, activeStreamError),
-    [messages, activeStreamError]
+  const hiddenStreamErrorMessageIdsSet = React.useMemo(
+    () => hiddenStreamErrorMessageIds(messages, activeStreamError, activeStreamErrorSource),
+    [messages, activeStreamError, activeStreamErrorSource]
   );
   const feedMessages = React.useMemo(
-    () => hiddenStreamErrorMessageId
-      ? messages.filter(m => m.id !== hiddenStreamErrorMessageId)
+    () => hiddenStreamErrorMessageIdsSet.size
+      ? messages.filter(m => !hiddenStreamErrorMessageIdsSet.has(m.id))
       : messages,
-    [messages, hiddenStreamErrorMessageId]
+    [messages, hiddenStreamErrorMessageIdsSet]
   );
 
   /* Elapsed = time since the preceding user message in the feed. Walks
@@ -1130,6 +1148,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
             <StreamErrorCard
               convId={convId}
               error={streamError}
+              source={state.streamErrorSource}
               queueLength={queue.length}
               messages={messages}
             />
@@ -2925,7 +2944,7 @@ function fmtFileSize(n){
    "Resume queue" clears the error AND calls drainQueueIfReady so the head
    of the queue fires immediately. The resume button only appears when the
    queue has pending items — the drainer would be a no-op otherwise. */
-function StreamErrorCard({ convId, error, queueLength, messages }){
+function StreamErrorCard({ convId, error, source, queueLength, messages }){
   /* Retry = re-send the last user message verbatim. Matches V1
      `chatRetryLast` (`streaming.js:715-726`): the composer picker values
      govern backend/model/effort just like a normal send. We don't preserve
@@ -2939,24 +2958,30 @@ function StreamErrorCard({ convId, error, queueLength, messages }){
     }
     return null;
   }, [messages]);
-  const canRetry = !!(lastUser && typeof lastUser.content === 'string' && lastUser.content);
+  const isAbort = source === 'abort' || error === 'Aborted by user';
+  const canRetry = !isAbort && !!(lastUser && typeof lastUser.content === 'string' && lastUser.content);
 
   function onRetry(){
     if (!canRetry) return;
     StreamStore.clearStreamError(convId);
     StreamStore.send(convId, lastUser.content).catch(() => {});
   }
+  const title = isAbort ? 'Operation aborted' : 'Stream error';
+  const detail = isAbort ? 'Aborted by user' : error;
+  const body = isAbort
+    ? `The operation was stopped. ${queueLength ? `${queueLength} queued message${queueLength === 1 ? '' : 's'} ${queueLength === 1 ? 'is' : 'are'} paused until you resume.` : 'Dismiss this notice to keep working.'}`
+    : `The stream was interrupted. ${queueLength ? `${queueLength} queued message${queueLength === 1 ? '' : 's'} ${queueLength === 1 ? 'is' : 'are'} paused until you resume.` : 'No messages are queued — dismiss this notice to keep working.'}`;
 
   return (
-    <div className="err-card">
+    <div className={`err-card ${isAbort ? 'err-card-abort' : ''}`}>
       <div className="err-head">
-        <span className="dot" style={{background:"var(--status-error)"}}/>
-        Stream error
+        <span className="dot" style={{background: isAbort ? "var(--status-awaiting)" : "var(--status-error)"}}/>
+        {title}
         <span className="spacer" style={{flex:1}}/>
-        <span className="u-mono u-dim" style={{fontSize:10.5}}>{error}</span>
+        <span className="u-mono u-dim" style={{fontSize:10.5}}>{detail}</span>
       </div>
       <div className="prose" style={{fontFamily:"var(--prose-font)",fontSize:15,lineHeight:1.55}}>
-        <p>The stream was interrupted. {queueLength ? `${queueLength} queued message${queueLength === 1 ? '' : 's'} ${queueLength === 1 ? 'is' : 'are'} paused until you resume.` : 'No messages are queued — dismiss this notice to keep working.'}</p>
+        <p>{body}</p>
       </div>
       <div className="err-actions">
         <span className="spacer" style={{flex:1}}/>

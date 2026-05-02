@@ -46,6 +46,9 @@ describe('CodexAdapter', () => {
       userQuestions: true,
       stdinInput: true,
     });
+    expect(meta.resumeCapabilities.activeTurnResume).toBe('unsupported');
+    expect(meta.resumeCapabilities.sessionResume).toBe('supported');
+    expect(meta.resumeCapabilities.activeTurnResumeReason).toContain('thread/resume');
   });
 
   test('resolveCodexCliRuntime maps profile configDir to CODEX_HOME and honors command/env', () => {
@@ -288,6 +291,293 @@ describe('CodexAdapter', () => {
 
     // Abort to prevent the stream from hanging on a real spawn
     abort();
+  });
+
+  test('sendMessage emits backend runtime turn id from the turn/start response', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        return {
+          spawn: () => {
+            const proc = new EventEmitter();
+            proc.pid = 6262;
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.killed = false;
+            proc.exitCode = null;
+            proc.kill = () => {
+              proc.killed = true;
+              proc.exitCode = 0;
+              setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+            };
+            proc.stdin = {
+              write: (line: string) => {
+                const req = JSON.parse(line);
+                if (req.method === 'initialize') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: {},
+                  }) + '\n')));
+                } else if (req.method === 'thread/start') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: { thread: { id: 'thread-1' } },
+                  }) + '\n')));
+                } else if (req.method === 'turn/start') {
+                  setImmediate(() => {
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      id: req.id,
+                      result: { turn: { id: 'turn-1' } },
+                    }) + '\n'));
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'turn/started',
+                      params: { turnId: 'turn-1' },
+                    }) + '\n'));
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'turn/completed',
+                      params: { threadId: 'thread-1' },
+                    }) + '\n'));
+                  });
+                }
+                return true;
+              },
+              end: () => {},
+            };
+            return proc;
+          },
+          execFile: () => ({ stdin: { end: () => {} } }),
+        };
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-session-runtime',
+        conversationId: 'test-conv-runtime',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'external_session', sessionId: 'thread-1' },
+      { type: 'backend_runtime', externalSessionId: 'thread-1', processId: 6262 },
+      { type: 'backend_runtime', externalSessionId: 'thread-1', activeTurnId: 'turn-1', processId: 6262 },
+    ]));
+    expect(events.filter((event) => (
+      event.type === 'backend_runtime' && event.activeTurnId === 'turn-1'
+    ))).toHaveLength(1);
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
+  test('sendMessage emits turn/start response turn id before done when completion is in the same chunk', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        return {
+          spawn: () => {
+            const proc = new EventEmitter();
+            proc.pid = 6363;
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.killed = false;
+            proc.exitCode = null;
+            proc.kill = () => {
+              proc.killed = true;
+              proc.exitCode = 0;
+              setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+            };
+            proc.stdin = {
+              write: (line: string) => {
+                const req = JSON.parse(line);
+                if (req.method === 'initialize') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: {},
+                  }) + '\n')));
+                } else if (req.method === 'thread/start') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: { thread: { id: 'thread-1' } },
+                  }) + '\n')));
+                } else if (req.method === 'turn/start') {
+                  setImmediate(() => {
+                    const response = JSON.stringify({
+                      jsonrpc: '2.0',
+                      id: req.id,
+                      result: { turn: { id: 'turn-1' } },
+                    });
+                    const completed = JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'turn/completed',
+                      params: { threadId: 'thread-1' },
+                    });
+                    proc.stdout.emit('data', Buffer.from(`${response}\n${completed}\n`));
+                  });
+                }
+                return true;
+              },
+              end: () => {},
+            };
+            return proc;
+          },
+          execFile: () => ({ stdin: { end: () => {} } }),
+        };
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-session-runtime-same-chunk',
+        conversationId: 'test-conv-runtime-same-chunk',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    const activeTurnEvents = events.filter((event) => (
+      event.type === 'backend_runtime' && event.activeTurnId === 'turn-1'
+    ));
+    expect(activeTurnEvents).toHaveLength(1);
+    expect(events.indexOf(activeTurnEvents[0])).toBeLessThan(events.findIndex((event) => event.type === 'done'));
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
+  test('sendMessage emits turn/start response turn id before delayed completion without turn/started', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+    let emitCompletion: (() => void) | null = null;
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        return {
+          spawn: () => {
+            const proc = new EventEmitter();
+            proc.pid = 6464;
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.killed = false;
+            proc.exitCode = null;
+            proc.kill = () => {
+              proc.killed = true;
+              proc.exitCode = 0;
+              setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+            };
+            proc.stdin = {
+              write: (line: string) => {
+                const req = JSON.parse(line);
+                if (req.method === 'initialize') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: {},
+                  }) + '\n')));
+                } else if (req.method === 'thread/start') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: { thread: { id: 'thread-1' } },
+                  }) + '\n')));
+                } else if (req.method === 'turn/start') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: { turn: { id: 'turn-1' } },
+                  }) + '\n')));
+                  emitCompletion = () => {
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'turn/completed',
+                      params: { threadId: 'thread-1' },
+                    }) + '\n'));
+                  };
+                }
+                return true;
+              },
+              end: () => {},
+            };
+            return proc;
+          },
+          execFile: () => ({ stdin: { end: () => {} } }),
+        };
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-session-runtime-delayed-completion',
+        conversationId: 'test-conv-runtime-delayed-completion',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    const iterator = streamRef[Symbol.asyncIterator]();
+    while (!events.some((event) => event.type === 'backend_runtime' && event.activeTurnId === 'turn-1')) {
+      const { value, done } = await iterator.next();
+      expect(done).toBe(false);
+      events.push(value);
+      expect(value.type).not.toBe('done');
+    }
+
+    const activeTurnEvent = events.find((event) => (
+      event.type === 'backend_runtime' && event.activeTurnId === 'turn-1'
+    ));
+    expect(activeTurnEvent).toEqual({
+      type: 'backend_runtime',
+      externalSessionId: 'thread-1',
+      activeTurnId: 'turn-1',
+      processId: 6464,
+    });
+
+    expect(emitCompletion).not.toBeNull();
+    emitCompletion!();
+    while (!events.some((event) => event.type === 'done')) {
+      const { value, done } = await iterator.next();
+      expect(done).toBe(false);
+      events.push(value);
+    }
+
+    expect(events.findIndex((event) => (
+      event.type === 'backend_runtime' && event.activeTurnId === 'turn-1'
+    ))).toBeLessThan(events.findIndex((event) => event.type === 'done'));
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
   });
 });
 
