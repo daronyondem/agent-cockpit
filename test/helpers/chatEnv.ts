@@ -11,6 +11,7 @@ import { createChatRouter } from '../../src/routes/chat';
 import { attachWebSocket, type WsFunctions } from '../../src/ws';
 import { BackendRegistry } from '../../src/services/backends/registry';
 import type { ActiveStreamEntry } from '../../src/types';
+import type { StreamJobRegistry } from '../../src/services/streamJobRegistry';
 import { MockBackendAdapter } from './mockBackendAdapter';
 
 export const DEFAULT_WORKSPACE = '/tmp/test-workspace';
@@ -31,6 +32,8 @@ export interface ChatRouterEnv {
   server: http.Server;
   baseUrl: string;
   activeStreams: Map<string, ActiveStreamEntry>;
+  streamJobs: StreamJobRegistry;
+  reconcileInterruptedJobs: () => Promise<{ interrupted: number; removed: number }>;
   wsFns: WsFunctions;
   wsShutdown: () => void;
   request(method: string, urlPath: string, body?: any): Promise<HttpResult>;
@@ -80,7 +83,8 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     maybeRefresh: async () => {},
   } as any;
   const chatResult = createChatRouter({ chatService, backendRegistry, updateService: opts.updateService ?? null as any, claudePlanUsageService: mockPlanUsage, kiroPlanUsageService: mockKiroPlanUsage, codexPlanUsageService: mockCodexPlanUsage });
-  const { activeStreams } = chatResult;
+  await chatResult.reconcileInterruptedJobs();
+  const { activeStreams, streamJobs, reconcileInterruptedJobs } = chatResult;
   app.use('/api/chat', chatResult.router);
 
   const server = await new Promise<http.Server>((resolve) => {
@@ -214,7 +218,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     });
   };
 
-  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
+  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, streamJobs, reconcileInterruptedJobs, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
 }
 
 async function removeTmpDirWithRetry(tmpDir: string): Promise<void> {

@@ -105,9 +105,9 @@
     return data.conversations || [];
   }
 
-  /* Returns the IDs of conversations whose CLI stream is currently running
-     on the server (or paused awaiting user input). Used on app load to
-     restore sidebar "streaming" dots after a page refresh. */
+  /* Returns the IDs of conversations with accepted/preparing/running CLI
+     turns on the server. Used on app load to restore sidebar "streaming"
+     dots after a page refresh. */
   async function getActiveStreams(){
     const res = await chatFetch('active-streams');
     const data = await res.json();

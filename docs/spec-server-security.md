@@ -46,10 +46,11 @@
 13. Mount chat router at `/api/chat`
 14. Serve static files from `public/`
 15. Call `chatService.initialize()` (migration + lookup map)
-16. Start UpdateService (version polling)
-17. Listen on configured PORT
-18. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is authoritative for active CLI turns; WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
-19. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
+16. Reconcile leftover durable stream jobs via `chatResult.reconcileInterruptedJobs()` before the server accepts traffic. This converts unrecoverable accepted/preparing/running jobs from a prior process into one persisted assistant `streamError` when the user message exists, or removes the job when no user message was saved.
+17. Start UpdateService (version polling)
+18. Listen on configured PORT
+19. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. Runtime `activeStreams` is authoritative while this process owns a backend iterator; `data/chat/stream-jobs.json` is the durable supervision layer used for accepted/preparing visibility and restart reconciliation. WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
+20. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
 
 ### Graceful Shutdown
 

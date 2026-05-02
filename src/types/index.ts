@@ -561,6 +561,45 @@ export type StreamEvent =
 
 export type StreamErrorSource = 'backend' | 'transport' | 'abort' | 'server';
 
+// ── Durable stream jobs ─────────────────────────────────────────────────────
+
+export type StreamJobState =
+  | 'accepted'
+  | 'preparing'
+  | 'running'
+  | 'abort_requested'
+  | 'finalizing';
+
+export interface StreamJobTerminalInfo {
+  message: string;
+  source: StreamErrorSource;
+  at: string;
+}
+
+export interface DurableStreamJob {
+  id: string;
+  state: StreamJobState;
+  conversationId: string;
+  sessionId: string;
+  userMessageId?: string | null;
+  backend: string;
+  cliProfileId?: string | null;
+  model?: string | null;
+  effort?: EffortLevel | null;
+  workingDir?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt?: string | null;
+  lastEventAt?: string | null;
+  abortRequested?: StreamJobTerminalInfo | null;
+  terminalError?: StreamJobTerminalInfo | null;
+}
+
+export interface StreamJobFile {
+  version: 1;
+  jobs: DurableStreamJob[];
+}
+
 // ── Workspace Memory ─────────────────────────────────────────────────────────
 
 export type MemoryType = 'user' | 'feedback' | 'project' | 'reference' | 'unknown';
@@ -1101,6 +1140,7 @@ export interface ActiveStreamEntry {
   backend: string;
   needsTitleUpdate: boolean;
   titleUpdateMessage: string | null;
+  jobId?: string;
   startedAt?: string;
   lastEventAt?: string;
   abortRequested?: {
@@ -1111,6 +1151,7 @@ export interface ActiveStreamEntry {
   abortFinalizing?: Promise<void>;
   finalizeAbort?: () => Promise<void>;
   terminalFinalizing?: Promise<void>;
+  done?: Promise<void>;
 }
 
 // ── Tool Detail Extraction ───────────────────────────────────────────────────
