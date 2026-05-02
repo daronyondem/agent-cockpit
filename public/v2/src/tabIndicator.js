@@ -1,11 +1,11 @@
-/* Browser tab status indicator (v2 port of legacy public/js/tab-indicator.js).
+/* Browser tab status indicator.
    Overlays a coloured dot on the favicon to reflect whether any conversation
    is streaming. "done" / "error" states only surface when a stream ends while
    the tab is hidden, so a user working in another tab is notified without the
    badge flickering for visible work.
 
-   Data source: StreamStore.convStates() + subscribeGlobal. No title prefix
-   (legacy dropped that — favicon dot is the single tab indicator). */
+   Data source: StreamStore.convStates() + subscribeGlobal. No title prefix;
+   the favicon dot is the single tab indicator. */
 
 (function(){
   const FAVICON_HREF = '/favicon.svg';

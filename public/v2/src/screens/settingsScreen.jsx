@@ -178,9 +178,9 @@ function Field({ label, hint, children }){
   );
 }
 
-/* Segmented horizontal picker — matches the deck mock-up's `.seg.seg-inline`
-   visual (a row of pill buttons with `aria-pressed` on the active one).
-   Accepts `options: [{ id, label }]` and resolves to the picked id. */
+/* Segmented horizontal picker: a row of pill buttons with `aria-pressed` on
+   the active one. Accepts `options: [{ id, label }]` and resolves to the
+   picked id. */
 function Seg({ value, onChange, options }){
   return (
     <div className="seg seg-inline">
@@ -196,8 +196,7 @@ function Seg({ value, onChange, options }){
   );
 }
 
-/* Pill toggle switch — matches the deck's `.toggle/.tgl` markup so the
-   visual style stays consistent with the design mock-up. */
+/* Pill toggle switch using the shared `.toggle/.tgl` markup. */
 function Toggle({ checked, onChange, label }){
   return (
     <label className="toggle">
@@ -1260,9 +1259,8 @@ function totalsFor(days){
   return t;
 }
 
-/* Filter the raw `days` list to the selected range. Mirrors V1
-   `chatUpdateUsageStats` (public/js/main.js:1142-1157). Empty range
-   returns an empty array — matches the "no data for this period" UX. */
+/* Filter the raw `days` list to the selected range. Empty range returns an
+   empty array — matches the "no data for this period" UX. */
 function daysForRange(days, range){
   if (!Array.isArray(days) || !days.length) return [];
   if (range === 'all') return days;

@@ -193,11 +193,8 @@ agent-cockpit/
 │   ├── v2/                   # Default UI (React 18 + Babel Standalone, no build step)
 │   │   ├── index.html
 │   │   └── src/              # JSX components, screens, primitives, styles
-│   ├── index.html            # Legacy V1 UI shell (served at /legacy/)
-│   ├── js/                   # Legacy V1 frontend ES modules
-│   └── styles.css            # Legacy V1 CSS with light/dark themes
 ├── docs/                     # Wiki-style specification (see SPEC.md)
-├── scripts/                  # Build helpers (e.g. KB graph bundles)
+├── scripts/                  # Repository maintenance helpers
 ├── test/                     # Jest test suites
 └── data/                     # Runtime data (gitignored)
     ├── chat/
@@ -295,4 +292,4 @@ Agent Cockpit supports Claude Code, Kiro, and OpenAI Codex as its first three ba
 
 ## Specification
 
-See [docs/SPEC.md](docs/SPEC.md) for a complete technical specification covering every API endpoint, data model, frontend behavior (V2 default UI and legacy V1), security mechanism, and implementation detail. The root `SPEC.md` is a thin redirect — all content lives under `docs/`.
+See [docs/SPEC.md](docs/SPEC.md) for a complete technical specification covering every API endpoint, data model, frontend behavior, security mechanism, and implementation detail. The root `SPEC.md` is a thin redirect — all content lives under `docs/`.

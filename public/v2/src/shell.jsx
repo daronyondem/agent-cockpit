@@ -1615,9 +1615,8 @@ function AssistantBody({ message, isStreaming }){
   );
 }
 
-/* V1 parity: render a "Processing…" spinner once at least one tool has
-   finished, no tool is currently running, and no text has streamed yet for
-   this turn. Mirrors `public/js/rendering.js:1038-1046`. */
+/* Render a "Processing…" spinner once at least one tool has finished, no tool
+   is currently running, and no text has streamed yet for this turn. */
 function shouldShowProcessing(blocks){
   let hasCompleted = false;
   let hasRunning = false;
@@ -2259,10 +2258,9 @@ function msgTime(iso){
   return Math.floor(h / 24) + 'd';
 }
 
-/* "Xs" under a minute, "Xm YYs" (zero-padded seconds) otherwise.
-   Mirrors V1 `chatFormatElapsed` (public/js/utils.js:30) exactly. Used
-   by the assistant-message elapsed pill; capped at 1 h upstream so no
-   hour branch needed. */
+/* "Xs" under a minute, "Xm YYs" (zero-padded seconds) otherwise. Used by the
+   assistant-message elapsed pill; capped at 1 h upstream so no hour branch
+   needed. */
 function formatMsgElapsed(ms){
   const totalSec = Math.floor((ms || 0) / 1000);
   const min = Math.floor(totalSec / 60);
@@ -2274,7 +2272,7 @@ function formatMsgElapsed(ms){
 /* Three cascading pickers below the composer: Profile → Model → Effort.
    Values flush to the server with the next /message POST (see StreamStore.send).
    Each chip wraps a transparent native <select> so we get native dropdown
-   UX, keyboard/a11y for free, and the chip's pixel styling from the deck. */
+   UX, keyboard/a11y for free, and the chip's styled shell. */
 function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, profileLocked, disabled }){
   const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled) : [];
   const selectedProfile = activeProfiles.find(p => p.id === composerCliProfileId)
@@ -2608,8 +2606,7 @@ function kindFromFile(file){
 
 /* Shown while the agent is in plan mode — gathering context / drafting a
    plan without taking action yet. Clears when plan mode exits (either into
-   a plan-approval card or the stream finishes). Mirrors V1
-   `public/js/rendering.js:1049-1052`. */
+   a plan-approval card or the stream finishes). */
 function PlanModeBanner(){
   return (
     <div className="plan-mode-banner">
@@ -2622,8 +2619,7 @@ function PlanModeBanner(){
 /* Banner shown above the queue stack when the queue was restored from a
    prior session (server had pending items at conv load time). Auto-drain is
    paused until the user Resumes or Clears, so stale queued messages don't
-   fire unexpectedly on next page load. Mirrors V1
-   `public/js/conversations.js:991-999`. */
+   fire unexpectedly on next page load. */
 function SuspendedQueueBanner({ count, onResume, onClear }){
   return (
     <div className="qbanner qbanner-suspended">
