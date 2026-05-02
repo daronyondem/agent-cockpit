@@ -2,7 +2,6 @@ import express from 'express';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import crypto from 'crypto';
 import multer from 'multer';
 import { csrfGuard } from '../middleware/csrf';
 import { attachmentFromPath } from '../services/chatService';
@@ -15,7 +14,8 @@ import type { CodexPlanUsageService } from '../services/codexPlanUsageService';
 import { CliProfileAuthService } from '../services/cliProfileAuthService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
-import { StreamJobRegistry, ACTIVE_STREAM_JOB_STATES } from '../services/streamJobRegistry';
+import { ACTIVE_STREAM_JOB_STATES } from '../services/streamJobRegistry';
+import { StreamJobSupervisor, type PendingMessageSend } from '../services/streamJobSupervisor';
 import { detectLibreOffice } from '../services/knowledgeBase/libreOffice';
 import { detectPandoc } from '../services/knowledgeBase/pandoc';
 import {
@@ -50,17 +50,8 @@ function isCliProfileResolutionError(err: unknown): boolean {
 
 interface ProcessStreamDeps {
   chatService: ChatService;
-  streamJobs?: StreamJobRegistry;
+  streamSupervisor?: StreamJobSupervisor;
   jobId?: string;
-}
-
-interface PendingMessageSend {
-  jobId: string;
-  abortRequested?: {
-    message: string;
-    source: 'abort';
-    at: string;
-  };
 }
 
 /**
@@ -177,21 +168,18 @@ export async function processStream(
   let doneEmitted = false;
 
   async function markJobFinalizing(message: string, source: StreamErrorSource): Promise<void> {
-    if (!deps.streamJobs || !deps.jobId) return;
+    if (!deps.streamSupervisor || !deps.jobId) return;
     try {
-      await deps.streamJobs.update(deps.jobId, {
-        state: 'finalizing',
-        terminalError: { message, source, at: new Date().toISOString() },
-      });
+      await deps.streamSupervisor.markFinalizing(deps.jobId, deps.streamSupervisor.terminal(message, source));
     } catch (err: unknown) {
       console.warn(`[chat] Failed to mark stream job finalizing for conv=${convId}:`, (err as Error).message);
     }
   }
 
   async function deleteJobBeforeDone(): Promise<void> {
-    if (!deps.streamJobs || !deps.jobId || entry.jobId !== deps.jobId) return;
+    if (!deps.streamSupervisor || !deps.jobId || entry.jobId !== deps.jobId) return;
     try {
-      await deps.streamJobs.delete(deps.jobId);
+      await deps.streamSupervisor.completeJob(deps.jobId);
       entry.jobId = undefined;
     } catch (err: unknown) {
       console.warn(`[chat] Failed to delete completed stream job for conv=${convId}:`, (err as Error).message);
@@ -492,9 +480,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   const router = express.Router();
   const packageJson = require('../../package.json');
 
-  const activeStreams = new Map<string, ActiveStreamEntry>();
-  const pendingMessageSends = new Map<string, PendingMessageSend>();
-  const streamJobs = new StreamJobRegistry(chatService.baseDir);
+  const streamSupervisor = new StreamJobSupervisor(chatService.baseDir);
+  const activeStreams = streamSupervisor.activeStreams;
+  const pendingMessageSends = streamSupervisor.pendingMessageSends;
+  const streamJobs = streamSupervisor.registry;
   const memoryWatcher = new MemoryWatcher();
   const cliProfileAuth = new CliProfileAuthService(chatService.baseDir);
   // Per-conversation map of last-known memory file fingerprints (filename → sha-ish)
@@ -504,37 +493,21 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   let wsFns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected' | 'startStreamGracePeriod'> | null = null;
 
   function hasInFlightTurn(convId: string): boolean {
-    return activeStreams.has(convId) || pendingMessageSends.has(convId);
+    return streamSupervisor.hasInFlightTurn(convId);
   }
 
   function hasAnyInFlightTurn(): boolean {
-    return activeStreams.size > 0 || pendingMessageSends.size > 0;
+    return streamSupervisor.hasAnyInFlightTurn();
   }
 
   async function requestPendingAbort(convId: string): Promise<boolean> {
-    const pending = pendingMessageSends.get(convId);
-    if (!pending) return false;
-    if (!pending.abortRequested) {
-      pending.abortRequested = {
-        message: 'Aborted by user',
-        source: 'abort',
-        at: new Date().toISOString(),
-      };
-      await streamJobs.update(pending.jobId, {
-        state: 'abort_requested',
-        abortRequested: pending.abortRequested,
-      });
-    }
-    return true;
+    return streamSupervisor.requestPendingAbort(convId);
   }
 
   async function finalizePendingAbortIfRequested(convId: string, backend: string, pending: PendingMessageSend): Promise<boolean> {
     const abort = pending.abortRequested;
     if (!abort) return false;
-    await streamJobs.update(pending.jobId, {
-      state: 'finalizing',
-      terminalError: { message: abort.message, source: abort.source, at: new Date().toISOString() },
-    });
+    await streamSupervisor.markFinalizing(pending.jobId, abort);
     if (wsFns) wsFns.clearBuffer(convId);
     const errorMsg = await chatService.addStreamErrorMessage(convId, backend, abort.message, abort.source);
     if (wsFns && errorMsg) wsFns.send(convId, { type: 'assistant_message', message: errorMsg });
@@ -544,7 +517,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
     memoryMcp.revokeMemoryMcpSession(convId);
     kbSearchMcp.revokeKbSearchSession(convId);
-    await streamJobs.delete(pending.jobId);
+    await streamSupervisor.completeJob(pending.jobId);
     return true;
   }
 
@@ -564,14 +537,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       return true;
     }
     if (!entry.abortRequested) {
-      entry.abortRequested = { message, source: 'abort', at: new Date().toISOString() };
       if (!terminalAlreadyFinalizing) {
-        if (entry.jobId) {
-          await streamJobs.update(entry.jobId, {
-            state: 'abort_requested',
-            abortRequested: entry.abortRequested,
-          });
-        }
+        await streamSupervisor.requestRuntimeAbort(entry, message);
         console.log(`[chat] Aborting active stream for conv=${convId}`);
 
         try {
@@ -608,11 +575,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       }
     }
 
-    if (activeStreams.get(convId) === entry) {
-      activeStreams.delete(convId);
-    }
+    streamSupervisor.detachRuntime(convId, entry);
     if (entry.jobId) {
-      await streamJobs.delete(entry.jobId);
+      await streamSupervisor.completeJob(entry.jobId);
       entry.jobId = undefined;
     }
     memoryWatcher.unwatch(convId);
@@ -652,10 +617,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           at: new Date().toISOString(),
         };
 
-      await streamJobs.update(job.id, {
-        state: 'finalizing',
-        terminalError: terminal,
-      });
+      await streamSupervisor.markFinalizing(job.id, terminal);
 
       const conv = await chatService.getConversation(convId);
       const userMessageStillExists = !!job.userMessageId
@@ -671,7 +633,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         removed += 1;
       }
 
-      await streamJobs.delete(job.id);
+      await streamSupervisor.completeJob(job.id);
     }
 
     return { interrupted, removed };
@@ -1058,6 +1020,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         startedAt: string | null;
         lastEventAt: string | null;
         connected: boolean;
+        runtimeAttached: boolean;
+        pending: boolean;
       }>();
 
       for (const job of await streamJobs.listActive()) {
@@ -1069,6 +1033,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           startedAt: job.startedAt || job.createdAt || null,
           lastEventAt: job.lastEventAt || job.startedAt || job.createdAt || null,
           connected: wsFns ? wsFns.isConnected(job.conversationId) : false,
+          runtimeAttached: activeStreams.has(job.conversationId),
+          pending: pendingMessageSends.has(job.conversationId),
         });
       }
 
@@ -1082,6 +1048,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           startedAt: entry.startedAt || existing?.startedAt || null,
           lastEventAt: entry.lastEventAt || entry.startedAt || existing?.lastEventAt || null,
           connected: wsFns ? wsFns.isConnected(id) : false,
+          runtimeAttached: true,
+          pending: existing?.pending || false,
         });
       }
 
@@ -1165,16 +1133,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       if (pendingMessageSends.has(convId)) {
         return res.status(409).json({ error: 'Conversation is already streaming' });
       }
-      const entry = activeStreams.get(convId);
-      if (entry) {
-        entry.abort();
-        activeStreams.delete(convId);
-        if (entry.jobId) {
-          await streamJobs.delete(entry.jobId);
-          entry.jobId = undefined;
-        }
-      }
-      await streamJobs.deleteActiveForConversation(convId);
+      await streamSupervisor.cleanupRuntimeConversation(convId);
       if (wsFns) wsFns.clearBuffer(convId);
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
@@ -1195,16 +1154,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       if (pendingMessageSends.has(convId)) {
         return res.status(409).json({ error: 'Conversation is already streaming' });
       }
-      const entry = activeStreams.get(convId);
-      if (entry) {
-        entry.abort();
-        activeStreams.delete(convId);
-        if (entry.jobId) {
-          await streamJobs.delete(entry.jobId);
-          entry.jobId = undefined;
-        }
-      }
-      await streamJobs.deleteActiveForConversation(convId);
+      await streamSupervisor.cleanupRuntimeConversation(convId);
       if (wsFns) wsFns.clearBuffer(convId);
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
@@ -1496,14 +1446,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       return res.status(409).json({ error: 'Conversation is already streaming' });
     }
 
-    const jobId = crypto.randomUUID();
     let jobHandedOff = false;
-    const pendingMessageSend: PendingMessageSend = { jobId };
-    pendingMessageSends.set(convId, pendingMessageSend);
+    let pendingMessageSend: PendingMessageSend | null = null;
     try {
-      await streamJobs.create({
-        id: jobId,
-        state: 'accepted',
+      pendingMessageSend = await streamSupervisor.beginAcceptedTurn({
         conversationId: convId,
         sessionId: conv.currentSessionId,
         backend: conv.backend,
@@ -1512,6 +1458,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         effort: effort !== undefined ? (effort || null) : (conv.effort || null),
         workingDir: conv.workingDir || null,
       });
+      const jobId = pendingMessageSend.jobId;
 
       try {
         if (cliProfileId) {
@@ -1551,8 +1498,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     if (cliProfileId && backend && backend !== backendId) {
       return res.status(400).json({ error: `CLI profile vendor ${backendId} does not match backend ${backend}` });
     }
-    await streamJobs.update(jobId, {
-      state: 'preparing',
+    await streamSupervisor.markPreparing(jobId, {
       backend: backendId,
       sessionId: conv.currentSessionId,
       cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
@@ -1561,8 +1507,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       workingDir: conv.workingDir || null,
     });
     const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backendId);
-    await streamJobs.update(jobId, {
-      state: 'preparing',
+    await streamSupervisor.markPreparing(jobId, {
       userMessageId: userMsg?.id || null,
     });
     if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
@@ -1722,11 +1667,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     });
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
     const startedAt = new Date().toISOString();
-    activeStreams.set(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null, startedAt, lastEventAt: startedAt, jobId });
+    streamSupervisor.attachRuntime(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null, startedAt, lastEventAt: startedAt, jobId });
     jobHandedOff = true;
     try {
-      await streamJobs.update(jobId, {
-        state: 'running',
+      await streamSupervisor.markRunning(jobId, {
         startedAt,
         lastEventAt: startedAt,
         model: model || conv.model || null,
@@ -1807,12 +1751,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         (frame) => { wsFns!.send(convId, frame); },
         () => activeStreams.get(convId) !== activeEntry,
         async () => {
-          if (activeStreams.get(convId) === activeEntry) {
-            activeStreams.delete(convId);
-          }
+          streamSupervisor.detachRuntime(convId, activeEntry);
           if (activeEntry.jobId) {
             try {
-              await streamJobs.delete(activeEntry.jobId);
+              await streamSupervisor.completeJob(activeEntry.jobId);
               activeEntry.jobId = undefined;
             } catch (err: unknown) {
               console.warn(`[chat] Failed to delete completed stream job for conv=${convId}:`, (err as Error).message);
@@ -1828,18 +1770,16 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
             codexPlanUsageService.maybeRefresh('turn-done', runtime.profile);
           }
         },
-        { chatService, streamJobs, jobId },
+        { chatService, streamSupervisor, jobId },
       ).catch((err) => {
         console.error(`[chat] WS stream error for conv=${convId}:`, err);
         if (wsFns) {
           wsFns.send(convId, { type: 'error', error: (err as Error).message, terminal: true, source: 'server' });
           wsFns.send(convId, { type: 'done' });
         }
-        if (activeStreams.get(convId) === activeEntry) {
-          activeStreams.delete(convId);
-        }
+        streamSupervisor.detachRuntime(convId, activeEntry);
         if (activeEntry.jobId) {
-          void streamJobs.delete(activeEntry.jobId).catch((deleteErr: unknown) => {
+          void streamSupervisor.completeJob(activeEntry.jobId).catch((deleteErr: unknown) => {
             console.warn(`[chat] Failed to delete stream job for conv=${convId}:`, (deleteErr as Error).message);
           });
         }
@@ -1851,10 +1791,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
     res.json({ userMessage: userMsg, streamReady: true });
     } finally {
-      pendingMessageSends.delete(convId);
+      if (pendingMessageSend) {
+        streamSupervisor.clearPending(convId, pendingMessageSend);
+      }
       if (!jobHandedOff) {
         try {
-          await streamJobs.delete(jobId);
+          if (pendingMessageSend) await streamSupervisor.completeJob(pendingMessageSend.jobId);
         } catch (err: unknown) {
           console.warn(`[chat] Failed to delete unstarted stream job for conv=${convId}:`, (err as Error).message);
         }
@@ -3529,12 +3471,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   });
 
   // ── Shutdown helper ────────────────────────────────────────────────────────
-  function shutdown() {
-    for (const [convId, entry] of activeStreams) {
-      console.log(`[shutdown] Aborting active stream for conv=${convId}`);
-      entry.abort();
+  async function shutdown() {
+    try {
+      await streamSupervisor.prepareForShutdown();
+    } catch (err: unknown) {
+      console.warn('[shutdown] Failed to mark active stream jobs interrupted:', (err as Error).message);
     }
-    activeStreams.clear();
+    streamSupervisor.abortAndDetachAllRuntime();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
     cliProfileAuth.shutdown();

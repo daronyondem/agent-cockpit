@@ -198,6 +198,8 @@ describe('GET /active-streams', () => {
         startedAt: '2026-01-01T00:00:00.000Z',
         lastEventAt: '2026-01-01T00:00:01.000Z',
         connected: false,
+        runtimeAttached: true,
+        pending: false,
       }),
     ]));
 
@@ -224,6 +226,8 @@ describe('GET /active-streams', () => {
         backend: 'claude-code',
         state: 'accepted',
         connected: false,
+        runtimeAttached: false,
+        pending: false,
       }),
     ]));
 
@@ -421,6 +425,15 @@ describe('pending message send lifecycle guards', () => {
       backend: 'claude-code',
     });
     expect(jobs[0].userMessageId).toBeUndefined();
+    const active = await env.request('GET', '/api/chat/active-streams');
+    expect(active.body.streams).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: pending.conv.id,
+        state: 'preparing',
+        runtimeAttached: false,
+        pending: true,
+      }),
+    ]));
 
     pending.releaseUserAdd();
     const send = await pending.sendPromise;
@@ -504,6 +517,91 @@ describe('pending message send lifecycle guards', () => {
     pending.releaseUserAdd();
     const send = await pending.sendPromise;
     expect(send.status).toBe(200);
+  });
+});
+
+describe('stream job supervisor lifecycle cleanup', () => {
+  async function startBlockingStream(title: string) {
+    const conv = await env.chatService.createConversation(title);
+    let aborted = false;
+    let unblock!: () => void;
+    const blockPromise = new Promise<void>(resolve => { unblock = resolve; });
+    env.mockBackend.sendMessage = function() {
+      async function* createStream() {
+        yield { type: 'text', content: 'working', streaming: true } as StreamEvent;
+        await blockPromise;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return {
+        stream: createStream(),
+        abort: () => { aborted = true; unblock(); },
+        sendInput: () => {},
+      };
+    };
+
+    const send = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'start',
+      backend: 'claude-code',
+    });
+    expect(send.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 100));
+    expect(env.activeStreams.has(conv.id)).toBe(true);
+    expect(await env.streamJobs.listActive()).toEqual([
+      expect.objectContaining({ conversationId: conv.id, state: 'running' }),
+    ]);
+    return { conv, wasAborted: () => aborted, unblock };
+  }
+
+  test('archive aborts the runtime attachment and clears the durable job', async () => {
+    const stream = await startBlockingStream('Archive Active Stream');
+
+    const archive = await env.request('PATCH', `/api/chat/conversations/${stream.conv.id}/archive`, {});
+    expect(archive.status).toBe(200);
+    expect(stream.wasAborted()).toBe(true);
+    expect(env.activeStreams.has(stream.conv.id)).toBe(false);
+    expect(await env.streamJobs.listActive()).toEqual([]);
+  });
+
+  test('delete aborts the runtime attachment and clears the durable job', async () => {
+    const stream = await startBlockingStream('Delete Active Stream');
+
+    const del = await env.request('DELETE', `/api/chat/conversations/${stream.conv.id}`);
+    expect(del.status).toBe(200);
+    expect(stream.wasAborted()).toBe(true);
+    expect(env.activeStreams.has(stream.conv.id)).toBe(false);
+    expect(await env.streamJobs.listActive()).toEqual([]);
+    expect(await env.chatService.getConversation(stream.conv.id)).toBeNull();
+  });
+
+  test('shutdown marks active jobs finalizing for startup reconciliation', async () => {
+    const stream = await startBlockingStream('Shutdown Active Stream');
+
+    await env.chatShutdown();
+    expect(stream.wasAborted()).toBe(true);
+    expect(env.activeStreams.has(stream.conv.id)).toBe(false);
+
+    const jobs = await env.streamJobs.listActive();
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      conversationId: stream.conv.id,
+      state: 'finalizing',
+      terminalError: {
+        message: 'Interrupted by server shutdown',
+        source: 'server',
+      },
+    });
+
+    const reconciled = await env.reconcileInterruptedJobs();
+    expect(reconciled).toEqual({ interrupted: 1, removed: 0 });
+
+    const saved = await env.chatService.getConversation(stream.conv.id);
+    const streamErrors = (saved?.messages || []).filter(m => m.streamError);
+    expect(streamErrors).toHaveLength(1);
+    expect(streamErrors[0].streamError).toEqual({
+      message: 'Interrupted by server shutdown',
+      source: 'server',
+    });
+    expect(await env.streamJobs.listActive()).toEqual([]);
   });
 });
 

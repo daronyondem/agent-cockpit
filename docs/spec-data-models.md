@@ -377,6 +377,12 @@ Plain active jobs use `message: "Interrupted by server restart"` and
 idempotent: if the matching terminal `streamError` is already the final
 message, no duplicate is appended.
 
+During a graceful `SIGTERM`/`SIGINT`, `StreamJobSupervisor` marks all pending
+and runtime-attached jobs `finalizing` with
+`message: "Interrupted by server shutdown"` and `source: "server"` before
+aborting process-local backend handles. Those jobs remain in the file so the
+next startup reconciliation pass uses the same durable terminal path.
+
 ### AttachmentMeta
 
 Typed file attachment used on both queued messages (`QueuedMessage.attachments`)

@@ -210,22 +210,27 @@ chatService.initialize().then(async () => {
   });
   setWsFunctions(wsFns);
 
-  function shutdown(signal: string) {
+  let shuttingDown = false;
+  async function shutdown(signal: string) {
+    if (shuttingDown) return;
+    shuttingDown = true;
     console.log(`\n[shutdown] Received ${signal}, shutting down gracefully...`);
 
-    chatShutdown();
+    const forceExitTimer = setTimeout(() => {
+      console.error('[shutdown] Forcing exit after 10s timeout');
+      process.exit(1);
+    }, 10000);
+    forceExitTimer.unref();
+
+    await chatShutdown();
     backendRegistry.shutdownAll();
     wsFns.shutdown();
 
     server.close(() => {
       console.log('[shutdown] HTTP server closed');
+      clearTimeout(forceExitTimer);
       process.exit(0);
     });
-
-    setTimeout(() => {
-      console.error('[shutdown] Forcing exit after 10s timeout');
-      process.exit(1);
-    }, 10000).unref();
   }
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));
