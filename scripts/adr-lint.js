@@ -53,7 +53,10 @@ function lintFile(file) {
     if (!found) errors.push(`superseded-by references unknown ADR ${fm['superseded-by']}`);
   }
 
-  if (Array.isArray(fm.affects)) {
+  // Historical ADRs are archival snapshots; their original `affects` references may
+  // point at files that were deliberately removed by later accepted decisions.
+  const isHistorical = Array.isArray(fm.tags) && fm.tags.includes('historical');
+  if (Array.isArray(fm.affects) && !isHistorical) {
     for (const p of fm.affects) {
       const abs = path.join(ROOT, p);
       if (!fs.existsSync(abs)) errors.push(`affects: path does not exist: ${p}`);

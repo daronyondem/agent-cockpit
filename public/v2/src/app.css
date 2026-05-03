@@ -2399,6 +2399,197 @@ body{
   font-family: var(--mono-font);
   font-size: 10.5px;
 }
+.kb-synth-filter-row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.kb-synth-view-toggle{
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.kb-synth-view-toggle button{
+  min-width: 48px;
+  padding: 5px 9px;
+  border: 0;
+  border-radius: calc(var(--r-sm) - 2px);
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.kb-synth-view-toggle button:hover{ color: var(--text); }
+.kb-synth-view-toggle button.active{
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.kb-atlas{
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px 12px 14px;
+  background: var(--bg);
+}
+.kb-atlas-empty{
+  padding: 16px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.kb-atlas-overview{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kb-atlas-overview-meta{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 2px 2px;
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+}
+.kb-atlas-overview-meta span{
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+.kb-atlas-card-list{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kb-atlas-card{
+  --atlas-color: var(--accent);
+  --atlas-soft: var(--accent-soft);
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  padding: 12px 12px 12px 14px;
+  border: 1px solid color-mix(in oklch, var(--atlas-color), var(--border) 64%);
+  border-radius: var(--r-sm);
+  background:
+    linear-gradient(90deg, color-mix(in oklch, var(--atlas-soft), transparent 4%), transparent 44%),
+    color-mix(in oklch, var(--surface), var(--atlas-soft) 10%);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 120ms ease, opacity 120ms ease, background 120ms ease, box-shadow 120ms ease;
+}
+.kb-atlas-card:hover,
+.kb-atlas-card.selected{
+  border-color: var(--atlas-color);
+  box-shadow: inset 3px 0 0 var(--atlas-color);
+}
+.kb-atlas-card:focus-visible{
+  outline: 2px solid var(--atlas-color);
+  outline-offset: -2px;
+}
+.kb-atlas-card.dim{ opacity: .38; }
+.kb-atlas-card-accent{
+  position: absolute;
+  left: 0;
+  top: 10px;
+  bottom: 10px;
+  width: 3px;
+  border-radius: 0 999px 999px 0;
+  background: var(--atlas-color);
+}
+.kb-atlas-card-head{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.kb-atlas-card-title{
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.kb-atlas-card-meta{
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+}
+.kb-atlas-card-summary{
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.kb-atlas-topic-chips,
+.kb-atlas-bridge-list{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.kb-atlas-topic-chip,
+.kb-atlas-bridge-chip,
+.kb-atlas-more{
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--surface), var(--bg) 30%);
+  color: var(--text-2);
+  font-size: 10.5px;
+  line-height: 1.1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.kb-atlas-topic-chip:hover,
+.kb-atlas-bridge-chip:hover{
+  border-color: var(--atlas-color);
+  color: var(--text);
+}
+.kb-atlas-topic-chip:focus-visible,
+.kb-atlas-bridge-chip:focus-visible{
+  outline: 2px solid var(--atlas-color);
+  outline-offset: 1px;
+}
+.kb-atlas-topic-chip.active,
+.kb-atlas-topic-chip.neighbor,
+.kb-atlas-bridge-chip.active{
+  border-color: var(--atlas-color);
+  background: var(--atlas-soft);
+  color: var(--text);
+}
+.kb-atlas-topic-chip.god{
+  border-color: color-mix(in oklch, #e8a33d, var(--border) 40%);
+  background: color-mix(in oklch, #e8a33d, transparent 84%);
+}
+.kb-atlas-bridge-chip{ gap: 4px; }
+.kb-atlas-more{ color: var(--text-3); cursor: default; }
+.kb-atlas-card.tone-0{ --atlas-color: #0ea5e9; --atlas-soft: color-mix(in oklch, #0ea5e9, transparent 88%); }
+.kb-atlas-card.tone-1{ --atlas-color: #3fb27f; --atlas-soft: color-mix(in oklch, #3fb27f, transparent 88%); }
+.kb-atlas-card.tone-2{ --atlas-color: #e8a33d; --atlas-soft: color-mix(in oklch, #e8a33d, transparent 88%); }
+.kb-atlas-card.tone-3{ --atlas-color: #8b72e0; --atlas-soft: color-mix(in oklch, #8b72e0, transparent 88%); }
+.kb-atlas-card.tone-4{ --atlas-color: #e5484d; --atlas-soft: color-mix(in oklch, #e5484d, transparent 90%); }
+.kb-atlas-card.tone-5{ --atlas-color: #14b8a6; --atlas-soft: color-mix(in oklch, #14b8a6, transparent 88%); }
+.kb-atlas-card.tone-6{ --atlas-color: #f97316; --atlas-soft: color-mix(in oklch, #f97316, transparent 90%); }
+.kb-atlas-card.tone-7{ --atlas-color: #64748b; --atlas-soft: color-mix(in oklch, #64748b, transparent 88%); }
 .kb-pager{
   display: flex; align-items: center; justify-content: center; gap: 12px;
   padding: 10px 16px;
@@ -2764,6 +2955,9 @@ body{
   min-height: 0;
   display: flex; flex-direction: column;
   border-right: 1px solid var(--border);
+}
+.kb-split.atlas-mode .kb-split-left{
+  flex-basis: min(52%, 560px);
 }
 .kb-split-right{
   flex: 1 1 auto; min-height: 0;
@@ -4782,6 +4976,29 @@ body{
     border-bottom: 1px solid var(--border);
   }
   .kb-raw-resizer{ display: none; }
+  .kb-split{
+    flex-direction: column;
+  }
+  .kb-split-left,
+  .kb-split.atlas-mode .kb-split-left{
+    flex: 0 0 auto;
+    width: 100%;
+    max-height: 45vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .kb-synth-filter-row{
+    flex-wrap: wrap;
+  }
+  .kb-synth-view-toggle{
+    width: 100%;
+  }
+  .kb-synth-view-toggle button{
+    flex: 1 1 0;
+  }
+  .kb-atlas{
+    padding: 8px;
+  }
 
   /* Sidebar footer avatar nudge so the close hamburger doesn't overlap. */
   .sb-footer{ padding-bottom: 12px; }

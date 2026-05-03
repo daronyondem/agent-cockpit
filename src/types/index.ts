@@ -873,7 +873,7 @@ export interface KbSynthesisState {
   connections: KbSynthesisConnectionSummary[];
 }
 
-/** Topic summary for the synthesis tab graph view. */
+/** Topic summary for the synthesis tab list and atlas views. */
 export interface KbSynthesisTopicSummary {
   topicId: string;
   title: string;
@@ -883,7 +883,7 @@ export interface KbSynthesisTopicSummary {
   isGodNode: boolean;
 }
 
-/** Connection summary for the synthesis tab graph view. */
+/** Connection summary for the synthesis tab list and atlas views. */
 export interface KbSynthesisConnectionSummary {
   sourceTopic: string;
   targetTopic: string;
