@@ -1,4 +1,4 @@
-/* global React, AgentApi, Ico, marked, DOMPurify, useDialog, useToasts */
+/* global React, AgentApi, Ico, marked, DOMPurify, useDialog, useToasts, SynthesisAtlas */
 
 /* KB Browser — modal-swap over the chat main pane.
    Tabs: Raw (stub), Entries (wired), Synthesis (wired), Reflections (wired), Settings (stub). */
@@ -480,6 +480,29 @@ const DREAM_PHASE_LABELS = {
   discovery: 'Discovery',
   reflection: 'Reflection',
 };
+const KB_SYNTHESIS_VIEW_KEY_PREFIX = 'ac:v2:kb-synthesis-view:';
+
+function readKbSynthesisView(hash){
+  try {
+    const value = window.localStorage && window.localStorage.getItem(KB_SYNTHESIS_VIEW_KEY_PREFIX + hash);
+    return value === 'atlas' ? 'atlas' : 'list';
+  } catch (e) {
+    return 'list';
+  }
+}
+
+function writeKbSynthesisView(hash, value){
+  try {
+    if (window.localStorage) window.localStorage.setItem(KB_SYNTHESIS_VIEW_KEY_PREFIX + hash, value);
+  } catch (e) {}
+}
+
+function kbTopicMatchesQuery(topic, query){
+  if (!query) return true;
+  const haystack = `${topic && topic.title || ''} ${topic && topic.summary || ''}`.toLowerCase();
+  return haystack.includes(query);
+}
+
 function StepCheck(){
   return (
     <svg className="step-check" width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
@@ -556,10 +579,25 @@ function KbSynthesisTab({ hash }){
   const [data, setData] = React.useState(null);
   const [err, setErr] = React.useState(null);
   const [selectedId, setSelectedId] = React.useState(null);
+  const [selectedClusterId, setSelectedClusterId] = React.useState(null);
+  const [selectedBridgeId, setSelectedBridgeId] = React.useState(null);
   const [query, setQuery] = React.useState('');
+  const [viewMode, setViewModeState] = React.useState(() => readKbSynthesisView(hash));
   const [triggeredAt, setTriggeredAt] = React.useState(null);
   const [starting, setStarting] = React.useState(false);
   const [stopping, setStopping] = React.useState(false);
+
+  React.useEffect(() => {
+    setViewModeState(readKbSynthesisView(hash));
+    setSelectedClusterId(null);
+    setSelectedBridgeId(null);
+  }, [hash]);
+
+  function setViewMode(nextMode){
+    const mode = nextMode === 'atlas' ? 'atlas' : 'list';
+    setViewModeState(mode);
+    writeKbSynthesisView(hash, mode);
+  }
 
   const refetch = React.useCallback(() => {
     return AgentApi.kb.getSynthesis(hash)
@@ -647,15 +685,34 @@ function KbSynthesisTab({ hash }){
   }
 
   const topics = data && Array.isArray(data.topics) ? data.topics : [];
+  const connections = data && Array.isArray(data.connections) ? data.connections : [];
   const topicsById = React.useMemo(() => {
     const m = {};
     for (const t of topics) m[t.topicId] = t;
     return m;
   }, [topics]);
+  const atlas = React.useMemo(() => {
+    if (!window.SynthesisAtlas || !topics.length) return null;
+    return window.SynthesisAtlas.buildAtlas(topics, connections);
+  }, [topics, connections]);
   const q = query.trim().toLowerCase();
   const filteredTopics = q
-    ? topics.filter(t => (t.title || '').toLowerCase().includes(q))
+    ? topics.filter(t => kbTopicMatchesQuery(t, q))
     : topics;
+
+  React.useEffect(() => {
+    if (selectedId && !topicsById[selectedId]) setSelectedId(null);
+  }, [selectedId, topicsById]);
+
+  React.useEffect(() => {
+    if (!selectedClusterId || !atlas) return;
+    if (!atlas.clusters.some((cluster) => cluster.clusterId === selectedClusterId)) setSelectedClusterId(null);
+  }, [atlas, selectedClusterId]);
+
+  React.useEffect(() => {
+    if (!selectedBridgeId || !atlas) return;
+    if (!atlas.bridges.some((bridge) => bridge.bridgeId === selectedBridgeId)) setSelectedBridgeId(null);
+  }, [atlas, selectedBridgeId]);
 
   if (err && !data) return <div className="kb-pane"><div className="u-err" style={{padding:"16px"}}>{err}</div></div>;
   if (data === null) return <div className="kb-pane"><div className="u-dim" style={{padding:"16px"}}>Loading synthesis…</div></div>;
@@ -713,43 +770,74 @@ function KbSynthesisTab({ hash }){
           />
         ) : null}
       </div>
-      <div className="kb-split">
+      <div className={`kb-split ${viewMode === 'atlas' ? 'atlas-mode' : ''}`}>
         <div className="kb-split-left">
           {topics.length > 0 ? (
             <div className="kb-filters">
-              <input
-                type="text"
-                placeholder="Search topics…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                className="kb-search-input"
-              />
+              <div className="kb-synth-filter-row">
+                <input
+                  type="text"
+                  placeholder="Search topics…"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="kb-search-input"
+                />
+                <div className="kb-synth-view-toggle" role="tablist" aria-label="Synthesis view">
+                  <button
+                    type="button"
+                    className={viewMode === 'list' ? 'active' : ''}
+                    onClick={() => setViewMode('list')}
+                    role="tab"
+                    aria-selected={viewMode === 'list'}
+                  >List</button>
+                  <button
+                    type="button"
+                    className={viewMode === 'atlas' ? 'active' : ''}
+                    onClick={() => setViewMode('atlas')}
+                    role="tab"
+                    aria-selected={viewMode === 'atlas'}
+                  >Atlas</button>
+                </div>
+              </div>
             </div>
           ) : null}
-          <div className="kb-list">
-            {topics.length === 0 ? (
-              <div className="u-dim" style={{padding:"16px"}}>No topics yet. Click Dream to synthesize pending entries into topics.</div>
-            ) : filteredTopics.length === 0 ? (
-              <div className="u-dim" style={{padding:"16px"}}>No matches for “{query.trim()}”.</div>
-            ) : filteredTopics.map(t => (
-              <button
-                key={t.topicId}
-                type="button"
-                className={`kb-entry-row ${selectedId === t.topicId ? 'active' : ''}`}
-                onClick={() => setSelectedId(t.topicId)}
-              >
-                <div className="kb-entry-title">
-                  {t.isGodNode ? <span className="u-accent" style={{marginRight:6}}>★</span> : null}
-                  {t.title}
-                </div>
-                {t.summary ? <div className="kb-entry-summary">{t.summary}</div> : null}
-                <div className="kb-entry-meta">
-                  <span className="kb-meta-chip">{t.entryCount || 0} entries</span>
-                  <span className="kb-meta-chip">{t.connectionCount || 0} links</span>
-                </div>
-              </button>
-            ))}
-          </div>
+          {viewMode === 'atlas' && topics.length > 0 ? (
+            <KbSynthesisAtlas
+              atlas={atlas}
+              query={q}
+              selectedTopicId={selectedId}
+              selectedClusterId={selectedClusterId}
+              selectedBridgeId={selectedBridgeId}
+              onSelectTopic={(topicId) => { setSelectedId(topicId); setSelectedClusterId(null); setSelectedBridgeId(null); }}
+              onSelectCluster={(clusterId) => { setSelectedId(null); setSelectedClusterId(clusterId); setSelectedBridgeId(null); }}
+              onSelectBridge={(bridgeId) => { setSelectedId(null); setSelectedClusterId(null); setSelectedBridgeId(bridgeId); }}
+            />
+          ) : (
+            <div className="kb-list">
+              {topics.length === 0 ? (
+                <div className="u-dim" style={{padding:"16px"}}>No topics yet. Click Dream to synthesize pending entries into topics.</div>
+              ) : filteredTopics.length === 0 ? (
+                <div className="u-dim" style={{padding:"16px"}}>No matches for “{query.trim()}”.</div>
+              ) : filteredTopics.map(t => (
+                <button
+                  key={t.topicId}
+                  type="button"
+                  className={`kb-entry-row ${selectedId === t.topicId ? 'active' : ''}`}
+                  onClick={() => { setSelectedId(t.topicId); setSelectedClusterId(null); setSelectedBridgeId(null); }}
+                >
+                  <div className="kb-entry-title">
+                    {t.isGodNode ? <span className="u-accent" style={{marginRight:6}}>★</span> : null}
+                    {t.title}
+                  </div>
+                  {t.summary ? <div className="kb-entry-summary">{t.summary}</div> : null}
+                  <div className="kb-entry-meta">
+                    <span className="kb-meta-chip">{t.entryCount || 0} entries</span>
+                    <span className="kb-meta-chip">{t.connectionCount || 0} links</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="kb-split-right">
           {selectedId ? (
@@ -757,13 +845,273 @@ function KbSynthesisTab({ hash }){
               hash={hash}
               topicId={selectedId}
               topicsById={topicsById}
-              onSelectTopic={setSelectedId}
+              onSelectTopic={(topicId) => { setSelectedId(topicId); setSelectedClusterId(null); setSelectedBridgeId(null); }}
+            />
+          ) : selectedBridgeId && atlas ? (
+            <KbBridgeDetail
+              atlas={atlas}
+              bridgeId={selectedBridgeId}
+              onSelectTopic={(topicId) => { setSelectedId(topicId); setSelectedClusterId(null); setSelectedBridgeId(null); }}
+              onSelectCluster={(clusterId) => { setSelectedId(null); setSelectedClusterId(clusterId); setSelectedBridgeId(null); }}
+            />
+          ) : selectedClusterId && atlas ? (
+            <KbClusterDetail
+              atlas={atlas}
+              clusterId={selectedClusterId}
+              onSelectTopic={(topicId) => { setSelectedId(topicId); setSelectedClusterId(null); setSelectedBridgeId(null); }}
+              onSelectCluster={(clusterId) => { setSelectedClusterId(clusterId); setSelectedBridgeId(null); }}
             />
           ) : (
-            <div className="u-dim" style={{padding:"16px"}}>Select a topic to view its entries and connections.</div>
+            <div className="u-dim" style={{padding:"16px"}}>Select a topic or atlas area to view its synthesis.</div>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+function KbSynthesisAtlas({ atlas, query, selectedTopicId, selectedClusterId, selectedBridgeId, onSelectTopic, onSelectCluster, onSelectBridge }){
+  if (!atlas) return <div className="kb-atlas-empty">Atlas unavailable.</div>;
+  const selectedNeighborIds = new Set();
+  if (selectedTopicId && atlas.model && Array.isArray(atlas.model.edges)) {
+    atlas.model.edges.forEach((edge) => {
+      if (edge.sourceTopic === selectedTopicId) selectedNeighborIds.add(edge.targetTopic);
+      if (edge.targetTopic === selectedTopicId) selectedNeighborIds.add(edge.sourceTopic);
+    });
+  }
+  const selectedBridge = selectedBridgeId ? atlas.bridges.find((bridge) => bridge.bridgeId === selectedBridgeId) : null;
+  const selectedBridgeClusterIds = new Set(selectedBridge ? [selectedBridge.sourceClusterId, selectedBridge.targetClusterId] : []);
+  const selectedBridgeTopicIds = new Set(selectedBridge && selectedBridge.topicIds ? selectedBridge.topicIds : []);
+  const totalTopics = atlas.clusters.reduce((sum, cluster) => sum + cluster.topicIds.length, 0);
+  const totalEntries = atlas.clusters.reduce((sum, cluster) => sum + (cluster.entryCount || 0), 0);
+
+  function clusterMatches(cluster){
+    if (!query) return true;
+    if (`${cluster.title} ${cluster.summary || ''}`.toLowerCase().includes(query)) return true;
+    return cluster.topics.some((topic) => kbTopicMatchesQuery(topic, query));
+  }
+
+  function representativeTopics(cluster){
+    if (!query) return cluster.representativeTopics || cluster.topics.slice(0, 6);
+    const matches = cluster.topics.filter((topic) => kbTopicMatchesQuery(topic, query));
+    const seen = new Set(matches.map((topic) => topic.topicId));
+    const fallback = (cluster.representativeTopics || cluster.topics).filter((topic) => !seen.has(topic.topicId));
+    return matches.concat(fallback).slice(0, 6);
+  }
+
+  return (
+    <div className="kb-atlas kb-atlas-overview">
+      <div className="kb-atlas-overview-meta">
+        <span>{atlas.clusters.length} areas</span>
+        <span>{totalTopics} topics</span>
+        <span>{totalEntries} entries</span>
+      </div>
+      <div className="kb-atlas-card-list">
+        {atlas.clusters.map((cluster) => {
+          const matches = clusterMatches(cluster);
+          const hasSelectedTopic = !!(selectedTopicId && cluster.topicIds.includes(selectedTopicId));
+          const hasNeighbor = selectedTopicId && cluster.topicIds.some((topicId) => selectedNeighborIds.has(topicId));
+          const hasSelectedBridge = selectedBridgeId && selectedBridgeClusterIds.has(cluster.clusterId);
+          const selected = selectedClusterId === cluster.clusterId;
+          const dimmed = (!!query && !matches) ||
+            (!!selectedTopicId && !hasSelectedTopic && !hasNeighbor) ||
+            (!!selectedBridgeId && !hasSelectedBridge);
+          const shownTopics = representativeTopics(cluster);
+          const remaining = Math.max(0, cluster.topicIds.length - shownTopics.length);
+          return (
+            <div
+              key={cluster.clusterId}
+              role="button"
+              tabIndex={0}
+              className={`kb-atlas-card tone-${cluster.tone} ${selected ? 'selected' : ''} ${dimmed ? 'dim' : ''} ${cluster.type === 'bridge' ? 'bridge' : ''}`}
+              onClick={() => onSelectCluster(cluster.clusterId)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  onSelectCluster(cluster.clusterId);
+                }
+              }}
+            >
+              <span className="kb-atlas-card-accent" aria-hidden="true"/>
+              <span className="kb-atlas-card-head">
+                <span className="kb-atlas-card-title">{cluster.title}</span>
+                <span className="kb-atlas-card-meta">
+                  {cluster.topicIds.length} topics · {cluster.entryCount || 0} entries · {cluster.bridges.length} bridges
+                </span>
+              </span>
+              {cluster.summary ? <span className="kb-atlas-card-summary">{cluster.summary}</span> : null}
+              <span className="kb-atlas-topic-chips">
+                {shownTopics.map((topic) => {
+                  const active = selectedTopicId === topic.topicId || selectedBridgeTopicIds.has(topic.topicId);
+                  const neighbor = selectedNeighborIds.has(topic.topicId);
+                  return (
+                    <span
+                      key={topic.topicId}
+                      role="button"
+                      tabIndex={0}
+                      className={`kb-atlas-topic-chip ${active ? 'active' : ''} ${neighbor ? 'neighbor' : ''} ${topic.isGodNode ? 'god' : ''}`}
+                      title={`${topic.title || topic.topicId} · ${topic.entryCount || 0} entries`}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectTopic(topic.topicId);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onSelectTopic(topic.topicId);
+                        }
+                      }}
+                    >{topic.title || topic.topicId}</span>
+                  );
+                })}
+                {remaining > 0 ? <span className="kb-atlas-more">+{remaining} more</span> : null}
+              </span>
+              {cluster.bridges.length ? (
+                <span className="kb-atlas-bridge-list">
+                  {cluster.bridges.slice(0, 3).map((bridge) => {
+                    const active = selectedBridgeId === bridge.bridgeId;
+                    return (
+                      <span
+                        key={bridge.bridgeId}
+                        role="button"
+                        tabIndex={0}
+                        className={`kb-atlas-bridge-chip ${active ? 'active' : ''}`}
+                        title={`${bridge.relationship || 'related'} · ${bridge.count} link${bridge.count === 1 ? '' : 's'}`}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          if (onSelectBridge) onSelectBridge(bridge.bridgeId);
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            if (onSelectBridge) onSelectBridge(bridge.bridgeId);
+                          }
+                        }}
+                      >
+                        <span className="u-dim">{bridge.relationship || 'related'}</span>
+                        <span>{bridge.otherTitle}</span>
+                      </span>
+                    );
+                  })}
+                  {cluster.bridges.length > 3 ? <span className="kb-atlas-more">+{cluster.bridges.length - 3} bridges</span> : null}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function KbBridgeDetail({ atlas, bridgeId, onSelectTopic, onSelectCluster }){
+  const bridge = atlas && atlas.bridges.find((candidate) => candidate.bridgeId === bridgeId);
+  if (!bridge) return <div className="u-dim" style={{padding:"16px"}}>Select an atlas bridge.</div>;
+  const clusterById = {};
+  atlas.clusters.forEach((cluster) => { clusterById[cluster.clusterId] = cluster; });
+  const topicById = {};
+  atlas.clusters.forEach((cluster) => cluster.topics.forEach((topic) => { topicById[topic.topicId] = topic; }));
+  const source = clusterById[bridge.sourceClusterId];
+  const target = clusterById[bridge.targetClusterId];
+  const bridgeTopics = bridge.topicIds.map((topicId) => topicById[topicId]).filter(Boolean);
+
+  return (
+    <div className="kb-detail kb-bridge-detail">
+      <h3 className="kb-detail-title">{bridge.relationship || 'Bridge'}</h3>
+      <p className="kb-detail-summary">
+        {source ? source.title : bridge.sourceClusterId} ↔ {target ? target.title : bridge.targetClusterId}
+      </p>
+      <div className="kb-entry-meta" style={{marginBottom:12}}>
+        <span className="kb-meta-chip">{bridge.count} link{bridge.count === 1 ? '' : 's'}</span>
+        <span className="kb-meta-chip">weight {bridge.weight}</span>
+      </div>
+      <div className="kb-detail-section">
+        <h6>Areas</h6>
+        <div className="kb-link-list">
+          {[source, target].filter(Boolean).map((cluster) => (
+            <button
+              key={cluster.clusterId}
+              type="button"
+              className="kb-link"
+              onClick={() => onSelectCluster(cluster.clusterId)}
+            >· {cluster.title}</button>
+          ))}
+        </div>
+      </div>
+      {bridgeTopics.length ? (
+        <div className="kb-detail-section">
+          <h6>Connected Topics</h6>
+          <div className="kb-link-list">
+            {bridgeTopics.map((topic) => (
+              <button
+                key={topic.topicId}
+                type="button"
+                className="kb-link"
+                onClick={() => onSelectTopic(topic.topicId)}
+              >· {topic.title || topic.topicId}</button>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+function KbClusterDetail({ atlas, clusterId, onSelectTopic, onSelectCluster }){
+  const cluster = atlas && atlas.clusters.find((candidate) => candidate.clusterId === clusterId);
+  if (!cluster) return <div className="u-dim" style={{padding:"16px"}}>Select an atlas area.</div>;
+  const clusterById = {};
+  atlas.clusters.forEach((item) => { clusterById[item.clusterId] = item; });
+  const related = atlas.bridges.filter((bridge) => bridge.sourceClusterId === clusterId || bridge.targetClusterId === clusterId);
+
+  return (
+    <div className="kb-detail kb-cluster-detail">
+      <h3 className="kb-detail-title">{cluster.title}</h3>
+      {cluster.summary ? <p className="kb-detail-summary">{cluster.summary}</p> : null}
+      <div className="kb-entry-meta" style={{marginBottom:12}}>
+        <span className="kb-meta-chip">{cluster.topicIds.length} topics</span>
+        <span className="kb-meta-chip">{cluster.entryCount || 0} entries</span>
+        <span className="kb-meta-chip">{related.length} bridges</span>
+      </div>
+      <div className="kb-detail-section">
+        <h6>Key Topics</h6>
+        <div className="kb-link-list">
+          {cluster.topics.map((topic) => (
+            <button
+              key={topic.topicId}
+              type="button"
+              className="kb-link"
+              onClick={() => onSelectTopic(topic.topicId)}
+            >
+              · {topic.title || topic.topicId}
+              <span className="u-dim"> · {topic.entryCount || 0} entries</span>
+            </button>
+          ))}
+        </div>
+      </div>
+      {related.length ? (
+        <div className="kb-detail-section">
+          <h6>Bridges</h6>
+          <div className="kb-link-list">
+            {related.map((bridge) => {
+              const otherId = bridge.sourceClusterId === clusterId ? bridge.targetClusterId : bridge.sourceClusterId;
+              const other = clusterById[otherId];
+              return (
+                <button
+                  key={bridge.bridgeId}
+                  type="button"
+                  className="kb-link"
+                  onClick={() => other && onSelectCluster(other.clusterId)}
+                >
+                  <span className="u-dim">{bridge.relationship || 'related'} → </span>{other ? other.title : otherId}
+                  <span className="u-dim"> · {bridge.count} link{bridge.count === 1 ? '' : 's'}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
