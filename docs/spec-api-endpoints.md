@@ -357,6 +357,45 @@ Constants (defined in `src/routes/chat.ts`):
 | POST | `/update-trigger` | Yes | Full update sequence (see Section 4, UpdateService). Refuses while any conversation turn is active or still in the pending-send setup window. |
 | POST | `/server/restart` | Yes | Plain pm2 restart (no git pull / npm install) via `UpdateService.restart()`. Returns `409` if an update is in progress or any conversation turn is active or still in the pending-send setup window. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. |
 
+## 3.13.1 CLI Updates
+
+CLI update status covers the local vendor CLIs used by configured CLI profiles. The server groups profiles by `(vendor, command, PATH)` so multiple profiles that resolve to the same binary produce one status row with multiple `profileIds`/`profileNames`.
+
+| Method | Path | CSRF | Description |
+|--------|------|------|-------------|
+| GET | `/cli-updates` | — | Returns the cached snapshot from `CliUpdateService`: `{ items: CliUpdateStatus[], lastCheckAt: string \| null, updateInProgress: boolean }`. This route does not force a fresh subprocess/network check; it is safe for the web UI to poll. |
+| POST | `/cli-updates/check` | Yes | Forces an immediate check and returns the same snapshot shape. Checks run CLI version commands, resolve the command path, detect supported install methods, and query latest npm package versions when applicable. |
+| POST | `/cli-updates/:id/update` | Yes | Runs the supported updater for one status item, then re-probes the CLI. Returns `{ success, item?, steps, error? }`. Returns `409` when any conversation turn is active or still in the pending-send setup window; returns `400` for unsupported install methods, missing targets, and command failures. On success the router calls `backendRegistry.shutdownAll()` so long-lived backend processes are restarted on next use with the updated binary. |
+
+`CliUpdateStatus`:
+
+```ts
+{
+  id: string;                         // `${vendor}:${sha1(vendor, command, PATH).slice(0, 12)}`
+  vendor: 'claude-code' | 'codex' | 'kiro';
+  label: string;                      // "Claude Code", "Codex", or "Kiro"
+  command: string;
+  resolvedPath: string | null;
+  profileIds: string[];
+  profileNames: string[];
+  installMethod: 'npm-global' | 'self-update' | 'unknown' | 'missing';
+  currentVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  updateSupported: boolean;
+  updateInProgress: boolean;
+  lastCheckAt: string | null;
+  lastError: string | null;
+  updateCommand: string[] | null;
+}
+```
+
+Supported update methods:
+
+- Codex and Claude Code installed from global npm packages are updated with `npm i -g <package>@latest` after the service verifies the resolved command lives under `npm root -g/<package>`.
+- Kiro exposes a self-updater command (`kiro-cli update --non-interactive`), so the service records `installMethod: 'self-update'` and `updateSupported: true`, but it currently has no latest-version source and therefore does not raise `updateAvailable` from background checks. Settings can still run the updater manually; the composer notification does not appear without `updateAvailable`.
+- Unknown, missing, native, or otherwise unmanaged installs are shown in Settings with diagnostics but do not render the composer update notification or enable the update action.
+
 ## 3.14 Claude Code Plan Usage
 
 Account-wide Claude Code plan usage snapshot (5-hour session %, weekly %, per-model breakdown, reset times, plan tier, optional extra-credit balance). Surfaced in the ContextChip tooltip on Claude Code conversations. The default route reads the server-configured Claude cache; an optional `cliProfileId` reads the selected Claude profile cache.

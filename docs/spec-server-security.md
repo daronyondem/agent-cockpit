@@ -43,17 +43,18 @@
 8. Parse JSON bodies with `express.json()`
 9. Mount CSRF token endpoint at `GET /api/csrf-token`
 9a. Mount current-user endpoint at `GET /api/me`
-10. Create BackendRegistry, register ClaudeCodeAdapter and KiroAdapter
+10. Create BackendRegistry, register ClaudeCodeAdapter, KiroAdapter, and CodexAdapter
 11. Initialize ChatService
-12. Initialize UpdateService
+12. Initialize UpdateService and CliUpdateService
 13. Mount chat router at `/api/chat`
 14. Serve static files from `public/`
 15. Call `chatService.initialize()` (migration + lookup map)
 16. Reconcile leftover durable stream jobs via `chatResult.reconcileInterruptedJobs()` before the server accepts traffic. This converts unrecoverable accepted/preparing/running jobs from a prior process into one persisted assistant `streamError` when the user message exists, or removes the job when no user message was saved.
 17. Start UpdateService (version polling)
-18. Listen on configured PORT
-19. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is the stream supervisor's process-local runtime attachment map while this process owns a backend iterator; `data/chat/stream-jobs.json` is the durable supervision layer used for accepted/preparing visibility, backend runtime identifiers (`externalSessionId`, `activeTurnId`, `processId`), and restart reconciliation. Runtime identifiers are diagnostic/current-turn metadata only; startup reconciliation still does not reattach or retry unless a backend explicitly advertises active-turn resume support. WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
-20. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
+18. Start CliUpdateService (local CLI update polling)
+19. Listen on configured PORT
+20. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is the stream supervisor's process-local runtime attachment map while this process owns a backend iterator; `data/chat/stream-jobs.json` is the durable supervision layer used for accepted/preparing visibility, backend runtime identifiers (`externalSessionId`, `activeTurnId`, `processId`), and restart reconciliation. Runtime identifiers are diagnostic/current-turn metadata only; startup reconciliation still does not reattach or retry unless a backend explicitly advertises active-turn resume support. WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
+21. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
 
 ### Graceful Shutdown
 

@@ -31,6 +31,7 @@ Engineering notes that capture empirical findings — not proposals or specs, bu
 | Document | Description |
 |----------|-------------|
 | [notes-kiro-bedrock-parity.md](notes-kiro-bedrock-parity.md) | Differences observed between Kiro (AWS Bedrock-routed) and Claude Code (direct Anthropic API) for Opus 4.7 — image format/dimension caps, ACP stream termination, JSON-RPC error extraction, etc. |
+| [parity-decisions.md](parity-decisions.md) | Intentional parity decisions between the desktop web UI and the mobile PWA, especially features that are deliberately web-only. |
 
 ### Architecture Decision Records
 

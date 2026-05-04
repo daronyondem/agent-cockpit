@@ -8,6 +8,7 @@ import { attachmentFromPath } from '../services/chatService';
 import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
 import type { UpdateService } from '../services/updateService';
+import type { CliUpdateService } from '../services/cliUpdateService';
 import type { ClaudePlanUsageService } from '../services/claudePlanUsageService';
 import type { KiroPlanUsageService } from '../services/kiroPlanUsageService';
 import type { CodexPlanUsageService } from '../services/codexPlanUsageService';
@@ -496,12 +497,13 @@ interface ChatRouterDeps {
   chatService: ChatService;
   backendRegistry: BackendRegistry;
   updateService: UpdateService;
+  cliUpdateService?: CliUpdateService | null;
   claudePlanUsageService: ClaudePlanUsageService;
   kiroPlanUsageService: KiroPlanUsageService;
   codexPlanUsageService: CodexPlanUsageService;
 }
 
-export function createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService }: ChatRouterDeps) {
+export function createChatRouter({ chatService, backendRegistry, updateService, cliUpdateService = null, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService }: ChatRouterDeps) {
   const router = express.Router();
   const packageJson = require('../../package.json');
 
@@ -888,6 +890,45 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         hasActiveStreams: hasAnyInFlightTurn,
       });
       res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── CLI update status ─────────────────────────────────────────────────────
+  router.get('/cli-updates', async (_req: Request, res: Response) => {
+    if (!cliUpdateService) return res.json({ items: [], lastCheckAt: null, updateInProgress: false });
+    try {
+      const settings = await chatService.getSettings();
+      res.json(cliUpdateService.getStatus(settings));
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/cli-updates/check', csrfGuard, async (_req: Request, res: Response) => {
+    if (!cliUpdateService) return res.status(501).json({ error: 'CLI update service not available' });
+    try {
+      const status = await cliUpdateService.checkNow(() => chatService.getSettings());
+      res.json(status);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/cli-updates/:id/update', csrfGuard, async (req: Request, res: Response) => {
+    if (!cliUpdateService) return res.status(501).json({ error: 'CLI update service not available' });
+    try {
+      const result = await cliUpdateService.triggerUpdate(param(req, 'id'), {
+        loadSettings: () => chatService.getSettings(),
+        hasActiveStreams: hasAnyInFlightTurn,
+        onUpdated: () => backendRegistry.shutdownAll(),
+      });
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(result.error && result.error.includes('actively running') ? 409 : 400).json(result);
+      }
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -3510,6 +3551,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     memoryFingerprints.clear();
     cliProfileAuth.shutdown();
     if (updateService) updateService.stop();
+    if (cliUpdateService) cliUpdateService.stop();
   }
 
   function setWsFunctions(fns: Pick<WsFunctions, 'send' | 'isConnected' | 'isStreamAlive' | 'clearBuffer' | 'forEachConnected' | 'startStreamGracePeriod'>) {

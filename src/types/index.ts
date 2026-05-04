@@ -1145,6 +1145,42 @@ export interface UpdateResult {
   error?: string;
 }
 
+// ── CLI Update Service ──────────────────────────────────────────────────────
+
+export type CliInstallMethod = 'npm-global' | 'self-update' | 'unknown' | 'missing';
+
+export interface CliUpdateStatus {
+  id: string;
+  vendor: CliVendor;
+  label: string;
+  command: string;
+  resolvedPath: string | null;
+  profileIds: string[];
+  profileNames: string[];
+  installMethod: CliInstallMethod;
+  currentVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  updateSupported: boolean;
+  updateInProgress: boolean;
+  lastCheckAt: string | null;
+  lastError: string | null;
+  updateCommand: string[] | null;
+}
+
+export interface CliUpdatesResponse {
+  items: CliUpdateStatus[];
+  lastCheckAt: string | null;
+  updateInProgress: boolean;
+}
+
+export interface CliUpdateResult {
+  success: boolean;
+  item?: CliUpdateStatus;
+  steps: UpdateStep[];
+  error?: string;
+}
+
 // ── WebSocket Frames ────────────────────────────────────────────────────────
 
 export interface WsInputFrame {

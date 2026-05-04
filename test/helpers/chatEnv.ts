@@ -48,6 +48,7 @@ export interface CreateChatRouterEnvOpts {
   gracePeriodMs?: number;
   bufferCleanupMs?: number;
   updateService?: any;
+  cliUpdateService?: any;
 }
 
 /** Build an isolated Express + WebSocket test server with a fresh ChatService,
@@ -83,7 +84,15 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     getCached: () => ({ fetchedAt: null, account: null, rateLimits: null, lastError: null, stale: true }),
     maybeRefresh: async () => {},
   } as any;
-  const chatResult = createChatRouter({ chatService, backendRegistry, updateService: opts.updateService ?? null as any, claudePlanUsageService: mockPlanUsage, kiroPlanUsageService: mockKiroPlanUsage, codexPlanUsageService: mockCodexPlanUsage });
+  const chatResult = createChatRouter({
+    chatService,
+    backendRegistry,
+    updateService: opts.updateService ?? null as any,
+    cliUpdateService: opts.cliUpdateService ?? null,
+    claudePlanUsageService: mockPlanUsage,
+    kiroPlanUsageService: mockKiroPlanUsage,
+    codexPlanUsageService: mockCodexPlanUsage,
+  });
   await chatResult.reconcileInterruptedJobs();
   const { activeStreams, streamJobs, reconcileInterruptedJobs, shutdown: chatShutdown } = chatResult;
   app.use('/api/chat', chatResult.router);

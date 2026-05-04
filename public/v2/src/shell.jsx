@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Sidebar, Ico, AgentApi, StreamStore, KbBrowser, FilesBrowser, DialogProvider, useDialog, ToastProvider, useToasts, marked, DOMPurify, FileLinkUtils, UpdateModal, RestartOverlay, WorkspaceSettingsModal, SessionsModal */
+/* global React, ReactDOM, Sidebar, Ico, AgentApi, StreamStore, KbBrowser, FilesBrowser, DialogProvider, useDialog, ToastProvider, useToasts, marked, DOMPurify, FileLinkUtils, UpdateModal, RestartOverlay, WorkspaceSettingsModal, SessionsModal, CliUpdateStore */
 
 /* Agent Cockpit v2 — real app entry.
    PR 4a scope: long-conversation rendering — progress-breadcrumb
@@ -175,6 +175,21 @@ function CliProfilesProvider({ children }){
 }
 function useCliProfileSettings(){ return React.useContext(CliProfilesContext); }
 
+function useCliUpdates(){
+  const [snapshot, setSnapshot] = React.useState(() => (window.CliUpdateStore && CliUpdateStore.get()) || null);
+  React.useEffect(() => {
+    if (!window.CliUpdateStore) return undefined;
+    const unsub = CliUpdateStore.subscribe(setSnapshot);
+    CliUpdateStore.refresh();
+    const timer = setInterval(() => CliUpdateStore.refresh(), 5 * 60 * 1000);
+    return () => {
+      clearInterval(timer);
+      unsub();
+    };
+  }, []);
+  return snapshot;
+}
+
 function backendIconFor(backends, backendId){
   if (!backendId) return null;
   const b = (backends || []).find(x => x.id === backendId);
@@ -239,7 +254,7 @@ function App(){
   const [activeConvId, setActiveConvId] = React.useState(null);
   const [kbView, setKbView] = React.useState(null);     // { hash, label } | null
   const [filesView, setFilesView] = React.useState(null); // { hash, label } | null
-  const [settingsView, setSettingsView] = React.useState(false); // boolean — global app settings, no per-workspace context
+  const [settingsView, setSettingsView] = React.useState(null); // { initialTab } | null — global app settings, no per-workspace context
   const [folderPickerOpen, setFolderPickerOpen] = React.useState(false);
   const [creatingConv, setCreatingConv] = React.useState(false);
   const [viewingArchive, setViewingArchive] = React.useState(false);
@@ -370,7 +385,7 @@ function App(){
   const onSelectConv = React.useCallback((id) => {
     setKbView(null);
     setFilesView(null);
-    setSettingsView(false);
+    setSettingsView(null);
     /* Push the active id into StreamStore synchronously *before* markRead
        so any `done` frame that fires between this call and the React-effect
        sync below already sees the new active id and doesn't re-flag the
@@ -390,22 +405,22 @@ function App(){
 
   const onOpenKb = React.useCallback((hash, label) => {
     setFilesView(null);
-    setSettingsView(false);
+    setSettingsView(null);
     setKbView({ hash, label });
     setSbOpen(false);
   }, []);
 
   const onOpenFiles = React.useCallback((hash, label) => {
     setKbView(null);
-    setSettingsView(false);
+    setSettingsView(null);
     setFilesView({ hash, label });
     setSbOpen(false);
   }, []);
 
-  const onOpenSettings = React.useCallback(() => {
+  const onOpenSettings = React.useCallback((initialTab) => {
     setKbView(null);
     setFilesView(null);
-    setSettingsView(true);
+    setSettingsView({ initialTab: initialTab || null });
     setSbOpen(false);
   }, []);
 
@@ -422,7 +437,7 @@ function App(){
         setActiveConvId(null);
         setKbView(null);
         setFilesView(null);
-        setSettingsView(false);
+        setSettingsView(null);
       }
       return next;
     });
@@ -495,7 +510,7 @@ function App(){
       setFolderPickerOpen(false);
       setKbView(null);
       setFilesView(null);
-      setSettingsView(false);
+      setSettingsView(null);
       setViewingArchive(false);
       setActiveConvId(conv.id);
     } catch (err) {
@@ -543,7 +558,7 @@ function App(){
       </button>
       {settingsView ? (
         <section className="main main-settings">
-          <SettingsScreen onClose={() => setSettingsView(false)}/>
+          <SettingsScreen initialTab={settingsView.initialTab} onClose={() => setSettingsView(null)}/>
         </section>
       ) : filesView ? (
         <section className="main main-files">
@@ -561,6 +576,7 @@ function App(){
               onDeleted={onDeleted}
               onRenamed={onRenamed}
               onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+              onOpenSettings={onOpenSettings}
             />
           </ChatErrorBoundary>
         : <EmptyMain/>}
@@ -604,7 +620,7 @@ function EmptyMain(){
   );
 }
 
-function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSettings }){
+function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSettings, onOpenSettings }){
   const state = useConversationState(convId);
   const backends = useBackendList();
   const { profiles: cliProfiles } = useCliProfileSettings();
@@ -1248,6 +1264,11 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
                 </button>
               </span>
               <ComposerNotifIcon conv={conv} convId={convId}/>
+              <ComposerCliUpdateIcon
+                cliProfileId={topbarCliProfileId}
+                backendId={topbarBackendId}
+                onOpenSettings={onOpenSettings}
+              />
               {streaming ? (
                 hasContent ? (
                   <button
@@ -2992,6 +3013,172 @@ function StreamErrorCard({ convId, error, source, queueLength, messages }){
         ) : null}
       </div>
     </div>
+  );
+}
+
+function useFixedPopoverPosition(anchorRef, panelRef, open){
+  const [pos, setPos] = React.useState(null);
+  React.useEffect(() => {
+    if (!open || !anchorRef.current) return undefined;
+    const compute = () => {
+      const a = anchorRef.current.getBoundingClientRect();
+      const p = panelRef.current;
+      const pw = p ? p.offsetWidth : 320;
+      const ph = p ? p.offsetHeight : 160;
+      const margin = 16;
+      const gap = 8;
+      let left = a.left + a.width / 2 - pw / 2;
+      left = Math.max(margin, Math.min(left, window.innerWidth - pw - margin));
+      const above = a.top - gap - ph;
+      const below = a.bottom + gap;
+      const placeAbove = above >= margin || window.innerHeight - below < ph;
+      const top = placeAbove
+        ? Math.max(margin, above)
+        : Math.min(below, window.innerHeight - ph - margin);
+      const arrowX = Math.max(12, Math.min(pw - 18, a.left + a.width / 2 - left - 5));
+      setPos({ top, left, placeAbove, arrowX });
+    };
+    compute();
+    const raf = requestAnimationFrame(compute);
+    window.addEventListener('resize', compute);
+    window.addEventListener('scroll', compute, true);
+    return () => {
+      cancelAnimationFrame(raf);
+      window.removeEventListener('resize', compute);
+      window.removeEventListener('scroll', compute, true);
+    };
+  }, [open]);
+  return pos;
+}
+
+function formatInstallMethod(method){
+  if (method === 'npm-global') return 'npm global';
+  if (method === 'self-update') return 'self updater';
+  if (method === 'missing') return 'not found';
+  return 'unknown';
+}
+
+function ComposerCliUpdateIcon({ cliProfileId, backendId, onOpenSettings }){
+  useCliUpdates();
+  const toast = useToasts();
+  const buttonRef = React.useRef(null);
+  const panelRef = React.useRef(null);
+  const [open, setOpen] = React.useState(false);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const item = window.CliUpdateStore
+    ? CliUpdateStore.findForSelection(cliProfileId, backendId)
+    : null;
+  const pos = useFixedPopoverPosition(buttonRef, panelRef, open);
+
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (panelRef.current && panelRef.current.contains(e.target)) return;
+      if (buttonRef.current && buttonRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!item || !item.updateAvailable) setOpen(false);
+  }, [item && item.id, item && item.updateAvailable]);
+
+  if (!item || !item.updateAvailable) return null;
+
+  const title = item.label + ' update available';
+  const profileLabel = item.profileNames && item.profileNames.length
+    ? item.profileNames.slice(0, 2).join(', ') + (item.profileNames.length > 2 ? ' +' + (item.profileNames.length - 2) : '')
+    : 'Current profile';
+
+  async function doUpdate(){
+    if (!item || busy || !item.updateSupported) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await CliUpdateStore.update(item.id);
+      if (result && result.success) {
+        toast.success(item.label + ' updated');
+        setOpen(false);
+      } else {
+        setError((result && result.error) || 'Update failed');
+      }
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const style = pos
+    ? { top: pos.top, left: pos.left }
+    : { visibility: 'hidden', top: 0, left: 0 };
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="composer-notif state-pending state-cli-update"
+        aria-label={title}
+        aria-expanded={open ? 'true' : 'false'}
+        onClick={() => { setError(null); setOpen(v => !v); }}
+      >
+        {Ico.terminal(14)}
+        <span className="composer-notif-pulse state-pending"/>
+      </button>
+      {open ? (
+        <div
+          ref={panelRef}
+          className="tt composer-action-popover"
+          data-variant="stat"
+          data-placement={pos && pos.placeAbove ? 'above' : 'below'}
+          data-pinned="true"
+          role="dialog"
+          aria-label={title}
+          style={style}
+        >
+          <span className="tt-arrow" style={{ left: pos ? pos.arrowX : 12 }}/>
+          <div className="tt-header">
+            <span className="tt-eye">CLI Update</span>
+          </div>
+          <h4 className="tt-h">{title}</h4>
+          <div className="tt-section">
+            <div className="tt-rows">
+              <div className="tt-kv"><span>Current</span><b>{item.currentVersion || 'unknown'}</b></div>
+              <div className="tt-kv"><span>Available</span><b>{item.latestVersion || 'unknown'}</b></div>
+              <div className="tt-kv"><span>Install</span><b>{formatInstallMethod(item.installMethod)}</b></div>
+              <div className="tt-kv"><span>Profile</span><b title={profileLabel}>{profileLabel}</b></div>
+            </div>
+          </div>
+          {error ? (
+            <div className="tt-section">
+              <div className="tt-error-text">{error}</div>
+            </div>
+          ) : null}
+          <div className="tt-foot">
+            <span className="hint">{item.updateSupported ? 'No active stream can be running.' : 'Open settings for update details.'}</span>
+            <span className="spacer"/>
+            <button type="button" className="tt-btn" onClick={() => onOpenSettings && onOpenSettings('cli')}>CLI settings</button>
+            <button type="button" className="tt-btn primary" disabled={busy || !item.updateSupported} onClick={doUpdate}>
+              {busy ? 'Updating…' : 'Update now'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </>
   );
 }
 

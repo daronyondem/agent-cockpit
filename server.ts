@@ -15,6 +15,7 @@ import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
 import { KiroAdapter } from './src/services/backends/kiro';
 import { CodexAdapter } from './src/services/backends/codex';
 import { UpdateService } from './src/services/updateService';
+import { CliUpdateService } from './src/services/cliUpdateService';
 import { ClaudePlanUsageService } from './src/services/claudePlanUsageService';
 import { KiroPlanUsageService } from './src/services/kiroPlanUsageService';
 import { CodexPlanUsageService } from './src/services/codexPlanUsageService';
@@ -97,10 +98,11 @@ backendRegistry.register(new CodexAdapter({
 
 const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
 const updateService = new UpdateService(__dirname);
+const cliUpdateService = new CliUpdateService(__dirname);
 const claudePlanUsageService = new ClaudePlanUsageService(__dirname);
 const kiroPlanUsageService = new KiroPlanUsageService(__dirname);
 const codexPlanUsageService = new CodexPlanUsageService(__dirname);
-const chatResult = createChatRouter({ chatService, backendRegistry, updateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
+const chatResult = createChatRouter({ chatService, backendRegistry, updateService, cliUpdateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
 const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = chatResult;
 app.use('/api/chat', chatRouter);
 
@@ -137,6 +139,7 @@ chatService.initialize().then(async () => {
   }
 
   updateService.start();
+  cliUpdateService.start(() => chatService.getSettings());
 
   // Load last-persisted Claude plan usage snapshot, then fire-and-forget
   // the first refresh. Further refreshes happen opportunistically after

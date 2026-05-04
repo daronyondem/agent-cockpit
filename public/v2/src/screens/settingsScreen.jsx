@@ -1,4 +1,4 @@
-/* global React, AgentApi, Ico, useDialog, useToasts */
+/* global React, AgentApi, Ico, useDialog, useToasts, CliUpdateStore */
 
 /* SettingsScreen — full-screen modal-swap pane for V2 app settings.
    Mirrors the V1 layout (General / CLI Config / Memory / Knowledge Base /
@@ -213,10 +213,10 @@ function Toggle({ checked, onChange, label }){
   );
 }
 
-function SettingsScreen({ onClose }){
+function SettingsScreen({ onClose, initialTab }){
   const dialog = useDialog();
   const toast = useToasts();
-  const [tab, setTab] = React.useState('general');
+  const [tab, setTab] = React.useState(() => SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'general');
   const [settings, setSettings] = React.useState(null);
   const [backends, setBackends] = React.useState([]);
   const [profileBackends, setProfileBackends] = React.useState({});
@@ -431,6 +431,110 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
 }
 
 /* ──────────────────── CLI Config tab ──────────────────── */
+
+function CliUpdatesPanel(){
+  const toast = useToasts();
+  const dialog = useDialog();
+  const [snapshot, setSnapshot] = React.useState(() => (window.CliUpdateStore && CliUpdateStore.get()) || null);
+  const [checking, setChecking] = React.useState(false);
+  const [updatingId, setUpdatingId] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!window.CliUpdateStore) return undefined;
+    const unsub = CliUpdateStore.subscribe(setSnapshot);
+    CliUpdateStore.refresh();
+    return unsub;
+  }, []);
+
+  const items = snapshot && Array.isArray(snapshot.items) ? snapshot.items : [];
+  const updateCount = items.filter(item => item.updateAvailable).length;
+
+  async function onCheck(anchor){
+    setChecking(true);
+    try {
+      const data = await CliUpdateStore.check();
+      setSnapshot(data);
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'CLI update check failed', body: err.message || String(err) });
+    } finally {
+      setChecking(false);
+    }
+  }
+
+  async function onUpdate(item, anchor){
+    setUpdatingId(item.id);
+    try {
+      const result = await CliUpdateStore.update(item.id);
+      if (result && result.success) {
+        toast.success(`${item.label} updated`);
+      } else {
+        await dialog.alert({ anchor, variant: 'error', title: 'CLI update failed', body: (result && result.error) || 'Update failed' });
+      }
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'CLI update failed', body: err.message || String(err) });
+    } finally {
+      setUpdatingId(null);
+    }
+  }
+
+  return (
+    <div className="cli-updates-panel">
+      <div className="cli-updates-head">
+        <div>
+          <div className="settings-section-title">CLI updates</div>
+          <p className="settings-desc u-dim">
+            Detects local CLI versions used by configured profiles. Supported npm-installed CLIs can be updated from the web UI when no conversation is running.
+          </p>
+        </div>
+        <button type="button" className="btn" disabled={checking} onClick={(e) => onCheck(e.currentTarget)}>
+          {checking ? 'Checking…' : 'Check now'}
+        </button>
+      </div>
+      {items.length === 0 ? (
+        <div className="settings-empty u-dim">No CLI update status has been collected yet.</div>
+      ) : (
+        <div className="cli-update-list">
+          {items.map(item => {
+            const canRunUpdate = item.updateSupported && (item.updateAvailable || item.installMethod === 'self-update');
+            const buttonLabel = item.installMethod === 'self-update' && !item.updateAvailable ? 'Run updater' : 'Update';
+            return (
+              <div className={`cli-update-row ${item.updateAvailable ? 'has-update' : ''}`} key={item.id}>
+                <div className="cli-update-main">
+                  <div className="cli-update-title">
+                    <b>{item.label}</b>
+                    {item.updateAvailable ? <span className="cli-update-badge">Update available</span> : null}
+                  </div>
+                  <div className="cli-update-meta u-mono">
+                    <span>{item.currentVersion || 'unknown'}</span>
+                    {item.latestVersion ? <><span>→</span><span>{item.latestVersion}</span></> : null}
+                    <span className="sep">·</span>
+                    <span>{item.profileNames && item.profileNames.length ? item.profileNames.join(', ') : item.command}</span>
+                  </div>
+                  {item.lastError ? <div className="cli-update-error">{item.lastError}</div> : null}
+                </div>
+                <div className="cli-update-side">
+                  <span className="cli-update-method">{item.installMethod === 'npm-global' ? 'npm' : item.installMethod === 'self-update' ? 'self-update' : item.installMethod}</span>
+                  <button
+                    type="button"
+                    className="btn primary"
+                    disabled={!canRunUpdate || updatingId === item.id}
+                    onClick={(e) => onUpdate(item, e.currentTarget)}
+                    title={!item.updateSupported ? 'This install method cannot be updated from Agent Cockpit' : undefined}
+                  >
+                    {updatingId === item.id ? 'Updating…' : buttonLabel}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <div className="cli-updates-foot u-dim">
+        {updateCount > 0 ? `${updateCount} update${updateCount === 1 ? '' : 's'} available.` : 'No versioned CLI updates available.'}
+      </div>
+    </div>
+  );
+}
 
 function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
   const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
@@ -691,6 +795,8 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
           <span><b>{profiles.length}</b> total</span>
         </div>
       </div>
+
+      <CliUpdatesPanel/>
 
       <div className="cli-list">
         {profiles.length === 0 ? (

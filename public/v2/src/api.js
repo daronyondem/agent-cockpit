@@ -225,6 +225,21 @@
     return res.json();
   }
 
+  async function getCliUpdates(){
+    const res = await chatFetch('cli-updates');
+    return res.json();
+  }
+
+  async function checkCliUpdates(){
+    const res = await chatFetch('cli-updates/check', { method: 'POST' });
+    return res.json();
+  }
+
+  async function triggerCliUpdate(itemId){
+    const res = await chatFetch('cli-updates/' + encodeURIComponent(itemId) + '/update', { method: 'POST', body: {} });
+    return res.json();
+  }
+
   /* Claude plan usage (Max/Pro rate limit utilization). Server-side cache
      is refreshed opportunistically on server start and after each Claude
      Code assistant turn, floor-throttled to once per 10 minutes. The
@@ -762,6 +777,9 @@
     getUpdateStatus,
     checkVersion,
     triggerUpdate,
+    getCliUpdates,
+    checkCliUpdates,
+    triggerCliUpdate,
     getClaudePlanUsage,
     getKiroPlanUsage,
     getCodexPlanUsage,

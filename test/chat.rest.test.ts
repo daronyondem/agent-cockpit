@@ -309,6 +309,71 @@ describe('GET /backends', () => {
   });
 });
 
+describe('CLI update routes', () => {
+  test('returns cached CLI update status', async () => {
+    await destroyChatRouterEnv(env);
+    const fakeCliUpdateService = {
+      getStatus: jest.fn(() => ({
+        items: [{
+          id: 'codex:abc',
+          vendor: 'codex',
+          label: 'Codex',
+          command: 'codex',
+          resolvedPath: '/usr/local/bin/codex',
+          profileIds: ['server-configured-codex'],
+          profileNames: ['Codex (Server Configured)'],
+          installMethod: 'npm-global',
+          currentVersion: '0.125.0',
+          latestVersion: '0.128.0',
+          updateAvailable: true,
+          updateSupported: true,
+          updateInProgress: false,
+          lastCheckAt: '2026-05-04T00:00:00.000Z',
+          lastError: null,
+          updateCommand: ['npm', 'i', '-g', '@openai/codex@latest'],
+        }],
+        lastCheckAt: '2026-05-04T00:00:00.000Z',
+        updateInProgress: false,
+      })),
+      stop: jest.fn(),
+    };
+    env = await createChatRouterEnv({ cliUpdateService: fakeCliUpdateService });
+
+    const res = await env.request('GET', '/api/chat/cli-updates');
+    expect(res.status).toBe(200);
+    expect(res.body.items[0]).toMatchObject({
+      id: 'codex:abc',
+      vendor: 'codex',
+      updateAvailable: true,
+    });
+    expect(fakeCliUpdateService.getStatus).toHaveBeenCalled();
+  });
+
+  test('CLI update trigger uses active-stream guard', async () => {
+    await destroyChatRouterEnv(env);
+    const fakeCliUpdateService = {
+      triggerUpdate: jest.fn(async (_id: string, opts: { hasActiveStreams?: () => boolean }) => (
+        opts.hasActiveStreams?.()
+          ? { success: false, steps: [], error: 'Cannot update a CLI while conversations are actively running.' }
+          : { success: true, steps: [] }
+      )),
+      getStatus: jest.fn(() => ({ items: [], lastCheckAt: null, updateInProgress: false })),
+      stop: jest.fn(),
+    };
+    env = await createChatRouterEnv({ cliUpdateService: fakeCliUpdateService });
+    const pending = await startPendingMessage('block cli update');
+
+    const res = await env.request('POST', '/api/chat/cli-updates/codex%3Aabc/update', {});
+    expect(res.status).toBe(409);
+    expect(res.body.success).toBe(false);
+    expect(fakeCliUpdateService.triggerUpdate).toHaveBeenCalled();
+
+    pending.releaseUserAdd();
+    const send = await pending.sendPromise;
+    expect(send.status).toBe(200);
+  });
+});
+
 describe('POST /conversations/:id/abort', () => {
   test('aborts active stream without requiring an open WebSocket and buffers terminal abort frames', async () => {
     const conv = await env.chatService.createConversation('REST Abort');
