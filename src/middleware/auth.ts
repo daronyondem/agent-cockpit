@@ -1,22 +1,43 @@
+import crypto from 'crypto';
+import express from 'express';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import rateLimit from 'express-rate-limit';
+import QRCode from 'qrcode';
+import {
+  generateAuthenticationOptions,
+  generateRegistrationOptions,
+  verifyAuthenticationResponse,
+  verifyRegistrationResponse,
+  type AuthenticationResponseJSON,
+  type RegistrationResponseJSON,
+  type WebAuthnCredential,
+} from '@simplewebauthn/server';
 import type { Request, Response, NextFunction, Express } from '../types';
 import type { AppConfig } from '../types';
+import { LocalAuthError, LocalAuthStore, type LocalOwner, type LocalPasskeyCredential } from '../services/localAuthStore';
 
-export type AuthProvider = 'google' | 'github';
+export type AuthProvider = 'local' | 'google' | 'github';
 
-interface AuthUser {
+export interface AuthUser {
   id: string;
   email: string;
   displayName: string;
   provider: AuthProvider;
 }
 
+const MOBILE_AUTH_CALLBACK_URL = 'agentcockpit://auth/callback';
+const MOBILE_AUTH_CODE_TTL_MS = 5 * 60 * 1000;
+const MOBILE_PAIRING_CODE_TTL_MS = 5 * 60 * 1000;
+
+const mobileAuthCodes = new Map<string, { user: AuthUser; expiresAt: number }>();
+const mobilePairingChallenges = new Map<string, { user: AuthUser; codeHash: string; expiresAt: number }>();
+
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 20,
+  skip: () => process.env.NODE_ENV === 'test',
   standardHeaders: true,
   legacyHeaders: false,
   message: 'Too many authentication attempts, please try again later.',
@@ -35,6 +56,87 @@ function verifyEmail(config: AppConfig, provider: AuthProvider) {
       return done(null, { id: profile.id, email, displayName: profile.displayName, provider });
     }
     return done(null, false, { message: 'Access denied: unauthorized email.' });
+  };
+}
+
+export function issueMobileAuthCode(user: AuthUser): string {
+  const now = Date.now();
+  for (const [code, entry] of mobileAuthCodes) {
+    if (entry.expiresAt <= now) {
+      mobileAuthCodes.delete(code);
+    }
+  }
+
+  const code = crypto.randomBytes(32).toString('hex');
+  mobileAuthCodes.set(code, {
+    user,
+    expiresAt: now + MOBILE_AUTH_CODE_TTL_MS,
+  });
+  return code;
+}
+
+function consumeMobileAuthCode(code: string): AuthUser | null {
+  const entry = mobileAuthCodes.get(code);
+  mobileAuthCodes.delete(code);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    return null;
+  }
+  return entry.user;
+}
+
+function issueMobilePairingChallenge(user: AuthUser): { challengeId: string; pairingCode: string; expiresAt: string } {
+  const now = Date.now();
+  for (const [challengeId, entry] of mobilePairingChallenges) {
+    if (entry.expiresAt <= now) {
+      mobilePairingChallenges.delete(challengeId);
+    }
+  }
+
+  const challengeId = crypto.randomUUID();
+  const pairingCode = generatePairingCode();
+  const expiresAt = now + MOBILE_PAIRING_CODE_TTL_MS;
+  mobilePairingChallenges.set(challengeId, {
+    user,
+    codeHash: hashPairingCode(pairingCode),
+    expiresAt,
+  });
+  return { challengeId, pairingCode, expiresAt: new Date(expiresAt).toISOString() };
+}
+
+function consumeMobilePairingChallenge(challengeId: string, pairingCode: string): AuthUser | null {
+  const entry = mobilePairingChallenges.get(challengeId);
+  mobilePairingChallenges.delete(challengeId);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    return null;
+  }
+  if (entry.codeHash !== hashPairingCode(pairingCode)) {
+    return null;
+  }
+  return entry.user;
+}
+
+function generatePairingCode(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (const byte of crypto.randomBytes(8)) {
+    code += alphabet[byte % alphabet.length];
+  }
+  return `${code.slice(0, 4)}-${code.slice(4)}`;
+}
+
+function normalizePairingCode(code: string): string {
+  return code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+function hashPairingCode(code: string): string {
+  return crypto.createHash('sha256').update(normalizePairingCode(code)).digest('hex');
+}
+
+function publicUser(user: AuthUser): Omit<AuthUser, 'id'> {
+  return {
+    email: user.email,
+    displayName: user.displayName,
+    provider: user.provider,
   };
 }
 
@@ -276,82 +378,193 @@ body{
   .login{ grid-template-columns:1fr; }
   .login-right{ display:none; }
 }
+.auth-form{
+  display:flex; flex-direction:column; gap:12px; margin-bottom:18px;
+}
+.auth-field{
+  display:flex; flex-direction:column; gap:6px;
+}
+.auth-field label{
+  font-size:12px; font-weight:600; color:var(--text-2);
+}
+.auth-field input{
+  width:100%;
+  border:1px solid var(--border-strong);
+  border-radius:var(--r-md);
+  background:var(--surface);
+  color:var(--text);
+  font:inherit;
+  font-size:14.5px;
+  padding:12px 13px;
+  box-shadow:var(--shadow-1);
+}
+.auth-field input:focus{
+  outline:none;
+  border-color:var(--accent);
+  box-shadow:var(--focus-ring), var(--shadow-1);
+}
+.auth-actions{
+  display:flex; flex-direction:column; gap:10px; margin-top:4px;
+}
+.auth-submit{
+  display:grid;
+  grid-template-columns:1fr auto;
+  align-items:center; gap:14px; width:100%;
+  padding:13px 16px;
+  background:var(--accent);
+  border:1px solid var(--accent);
+  color:white;
+  border-radius:var(--r-md);
+  font:inherit; font-size:14.5px; font-weight:600;
+  cursor:pointer;
+  box-shadow:var(--shadow-1);
+}
+.auth-submit:hover{ filter:brightness(.96); }
+.auth-secondary{
+  width:100%;
+  border:1px solid var(--border-strong);
+  border-radius:var(--r-md);
+  background:var(--surface);
+  color:var(--text);
+  font:inherit;
+  font-size:14.5px;
+  font-weight:600;
+  padding:12px 16px;
+  cursor:pointer;
+  box-shadow:var(--shadow-1);
+}
+.auth-secondary:hover{ border-color:var(--accent); }
+.auth-secondary:disabled{ opacity:.55; cursor:not-allowed; }
+.auth-divider{
+  display:flex; align-items:center; gap:10px;
+  color:var(--text-3);
+  font-size:11px;
+  font-family:var(--mono-font);
+  text-transform:uppercase;
+  letter-spacing:.12em;
+}
+.auth-divider::before,
+.auth-divider::after{
+  content:"";
+  height:1px;
+  flex:1;
+  background:var(--border);
+}
+.auth-status{
+  min-height:18px;
+  color:var(--text-3);
+  font-size:12px;
+  line-height:1.45;
+}
+.auth-status.err{ color:color-mix(in oklch,#ef4444,var(--text) 20%); }
+.auth-error{
+  border:1px solid color-mix(in oklch,#ef4444,transparent 45%);
+  background:color-mix(in oklch,#ef4444,transparent 90%);
+  color:color-mix(in oklch,#ef4444,var(--text) 20%);
+  border-radius:var(--r-md);
+  padding:10px 12px;
+  font-size:13px;
+  line-height:1.45;
+}
 `;
 
-export function setupAuth(app: Express, config: AppConfig): void {
-  const hasGitHub = config.GITHUB_CLIENT_ID && config.GITHUB_CLIENT_SECRET;
+interface AuthFormBody {
+  email?: unknown;
+  displayName?: unknown;
+  password?: unknown;
+  setupToken?: unknown;
+  recoveryCode?: unknown;
+  mobile?: unknown;
+  popup?: unknown;
+}
 
-  passport.use(new GoogleStrategy(
-    {
-      clientID: config.GOOGLE_CLIENT_ID,
-      clientSecret: config.GOOGLE_CLIENT_SECRET,
-      callbackURL: config.GOOGLE_CALLBACK_URL,
-    },
-    verifyEmail(config, 'google'),
-  ));
+interface MobileAuthExchangeBody {
+  code?: unknown;
+  deviceName?: unknown;
+  platform?: unknown;
+}
 
-  if (hasGitHub) {
-    passport.use(new GitHubStrategy(
-      {
-        clientID: config.GITHUB_CLIENT_ID!,
-        clientSecret: config.GITHUB_CLIENT_SECRET!,
-        callbackURL: config.GITHUB_CALLBACK_URL || '',
-        scope: ['user:email'],
-      },
-      verifyEmail(config, 'github'),
-    ));
+interface MobilePairingExchangeBody {
+  challengeId?: unknown;
+  code?: unknown;
+  deviceName?: unknown;
+  platform?: unknown;
+}
+
+interface PasskeyRegistrationOptionsBody {
+  name?: unknown;
+}
+
+interface PasskeyRegistrationVerifyBody {
+  name?: unknown;
+  response?: unknown;
+}
+
+interface PasskeyAuthenticationOptionsBody {
+  mobile?: unknown;
+  popup?: unknown;
+}
+
+interface PasskeyAuthenticationVerifyBody {
+  response?: unknown;
+}
+
+const authFormParsers = [
+  express.urlencoded({ extended: false, limit: '20kb' }),
+  express.json({ limit: '20kb' }),
+];
+
+function localUserFromOwner(owner: LocalOwner): AuthUser {
+  return {
+    id: owner.id,
+    email: owner.email,
+    displayName: owner.displayName,
+    provider: 'local',
+  };
+}
+
+function stringField(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
+
+function hiddenModeInputs(req: Request): string {
+  const fields: string[] = [];
+  if (req.query.mobile === '1') {
+    fields.push('<input type="hidden" name="mobile" value="1">');
   }
+  if (req.query.popup === '1') {
+    fields.push('<input type="hidden" name="popup" value="1">');
+  }
+  return fields.join('');
+}
 
-  passport.serializeUser((user, done) => done(null, user));
-  passport.deserializeUser((obj: Express.User, done) => done(null, obj));
-
-  app.use(passport.initialize());
-  app.use(passport.session());
-
-  // Marks the session as "opened from a popup re-auth window" so the final
-  // callback lands on /auth/popup-done (which self-closes) instead of /.
-  // The flag survives the Google/GitHub roundtrip because express-session
-  // persists through the OAuth redirect.
-  const markPopupIfRequested = (req: Request, _res: Response, next: NextFunction): void => {
-    if (req.query.popup === '1' && req.session) {
-      (req.session as unknown as { reAuthPopup?: boolean }).reAuthPopup = true;
-    }
-    next();
-  };
-
-  const finishAuth = (req: Request, res: Response): void => {
-    const sess = req.session as unknown as { reAuthPopup?: boolean } | undefined;
-    if (sess && sess.reAuthPopup) {
-      delete sess.reAuthPopup;
-      res.redirect('/auth/popup-done');
-      return;
-    }
-    res.redirect('/');
-  };
-
-  // ── Login page ──────────────────────────────────────────────────────────────
-  // Editorial two-column layout: auth card on the left, editorial pull-quote +
-  // floating "live session" card on the right. Real brand logos on the OAuth
-  // buttons (standard OAuth UX). Theme follows the main V2 app's `ac:v2:theme`
-  // localStorage key or prefers-color-scheme.
-  app.get('/auth/login', (req: Request, res: Response) => {
-    const popup = req.query.popup === '1' ? '?popup=1' : '';
-    const githubBtn = hasGitHub
-      ? `<a class="provider-btn" href="/auth/github${popup}">
-          <span class="mark">${GITHUB_OCTO_SVG}</span>
-          <span class="label">Continue with GitHub</span>
-          <span class="right">
-            <span class="tag">Recommended</span>
-            <span class="arrow">${ARROW_SVG}</span>
-          </span>
-        </a>`
-      : '';
-    res.send(`<!DOCTYPE html>
+function renderAuthShell(options: {
+  title: string;
+  subtitle: string;
+  eyebrow: string;
+  form: string;
+  error?: string;
+  footer?: string;
+}): string {
+  const error = options.error
+    ? `<div class="auth-error" role="alert">${escapeHtml(options.error)}</div>`
+    : '';
+  const footer = options.footer ?? '';
+  return `<!DOCTYPE html>
 <html lang="en" data-direction="editorial" data-theme="light">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · Agent Cockpit</title>
+<title>${escapeHtml(options.title)} · Agent Cockpit</title>
 <script>
 (function(){
   try {
@@ -382,30 +595,16 @@ export function setupAuth(app: Express, config: AppConfig): void {
     </div>
 
     <div class="login-body">
-      <div class="login-eyebrow"><span class="dot"></span>Ready</div>
-      <h1 class="login-title">The cockpit <em>is listening.</em><br>Sign in to take the controls.</h1>
-      <p class="login-sub">Agent Cockpit is where you <b>plan, watch, and steer</b> long-running agents across your workspace. One account. Two ways in.</p>
-
-      <div class="providers">
-        <a class="provider-btn" href="/auth/google${popup}">
-          <span class="mark">${GOOGLE_G_SVG}</span>
-          <span class="label">Continue with Google</span>
-          <span class="right">
-            <span class="arrow">${ARROW_SVG}</span>
-          </span>
-        </a>
-        ${githubBtn}
-      </div>
-
-      <p class="login-legal">
-        By continuing you agree to our <a href="#">Terms</a> and
-        <a href="#">Privacy&nbsp;Policy</a>. We only use your account to
-        identify you — never to post, read, or email on your behalf.
-      </p>
+      <div class="login-eyebrow"><span class="dot"></span>${escapeHtml(options.eyebrow)}</div>
+      <h1 class="login-title">${options.title}</h1>
+      <p class="login-sub">${options.subtitle}</p>
+      ${error}
+      ${options.form}
+      ${footer}
     </div>
 
     <div class="login-foot">
-      <span class="status"><span class="dot"></span>All systems operational</span>
+      <span class="status"><span class="dot"></span>First-party auth</span>
       <span class="links">
         <a href="#">Terms</a>
         <a href="#">Privacy</a>
@@ -420,12 +619,913 @@ export function setupAuth(app: Express, config: AppConfig): void {
         &ldquo;Keeping my entire <em>knowledge base</em>, <em>memory</em> in my hands, accessing from anywhere I need, using the
         <em>multiple CLI vendors</em>, subscriptions I have. A central cockpit for my day to day AI work.&rdquo;
       </p>
-      <div class="pe-attr">Daron Yondem · Sr AI/ML Architect, AWS</div>
+      <div class="pe-attr">Agent Cockpit · Local owner account</div>
     </div>
   </div>
 </div>
 </body>
-</html>`);
+</html>`;
+}
+
+function renderSetupPage(req: Request, error?: string): string {
+  const tokenField = isLocalRequest(req) ? '' : `
+        <div class="auth-field">
+          <label for="setupToken">Setup token</label>
+          <input id="setupToken" name="setupToken" type="password" autocomplete="one-time-code" required>
+        </div>`;
+  return renderAuthShell({
+    title: 'Create the owner account',
+    eyebrow: 'First run',
+    subtitle: 'Set up the single local owner for this Agent Cockpit backend. This replaces third-party provider login for the primary account.',
+    error,
+    form: `<form class="auth-form" method="post" action="/auth/setup">
+        <div class="auth-field">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="username" required autofocus>
+        </div>
+        <div class="auth-field">
+          <label for="displayName">Display name</label>
+          <input id="displayName" name="displayName" type="text" autocomplete="name" required>
+        </div>
+        <div class="auth-field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" minlength="12" required>
+        </div>
+        ${tokenField}
+        <div class="auth-actions">
+          <button class="auth-submit" type="submit"><span>Create owner</span><span>${ARROW_SVG}</span></button>
+        </div>
+      </form>`,
+    footer: '<p class="login-legal">Remote first-run setup requires <code>AUTH_SETUP_TOKEN</code>. Localhost setup is allowed for server-console access.</p>',
+  });
+}
+
+function renderLoginPage(req: Request, error?: string): string {
+  return renderAuthShell({
+    title: 'Sign in to Agent Cockpit',
+    eyebrow: 'Ready',
+    subtitle: 'Use the local owner account configured on this backend. Mobile login uses the same first-party session after the backend verifies you.',
+    error,
+    form: `<form class="auth-form" method="post" action="/auth/login/password">
+        ${hiddenModeInputs(req)}
+        <div class="auth-field">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="username" required autofocus>
+        </div>
+        <div class="auth-field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <div class="auth-actions">
+          <button class="auth-submit" type="submit"><span>Sign in</span><span>${ARROW_SVG}</span></button>
+          <div class="auth-divider"><span>or</span></div>
+          <button class="auth-secondary" id="passkeyLogin" type="button">Sign in with passkey</button>
+          <div class="auth-status" id="passkeyStatus" role="status" aria-live="polite"></div>
+        </div>
+      </form>
+      <script>
+      (function(){
+        var button = document.getElementById('passkeyLogin');
+        var status = document.getElementById('passkeyStatus');
+        if (!button || !status) return;
+        if (!window.PublicKeyCredential || !navigator.credentials) {
+          button.disabled = true;
+          status.textContent = 'Passkeys are not available in this browser.';
+          return;
+        }
+        function setStatus(text, error){
+          status.textContent = text || '';
+          status.className = 'auth-status' + (error ? ' err' : '');
+        }
+        function fromBase64url(value){
+          var padded = value + '='.repeat((4 - value.length % 4) % 4);
+          var binary = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+          var bytes = new Uint8Array(binary.length);
+          for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+          return bytes.buffer;
+        }
+        function toBase64url(buffer){
+          var bytes = new Uint8Array(buffer);
+          var binary = '';
+          for (var i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+          return btoa(binary).replace(/\\+/g, '-').replace(/\\//g, '_').replace(/=+$/g, '');
+        }
+        function decodeOptions(options){
+          options.challenge = fromBase64url(options.challenge);
+          options.allowCredentials = (options.allowCredentials || []).map(function(credential){
+            return Object.assign({}, credential, { id: fromBase64url(credential.id) });
+          });
+          return options;
+        }
+        function encodeAssertion(credential){
+          return {
+            id: credential.id,
+            rawId: toBase64url(credential.rawId),
+            type: credential.type,
+            response: {
+              clientDataJSON: toBase64url(credential.response.clientDataJSON),
+              authenticatorData: toBase64url(credential.response.authenticatorData),
+              signature: toBase64url(credential.response.signature),
+              userHandle: credential.response.userHandle ? toBase64url(credential.response.userHandle) : undefined
+            },
+            clientExtensionResults: credential.getClientExtensionResults()
+          };
+        }
+        async function readJson(res){
+          var body = await res.json().catch(function(){ return {}; });
+          if (!res.ok) throw new Error(body.error || res.statusText || ('HTTP ' + res.status));
+          return body;
+        }
+        button.addEventListener('click', async function(){
+          button.disabled = true;
+          setStatus('Waiting for passkey...');
+          try {
+            var params = new URLSearchParams(window.location.search);
+            var options = await readJson(await fetch('/api/auth/passkeys/login/options', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({
+                mobile: params.get('mobile') === '1' ? '1' : undefined,
+                popup: params.get('popup') === '1' ? '1' : undefined
+              })
+            }));
+            var assertion = await navigator.credentials.get({ publicKey: decodeOptions(options) });
+            if (!assertion) throw new Error('Passkey login was cancelled.');
+            var result = await readJson(await fetch('/api/auth/passkeys/login/verify', {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { 'content-type': 'application/json' },
+              body: JSON.stringify({ response: encodeAssertion(assertion) })
+            }));
+            window.location.href = result.redirectTo || '/';
+          } catch (err) {
+            setStatus(err && err.message ? err.message : 'Passkey login failed.', true);
+            button.disabled = false;
+          }
+        });
+      })();
+      </script>`,
+    footer: '<p class="login-legal"><a href="/auth/recovery">Use a recovery code</a>. Mobile pairing builds on this local owner account.</p>',
+  });
+}
+
+function renderRecoveryPage(req: Request, error?: string): string {
+  return renderAuthShell({
+    title: 'Use a recovery code',
+    eyebrow: 'Recovery',
+    subtitle: 'Recovery codes are single-use. A successful recovery sign-in disables passkey-required mode so you can repair the account.',
+    error,
+    form: `<form class="auth-form" method="post" action="/auth/recovery/login">
+        ${hiddenModeInputs(req)}
+        <div class="auth-field">
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" autocomplete="username" required autofocus>
+        </div>
+        <div class="auth-field">
+          <label for="recoveryCode">Recovery code</label>
+          <input id="recoveryCode" name="recoveryCode" type="text" autocomplete="one-time-code" required>
+        </div>
+        <div class="auth-actions">
+          <button class="auth-submit" type="submit"><span>Recover session</span><span>${ARROW_SVG}</span></button>
+        </div>
+      </form>`,
+    footer: '<p class="login-legal"><a href="/auth/login">Return to password login</a>.</p>',
+  });
+}
+
+function requireAuthenticatedApi(req: Request, res: Response, next: NextFunction): void {
+  if (isLocalRequest(req) || req.isAuthenticated()) {
+    next();
+    return;
+  }
+  res.status(401).json({ error: 'Not authenticated' });
+}
+
+function authApiCsrfGuard(req: Request, res: Response, next: NextFunction): void {
+  const token = req.get('x-csrf-token');
+  if (!token || token !== req.session.csrfToken) {
+    res.status(403).json({ error: 'Invalid CSRF token' });
+    return;
+  }
+  next();
+}
+
+function requestOrigin(req: Request): string {
+  const host = req.get('host') || req.hostname;
+  return `${req.protocol}://${host}`;
+}
+
+function passkeyRpId(req: Request): string {
+  return req.hostname;
+}
+
+function publicPasskey(passkey: LocalPasskeyCredential): Omit<LocalPasskeyCredential, 'credentialId' | 'publicKey' | 'counter'> {
+  return {
+    id: passkey.id,
+    name: passkey.name,
+    transports: passkey.transports,
+    createdAt: passkey.createdAt,
+    lastUsedAt: passkey.lastUsedAt,
+  };
+}
+
+function storedCredential(passkey: LocalPasskeyCredential): WebAuthnCredential {
+  return {
+    id: passkey.credentialId,
+    publicKey: Buffer.from(passkey.publicKey, 'base64url'),
+    counter: passkey.counter,
+    transports: passkey.transports as WebAuthnCredential['transports'],
+  };
+}
+
+function requestPlatform(req: Request, explicitPlatform?: string): string | undefined {
+  const platform = explicitPlatform?.trim() ?? '';
+  if (platform) {
+    return platform;
+  }
+  const userAgent = req.get('user-agent') || '';
+  if (/iPhone|iPad|iOS/i.test(userAgent)) return 'iOS';
+  if (/Android/i.test(userAgent)) return 'Android';
+  if (/Macintosh|Mac OS X/i.test(userAgent)) return 'macOS';
+  if (/Windows/i.test(userAgent)) return 'Windows';
+  if (/Linux/i.test(userAgent)) return 'Linux';
+  return undefined;
+}
+
+function currentAuthUser(req: Request): AuthUser | null {
+  const user = req.user as AuthUser | undefined;
+  return user ?? null;
+}
+
+export function setupAuth(app: Express, config: AppConfig): void {
+  const localAuth = new LocalAuthStore(config.AUTH_DATA_DIR);
+  const legacyOAuthEnabled = config.AUTH_ENABLE_LEGACY_OAUTH;
+  const hasGoogle = legacyOAuthEnabled && config.GOOGLE_CLIENT_ID && config.GOOGLE_CLIENT_SECRET;
+  const hasGitHub = legacyOAuthEnabled && config.GITHUB_CLIENT_ID && config.GITHUB_CLIENT_SECRET;
+
+  if (hasGoogle) {
+    passport.use(new GoogleStrategy(
+      {
+        clientID: config.GOOGLE_CLIENT_ID,
+        clientSecret: config.GOOGLE_CLIENT_SECRET,
+        callbackURL: config.GOOGLE_CALLBACK_URL,
+      },
+      verifyEmail(config, 'google'),
+    ));
+  }
+
+  if (hasGitHub) {
+    passport.use(new GitHubStrategy(
+      {
+        clientID: config.GITHUB_CLIENT_ID!,
+        clientSecret: config.GITHUB_CLIENT_SECRET!,
+        callbackURL: config.GITHUB_CALLBACK_URL || '',
+        scope: ['user:email'],
+      },
+      verifyEmail(config, 'github'),
+    ));
+  }
+
+  passport.serializeUser((user, done) => done(null, user));
+  passport.deserializeUser((obj: Express.User, done) => done(null, obj));
+
+  app.use(passport.initialize());
+  app.use(passport.session());
+
+  app.use(async (req: Request, res: Response, next: NextFunction) => {
+    const mobileDeviceId = req.session.mobileDeviceId;
+    if (!mobileDeviceId) {
+      next();
+      return;
+    }
+
+    try {
+      const device = await localAuth.getMobileDevice(mobileDeviceId);
+      if (!device || device.revokedAt) {
+        req.session.destroy(() => {
+          res.clearCookie('connect.sid', { path: '/' });
+          if (req.path.startsWith('/api/')) {
+            res.status(401).json({ error: 'Mobile device revoked' });
+            return;
+          }
+          res.redirect('/auth/login');
+        });
+        return;
+      }
+
+      await localAuth.touchMobileDevice(mobileDeviceId, {
+        ip: req.ip,
+        userAgent: req.get('user-agent') || undefined,
+        platform: requestPlatform(req),
+      });
+      next();
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  // Marks the session as "opened from a popup re-auth window" so the final
+  // callback lands on /auth/popup-done (which self-closes) instead of /.
+  // The flag survives legacy Google/GitHub roundtrips because express-session
+  // persists through provider redirects.
+  const markOAuthModeIfRequested = (req: Request, _res: Response, next: NextFunction): void => {
+    if (req.query.popup === '1' && req.session) {
+      (req.session as unknown as { reAuthPopup?: boolean }).reAuthPopup = true;
+    }
+    if (req.query.mobile === '1' && req.session) {
+      (req.session as unknown as { mobileAuth?: boolean }).mobileAuth = true;
+    }
+    next();
+  };
+
+  const finishAuth = (req: Request, res: Response): void => {
+    const sess = req.session as unknown as { mobileAuth?: boolean; reAuthPopup?: boolean } | undefined;
+    if (sess && sess.mobileAuth) {
+      delete sess.mobileAuth;
+      const user = req.user as AuthUser | undefined;
+      if (!user) {
+        res.redirect(`${MOBILE_AUTH_CALLBACK_URL}?error=missing_user`);
+        return;
+      }
+      const code = issueMobileAuthCode(user);
+      res.redirect(`${MOBILE_AUTH_CALLBACK_URL}?code=${encodeURIComponent(code)}`);
+      return;
+    }
+    if (sess && sess.reAuthPopup) {
+      delete sess.reAuthPopup;
+      res.redirect('/auth/popup-done');
+      return;
+    }
+    res.redirect('/');
+  };
+
+  const loginAndFinish = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { mobile?: boolean; popup?: boolean } = {}): void => {
+    req.login(user, (loginErr) => {
+      if (loginErr) {
+        next(loginErr);
+        return;
+      }
+      if (mode.mobile && req.session) {
+        req.session.mobileAuth = true;
+      }
+      if (mode.popup && req.session) {
+        req.session.reAuthPopup = true;
+      }
+      finishAuth(req, res);
+    });
+  };
+
+  const loginAndFinishJson = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { mobile?: boolean; popup?: boolean } = {}): void => {
+    req.login(user, (loginErr) => {
+      if (loginErr) {
+        next(loginErr);
+        return;
+      }
+      const redirectTo = mode.mobile
+        ? `${MOBILE_AUTH_CALLBACK_URL}?code=${encodeURIComponent(issueMobileAuthCode(user))}`
+        : mode.popup ? '/auth/popup-done' : '/';
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          next(saveErr);
+          return;
+        }
+        res.json({ redirectTo, user: publicUser(user) });
+      });
+    });
+  };
+
+  const setupAllowed = (req: Request, body: AuthFormBody): boolean => {
+    if (isLocalRequest(req)) {
+      return true;
+    }
+    return Boolean(config.AUTH_SETUP_TOKEN) && stringField(body.setupToken) === config.AUTH_SETUP_TOKEN;
+  };
+
+  const establishMobileSession = async (
+    req: Request,
+    res: Response,
+    next: NextFunction,
+    user: AuthUser,
+    body: { deviceName?: unknown; platform?: unknown },
+  ): Promise<void> => {
+    const device = await localAuth.hasOwner()
+      ? await localAuth.createMobileDevice({
+        displayName: stringField(body.deviceName),
+        ip: req.ip,
+        userAgent: req.get('user-agent') || undefined,
+        platform: requestPlatform(req, stringField(body.platform)),
+      })
+      : null;
+
+    req.login(user, (loginErr) => {
+      if (loginErr) {
+        next(loginErr);
+        return;
+      }
+      if (device) {
+        req.session.mobileDeviceId = device.id;
+      }
+      if (!req.session.csrfToken) {
+        req.session.csrfToken = crypto.randomBytes(32).toString('hex');
+      }
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          next(saveErr);
+          return;
+        }
+        res.json({
+          user: publicUser(user),
+          csrfToken: req.session.csrfToken,
+          ...(device ? { device } : {}),
+        });
+      });
+    });
+  };
+
+  app.get('/api/auth/status', async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const setupRequired = !(await localAuth.hasOwner());
+      const passkeyCount = setupRequired ? 0 : (await localAuth.listPasskeys()).length;
+      const recovery = setupRequired
+        ? { configured: false, total: 0, remaining: 0, createdAt: null }
+        : await localAuth.getRecoveryStatus();
+      const policy = setupRequired
+        ? { passkeyRequired: false }
+        : await localAuth.getPolicy();
+      res.json({
+        setupRequired,
+        providers: {
+          password: true,
+          passkey: !setupRequired,
+          legacyOAuth: legacyOAuthEnabled,
+        },
+        passkeys: {
+          registered: passkeyCount,
+        },
+        policy,
+        recovery,
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/auth/setup', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (await localAuth.hasOwner()) {
+        res.redirect('/auth/login');
+        return;
+      }
+      res.send(renderSetupPage(req));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post('/auth/setup', authLimiter, authFormParsers, async (req: Request, res: Response, next: NextFunction) => {
+    const body = (req.body ?? {}) as AuthFormBody;
+    try {
+      if (await localAuth.hasOwner()) {
+        res.status(409).send(renderLoginPage(req, 'Owner account already exists.'));
+        return;
+      }
+      if (!setupAllowed(req, body)) {
+        res.status(403).send(renderSetupPage(req, 'Remote setup requires a valid setup token.'));
+        return;
+      }
+      const owner = await localAuth.createOwner({
+        email: stringField(body.email),
+        displayName: stringField(body.displayName),
+        password: stringField(body.password),
+      });
+      loginAndFinish(req, res, next, localUserFromOwner(owner));
+    } catch (err) {
+      if (err instanceof LocalAuthError) {
+        res.status(400).send(renderSetupPage(req, err.message));
+        return;
+      }
+      next(err);
+    }
+  });
+
+  app.post('/auth/login/password', authLimiter, authFormParsers, async (req: Request, res: Response, next: NextFunction) => {
+    const body = (req.body ?? {}) as AuthFormBody;
+    try {
+      const policy = await localAuth.getPolicy();
+      if (policy.passkeyRequired) {
+        res.status(403).send(renderLoginPage(req, 'Passkey login is required for this backend. Use a passkey or recovery code.'));
+        return;
+      }
+      const owner = await localAuth.verifyPassword(stringField(body.email), stringField(body.password));
+      if (!owner) {
+        res.status(401).send(renderLoginPage(req, 'Invalid email or password.'));
+        return;
+      }
+      loginAndFinish(req, res, next, localUserFromOwner(owner), {
+        mobile: body.mobile === '1',
+        popup: body.popup === '1',
+      });
+    } catch (err) {
+      if (err instanceof LocalAuthError && err.code === 'owner-missing') {
+        res.redirect('/auth/setup');
+        return;
+      }
+      next(err);
+    }
+  });
+
+  app.get('/auth/recovery', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!(await localAuth.hasOwner())) {
+        res.redirect('/auth/setup');
+        return;
+      }
+      res.send(renderRecoveryPage(req));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post('/auth/recovery/login', authLimiter, authFormParsers, async (req: Request, res: Response, next: NextFunction) => {
+    const body = (req.body ?? {}) as AuthFormBody;
+    try {
+      const owner = await localAuth.getOwner();
+      if (!owner) {
+        res.redirect('/auth/setup');
+        return;
+      }
+      if (stringField(body.email).trim().toLowerCase() !== owner.email) {
+        res.status(401).send(renderRecoveryPage(req, 'Invalid email or recovery code.'));
+        return;
+      }
+      const recoveredOwner = await localAuth.useRecoveryCode(stringField(body.recoveryCode));
+      if (!recoveredOwner) {
+        res.status(401).send(renderRecoveryPage(req, 'Invalid email or recovery code.'));
+        return;
+      }
+      loginAndFinish(req, res, next, localUserFromOwner(recoveredOwner), {
+        mobile: body.mobile === '1',
+        popup: body.popup === '1',
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/auth/passkeys', requireAuthenticatedApi, async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const passkeys = await localAuth.listPasskeys();
+      res.json({ passkeys: passkeys.map(publicPasskey) });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post('/api/auth/passkeys/register/options', express.json(), requireAuthenticatedApi, authApiCsrfGuard, async (req: Request, res: Response, next: NextFunction) => {
+    const body = (req.body ?? {}) as PasskeyRegistrationOptionsBody;
+    try {
+      const owner = await localAuth.getOwner();
+      if (!owner) {
+        res.status(404).json({ error: 'Owner account is not configured.' });
+        return;
+      }
+      const passkeys = await localAuth.listPasskeys();
+      const rpId = passkeyRpId(req);
+      const origin = requestOrigin(req);
+      const options = await generateRegistrationOptions({
+        rpName: 'Agent Cockpit',
+        rpID: rpId,
+        userID: Buffer.from(owner.id),
+        userName: owner.email,
+        userDisplayName: owner.displayName,
+        attestationType: 'none',
+        authenticatorSelection: {
+          residentKey: 'preferred',
+          userVerification: 'required',
+        },
+        excludeCredentials: passkeys.map(passkey => ({
+          id: passkey.credentialId,
+          transports: passkey.transports as WebAuthnCredential['transports'],
+        })),
+      });
+
+      req.session.passkeyRegistration = {
+        challenge: options.challenge,
+        rpId,
+        origin,
+        name: stringField(body.name) || undefined,
+      };
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          next(saveErr);
+          return;
+        }
+        res.json(options);
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post('/api/auth/passkeys/register/verify', express.json({ limit: '50kb' }), requireAuthenticatedApi, authApiCsrfGuard, async (req: Request, res: Response, next: NextFunction) => {
+    const body = (req.body ?? {}) as PasskeyRegistrationVerifyBody;
+    const ceremony = req.session.passkeyRegistration;
+    if (!ceremony) {
+      res.status(400).json({ error: 'Passkey registration was not started.' });
+      return;
+    }
+    try {
+      const response = body.response as RegistrationResponseJSON | undefined;
+      if (!response || typeof response.id !== 'string') {
+        res.status(400).json({ error: 'Passkey registration response is required.' });
+        return;
+      }
+      const verification = await verifyRegistrationResponse({
+        response,
+        expectedChallenge: ceremony.challenge,
+        expectedOrigin: ceremony.origin,
+        expectedRPID: ceremony.rpId,
+        requireUserVerification: true,
+      });
+      if (!verification.verified) {
+        res.status(400).json({ error: 'Passkey registration could not be verified.' });
+        return;
+      }
+
+      const credential = verification.registrationInfo.credential;
+      const passkey = await localAuth.createPasskey({
+        name: stringField(body.name) || ceremony.name,
+        credentialId: credential.id,
+        publicKey: Buffer.from(credential.publicKey).toString('base64url'),
+        counter: credential.counter,
+        transports: response.response.transports,
+      });
+      delete req.session.passkeyRegistration;
+      res.json({
+        passkey: publicPasskey(passkey),
+        passkeys: (await localAuth.listPasskeys()).map(publicPasskey),
+      });
+    } catch (err) {
+      if (err instanceof LocalAuthError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  app.post('/api/auth/passkeys/login/options', express.json(), authLimiter, async (req: Request, res: Response, next: NextFunction) => {
+    const body = (req.body ?? {}) as PasskeyAuthenticationOptionsBody;
+    try {
+      const owner = await localAuth.getOwner();
+      if (!owner) {
+        res.status(404).json({ error: 'Owner account is not configured.' });
+        return;
+      }
+      const passkeys = await localAuth.listPasskeys();
+      if (passkeys.length === 0) {
+        res.status(409).json({ error: 'No passkeys are registered for this backend.' });
+        return;
+      }
+      const rpId = passkeyRpId(req);
+      const origin = requestOrigin(req);
+      const options = await generateAuthenticationOptions({
+        rpID: rpId,
+        userVerification: 'required',
+        allowCredentials: passkeys.map(passkey => ({
+          id: passkey.credentialId,
+          transports: passkey.transports as WebAuthnCredential['transports'],
+        })),
+      });
+      req.session.passkeyAuthentication = {
+        challenge: options.challenge,
+        rpId,
+        origin,
+        mobile: body.mobile === '1',
+        popup: body.popup === '1',
+      };
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          next(saveErr);
+          return;
+        }
+        res.json(options);
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post('/api/auth/passkeys/login/verify', express.json({ limit: '50kb' }), authLimiter, async (req: Request, res: Response, next: NextFunction) => {
+    const body = (req.body ?? {}) as PasskeyAuthenticationVerifyBody;
+    const ceremony = req.session.passkeyAuthentication;
+    if (!ceremony) {
+      res.status(400).json({ error: 'Passkey login was not started.' });
+      return;
+    }
+    try {
+      const response = body.response as AuthenticationResponseJSON | undefined;
+      if (!response || typeof response.id !== 'string') {
+        res.status(400).json({ error: 'Passkey login response is required.' });
+        return;
+      }
+      const passkey = await localAuth.getPasskeyByCredentialId(response.id);
+      if (!passkey) {
+        res.status(400).json({ error: 'Passkey is not registered for this backend.' });
+        return;
+      }
+      const verification = await verifyAuthenticationResponse({
+        response,
+        expectedChallenge: ceremony.challenge,
+        expectedOrigin: ceremony.origin,
+        expectedRPID: ceremony.rpId,
+        credential: storedCredential(passkey),
+        requireUserVerification: true,
+      });
+      if (!verification.verified) {
+        res.status(401).json({ error: 'Passkey login could not be verified.' });
+        return;
+      }
+      await localAuth.updatePasskeyUsage(
+        verification.authenticationInfo.credentialID,
+        verification.authenticationInfo.newCounter,
+      );
+      const owner = await localAuth.getOwner();
+      if (!owner) {
+        res.status(404).json({ error: 'Owner account is not configured.' });
+        return;
+      }
+      delete req.session.passkeyAuthentication;
+      loginAndFinishJson(req, res, next, localUserFromOwner(owner), {
+        mobile: ceremony.mobile,
+        popup: ceremony.popup,
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.patch('/api/auth/passkeys/:id', express.json(), requireAuthenticatedApi, authApiCsrfGuard, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const name = stringField((req.body as { name?: unknown } | undefined)?.name);
+      const passkey = await localAuth.renamePasskey(stringField(req.params.id), name);
+      if (!passkey) {
+        res.status(404).json({ error: 'Passkey not found' });
+        return;
+      }
+      res.json({ passkey: publicPasskey(passkey), passkeys: (await localAuth.listPasskeys()).map(publicPasskey) });
+    } catch (err) {
+      if (err instanceof LocalAuthError) {
+        res.status(400).json({ error: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  app.delete('/api/auth/passkeys/:id', requireAuthenticatedApi, authApiCsrfGuard, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const passkey = await localAuth.deletePasskey(stringField(req.params.id));
+      if (!passkey) {
+        res.status(404).json({ error: 'Passkey not found' });
+        return;
+      }
+      res.json({ passkeys: (await localAuth.listPasskeys()).map(publicPasskey) });
+    } catch (err) {
+      if (err instanceof LocalAuthError) {
+        res.status(err.code === 'unsafe-policy' ? 409 : 400).json({ error: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  app.post('/api/auth/recovery/regenerate', express.json(), requireAuthenticatedApi, authApiCsrfGuard, async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const recoveryCodes = await localAuth.regenerateRecoveryCodes();
+      res.json({
+        recoveryCodes,
+        recovery: await localAuth.getRecoveryStatus(),
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.patch('/api/auth/policy', express.json(), requireAuthenticatedApi, authApiCsrfGuard, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const passkeyRequired = (req.body as { passkeyRequired?: unknown } | undefined)?.passkeyRequired;
+      if (typeof passkeyRequired !== 'boolean') {
+        res.status(400).json({ error: 'passkeyRequired must be a boolean' });
+        return;
+      }
+      res.json({ policy: await localAuth.setPasskeyRequired(passkeyRequired) });
+    } catch (err) {
+      if (err instanceof LocalAuthError) {
+        res.status(err.code === 'unsafe-policy' ? 409 : 400).json({ error: err.message });
+        return;
+      }
+      next(err);
+    }
+  });
+
+  app.post('/api/mobile-pairing/challenges', express.json(), requireAuthenticatedApi, authApiCsrfGuard, async (req: Request, res: Response, next: NextFunction) => {
+    const user = currentAuthUser(req);
+    if (!user) {
+      res.status(401).json({ error: 'Not authenticated' });
+      return;
+    }
+
+    try {
+      const challenge = issueMobilePairingChallenge(user);
+      const pairingUrl = new URL('agentcockpit://pair');
+      pairingUrl.searchParams.set('server', requestOrigin(req));
+      pairingUrl.searchParams.set('challengeId', challenge.challengeId);
+      pairingUrl.searchParams.set('code', challenge.pairingCode);
+      const pairingUrlString = pairingUrl.toString();
+      const qrCodeDataUrl = await QRCode.toDataURL(pairingUrlString, {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 240,
+      });
+      res.json({
+        ...challenge,
+        pairingUrl: pairingUrlString,
+        qrCodeDataUrl,
+      });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post('/api/mobile-pairing/exchange', express.json(), authLimiter, async (req: Request, res: Response, next: NextFunction) => {
+    const body = (req.body ?? {}) as MobilePairingExchangeBody;
+    const user = consumeMobilePairingChallenge(stringField(body.challengeId), stringField(body.code));
+    if (!user) {
+      res.status(400).json({ error: 'Invalid or expired pairing code' });
+      return;
+    }
+
+    try {
+      await establishMobileSession(req, res, next, user, body);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/api/mobile-devices', requireAuthenticatedApi, async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      res.json({ devices: await localAuth.listMobileDevices() });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.delete('/api/mobile-devices/:id', requireAuthenticatedApi, authApiCsrfGuard, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const device = await localAuth.revokeMobileDevice(stringField(req.params.id));
+      if (!device) {
+        res.status(404).json({ error: 'Mobile device not found' });
+        return;
+      }
+      res.json({ device });
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.post('/api/mobile-auth/exchange', express.json(), async (req: Request, res: Response, next: NextFunction) => {
+    const body = (req.body ?? {}) as MobileAuthExchangeBody;
+    const code = stringField(body.code);
+    const user = consumeMobileAuthCode(code);
+    if (!user) {
+      res.status(400).json({ error: 'Invalid or expired mobile auth code' });
+      return;
+    }
+
+    try {
+      await establishMobileSession(req, res, next, user, body);
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/auth/login', async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (!(await localAuth.hasOwner())) {
+        res.redirect('/auth/setup');
+        return;
+      }
+      res.send(renderLoginPage(req));
+    } catch (err) {
+      next(err);
+    }
+  });
+
+  app.get('/auth/mobile-login', (req: Request, res: Response) => {
+    const query = req.query.popup === '1' ? '?popup=1&mobile=1' : '?mobile=1';
+    res.redirect(`/auth/login${query}`);
   });
 
   // Popup-mode terminal page: the re-auth popup lands here instead of /, posts
@@ -449,15 +1549,17 @@ export function setupAuth(app: Express, config: AppConfig): void {
   });
 
   // ── Google OAuth ────────────────────────────────────────────────────────────
-  app.get('/auth/google', authLimiter, markPopupIfRequested, passport.authenticate('google', { scope: ['profile', 'email'] }));
+  if (hasGoogle) {
+    app.get('/auth/google', authLimiter, markOAuthModeIfRequested, passport.authenticate('google', { scope: ['profile', 'email'] }));
 
-  app.get('/auth/google/callback', authLimiter,
-    passport.authenticate('google', { failureRedirect: '/auth/denied' }),
-    finishAuth);
+    app.get('/auth/google/callback', authLimiter,
+      passport.authenticate('google', { failureRedirect: '/auth/denied' }),
+      finishAuth);
+  }
 
   // ── GitHub OAuth ────────────────────────────────────────────────────────────
   if (hasGitHub) {
-    app.get('/auth/github', authLimiter, markPopupIfRequested, passport.authenticate('github', { scope: ['user:email'] }));
+    app.get('/auth/github', authLimiter, markOAuthModeIfRequested, passport.authenticate('github', { scope: ['user:email'] }));
 
     app.get('/auth/github/callback', authLimiter,
       passport.authenticate('github', { failureRedirect: '/auth/denied' }),
@@ -506,7 +1608,7 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
 }
 
 // Returns the logged-in user's display name + identity provider for the
-// sidebar footer. Requests that bypass OAuth (localhost) and arrive without a
+// sidebar footer. Requests that bypass auth (localhost) and arrive without a
 // user object get null fields so the client can render a neutral placeholder.
 export function meHandler(req: Request, res: Response): void {
   const u = req.user as { displayName?: string; email?: string; provider?: AuthProvider } | undefined;

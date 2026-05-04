@@ -54,9 +54,9 @@
     state.csrfToken = body.csrfToken;
   }
 
-  /* Returns the logged-in user's display name and identity provider. Used by
-     the sidebar footer to render the provider's logo + name. Local-only dev
-     sessions may return null fields — the caller renders a neutral fallback. */
+  /* Returns the logged-in user's display name and auth provider. Used by
+     the sidebar footer to render the local owner or provider identity. Local-only
+     dev sessions may return null fields — the caller renders a neutral fallback. */
   async function getMe(){
     const res = await fetch(apiUrl('me'), { credentials: 'same-origin' });
     if (res.status === 401) {
@@ -78,6 +78,36 @@
       body = JSON.stringify(body);
     }
     const res = await fetch(chatUrl(path), Object.assign({}, opts, { headers, body, credentials: 'same-origin' }));
+    if (res.status === 401) {
+      if (state.onSessionExpired) state.onSessionExpired();
+      const e = new Error('Session expired');
+      e.status = res.status;
+      throw e;
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      const e = new Error(err.error || res.statusText || `HTTP ${res.status}`);
+      e.status = res.status;
+      throw e;
+    }
+    return res;
+  }
+
+  async function authFetch(path, opts){
+    opts = opts || {};
+    const method = (opts.method || 'GET').toUpperCase();
+    const needsCsrf = opts.csrf !== false && !['GET', 'HEAD', 'OPTIONS'].includes(method);
+    if (needsCsrf && !state.csrfToken) await fetchCsrfToken();
+    const headers = Object.assign({}, opts.headers);
+    if (needsCsrf && state.csrfToken) headers['x-csrf-token'] = state.csrfToken;
+    let body = opts.body;
+    if (body && typeof body === 'object' && !(body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+      body = JSON.stringify(body);
+    }
+    const fetchOpts = Object.assign({}, opts, { method, headers, body, credentials: 'same-origin' });
+    delete fetchOpts.csrf;
+    const res = await fetch(apiUrl(path), fetchOpts);
     if (res.status === 401) {
       if (state.onSessionExpired) state.onSessionExpired();
       const e = new Error('Session expired');
@@ -608,6 +638,44 @@
     ).then(r => r.json()),
   };
 
+  const AuthApi = {
+    status: () => authFetch('auth/status', { csrf: false }).then(r => r.json()),
+    listPasskeys: () => authFetch('auth/passkeys').then(r => r.json()),
+    startPasskeyRegistration: (name) => authFetch(
+      'auth/passkeys/register/options',
+      { method: 'POST', body: { name: name || '' } },
+    ).then(r => r.json()),
+    verifyPasskeyRegistration: (name, response) => authFetch(
+      'auth/passkeys/register/verify',
+      { method: 'POST', body: { name: name || '', response } },
+    ).then(r => r.json()),
+    renamePasskey: (id, name) => authFetch(
+      'auth/passkeys/' + encodeURIComponent(id),
+      { method: 'PATCH', body: { name: name || '' } },
+    ).then(r => r.json()),
+    deletePasskey: (id) => authFetch(
+      'auth/passkeys/' + encodeURIComponent(id),
+      { method: 'DELETE' },
+    ).then(r => r.json()),
+    regenerateRecoveryCodes: () => authFetch(
+      'auth/recovery/regenerate',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    updatePolicy: (patch) => authFetch(
+      'auth/policy',
+      { method: 'PATCH', body: patch || {} },
+    ).then(r => r.json()),
+    createMobilePairingChallenge: () => authFetch(
+      'mobile-pairing/challenges',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    listMobileDevices: () => authFetch('mobile-devices').then(r => r.json()),
+    revokeMobileDevice: (deviceId) => authFetch(
+      'mobile-devices/' + encodeURIComponent(deviceId),
+      { method: 'DELETE' },
+    ).then(r => r.json()),
+  };
+
   /* Per-conversation file attachments. The composer's attachment tray drives
      these; each upload lands in the conv's artifacts dir and the chosen
      server path is embedded in the next /message body as `[Uploaded files: …]`
@@ -720,6 +788,7 @@
     kb: KbApi,
     explorer: ExplorerApi,
     settings: SettingsApi,
+    auth: AuthApi,
     workspace: WorkspaceApi,
     conv: ConvApi,
   };

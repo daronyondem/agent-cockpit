@@ -12,8 +12,9 @@
 | 4. Backend Services | [spec-backend-services.md](spec-backend-services.md) | ChatService, adapter system, KB pipeline, update service |
 | 5. Server Initialization & Security | [spec-server-security.md](spec-server-security.md) | Config, startup order, auth, CSRF, CSP |
 | 6. Frontend Behavior | [spec-frontend.md](spec-frontend.md) | SPA architecture, streaming, KB browser, settings |
-| 7. Export, Limitations & Deployment | [spec-deployment.md](spec-deployment.md) | Markdown export, known limitations, deployment |
-| 8. Testing & CI/CD | [spec-testing.md](spec-testing.md) | Test suite, test files, CI workflows |
+| 7. iOS Native Client | [spec-ios.md](spec-ios.md) | SwiftUI native client architecture, REST/WebSocket bridge, simulator requirements |
+| 8. Export, Limitations & Deployment | [spec-deployment.md](spec-deployment.md) | Markdown export, known limitations, deployment |
+| 9. Testing & CI/CD | [spec-testing.md](spec-testing.md) | Test suite, test files, CI workflows |
 
 ### Design Documents
 
@@ -50,5 +51,5 @@ Install on a machine with Claude Code CLI. Expose via a tunnel (e.g., ngrok). Ac
 ### Key Principles
 
 - CLI and web interface **must** run on the same machine — spawns local CLI processes, not remote API calls.
-- OAuth protects access. Only whitelisted email addresses can log in.
+- First-party local owner auth protects access. Legacy OAuth is optional and disabled by default.
 - Local requests (localhost/127.0.0.1/::1) bypass authentication for development convenience.

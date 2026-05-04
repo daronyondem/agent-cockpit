@@ -2,8 +2,9 @@
 
 /* SettingsScreen — full-screen modal-swap pane for V2 app settings.
    Mirrors the V1 layout (General / CLI Config / Memory / Knowledge Base /
-   Usage / Server) backed by `GET/PUT /settings` plus `GET /backends`, `GET /usage-stats`
-   (+ DELETE), and `POST /server/restart`. All form tabs share a single
+   Security / Usage / Server) backed by `GET/PUT /settings` plus `GET /backends`,
+   auth/security endpoints, `GET /usage-stats` (+ DELETE), and `POST /server/restart`.
+   All form tabs share a single
    in-memory `settings` object; clicking Save on any form tab POSTs the full
    merged shape so the user doesn't have to remember to save from one specific
    tab (V1 only had Save on General). */
@@ -13,6 +14,7 @@ const SETTINGS_TABS = [
   { id: 'cli',     label: 'CLI Config' },
   { id: 'memory',  label: 'Memory' },
   { id: 'kb',      label: 'Knowledge Base' },
+  { id: 'security', label: 'Security' },
   { id: 'usage',   label: 'Usage' },
   { id: 'server',  label: 'Server' },
 ];
@@ -301,6 +303,7 @@ function SettingsScreen({ onClose }){
             : tab === 'cli'     ? <CliProfilesTab settings={settings} backends={backends} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'memory'  ? <SettingsMemoryTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'kb'      ? <SettingsKbTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
+            : tab === 'security' ? <SecurityTab/>
             : tab === 'usage'   ? <UsageTab/>
             : tab === 'server'  ? <ServerTab/>
             : null}
@@ -359,7 +362,7 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
   }
 
   return (
-    <div className="settings-form">
+    <div className="settings-form settings-form-wide">
       <Field label="Theme" hint="System follows your OS appearance.">
         <Seg
           value={settings.theme || 'system'}
@@ -941,7 +944,7 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
   }
 
   return (
-    <div className="settings-form">
+    <div className="settings-form settings-form-wide">
       <p className="settings-desc u-dim">
         CLI profile used by the workspace memory helper when formatting and deduping captured notes.
         Falls back to the default profile when unset.
@@ -1096,7 +1099,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
   }
 
   return (
-    <div className="settings-form">
+    <div className="settings-form settings-form-wide">
       <p className="settings-desc u-dim">
         Per-CLI defaults for the ingestion, digestion, and dreaming pipelines. Embedding
         configuration lives on each workspace's KB Settings tab.
@@ -1217,6 +1220,536 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
 
       <div className="settings-actions">
         <button className="btn" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────── Security tab ──────────────────── */
+
+function fmtDateTime(value){
+  if (!value) return 'Never';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value);
+  return d.toLocaleString(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+}
+
+function recoveryCodeText(codes){
+  return (codes || []).join('\n');
+}
+
+async function copySecurityText(text, toast, label){
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    toast.success((label || 'Value') + ' copied');
+  } catch (err) {
+    toast.error('Copy failed');
+  }
+}
+
+function webAuthnAvailable(){
+  return !!(window.PublicKeyCredential && navigator.credentials);
+}
+
+function base64urlToBuffer(value){
+  const padded = value + '='.repeat((4 - value.length % 4) % 4);
+  const binary = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes.buffer;
+}
+
+function bufferToBase64url(buffer){
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function decodePasskeyRegistrationOptions(options){
+  const next = { ...options };
+  next.challenge = base64urlToBuffer(next.challenge);
+  next.user = { ...next.user, id: base64urlToBuffer(next.user.id) };
+  next.excludeCredentials = (next.excludeCredentials || []).map(credential => ({
+    ...credential,
+    id: base64urlToBuffer(credential.id),
+  }));
+  return next;
+}
+
+function encodePasskeyRegistrationCredential(credential){
+  const response = credential.response;
+  return {
+    id: credential.id,
+    rawId: bufferToBase64url(credential.rawId),
+    type: credential.type,
+    authenticatorAttachment: credential.authenticatorAttachment || undefined,
+    response: {
+      clientDataJSON: bufferToBase64url(response.clientDataJSON),
+      attestationObject: bufferToBase64url(response.attestationObject),
+      transports: response.getTransports ? response.getTransports() : undefined,
+    },
+    clientExtensionResults: credential.getClientExtensionResults(),
+  };
+}
+
+function SecurityTab(){
+  const dialog = useDialog();
+  const toast = useToasts();
+  const [status, setStatus] = React.useState(null);
+  const [passkeys, setPasskeys] = React.useState([]);
+  const [devices, setDevices] = React.useState([]);
+  const [pairing, setPairing] = React.useState(null);
+  const [recoveryCodes, setRecoveryCodes] = React.useState([]);
+  const [loading, setLoading] = React.useState(true);
+  const [error, setError] = React.useState(null);
+  const [busy, setBusy] = React.useState('');
+
+  React.useEffect(() => { reload(); }, []);
+
+  async function reload(){
+    setLoading(true);
+    setError(null);
+    try {
+      const [nextStatus, nextPasskeys, nextDevices] = await Promise.all([
+        AgentApi.auth.status(),
+        AgentApi.auth.listPasskeys(),
+        AgentApi.auth.listMobileDevices(),
+      ]);
+      setStatus(nextStatus || {});
+      setPasskeys((nextPasskeys && nextPasskeys.passkeys) || []);
+      setDevices((nextDevices && nextDevices.devices) || []);
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function regenerateRecoveryCodes(anchor){
+    const ok = await dialog.confirm({
+      anchor,
+      destructive: true,
+      title: 'Regenerate recovery codes?',
+      body: 'Existing recovery codes will stop working. Store the new codes before leaving this screen.',
+      confirmLabel: 'Regenerate',
+    });
+    if (!ok) return;
+    setBusy('recovery');
+    try {
+      const res = await AgentApi.auth.regenerateRecoveryCodes();
+      setRecoveryCodes((res && res.recoveryCodes) || []);
+      if (res && res.recovery) {
+        setStatus(prev => ({ ...(prev || {}), recovery: res.recovery }));
+      }
+      toast.success('Recovery codes regenerated');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Regenerate failed', body: err.message || String(err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function updatePasskeyPolicy(required, anchor){
+    if (required) {
+      const ok = await dialog.confirm({
+        anchor,
+        title: 'Require passkeys?',
+        body: 'Password login will be blocked until recovery login disables this policy.',
+        confirmLabel: 'Require passkeys',
+      });
+      if (!ok) return;
+    }
+    setBusy('policy');
+    try {
+      const res = await AgentApi.auth.updatePolicy({ passkeyRequired: !!required });
+      if (res && res.policy) {
+        setStatus(prev => ({ ...(prev || {}), policy: res.policy }));
+      }
+      toast.success(required ? 'Passkey requirement enabled' : 'Passkey requirement disabled');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Policy update failed', body: err.message || String(err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  function updatePasskeyState(nextPasskeys){
+    setPasskeys(nextPasskeys || []);
+    setStatus(prev => ({
+      ...(prev || {}),
+      passkeys: { registered: (nextPasskeys || []).length },
+    }));
+  }
+
+  async function addPasskey(anchor){
+    if (!webAuthnAvailable()) {
+      await dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Passkeys unavailable',
+        body: 'This browser does not expose WebAuthn passkey APIs.',
+      });
+      return;
+    }
+    const rawName = await dialog.prompt({
+      anchor,
+      title: 'Name this passkey',
+      inputLabel: 'Passkey name',
+      inputDefault: 'This device',
+      confirmLabel: 'Continue',
+    });
+    const name = (rawName || '').trim();
+    if (!name) return;
+    setBusy('passkey');
+    try {
+      const options = await AgentApi.auth.startPasskeyRegistration(name);
+      const credential = await navigator.credentials.create({
+        publicKey: decodePasskeyRegistrationOptions(options),
+      });
+      if (!credential) throw new Error('Passkey registration was cancelled.');
+      const res = await AgentApi.auth.verifyPasskeyRegistration(
+        name,
+        encodePasskeyRegistrationCredential(credential),
+      );
+      updatePasskeyState((res && res.passkeys) || []);
+      toast.success('Passkey registered');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Passkey registration failed', body: err.message || String(err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function renamePasskey(passkey, anchor){
+    const rawName = await dialog.prompt({
+      anchor,
+      title: 'Rename passkey',
+      inputLabel: 'Passkey name',
+      inputDefault: passkey.name || '',
+      confirmLabel: 'Rename',
+    });
+    const name = (rawName || '').trim();
+    if (!name || name === passkey.name) return;
+    setBusy('passkey:' + passkey.id);
+    try {
+      const res = await AgentApi.auth.renamePasskey(passkey.id, name);
+      updatePasskeyState((res && res.passkeys) || []);
+      toast.success('Passkey renamed');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Rename failed', body: err.message || String(err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function deletePasskey(passkey, anchor){
+    const ok = await dialog.confirm({
+      anchor,
+      destructive: true,
+      title: 'Delete this passkey?',
+      body: `${passkey.name || 'This passkey'} will no longer sign in to this backend.`,
+      confirmLabel: 'Delete',
+    });
+    if (!ok) return;
+    setBusy('passkey:' + passkey.id);
+    try {
+      const res = await AgentApi.auth.deletePasskey(passkey.id);
+      updatePasskeyState((res && res.passkeys) || []);
+      toast.success('Passkey deleted');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Delete failed', body: err.message || String(err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function createPairingChallenge(anchor){
+    setBusy('pairing');
+    try {
+      const res = await AgentApi.auth.createMobilePairingChallenge();
+      setPairing(res || null);
+      toast.success('Pairing code created');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Pairing failed', body: err.message || String(err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  async function revokeDevice(device, anchor){
+    const ok = await dialog.confirm({
+      anchor,
+      destructive: true,
+      title: 'Revoke this device?',
+      body: `${device.displayName || 'This device'} will be signed out on its next request.`,
+      confirmLabel: 'Revoke',
+    });
+    if (!ok) return;
+    setBusy('device:' + device.id);
+    try {
+      await AgentApi.auth.revokeMobileDevice(device.id);
+      toast.success('Device revoked');
+      await reload();
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Revoke failed', body: err.message || String(err) });
+    } finally {
+      setBusy('');
+    }
+  }
+
+  if (loading) return <div className="u-dim" style={{padding:'16px'}}>Loading...</div>;
+  if (error) return <div className="u-err" style={{padding:'16px'}}>{error}</div>;
+
+  const providers = (status && status.providers) || {};
+  const recovery = (status && status.recovery) || {};
+  const policy = (status && status.policy) || {};
+  const passkeyAvailable = providers.passkey === true;
+  const passkeyCount = passkeys.length || ((status && status.passkeys && status.passkeys.registered) || 0);
+  const passkeyRequired = !!policy.passkeyRequired;
+  const canEnablePasskeyRequired = passkeyAvailable && passkeyCount > 0 && (recovery.remaining || 0) > 0;
+  const disablePolicyToggle = busy === 'policy' || (!passkeyRequired && !canEnablePasskeyRequired);
+  const activeDevices = devices.filter(device => !device.revokedAt);
+  const revokedDevices = devices.filter(device => device.revokedAt);
+  const recoveryText = recoveryCodeText(recoveryCodes);
+
+  return (
+    <div className="settings-security settings-form-wide">
+      <div className="pane-block">
+        <div className="pane-block-head">
+          <span>Owner login</span>
+        </div>
+        <div className="security-panel">
+          <div className="security-kv">
+            <div>
+              <div className="lbl">Password login</div>
+              <div className="val">{providers.password ? 'Enabled' : 'Disabled'}</div>
+            </div>
+            <div>
+              <div className="lbl">Passkeys</div>
+              <div className="val">{passkeyAvailable ? `${passkeyCount} registered` : 'Unavailable'}</div>
+            </div>
+            <div>
+              <div className="lbl">Legacy OAuth</div>
+              <div className="val">{providers.legacyOAuth ? 'Enabled' : 'Disabled'}</div>
+            </div>
+          </div>
+          <div className="security-policy-row">
+            <label className={`toggle ${disablePolicyToggle ? 'disabled' : ''}`}>
+              <input
+                type="checkbox"
+                checked={passkeyRequired}
+                disabled={disablePolicyToggle}
+                onChange={(e) => updatePasskeyPolicy(e.target.checked, e.currentTarget)}
+              />
+              <span className="tgl"/>
+              <span>Require passkey for login</span>
+            </label>
+            {!canEnablePasskeyRequired && !passkeyRequired ? (
+              <span className="u-dim">Register a passkey and keep at least one recovery code before requiring passkeys.</span>
+            ) : null}
+          </div>
+        </div>
+      </div>
+
+      <div className="pane-block">
+        <div className="pane-block-head">
+          <span>Passkeys</span>
+          <span className="spacer"/>
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={busy === 'passkey'}
+            onClick={(e) => addPasskey(e.currentTarget)}
+          >{busy === 'passkey' ? 'Registering...' : 'Add passkey'}</button>
+        </div>
+        {passkeys.length === 0 ? (
+          <div className="security-panel u-dim">No passkeys have been registered.</div>
+        ) : (
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Created</th>
+                <th>Last used</th>
+                <th>Transports</th>
+                <th className="r">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {passkeys.map(passkey => (
+                <tr key={passkey.id}>
+                  <td>{passkey.name || 'Passkey'}</td>
+                  <td>{fmtDateTime(passkey.createdAt)}</td>
+                  <td>{fmtDateTime(passkey.lastUsedAt)}</td>
+                  <td>{(passkey.transports || []).join(', ') || '-'}</td>
+                  <td className="r">
+                    <span className="security-row-actions">
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        disabled={busy === 'passkey:' + passkey.id}
+                        onClick={(e) => renamePasskey(passkey, e.currentTarget)}
+                      >Rename</button>
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        disabled={busy === 'passkey:' + passkey.id}
+                        onClick={(e) => deletePasskey(passkey, e.currentTarget)}
+                      >Delete</button>
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="pane-block">
+        <div className="pane-block-head">
+          <span>Recovery codes</span>
+          <span className="spacer"/>
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={busy === 'recovery'}
+            onClick={(e) => regenerateRecoveryCodes(e.currentTarget)}
+          >{busy === 'recovery' ? 'Regenerating...' : 'Regenerate'}</button>
+        </div>
+        <div className="security-panel">
+          <div className="security-kv">
+            <div>
+              <div className="lbl">Status</div>
+              <div className="val">{recovery.configured ? 'Configured' : 'Not configured'}</div>
+            </div>
+            <div>
+              <div className="lbl">Remaining</div>
+              <div className="val">{recovery.remaining || 0} / {recovery.total || 0}</div>
+            </div>
+            <div>
+              <div className="lbl">Created</div>
+              <div className="val">{fmtDateTime(recovery.createdAt)}</div>
+            </div>
+          </div>
+          {recoveryCodes.length ? (
+            <div className="security-secret-block">
+              <div className="security-secret-head">
+                <span>New recovery codes</span>
+                <button
+                  type="button"
+                  className="btn ghost"
+                  onClick={() => copySecurityText(recoveryText, toast, 'Recovery codes')}
+                >Copy</button>
+              </div>
+              <textarea className="ta" rows={Math.min(10, Math.max(4, recoveryCodes.length))} readOnly value={recoveryText}/>
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="pane-block">
+        <div className="pane-block-head">
+          <span>Mobile pairing</span>
+          <span className="spacer"/>
+          <button
+            type="button"
+            className="btn ghost"
+            disabled={busy === 'pairing'}
+            onClick={(e) => createPairingChallenge(e.currentTarget)}
+          >{busy === 'pairing' ? 'Creating...' : 'Create pairing code'}</button>
+        </div>
+        <div className="security-panel">
+          {pairing ? (
+            <div className="security-pairing-content">
+              {pairing.qrCodeDataUrl ? (
+                <div className="security-pairing-qr">
+                  <img src={pairing.qrCodeDataUrl} alt="Mobile pairing QR code"/>
+                </div>
+              ) : null}
+              <div className="security-pairing-grid">
+                <Field label="Challenge ID">
+                  <input className="u-mono" readOnly value={pairing.challengeId || ''}/>
+                </Field>
+                <Field label="Pairing code">
+                  <input className="u-mono" readOnly value={pairing.pairingCode || ''}/>
+                </Field>
+                <Field label="Expires">
+                  <input readOnly value={fmtDateTime(pairing.expiresAt)}/>
+                </Field>
+                <div className="settings-actions">
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => copySecurityText(pairing.pairingCode, toast, 'Pairing code')}
+                  >Copy code</button>
+                  <button
+                    type="button"
+                    className="btn ghost"
+                    onClick={() => copySecurityText(pairing.pairingUrl, toast, 'Pairing URL')}
+                  >Copy URL</button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="u-dim">Create a five-minute code, then enter it in the iOS app.</div>
+          )}
+        </div>
+      </div>
+
+      <div className="pane-block">
+        <div className="pane-block-head">
+          <span>Paired devices</span>
+          <span className="spacer"/>
+          <span className="u-dim u-mono">{activeDevices.length} active</span>
+        </div>
+        {devices.length === 0 ? (
+          <div className="security-panel u-dim">No mobile devices have been paired.</div>
+        ) : (
+          <table className="tbl">
+            <thead>
+              <tr>
+                <th>Device</th>
+                <th>Platform</th>
+                <th>Last online</th>
+                <th>Status</th>
+                <th className="r">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {activeDevices.concat(revokedDevices).map(device => (
+                <tr key={device.id}>
+                  <td>
+                    <div>{device.displayName || 'Mobile device'}</div>
+                    <div className="u-dim u-mono" style={{fontSize:11}}>{device.id}</div>
+                  </td>
+                  <td>{device.platform || 'Mobile'}</td>
+                  <td>{fmtDateTime(device.lastSeenAt)}</td>
+                  <td>{device.revokedAt ? 'Revoked' : 'Active'}</td>
+                  <td className="r">
+                    {device.revokedAt ? (
+                      <span className="u-dim">-</span>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn ghost"
+                        disabled={busy === 'device:' + device.id}
+                        onClick={(e) => revokeDevice(device, e.currentTarget)}
+                      >{busy === 'device:' + device.id ? 'Revoking...' : 'Revoke'}</button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </div>
   );
@@ -1561,7 +2094,7 @@ function ServerTab(){
   }
 
   return (
-    <div className="settings-form">
+    <div className="settings-form settings-form-wide">
       <p className="settings-desc u-dim">
         Restart the Agent Cockpit server process under pm2. Useful after upgrading or
         editing config files. Active conversation streams will be aborted.

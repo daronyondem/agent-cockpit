@@ -1,3 +1,4 @@
+import path from 'path';
 import dotenv from 'dotenv';
 import type { AppConfig, CodexApprovalPolicy, CodexSandboxMode } from '../types';
 
@@ -23,6 +24,9 @@ const config: AppConfig = {
   GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET,
   GITHUB_CALLBACK_URL: process.env.GITHUB_CALLBACK_URL,
   ALLOWED_EMAIL: process.env.ALLOWED_EMAIL || '',
+  AUTH_DATA_DIR: process.env.AUTH_DATA_DIR || path.join(process.cwd(), 'data', 'auth'),
+  AUTH_SETUP_TOKEN: process.env.AUTH_SETUP_TOKEN || '',
+  AUTH_ENABLE_LEGACY_OAUTH: process.env.AUTH_ENABLE_LEGACY_OAUTH === 'true',
   DEFAULT_WORKSPACE: process.env.DEFAULT_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`,
   BASE_PATH: process.env.BASE_PATH || '',
   CODEX_APPROVAL_POLICY: parseEnum(process.env.CODEX_APPROVAL_POLICY, CODEX_APPROVAL_POLICIES, 'on-request', 'CODEX_APPROVAL_POLICY'),
