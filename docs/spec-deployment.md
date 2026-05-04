@@ -87,4 +87,4 @@ The Vite dev server listens on port `5174` and proxies `/api`, `/auth`, and `/lo
 npm run mobile:build
 ```
 
-The build writes to `public/mobile/`, which the existing Express static mount serves at `/mobile/` after normal authentication. A phone can open `https://<agent-cockpit-host>/mobile/` and use Add to Home Screen for an installable PWA. No Xcode, Expo Go, EAS, Apple signing, TestFlight, or App Store distribution is required for the supported mobile path.
+The build writes to `public/mobile/`, including the generated shell, manifest, hashed JS/CSS, SVG icon, PNG manifest icons, and 180x180 `apple-touch-icon.png` for iOS home-screen installs. The existing Express static mount serves these files at `/mobile/` after normal authentication. A phone can open `https://<agent-cockpit-host>/mobile/` and use Add to Home Screen for an installable PWA. No Xcode, Expo Go, EAS, Apple signing, TestFlight, or App Store distribution is required for the supported mobile path.

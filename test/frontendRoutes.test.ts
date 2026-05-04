@@ -75,12 +75,20 @@ describe('frontend routes', () => {
       expect(mobile.body).toContain('<div id="root"');
       expect(mobile.body).toContain('Agent Cockpit Mobile');
       expect(mobile.body).toContain('/mobile/manifest.webmanifest');
+      expect(mobile.body).toContain('/mobile/apple-touch-icon.png');
+      expect(mobile.body).toContain('/mobile/icon-192.png');
       expect(mobile.body).toMatch(/\/mobile\/assets\/index-[A-Za-z0-9_-]+\.js/);
 
       const manifest = await makeRequest(server, '/mobile/manifest.webmanifest');
       expect(manifest.status).toBe(200);
       expect(manifest.headers['content-type']).toMatch(/application\/manifest\+json|application\/octet-stream|application\/json/);
       expect(manifest.body).toContain('"start_url": "/mobile/"');
+      expect(manifest.body).toContain('"src": "/mobile/icon-192.png"');
+      expect(manifest.body).toContain('"src": "/mobile/icon-512.png"');
+
+      const appleTouchIcon = await makeRequest(server, '/mobile/apple-touch-icon.png');
+      expect(appleTouchIcon.status).toBe(200);
+      expect(appleTouchIcon.headers['content-type']).toMatch(/image\/png/);
 
       for (const removedPath of ['/legacy/', '/index.html', '/styles.css', '/js/main.js', '/v2/deck.html']) {
         const res = await makeRequest(server, removedPath);
