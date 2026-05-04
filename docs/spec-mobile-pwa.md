@@ -50,6 +50,7 @@ The PWA runs in the phone browser or as an installed home-screen web app. It doe
 3. Once loaded, the PWA calls same-origin `/api/me`, `/api/chat/settings`, `/api/chat/backends`, `/api/chat/active-streams`, and `/api/chat/conversations`.
 4. REST calls use `credentials: "same-origin"`, the browser's `connect.sid` cookie, and CSRF tokens from `GET /api/csrf-token`.
 5. Streaming uses `ws(s)://<same-origin>/api/chat/conversations/:id/ws` and sends `{ "type": "reconnect" }` on open.
+6. While the conversation list is visible, the PWA opens passive WebSocket monitors for conversations returned by `/api/chat/active-streams`. Those sockets use the same reconnect contract as chat views, ignore text deltas, react to `assistant_message`, `title_updated`, terminal `error`, `done`, and interaction-needed `tool_activity` frames, and refresh the list when a stream reaches a terminal state. The list also refreshes on focus/visibility return and every 15 seconds as a fallback for suspended browsers, missed sockets, and activity started from another client. The multi-client WebSocket transport decision is recorded in [ADR-0028](adr/0028-allow-multiple-websocket-clients-per-conversation.md).
 
 For reverse-proxy base paths, the API base is derived from the current URL by replacing `/mobile/...` with `/`, matching the desktop V2 client's base-path behavior.
 
@@ -63,9 +64,12 @@ The PWA currently covers:
 - Backend metadata loading via `GET /api/chat/backends`.
 - Profile-specific backend metadata loading via `GET /api/chat/cli-profiles/:profileId/metadata`.
 - Active/archived conversation list via `GET /api/chat/conversations`.
+- Flat latest-first conversation list with a workspace select filter. `All conversations` is the default; choosing a workspace filters the list to that `workspaceHash` without introducing collapsible workspace groups.
 - Conversation-list previews strip uploaded-file/file-delivery wire markers. Attachment-only previews render as human labels such as `Attachment: IMG_3021.PNG` rather than exposing absolute artifact paths.
 - Active-stream summary hydration via `GET /api/chat/active-streams`.
+- Conversation-list running badges update automatically from passive WebSocket monitors and REST fallback refreshes; the manual Refresh button remains a recovery control for explicit user-triggered reconciliation.
 - Open conversation via `GET /api/chat/conversations/:id`.
+- Opening a conversation scrolls the transcript to the newest message. The transcript continues following newly appended messages and streaming text.
 - Create conversation via `POST /api/chat/conversations`.
 - Rename, archive, restore, and delete conversation.
 - Full-conversation markdown download.
@@ -94,6 +98,7 @@ The PWA currently covers:
 The PWA intentionally does not yet cover:
 
 - Memory and Knowledge Base mobile panels/live update bubbles.
+- CLI update notifications and update actions. This is an intentional web-only parity decision because CLI binary updates are server-administration controls; see [parity-decisions.md](parity-decisions.md) and [ADR-0027](adr/0027-manage-cli-updates-from-web-cockpit.md).
 - Service worker offline caching. The app is server-backed and currently requires network access to the Agent Cockpit host.
 - True remote push notifications. Browser notification support only works while the PWA/browser context is alive enough to receive WebSocket events.
 - Reuse of desktop V2 settings, Memory, KB, and usage management screens.

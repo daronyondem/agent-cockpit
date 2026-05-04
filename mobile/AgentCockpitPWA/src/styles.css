@@ -90,6 +90,31 @@ button {
   padding: 12px;
 }
 
+.filter-select {
+  align-items: center;
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.filter-select span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.filter-select select {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--accent-dark);
+  font-size: 13px;
+  font-weight: 700;
+  min-height: 38px;
+  max-width: min(52vw, 260px);
+  padding: 8px 28px 8px 10px;
+}
+
 .conversation-list {
   display: flex;
   flex: 1;
