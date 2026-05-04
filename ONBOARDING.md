@@ -1,12 +1,14 @@
 # Agent Cockpit — Self-Hosting Guide
 
-This guide walks you through setting up Agent Cockpit on your own machine, exposed to the internet via a Cloudflare Tunnel, and kept running with PM2.
+This guide walks you through setting up Agent Cockpit on your own machine, exposing it through Cloudflare Tunnel, and keeping it running with PM2.
 
 By the end you will have:
 
 - Agent Cockpit running as a persistent background service
-- A Cloudflare Tunnel giving it a stable public URL (e.g. `chat.yourdomain.com`)
-- OAuth protecting access so only you can log in
+- A Cloudflare Tunnel with a stable public URL, for example `chat.yourdomain.com`
+- One first-party local owner account for the backend
+- Recovery codes and a local reset command for lockout recovery
+- Optional passkeys and iOS mobile pairing for the owner account
 - Automatic restarts on crash or reboot
 
 ---
@@ -17,18 +19,15 @@ Install the following before you begin:
 
 | Dependency | Install | Verify |
 |---|---|---|
-| **Node.js 18+** | [nodejs.org](https://nodejs.org/) or `brew install node` | `node -v` |
+| **Node.js 22+** | [nodejs.org](https://nodejs.org/) or `brew install node` | `node -v` |
 | **Claude Code CLI** | `npm install -g @anthropic-ai/claude-code` | `claude --version` |
 | **cloudflared** | `brew install cloudflared` | `cloudflared --version` |
 | **PM2** | `npm install -g pm2` | `pm2 --version` |
+| **Xcode** | App Store | Required only for installing the iOS app on your own device |
 
-You will also need:
+You will also need a Cloudflare account with a domain managed by Cloudflare DNS.
 
-- A **Cloudflare account** with a domain managed by Cloudflare DNS
-- A **Google Cloud project** for OAuth credentials (required)
-- A **GitHub OAuth App** (optional — enables GitHub login)
-
-Make sure the Claude Code CLI is authenticated before proceeding:
+Make sure the CLI backends you plan to use are authenticated on the same machine that runs Agent Cockpit. For Claude Code:
 
 ```bash
 claude
@@ -47,9 +46,60 @@ npm install
 
 ---
 
-## 2. Set Up the Cloudflare Tunnel
+## 2. Configure Environment
 
-### 2.1 Log in to Cloudflare
+```bash
+cp .env.example .env
+```
+
+Edit `.env`:
+
+```env
+PORT=3334
+SESSION_SECRET=<generate-a-long-random-string>
+AUTH_SETUP_TOKEN=<generate-a-long-random-string>
+DEFAULT_WORKSPACE=~/projects
+BASE_PATH=
+```
+
+Notes:
+
+- `SESSION_SECRET` should be a long random string. Generate one with `openssl rand -base64 32`.
+- `AUTH_SETUP_TOKEN` is required only for first-run setup from a non-localhost URL, such as your Cloudflare Tunnel domain. It prevents someone else from claiming an exposed empty backend.
+- Localhost setup, for example `http://localhost:3334/auth/setup`, does not require `AUTH_SETUP_TOKEN`.
+- `DEFAULT_WORKSPACE` is the default directory the CLI backend will operate in.
+- `BASE_PATH` can be left empty unless you are running behind a reverse proxy at a subpath.
+- Google/GitHub OAuth is not required. It is legacy-only and disabled unless `AUTH_ENABLE_LEGACY_OAUTH=true`.
+
+---
+
+## 3. Create a PM2 App Definition
+
+Create `ecosystem.config.js` in the repo root. This file is gitignored because it can contain local paths and secrets.
+
+```js
+module.exports = {
+  apps: [{
+    name: 'agent-cockpit',
+    script: 'server.ts',
+    interpreter: './node_modules/.bin/tsx',
+    cwd: __dirname,
+    env: {
+      PORT: 3334,
+      SESSION_SECRET: '<same value as .env>',
+      AUTH_SETUP_TOKEN: '<same value as .env>',
+      DEFAULT_WORKSPACE: '/Users/you/projects',
+      BASE_PATH: '',
+    },
+  }],
+};
+```
+
+---
+
+## 4. Set Up the Cloudflare Tunnel
+
+### 4.1 Log in to Cloudflare
 
 ```bash
 cloudflared login
@@ -57,27 +107,25 @@ cloudflared login
 
 This opens a browser window. Select the domain you want to use and authorize `cloudflared`.
 
-### 2.2 Create a tunnel
+### 4.2 Create a tunnel
 
 ```bash
 cloudflared tunnel create my-tunnel
 ```
 
-Note the **Tunnel ID** (a UUID like `8307e28b-b493-4646-931e-42e9ba37f2d7`) — you will need it next.
+Note the Tunnel ID. It is a UUID like `8307e28b-b493-4646-931e-42e9ba37f2d7`.
 
-### 2.3 Route DNS
-
-Create a DNS record pointing your chosen subdomain to the tunnel:
+### 4.3 Route DNS
 
 ```bash
 cloudflared tunnel route dns my-tunnel chat.yourdomain.com
 ```
 
-This creates a CNAME record in Cloudflare DNS automatically.
+This creates a CNAME record in Cloudflare DNS.
 
-### 2.4 Configure the tunnel
+### 4.4 Configure the tunnel
 
-Create (or edit) `~/.cloudflared/config.yml`:
+Create or edit `~/.cloudflared/config.yml`:
 
 ```yaml
 tunnel: <YOUR_TUNNEL_ID>
@@ -91,122 +139,106 @@ ingress:
 
 Replace `<YOUR_TUNNEL_ID>` and `<you>` with your actual values.
 
-### 2.5 Test the tunnel
+### 4.5 Test the tunnel
 
 ```bash
 cloudflared tunnel run my-tunnel
 ```
 
-You should see connection logs showing it connected to Cloudflare edge servers. Press `Ctrl+C` to stop for now — we will run it under PM2 later.
-
----
-
-## 3. Set Up OAuth
-
-You need at least Google OAuth. GitHub OAuth is optional but recommended.
-
-### 3.1 Google OAuth
-
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (or select an existing one).
-3. Navigate to **APIs & Services > Credentials**.
-4. Click **Create Credentials > OAuth client ID**.
-5. Select **Web application** as the application type.
-6. Add your tunnel URL to **Authorized JavaScript origins**:
-   - `https://chat.yourdomain.com`
-7. Add the callback URL to **Authorized redirect URIs**:
-   - `https://chat.yourdomain.com/auth/google/callback`
-8. Copy the **Client ID** and **Client Secret** — you will need them in the next step.
-
-### 3.2 GitHub OAuth (optional)
-
-1. Go to **GitHub > Settings > Developer settings > OAuth Apps > New OAuth App**.
-2. Set the fields:
-   - **Homepage URL**: `https://chat.yourdomain.com`
-   - **Authorization callback URL**: `https://chat.yourdomain.com/auth/github/callback`
-3. After creating the app, copy the **Client ID** and generate a **Client Secret**.
-
----
-
-## 4. Configure Environment
-
-```bash
-cp .env.example .env
-```
-
-Edit `.env` with your values:
-
-```env
-PORT=3334
-SESSION_SECRET=<generate-a-long-random-string>
-GOOGLE_CLIENT_ID=<from-step-3.1>
-GOOGLE_CLIENT_SECRET=<from-step-3.1>
-GOOGLE_CALLBACK_URL=https://chat.yourdomain.com/auth/google/callback
-ALLOWED_EMAIL=you@example.com
-DEFAULT_WORKSPACE=~/projects
-BASE_PATH=
-```
-
-If you set up GitHub OAuth, also add:
-
-```env
-GITHUB_CLIENT_ID=<from-step-3.2>
-GITHUB_CLIENT_SECRET=<from-step-3.2>
-GITHUB_CALLBACK_URL=https://chat.yourdomain.com/auth/github/callback
-```
-
-**Notes:**
-- `SESSION_SECRET` should be a long random string. Generate one with: `openssl rand -base64 32`
-- `ALLOWED_EMAIL` is a comma-separated list of email addresses allowed to log in.
-- `DEFAULT_WORKSPACE` is the default working directory Claude Code will operate in.
-- `BASE_PATH` can be left empty unless you are running behind a reverse proxy at a subpath.
+Open `https://chat.yourdomain.com`. You should see Agent Cockpit. Press `Ctrl+C` to stop the tunnel for now; PM2 will run it later.
 
 ---
 
 ## 5. Start Everything with PM2
 
-### 5.1 Start the Cloudflare tunnel
+### 5.1 Start Agent Cockpit
 
 ```bash
-pm2 start cloudflared --name cf-tunnel -- tunnel run my-tunnel
+npx pm2 start ecosystem.config.js
 ```
 
-### 5.2 Start Agent Cockpit
+### 5.2 Start the Cloudflare tunnel
 
 ```bash
-cd /path/to/agent-cockpit
-pm2 start server.js --name agent-cockpit
+npx pm2 start "$(command -v cloudflared)" --name cf-tunnel --interpreter none -- tunnel run my-tunnel
 ```
 
-Since the `.env` file is in the project directory and the app uses `dotenv`, it will pick up the environment variables automatically.
+If `command -v cloudflared` prints nothing, use the absolute path from your install, commonly `/opt/homebrew/bin/cloudflared` on Apple Silicon Macs.
 
 ### 5.3 Verify both are running
 
 ```bash
-pm2 list
+npx pm2 list
 ```
 
-You should see both `cf-tunnel` and `agent-cockpit` with status `online`.
+You should see both `agent-cockpit` and `cf-tunnel` with status `online`.
 
 ### 5.4 Save the process list
 
 ```bash
-pm2 save
+npx pm2 save
 ```
-
-This saves the current process list so PM2 can restore it after a restart.
 
 ### 5.5 Enable startup on boot
 
 ```bash
-pm2 startup
+npx pm2 startup
 ```
 
-PM2 will print a `sudo` command. Copy and run it. This creates a system service that starts PM2 (and your saved processes) automatically when your machine boots.
+PM2 will print a `sudo` command. Copy and run it. This creates a system service that restores your saved PM2 processes when the machine boots.
 
 ---
 
-## 6. Recommended Claude Code CLI Settings
+## 6. Create the Owner Account
+
+Open either URL:
+
+- Local setup from the server machine: `http://localhost:3334/auth/setup`
+- Remote setup through the tunnel: `https://chat.yourdomain.com/auth/setup`
+
+If you use the tunnel URL, enter the `AUTH_SETUP_TOKEN` from your environment when the setup page asks for it.
+
+Create the owner account with:
+
+- Email
+- Display name
+- Password with at least 12 characters
+
+After setup, Agent Cockpit signs you in and creates `data/auth/owner.json`. Passwords are stored as scrypt hashes; plaintext passwords are not stored.
+
+---
+
+## 7. Secure the Owner Account
+
+Generate recovery codes immediately after first setup:
+
+```bash
+npm run auth:reset -- --regenerate-recovery-codes
+```
+
+Store the printed codes somewhere safe. Each code is single-use. They are the recovery path if passkey-required mode is enabled later or if the normal password flow breaks.
+
+You can also manage these from the web UI:
+
+1. Open **Settings > Security**.
+2. Register one or more passkeys.
+3. Regenerate/store recovery codes if needed.
+4. Enable **Require passkey for login** only after at least one passkey and one unused recovery code exist.
+5. Create mobile pairing codes and revoke paired devices when needed.
+
+Passkeys are bound to the backend domain. If you use both a dev and prod hostname, register passkeys separately on each hostname you plan to use.
+
+Local lockout recovery command:
+
+```bash
+npm run auth:reset -- --password "new long password" --disable-passkey-required --revoke-sessions --regenerate-recovery-codes
+```
+
+This requires local filesystem/server access. It is intentionally not exposed over HTTP.
+
+---
+
+## 8. Recommended Claude Code CLI Settings
 
 Agent Cockpit spawns Claude Code CLI processes on your behalf. Since there is no interactive terminal to approve actions, add these settings to `~/.claude/settings.json`:
 
@@ -220,7 +252,7 @@ Agent Cockpit spawns Claude Code CLI processes on your behalf. Since there is no
 }
 ```
 
-This gives Claude Code permission to edit files without prompting for confirmation. Without this, file edit requests will hang waiting for terminal input that never comes.
+Without this, file edit requests can hang waiting for terminal input.
 
 Optionally, to remove Claude attribution from git commits and pull requests:
 
@@ -235,32 +267,100 @@ Optionally, to remove Claude attribution from git commits and pull requests:
 
 ---
 
-## 7. Verify Everything
+## 9. Verify Everything
 
 Open `https://chat.yourdomain.com` in your browser and confirm:
 
-- [ ] The login page loads with Google (and GitHub, if configured) sign-in buttons
-- [ ] OAuth login succeeds and redirects back to `chat.yourdomain.com` (not somewhere else)
+- [ ] First-run setup creates the owner account
+- [ ] Login works with the owner email/password
+- [ ] A passkey can be registered from **Settings > Security**
+- [ ] Recovery codes have been generated and stored
+- [ ] **Require passkey for login** can be enabled only after passkey and recovery-code setup
 - [ ] You can create a new conversation and send a message
 - [ ] Claude Code responds with streamed output
-- [ ] Run `pm2 list` and confirm both `agent-cockpit` and `cf-tunnel` show `online`
+- [ ] `npx pm2 list` shows both `agent-cockpit` and `cf-tunnel` as `online`
 - [ ] Reboot your machine and verify both services come back up automatically
+
+---
+
+## 10. iOS App Login
+
+The iOS app is a native companion client for a backend URL that you enter on the connection screen. To install it on your own iPhone from Xcode, follow [docs/ios-app.md](docs/ios-app.md).
+
+In the iOS app connection screen:
+
+1. Enter your backend URL, for example `https://chat.yourdomain.com`.
+2. Tap **Sign in with Passkey or Password**.
+3. Complete the backend-owned login page.
+4. The app receives a one-time callback code and exchanges it for the normal backend session cookie and CSRF token.
+
+Mobile pairing is also supported:
+
+1. Open **Settings > Security** in the web UI.
+2. Click **Create pairing code**.
+3. In the iOS connection screen, tap **Scan QR Code** and scan the displayed QR code.
+
+Manual fallback: enter the displayed `challengeId` and `pairingCode` in the iOS connection screen.
+
+After pairing, **Settings > Security > Paired devices** shows the iPhone's device record. Revoking that device invalidates the mobile session.
+
+---
+
+## Legacy OAuth
+
+Google/GitHub OAuth is optional legacy compatibility. New self-hosted installs should use first-party owner auth.
+
+If you need legacy OAuth temporarily:
+
+1. Set `AUTH_ENABLE_LEGACY_OAUTH=true`.
+2. Configure provider credentials and callback URLs.
+3. Set `ALLOWED_EMAIL` to the allowed email list.
+
+Legacy callback examples:
+
+```env
+GOOGLE_CALLBACK_URL=https://chat.yourdomain.com/auth/google/callback
+GITHUB_CALLBACK_URL=https://chat.yourdomain.com/auth/github/callback
+```
 
 ---
 
 ## Troubleshooting
 
-**Server starts on the wrong port**
-If `PORT` is set in your shell profile (e.g. `.zshrc`), it will override the `.env` file. Either unset it (`unset PORT`) or pass it explicitly when starting: `PORT=3334 pm2 start server.js --name agent-cockpit`.
+**Setup asks for a token**
 
-**OAuth redirects to the wrong domain**
-Double-check that `GOOGLE_CALLBACK_URL` and `GITHUB_CALLBACK_URL` in your `.env` match the URLs registered in the Google Cloud Console and GitHub OAuth App settings. All three must agree: the `.env` value, the OAuth provider's registered redirect URI, and the actual domain your tunnel is serving.
+You are accessing setup through a non-localhost URL. Enter `AUTH_SETUP_TOKEN`, or open `http://localhost:3334/auth/setup` directly on the server machine.
+
+**Server starts on the wrong port**
+
+Check `PORT` in `.env`, `ecosystem.config.js`, and your shell profile. Restart PM2 with:
+
+```bash
+npx pm2 restart agent-cockpit --update-env
+```
 
 **PM2 process keeps erroring**
-Check the logs: `pm2 logs agent-cockpit --lines 50`. Common causes are missing environment variables, port conflicts (`EADDRINUSE`), or missing `node_modules` (run `npm install`).
 
-**Tunnel not connecting**
-Run `cloudflared tunnel info my-tunnel` to check the tunnel status. Verify that `~/.cloudflared/config.yml` has the correct tunnel ID and credentials file path.
+Check logs:
 
-**Claude Code CLI not responding**
-Make sure the CLI is authenticated: run `claude` in a terminal and confirm it works. Also check that `DEFAULT_WORKSPACE` points to a valid directory.
+```bash
+npx pm2 logs agent-cockpit --lines 50
+```
+
+Common causes are missing environment variables, port conflicts, missing `node_modules`, or an invalid `DEFAULT_WORKSPACE`.
+
+**PM2 warns that the daemon is out of date**
+
+`pm2 update` restarts the PM2 daemon and briefly interrupts all PM2-managed apps, including Agent Cockpit and the tunnel. Run it only from a normal terminal or SSH session when brief downtime is acceptable, then verify with `npx pm2 list`.
+
+**Tunnel is not reachable**
+
+Run `cloudflared tunnel info my-tunnel` and verify `~/.cloudflared/config.yml` has the correct tunnel ID, credentials file path, hostname, and local service port.
+
+**CLI backend does not respond**
+
+Make sure the CLI is authenticated on the server machine. For Claude Code, run `claude` in a terminal and confirm it works. Also check that `DEFAULT_WORKSPACE` points to a valid directory.
+
+**iOS app cannot connect**
+
+Confirm the backend URL includes the scheme, for example `https://chat.yourdomain.com`, and check that `https://chat.yourdomain.com/api/auth/status` is reachable from the phone's network. If QR scan fails, use the manual `challengeId` and pairing code from **Settings > Security**.

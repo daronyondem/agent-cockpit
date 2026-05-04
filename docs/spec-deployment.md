@@ -67,4 +67,10 @@ npm start              # Listens on PORT (default 3334)
 ```bash
 ngrok http 3334
 ```
-Update OAuth callback URLs to include the ngrok URL.
+For a fresh exposed backend, set `AUTH_SETUP_TOKEN` before first-run setup so a remote visitor cannot claim the owner account. Legacy OAuth callback URLs are only relevant when `AUTH_ENABLE_LEGACY_OAUTH=true`.
+
+**Local auth reset:**
+```bash
+npm run auth:reset -- --password "new long password" --disable-passkey-required --revoke-sessions --regenerate-recovery-codes
+```
+The reset command requires local filesystem access. It can reset the owner password, disable passkey-required mode, revoke paired mobile devices, delete session files under `data/sessions`, and print replacement recovery codes.

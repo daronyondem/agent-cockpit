@@ -65,6 +65,78 @@
 
 All methods are `async` except `getWorkspaceContext()`. `getWorkspaceMemoryPointer()` is `async` so it can `mkdir -p` the memory dir on first access.
 
+### LocalAuthStore
+
+**File:** `src/services/localAuthStore.ts`
+
+`LocalAuthStore` owns the first-party single-owner auth state for the backend. It stores `owner.json` under `AUTH_DATA_DIR` (default `data/auth`) and writes it through `atomicWriteFile`, then chmods the file to `0600`. The directory is created with mode `0700`.
+
+State shape:
+
+```json
+{
+  "version": 1,
+  "owner": {
+    "id": "local-owner",
+    "email": "owner@example.com",
+    "displayName": "Owner User",
+    "passwordHash": "scrypt$<salt>$<derived>",
+    "createdAt": "2026-05-03T00:00:00.000Z",
+    "updatedAt": "2026-05-03T00:00:00.000Z"
+  },
+  "policy": {
+    "passkeyRequired": false
+  },
+  "passkeys": [],
+  "recoveryCodes": [
+    {
+      "id": "uuid",
+      "codeHash": "scrypt$<salt>$<derived>",
+      "createdAt": "2026-05-03T00:00:00.000Z",
+      "usedAt": "2026-05-03T00:00:00.000Z"
+    }
+  ],
+  "mobileDevices": [
+    {
+      "id": "uuid",
+      "displayName": "Daron iPhone",
+      "createdAt": "2026-05-03T00:00:00.000Z",
+      "lastSeenAt": "2026-05-03T00:00:00.000Z",
+      "lastIp": "::ffff:127.0.0.1",
+      "lastUserAgent": "AgentCockpit iOS",
+      "platform": "iOS",
+      "revokedAt": "2026-05-03T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+Methods:
+
+| Method | Description |
+|--------|-------------|
+| `hasOwner()` | Returns true when a valid owner state file exists. |
+| `getOwner()` | Returns the owner record or null. |
+| `getPolicy()` | Returns `{ passkeyRequired }`; throws `owner-missing` before setup. |
+| `getRecoveryStatus()` | Returns `{ configured, total, remaining, createdAt }` for recovery-code health. |
+| `listPasskeys()` / `getPasskeyByCredentialId(credentialId)` | Reads passkey metadata and stored credential public material. Lists are sorted by creation time descending. |
+| `createOwner({ email, displayName, password })` | Creates the single owner. Fails when an owner already exists, when email/display name are blank or invalid, or when the password is shorter than 12 characters. Email is normalized to lowercase. |
+| `verifyPassword(email, password)` | Verifies the submitted password against the stored scrypt hash with `crypto.timingSafeEqual`. Returns the owner on success, null on wrong credentials, and throws `owner-missing` when setup has not happened. |
+| `regenerateRecoveryCodes(count?)` | Replaces all recovery codes with `count` new single-use codes (default 10, max 50), stores only scrypt hashes, and returns plaintext codes for one-time display. |
+| `useRecoveryCode(code)` | Matches one unused recovery-code hash, marks it used, disables `passkeyRequired`, and returns the owner. Invalid or already-used codes return null. |
+| `setPasskeyRequired(required)` | Updates policy. Enabling passkey-required throws `unsafe-policy` unless at least one passkey and one unused recovery code exist. |
+| `createPasskey({ name?, credentialId, publicKey, counter, transports? })` | Stores verified WebAuthn credential public material with a display name and created timestamp. Duplicate credential ids and invalid inputs throw `invalid-input`. |
+| `renamePasskey(id, name)` | Updates passkey display name; missing ids return null. |
+| `updatePasskeyUsage(credentialId, counter)` | Updates authenticator counter and `lastUsedAt` after successful WebAuthn login; missing credentials return null. |
+| `deletePasskey(id)` | Deletes a passkey; missing ids return null. Throws `unsafe-policy` instead of deleting the last passkey while passkey-required mode is enabled. |
+| `createMobileDevice({ displayName?, ip?, userAgent?, platform? })` | Appends a paired mobile-device record with created/last-seen timestamps and returns it. |
+| `listMobileDevices()` / `getMobileDevice(id)` | Reads mobile-device metadata, with list sorted by recent activity. |
+| `touchMobileDevice(id, { ip?, userAgent?, platform? })` | Updates last-seen metadata for a non-revoked mobile device. Returns null for missing/revoked devices. |
+| `revokeMobileDevice(id)` | Sets `revokedAt` and returns the device; missing ids return null. |
+| `resetOwnerAccess(opts)` | Local CLI reset helper. Can update owner identity/password, disable passkey-required mode, revoke all mobile devices, and regenerate recovery codes. |
+
+The password and recovery-code hash format is `scrypt$<base64url salt>$<base64url derived key>`, using a 16-byte random salt and a 64-byte derived key. Plaintext passwords, setup tokens, recovery codes after display, pairing codes, and mobile auth codes are not stored in this file. Passkeys store only WebAuthn credential public material: credential id, public key, counter, transports, and timestamps.
+
 ### Durability primitives
 
 Every JSON file ChatService writes (`workspaces/{hash}/index.json`, session files, the usage ledger, memory `snapshot.json`) goes through `atomicWriteFile` from `src/utils/atomicWrite.ts` — a sibling-tmp + `rename(2)` helper so readers never observe a torn file. Read-modify-write methods that mutate a workspace index are wrapped in `_indexLock.run(hash, ...)` (a `KeyedMutex` from `src/utils/keyedMutex.ts`) so concurrent mutators on the same workspace serialize FIFO and never lose updates; different workspaces run in parallel. `_recordToLedger` and `clearUsageStats` use `_ledgerLock` with the constant key `'__usage_ledger__'` for the same reason on the shared ledger. `generateAndUpdateTitle` keeps the slow backend adapter call **outside** the lock (only the persist step acquires it) so a hung backend can't stall other writes on the workspace. `initialize()`'s `_buildLookupMap` catches `JSON.parse` failures per workspace, logs a warning, and keeps building — a single corrupt `index.json` degrades access to that workspace but cannot crash the server into a restart loop.

@@ -12,13 +12,16 @@
 |----------|----------|---------|-------------|
 | `PORT` | No | `3334` | Server listen port |
 | `SESSION_SECRET` | Yes | — | Secret for signing session cookies |
-| `GOOGLE_CLIENT_ID` | Yes | — | Google OAuth 2.0 client ID |
-| `GOOGLE_CLIENT_SECRET` | Yes | — | Google OAuth 2.0 client secret |
-| `GOOGLE_CALLBACK_URL` | Yes | — | Google OAuth callback URL |
-| `GITHUB_CLIENT_ID` | No | — | GitHub OAuth client ID (enables GitHub login if set) |
-| `GITHUB_CLIENT_SECRET` | No | — | GitHub OAuth client secret |
-| `GITHUB_CALLBACK_URL` | No | — | GitHub OAuth callback URL |
-| `ALLOWED_EMAIL` | Yes | — | Comma-separated list of allowed email addresses |
+| `GOOGLE_CLIENT_ID` | No | — | Legacy Google OAuth client ID. Used only when `AUTH_ENABLE_LEGACY_OAUTH=true`. |
+| `GOOGLE_CLIENT_SECRET` | No | — | Legacy Google OAuth client secret. Used only when `AUTH_ENABLE_LEGACY_OAUTH=true`. |
+| `GOOGLE_CALLBACK_URL` | No | — | Legacy Google OAuth callback URL. Used only when `AUTH_ENABLE_LEGACY_OAUTH=true`. |
+| `GITHUB_CLIENT_ID` | No | — | Legacy GitHub OAuth client ID. Used only when `AUTH_ENABLE_LEGACY_OAUTH=true`. |
+| `GITHUB_CLIENT_SECRET` | No | — | Legacy GitHub OAuth client secret. Used only when `AUTH_ENABLE_LEGACY_OAUTH=true`. |
+| `GITHUB_CALLBACK_URL` | No | — | Legacy GitHub OAuth callback URL. Used only when `AUTH_ENABLE_LEGACY_OAUTH=true`. |
+| `ALLOWED_EMAIL` | No | — | Legacy OAuth comma-separated allowed-email list. Used only when legacy OAuth routes are enabled. |
+| `AUTH_DATA_DIR` | No | `data/auth` under the process working directory | Directory for first-party local auth state. The owner account is stored in `owner.json`. |
+| `AUTH_SETUP_TOKEN` | Recommended for exposed first-run setup | `''` | Secret token required to create the first owner account from a non-localhost request. Localhost setup is allowed without the token for server-console access. |
+| `AUTH_ENABLE_LEGACY_OAUTH` | No | `false` | Transitional flag that registers the old Google/GitHub OAuth routes when set to `true`. Third-party auth is disabled by default. |
 | `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
 | `BASE_PATH` | No | `''` | URL base path prefix (for reverse proxy deployments) |
@@ -67,36 +70,69 @@ On the next process start, normal durable job reconciliation converts those fina
 
 **File:** `src/middleware/auth.ts`
 
-**Strategies:**
-- **Google OAuth 2.0** (always registered): `passport-google-oauth20`, scope `['profile', 'email']`
-- **GitHub OAuth** (optional, if both `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` set): `passport-github2`, scope `['user:email']`
+**Default model:** Agent Cockpit uses one first-party local owner account per backend. The owner state is stored in `AUTH_DATA_DIR/owner.json` with mode `0600` after writes. Passwords are stored as `scrypt` hashes with a random per-password salt; plaintext passwords are never stored. The owner session still uses Passport's session helpers so the rest of the app continues to rely on `req.isAuthenticated()` and the existing `connect.sid` cookie.
 
-**Email verification:** Both strategies use `verifyEmail(config, provider)` — parses `ALLOWED_EMAIL` into lowercased array, case-insensitive match, returns `{ id, email, displayName, provider }` or `false`. The `provider` field (`'google'` or `'github'`) is baked into the user object at verification time so downstream code (e.g. `meHandler`) can tell where the user signed in from without re-inspecting the passport strategy.
+**First-run setup:** If no owner exists, `/auth/login` redirects to `/auth/setup`. Localhost setup is allowed without a token because it requires server-console/local network access. Non-localhost setup requires `AUTH_SETUP_TOKEN` in the submitted form body; without it, setup returns 403. This prevents an exposed empty backend from being claimed by a remote visitor.
 
-**Rate limiting:** Applied to `/auth/google*` and `/auth/github*` — 15 min window, 20 requests/IP.
+**Recovery and lockout protection:** The owner can regenerate recovery codes through `POST /api/auth/recovery/regenerate`. Only scrypt hashes of recovery codes are stored; plaintext codes are returned only once in the regeneration response. `POST /auth/recovery/login` consumes one unused code, signs in the owner, and disables `policy.passkeyRequired` so the owner can repair a locked account. `PATCH /api/auth/policy` refuses to enable passkey-required mode until at least one passkey and at least one unused recovery code exist.
+
+**Passkeys:** WebAuthn ceremonies use `@simplewebauthn/server`. Registration is started from an authenticated web session with `POST /api/auth/passkeys/register/options`, verified by `POST /api/auth/passkeys/register/verify`, and stored as public credential material only: credential id, public key, counter, transports, created timestamp, and optional last-used timestamp. Login starts with public `POST /api/auth/passkeys/login/options`; verify uses the stored challenge in the anonymous session, validates the assertion against the backend origin/RP ID, updates the credential counter and `lastUsedAt`, and then creates the normal Passport session. The `/auth/login` page exposes password and passkey login; `?mobile=1` and `?popup=1` are preserved through passkey login and finish with the same one-time mobile callback or popup-done redirect as password login.
+
+**Local reset command:** `npm run auth:reset -- ...` runs `scripts/auth-reset.ts` with local filesystem access. It can reset the owner password, update email/display name, disable passkey-required mode, revoke paired mobile devices, delete `data/sessions`, and regenerate recovery codes. This is intentionally not exposed as an HTTP endpoint.
+
+**Mobile pairing and devices:** Authenticated web sessions can create five-minute pairing challenges with `POST /api/mobile-pairing/challenges`. The response includes manual fields plus `pairingUrl` and `qrCodeDataUrl`; `qrCodeDataUrl` is generated server-side with the `qrcode` package and encodes the same `agentcockpit://pair?...` URL returned in `pairingUrl`. Native clients scan the QR code or enter the manual fields, then exchange `{ challengeId, code, deviceName?, platform? }` at `POST /api/mobile-pairing/exchange`; successful exchange creates the normal Passport session, ensures a CSRF token, and records a mobile device under the local auth state. `GET /api/mobile-devices` lists devices, and `DELETE /api/mobile-devices/:id` sets `revokedAt`. `setupAuth` checks `req.session.mobileDeviceId` before each request; revoked mobile sessions are destroyed and API callers receive `401 { error: "Mobile device revoked" }`.
+
+**Web admin surface:** The V2 Settings **Security** tab is the owner-facing management UI for these routes. It reads `/api/auth/status`, `/api/auth/passkeys`, and `/api/mobile-devices`, registers/renames/deletes passkeys, regenerates recovery codes, toggles `policy.passkeyRequired` when safe, creates mobile pairing challenges, renders the returned QR code, copies the returned pairing URL/code, and revokes paired mobile devices.
+
+**Legacy OAuth:** Google/GitHub OAuth routes are disabled by default. Setting `AUTH_ENABLE_LEGACY_OAUTH=true` registers the old Google/GitHub Passport strategies and routes as a transitional compatibility path. Legacy OAuth still uses `ALLOWED_EMAIL` to authorize provider identities and stamps `provider: 'google' | 'github'` on the session user. The first-party local owner stamps `provider: 'local'`.
+
+**Rate limiting:** Applied to setup, password login, passkey login, recovery login, mobile pairing exchange, and legacy OAuth routes — 15 min window, 20 requests/IP. Jest skips this limiter so auth route tests do not share mutable rate-limit state.
 
 **Auth routes:**
 
 | Route | Method | Description |
 |-------|--------|-------------|
-| `/auth/login` | GET | Editorial two-column login page. **Left column:** topbar with the Agent Cockpit logo (`<img src="/logo-full-no-text.svg">` — the same asset the V2 sidebar renders, rendered at 90×35) + "Agent Cockpit" wordmark, with a "Readme.md here" link (→ `https://github.com/daronyondem/agent-cockpit`, `target="_blank"`) on the right; centered body with a pulsing-dot "Ready" eyebrow, serif title ("The cockpit _is listening._ Sign in to take the controls."), sub-paragraph, provider buttons for Google (real multi-color G SVG) and — when GitHub config is present — GitHub (real Octocat SVG, tagged "Recommended"), legal paragraph; mono footer with "All systems operational" status + Terms (`#`) / Privacy (`#`) / Docs (→ `https://github.com/daronyondem/agent-cockpit/tree/main/docs`) links. **Right column (hidden below 960px):** radial-gradient editorial canvas with a serif pull-quote about Agent Cockpit attributed to _Daron Yondem · Sr AI/ML Architect, AWS_; the quote's three `<em>` spans (`knowledge base`, `memory`, `multiple CLI vendors`) render in `--accent` blue via the `.pe-quote em` rule. Theme follows `localStorage['ac:v2:theme']` (`'system'` default falls back to `prefers-color-scheme`), applied via an inline pre-paint script that sets `data-theme` on `<html>` before CSS loads. Design tokens (editorial direction, light + dark) are inlined in the response because `/v2/src/tokens.css` is gated behind `requireAuth`. Fonts (JetBrains Mono, Instrument Serif, General Sans) are loaded from the same CDNs as the V2 app — allowed by the CSP `style-src` / `font-src` lists. Accepts `?popup=1` — when set, the provider button hrefs become `/auth/google?popup=1` / `/auth/github?popup=1` so the popup flag propagates through the whole flow. The logo asset is served by a targeted `app.get('/logo-full-no-text.svg', ...)` route mounted in `server.ts` _before_ `app.use(requireAuth)`, so unauthenticated visitors to the login page can load it without opening up the rest of `public/`. |
-| `/auth/google` | GET | Initiates Google OAuth flow. If `?popup=1`, the `markPopupIfRequested` middleware sets `req.session.reAuthPopup = true` before passport's redirect; the flag survives the Google roundtrip via express-session. |
-| `/auth/google/callback` | GET | Google callback → `finishAuth`: redirects to `/auth/popup-done` when `req.session.reAuthPopup` is set (and unsets the flag), otherwise `/`. Failure redirects to `/auth/denied`. |
-| `/auth/github` | GET | Initiates GitHub OAuth flow. Same `?popup=1` handling as Google. |
-| `/auth/github/callback` | GET | GitHub callback → `finishAuth` (same popup logic as Google). Failure → `/auth/denied`. |
+| `/api/auth/status` | GET | Public capability probe. Returns `{ setupRequired, providers: { password: true, passkey, legacyOAuth }, passkeys: { registered }, policy, recovery }`. `passkey` is false only before first-run owner setup; `policy` is `{ passkeyRequired }`; `recovery` is `{ configured, total, remaining, createdAt }`. |
+| `/auth/setup` | GET | First-run setup page for the single local owner. Redirects to `/auth/login` after the owner exists. Remote requests see a setup-token field; localhost setup does not require the token. |
+| `/auth/setup` | POST | Creates the local owner. Form/JSON body `{ email, displayName, password, setupToken? }`. Passwords must be at least 12 characters. Localhost requests can omit `setupToken`; remote requests must match `AUTH_SETUP_TOKEN`. On success, logs in the owner and redirects to `/`. |
+| `/auth/login` | GET | First-party login page. If no owner exists, redirects to `/auth/setup`. Accepts `?popup=1` and `?mobile=1`; those modes are carried as hidden fields on the password form so successful login can finish as popup re-auth or native mobile auth. |
+| `/auth/login/password` | POST | Password login for the local owner. Form/JSON body `{ email, password, popup?, mobile? }`. Valid credentials create the normal session and redirect to `/`; with `mobile=1`, the route redirects to `agentcockpit://auth/callback?code=<one-time-code>`; with `popup=1`, it redirects to `/auth/popup-done`. Invalid credentials return 401 with the login page and an error. If `policy.passkeyRequired` is true, password login returns 403 and the owner must use passkey login or recovery. |
+| `/api/auth/passkeys` | GET | Authenticated. Lists passkeys as `{ passkeys: [{ id, name, transports?, createdAt, lastUsedAt? }] }`; credential ids, public keys, and counters are not returned. |
+| `/api/auth/passkeys/register/options` | POST | Authenticated + `x-csrf-token`. Body `{ name? }`. Generates WebAuthn registration options for the current origin/RP ID, excludes already-registered credentials, stores the challenge in session, and returns the browser JSON options. |
+| `/api/auth/passkeys/register/verify` | POST | Authenticated + `x-csrf-token`. Body `{ name?, response }`, where `response` is the JSON-encoded `PublicKeyCredential` from `navigator.credentials.create`. Verifies challenge/origin/RP ID/user verification, stores the credential public material, and returns `{ passkey, passkeys }`. |
+| `/api/auth/passkeys/login/options` | POST | Public + rate limited. Body `{ popup?, mobile? }`. Requires at least one registered passkey, generates assertion options for all registered credentials, stores challenge and mode in session, and returns browser JSON options. |
+| `/api/auth/passkeys/login/verify` | POST | Public + rate limited. Body `{ response }`, where `response` is the JSON-encoded `PublicKeyCredential` from `navigator.credentials.get`. Verifies challenge/origin/RP ID/user verification, updates counter/last-used metadata, creates the normal session, and returns `{ redirectTo, user }` so the login page can navigate to `/`, `/auth/popup-done`, or the native callback URL. |
+| `/api/auth/passkeys/:id` | PATCH | Authenticated + `x-csrf-token`. Body `{ name }`. Renames a passkey and returns `{ passkey, passkeys }`. |
+| `/api/auth/passkeys/:id` | DELETE | Authenticated + `x-csrf-token`. Deletes a passkey and returns `{ passkeys }`. Returns 409 if deleting the last passkey while `passkeyRequired` is enabled. |
+| `/auth/recovery` | GET | Recovery-code login page. Redirects to setup when no owner exists. |
+| `/auth/recovery/login` | POST | Form/JSON body `{ email, recoveryCode, popup?, mobile? }`. The code must match an unused stored recovery-code hash. On success, the code is marked used, `passkeyRequired` is disabled, and the session finishes like password login, including popup/mobile modes. |
+| `/api/auth/recovery/regenerate` | POST | Authenticated + `x-csrf-token`. Replaces all recovery codes and returns `{ recoveryCodes, recovery }`. |
+| `/api/auth/policy` | PATCH | Authenticated + `x-csrf-token`. Body `{ passkeyRequired }`. Returns `{ policy }` or 409 if enabling passkey-required would be unsafe. |
+| `/api/mobile-pairing/challenges` | POST | Authenticated + `x-csrf-token`. Issues a single-use five-minute pairing challenge for the current session and returns `{ challengeId, pairingCode, expiresAt, pairingUrl, qrCodeDataUrl }`. |
+| `/api/mobile-pairing/exchange` | POST | Public pairing bridge. Body `{ challengeId, code, deviceName?, platform? }`. Consumes the challenge, logs in the native client, creates a mobile device record, and returns `{ user, csrfToken, device }`. |
+| `/api/mobile-devices` | GET | Authenticated. Returns paired devices sorted by recent activity. |
+| `/api/mobile-devices/:id` | DELETE | Authenticated + `x-csrf-token`. Revokes a device. |
+| `/auth/mobile-login` | GET | Convenience redirect to `/auth/login?mobile=1`, used by native clients that want the backend-owned web login bridge. |
+| `/auth/google` | GET | Legacy OAuth only when `AUTH_ENABLE_LEGACY_OAUTH=true`. Initiates Google OAuth flow. If `?popup=1`, sets `req.session.reAuthPopup = true`; if `?mobile=1`, sets `req.session.mobileAuth = true`. |
+| `/auth/google/callback` | GET | Legacy OAuth only. Google callback → `finishAuth`: native mobile code, popup completion, or `/` redirect. Failure redirects to `/auth/denied`. |
+| `/auth/github` | GET | Legacy OAuth only when `AUTH_ENABLE_LEGACY_OAUTH=true` and GitHub credentials are configured. Same `?popup=1` and `?mobile=1` handling as Google. |
+| `/auth/github/callback` | GET | Legacy OAuth only. GitHub callback → `finishAuth` (same mobile/popup/default logic as Google). Failure → `/auth/denied`. |
 | `/auth/popup-done` | GET | Terminal page for popup re-auth. Serves a tiny HTML document that calls `window.opener.postMessage({ type: 'ac-reauth-ok' }, window.location.origin)` and then `window.close()`. Same-origin check on the message is enforced implicitly via the `targetOrigin` argument. |
+| `/api/mobile-auth/exchange` | POST | Public native-auth bridge mounted before `requireAuth`. Body `{ code, deviceName?, platform? }`. Consumes a short-lived, single-use mobile auth code issued after successful first-party or legacy OAuth login, calls `req.login()` with the verified user, records a mobile device when a local owner exists, ensures a session CSRF token, and returns `{ user: { displayName, email, provider }, csrfToken, device? }` while setting the normal `connect.sid` session cookie. Invalid or expired codes return `400 { error: "Invalid or expired mobile auth code" }`. |
 | `/auth/denied` | GET | Access denied page |
 | `/auth/logout` | GET | Destroys session, clears cookie, redirects to `/` |
 
 **`requireAuth` middleware:** Localhost passes through without auth. Otherwise requires `req.isAuthenticated()`. For unauthenticated requests to `/api/*` paths, responds with `401 { error: "Not authenticated" }` as JSON (so client `fetch` callers can handle it without trying to parse an HTML login page). All other unauthenticated requests are redirected to `/auth/login`.
 
-**`meHandler` (`GET /api/me`):** Returns `{ displayName: string | null, email: string | null, provider: 'google' | 'github' | null }` from `req.user`. The endpoint sits behind `requireAuth`, so unauthenticated non-local callers get the standard `401 { error: "Not authenticated" }`. Local-bypass requests that arrive without a user object get `200` with all three fields set to `null`, so the v2 sidebar footer can render a neutral placeholder in localhost dev sessions instead of failing the fetch.
+**`meHandler` (`GET /api/me`):** Returns `{ displayName: string | null, email: string | null, provider: 'local' | 'google' | 'github' | null }` from `req.user`. The endpoint sits behind `requireAuth`, so unauthenticated non-local callers get the standard `401 { error: "Not authenticated" }`. Local-bypass requests that arrive without a user object get `200` with all three fields set to `null`, so the v2 sidebar footer can render a neutral placeholder in localhost dev sessions instead of failing the fetch.
+
+See [ADR-0023](adr/0023-use-first-party-owner-authentication.md) for the first-party owner auth decision.
 
 **V2 frontend silent re-auth:** When `AgentApi.chatFetch` sees a 401, it invokes the handler registered via `AgentApi.setSessionExpiredHandler`. The shell wires this (see `public/v2/src/shell.jsx`) to a popup flow:
 
 1. `dialog.confirm` with "Sign in" / "Cancel" — if the user declines, nothing happens.
 2. On confirm, `window.open('/auth/login?popup=1', 'ac-reauth', ...)`. If the popup is blocked, fall back to a full-page redirect to `/auth/login` (the draft still survives via the localStorage mirror).
-3. The main window awaits either a `postMessage({ type: 'ac-reauth-ok' })` from the popup (sent by `/auth/popup-done` after successful OAuth) or the popup closing without a success message (polled via `popup.closed` every 500 ms).
+3. The main window awaits either a `postMessage({ type: 'ac-reauth-ok' })` from the popup (sent by `/auth/popup-done` after successful first-party login) or the popup closing without a success message (polled via `popup.closed` every 500 ms).
 4. In either case, call `AgentApi.invalidateCsrfToken()` — the old cached CSRF token is tied to the old session and would be rejected by `csrfGuard`; the next `chatFetch` re-fetches lazily.
 5. On success, call `StreamStore.clearAllStreamErrors()` to sweep stale "session expired" stream-error cards across every conv. The user's draft (input text + completed uploads) is already preserved in `ConvState.input` / `ConvState.pendingAttachments` by the `send()` snapshot/restore logic (`streamStore.js`), so they can just click send again.
 6. On close-without-success, verify with a `GET /api/csrf-token`; if still 401, open an error alert and re-enable the handler.

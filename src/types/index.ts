@@ -1091,6 +1091,9 @@ export interface AppConfig {
   GITHUB_CLIENT_SECRET?: string;
   GITHUB_CALLBACK_URL?: string;
   ALLOWED_EMAIL: string;
+  AUTH_DATA_DIR: string;
+  AUTH_SETUP_TOKEN: string;
+  AUTH_ENABLE_LEGACY_OAUTH: boolean;
   DEFAULT_WORKSPACE: string;
   BASE_PATH: string;
   CODEX_APPROVAL_POLICY: CodexApprovalPolicy;
@@ -1103,6 +1106,22 @@ declare module 'express-session' {
   interface SessionData {
     csrfToken?: string;
     passport?: { user?: unknown };
+    mobileAuth?: boolean;
+    mobileDeviceId?: string;
+    reAuthPopup?: boolean;
+    passkeyRegistration?: {
+      challenge: string;
+      rpId: string;
+      origin: string;
+      name?: string;
+    };
+    passkeyAuthentication?: {
+      challenge: string;
+      rpId: string;
+      origin: string;
+      mobile?: boolean;
+      popup?: boolean;
+    };
   }
 }
 

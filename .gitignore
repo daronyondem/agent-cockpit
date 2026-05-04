@@ -6,5 +6,10 @@ TASK.md
 .DS_Store
 .claude/
 coverage/
+*.xcuserstate
+xcuserdata/
+ios/AgentCockpit/.build/
+ios/AgentCockpit/.derivedData/
+ios/AgentCockpit/.swiftpm/
 ecosystem.config.js
 plans/

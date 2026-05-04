@@ -18,6 +18,7 @@ Agent Cockpit solves this by decoupling **your data** from **the AI provider**. 
 
 - **Own your data across any CLI** — Every conversation, session, and memory update is stored locally as open JSON on your own disk. Switch between Claude Code, Kiro, Codex, and future backends without losing history or context. When a better model ships from another vendor, your accumulated context comes with you instead of being locked inside their platform.
 - **Remote web access to local or remote CLIs** — Install Agent Cockpit on your laptop or on a remote machine and drive it from any browser. Pair it with a tunnel like Cloudflare Tunnel to chat with your coding agents from your phone, tablet, or a café laptop while they operate on real files in their native environment.
+- **Native iOS companion app** — Connect an iPhone to any self-hosted backend URL, pair it with a QR/manual code from the web UI, or sign in through the backend-owned passkey/password web flow.
 - **Integrated memory system** — Adds persistent memory to CLIs that don't have one (like Kiro) and captures memory on the fly from CLIs that do (like Claude Code). Every change to the CLI's own memory file is snapshotted locally, so your accumulated context is portable and vendor-neutral — not trapped inside whichever CLI happens to own it today.
 - **Token and cost tracking** — Token usage and cost are tracked per conversation so you always know what a long-running task or an experiment is actually costing you.
 - **Message queue** — Keep typing while the CLI is still responding. Queued messages fire automatically as soon as the current response finishes, so your thinking isn't gated on the agent's latency — a feature rarely found in other chat UIs.
@@ -46,7 +47,7 @@ Agent Cockpit runs on the same machine as your CLI tools. When you send a messag
 This means:
 - **The CLI and the web interface must run on the same machine.** Agent Cockpit spawns local processes, not remote API calls.
 - **Expose the server for remote access.** Use a tunnel like [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) to chat with your coding agents from any browser, anywhere, while they operate on your local files and environment.
-- **OAuth protects access.** Only the email addresses you configure in `ALLOWED_EMAIL` can log in, so your CLI sessions stay private even when exposed over the internet.
+- **First-party owner auth protects access.** Create one local owner account per backend; exposed first-run setup can be guarded with `AUTH_SETUP_TOKEN`.
 
 ## Additional features
 
@@ -64,7 +65,7 @@ Beyond the headline capabilities above, Agent Cockpit also ships with:
 - **Browser tab status indicator** — favicon dot shows when a task is still running so you can flip away and check back
 - **Per-CLI context tooltip** — hover the context chip to see what the active backend reports (tokens vs. credits/percentage)
 - **Dark and light themes** — system-aware theme with manual override
-- **Google and GitHub OAuth** — email whitelist for access control
+- **First-party authentication** — local owner setup, password login, recovery codes, mobile pairing, and optional legacy OAuth compatibility
 - **Self-update** — check for updates and apply them from the UI with one click
 - **Pluggable backend system** — extensible adapter architecture for adding new CLI backends
 - **Graceful shutdown** — clean process cleanup on SIGTERM/SIGINT
@@ -77,9 +78,9 @@ Beyond the headline capabilities above, Agent Cockpit also ships with:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [Kiro CLI](https://kiro.dev) (`kiro-cli`)
   - [OpenAI Codex CLI](https://github.com/openai/codex) (`codex`, install with `npm install -g @openai/codex`)
-- At least one OAuth provider configured: Google OAuth 2.0 **or** GitHub OAuth (or both)
 - (Optional) [LibreOffice](https://www.libreoffice.org/) and/or [Pandoc](https://pandoc.org/) on `PATH` to expand Knowledge Base ingestion to Office and other document formats
 - (Optional) [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) or a similar tunnel for remote access — see [ONBOARDING.md](ONBOARDING.md) for a step-by-step self-hosting guide with PM2 and Cloudflare Tunnel
+- (Optional) Xcode and an iPhone running iOS 18+ to build and install the native app — see [docs/ios-app.md](docs/ios-app.md)
 
 ## Quick Start
 
@@ -103,7 +104,7 @@ cp .env.example .env
 npm start
 ```
 
-4. Open `http://localhost:3334` in your browser.
+4. Open `http://localhost:3334` in your browser and create the first local owner account.
 
 ## Environment Variables
 
@@ -111,13 +112,16 @@ npm start
 |----------|----------|---------|-------------|
 | `PORT` | No | `3334` | Server listen port |
 | `SESSION_SECRET` | Yes | — | Secret for signing session cookies |
-| `GOOGLE_CLIENT_ID` | No* | — | Google OAuth 2.0 client ID |
-| `GOOGLE_CLIENT_SECRET` | No* | — | Google OAuth 2.0 client secret |
-| `GOOGLE_CALLBACK_URL` | No* | — | Google OAuth callback URL |
-| `GITHUB_CLIENT_ID` | No* | — | GitHub OAuth client ID |
-| `GITHUB_CLIENT_SECRET` | No* | — | GitHub OAuth client secret |
-| `GITHUB_CALLBACK_URL` | No* | — | GitHub OAuth callback URL |
-| `ALLOWED_EMAIL` | Yes | — | Comma-separated list of allowed email addresses |
+| `AUTH_DATA_DIR` | No | `data/auth` | First-party owner auth state directory |
+| `AUTH_SETUP_TOKEN` | Recommended for remote setup | — | Token required to create the first owner account from a non-localhost request |
+| `AUTH_ENABLE_LEGACY_OAUTH` | No | `false` | Set to `true` to register legacy Google/GitHub OAuth routes |
+| `GOOGLE_CLIENT_ID` | No | — | Legacy Google OAuth client ID, used only when legacy OAuth is enabled |
+| `GOOGLE_CLIENT_SECRET` | No | — | Legacy Google OAuth client secret, used only when legacy OAuth is enabled |
+| `GOOGLE_CALLBACK_URL` | No | — | Legacy Google OAuth callback URL, used only when legacy OAuth is enabled |
+| `GITHUB_CLIENT_ID` | No | — | Legacy GitHub OAuth client ID, used only when legacy OAuth is enabled |
+| `GITHUB_CLIENT_SECRET` | No | — | Legacy GitHub OAuth client secret, used only when legacy OAuth is enabled |
+| `GITHUB_CALLBACK_URL` | No | — | Legacy GitHub OAuth callback URL, used only when legacy OAuth is enabled |
+| `ALLOWED_EMAIL` | No | — | Legacy OAuth allowed-email list |
 | `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
 | `BASE_PATH` | No | `''` | URL base path for reverse proxy deployments |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
@@ -125,30 +129,33 @@ npm start
 | `CODEX_APPROVAL_POLICY` | No | `on-request` | Codex approval policy for interactive threads (`untrusted`, `on-failure`, `on-request`, `never`) |
 | `CODEX_SANDBOX_MODE` | No | `workspace-write` | Codex sandbox mode for interactive threads (`read-only`, `workspace-write`, `danger-full-access`). Use `CODEX_APPROVAL_POLICY=never` with `CODEX_SANDBOX_MODE=danger-full-access` to run Codex with full elevated permissions. |
 
-*\* At least one OAuth provider (Google or GitHub) must be fully configured. You can set up one or both.*
-
 ## Authentication Setup
 
-You need at least one OAuth provider configured. You can use Google, GitHub, or both.
+Agent Cockpit uses one first-party local owner account by default. No GitHub, Google, Apple ID, or Cloudflare Access login is required for the normal self-hosted flow.
 
-### Google OAuth
+On first run, open `/auth/setup` and create the owner account with an email, display name, and password of at least 12 characters. If the backend is exposed through a tunnel before setup, set `AUTH_SETUP_TOKEN` and enter that token on the setup page so a remote visitor cannot claim the empty backend.
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2. Create a new project (or select an existing one).
-3. Navigate to **APIs & Services > Credentials**.
-4. Click **Create Credentials > OAuth client ID**.
-5. Select **Web application** as the application type.
-6. Add `http://localhost:3334` to **Authorized JavaScript origins**.
-7. Add `http://localhost:3334/auth/google/callback` to **Authorized redirect URIs**.
-8. Copy the Client ID and Client Secret into your `.env` file.
-9. Set `ALLOWED_EMAIL` to the Google account email you want to grant access.
+After setup, open **Settings > Security** to:
 
-### GitHub OAuth
+- Register one or more passkeys.
+- Generate recovery codes and store them somewhere safe.
+- Enable **Require passkey for login** after at least one passkey and one unused recovery code exist.
+- Create QR/manual pairing codes for the iOS app.
+- Review and revoke paired mobile devices.
 
-1. Go to **GitHub Settings > Developer settings > OAuth Apps > New OAuth App**.
-2. Set the **Authorization callback URL** to `http://localhost:3334/auth/github/callback` (or your production URL).
-3. After creating the app, copy the Client ID and generate a Client Secret.
-4. Add `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET`, and `GITHUB_CALLBACK_URL` to your `.env`.
+Passkeys are tied to the backend domain. If you move from one host to another, for example from `chat-dev.example.com` to `chat.example.com`, register a passkey while signed in on the new domain.
+
+For local lockout recovery, run this on the backend machine:
+
+```bash
+npm run auth:reset -- --password "new long password" --disable-passkey-required --revoke-sessions --regenerate-recovery-codes
+```
+
+The reset command requires local filesystem access. It can reset the owner password, disable passkey-required mode, revoke sessions, revoke mobile devices, and print replacement recovery codes.
+
+### Legacy OAuth
+
+Google/GitHub OAuth is legacy-only and disabled by default. Set `AUTH_ENABLE_LEGACY_OAUTH=true` only if you need the old provider routes temporarily, then configure the provider client id, client secret, callback URL, and `ALLOWED_EMAIL`.
 
 ## Remote Access with Cloudflare Tunnel
 
@@ -158,7 +165,19 @@ To access Agent Cockpit from outside your local network, use [Cloudflare Tunnel]
 cloudflared tunnel --url http://localhost:3334
 ```
 
-Use the tunnel-provided URL to reach your local Agent Cockpit from any device. Make sure to update your OAuth provider's **Authorized JavaScript origins** and **Authorized redirect URIs** to include the tunnel URL.
+Use the tunnel-provided URL to reach your local Agent Cockpit from any device. For a fresh exposed backend, set `AUTH_SETUP_TOKEN` before creating the owner account.
+
+## iOS App
+
+The native iOS app lives in `ios/AgentCockpit`. It connects to a backend URL that the user enters on the connection screen, so it works with personal tunnel domains, LAN hosts, and separate dev/prod backends.
+
+Supported login paths:
+
+- **Sign in with Passkey or Password** opens the backend-owned login page in the system authentication session and returns to the app with a one-time code.
+- **Scan QR Code** uses a pairing QR code created from **Settings > Security** in the web UI.
+- **Pair Device** accepts the manual `challengeId` and pairing code from the same web UI panel.
+
+See [docs/ios-app.md](docs/ios-app.md) for Xcode install steps, real-device setup, and mobile troubleshooting.
 
 ## Project Structure
 
@@ -170,11 +189,12 @@ agent-cockpit/
 │   ├── types/index.ts        # Shared type definitions
 │   ├── config/index.ts       # Environment configuration
 │   ├── middleware/
-│   │   ├── auth.ts           # OAuth strategies, login page, auth routes
+│   │   ├── auth.ts           # First-party owner auth, legacy OAuth, login routes
 │   │   ├── csrf.ts           # CSRF token generation and validation
 │   │   └── security.ts       # Helmet CSP configuration
 │   ├── routes/chat.ts        # All chat API routes
 │   └── services/
+│       ├── localAuthStore.ts # First-party auth state, passkeys, recovery codes, mobile devices
 │       ├── backends/
 │       │   ├── base.ts           # Base adapter interface for CLI backends
 │       │   ├── claudeCode.ts     # Claude Code CLI adapter
@@ -193,8 +213,10 @@ agent-cockpit/
 │   ├── v2/                   # Default UI (React 18 + Babel Standalone, no build step)
 │   │   ├── index.html
 │   │   └── src/              # JSX components, screens, primitives, styles
+├── ios/                      # Native iOS companion app and Swift smoke tests
 ├── docs/                     # Wiki-style specification (see SPEC.md)
 ├── scripts/                  # Repository maintenance helpers
+│   └── auth-reset.ts         # Local owner-account recovery command
 ├── test/                     # Jest test suites
 └── data/                     # Runtime data (gitignored)
     ├── chat/
@@ -216,7 +238,7 @@ Tests use Jest and run with:
 npm test
 ```
 
-Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, CodexAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, self-update service, OAuth/auth flows, settings service, browser tab indicator, memory MCP and watcher, and the full Knowledge Base pipeline (ingestion, digestion, dreaming, embeddings, vector store, folders, multi-location, handlers).
+Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, CodexAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, self-update service, first-party auth and legacy OAuth flows, settings service, browser tab indicator, memory MCP and watcher, and the full Knowledge Base pipeline (ingestion, digestion, dreaming, embeddings, vector store, folders, multi-location, handlers).
 
 CI runs tests automatically on every pull request against `main` via GitHub Actions. Version bumps are automated on merge to `main`.
 

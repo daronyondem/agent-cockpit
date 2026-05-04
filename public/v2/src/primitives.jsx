@@ -163,7 +163,7 @@ const ProviderLogo = {
 };
 
 /* Footer user block. `user` comes from GET /api/me — shape:
-   { displayName: string|null, email: string|null, provider: 'google'|'github'|null }.
+   { displayName: string|null, email: string|null, provider: 'local'|'google'|'github'|null }.
    null until the fetch resolves (initial paint or test screens with no prop). */
 function SidebarUser({ user }){
   if (!user || (!user.displayName && !user.email && !user.provider)) {
@@ -171,7 +171,9 @@ function SidebarUser({ user }){
   }
   const name = user.displayName || (user.email ? user.email.split('@')[0] : 'User');
   const logo = user.provider && ProviderLogo[user.provider] ? ProviderLogo[user.provider]() : null;
-  const providerLabel = user.provider === 'google' ? 'Google' : user.provider === 'github' ? 'GitHub' : null;
+  const providerLabel = user.provider === 'local'
+    ? 'Local owner'
+    : user.provider === 'google' ? 'Google' : user.provider === 'github' ? 'GitHub' : null;
   return (
     <span className="user">
       <span
