@@ -36,6 +36,31 @@ describe('WebSocket streaming', () => {
     expect(doneEvent).toBeDefined();
   });
 
+  test('broadcasts stream events to multiple WebSockets for the same conversation', async () => {
+    const conv = await env.chatService.createConversation('WS Multi Client');
+
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'Hello both clients', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws1 = await env.connectWs(conv.id);
+    const ws2 = await env.connectWs(conv.id);
+    const events1Promise = env.readWsEvents(ws1);
+    const events2Promise = env.readWsEvents(ws2);
+
+    await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'test multi-client ws',
+      backend: 'claude-code',
+    });
+
+    const [events1, events2] = await Promise.all([events1Promise, events2Promise]);
+    expect(events1.find((e: any) => e.type === 'text')?.content).toBe('Hello both clients');
+    expect(events2.find((e: any) => e.type === 'text')?.content).toBe('Hello both clients');
+    expect(events1.some((e: any) => e.type === 'done')).toBe(true);
+    expect(events2.some((e: any) => e.type === 'done')).toBe(true);
+  });
+
   test('records backend runtime without forwarding it over WebSocket', async () => {
     const conv = await env.chatService.createConversation('WS Runtime Metadata');
     let unblock!: () => void;

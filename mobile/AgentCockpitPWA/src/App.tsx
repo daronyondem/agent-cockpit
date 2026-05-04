@@ -22,6 +22,8 @@ import type {
 } from './types';
 
 const effortOrder: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+const LIST_AUTO_REFRESH_MS = 15_000;
+const ALL_WORKSPACES = 'all';
 
 type Screen = 'list' | 'chat';
 
@@ -58,6 +60,7 @@ type FilePreviewState = {
 export default function App() {
   const clientRef = useRef(new AgentCockpitAPI());
   const socketRef = useRef<WebSocket | null>(null);
+  const listStreamSocketsRef = useRef<Map<string, WebSocket>>(new Map());
   const attachInputRef = useRef<HTMLInputElement | null>(null);
   const explorerUploadInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -71,6 +74,7 @@ export default function App() {
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [activeStreamIDs, setActiveStreamIDs] = useState<Set<string>>(new Set());
   const [listArchived, setListArchived] = useState(false);
+  const [workspaceFilter, setWorkspaceFilter] = useState(ALL_WORKSPACES);
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
   const [draft, setDraft] = useState('');
   const [streamText, setStreamText] = useState('');
@@ -130,8 +134,45 @@ export default function App() {
 
   useEffect(() => {
     void loadDashboard();
-    return () => socketRef.current?.close();
+    return () => {
+      socketRef.current?.close();
+      closeListStreamSockets();
+    };
   }, []);
+
+  useEffect(() => {
+    if (workspaceFilter !== ALL_WORKSPACES && conversations.every((conversation) => conversation.workspaceHash !== workspaceFilter)) {
+      setWorkspaceFilter(ALL_WORKSPACES);
+    }
+  }, [conversations, workspaceFilter]);
+
+  useEffect(() => {
+    if (screen !== 'list') {
+      closeListStreamSockets();
+      return;
+    }
+    syncListStreamSockets(activeStreamIDs);
+  }, [screen, activeStreamIDs]);
+
+  useEffect(() => {
+    if (screen !== 'list') {
+      return;
+    }
+    const refresh = () => void refreshConversationList();
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') {
+        refresh();
+      }
+    };
+    const timer = window.setInterval(refresh, LIST_AUTO_REFRESH_MS);
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refreshWhenVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refreshWhenVisible);
+    };
+  }, [screen, listArchived]);
 
   useEffect(() => {
     if (selectedCliProfileId) {
@@ -212,16 +253,22 @@ export default function App() {
       setLoading(true);
       setErrorMessage(null);
       socketRef.current?.close();
-      const conversation = await clientRef.current.getConversation(id);
+      closeListStreamSockets();
+      const [conversation, streamIDs] = await Promise.all([
+        clientRef.current.getConversation(id),
+        clientRef.current.getActiveStreams(),
+      ]);
+      const streamActive = streamIDs.has(id);
+      setActiveStreamIDs(streamIDs);
       setActiveConversation(conversation);
       setDraft('');
       setStreamText('');
       setPendingInteraction(null);
       setPendingAttachments([]);
       hydrateSelectionFromConversation(conversation);
-      setIsStreaming(activeStreamIDs.has(id));
+      setIsStreaming(streamActive);
       setScreen('chat');
-      if (activeStreamIDs.has(id)) {
+      if (streamActive) {
         startStream(id);
       }
     } catch (error) {
@@ -343,6 +390,104 @@ export default function App() {
         socketRef.current = null;
       }
     };
+  }
+
+  function syncListStreamSockets(streamIDs: Set<string>) {
+    const sockets = listStreamSocketsRef.current;
+    for (const [conversationID, socket] of sockets) {
+      if (!streamIDs.has(conversationID)) {
+        socket.close();
+        sockets.delete(conversationID);
+      }
+    }
+    for (const conversationID of streamIDs) {
+      const existing = sockets.get(conversationID);
+      if (existing && existing.readyState !== WebSocket.CLOSED && existing.readyState !== WebSocket.CLOSING) {
+        continue;
+      }
+      const socket = new WebSocket(clientRef.current.websocketURL(conversationID));
+      sockets.set(conversationID, socket);
+      socket.onopen = () => socket.send(JSON.stringify({ type: 'reconnect' }));
+      socket.onmessage = (event) => {
+        try {
+          handleListStreamEvent(conversationID, JSON.parse(event.data) as StreamEvent);
+        } catch {
+          // List monitoring is best-effort; the periodic REST refresh remains authoritative.
+        }
+      };
+      socket.onclose = () => {
+        if (listStreamSocketsRef.current.get(conversationID) === socket) {
+          listStreamSocketsRef.current.delete(conversationID);
+        }
+      };
+    }
+  }
+
+  function closeListStreamSockets() {
+    for (const socket of listStreamSocketsRef.current.values()) {
+      socket.close();
+    }
+    listStreamSocketsRef.current.clear();
+  }
+
+  function handleListStreamEvent(conversationID: string, event: StreamEvent) {
+    switch (event.type) {
+      case 'assistant_message':
+        if (event.message) {
+          const message = event.message;
+          setConversations((items) =>
+            items.map((item) =>
+              item.id === conversationID
+                ? {
+                    ...item,
+                    lastMessage: message.content || item.lastMessage,
+                    updatedAt: message.timestamp || item.updatedAt,
+                  }
+                : item,
+            ),
+          );
+        }
+        void refreshConversationList();
+        break;
+      case 'title_updated':
+        if (event.title) {
+          setConversations((items) => items.map((item) => (item.id === conversationID ? { ...item, title: event.title || item.title } : item)));
+        }
+        break;
+      case 'error':
+        if (event.terminal !== false) {
+          markListStreamFinished(conversationID);
+          notify('Agent Cockpit stream failed', event.error || 'The stream ended with an error.');
+        }
+        break;
+      case 'done':
+        markListStreamFinished(conversationID);
+        notify('Agent Cockpit stream finished', 'The latest response is ready.');
+        break;
+      case 'tool_activity':
+        if (event.isPlanMode && event.planContent && event.planAction !== 'exit') {
+          notify('Agent Cockpit needs approval', event.planContent);
+        } else if (event.isQuestion && event.questions?.length) {
+          notify('Agent Cockpit has a question', event.questions[0].question);
+        }
+        break;
+      default:
+        break;
+    }
+  }
+
+  function markListStreamFinished(conversationID: string) {
+    setActiveStreamIDs((current) => {
+      const next = new Set(current);
+      next.delete(conversationID);
+      return next;
+    });
+    const socket = listStreamSocketsRef.current.get(conversationID);
+    if (socket) {
+      listStreamSocketsRef.current.delete(conversationID);
+      socket.close();
+    }
+    void refreshConversationList();
   }
 
   function handleStreamEvent(conversationID: string, event: StreamEvent) {
@@ -1050,11 +1195,13 @@ export default function App() {
           conversations={conversations}
           activeStreamIDs={activeStreamIDs}
           archived={listArchived}
+          workspaceFilter={workspaceFilter}
           loading={loading}
           currentUser={currentUser}
           errorMessage={errorMessage}
           onRefresh={() => void loadDashboard(listArchived)}
           onToggleArchived={() => void loadDashboard(!listArchived)}
+          onWorkspaceFilter={setWorkspaceFilter}
           onOpenConversation={(id) => void openConversation(id)}
           onNewConversation={() => {
             setNewWorkingDir(settings?.workingDirectory || '');
@@ -1242,14 +1389,21 @@ function ConversationListScreen(props: {
   conversations: ConversationListItem[];
   activeStreamIDs: Set<string>;
   archived: boolean;
+  workspaceFilter: string;
   loading: boolean;
   currentUser: CurrentUser | null;
   errorMessage: string | null;
   onRefresh: () => void;
   onToggleArchived: () => void;
+  onWorkspaceFilter: (workspaceHash: string) => void;
   onOpenConversation: (id: string) => void;
   onNewConversation: () => void;
 }) {
+  const workspaces = useMemo(() => workspaceOptions(props.conversations), [props.conversations]);
+  const visibleConversations = props.workspaceFilter === ALL_WORKSPACES
+    ? props.conversations
+    : props.conversations.filter((conversation) => conversation.workspaceHash === props.workspaceFilter);
+
   return (
     <section className="screen">
       <header className="topbar">
@@ -1262,6 +1416,17 @@ function ConversationListScreen(props: {
       <nav className="toolbar">
         <Button label="New" variant="primary" onClick={props.onNewConversation} />
         <Button label={props.archived ? 'Active' : 'Archived'} onClick={props.onToggleArchived} />
+        {workspaces.length > 1 ? (
+          <label className="filter-select">
+            <span>Workspace</span>
+            <select value={props.workspaceFilter} onChange={(event) => props.onWorkspaceFilter(event.currentTarget.value)}>
+              <option value={ALL_WORKSPACES}>All conversations</option>
+              {workspaces.map((workspace) => (
+                <option key={workspace.hash} value={workspace.hash}>{workspace.label}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         <Button label="Refresh" onClick={props.onRefresh} />
         {'Notification' in window && Notification.permission === 'default' ? (
           <Button label="Enable Alerts" onClick={() => void Notification.requestPermission()} />
@@ -1269,7 +1434,7 @@ function ConversationListScreen(props: {
       </nav>
       {props.errorMessage ? <ErrorBanner message={props.errorMessage} /> : null}
       <div className="conversation-list">
-        {props.conversations.length ? props.conversations.map((conversation) => (
+        {visibleConversations.length ? visibleConversations.map((conversation) => (
           <button key={conversation.id} className="conversation-card" onClick={() => props.onOpenConversation(conversation.id)}>
             <span className="row">
               <strong>{conversation.title || 'Untitled'}</strong>
@@ -1282,7 +1447,7 @@ function ConversationListScreen(props: {
               <span>{formatDate(conversation.updatedAt)}</span>
             </span>
           </button>
-        )) : <p className="empty">No conversations.</p>}
+        )) : <p className="empty">{props.conversations.length ? 'No conversations in this workspace.' : 'No conversations.'}</p>}
       </div>
     </section>
   );
@@ -1323,6 +1488,23 @@ function ChatScreen(props: {
   onOpenSettings: () => void;
 }) {
   const conversation = props.conversation;
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const lastMessage = conversation?.messages[conversation.messages.length - 1];
+  const scrollKey = [
+    conversation?.id || '',
+    conversation?.messages.length || 0,
+    lastMessage?.id || '',
+    lastMessage?.content.length || 0,
+    props.streamText.length,
+    props.isStreaming ? 'streaming' : 'idle',
+  ].join(':');
+  useEffect(() => {
+    const transcript = transcriptRef.current;
+    if (!transcript) {
+      return;
+    }
+    transcript.scrollTop = transcript.scrollHeight;
+  }, [scrollKey]);
   if (!conversation) {
     return <section className="screen center">No conversation selected.</section>;
   }
@@ -1343,7 +1525,7 @@ function ChatScreen(props: {
         <Button label="More" onClick={props.onOpenActions} />
       </header>
       {props.errorMessage ? <ErrorBanner message={props.errorMessage} /> : null}
-      <div className="transcript">
+      <div className="transcript" ref={transcriptRef}>
         {conversation.messages.map((message) => (
           <MessageBubble
             key={message.id}
@@ -2022,6 +2204,16 @@ function lastTwoPathComponents(path: string): string {
   const parts = path.split('/').filter(Boolean);
   if (parts.length < 2) return path || 'Default workspace';
   return parts.slice(-2).join('/');
+}
+
+function workspaceOptions(conversations: ConversationListItem[]): Array<{ hash: string; label: string }> {
+  const byHash = new Map<string, string>();
+  for (const conversation of conversations) {
+    if (!byHash.has(conversation.workspaceHash)) {
+      byHash.set(conversation.workspaceHash, lastTwoPathComponents(conversation.workingDir));
+    }
+  }
+  return Array.from(byHash, ([hash, label]) => ({ hash, label })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 function formatDate(value: string): string {

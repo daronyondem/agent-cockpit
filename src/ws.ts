@@ -83,7 +83,7 @@ export function attachWebSocket(
   const bufferCleanupMs = opts.bufferCleanupMs ?? BUFFER_CLEANUP_MS;
 
   const wss = new WebSocketServer({ noServer: true });
-  const activeWebSockets = new Map<string, WebSocket>();
+  const activeWebSockets = new Map<string, Set<WebSocket>>();
   const convBuffers = new Map<string, ConvBuffer>();
   let shuttingDown = false;
 
@@ -92,13 +92,15 @@ export function attachWebSocket(
   const aliveMap = new WeakMap<WebSocket, boolean>();
 
   const pingInterval = setInterval(() => {
-    for (const ws of activeWebSockets.values()) {
-      if (!aliveMap.get(ws)) {
-        ws.terminate();
-        continue;
+    for (const sockets of activeWebSockets.values()) {
+      for (const ws of sockets) {
+        if (!aliveMap.get(ws)) {
+          ws.terminate();
+          continue;
+        }
+        aliveMap.set(ws, false);
+        ws.ping();
       }
-      aliveMap.set(ws, false);
-      ws.ping();
     }
   }, PING_INTERVAL);
 
@@ -123,6 +125,45 @@ export function attachWebSocket(
       clearBufferTimers(buf);
       convBuffers.delete(convId);
     }
+  }
+
+  function addActiveSocket(convId: string, ws: WebSocket): number {
+    let sockets = activeWebSockets.get(convId);
+    const openCount = sockets ? getOpenSockets(convId).length : 0;
+    sockets = activeWebSockets.get(convId);
+    if (!sockets) {
+      sockets = new Set();
+      activeWebSockets.set(convId, sockets);
+    }
+    sockets.add(ws);
+    return openCount;
+  }
+
+  function removeActiveSocket(convId: string, ws: WebSocket): boolean {
+    const sockets = activeWebSockets.get(convId);
+    if (!sockets || !sockets.has(ws)) return false;
+    sockets.delete(ws);
+    if (sockets.size === 0) {
+      activeWebSockets.delete(convId);
+    }
+    return true;
+  }
+
+  function getOpenSockets(convId: string): WebSocket[] {
+    const sockets = activeWebSockets.get(convId);
+    if (!sockets) return [];
+    const open: WebSocket[] = [];
+    for (const ws of sockets) {
+      if (ws.readyState === WebSocket.OPEN) {
+        open.push(ws);
+      } else if (ws.readyState === WebSocket.CLOSED) {
+        sockets.delete(ws);
+      }
+    }
+    if (sockets.size === 0) {
+      activeWebSockets.delete(convId);
+    }
+    return open;
   }
 
   function replayBuffer(ws: WebSocket, convId: string) {
@@ -225,13 +266,7 @@ export function attachWebSocket(
 
   // ── Connection handler ────────────────────────────────────────────────────
   function handleConnection(ws: WebSocket, convId: string) {
-    // Close any existing WS for this conversation
-    const existing = activeWebSockets.get(convId);
-    const hadExisting = !!(existing && existing.readyState === WebSocket.OPEN);
-    if (existing && existing.readyState === WebSocket.OPEN) {
-      existing.close(1000, 'Replaced by new connection');
-    }
-    activeWebSockets.set(convId, ws);
+    const existingOpenCount = addActiveSocket(convId, ws);
     aliveMap.set(ws, true);
 
     // Cancel post-completion cleanup so the reconnected client can replay.
@@ -242,7 +277,7 @@ export function attachWebSocket(
     }
 
     const eventTypes = buf ? buf.events.map(e => 'type' in e ? e.type : '?').join(',') : '';
-    console.log(`[diag][ws] handleConnection conv=${convId.slice(0,8)} replacedExisting=${hadExisting} bufEvents=${buf?.events.length ?? 0} hadCleanup=${hadCleanup} activeStreamHas=${activeStreams.has(convId)} types=[${eventTypes}]`);
+    console.log(`[diag][ws] handleConnection conv=${convId.slice(0,8)} existingOpen=${existingOpenCount} bufEvents=${buf?.events.length ?? 0} hadCleanup=${hadCleanup} activeStreamHas=${activeStreams.has(convId)} types=[${eventTypes}]`);
 
     // If there's a buffer with events, this is a reconnection — replay immediately
     if (buf && buf.events.length > 0) {
@@ -294,14 +329,13 @@ export function attachWebSocket(
     });
 
     ws.on('close', (code, reason) => {
-      const wasActive = activeWebSockets.get(convId) === ws;
+      const wasActive = removeActiveSocket(convId, ws);
       if (!wasActive) return;
       console.log(`[diag][ws] ws-close conv=${convId.slice(0,8)} code=${code} reason="${reason?.toString() || ''}" wasActive=${wasActive} activeStreamHas=${activeStreams.has(convId)}`);
       if (!shuttingDown) {
         console.log(`[ws] Disconnected for conv=${convId}`);
       }
-      activeWebSockets.delete(convId);
-      if (activeStreams.has(convId)) {
+      if (activeStreams.has(convId) && !isConnected(convId)) {
         startStreamGracePeriod(convId);
       }
     });
@@ -335,14 +369,17 @@ export function attachWebSocket(
       }
     }
 
-    // Send to WS if open
-    const ws = activeWebSockets.get(convId);
-    const wsOpen = !!(ws && ws.readyState === WebSocket.OPEN);
+    // Send to every open WS for this conversation.
+    const sockets = getOpenSockets(convId);
+    const wsOpen = sockets.length > 0;
     if (frame.type !== 'text' && frame.type !== 'thinking') {
       console.log(`[diag][ws] send conv=${convId.slice(0,8)} type=${frame.type} wsOpen=${wsOpen} replayable=${replayable} bufLen=${buf?.events.length ?? 0}`);
     }
     if (wsOpen) {
-      ws!.send(JSON.stringify(frame));
+      const payload = JSON.stringify(frame);
+      for (const socket of sockets) {
+        socket.send(payload);
+      }
       return true;
     }
 
@@ -353,14 +390,13 @@ export function attachWebSocket(
 
   /** True if a WebSocket is currently open for this conversation. */
   function isConnected(convId: string): boolean {
-    const ws = activeWebSockets.get(convId);
-    return !!ws && ws.readyState === WebSocket.OPEN;
+    return getOpenSockets(convId).length > 0;
   }
 
   /** Enumerate every conversation with an OPEN WebSocket. */
   function forEachConnected(cb: (convId: string) => void): void {
-    for (const [convId, ws] of activeWebSockets) {
-      if (ws.readyState === WebSocket.OPEN) cb(convId);
+    for (const [convId] of activeWebSockets) {
+      if (getOpenSockets(convId).length > 0) cb(convId);
     }
   }
 
@@ -391,9 +427,11 @@ export function attachWebSocket(
   function shutdown() {
     shuttingDown = true;
     clearInterval(pingInterval);
-    for (const [convId, ws] of activeWebSockets) {
+    for (const [convId, sockets] of activeWebSockets) {
       console.log(`[ws-shutdown] Closing WS for conv=${convId}`);
-      ws.close(1001, 'Server shutting down');
+      for (const ws of sockets) {
+        ws.close(1001, 'Server shutting down');
+      }
     }
     activeWebSockets.clear();
     for (const [convId] of convBuffers) {
