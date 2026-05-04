@@ -742,6 +742,44 @@ Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, succes
 - `_checkRemoteVersion()` — `git fetch origin main` + `git show origin/main:package.json`
 - `_isNewer(remote, local)` — three-part numeric semver comparison
 
+## 4.3.1 CliUpdateService
+
+**File:** `src/services/cliUpdateService.ts`
+
+`CliUpdateService` detects and updates the local backend CLIs that Agent Cockpit can spawn through configured CLI profiles. It is deliberately separate from `UpdateService`: `UpdateService` updates Agent Cockpit itself, while this service updates vendor CLI binaries such as Codex, Claude Code, and Kiro.
+
+**Lifecycle:**
+- `server.ts` constructs `new CliUpdateService(__dirname)` next to `UpdateService`, passes it into `createChatRouter`, and starts it after `chatService.initialize()` with `cliUpdateService.start(() => chatService.getSettings())`.
+- `start(loadSettings)` runs an immediate background check and then polls every 15 minutes on an unref'd interval.
+- `stop()` clears the interval; `chatShutdown()` calls it with the rest of the router-owned services.
+
+**Target resolution:**
+- Reads `Settings.cliProfiles` plus an in-memory server-configured profile for the default backend when the settings payload lacks one.
+- Skips disabled profiles and groups active profiles by vendor, command, and `PATH`, producing one update item for each real runtime target.
+- Codex profiles resolve through `resolveCodexCliRuntime(profile)` so `command`, merged `env`, and `CODEX_HOME` are honored.
+- Claude Code profiles resolve through `resolveClaudeCliRuntime(profile)` so `command`, merged `env`, and `CLAUDE_CONFIG_DIR` are honored.
+- Kiro uses the server-configured `kiro-cli` runtime because Kiro profiles do not expose profile-local command/config/env overrides.
+
+**Status checks:**
+- Runs the vendor version command (`codex --version`, `claude --version`, `kiro-cli version`) and extracts the first semver-looking value.
+- Resolves the command path using `which` (`where` on Windows), or by checking an explicit path command directly.
+- For Codex and Claude Code, calls `npm root -g` and realpath-checks whether the resolved command lives under the expected global package directory (`@openai/codex` or `@anthropic-ai/claude-code`). Only then is the install method marked `npm-global`.
+- For npm-global installs, calls `npm view <package> version` and compares three-part semver numerically.
+- Kiro is marked `self-update` with an update command, but there is no latest-version source in the current service, so `updateAvailable` remains false unless a future detector adds one.
+- Missing/unknown/native installs remain visible in Settings with `lastError`, but they are not actionable from the composer notification.
+
+**Update path:**
+- `triggerUpdate(itemId, { loadSettings, hasActiveStreams, onUpdated })` refuses when another update is in progress for the same item or when `hasActiveStreams()` reports any active/pending conversation turn.
+- Supported commands are:
+  - Codex npm-global: `npm i -g @openai/codex@latest`
+  - Claude Code npm-global: `npm i -g @anthropic-ai/claude-code@latest`
+  - Kiro self-update: `<kiro command> update --non-interactive`
+- Each command runs through `execFile` with the target profile env, a 120-second timeout, and capped output.
+- On success the route-level caller invokes `backendRegistry.shutdownAll()` so long-lived backend child processes restart on next use with the updated executable.
+- After the update command, the service re-probes the target and returns `{ success: true, steps, item }`. Failures return `{ success: false, steps, error, item? }` without mutating unrelated status items.
+
+See [ADR-0027](adr/0027-manage-cli-updates-from-web-cockpit.md) for the web-only product decision and supported-install policy.
+
 ## 4.4 ClaudePlanUsageService
 
 **File:** `src/services/claudePlanUsageService.ts`

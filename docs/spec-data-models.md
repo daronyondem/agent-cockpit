@@ -54,6 +54,7 @@ agent-cockpit/
 │       │       ├── pptx.ts             # PPTX per-slide hybrid: XML extract / AI / image-only via signals + LO rasterization
 │       │       └── passthrough.ts      # Text (md/txt/json/...) + hybrid image passthrough (per-image AI description, SVG bypass)
 │       ├── cliProfiles.ts              # CLI profile helpers: server-configured profile IDs/defaults and runtime resolver
+│       ├── cliUpdateService.ts         # In-memory local CLI version checks and supported CLI update commands
 │       ├── chatService.ts              # Conversation CRUD, messages, sessions
 │       ├── settingsService.ts          # Settings I/O: read, write, legacy migration
 │       └── updateService.ts            # Self-update: version checking, git pull, PM2 restart
@@ -65,6 +66,7 @@ agent-cockpit/
 │       ├── index.html                  # V2 app entry
 │       └── src/                        # V2 React/Babel prototype sources and styles
 │           ├── api.js                  # CSRF-aware REST/WebSocket client helpers
+│           ├── cliUpdateStore.js       # Web-only cached CLI update status/action store
 │           ├── streamStore.js          # Per-conversation streaming, queue, draft, and WebSocket state
 │           ├── shell.jsx               # Root app shell, sidebar wiring, chat surface
 │           ├── screens/                # Real V2 screens: KB, files, settings
@@ -491,6 +493,39 @@ Daily per-backend/model token usage records for global statistics:
       usage: Usage              // Accumulated usage for this backend+model on this day
     }]
   }]
+}
+```
+
+## CLI Update Status (API-only)
+
+CLI update state is process-local and in-memory. No CLI update cache is written to disk; the service rebuilds it from settings and subprocess probes after startup.
+
+```ts
+type CliInstallMethod = 'npm-global' | 'self-update' | 'unknown' | 'missing';
+
+interface CliUpdateStatus {
+  id: string;
+  vendor: 'claude-code' | 'codex' | 'kiro';
+  label: string;
+  command: string;
+  resolvedPath: string | null;
+  profileIds: string[];
+  profileNames: string[];
+  installMethod: CliInstallMethod;
+  currentVersion: string | null;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  updateSupported: boolean;
+  updateInProgress: boolean;
+  lastCheckAt: string | null;
+  lastError: string | null;
+  updateCommand: string[] | null;
+}
+
+interface CliUpdatesResponse {
+  items: CliUpdateStatus[];
+  lastCheckAt: string | null;
+  updateInProgress: boolean;
 }
 ```
 

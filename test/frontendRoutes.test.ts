@@ -62,7 +62,8 @@ describe('frontend routes', () => {
       expect(v2.status).toBe(200);
       expect(v2.headers['content-type']).toMatch(/text\/html/);
       expect(v2.body).toContain('<div id="root"');
-      expect(v2.body).toContain('src/app.css?v=125');
+      expect(v2.body).toContain('src/app.css?v=126');
+      expect(v2.body).toContain('src/cliUpdateStore.js?v=116');
       expect(v2.body).toContain('src/synthesisAtlas.js?v=117');
       expect(v2.body).toContain('src/screens/kbBrowser.jsx?v=119');
       expect(v2.body.indexOf('src/synthesisAtlas.js?v=117')).toBeLessThan(
