@@ -8,7 +8,7 @@ By the end you will have:
 - A Cloudflare Tunnel with a stable public URL, for example `chat.yourdomain.com`
 - One first-party local owner account for the backend
 - Recovery codes and a local reset command for lockout recovery
-- Optional passkeys and iOS mobile pairing for the owner account
+- Optional passkeys and a mobile PWA install path for the owner account
 - Automatic restarts on crash or reboot
 
 ---
@@ -23,7 +23,6 @@ Install the following before you begin:
 | **Claude Code CLI** | `npm install -g @anthropic-ai/claude-code` | `claude --version` |
 | **cloudflared** | `brew install cloudflared` | `cloudflared --version` |
 | **PM2** | `npm install -g pm2` | `pm2 --version` |
-| **Xcode** | App Store | Required only for installing the iOS app on your own device |
 
 You will also need a Cloudflare account with a domain managed by Cloudflare DNS.
 
@@ -224,7 +223,6 @@ You can also manage these from the web UI:
 2. Register one or more passkeys.
 3. Regenerate/store recovery codes if needed.
 4. Enable **Require passkey for login** only after at least one passkey and one unused recovery code exist.
-5. Create mobile pairing codes and revoke paired devices when needed.
 
 Passkeys are bound to the backend domain. If you use both a dev and prod hostname, register passkeys separately on each hostname you plan to use.
 
@@ -283,26 +281,15 @@ Open `https://chat.yourdomain.com` in your browser and confirm:
 
 ---
 
-## 10. iOS App Login
+## 10. Mobile PWA
 
-The iOS app is a native companion client for a backend URL that you enter on the connection screen. To install it on your own iPhone from Xcode, follow [docs/ios-app.md](docs/ios-app.md).
+The supported mobile client is the PWA served by the same backend:
 
-In the iOS app connection screen:
+```text
+https://chat.yourdomain.com/mobile/
+```
 
-1. Enter your backend URL, for example `https://chat.yourdomain.com`.
-2. Tap **Sign in with Passkey or Password**.
-3. Complete the backend-owned login page.
-4. The app receives a one-time callback code and exchanges it for the normal backend session cookie and CSRF token.
-
-Mobile pairing is also supported:
-
-1. Open **Settings > Security** in the web UI.
-2. Click **Create pairing code**.
-3. In the iOS connection screen, tap **Scan QR Code** and scan the displayed QR code.
-
-Manual fallback: enter the displayed `challengeId` and `pairingCode` in the iOS connection screen.
-
-After pairing, **Settings > Security > Paired devices** shows the iPhone's device record. Revoking that device invalidates the mobile session.
+Open that URL on the phone, sign in with the normal owner account, then use the browser's Add to Home Screen flow. The PWA uses the same authenticated web session as the desktop UI, so Xcode, Expo Go, TestFlight, App Store distribution, and native app pairing are not required.
 
 ---
 
@@ -361,6 +348,6 @@ Run `cloudflared tunnel info my-tunnel` and verify `~/.cloudflared/config.yml` h
 
 Make sure the CLI is authenticated on the server machine. For Claude Code, run `claude` in a terminal and confirm it works. Also check that `DEFAULT_WORKSPACE` points to a valid directory.
 
-**iOS app cannot connect**
+**Mobile PWA cannot connect**
 
-Confirm the backend URL includes the scheme, for example `https://chat.yourdomain.com`, and check that `https://chat.yourdomain.com/api/auth/status` is reachable from the phone's network. If QR scan fails, use the manual `challengeId` and pairing code from **Settings > Security**.
+Confirm the backend URL includes the scheme, for example `https://chat.yourdomain.com/mobile/`, and check that `https://chat.yourdomain.com/api/auth/status` is reachable from the phone's network. If the PWA was installed before a new build, fully close and reopen it; if iOS keeps an old shell alive, remove it from the home screen and add it again.

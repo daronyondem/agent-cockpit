@@ -665,15 +665,6 @@
       'auth/policy',
       { method: 'PATCH', body: patch || {} },
     ).then(r => r.json()),
-    createMobilePairingChallenge: () => authFetch(
-      'mobile-pairing/challenges',
-      { method: 'POST', body: {} },
-    ).then(r => r.json()),
-    listMobileDevices: () => authFetch('mobile-devices').then(r => r.json()),
-    revokeMobileDevice: (deviceId) => authFetch(
-      'mobile-devices/' + encodeURIComponent(deviceId),
-      { method: 'DELETE' },
-    ).then(r => r.json()),
   };
 
   /* Per-conversation file attachments. The composer's attachment tray drives

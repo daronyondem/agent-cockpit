@@ -30,17 +30,6 @@ export interface LocalRecoveryCode {
   usedAt?: string;
 }
 
-export interface LocalMobileDevice {
-  id: string;
-  displayName: string;
-  createdAt: string;
-  lastSeenAt: string;
-  lastIp?: string;
-  lastUserAgent?: string;
-  platform?: string;
-  revokedAt?: string;
-}
-
 export interface LocalAuthPolicy {
   passkeyRequired: boolean;
 }
@@ -51,20 +40,12 @@ export interface LocalAuthState {
   policy: LocalAuthPolicy;
   passkeys: LocalPasskeyCredential[];
   recoveryCodes: LocalRecoveryCode[];
-  mobileDevices: LocalMobileDevice[];
 }
 
 export interface CreateOwnerInput {
   email: string;
   displayName: string;
   password: string;
-}
-
-export interface CreateMobileDeviceInput {
-  displayName?: string;
-  ip?: string;
-  userAgent?: string;
-  platform?: string;
 }
 
 export interface CreatePasskeyInput {
@@ -128,16 +109,6 @@ export class LocalAuthStore {
     return state.passkeys.find(passkey => passkey.credentialId === credentialId) ?? null;
   }
 
-  async listMobileDevices(): Promise<LocalMobileDevice[]> {
-    const state = await this.requireState();
-    return [...state.mobileDevices].sort((a, b) => b.lastSeenAt.localeCompare(a.lastSeenAt));
-  }
-
-  async getMobileDevice(id: string): Promise<LocalMobileDevice | null> {
-    const state = await this.requireState();
-    return state.mobileDevices.find(device => device.id === id) ?? null;
-  }
-
   async createOwner(input: CreateOwnerInput): Promise<LocalOwner> {
     const existing = await this.readState();
     if (existing) {
@@ -166,7 +137,6 @@ export class LocalAuthStore {
       },
       passkeys: [],
       recoveryCodes: [],
-      mobileDevices: [],
     };
 
     await this.writeState(state);
@@ -312,59 +282,11 @@ export class LocalAuthStore {
     return deleted ?? null;
   }
 
-  async createMobileDevice(input: CreateMobileDeviceInput): Promise<LocalMobileDevice> {
-    const state = await this.requireState();
-    const now = new Date().toISOString();
-    const device: LocalMobileDevice = {
-      id: crypto.randomUUID(),
-      displayName: cleanOptional(input.displayName) || 'Mobile device',
-      createdAt: now,
-      lastSeenAt: now,
-      ...(cleanOptional(input.ip) ? { lastIp: cleanOptional(input.ip) } : {}),
-      ...(cleanOptional(input.userAgent) ? { lastUserAgent: cleanOptional(input.userAgent) } : {}),
-      ...(cleanOptional(input.platform) ? { platform: cleanOptional(input.platform) } : {}),
-    };
-    state.mobileDevices.push(device);
-    await this.writeState(state);
-    return device;
-  }
-
-  async touchMobileDevice(id: string, input: Omit<CreateMobileDeviceInput, 'displayName'>): Promise<LocalMobileDevice | null> {
-    const state = await this.requireState();
-    const device = state.mobileDevices.find(candidate => candidate.id === id);
-    if (!device || device.revokedAt) {
-      return null;
-    }
-    device.lastSeenAt = new Date().toISOString();
-    const ip = cleanOptional(input.ip);
-    const userAgent = cleanOptional(input.userAgent);
-    const platform = cleanOptional(input.platform);
-    if (ip) device.lastIp = ip;
-    if (userAgent) device.lastUserAgent = userAgent;
-    if (platform) device.platform = platform;
-    await this.writeState(state);
-    return device;
-  }
-
-  async revokeMobileDevice(id: string): Promise<LocalMobileDevice | null> {
-    const state = await this.requireState();
-    const device = state.mobileDevices.find(candidate => candidate.id === id);
-    if (!device) {
-      return null;
-    }
-    if (!device.revokedAt) {
-      device.revokedAt = new Date().toISOString();
-      await this.writeState(state);
-    }
-    return device;
-  }
-
   async resetOwnerAccess(input: {
     email?: string;
     displayName?: string;
     password?: string;
     disablePasskeyRequired?: boolean;
-    revokeMobileDevices?: boolean;
     regenerateRecoveryCodes?: boolean;
   }): Promise<{ owner: LocalOwner; recoveryCodes?: string[] }> {
     const state = await this.requireState();
@@ -386,11 +308,6 @@ export class LocalAuthStore {
 
     if (input.disablePasskeyRequired) {
       state.policy.passkeyRequired = false;
-    }
-    if (input.revokeMobileDevices) {
-      for (const device of state.mobileDevices) {
-        if (!device.revokedAt) device.revokedAt = now;
-      }
     }
 
     let recoveryCodes: string[] | undefined;
@@ -503,7 +420,6 @@ function normalizeState(state: LocalAuthState): LocalAuthState {
     },
     passkeys: Array.isArray(state.passkeys) ? state.passkeys : [],
     recoveryCodes: Array.isArray(state.recoveryCodes) ? state.recoveryCodes : [],
-    mobileDevices: Array.isArray(state.mobileDevices) ? state.mobileDevices : [],
   };
 }
 

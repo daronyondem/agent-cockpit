@@ -1,11 +1,11 @@
 ---
 id: 0022
 title: Bridge mobile OAuth through one-time codes
-status: Accepted
+status: Superseded
 date: 2026-05-03
 supersedes: []
-superseded-by: null
-tags: [ios, auth, oauth]
+superseded-by: 0026
+tags: [ios, auth, oauth, historical]
 affects:
   - src/middleware/auth.ts
   - ios/AgentCockpit/Sources/AgentCockpitCore/APIClient.swift

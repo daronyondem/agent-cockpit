@@ -5,7 +5,7 @@ status: Accepted
 date: 2026-05-03
 supersedes: []
 superseded-by: null
-tags: [auth, ios, server]
+tags: [auth, ios, server, historical]
 affects:
   - src/middleware/auth.ts
   - src/services/localAuthStore.ts

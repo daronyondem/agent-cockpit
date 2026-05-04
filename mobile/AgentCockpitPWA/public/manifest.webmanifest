@@ -1,0 +1,18 @@
+{
+  "name": "Agent Cockpit Mobile",
+  "short_name": "Cockpit",
+  "description": "Mobile web client for a self-hosted Agent Cockpit server.",
+  "start_url": "/mobile/",
+  "scope": "/mobile/",
+  "display": "standalone",
+  "background_color": "#f7f4ee",
+  "theme_color": "#047fa8",
+  "icons": [
+    {
+      "src": "/mobile/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

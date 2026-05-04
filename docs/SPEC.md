@@ -12,7 +12,7 @@
 | 4. Backend Services | [spec-backend-services.md](spec-backend-services.md) | ChatService, adapter system, KB pipeline, update service |
 | 5. Server Initialization & Security | [spec-server-security.md](spec-server-security.md) | Config, startup order, auth, CSRF, CSP |
 | 6. Frontend Behavior | [spec-frontend.md](spec-frontend.md) | SPA architecture, streaming, KB browser, settings |
-| 7. iOS Native Client | [spec-ios.md](spec-ios.md) | SwiftUI native client architecture, REST/WebSocket bridge, simulator requirements |
+| 7. Mobile PWA Client | [spec-mobile-pwa.md](spec-mobile-pwa.md) | Installable mobile web client architecture, implemented slice, deferred work |
 | 8. Export, Limitations & Deployment | [spec-deployment.md](spec-deployment.md) | Markdown export, known limitations, deployment |
 | 9. Testing & CI/CD | [spec-testing.md](spec-testing.md) | Test suite, test files, CI workflows |
 

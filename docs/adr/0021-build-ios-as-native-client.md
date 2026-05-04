@@ -1,11 +1,11 @@
 ---
 id: 0021
 title: Build iOS as native client
-status: Proposed
+status: Superseded
 date: 2026-05-02
 supersedes: []
-superseded-by: null
-tags: []
+superseded-by: 0025
+tags: [mobile, ios, historical]
 affects:
   - ios/AgentCockpit
   - docs/spec-ios.md

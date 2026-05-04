@@ -1106,8 +1106,6 @@ declare module 'express-session' {
   interface SessionData {
     csrfToken?: string;
     passport?: { user?: unknown };
-    mobileAuth?: boolean;
-    mobileDeviceId?: string;
     reAuthPopup?: boolean;
     passkeyRegistration?: {
       challenge: string;
@@ -1119,7 +1117,6 @@ declare module 'express-session' {
       challenge: string;
       rpId: string;
       origin: string;
-      mobile?: boolean;
       popup?: boolean;
     };
   }

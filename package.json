@@ -10,6 +10,9 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "auth:reset": "tsx scripts/auth-reset.ts",
+    "mobile:dev": "npm --prefix mobile/AgentCockpitPWA run dev",
+    "mobile:build": "npm --prefix mobile/AgentCockpitPWA run build",
+    "mobile:typecheck": "npm --prefix mobile/AgentCockpitPWA run typecheck",
     "adr:new": "node scripts/adr-new.js",
     "adr:index": "node scripts/adr-index.js",
     "adr:lint": "node scripts/adr-lint.js"
@@ -32,7 +35,6 @@
     "passport-github2": "^0.1.12",
     "passport-google-oauth20": "^2.0.0",
     "pm2": "^7.0.1",
-    "qrcode": "^1.5.4",
     "session-file-store": "^1.5.0",
     "unpdf": "^1.4.0",
     "ws": "^8.20.0"
@@ -49,7 +51,6 @@
     "@types/passport": "^1.0.17",
     "@types/passport-github2": "^1.2.9",
     "@types/passport-google-oauth20": "^2.0.17",
-    "@types/qrcode": "^1.5.6",
     "@types/ws": "^8.18.1",
     "jest": "^30.3.0",
     "jest-environment-jsdom": "^30.3.0",
