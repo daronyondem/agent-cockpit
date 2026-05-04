@@ -18,7 +18,7 @@ Agent Cockpit solves this by decoupling **your data** from **the AI provider**. 
 
 - **Own your data across any CLI** — Every conversation, session, and memory update is stored locally as open JSON on your own disk. Switch between Claude Code, Kiro, Codex, and future backends without losing history or context. When a better model ships from another vendor, your accumulated context comes with you instead of being locked inside their platform.
 - **Remote web access to local or remote CLIs** — Install Agent Cockpit on your laptop or on a remote machine and drive it from any browser. Pair it with a tunnel like Cloudflare Tunnel to chat with your coding agents from your phone, tablet, or a café laptop while they operate on real files in their native environment.
-- **Native iOS companion app** — Connect an iPhone to any self-hosted backend URL, pair it with a QR/manual code from the web UI, or sign in through the backend-owned passkey/password web flow.
+- **Mobile PWA** — Open `/mobile/` from any self-hosted backend, sign in with the same owner account, and install it to the home screen without Xcode, Expo, TestFlight, or App Store distribution.
 - **Integrated memory system** — Adds persistent memory to CLIs that don't have one (like Kiro) and captures memory on the fly from CLIs that do (like Claude Code). Every change to the CLI's own memory file is snapshotted locally, so your accumulated context is portable and vendor-neutral — not trapped inside whichever CLI happens to own it today.
 - **Token and cost tracking** — Token usage and cost are tracked per conversation so you always know what a long-running task or an experiment is actually costing you.
 - **Message queue** — Keep typing while the CLI is still responding. Queued messages fire automatically as soon as the current response finishes, so your thinking isn't gated on the agent's latency — a feature rarely found in other chat UIs.
@@ -65,7 +65,8 @@ Beyond the headline capabilities above, Agent Cockpit also ships with:
 - **Browser tab status indicator** — favicon dot shows when a task is still running so you can flip away and check back
 - **Per-CLI context tooltip** — hover the context chip to see what the active backend reports (tokens vs. credits/percentage)
 - **Dark and light themes** — system-aware theme with manual override
-- **First-party authentication** — local owner setup, password login, recovery codes, mobile pairing, and optional legacy OAuth compatibility
+- **First-party authentication** — local owner setup, password login, passkeys, recovery codes, and optional legacy OAuth compatibility
+- **Mobile PWA** — installable mobile web client served from `/mobile/` by the same authenticated backend
 - **Self-update** — check for updates and apply them from the UI with one click
 - **Pluggable backend system** — extensible adapter architecture for adding new CLI backends
 - **Graceful shutdown** — clean process cleanup on SIGTERM/SIGINT
@@ -80,7 +81,6 @@ Beyond the headline capabilities above, Agent Cockpit also ships with:
   - [OpenAI Codex CLI](https://github.com/openai/codex) (`codex`, install with `npm install -g @openai/codex`)
 - (Optional) [LibreOffice](https://www.libreoffice.org/) and/or [Pandoc](https://pandoc.org/) on `PATH` to expand Knowledge Base ingestion to Office and other document formats
 - (Optional) [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) or a similar tunnel for remote access — see [ONBOARDING.md](ONBOARDING.md) for a step-by-step self-hosting guide with PM2 and Cloudflare Tunnel
-- (Optional) Xcode and an iPhone running iOS 18+ to build and install the native app — see [docs/ios-app.md](docs/ios-app.md)
 
 ## Quick Start
 
@@ -140,8 +140,6 @@ After setup, open **Settings > Security** to:
 - Register one or more passkeys.
 - Generate recovery codes and store them somewhere safe.
 - Enable **Require passkey for login** after at least one passkey and one unused recovery code exist.
-- Create QR/manual pairing codes for the iOS app.
-- Review and revoke paired mobile devices.
 
 Passkeys are tied to the backend domain. If you move from one host to another, for example from `chat-dev.example.com` to `chat.example.com`, register a passkey while signed in on the new domain.
 
@@ -151,7 +149,7 @@ For local lockout recovery, run this on the backend machine:
 npm run auth:reset -- --password "new long password" --disable-passkey-required --revoke-sessions --regenerate-recovery-codes
 ```
 
-The reset command requires local filesystem access. It can reset the owner password, disable passkey-required mode, revoke sessions, revoke mobile devices, and print replacement recovery codes.
+The reset command requires local filesystem access. It can reset the owner password, disable passkey-required mode, revoke sessions, and print replacement recovery codes.
 
 ### Legacy OAuth
 
@@ -167,17 +165,11 @@ cloudflared tunnel --url http://localhost:3334
 
 Use the tunnel-provided URL to reach your local Agent Cockpit from any device. For a fresh exposed backend, set `AUTH_SETUP_TOKEN` before creating the owner account.
 
-## iOS App
+## Mobile PWA
 
-The native iOS app lives in `ios/AgentCockpit`. It connects to a backend URL that the user enters on the connection screen, so it works with personal tunnel domains, LAN hosts, and separate dev/prod backends.
+The supported mobile client is served by the same backend at `/mobile/`. Open `https://<your-host>/mobile/` on the phone, sign in with the normal owner account, then use the browser's Add to Home Screen flow. Rebuild the mobile bundle with `npm run mobile:build`.
 
-Supported login paths:
-
-- **Sign in with Passkey or Password** opens the backend-owned login page in the system authentication session and returns to the app with a one-time code.
-- **Scan QR Code** uses a pairing QR code created from **Settings > Security** in the web UI.
-- **Pair Device** accepts the manual `challengeId` and pairing code from the same web UI panel.
-
-See [docs/ios-app.md](docs/ios-app.md) for Xcode install steps, real-device setup, and mobile troubleshooting.
+The PWA uses the same authenticated web session as the desktop UI. Xcode, Expo Go, TestFlight, App Store distribution, and native app pairing are not part of the supported mobile path.
 
 ## Project Structure
 
@@ -194,7 +186,7 @@ agent-cockpit/
 │   │   └── security.ts       # Helmet CSP configuration
 │   ├── routes/chat.ts        # All chat API routes
 │   └── services/
-│       ├── localAuthStore.ts # First-party auth state, passkeys, recovery codes, mobile devices
+│       ├── localAuthStore.ts # First-party auth state, passkeys, recovery codes
 │       ├── backends/
 │       │   ├── base.ts           # Base adapter interface for CLI backends
 │       │   ├── claudeCode.ts     # Claude Code CLI adapter
@@ -213,7 +205,9 @@ agent-cockpit/
 │   ├── v2/                   # Default UI (React 18 + Babel Standalone, no build step)
 │   │   ├── index.html
 │   │   └── src/              # JSX components, screens, primitives, styles
-├── ios/                      # Native iOS companion app and Swift smoke tests
+│   └── mobile/               # Built mobile PWA assets served at /mobile/
+├── mobile/
+│   └── AgentCockpitPWA/      # Source for the Vite React mobile PWA
 ├── docs/                     # Wiki-style specification (see SPEC.md)
 ├── scripts/                  # Repository maintenance helpers
 │   └── auth-reset.ts         # Local owner-account recovery command
@@ -238,7 +232,7 @@ Tests use Jest and run with:
 npm test
 ```
 
-Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, CodexAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, self-update service, first-party auth and legacy OAuth flows, settings service, browser tab indicator, memory MCP and watcher, and the full Knowledge Base pipeline (ingestion, digestion, dreaming, embeddings, vector store, folders, multi-location, handlers).
+Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, CodexAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, self-update service, first-party auth and legacy OAuth flows, settings service, browser tab indicator, mobile PWA static serving, memory MCP and watcher, and the full Knowledge Base pipeline (ingestion, digestion, dreaming, embeddings, vector store, folders, multi-location, handlers).
 
 CI runs tests automatically on every pull request against `main` via GitHub Actions. Version bumps are automated on merge to `main`.
 

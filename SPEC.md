@@ -12,5 +12,6 @@ The full specification has been split into a wiki-style structure under [`docs/`
 | 4. Backend Services | [docs/spec-backend-services.md](docs/spec-backend-services.md) |
 | 5. Server Initialization & Security | [docs/spec-server-security.md](docs/spec-server-security.md) |
 | 6. Frontend Behavior | [docs/spec-frontend.md](docs/spec-frontend.md) |
-| 7. Export, Limitations & Deployment | [docs/spec-deployment.md](docs/spec-deployment.md) |
-| 8. Testing & CI/CD | [docs/spec-testing.md](docs/spec-testing.md) |
+| 7. Mobile PWA Client | [docs/spec-mobile-pwa.md](docs/spec-mobile-pwa.md) |
+| 8. Export, Limitations & Deployment | [docs/spec-deployment.md](docs/spec-deployment.md) |
+| 9. Testing & CI/CD | [docs/spec-testing.md](docs/spec-testing.md) |

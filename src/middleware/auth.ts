@@ -1,10 +1,8 @@
-import crypto from 'crypto';
 import express from 'express';
 import passport from 'passport';
 import { Strategy as GoogleStrategy } from 'passport-google-oauth20';
 import { Strategy as GitHubStrategy } from 'passport-github2';
 import rateLimit from 'express-rate-limit';
-import QRCode from 'qrcode';
 import {
   generateAuthenticationOptions,
   generateRegistrationOptions,
@@ -26,13 +24,6 @@ export interface AuthUser {
   displayName: string;
   provider: AuthProvider;
 }
-
-const MOBILE_AUTH_CALLBACK_URL = 'agentcockpit://auth/callback';
-const MOBILE_AUTH_CODE_TTL_MS = 5 * 60 * 1000;
-const MOBILE_PAIRING_CODE_TTL_MS = 5 * 60 * 1000;
-
-const mobileAuthCodes = new Map<string, { user: AuthUser; expiresAt: number }>();
-const mobilePairingChallenges = new Map<string, { user: AuthUser; codeHash: string; expiresAt: number }>();
 
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -57,79 +48,6 @@ function verifyEmail(config: AppConfig, provider: AuthProvider) {
     }
     return done(null, false, { message: 'Access denied: unauthorized email.' });
   };
-}
-
-export function issueMobileAuthCode(user: AuthUser): string {
-  const now = Date.now();
-  for (const [code, entry] of mobileAuthCodes) {
-    if (entry.expiresAt <= now) {
-      mobileAuthCodes.delete(code);
-    }
-  }
-
-  const code = crypto.randomBytes(32).toString('hex');
-  mobileAuthCodes.set(code, {
-    user,
-    expiresAt: now + MOBILE_AUTH_CODE_TTL_MS,
-  });
-  return code;
-}
-
-function consumeMobileAuthCode(code: string): AuthUser | null {
-  const entry = mobileAuthCodes.get(code);
-  mobileAuthCodes.delete(code);
-  if (!entry || entry.expiresAt <= Date.now()) {
-    return null;
-  }
-  return entry.user;
-}
-
-function issueMobilePairingChallenge(user: AuthUser): { challengeId: string; pairingCode: string; expiresAt: string } {
-  const now = Date.now();
-  for (const [challengeId, entry] of mobilePairingChallenges) {
-    if (entry.expiresAt <= now) {
-      mobilePairingChallenges.delete(challengeId);
-    }
-  }
-
-  const challengeId = crypto.randomUUID();
-  const pairingCode = generatePairingCode();
-  const expiresAt = now + MOBILE_PAIRING_CODE_TTL_MS;
-  mobilePairingChallenges.set(challengeId, {
-    user,
-    codeHash: hashPairingCode(pairingCode),
-    expiresAt,
-  });
-  return { challengeId, pairingCode, expiresAt: new Date(expiresAt).toISOString() };
-}
-
-function consumeMobilePairingChallenge(challengeId: string, pairingCode: string): AuthUser | null {
-  const entry = mobilePairingChallenges.get(challengeId);
-  mobilePairingChallenges.delete(challengeId);
-  if (!entry || entry.expiresAt <= Date.now()) {
-    return null;
-  }
-  if (entry.codeHash !== hashPairingCode(pairingCode)) {
-    return null;
-  }
-  return entry.user;
-}
-
-function generatePairingCode(): string {
-  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-  let code = '';
-  for (const byte of crypto.randomBytes(8)) {
-    code += alphabet[byte % alphabet.length];
-  }
-  return `${code.slice(0, 4)}-${code.slice(4)}`;
-}
-
-function normalizePairingCode(code: string): string {
-  return code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-}
-
-function hashPairingCode(code: string): string {
-  return crypto.createHash('sha256').update(normalizePairingCode(code)).digest('hex');
 }
 
 function publicUser(user: AuthUser): Omit<AuthUser, 'id'> {
@@ -474,21 +392,7 @@ interface AuthFormBody {
   password?: unknown;
   setupToken?: unknown;
   recoveryCode?: unknown;
-  mobile?: unknown;
   popup?: unknown;
-}
-
-interface MobileAuthExchangeBody {
-  code?: unknown;
-  deviceName?: unknown;
-  platform?: unknown;
-}
-
-interface MobilePairingExchangeBody {
-  challengeId?: unknown;
-  code?: unknown;
-  deviceName?: unknown;
-  platform?: unknown;
 }
 
 interface PasskeyRegistrationOptionsBody {
@@ -501,7 +405,6 @@ interface PasskeyRegistrationVerifyBody {
 }
 
 interface PasskeyAuthenticationOptionsBody {
-  mobile?: unknown;
   popup?: unknown;
 }
 
@@ -538,9 +441,6 @@ function escapeHtml(value: string): string {
 
 function hiddenModeInputs(req: Request): string {
   const fields: string[] = [];
-  if (req.query.mobile === '1') {
-    fields.push('<input type="hidden" name="mobile" value="1">');
-  }
   if (req.query.popup === '1') {
     fields.push('<input type="hidden" name="popup" value="1">');
   }
@@ -664,7 +564,7 @@ function renderLoginPage(req: Request, error?: string): string {
   return renderAuthShell({
     title: 'Sign in to Agent Cockpit',
     eyebrow: 'Ready',
-    subtitle: 'Use the local owner account configured on this backend. Mobile login uses the same first-party session after the backend verifies you.',
+    subtitle: 'Use the local owner account configured on this backend. The mobile PWA uses this same browser session at /mobile/.',
     error,
     form: `<form class="auth-form" method="post" action="/auth/login/password">
         ${hiddenModeInputs(req)}
@@ -746,7 +646,6 @@ function renderLoginPage(req: Request, error?: string): string {
               credentials: 'same-origin',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
-                mobile: params.get('mobile') === '1' ? '1' : undefined,
                 popup: params.get('popup') === '1' ? '1' : undefined
               })
             }));
@@ -766,7 +665,7 @@ function renderLoginPage(req: Request, error?: string): string {
         });
       })();
       </script>`,
-    footer: '<p class="login-legal"><a href="/auth/recovery">Use a recovery code</a>. Mobile pairing builds on this local owner account.</p>',
+    footer: '<p class="login-legal"><a href="/auth/recovery">Use a recovery code</a>. The mobile PWA signs in through this same page.</p>',
   });
 }
 
@@ -839,25 +738,6 @@ function storedCredential(passkey: LocalPasskeyCredential): WebAuthnCredential {
   };
 }
 
-function requestPlatform(req: Request, explicitPlatform?: string): string | undefined {
-  const platform = explicitPlatform?.trim() ?? '';
-  if (platform) {
-    return platform;
-  }
-  const userAgent = req.get('user-agent') || '';
-  if (/iPhone|iPad|iOS/i.test(userAgent)) return 'iOS';
-  if (/Android/i.test(userAgent)) return 'Android';
-  if (/Macintosh|Mac OS X/i.test(userAgent)) return 'macOS';
-  if (/Windows/i.test(userAgent)) return 'Windows';
-  if (/Linux/i.test(userAgent)) return 'Linux';
-  return undefined;
-}
-
-function currentAuthUser(req: Request): AuthUser | null {
-  const user = req.user as AuthUser | undefined;
-  return user ?? null;
-}
-
 export function setupAuth(app: Express, config: AppConfig): void {
   const localAuth = new LocalAuthStore(config.AUTH_DATA_DIR);
   const legacyOAuthEnabled = config.AUTH_ENABLE_LEGACY_OAUTH;
@@ -893,38 +773,6 @@ export function setupAuth(app: Express, config: AppConfig): void {
   app.use(passport.initialize());
   app.use(passport.session());
 
-  app.use(async (req: Request, res: Response, next: NextFunction) => {
-    const mobileDeviceId = req.session.mobileDeviceId;
-    if (!mobileDeviceId) {
-      next();
-      return;
-    }
-
-    try {
-      const device = await localAuth.getMobileDevice(mobileDeviceId);
-      if (!device || device.revokedAt) {
-        req.session.destroy(() => {
-          res.clearCookie('connect.sid', { path: '/' });
-          if (req.path.startsWith('/api/')) {
-            res.status(401).json({ error: 'Mobile device revoked' });
-            return;
-          }
-          res.redirect('/auth/login');
-        });
-        return;
-      }
-
-      await localAuth.touchMobileDevice(mobileDeviceId, {
-        ip: req.ip,
-        userAgent: req.get('user-agent') || undefined,
-        platform: requestPlatform(req),
-      });
-      next();
-    } catch (err) {
-      next(err);
-    }
-  });
-
   // Marks the session as "opened from a popup re-auth window" so the final
   // callback lands on /auth/popup-done (which self-closes) instead of /.
   // The flag survives legacy Google/GitHub roundtrips because express-session
@@ -933,25 +781,11 @@ export function setupAuth(app: Express, config: AppConfig): void {
     if (req.query.popup === '1' && req.session) {
       (req.session as unknown as { reAuthPopup?: boolean }).reAuthPopup = true;
     }
-    if (req.query.mobile === '1' && req.session) {
-      (req.session as unknown as { mobileAuth?: boolean }).mobileAuth = true;
-    }
     next();
   };
 
   const finishAuth = (req: Request, res: Response): void => {
-    const sess = req.session as unknown as { mobileAuth?: boolean; reAuthPopup?: boolean } | undefined;
-    if (sess && sess.mobileAuth) {
-      delete sess.mobileAuth;
-      const user = req.user as AuthUser | undefined;
-      if (!user) {
-        res.redirect(`${MOBILE_AUTH_CALLBACK_URL}?error=missing_user`);
-        return;
-      }
-      const code = issueMobileAuthCode(user);
-      res.redirect(`${MOBILE_AUTH_CALLBACK_URL}?code=${encodeURIComponent(code)}`);
-      return;
-    }
+    const sess = req.session as unknown as { reAuthPopup?: boolean } | undefined;
     if (sess && sess.reAuthPopup) {
       delete sess.reAuthPopup;
       res.redirect('/auth/popup-done');
@@ -960,14 +794,11 @@ export function setupAuth(app: Express, config: AppConfig): void {
     res.redirect('/');
   };
 
-  const loginAndFinish = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { mobile?: boolean; popup?: boolean } = {}): void => {
+  const loginAndFinish = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { popup?: boolean } = {}): void => {
     req.login(user, (loginErr) => {
       if (loginErr) {
         next(loginErr);
         return;
-      }
-      if (mode.mobile && req.session) {
-        req.session.mobileAuth = true;
       }
       if (mode.popup && req.session) {
         req.session.reAuthPopup = true;
@@ -976,15 +807,13 @@ export function setupAuth(app: Express, config: AppConfig): void {
     });
   };
 
-  const loginAndFinishJson = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { mobile?: boolean; popup?: boolean } = {}): void => {
+  const loginAndFinishJson = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { popup?: boolean } = {}): void => {
     req.login(user, (loginErr) => {
       if (loginErr) {
         next(loginErr);
         return;
       }
-      const redirectTo = mode.mobile
-        ? `${MOBILE_AUTH_CALLBACK_URL}?code=${encodeURIComponent(issueMobileAuthCode(user))}`
-        : mode.popup ? '/auth/popup-done' : '/';
+      const redirectTo = mode.popup ? '/auth/popup-done' : '/';
       req.session.save((saveErr) => {
         if (saveErr) {
           next(saveErr);
@@ -1000,47 +829,6 @@ export function setupAuth(app: Express, config: AppConfig): void {
       return true;
     }
     return Boolean(config.AUTH_SETUP_TOKEN) && stringField(body.setupToken) === config.AUTH_SETUP_TOKEN;
-  };
-
-  const establishMobileSession = async (
-    req: Request,
-    res: Response,
-    next: NextFunction,
-    user: AuthUser,
-    body: { deviceName?: unknown; platform?: unknown },
-  ): Promise<void> => {
-    const device = await localAuth.hasOwner()
-      ? await localAuth.createMobileDevice({
-        displayName: stringField(body.deviceName),
-        ip: req.ip,
-        userAgent: req.get('user-agent') || undefined,
-        platform: requestPlatform(req, stringField(body.platform)),
-      })
-      : null;
-
-    req.login(user, (loginErr) => {
-      if (loginErr) {
-        next(loginErr);
-        return;
-      }
-      if (device) {
-        req.session.mobileDeviceId = device.id;
-      }
-      if (!req.session.csrfToken) {
-        req.session.csrfToken = crypto.randomBytes(32).toString('hex');
-      }
-      req.session.save((saveErr) => {
-        if (saveErr) {
-          next(saveErr);
-          return;
-        }
-        res.json({
-          user: publicUser(user),
-          csrfToken: req.session.csrfToken,
-          ...(device ? { device } : {}),
-        });
-      });
-    });
   };
 
   app.get('/api/auth/status', async (_req: Request, res: Response, next: NextFunction) => {
@@ -1123,7 +911,6 @@ export function setupAuth(app: Express, config: AppConfig): void {
         return;
       }
       loginAndFinish(req, res, next, localUserFromOwner(owner), {
-        mobile: body.mobile === '1',
         popup: body.popup === '1',
       });
     } catch (err) {
@@ -1165,7 +952,6 @@ export function setupAuth(app: Express, config: AppConfig): void {
         return;
       }
       loginAndFinish(req, res, next, localUserFromOwner(recoveredOwner), {
-        mobile: body.mobile === '1',
         popup: body.popup === '1',
       });
     } catch (err) {
@@ -1302,7 +1088,6 @@ export function setupAuth(app: Express, config: AppConfig): void {
         challenge: options.challenge,
         rpId,
         origin,
-        mobile: body.mobile === '1',
         popup: body.popup === '1',
       };
       req.session.save((saveErr) => {
@@ -1358,7 +1143,6 @@ export function setupAuth(app: Express, config: AppConfig): void {
       }
       delete req.session.passkeyAuthentication;
       loginAndFinishJson(req, res, next, localUserFromOwner(owner), {
-        mobile: ceremony.mobile,
         popup: ceremony.popup,
       });
     } catch (err) {
@@ -1430,87 +1214,6 @@ export function setupAuth(app: Express, config: AppConfig): void {
     }
   });
 
-  app.post('/api/mobile-pairing/challenges', express.json(), requireAuthenticatedApi, authApiCsrfGuard, async (req: Request, res: Response, next: NextFunction) => {
-    const user = currentAuthUser(req);
-    if (!user) {
-      res.status(401).json({ error: 'Not authenticated' });
-      return;
-    }
-
-    try {
-      const challenge = issueMobilePairingChallenge(user);
-      const pairingUrl = new URL('agentcockpit://pair');
-      pairingUrl.searchParams.set('server', requestOrigin(req));
-      pairingUrl.searchParams.set('challengeId', challenge.challengeId);
-      pairingUrl.searchParams.set('code', challenge.pairingCode);
-      const pairingUrlString = pairingUrl.toString();
-      const qrCodeDataUrl = await QRCode.toDataURL(pairingUrlString, {
-        errorCorrectionLevel: 'M',
-        margin: 1,
-        width: 240,
-      });
-      res.json({
-        ...challenge,
-        pairingUrl: pairingUrlString,
-        qrCodeDataUrl,
-      });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  app.post('/api/mobile-pairing/exchange', express.json(), authLimiter, async (req: Request, res: Response, next: NextFunction) => {
-    const body = (req.body ?? {}) as MobilePairingExchangeBody;
-    const user = consumeMobilePairingChallenge(stringField(body.challengeId), stringField(body.code));
-    if (!user) {
-      res.status(400).json({ error: 'Invalid or expired pairing code' });
-      return;
-    }
-
-    try {
-      await establishMobileSession(req, res, next, user, body);
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  app.get('/api/mobile-devices', requireAuthenticatedApi, async (_req: Request, res: Response, next: NextFunction) => {
-    try {
-      res.json({ devices: await localAuth.listMobileDevices() });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  app.delete('/api/mobile-devices/:id', requireAuthenticatedApi, authApiCsrfGuard, async (req: Request, res: Response, next: NextFunction) => {
-    try {
-      const device = await localAuth.revokeMobileDevice(stringField(req.params.id));
-      if (!device) {
-        res.status(404).json({ error: 'Mobile device not found' });
-        return;
-      }
-      res.json({ device });
-    } catch (err) {
-      next(err);
-    }
-  });
-
-  app.post('/api/mobile-auth/exchange', express.json(), async (req: Request, res: Response, next: NextFunction) => {
-    const body = (req.body ?? {}) as MobileAuthExchangeBody;
-    const code = stringField(body.code);
-    const user = consumeMobileAuthCode(code);
-    if (!user) {
-      res.status(400).json({ error: 'Invalid or expired mobile auth code' });
-      return;
-    }
-
-    try {
-      await establishMobileSession(req, res, next, user, body);
-    } catch (err) {
-      next(err);
-    }
-  });
-
   app.get('/auth/login', async (req: Request, res: Response, next: NextFunction) => {
     try {
       if (!(await localAuth.hasOwner())) {
@@ -1521,11 +1224,6 @@ export function setupAuth(app: Express, config: AppConfig): void {
     } catch (err) {
       next(err);
     }
-  });
-
-  app.get('/auth/mobile-login', (req: Request, res: Response) => {
-    const query = req.query.popup === '1' ? '?popup=1&mobile=1' : '?mobile=1';
-    res.redirect(`/auth/login${query}`);
   });
 
   // Popup-mode terminal page: the re-auth popup lands here instead of /, posts

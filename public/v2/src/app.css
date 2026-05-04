@@ -4369,29 +4369,6 @@ body{
   font-size: 12px;
   color: var(--text-2);
 }
-.security-pairing-grid{
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
-}
-.security-pairing-grid .settings-actions{
-  grid-column: 1 / -1;
-}
-.security-pairing-content{
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 14px;
-  align-items: start;
-}
-.security-pairing-qr{
-  border: 1px solid var(--border);
-  border-radius: var(--r-sm);
-  padding: 8px;
-  background: #fff;
-}
-.security-pairing-qr img{
-  display: block;
-  width: 156px;
-  height: 156px;
-}
 .security-row-actions{
   display: inline-flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap;
 }
@@ -5015,13 +4992,8 @@ body{
     padding: 14px;
   }
   .stat-grid,
-  .security-kv,
-  .security-pairing-content,
-  .security-pairing-grid{
+  .security-kv{
     grid-template-columns: 1fr;
-  }
-  .security-pairing-qr{
-    justify-self: start;
   }
 
   /* Files browser — stack tree + preview, hide resizer, bigger tap targets. */

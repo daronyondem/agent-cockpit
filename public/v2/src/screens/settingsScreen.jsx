@@ -1305,8 +1305,6 @@ function SecurityTab(){
   const toast = useToasts();
   const [status, setStatus] = React.useState(null);
   const [passkeys, setPasskeys] = React.useState([]);
-  const [devices, setDevices] = React.useState([]);
-  const [pairing, setPairing] = React.useState(null);
   const [recoveryCodes, setRecoveryCodes] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState(null);
@@ -1318,14 +1316,12 @@ function SecurityTab(){
     setLoading(true);
     setError(null);
     try {
-      const [nextStatus, nextPasskeys, nextDevices] = await Promise.all([
+      const [nextStatus, nextPasskeys] = await Promise.all([
         AgentApi.auth.status(),
         AgentApi.auth.listPasskeys(),
-        AgentApi.auth.listMobileDevices(),
       ]);
       setStatus(nextStatus || {});
       setPasskeys((nextPasskeys && nextPasskeys.passkeys) || []);
-      setDevices((nextDevices && nextDevices.devices) || []);
     } catch (err) {
       setError(err.message || String(err));
     } finally {
@@ -1471,40 +1467,6 @@ function SecurityTab(){
     }
   }
 
-  async function createPairingChallenge(anchor){
-    setBusy('pairing');
-    try {
-      const res = await AgentApi.auth.createMobilePairingChallenge();
-      setPairing(res || null);
-      toast.success('Pairing code created');
-    } catch (err) {
-      await dialog.alert({ anchor, variant: 'error', title: 'Pairing failed', body: err.message || String(err) });
-    } finally {
-      setBusy('');
-    }
-  }
-
-  async function revokeDevice(device, anchor){
-    const ok = await dialog.confirm({
-      anchor,
-      destructive: true,
-      title: 'Revoke this device?',
-      body: `${device.displayName || 'This device'} will be signed out on its next request.`,
-      confirmLabel: 'Revoke',
-    });
-    if (!ok) return;
-    setBusy('device:' + device.id);
-    try {
-      await AgentApi.auth.revokeMobileDevice(device.id);
-      toast.success('Device revoked');
-      await reload();
-    } catch (err) {
-      await dialog.alert({ anchor, variant: 'error', title: 'Revoke failed', body: err.message || String(err) });
-    } finally {
-      setBusy('');
-    }
-  }
-
   if (loading) return <div className="u-dim" style={{padding:'16px'}}>Loading...</div>;
   if (error) return <div className="u-err" style={{padding:'16px'}}>{error}</div>;
 
@@ -1516,8 +1478,6 @@ function SecurityTab(){
   const passkeyRequired = !!policy.passkeyRequired;
   const canEnablePasskeyRequired = passkeyAvailable && passkeyCount > 0 && (recovery.remaining || 0) > 0;
   const disablePolicyToggle = busy === 'policy' || (!passkeyRequired && !canEnablePasskeyRequired);
-  const activeDevices = devices.filter(device => !device.revokedAt);
-  const revokedDevices = devices.filter(device => device.revokedAt);
   const recoveryText = recoveryCodeText(recoveryCodes);
 
   return (
@@ -1655,102 +1615,6 @@ function SecurityTab(){
         </div>
       </div>
 
-      <div className="pane-block">
-        <div className="pane-block-head">
-          <span>Mobile pairing</span>
-          <span className="spacer"/>
-          <button
-            type="button"
-            className="btn ghost"
-            disabled={busy === 'pairing'}
-            onClick={(e) => createPairingChallenge(e.currentTarget)}
-          >{busy === 'pairing' ? 'Creating...' : 'Create pairing code'}</button>
-        </div>
-        <div className="security-panel">
-          {pairing ? (
-            <div className="security-pairing-content">
-              {pairing.qrCodeDataUrl ? (
-                <div className="security-pairing-qr">
-                  <img src={pairing.qrCodeDataUrl} alt="Mobile pairing QR code"/>
-                </div>
-              ) : null}
-              <div className="security-pairing-grid">
-                <Field label="Challenge ID">
-                  <input className="u-mono" readOnly value={pairing.challengeId || ''}/>
-                </Field>
-                <Field label="Pairing code">
-                  <input className="u-mono" readOnly value={pairing.pairingCode || ''}/>
-                </Field>
-                <Field label="Expires">
-                  <input readOnly value={fmtDateTime(pairing.expiresAt)}/>
-                </Field>
-                <div className="settings-actions">
-                  <button
-                    type="button"
-                    className="btn ghost"
-                    onClick={() => copySecurityText(pairing.pairingCode, toast, 'Pairing code')}
-                  >Copy code</button>
-                  <button
-                    type="button"
-                    className="btn ghost"
-                    onClick={() => copySecurityText(pairing.pairingUrl, toast, 'Pairing URL')}
-                  >Copy URL</button>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="u-dim">Create a five-minute code, then enter it in the iOS app.</div>
-          )}
-        </div>
-      </div>
-
-      <div className="pane-block">
-        <div className="pane-block-head">
-          <span>Paired devices</span>
-          <span className="spacer"/>
-          <span className="u-dim u-mono">{activeDevices.length} active</span>
-        </div>
-        {devices.length === 0 ? (
-          <div className="security-panel u-dim">No mobile devices have been paired.</div>
-        ) : (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Device</th>
-                <th>Platform</th>
-                <th>Last online</th>
-                <th>Status</th>
-                <th className="r">Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {activeDevices.concat(revokedDevices).map(device => (
-                <tr key={device.id}>
-                  <td>
-                    <div>{device.displayName || 'Mobile device'}</div>
-                    <div className="u-dim u-mono" style={{fontSize:11}}>{device.id}</div>
-                  </td>
-                  <td>{device.platform || 'Mobile'}</td>
-                  <td>{fmtDateTime(device.lastSeenAt)}</td>
-                  <td>{device.revokedAt ? 'Revoked' : 'Active'}</td>
-                  <td className="r">
-                    {device.revokedAt ? (
-                      <span className="u-dim">-</span>
-                    ) : (
-                      <button
-                        type="button"
-                        className="btn ghost"
-                        disabled={busy === 'device:' + device.id}
-                        onClick={(e) => revokeDevice(device, e.currentTarget)}
-                      >{busy === 'device:' + device.id ? 'Revoking...' : 'Revoke'}</button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
     </div>
   );
 }

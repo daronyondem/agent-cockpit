@@ -69,6 +69,19 @@ describe('frontend routes', () => {
         v2.body.indexOf('src/screens/kbBrowser.jsx?v=119'),
       );
 
+      const mobile = await makeRequest(server, '/mobile/');
+      expect(mobile.status).toBe(200);
+      expect(mobile.headers['content-type']).toMatch(/text\/html/);
+      expect(mobile.body).toContain('<div id="root"');
+      expect(mobile.body).toContain('Agent Cockpit Mobile');
+      expect(mobile.body).toContain('/mobile/manifest.webmanifest');
+      expect(mobile.body).toMatch(/\/mobile\/assets\/index-[A-Za-z0-9_-]+\.js/);
+
+      const manifest = await makeRequest(server, '/mobile/manifest.webmanifest');
+      expect(manifest.status).toBe(200);
+      expect(manifest.headers['content-type']).toMatch(/application\/manifest\+json|application\/octet-stream|application\/json/);
+      expect(manifest.body).toContain('"start_url": "/mobile/"');
+
       for (const removedPath of ['/legacy/', '/index.html', '/styles.css', '/js/main.js', '/v2/deck.html']) {
         const res = await makeRequest(server, removedPath);
         expect(res.status).toBe(404);

@@ -1,4 +1,4 @@
-# 7. Export, Limitations & Deployment
+# 8. Export, Limitations & Deployment
 
 [← Back to index](SPEC.md)
 
@@ -73,4 +73,18 @@ For a fresh exposed backend, set `AUTH_SETUP_TOKEN` before first-run setup so a 
 ```bash
 npm run auth:reset -- --password "new long password" --disable-passkey-required --revoke-sessions --regenerate-recovery-codes
 ```
-The reset command requires local filesystem access. It can reset the owner password, disable passkey-required mode, revoke paired mobile devices, delete session files under `data/sessions`, and print replacement recovery codes.
+The reset command requires local filesystem access. It can reset the owner password, disable passkey-required mode, delete session files under `data/sessions`, and print replacement recovery codes.
+
+**Mobile PWA development, build, and install:**
+```bash
+npm install
+npm run mobile:dev
+```
+
+The Vite dev server listens on port `5174` and proxies `/api`, `/auth`, and `/logo-full-no-text.svg` to the PM2-managed Agent Cockpit backend at `http://localhost:3334`. For production/static serving:
+
+```bash
+npm run mobile:build
+```
+
+The build writes to `public/mobile/`, which the existing Express static mount serves at `/mobile/` after normal authentication. A phone can open `https://<agent-cockpit-host>/mobile/` and use Add to Home Screen for an installable PWA. No Xcode, Expo Go, EAS, Apple signing, TestFlight, or App Store distribution is required for the supported mobile path.

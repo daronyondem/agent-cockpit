@@ -10,23 +10,18 @@ All chat endpoints are mounted under `/api/chat`. All require authentication via
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| GET | `/api/auth/status` | Public | Returns `{ setupRequired, providers: { password: true, passkey, legacyOAuth }, passkeys: { registered }, policy, recovery }` so web/native clients can tell whether the backend needs first-run owner setup and which auth methods are active. `policy` is `{ passkeyRequired }`; `recovery` is `{ configured, total, remaining, createdAt }`. |
+| GET | `/api/auth/status` | Public | Returns `{ setupRequired, providers: { password: true, passkey, legacyOAuth }, passkeys: { registered }, policy, recovery }` so web clients can tell whether the backend needs first-run owner setup and which auth methods are active. `policy` is `{ passkeyRequired }`; `recovery` is `{ configured, total, remaining, createdAt }`. |
 | GET | `/api/me` | Yes, except localhost bypass | Returns `{ displayName, email, provider }` for the current server session. The default first-party owner uses `provider: "local"`. Localhost bypass returns null fields when no session user exists. |
-| GET | `/api/csrf-token` | Yes, except localhost bypass | Returns `{ csrfToken }` for the current session. Native and web clients cache this value and send it as `x-csrf-token` for state-changing requests. |
+| GET | `/api/csrf-token` | Yes, except localhost bypass | Returns `{ csrfToken }` for the current session. Web clients cache this value and send it as `x-csrf-token` for state-changing requests. |
 | GET | `/api/auth/passkeys` | Yes | Lists passkeys as `{ passkeys: [{ id, name, transports?, createdAt, lastUsedAt? }] }`; public credential material and counters are not returned. |
 | POST | `/api/auth/passkeys/register/options` | Yes + CSRF | Body `{ name? }`. Generates WebAuthn registration options for the current origin/RP ID, stores the challenge in session, and excludes already-registered credentials. |
 | POST | `/api/auth/passkeys/register/verify` | Yes + CSRF | Body `{ name?, response }`, where `response` is the JSON-encoded credential from `navigator.credentials.create`. Verifies the WebAuthn response and stores credential id, public key, counter, transports, and timestamps. Returns `{ passkey, passkeys }`. |
-| POST | `/api/auth/passkeys/login/options` | Public | Body `{ popup?, mobile? }`. Generates WebAuthn assertion options for registered credentials and stores challenge/mode in the anonymous session. Returns 409 when no passkeys exist. |
+| POST | `/api/auth/passkeys/login/options` | Public | Body `{ popup? }`. Generates WebAuthn assertion options for registered credentials and stores challenge/mode in the anonymous session. Returns 409 when no passkeys exist. |
 | POST | `/api/auth/passkeys/login/verify` | Public | Body `{ response }`, where `response` is the JSON-encoded credential from `navigator.credentials.get`. Verifies the assertion, updates passkey counter/last-used metadata, creates the normal server session, and returns `{ redirectTo, user }`. |
 | PATCH | `/api/auth/passkeys/:id` | Yes + CSRF | Body `{ name }`. Renames a passkey and returns `{ passkey, passkeys }`. |
 | DELETE | `/api/auth/passkeys/:id` | Yes + CSRF | Deletes a passkey and returns `{ passkeys }`. Returns 409 if deleting the last passkey while passkey-required mode is enabled. |
 | POST | `/api/auth/recovery/regenerate` | Yes + CSRF | Regenerates the owner's recovery codes. Returns `{ recoveryCodes, recovery }`; `recoveryCodes` are plaintext one-time codes and are shown only in this response. Stored recovery codes are scrypt-hashed. |
 | PATCH | `/api/auth/policy` | Yes + CSRF | Body `{ passkeyRequired: boolean }`. Updates auth policy. Enabling passkey-required mode returns 409 unless at least one passkey and at least one unused recovery code exist. |
-| POST | `/api/mobile-auth/exchange` | Public one-time code | Body `{ code, deviceName?, platform? }`. Consumes a short-lived mobile auth completion code from first-party mobile web login or legacy OAuth, creates the normal server session cookie, records a mobile device when a local owner exists, ensures a CSRF token, and returns `{ user: { displayName, email, provider }, csrfToken, device? }`. Invalid/expired codes return `400 { error: "Invalid or expired mobile auth code" }`. |
-| POST | `/api/mobile-pairing/challenges` | Yes + CSRF | Creates a five-minute mobile pairing challenge for the authenticated web session. Returns `{ challengeId, pairingCode, expiresAt, pairingUrl, qrCodeDataUrl }`; `pairingUrl` uses the `agentcockpit://pair` scheme with the server origin, challenge id, and code, and `qrCodeDataUrl` is a PNG data URL encoding that exact URL for native QR scanning. |
-| POST | `/api/mobile-pairing/exchange` | Public pairing code | Body `{ challengeId, code, deviceName?, platform? }`. Consumes a short-lived pairing challenge, creates the normal server session cookie, records the mobile device, ensures a CSRF token, and returns `{ user, csrfToken, device }`. Challenges are single-use even on failed code attempts. |
-| GET | `/api/mobile-devices` | Yes | Returns `{ devices }` sorted by most recent `lastSeenAt`. Each device includes `id`, `displayName`, `createdAt`, `lastSeenAt`, optional `lastIp`/`lastUserAgent`/`platform`, and optional `revokedAt`. |
-| DELETE | `/api/mobile-devices/:id` | Yes + CSRF | Revokes a paired mobile device and returns `{ device }`. Future requests carrying that mobile session are rejected with `401 { error: "Mobile device revoked" }`. |
 
 Non-API first-party auth pages:
 
@@ -38,7 +33,6 @@ Non-API first-party auth pages:
 | POST | `/auth/login/password` | Password login; blocks with 403 when `policy.passkeyRequired` is true. |
 | GET | `/auth/recovery` | Recovery-code login page. |
 | POST | `/auth/recovery/login` | Consumes one recovery code, signs in, and disables `passkeyRequired`. |
-| GET | `/auth/mobile-login` | Redirects native clients to `/auth/login?mobile=1`. |
 
 ## 3.1 Directory Browsing
 

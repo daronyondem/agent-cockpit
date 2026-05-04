@@ -95,18 +95,6 @@ State shape:
       "createdAt": "2026-05-03T00:00:00.000Z",
       "usedAt": "2026-05-03T00:00:00.000Z"
     }
-  ],
-  "mobileDevices": [
-    {
-      "id": "uuid",
-      "displayName": "Daron iPhone",
-      "createdAt": "2026-05-03T00:00:00.000Z",
-      "lastSeenAt": "2026-05-03T00:00:00.000Z",
-      "lastIp": "::ffff:127.0.0.1",
-      "lastUserAgent": "AgentCockpit iOS",
-      "platform": "iOS",
-      "revokedAt": "2026-05-03T00:00:00.000Z"
-    }
   ]
 }
 ```
@@ -129,13 +117,9 @@ Methods:
 | `renamePasskey(id, name)` | Updates passkey display name; missing ids return null. |
 | `updatePasskeyUsage(credentialId, counter)` | Updates authenticator counter and `lastUsedAt` after successful WebAuthn login; missing credentials return null. |
 | `deletePasskey(id)` | Deletes a passkey; missing ids return null. Throws `unsafe-policy` instead of deleting the last passkey while passkey-required mode is enabled. |
-| `createMobileDevice({ displayName?, ip?, userAgent?, platform? })` | Appends a paired mobile-device record with created/last-seen timestamps and returns it. |
-| `listMobileDevices()` / `getMobileDevice(id)` | Reads mobile-device metadata, with list sorted by recent activity. |
-| `touchMobileDevice(id, { ip?, userAgent?, platform? })` | Updates last-seen metadata for a non-revoked mobile device. Returns null for missing/revoked devices. |
-| `revokeMobileDevice(id)` | Sets `revokedAt` and returns the device; missing ids return null. |
-| `resetOwnerAccess(opts)` | Local CLI reset helper. Can update owner identity/password, disable passkey-required mode, revoke all mobile devices, and regenerate recovery codes. |
+| `resetOwnerAccess(opts)` | Local CLI reset helper. Can update owner identity/password, disable passkey-required mode, and regenerate recovery codes. |
 
-The password and recovery-code hash format is `scrypt$<base64url salt>$<base64url derived key>`, using a 16-byte random salt and a 64-byte derived key. Plaintext passwords, setup tokens, recovery codes after display, pairing codes, and mobile auth codes are not stored in this file. Passkeys store only WebAuthn credential public material: credential id, public key, counter, transports, and timestamps.
+The password and recovery-code hash format is `scrypt$<base64url salt>$<base64url derived key>`, using a 16-byte random salt and a 64-byte derived key. Plaintext passwords, setup tokens, and recovery codes after display are not stored in this file. Passkeys store only WebAuthn credential public material: credential id, public key, counter, transports, and timestamps.
 
 ### Durability primitives
 

@@ -10,7 +10,6 @@ const { values } = parseArgs({
     'display-name': { type: 'string' },
     password: { type: 'string' },
     'disable-passkey-required': { type: 'boolean', default: false },
-    'revoke-mobile-devices': { type: 'boolean', default: false },
     'revoke-sessions': { type: 'boolean', default: false },
     'regenerate-recovery-codes': { type: 'boolean', default: false },
     help: { type: 'boolean', short: 'h', default: false },
@@ -26,7 +25,6 @@ Options:
   --display-name <name>              Update the owner display name.
   --password <password>              Reset the owner password. Minimum 12 characters.
   --disable-passkey-required         Turn off passkey-required policy.
-  --revoke-mobile-devices            Revoke all paired mobile devices.
   --revoke-sessions                  Delete session files under data/sessions.
   --regenerate-recovery-codes        Replace recovery codes and print the new set.
 `);
@@ -49,7 +47,6 @@ async function main(): Promise<void> {
     || values['display-name']
     || values.password
     || values['disable-passkey-required']
-    || values['revoke-mobile-devices']
     || values['revoke-sessions']
     || values['regenerate-recovery-codes']
   );
@@ -65,7 +62,6 @@ async function main(): Promise<void> {
     displayName: values['display-name'],
     password: values.password,
     disablePasskeyRequired: values['disable-passkey-required'],
-    revokeMobileDevices: values['revoke-mobile-devices'],
     regenerateRecoveryCodes: values['regenerate-recovery-codes'],
   });
 
@@ -76,9 +72,6 @@ async function main(): Promise<void> {
   console.log(`Updated local owner: ${result.owner.email}`);
   if (values['disable-passkey-required']) {
     console.log('Passkey-required policy disabled.');
-  }
-  if (values['revoke-mobile-devices']) {
-    console.log('Paired mobile devices revoked.');
   }
   if (values['revoke-sessions']) {
     console.log('Session files cleared.');
