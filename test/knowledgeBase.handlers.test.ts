@@ -12,7 +12,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { pdfHandler } from '../src/services/knowledgeBase/handlers/pdf';
+import { pdfHandler, PDF_RASTER_DPI } from '../src/services/knowledgeBase/handlers/pdf';
 import { docxHandler } from '../src/services/knowledgeBase/handlers/docx';
 import { pptxHandler } from '../src/services/knowledgeBase/handlers/pptx';
 import * as pandocModule from '../src/services/knowledgeBase/pandoc';
@@ -93,11 +93,14 @@ describe('pdfHandler', () => {
       .readFileSync(path.join(outDir, 'pages/page-0001.png'))
       .subarray(0, 4);
     expect([header[0], header[1], header[2], header[3]]).toEqual([0x89, 0x50, 0x4e, 0x47]);
+    const image = await napiCanvas.loadImage(path.join(outDir, 'pages/page-0001.png'));
+    expect(image.width).toBe(1666);
+    expect(image.height).toBe(2156);
 
     // Metadata: counts + nested sourceCounts + per-page array.
     expect(result.metadata?.pageCount).toBe(1);
     expect(result.metadata?.renderedPageCount).toBe(1);
-    expect(result.metadata?.rasterDpi).toBe(150);
+    expect(result.metadata?.rasterDpi).toBe(PDF_RASTER_DPI);
     const sourceCounts = result.metadata?.sourceCounts as Record<string, number>;
     expect(sourceCounts.pdfjs).toBe(1);
     expect(sourceCounts['artificial-intelligence']).toBeUndefined();
@@ -644,6 +647,19 @@ describe('pptxHandler', () => {
         return { images };
       });
   }
+
+  test('uses a slide raster scale that aligns common 16:9 decks to the vision grid', () => {
+    const scale = pptxSlideRenderModule.PPTX_SLIDE_RASTER_SCALE;
+    const renderedWidth = Math.round(960 * scale);
+    const renderedHeight = Math.round(540 * scale);
+
+    expect(scale).toBeCloseTo(7 / 3);
+    expect(renderedWidth).toBe(2240);
+    expect(renderedHeight).toBe(1260);
+    expect(renderedWidth % 28).toBe(0);
+    expect(renderedHeight % 28).toBe(0);
+    expect(Math.max(renderedWidth, renderedHeight)).toBeLessThanOrEqual(2576);
+  });
 
   test('extracts slide text, speaker notes, and embedded media with hybrid annotations', async () => {
     const buffer = readFixture('sample.pptx');

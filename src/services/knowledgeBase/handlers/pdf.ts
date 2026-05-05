@@ -1,6 +1,6 @@
 // ─── PDF handler (hybrid: pdfjs text + AI conversion per page) ──────────────
 // Each PDF page goes through three steps:
-//   1. Render the page to a 150 DPI PNG (always — the image is preserved
+//   1. Render the page to a 196 DPI PNG (always — the image is preserved
 //      as a backup reference regardless of which text path runs).
 //   2. Extract per-page signals via pdfjs: figureCount, tableLikely,
 //      extractedText. See `../ingestion/pdfSignals.ts` for the algorithm.
@@ -40,7 +40,8 @@ import {
   ensureAiReadyImage,
 } from '../ingestion/pageConversion';
 
-const TARGET_SCALE = 150 / 72;
+export const PDF_RASTER_DPI = 196;
+const TARGET_SCALE = PDF_RASTER_DPI / 72;
 
 type PageSource = 'pdfjs' | 'artificial-intelligence' | 'image-only';
 
@@ -238,7 +239,7 @@ export const pdfHandler: Handler = async ({
   const metadata: Record<string, unknown> = {
     pageCount: totalPages,
     renderedPageCount: renderedPageNumbers.length,
-    rasterDpi: 150,
+    rasterDpi: PDF_RASTER_DPI,
     sourceCounts,
   };
   if (failedRenders.length > 0) {
