@@ -238,7 +238,11 @@ export function createMemoryMcpServer({ chatService, backendRegistry, emitMemory
   const sessions = new Map<string, MemoryMcpSession>(); // token → session
   const byConversation = new Map<string, string>(); // convId → token
 
-  async function emitFreshMemoryUpdate(hash: string, changedFiles: string[]): Promise<void> {
+  async function emitFreshMemoryUpdate(
+    hash: string,
+    changedFiles: string[],
+    sourceConversationId: string | null = null,
+  ): Promise<void> {
     if (!emitMemoryUpdate) return;
     const freshSnapshot = await chatService.getWorkspaceMemory(hash);
     emitMemoryUpdate(hash, {
@@ -246,6 +250,8 @@ export function createMemoryMcpServer({ chatService, backendRegistry, emitMemory
       capturedAt: freshSnapshot?.capturedAt || new Date().toISOString(),
       fileCount: freshSnapshot?.files.length || 0,
       changedFiles,
+      sourceConversationId,
+      displayInChat: !!sourceConversationId,
     });
   }
 
@@ -437,7 +443,7 @@ export function createMemoryMcpServer({ chatService, backendRegistry, emitMemory
       });
 
       // Fire a workspace-scoped WebSocket update so any open memory panel refreshes.
-      await emitFreshMemoryUpdate(hash, [relPath]);
+      await emitFreshMemoryUpdate(hash, [relPath], session.conversationId);
 
       return res.json({ ok: true, filename: relPath });
     } catch (err: unknown) {
@@ -551,7 +557,7 @@ export function createMemoryMcpServer({ chatService, backendRegistry, emitMemory
 
       if (savedCount > 0) {
         console.log(`[memoryMcp] extract: saved ${savedCount} entry(ies) for conv=${conversationId}`);
-        await emitFreshMemoryUpdate(hash, savedRelPaths);
+        await emitFreshMemoryUpdate(hash, savedRelPaths, conversationId);
       }
 
       return savedCount;

@@ -63,6 +63,26 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onClose }){
     return () => { cancelled = true; };
   }, [open, hash]);
 
+  React.useEffect(() => {
+    if (!open || !hash) return;
+    let cancelled = false;
+    const onMemoryUpdate = (event) => {
+      if (!event || !event.detail || event.detail.hash !== hash) return;
+      AgentApi.workspace.getMemory(hash).then((memRes) => {
+        if (cancelled) return;
+        setMemoryEnabled(!!memRes.enabled);
+        setMemorySnapshot(memRes.snapshot || null);
+      }).catch(() => {
+        // Best-effort live refresh; the next manual open/mutation refetches.
+      });
+    };
+    window.addEventListener('ac:memory-update', onMemoryUpdate);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('ac:memory-update', onMemoryUpdate);
+    };
+  }, [open, hash]);
+
   /* Escape closes unless we're mid-save (closing mid-PUT would leave a stale
      success toast in the air). */
   React.useEffect(() => {

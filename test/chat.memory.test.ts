@@ -225,6 +225,8 @@ describe('memory_update WebSocket frame', () => {
     expect(memUpdate.fileCount).toBe(2);
     expect(memUpdate.changedFiles).toEqual(expect.arrayContaining(['one.md', 'two.md']));
     expect(typeof memUpdate.capturedAt).toBe('string');
+    expect(memUpdate.sourceConversationId).toBe(conv.id);
+    expect(memUpdate.displayInChat).toBe(true);
   });
 
   test('idle connected workspace conversation receives memory_update from another conversation memory capture', async () => {
@@ -273,10 +275,15 @@ describe('memory_update WebSocket frame', () => {
     idleWs.close();
     fs.rmSync(memDir, { recursive: true, force: true });
 
-    expect(activeEvents.find((e) => e.type === 'memory_update')).toBeDefined();
+    const activeFrame = activeEvents.find((e) => e.type === 'memory_update');
+    expect(activeFrame).toBeDefined();
+    expect(activeFrame.sourceConversationId).toBe(activeConv.id);
+    expect(activeFrame.displayInChat).toBe(true);
     expect(frame.type).toBe('memory_update');
     expect(frame.fileCount).toBe(2);
     expect(frame.changedFiles).toEqual(expect.arrayContaining(['one.md', 'two.md']));
+    expect(frame.sourceConversationId).toBe(activeConv.id);
+    expect(frame.displayInChat).toBe(false);
   });
 
   test('changedFiles only includes files that changed since previous frame', async () => {

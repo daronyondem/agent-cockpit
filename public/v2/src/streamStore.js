@@ -1030,11 +1030,29 @@
       const changed = Array.isArray(frame.changedFiles) ? frame.changedFiles : [];
       const fileCount = typeof frame.fileCount === 'number' ? frame.fileCount : 0;
       const capturedAt = typeof frame.capturedAt === 'string' ? frame.capturedAt : new Date().toISOString();
+      const sourceConversationId = typeof frame.sourceConversationId === 'string' ? frame.sourceConversationId : null;
+      const displayInChat = frame.displayInChat === true;
+      const cur = states.get(convId);
+      try {
+        if (typeof window !== 'undefined' && cur && cur.conv && cur.conv.workspaceHash) {
+          window.dispatchEvent(new CustomEvent('ac:memory-update', {
+            detail: {
+              hash: cur.conv.workspaceHash,
+              capturedAt,
+              fileCount,
+              changedFiles: changed,
+              sourceConversationId,
+              displayInChat,
+            },
+          }));
+        }
+      } catch {}
+      if (!displayInChat) return;
       const synth = {
         id: 'mem_' + capturedAt + '_' + Math.random().toString(36).slice(2, 8),
         role: 'memory',
         timestamp: capturedAt,
-        memoryUpdate: { capturedAt, fileCount, changedFiles: changed },
+        memoryUpdate: { capturedAt, fileCount, changedFiles: changed, sourceConversationId },
       };
       update(convId, cur => ({ ...cur, messages: [...cur.messages, synth] }));
       return;
