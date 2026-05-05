@@ -2109,6 +2109,11 @@ function useViewportHeightVar() {
     const root = document.documentElement;
     const update = () => {
       root.style.setProperty('--app-height', `${window.visualViewport?.height || window.innerHeight}px`);
+      root.scrollLeft = 0;
+      document.body.scrollLeft = 0;
+      if (window.scrollX !== 0) {
+        window.scrollTo(0, window.scrollY);
+      }
     };
     update();
     window.addEventListener('resize', update);
