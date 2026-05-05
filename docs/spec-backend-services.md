@@ -39,6 +39,9 @@
 | `conversationToMarkdown(convId)` | Exports all sessions as single markdown document. |
 | `getWorkspaceInstructions(hash)` | Returns instructions string, empty string if unset, `null` if workspace not found. |
 | `setWorkspaceInstructions(hash, instructions)` | Saves to workspace index. Returns string or `null`. |
+| `getWorkspaceInstructionCompatibility(hash)` | Computes native CLI instruction-file coverage for the workspace. Detects `AGENTS.md` (Codex/vendor-neutral), `CLAUDE.md` (Claude Code), and any `*.md` under `.kiro/steering/` (Kiro). Returns `WorkspaceInstructionCompatibilityStatus` or `null`. |
+| `createWorkspaceInstructionPointers(hash)` | Creates missing compatibility pointer files without overwriting existing files. Missing `AGENTS.md` is created from existing `CLAUDE.md` and/or Kiro steering files; missing `CLAUDE.md` imports `AGENTS.md`; missing Kiro steering creates `.kiro/steering/agents-md.md` pointing at `AGENTS.md`. Returns `{ status, created }` or `null`. |
+| `dismissWorkspaceInstructionCompatibility(hash)` | Stores the current status fingerprint on `WorkspaceIndex.instructionCompatibilityDismissedFingerprint` and returns the recomputed status. The fingerprint is derived from detected source paths + missing vendors, so changes to instruction-file coverage invalidate the dismissal. |
 | `getWorkspaceHashForConv(convId)` | Returns workspace hash or `null`. |
 | `getWorkspaceContext(convId)` | **Synchronous.** Returns the workspace discussion-history pointer text or `null`. Prepended to the user message on new sessions. |
 | `getWorkspaceMemoryPointer(hash)` | Returns a bracketed pointer block telling the CLI where the workspace's `memory/files/` dir lives on disk, or `null` when memory is disabled for the workspace. `mkdir -p`s `memory/files/` so the model never hits ENOENT on a brand-new workspace. Prepended to the user message on new sessions alongside `getWorkspaceContext`. |

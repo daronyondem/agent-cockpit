@@ -101,6 +101,7 @@ The PWA currently covers:
 The PWA intentionally does not yet cover:
 
 - Memory and Knowledge Base mobile panels/live update bubbles.
+- Cross-CLI instruction compatibility notifications and pointer creation.
 - CLI update notifications and update actions. This is an intentional web-only parity decision because CLI binary updates are server-administration controls; see [parity-decisions.md](parity-decisions.md) and [ADR-0027](adr/0027-manage-cli-updates-from-web-cockpit.md).
 - Service worker offline caching. The app is server-backed and currently requires network access to the Agent Cockpit host.
 - True remote push notifications. Browser notification support only works while the PWA/browser context is alive enough to receive WebSocket events.

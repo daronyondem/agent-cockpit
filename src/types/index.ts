@@ -252,6 +252,13 @@ export interface WorkspaceIndex {
   workspacePath: string;
   instructions?: string;
   /**
+   * Fingerprint of the last dismissed CLI instruction-file compatibility
+   * warning. The fingerprint changes when detected instruction sources or
+   * missing vendor entrypoints change, so a stale dismissal does not hide a
+   * newly-actionable mismatch.
+   */
+  instructionCompatibilityDismissedFingerprint?: string;
+  /**
    * Whether per-workspace Memory is enabled. When false/undefined, the
    * workspace behaves exactly as before this feature: no memory injection,
    * no MCP memory_note exposure, no post-session extraction.
@@ -356,6 +363,46 @@ export interface ConversationListItem {
 
 export type CliVendor = 'codex' | 'claude-code' | 'kiro';
 export type CliAuthMode = 'server-configured' | 'account';
+
+export type WorkspaceInstructionSourceId = 'agents' | 'claude' | 'kiro';
+
+export interface WorkspaceInstructionSourceStatus {
+  id: WorkspaceInstructionSourceId;
+  vendor: CliVendor;
+  label: string;
+  expectedPath: string;
+  present: boolean;
+  paths: string[];
+}
+
+export interface WorkspaceInstructionVendorStatus {
+  vendor: CliVendor;
+  label: string;
+  sourceId: WorkspaceInstructionSourceId;
+  expectedPath: string;
+  covered: boolean;
+}
+
+export interface WorkspaceInstructionPointerResult {
+  vendor: CliVendor;
+  label: string;
+  path: string;
+}
+
+export interface WorkspaceInstructionCompatibilityStatus {
+  workspaceHash: string;
+  workspacePath: string;
+  sources: WorkspaceInstructionSourceStatus[];
+  vendors: WorkspaceInstructionVendorStatus[];
+  missingVendors: WorkspaceInstructionVendorStatus[];
+  hasAnyInstructions: boolean;
+  compatible: boolean;
+  canCreatePointers: boolean;
+  fingerprint: string;
+  dismissed: boolean;
+  shouldNotify: boolean;
+  primarySourceId: WorkspaceInstructionSourceId | null;
+}
 
 export interface CliProfile {
   id: string;
