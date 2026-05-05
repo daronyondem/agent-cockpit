@@ -256,6 +256,7 @@ function App(){
   const [filesView, setFilesView] = React.useState(null); // { hash, label } | null
   const [settingsView, setSettingsView] = React.useState(null); // { initialTab } | null — global app settings, no per-workspace context
   const [folderPickerOpen, setFolderPickerOpen] = React.useState(false);
+  const [folderPickerInitialPath, setFolderPickerInitialPath] = React.useState('');
   const [creatingConv, setCreatingConv] = React.useState(false);
   const [viewingArchive, setViewingArchive] = React.useState(false);
   const [updateTarget, setUpdateTarget] = React.useState(null); // { localVersion, remoteVersion } | null
@@ -429,9 +430,10 @@ function App(){
     setSbOpen(false);
   }, []);
 
-  const onNewConversation = React.useCallback(() => {
+  const onNewConversation = React.useCallback((initialPath) => {
     setSbOpen(false);
     setViewingArchive(false);
+    setFolderPickerInitialPath(initialPath || '');
     setFolderPickerOpen(true);
   }, []);
 
@@ -506,7 +508,7 @@ function App(){
 
   const onCloseWorkspaceSettings = React.useCallback(() => {
     /* KB toggle may have flipped — refetch so the workspace-level
-       `workspaceKbEnabled` flag (and the book icon on the group header)
+       `workspaceKbEnabled` flag (and the selected-workspace book icon)
        reflects the new state. Targeted patches don't apply here because
        the toggle affects every conv in the workspace, not just one. */
     setWorkspaceSettings(null);
@@ -531,6 +533,7 @@ function App(){
       const conv = await AgentApi.createConversation(body);
       StreamStore.prependConvListItem(conv);
       setFolderPickerOpen(false);
+      setFolderPickerInitialPath('');
       setKbView(null);
       setFilesView(null);
       setSettingsView(null);
@@ -607,7 +610,13 @@ function App(){
       <FolderPicker
         open={folderPickerOpen}
         busy={creatingConv}
-        onClose={() => { if (!creatingConv) setFolderPickerOpen(false); }}
+        initialPath={folderPickerInitialPath}
+        onClose={() => {
+          if (!creatingConv) {
+            setFolderPickerOpen(false);
+            setFolderPickerInitialPath('');
+          }
+        }}
         onSelect={createConv}
         onUseDefault={() => createConv(null)}
       />
