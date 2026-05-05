@@ -48,6 +48,19 @@ describe('frontend routes', () => {
     expect(serverSrc).not.toContain("res.redirect('/index.html')");
   });
 
+  test('memory update notifications open the focused memory-update modal first', () => {
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/workspaceSettings.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+
+    expect(shellSrc).toContain('MemoryUpdateModal');
+    expect(shellSrc).toContain('onOpenMemoryUpdate(conv.workspaceHash, wsLabel, entry.message.memoryUpdate || null)');
+    expect(workspaceSettingsSrc).toContain('function MemoryUpdateModal');
+    expect(workspaceSettingsSrc).toContain('window.MemoryUpdateModal = MemoryUpdateModal');
+    expect(workspaceSettingsSrc).toContain('View all memory items');
+    expect(cssSrc).toContain('.mu-panel');
+  });
+
   test('static frontend surface serves V2 and leaves removed assets unavailable', async () => {
     const app = express();
     app.get('/', (_req, res) => { res.redirect('/v2/'); });
@@ -62,10 +75,12 @@ describe('frontend routes', () => {
       expect(v2.status).toBe(200);
       expect(v2.headers['content-type']).toMatch(/text\/html/);
       expect(v2.body).toContain('<div id="root"');
-      expect(v2.body).toContain('src/app.css?v=127');
+      expect(v2.body).toContain('src/app.css?v=128');
       expect(v2.body).toContain('src/cliUpdateStore.js?v=116');
       expect(v2.body).toContain('src/synthesisAtlas.js?v=117');
       expect(v2.body).toContain('src/screens/kbBrowser.jsx?v=120');
+      expect(v2.body).toContain('src/workspaceSettings.jsx?v=118');
+      expect(v2.body).toContain('src/shell.jsx?v=126');
       expect(v2.body.indexOf('src/synthesisAtlas.js?v=117')).toBeLessThan(
         v2.body.indexOf('src/screens/kbBrowser.jsx?v=120'),
       );

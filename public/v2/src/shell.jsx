@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Sidebar, Ico, AgentApi, StreamStore, KbBrowser, FilesBrowser, DialogProvider, useDialog, ToastProvider, useToasts, marked, DOMPurify, FileLinkUtils, UpdateModal, RestartOverlay, WorkspaceSettingsModal, SessionsModal, CliUpdateStore */
+/* global React, ReactDOM, Sidebar, Ico, AgentApi, StreamStore, KbBrowser, FilesBrowser, DialogProvider, useDialog, ToastProvider, useToasts, marked, DOMPurify, FileLinkUtils, UpdateModal, RestartOverlay, WorkspaceSettingsModal, MemoryUpdateModal, SessionsModal, CliUpdateStore */
 
 /* Agent Cockpit v2 — real app entry.
    PR 4a scope: long-conversation rendering — progress-breadcrumb
@@ -261,6 +261,7 @@ function App(){
   const [updateTarget, setUpdateTarget] = React.useState(null); // { localVersion, remoteVersion } | null
   const [restarting, setRestarting] = React.useState(false);
   const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label } | null
+  const [memoryUpdateView, setMemoryUpdateView] = React.useState(null); // { hash, label, update } | null
   const [sbOpen, setSbOpen] = React.useState(false); // mobile-only sidebar overlay; ignored on desktop
   const [user, setUser] = React.useState(null); // { displayName, email, provider } | null
   const convStates = useConvStates();
@@ -386,6 +387,7 @@ function App(){
     setKbView(null);
     setFilesView(null);
     setSettingsView(null);
+    setMemoryUpdateView(null);
     /* Push the active id into StreamStore synchronously *before* markRead
        so any `done` frame that fires between this call and the React-effect
        sync below already sees the new active id and doesn't re-flag the
@@ -404,6 +406,7 @@ function App(){
   }, []);
 
   const onOpenKb = React.useCallback((hash, label) => {
+    setMemoryUpdateView(null);
     setFilesView(null);
     setSettingsView(null);
     setKbView({ hash, label });
@@ -411,6 +414,7 @@ function App(){
   }, []);
 
   const onOpenFiles = React.useCallback((hash, label) => {
+    setMemoryUpdateView(null);
     setKbView(null);
     setSettingsView(null);
     setFilesView({ hash, label });
@@ -418,6 +422,7 @@ function App(){
   }, []);
 
   const onOpenSettings = React.useCallback((initialTab) => {
+    setMemoryUpdateView(null);
     setKbView(null);
     setFilesView(null);
     setSettingsView({ initialTab: initialTab || null });
@@ -438,6 +443,7 @@ function App(){
         setKbView(null);
         setFilesView(null);
         setSettingsView(null);
+        setMemoryUpdateView(null);
       }
       return next;
     });
@@ -477,9 +483,26 @@ function App(){
   }, []);
 
   const onOpenWorkspaceSettings = React.useCallback((hash, label, initialTab) => {
+    setMemoryUpdateView(null);
     setWorkspaceSettings({ hash, label, initialTab: initialTab || null });
     setSbOpen(false);
   }, []);
+
+  const onOpenMemoryUpdate = React.useCallback((hash, label, update) => {
+    setWorkspaceSettings(null);
+    setMemoryUpdateView({ hash, label, update: update || null });
+    setSbOpen(false);
+  }, []);
+
+  const onViewAllMemoryItems = React.useCallback(() => {
+    if (!memoryUpdateView) return;
+    setWorkspaceSettings({
+      hash: memoryUpdateView.hash,
+      label: memoryUpdateView.label,
+      initialTab: 'memory',
+    });
+    setMemoryUpdateView(null);
+  }, [memoryUpdateView]);
 
   const onCloseWorkspaceSettings = React.useCallback(() => {
     /* KB toggle may have flipped — refetch so the workspace-level
@@ -575,7 +598,7 @@ function App(){
               onArchived={onArchived}
               onDeleted={onDeleted}
               onRenamed={onRenamed}
-              onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+              onOpenMemoryUpdate={onOpenMemoryUpdate}
               onOpenSettings={onOpenSettings}
             />
           </ChatErrorBoundary>
@@ -602,6 +625,14 @@ function App(){
         initialTab={workspaceSettings ? workspaceSettings.initialTab : null}
         onClose={onCloseWorkspaceSettings}
       />
+      <MemoryUpdateModal
+        open={!!memoryUpdateView}
+        hash={memoryUpdateView ? memoryUpdateView.hash : null}
+        label={memoryUpdateView ? memoryUpdateView.label : null}
+        update={memoryUpdateView ? memoryUpdateView.update : null}
+        onClose={() => setMemoryUpdateView(null)}
+        onViewAll={onViewAllMemoryItems}
+      />
     </div>
   );
 }
@@ -620,7 +651,7 @@ function EmptyMain(){
   );
 }
 
-function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSettings, onOpenSettings }){
+function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenSettings }){
   const state = useConversationState(convId);
   const backends = useBackendList();
   const { profiles: cliProfiles } = useCliProfileSettings();
@@ -1116,8 +1147,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenWorkspaceSet
                       key={entry.message.id}
                       message={entry.message}
                       onOpen={() => {
-                        if (!onOpenWorkspaceSettings || !conv.workspaceHash) return;
-                        onOpenWorkspaceSettings(conv.workspaceHash, wsLabel, 'memory');
+                        if (!onOpenMemoryUpdate || !conv.workspaceHash) return;
+                        onOpenMemoryUpdate(conv.workspaceHash, wsLabel, entry.message.memoryUpdate || null);
                       }}
                     />
                   );
@@ -3397,8 +3428,7 @@ function FileViewerPanel({ filename, viewPath, imageUrl, displayPath, line, onCl
 
 /* Synthetic in-feed bubble emitted when the server sends a `memory_update`
    frame. Shows a one-line summary (N files changed or snapshot refreshed)
-   plus a "View memory" action that opens the WorkspaceSettingsModal on
-   its Memory tab. Mirrors V1's chat-msg-memory bubble. */
+   plus a "View update" action that opens a focused changed-file modal. */
 function MemoryUpdateBubble({ message, onOpen }){
   const mu = message.memoryUpdate || { changedFiles: [], fileCount: 0, capturedAt: message.timestamp };
   const changed = Array.isArray(mu.changedFiles) ? mu.changedFiles : [];
@@ -3434,7 +3464,7 @@ function MemoryUpdateBubble({ message, onOpen }){
             </ul>
           ) : null}
           <button type="button" className="btn memory-cta" onClick={onOpen}>
-            View memory →
+            View update →
           </button>
         </div>
       </div>

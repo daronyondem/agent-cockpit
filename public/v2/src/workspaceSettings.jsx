@@ -230,6 +230,107 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onClose }){
 }
 window.WorkspaceSettingsModal = WorkspaceSettingsModal;
 
+function MemoryUpdateModal({ open, hash, label, update, onClose, onViewAll }){
+  const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState(null);
+  const [snapshot, setSnapshot] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!open || !hash) return;
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+    setSnapshot(null);
+    AgentApi.workspace.getMemory(hash)
+      .then(res => {
+        if (cancelled) return;
+        setSnapshot(res.snapshot || null);
+      })
+      .catch(err => {
+        if (!cancelled) setLoadError(err.message || String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [open, hash, update && update.capturedAt]);
+
+  React.useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const changedFiles = Array.isArray(update && update.changedFiles) ? update.changedFiles : [];
+  const files = (snapshot && snapshot.files) || [];
+  const filesByName = new Map(files.map(f => [f.filename, f]));
+  const changedEntries = changedFiles
+    .map(filename => ({ filename, entry: filesByName.get(filename) || null }));
+  const capturedAt = (update && update.capturedAt) || new Date().toISOString();
+
+  return (
+    <div className="fp-scrim" onClick={onClose}>
+      <div className="fp-panel ws-panel mu-panel" role="dialog" aria-modal="true" aria-label={`Memory update: ${label || ''}`} onClick={(e) => e.stopPropagation()}>
+        <div className="fp-head">
+          <span className="fp-title">Memory Update: {label || ''}</span>
+          <button className="fp-close" type="button" aria-label="Close" title="Close" onClick={onClose}>{Ico.x(14)}</button>
+        </div>
+        <div className="mu-body">
+          <div className="mu-meta">
+            <span>{formatMemoryUpdateTime(capturedAt)}</span>
+            <span>{changedFiles.length} changed file{changedFiles.length === 1 ? '' : 's'}</span>
+          </div>
+          {loading ? (
+            <div className="u-dim" style={{padding:'12px 0'}}>Loading…</div>
+          ) : loadError ? (
+            <div className="u-err" style={{padding:'12px 0'}}>{loadError}</div>
+          ) : changedFiles.length === 0 ? (
+            <div className="ws-empty u-dim">No specific memory file was included in this update.</div>
+          ) : (
+            <ul className="ws-mem-list mu-list">
+              {changedEntries.map(({ filename, entry }) => entry ? (
+                <MemoryEntryRow
+                  key={filename}
+                  entry={entry}
+                  defaultExpanded={true}
+                  showDelete={false}
+                />
+              ) : (
+                <li key={filename} className="ws-mem-item mu-missing">
+                  <div className="ws-mem-item-toggle">
+                    <div className="ws-mem-item-name">Memory file unavailable</div>
+                    <div className="ws-mem-item-desc">This file is not in the current memory snapshot.</div>
+                    <div className="ws-mem-item-path">{filename}</div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <div className="mu-actions">
+          <button type="button" className="btn ghost" onClick={onClose}>Close</button>
+          <button type="button" className="btn" onClick={onViewAll}>View all memory items</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+window.MemoryUpdateModal = MemoryUpdateModal;
+
+function formatMemoryUpdateTime(value){
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value || '';
+  return d.toLocaleString([], {
+    month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+  });
+}
+
 /* ---------- Tabs ---------- */
 
 function InstructionsTab({ instructions, setInstructions, dirty, saving, onSave }){
@@ -325,8 +426,8 @@ function MemoryTab({ enabled, snapshot, onToggle, onDelete, onClearAll }){
   );
 }
 
-function MemoryEntryRow({ entry, onDelete }){
-  const [expanded, setExpanded] = React.useState(false);
+function MemoryEntryRow({ entry, onDelete, defaultExpanded = false, showDelete = true }){
+  const [expanded, setExpanded] = React.useState(defaultExpanded);
   const heading = entry.name || entry.filename;
   const sub = entry.description || '';
   return (
@@ -341,13 +442,15 @@ function MemoryEntryRow({ entry, onDelete }){
           {sub ? <div className="ws-mem-item-desc">{sub}</div> : null}
           <div className="ws-mem-item-path">{entry.filename}</div>
         </button>
-        <button
-          type="button"
-          className="ws-mem-item-delete"
-          title="Delete entry"
-          aria-label="Delete entry"
-          onClick={(e) => { e.stopPropagation(); onDelete(e.currentTarget); }}
-        >{Ico.trash(12)}</button>
+        {showDelete && onDelete ? (
+          <button
+            type="button"
+            className="ws-mem-item-delete"
+            title="Delete entry"
+            aria-label="Delete entry"
+            onClick={(e) => { e.stopPropagation(); onDelete(e.currentTarget); }}
+          >{Ico.trash(12)}</button>
+        ) : null}
       </div>
       {expanded ? (
         <pre className="ws-mem-item-body">{entry.content || ''}</pre>
