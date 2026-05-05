@@ -20,17 +20,27 @@
 
 html, body, #root {
   height: 100%;
+  max-width: 100vw;
   overflow: hidden;
+  overflow-x: clip;
   width: 100%;
 }
 
 body {
+  background: var(--bg);
   inset: 0;
   margin: 0;
+  max-width: 100vw;
   min-height: 100%;
   overscroll-behavior: none;
   position: fixed;
-  background: var(--bg);
+  touch-action: pan-y;
+  width: 100vw;
+}
+
+#root {
+  inset: 0;
+  position: fixed;
 }
 
 button, input, textarea {
@@ -48,8 +58,11 @@ button {
 
 .app-shell {
   height: var(--app-height, 100dvh);
+  inset: 0;
   max-width: 100vw;
   overflow: hidden;
+  overflow-x: clip;
+  position: fixed;
   width: 100%;
 }
 
@@ -59,6 +72,8 @@ button {
   height: 100%;
   max-width: 100%;
   overflow: hidden;
+  overflow-x: clip;
+  position: relative;
   background: var(--bg);
   width: 100%;
 }
@@ -477,6 +492,10 @@ button {
   width: 100%;
 }
 
+.composer .btn {
+  min-width: 0;
+}
+
 textarea, input {
   background: #fff;
   border: 1px solid var(--border);
@@ -629,6 +648,31 @@ textarea {
   white-space: pre-wrap;
 }
 
+pre, code {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 420px) {
+  .topbar, .chat-topbar {
+    gap: 6px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+
+  .topbar .btn, .chat-topbar .btn, .composer .btn {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .composer {
+    gap: 6px;
+    padding-left: 6px;
+    padding-right: 6px;
+  }
+}
+
 .error-banner {
   background: var(--red-bg);
   border: 1px solid #f0bbb4;
@@ -674,7 +718,7 @@ textarea {
   to { transform: rotate(360deg); }
 }
 
-@media (min-width: 760px) {
+@media (min-width: 760px) and (hover: hover) and (pointer: fine) {
   .app-shell {
     margin: 0 auto;
     max-width: 860px;

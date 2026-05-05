@@ -59,7 +59,7 @@ For reverse-proxy base paths, the API base is derived from the current URL by re
 The PWA currently covers:
 
 - Same-origin authenticated load via the existing web auth session.
-- App-like viewport locking: the document body does not scroll horizontally or vertically, the shell height tracks the visual viewport, and only intended panes (conversation list, transcript, modals, queues, attachment trays) scroll inside their own bounds. The viewport meta includes `interactive-widget=resizes-content`, and the React shell maintains a `--app-height` CSS variable from `window.visualViewport.height` so the top bar and composer stay anchored as the mobile keyboard appears.
+- App-like viewport locking: the document body does not scroll horizontally or vertically, the root/app shell are fixed to the viewport, the shell height tracks the visual viewport, accidental `scrollLeft` is reset during viewport updates, and only intended panes (conversation list, transcript, modals, queues, attachment trays) scroll inside their own bounds. The viewport meta includes `interactive-widget=resizes-content`, and the React shell maintains a `--app-height` CSS variable from `window.visualViewport.height` so the top bar and composer stay anchored as the mobile keyboard appears. Desktop max-width framing is limited to fine-pointer/hover devices so touch browsers with unusual viewport reporting still get the full-width mobile shell.
 - Current-user display via `GET /api/me`.
 - Settings/default loading via `GET /api/chat/settings`.
 - Backend metadata loading via `GET /api/chat/backends`.
