@@ -5,6 +5,7 @@ import type {
   BackendMetadata,
   ContentBlock,
   Conversation,
+  ConversationArtifact,
   ConversationListItem,
   CurrentUser,
   EffortLevel,
@@ -1654,6 +1655,14 @@ function ContentBlockView(props: {
       </div>
     );
   }
+  if (props.block.type === 'artifact') {
+    const reference = makeConversationArtifactReference(props.client, props.conversation, props.block.artifact);
+    return (
+      <div className="message-content">
+        <FileCard reference={reference} onOpen={props.onOpenFile} onShare={props.onShareFile} />
+      </div>
+    );
+  }
   return <MessageTextWithFiles {...props} content={props.block.content} thinking={props.block.type === 'thinking'} />;
 }
 
@@ -2184,6 +2193,20 @@ function makeConversationUploadReference(client: AgentCockpitAPI, conversation: 
     downloadURL: client.conversationFileURL(conversation.id, title, 'download'),
     isImage: isImageFileName(title),
     fetchPreview: () => client.getConversationFilePreview(conversation.id, title),
+  };
+}
+
+function makeConversationArtifactReference(client: AgentCockpitAPI, conversation: Conversation, artifact: ConversationArtifact): FileReference {
+  const title = artifact.title || artifact.filename || basenameFromPath(artifact.path);
+  const filename = artifact.filename || basenameFromPath(artifact.path);
+  return {
+    id: `artifact:${conversation.id}:${filename}:${artifact.sourceToolId || ''}`,
+    title,
+    path: artifact.path || filename,
+    downloadURL: client.conversationFileURL(conversation.id, filename, 'download'),
+    isImage: artifact.kind === 'image' || isImageFileName(filename),
+    mimeType: artifact.mimeType,
+    fetchPreview: () => client.getConversationFilePreview(conversation.id, filename),
   };
 }
 

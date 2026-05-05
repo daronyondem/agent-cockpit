@@ -89,6 +89,7 @@ The PWA currently covers:
 - Send/queue wire-content composition by appending `[Uploaded files: <paths>]`.
 - User-message uploaded-file marker stripping and file card rendering.
 - Assistant `<!-- FILE_DELIVERY:/absolute/path -->` marker stripping and file card rendering.
+- Assistant generated-artifact `contentBlocks` render as the same file cards/image previews, backed by `GET /api/chat/conversations/:id/files/:filename`.
 - Text previews, image previews, file downloads, and Web Share API / fallback download for delivered files.
 - Session list, preview, and markdown download.
 - Workspace tree browsing, text preview/edit/save, copy, image/binary open, file/folder creation, rename/move, delete, upload progress/cancel, and conflict overwrite retry.

@@ -1,3 +1,6 @@
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import { BaseBackendAdapter } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
 import type { ModelOption } from '../src/types';
@@ -13,6 +16,8 @@ import {
   normalizeCodexModelOption,
   buildCodexTurnStartParams,
   resolveCodexCliRuntime,
+  codexImageArtifactEvent,
+  findCodexGeneratedImagePath,
 } from '../src/services/backends/codex';
 
 // ── CodexAdapter metadata ───────────────────────────────────────────────────
@@ -719,6 +724,42 @@ describe('extractCodexToolDetails', () => {
   test('imageGeneration maps to ImageGen', () => {
     const result = extractCodexToolDetails({ type: 'imageGeneration', id: 'ig-1' });
     expect(result!.tool).toBe('ImageGen');
+  });
+
+  test('imageGeneration result emits an artifact event from base64 image data', () => {
+    const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l8C6YQAAAABJRU5ErkJggg==';
+    const event = codexImageArtifactEvent({
+      type: 'imageGeneration',
+      id: 'ig-1',
+      result: pngBase64,
+    } as any, 'thread-1');
+
+    expect(event).toMatchObject({
+      type: 'artifact',
+      dataBase64: pngBase64,
+      filename: 'ig-1.png',
+      mimeType: 'image/png',
+      sourceToolId: 'ig-1',
+    });
+  });
+
+  test('findCodexGeneratedImagePath searches profile generated_images folders', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-codex-images-'));
+    try {
+      const imageDir = path.join(tmp, 'generated_images', 'rollout-1');
+      fs.mkdirSync(imageDir, { recursive: true });
+      const imagePath = path.join(imageDir, 'ig-1.png');
+      fs.writeFileSync(imagePath, 'png');
+
+      expect(findCodexGeneratedImagePath('ig-1', 'thread-1', {
+        command: 'codex',
+        env: {},
+        configDir: tmp,
+        profileKey: 'test',
+      })).toBe(imagePath);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   test('collabAgentToolCall (spawnAgent) maps to Agent with prompt preview and isAgent flag', () => {

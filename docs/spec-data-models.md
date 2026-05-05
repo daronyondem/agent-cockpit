@@ -103,7 +103,7 @@ agent-cockpit/
     │   │   └── {convId}/
     │   │       ├── session-1.json      # Archived session
     │   │       └── session-N.json      # Active session (updated every message)
-    │   ├── artifacts/{convId}/         # Per-conversation uploaded files
+    │   ├── artifacts/{convId}/         # Per-conversation uploaded files and generated assistant artifacts
     │   ├── settings.json               # User settings, including CLI profile definitions
     │   └── usage-ledger.json           # Daily per-backend token usage ledger
     └── sessions/                       # Express session JSON files (24h TTL)
@@ -232,8 +232,9 @@ Together these guarantee that a workspace index always parses on disk and that c
     status?: string             // 'success' | 'error' | 'warning' (derived from tool result)
   }],
   contentBlocks?: ContentBlock[] // Assistant only. Ordered interleaving of text, thinking,
-                                //   and tool blocks as the CLI emitted them, so the renderer
-                                //   can display "text → tool → text → tool" in source order
+                                //   tool, and generated-artifact blocks as the CLI emitted
+                                //   them, so the renderer can display "text → tool → image"
+                                //   in source order
                                 //   instead of grouping all tools before all text. When
                                 //   present this field is authoritative; `content`,
                                 //   `thinking`, and `toolActivity` are derived views kept
@@ -266,6 +267,12 @@ one block:
 // the derived top-level `toolActivity[]` array, including duration and
 // outcome patches applied from `tool_outcomes` stream events.
 { type: 'tool',     activity: ToolActivity }
+
+// A generated assistant artifact, persisted under
+// data/chat/artifacts/{conversationId}/ and served through
+// GET /conversations/:id/files/:filename. Used for backend-produced images
+// and files that arrive outside normal assistant text.
+{ type: 'artifact', artifact: ConversationArtifact }
 ```
 
 Ordering rules:
@@ -435,6 +442,27 @@ interface AttachmentMeta {
 `chatService.ts` (mirrored on the client by `StreamStore.attachmentKindFromPath`).
 Legacy entries migrated from the pre-typed `[Uploaded files: …]` tag carry
 only `name`, `path`, and `kind` — `size` and `meta` are unavailable for those.
+
+### ConversationArtifact
+
+Typed generated artifact metadata persisted on assistant `contentBlocks`.
+Unlike `AttachmentMeta`, which describes user uploads and queued attachment
+chips, `ConversationArtifact` describes files produced by a backend/tool during
+assistant generation. The server copies source bytes into the same per-
+conversation artifact directory used by uploads so desktop and mobile clients
+can use the existing conversation-file endpoint.
+
+```typescript
+interface ConversationArtifact {
+  filename: string;       // Stored basename under data/chat/artifacts/{convId}/
+  path: string;           // Absolute server path to the stored artifact
+  kind: AttachmentKind;   // Server-inferred category; images render inline
+  size?: number;          // Bytes after persistence
+  mimeType?: string;      // Backend-provided or inferred MIME type
+  title?: string;         // Optional display label, e.g. "Generated image"
+  sourceToolId?: string|null; // Backend tool/item id that produced it
+}
+```
 
 ### QueuedMessage
 

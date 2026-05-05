@@ -126,6 +126,23 @@ export async function processStream(
     }
   }
 
+  function appendArtifactBlock(artifact: NonNullable<Extract<StreamEvent, { type: 'artifact' }>['artifact']>): void {
+    blocks.push({ type: 'artifact', artifact });
+  }
+
+  function artifactSummary(contentBlocks: ContentBlock[]): string {
+    const names = contentBlocks
+      .filter((b): b is Extract<ContentBlock, { type: 'artifact' }> => b.type === 'artifact')
+      .map(b => b.artifact.title || b.artifact.filename)
+      .filter(Boolean);
+    if (names.length === 0) return '';
+    return names.length === 1 ? `Generated file: ${names[0]}` : `Generated files: ${names.join(', ')}`;
+  }
+
+  function hasArtifactBlock(contentBlocks: ContentBlock[]): boolean {
+    return contentBlocks.some(b => b.type === 'artifact');
+  }
+
   function patchToolBlock(id: string | null | undefined, outcome: string | undefined, status: string | undefined): void {
     if (!id) return;
     for (const b of blocks) {
@@ -212,7 +229,7 @@ export async function processStream(
   async function flushAccumulatedAssistant(turn: 'progress' | 'final' = 'progress', forceEmit = false): Promise<void> {
     const finalToolActivity = computeToolDurations(toolActivityAccumulator);
     const finalBlocks = finalizeBlocks(finalToolActivity);
-    const text = fullResponse.trim() || resultText?.trim() || '';
+    const text = fullResponse.trim() || resultText?.trim() || artifactSummary(finalBlocks);
     const hasPartialState = !!text || !!thinkingText.trim() || finalToolActivity.length > 0 || finalBlocks.length > 0;
     if (!hasPartialState) return;
 
@@ -330,6 +347,22 @@ export async function processStream(
           patchToolBlock(outcome.toolUseId, outcome.outcome || undefined, outcome.status || undefined);
         }
         emit({ type: 'tool_outcomes', outcomes: event.outcomes });
+      } else if (event.type === 'artifact') {
+        let artifact = event.artifact;
+        if (!artifact || event.sourcePath || event.dataBase64) {
+          artifact = await chatService.createConversationArtifact(convId, {
+            sourcePath: event.sourcePath,
+            dataBase64: event.dataBase64,
+            filename: event.filename || event.artifact?.filename,
+            mimeType: event.mimeType || event.artifact?.mimeType,
+            title: event.title || event.artifact?.title,
+            sourceToolId: event.sourceToolId ?? event.artifact?.sourceToolId ?? null,
+          }) || undefined;
+        }
+        if (artifact) {
+          appendArtifactBlock(artifact);
+          emit({ type: 'artifact', artifact });
+        }
       } else if (event.type === 'turn_boundary') {
         if (fullResponse.trim()) {
           const turnToolActivity = computeToolDurations(toolActivityAccumulator);
@@ -446,6 +479,7 @@ export async function processStream(
         const finalToolActivityArg = finalToolActivity.length > 0 ? finalToolActivity : undefined;
         const finalBlocks = finalizeBlocks(finalToolActivity);
         const finalBlocksArg = finalBlocks.length > 0 ? finalBlocks : undefined;
+        const finalArtifactSummary = artifactSummary(finalBlocks);
         if (terminalErrorPersisted) {
           console.log(`[chat] Stream done for conv=${convId} after terminal error`);
         } else if (fullResponse.trim()) {
@@ -473,6 +507,11 @@ export async function processStream(
             ? [...finalBlocks, { type: 'text', content: resultText.trim() }]
             : [{ type: 'text', content: resultText.trim() }];
           const assistantMsg = await chatService.addMessage(convId, 'assistant', resultText.trim(), backend, thinkingText.trim() || null, finalToolActivityArg, 'final', resultBlocks);
+          if (assistantMsg) emit({ type: 'assistant_message', message: assistantMsg });
+          maybeUpdateTitle();
+        } else if (hasArtifactBlock(finalBlocks)) {
+          console.log(`[chat] Stream done for conv=${convId}, saving artifacts=${finalBlocks.filter(b => b.type === 'artifact').length}, tools=${finalToolActivity.length}, blocks=${finalBlocks.length}`);
+          const assistantMsg = await chatService.addMessage(convId, 'assistant', finalArtifactSummary || 'Generated file', backend, thinkingText.trim() || null, finalToolActivityArg, 'final', finalBlocksArg);
           if (assistantMsg) emit({ type: 'assistant_message', message: assistantMsg });
           maybeUpdateTitle();
         } else {

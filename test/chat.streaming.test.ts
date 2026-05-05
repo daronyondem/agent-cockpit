@@ -637,6 +637,53 @@ describe('ContentBlocks ordering', () => {
     expect(toolBlock.activity.status).toBe('success');
   });
 
+  test('persists artifact-only assistant turns in contentBlocks', async () => {
+    const conv = await env.chatService.createConversation('Artifact Only');
+    const pngBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/l8C6YQAAAABJRU5ErkJggg==';
+
+    env.mockBackend.setMockEvents([
+      {
+        type: 'artifact',
+        dataBase64: pngBase64,
+        filename: 'chart.png',
+        mimeType: 'image/png',
+        title: 'Generated chart',
+        sourceToolId: 'ig-1',
+      },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+    await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'generate an image', backend: 'claude-code',
+    });
+    const events = await eventsPromise;
+
+    const artifactFrame = events.find((e: any) => e.type === 'artifact');
+    expect(artifactFrame?.artifact).toMatchObject({
+      filename: 'chart.png',
+      kind: 'image',
+      mimeType: 'image/png',
+      title: 'Generated chart',
+      sourceToolId: 'ig-1',
+    });
+
+    const loaded = (await env.chatService.getConversation(conv.id))!;
+    const msg = loaded.messages.filter((m: any) => m.role === 'assistant')[0];
+    expect(msg.content).toBe('Generated file: Generated chart');
+    expect(msg.contentBlocks).toHaveLength(1);
+    expect(msg.contentBlocks![0]).toMatchObject({
+      type: 'artifact',
+      artifact: {
+        filename: 'chart.png',
+        kind: 'image',
+        mimeType: 'image/png',
+      },
+    });
+    expect(fs.existsSync(path.join(env.chatService.artifactsDir, conv.id, 'chart.png'))).toBe(true);
+  });
+
   test('intermediate message at turn_boundary has its own contentBlocks', async () => {
     const conv = await env.chatService.createConversation('Test');
 
