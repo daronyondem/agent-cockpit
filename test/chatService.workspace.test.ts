@@ -178,6 +178,36 @@ describe('getKbStateSnapshot / getKbDb', () => {
     // Unknown workspaces → null.
     expect(await service.setWorkspaceKbAutoDigest('nopehash', true)).toBeNull();
   });
+
+  test('getWorkspaceKbAutoDream defaults to off and persists per workspace', async () => {
+    await service.createConversation('KB Auto Dream', '/tmp/kb-auto-dream');
+    const hash = workspaceHash('/tmp/kb-auto-dream');
+
+    expect(await service.getWorkspaceKbAutoDream(hash)).toEqual({ mode: 'off' });
+
+    const saved = await service.setWorkspaceKbAutoDream(hash, {
+      mode: 'window',
+      windowStart: '02:00',
+      windowEnd: '06:00',
+    });
+
+    expect(saved).toEqual({ mode: 'window', windowStart: '02:00', windowEnd: '06:00' });
+    expect(await service.getWorkspaceKbAutoDream(hash)).toEqual(saved);
+    expect(await service.setWorkspaceKbAutoDream('nopehash', { mode: 'off' })).toBeNull();
+  });
+
+  test('listKbEnabledWorkspaceHashes returns only KB-enabled workspaces', async () => {
+    await service.createConversation('KB Enabled A', '/tmp/kb-enabled-a');
+    await service.createConversation('KB Disabled B', '/tmp/kb-disabled-b');
+    const hashA = workspaceHash('/tmp/kb-enabled-a');
+    const hashB = workspaceHash('/tmp/kb-disabled-b');
+
+    await service.setWorkspaceKbEnabled(hashA, true);
+
+    const hashes = await service.listKbEnabledWorkspaceHashes();
+    expect(hashes).toContain(hashA);
+    expect(hashes).not.toContain(hashB);
+  });
 });
 
 describe('getWorkspaceKbPointer', () => {
@@ -309,4 +339,3 @@ describe('listConversations includes workspaceHash', () => {
 });
 
 // ── Migration ───────────────────────────────────────────────────────────────
-

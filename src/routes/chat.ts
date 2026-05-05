@@ -30,6 +30,11 @@ import {
   KbDigestDisabledError,
 } from '../services/knowledgeBase/digest';
 import { KbDreamService } from '../services/knowledgeBase/dream';
+import {
+  KbDreamScheduler,
+  getKbAutoDreamState,
+  validateKbAutoDreamConfig,
+} from '../services/knowledgeBase/autoDream';
 import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
@@ -726,20 +731,22 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // `kbAutoDigest=true`.
   kbIngestion.setDigestTrigger(kbDigestion);
 
-  // Knowledge Base dreaming orchestrator. Runs the configured Dreaming
-  // CLI to synthesize entries into a knowledge graph of topics and
-  // connections. Manual-only — triggered via POST /kb/dream or /kb/redream.
   // KB Search MCP server — exposes search and ingestion tools to CLIs
   // during both dreaming and conversation sessions.
   const kbSearchMcp = createKbSearchMcpServer({ chatService, kbIngestion });
   router.use('/mcp', kbSearchMcp.router);
 
+  // Knowledge Base dreaming orchestrator. Runs the configured Dreaming CLI to
+  // synthesize entries into a knowledge graph of topics and connections.
+  // Manual triggers use POST /kb/dream or /kb/redream; KbDreamScheduler can
+  // also start incremental runs from per-workspace Auto-Dream settings.
   const kbDreaming = new KbDreamService({
     chatService,
     backendRegistry,
     emit: broadcastKbStateUpdate,
     kbSearchMcp,
   });
+  const kbDreamScheduler = new KbDreamScheduler({ chatService, kbDreaming });
 
   // Memory MCP server — exposes `memory_note` tool to non-Claude CLIs via the
   // stdio stub in `src/services/memoryMcp/stub.cjs`.  The router is mounted
@@ -2870,6 +2877,27 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   });
 
+  router.put('/workspaces/:hash/kb/auto-dream', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const body = req.body as { autoDream?: unknown };
+      const validation = validateKbAutoDreamConfig(body.autoDream ?? req.body);
+      if (!validation.config) {
+        return res.status(400).json({ error: validation.error || 'Invalid autoDream config' });
+      }
+      const hash = param(req, 'hash');
+      const result = await chatService.setWorkspaceKbAutoDream(hash, validation.config);
+      if (result === null) return res.status(404).json({ error: 'Workspace not found' });
+      broadcastKbStateUpdate(hash, {
+        type: 'kb_state_update',
+        updatedAt: new Date().toISOString(),
+        changed: { autoDream: true, synthesis: true },
+      });
+      res.json({ autoDream: result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── KB embedding config ─────────────────────────────────────────────────────
 
   router.get('/workspaces/:hash/kb/embedding-config', async (req: Request, res: Response) => {
@@ -3258,6 +3286,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         return;
       }
       const snapshot = db.getSynthesisSnapshot();
+      const autoDream = await chatService.getWorkspaceKbAutoDream(hash);
       const topics = db.listTopics();
       const connections = db.listAllConnections();
       const godNodes = new Set(snapshot.godNodes);
@@ -3274,6 +3303,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         dreamProgress: snapshot.dreamProgress,
         reflectionCount: snapshot.reflectionCount,
         staleReflectionCount: snapshot.staleReflectionCount,
+        autoDream: getKbAutoDreamState(autoDream, snapshot.lastRunAt),
         topics: topics.map((t) => ({
           topicId: t.topicId,
           title: t.title,
@@ -3547,6 +3577,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       console.warn('[shutdown] Failed to mark active stream jobs interrupted:', (err as Error).message);
     }
     streamSupervisor.abortAndDetachAllRuntime();
+    kbDreamScheduler.stop();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
     cliProfileAuth.shutdown();
@@ -3558,5 +3589,5 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     wsFns = fns;
   }
 
-  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp };
+  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, kbDreamScheduler };
 }

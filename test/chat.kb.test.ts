@@ -95,6 +95,65 @@ describe('PUT /workspaces/:hash/kb/enabled', () => {
   });
 });
 
+describe('PUT /workspaces/:hash/kb/auto-dream', () => {
+  test('persists interval config and returns it through KB state', async () => {
+    const conv = await env.chatService.createConversation('KB Auto Dream', '/tmp/ws-kb-auto-dream');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const put = await env.request(
+      'PUT',
+      `/api/chat/workspaces/${hash}/kb/auto-dream`,
+      { autoDream: { mode: 'interval', intervalHours: 12 } },
+    );
+    expect(put.status).toBe(200);
+    expect(put.body.autoDream).toEqual({ mode: 'interval', intervalHours: 12 });
+
+    const get = await env.request('GET', `/api/chat/workspaces/${hash}/kb`);
+    expect(get.status).toBe(200);
+    expect(get.body.state.autoDream).toEqual({ mode: 'interval', intervalHours: 12 });
+  });
+
+  test('rejects invalid window times', async () => {
+    const conv = await env.chatService.createConversation('KB Auto Dream Bad', '/tmp/ws-kb-auto-dream-bad');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const res = await env.request(
+      'PUT',
+      `/api/chat/workspaces/${hash}/kb/auto-dream`,
+      { autoDream: { mode: 'window', windowStart: '2AM', windowEnd: '06:00' } },
+    );
+
+    expect(res.status).toBe(400);
+    expect(String(res.body.error || '')).toMatch(/windowStart/);
+  });
+
+  test('synthesis state includes auto-dream timing', async () => {
+    const conv = await env.chatService.createConversation('KB Auto Dream Synth', '/tmp/ws-kb-auto-dream-synth');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceKbEnabled(hash, true);
+    await env.chatService.setWorkspaceKbAutoDream(hash, { mode: 'window', windowStart: '02:00', windowEnd: '06:00' });
+
+    const res = await env.request('GET', `/api/chat/workspaces/${hash}/kb/synthesis`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.autoDream).toEqual(expect.objectContaining({
+      mode: 'window',
+      windowStart: '02:00',
+      windowEnd: '06:00',
+    }));
+    expect(res.body.autoDream).toHaveProperty('nextRunAt');
+  });
+
+  test('returns 404 for unknown workspace', async () => {
+    const res = await env.request(
+      'PUT',
+      '/api/chat/workspaces/nonexistent999/kb/auto-dream',
+      { autoDream: { mode: 'off' } },
+    );
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('GET /kb/libreoffice-status', () => {
   test('returns LibreOfficeStatus shape', async () => {
     const res = await env.request('GET', '/api/chat/kb/libreoffice-status');
@@ -410,4 +469,3 @@ describe('GET /workspaces/:hash/kb/raw/:rawId/media/*', () => {
 });
 
 // ── POST /conversations (create) ──────────────────────────────────────────
-

@@ -482,23 +482,35 @@ export class KbDreamService {
       throw new Error('A dreaming run is already in progress for this workspace.');
     }
 
-    const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
-    if (!enabled) throw new Error('Knowledge Base is not enabled for this workspace.');
-
-    const db = this.chatService.getKbDb(hash);
-    if (!db) throw new Error('Knowledge Base database not available.');
-
-    // Pre-flight: verify embedding infrastructure is available.
-    const embeddingCfg = await this.chatService.getWorkspaceKbEmbeddingConfig(hash);
-    if (embeddingCfg) {
-      try {
-        await checkOllamaHealth(embeddingCfg);
-      } catch {
-        console.warn(`[kb] dream: Ollama not reachable — retrieval routing will be skipped.`);
-      }
-    }
-
     this.running.add(hash);
+
+    let db: KbDatabase | null = null;
+    let embeddingCfg: EmbeddingConfig | undefined;
+    try {
+      const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
+      if (!enabled) throw new Error('Knowledge Base is not enabled for this workspace.');
+
+      const maybeDb = this.chatService.getKbDb(hash);
+      if (!maybeDb) throw new Error('Knowledge Base database not available.');
+      db = maybeDb;
+
+      // Pre-flight: verify embedding infrastructure is available.
+      embeddingCfg = await this.chatService.getWorkspaceKbEmbeddingConfig(hash);
+      if (embeddingCfg) {
+        try {
+          await checkOllamaHealth(embeddingCfg);
+        } catch {
+          console.warn(`[kb] dream: Ollama not reachable — retrieval routing will be skipped.`);
+        }
+      }
+    } catch (err) {
+      this.running.delete(hash);
+      throw err;
+    }
+    if (!db) {
+      this.running.delete(hash);
+      throw new Error('Knowledge Base database not available.');
+    }
 
     const result: DreamResult = { mode, processedEntries: 0, skippedBatches: 0, errors: [] };
 
