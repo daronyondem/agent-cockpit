@@ -24,6 +24,10 @@ import { detectLibreOffice } from '../libreOffice';
 
 const execFileAsync = promisify(execFile);
 
+// 168 DPI. 16:9 slides exported as 960x540 pt render to 2240x1260 px,
+// exact 28 px multiples that fit under Opus 4.7's 2576 px native long edge.
+export const PPTX_SLIDE_RASTER_SCALE = 7 / 3;
+
 export interface RasterizationResult {
   /** Slide image paths relative to `outDir`, e.g. `slides/slide-001.png`. */
   images: string[];
@@ -110,7 +114,7 @@ export async function rasterizeSlidesViaLibreOffice(
       try {
         const pngBuffer = await renderPageAsImage(pdf, page, {
           canvasImport,
-          scale: 1.5,
+          scale: PPTX_SLIDE_RASTER_SCALE,
         });
         const pngPath = path.join(slidesDir, `slide-${String(page).padStart(3, '0')}.png`);
         await fsp.writeFile(pngPath, Buffer.from(pngBuffer));

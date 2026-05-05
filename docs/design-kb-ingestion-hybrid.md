@@ -6,7 +6,7 @@
 |--|--|
 | **Status** | Implemented |
 | **Author** | Daron Yondem |
-| **Last updated** | 2026-04-27 |
+| **Last updated** | 2026-05-05 |
 | **Implementation** | Shipped across PRs #213–#228 (issue #211). All 8 design PRs landed plus follow-ups for image downscaling (#222), PPTX paragraph structure (#219), and adaptive CLI timeouts (#228). |
 
 ---
@@ -15,7 +15,7 @@
 
 The Knowledge Base pipeline today has two failure modes the user has hit in practice:
 
-1. **Vision-only PDFs lose coverage at digestion time.** A 185-page rasterized PDF (`Agentic Artificial Intelligence`) produced only **20 entries** when run through digestion. The handler converts every PDF page to a 150 DPI PNG and writes a thin `text.md` index of `![Page N](pages/page-NNNN.png)` links — there is no extracted text. The Digestion CLI is then asked, in **a single call**, to read 185 page images and emit structured entries. Output token budget pressure pushes the CLI toward "summarize and merge" rather than "one entry per concept."
+1. **Vision-only PDFs lose coverage at digestion time.** A 185-page rasterized PDF (`Agentic Artificial Intelligence`) produced only **20 entries** when run through digestion. The handler converts every PDF page to a 196 DPI PNG and writes a thin `text.md` index of `![Page N](pages/page-NNNN.png)` links — there is no extracted text. The Digestion CLI is then asked, in **a single call**, to read 185 page images and emit structured entries. Output token budget pressure pushes the CLI toward "summarize and merge" rather than "one entry per concept."
 2. **Per-format quality varies dramatically.** PDFs are 100% image (great fidelity, poor accessibility for the CLI). PPTX text is XML-extracted (loses table structure, ignores chart content). DOCX is high-quality pandoc output (tables preserved) but embedded image content is just a link with no description. Passthrough images are stored as-is with no description at all. The same digestion pass has to cope with very different input qualities.
 
 The root cause in both cases is that **the only intelligent step in ingestion is digestion**, which has to do everything — read images, recognize tables, describe figures, *and* produce structured entries — in one shot.
@@ -80,7 +80,7 @@ The hybrid handlers in Stage 2 invoke the new **Ingestion CLI** for visual conte
 ```mermaid
 flowchart TD
     Start[PDF received] --> ForEachPage[For each page]
-    ForEachPage --> Render[Render PNG @150 DPI<br/>via unpdf]
+    ForEachPage --> Render[Render PNG @196 DPI<br/>via unpdf]
     Render --> ExtractText[pdfjs getTextContent]
     ExtractText --> Probe[pdfjs getOperatorList]
     Probe --> Classify{figureCount === 0<br/>AND<br/>tableLikely === false?}
@@ -434,7 +434,7 @@ Each handler's `meta.json` gains a `pages` (or `slides` / `images`) array with p
   "metadata": {
     "pageCount": 185,
     "renderedPageCount": 185,
-    "rasterDpi": 150,
+    "rasterDpi": 196,
     "sourceCounts": {
       "pdfjs": 142,
       "artificial-intelligence": 38,
