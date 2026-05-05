@@ -70,7 +70,8 @@ export interface ToolActivity {
 export type ContentBlock =
   | { type: 'text'; content: string }
   | { type: 'thinking'; content: string }
-  | { type: 'tool'; activity: ToolActivity };
+  | { type: 'tool'; activity: ToolActivity }
+  | { type: 'artifact'; artifact: ConversationArtifact };
 
 export interface Message {
   id: string;
@@ -169,6 +170,30 @@ export interface AttachmentMeta {
   kind: AttachmentKind;
   /** Human-readable secondary line for the chip (e.g. "1.8 MB", "service/kb"). */
   meta?: string;
+}
+
+/**
+ * Structured metadata for a generated assistant artifact persisted inside a
+ * conversation's artifact directory. Backends emit artifact source events
+ * when they produce files/images outside the normal text stream; processStream
+ * copies those bytes here and persists this descriptor on the assistant
+ * message so every client can render the file without vendor-specific logic.
+ */
+export interface ConversationArtifact {
+  /** Stored basename inside data/chat/artifacts/{conversationId}/. */
+  filename: string;
+  /** Absolute server path inside the conversation's artifacts dir. */
+  path: string;
+  /** Broad kind grouping for renderers. */
+  kind: AttachmentKind;
+  /** Raw byte size after persistence, when known. */
+  size?: number;
+  /** MIME type, either backend-provided or inferred from the filename. */
+  mimeType?: string;
+  /** Optional human-readable label from the backend/tool. */
+  title?: string;
+  /** Backend tool/item id that produced the artifact, when known. */
+  sourceToolId?: string | null;
 }
 
 /**
@@ -490,6 +515,33 @@ export interface ToolOutcomesEvent {
   outcomes: ToolOutcome[];
 }
 
+export interface ArtifactEvent {
+  type: 'artifact';
+  /**
+   * Present after processStream has persisted the bytes into the
+   * conversation's artifact directory. Frontends render this descriptor.
+   */
+  artifact?: ConversationArtifact;
+  /**
+   * Backend-provided absolute path to copy into the conversation artifacts dir.
+   * Used for CLI-generated files that already exist on disk.
+   */
+  sourcePath?: string;
+  /**
+   * Backend-provided base64 file bytes. Data URLs are accepted; plain base64
+   * is expected when `mimeType` is provided separately.
+   */
+  dataBase64?: string;
+  /** Preferred stored basename. Sanitized by ChatService before writing. */
+  filename?: string;
+  /** MIME type of `dataBase64` or `sourcePath`, when known. */
+  mimeType?: string;
+  /** Optional human-readable label from the backend/tool. */
+  title?: string;
+  /** Backend tool/item id that produced the artifact, when known. */
+  sourceToolId?: string | null;
+}
+
 export interface TurnBoundaryEvent {
   type: 'turn_boundary';
 }
@@ -574,6 +626,7 @@ export type StreamEvent =
   | ThinkingEvent
   | ToolActivityEvent
   | ToolOutcomesEvent
+  | ArtifactEvent
   | TurnBoundaryEvent
   | ResultEvent
   | UsageEvent

@@ -1681,6 +1681,8 @@ function shouldShowProcessing(blocks){
       else hasRunning = true;
     } else if (b && b.type === 'text' && b.content && b.content.length) {
       hasText = true;
+    } else if (b && b.type === 'artifact') {
+      hasText = true;
     }
   }
   return hasCompleted && !hasRunning && !hasText;
@@ -1734,6 +1736,9 @@ function groupBlocksForRender(contentBlocks){
     } else if (b && b.type === 'thinking') {
       flush();
       out.push({ kind: 'thinking', content: b.content || '' });
+    } else if (b && b.type === 'artifact' && b.artifact) {
+      flush();
+      out.push({ kind: 'artifact', artifact: b.artifact });
     }
   }
   flush();
@@ -1749,6 +1754,9 @@ function renderSegment(seg, key){
   }
   if (seg.kind === 'tool-run') {
     return <ToolRun key={key} tools={seg.tools}/>;
+  }
+  if (seg.kind === 'artifact') {
+    return <GeneratedArtifact key={key} artifact={seg.artifact}/>;
   }
   return null;
 }
@@ -1785,6 +1793,77 @@ function buildConversationArtifactDescriptor(ref, convId){
     line: ref.line || null,
     column: ref.column || null,
   };
+}
+
+function GeneratedArtifact({ artifact }){
+  const { convId, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
+  if (!artifact) return null;
+  const filename = artifact.filename || (artifact.path || '').split('/').pop() || 'artifact';
+  const isImage = (artifact.kind === 'image') || CHAT_IMAGE_EXTS.test(filename);
+  const basePath = convId
+    ? 'conversations/' + encodeURIComponent(convId) + '/files/' + encodeURIComponent(filename)
+    : null;
+  const downloadUrl = basePath ? AgentApi.chatUrl(basePath + '?mode=download') : null;
+  const rawUrl = basePath ? AgentApi.chatUrl(basePath) : null;
+  if (isImage && rawUrl) {
+    return (
+      <div className="file-cards">
+        <button
+          type="button"
+          className="user-image-thumb generated-image-thumb"
+          onClick={() => openLightbox && openLightbox(rawUrl, artifact.title || filename)}
+          title={artifact.path || filename}
+        >
+          <img src={rawUrl} alt={artifact.title || filename}/>
+        </button>
+        <GeneratedArtifactCard
+          artifact={artifact}
+          filename={filename}
+          viewPath={basePath ? basePath + '?mode=view' : null}
+          downloadUrl={downloadUrl}
+          imageUrl={rawUrl}
+          onOpenView={openFileViewer}
+        />
+      </div>
+    );
+  }
+  return (
+    <div className="file-cards">
+      <GeneratedArtifactCard
+        artifact={artifact}
+        filename={filename}
+        viewPath={basePath ? basePath + '?mode=view' : null}
+        downloadUrl={downloadUrl}
+        imageUrl={null}
+        onOpenView={openFileViewer}
+      />
+    </div>
+  );
+}
+
+function GeneratedArtifactCard({ artifact, filename, viewPath, downloadUrl, imageUrl, onOpenView }){
+  return (
+    <div className="file-card" title={artifact.path || filename}>
+      <span className="file-card-icon" aria-hidden="true">{Ico.file ? Ico.file(18) : 'File'}</span>
+      <span className="file-card-name">{artifact.title || filename}</span>
+      <span className="file-card-actions">
+        <button
+          type="button"
+          className="btn ghost file-card-btn"
+          onClick={() => onOpenView && onOpenView({
+            filename,
+            viewPath,
+            imageUrl,
+            displayPath: artifact.path || filename,
+          })}
+          disabled={!viewPath || !onOpenView}
+        >View</button>
+        {downloadUrl ? (
+          <a className="btn ghost file-card-btn" href={downloadUrl} download={filename}>Download</a>
+        ) : null}
+      </span>
+    </div>
+  );
 }
 
 function TextSegment({ content }){

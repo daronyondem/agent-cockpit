@@ -57,7 +57,18 @@ export type QueuedMessage = {
 export type ContentBlock =
   | { type: 'text'; content: string }
   | { type: 'thinking'; content: string }
-  | { type: 'tool'; activity: ToolActivity };
+  | { type: 'tool'; activity: ToolActivity }
+  | { type: 'artifact'; artifact: ConversationArtifact };
+
+export type ConversationArtifact = {
+  filename: string;
+  path: string;
+  kind: AttachmentKind;
+  size?: number;
+  mimeType?: string;
+  title?: string;
+  sourceToolId?: string | null;
+};
 
 export type StreamError = {
   message: string;
@@ -239,6 +250,7 @@ export type StreamEvent =
       isQuestion?: boolean;
       questions?: UserQuestion[];
     })
+  | { type: 'artifact'; artifact?: ConversationArtifact }
   | { type: 'assistant_message'; message: Message }
   | { type: 'title_updated'; title?: string }
   | { type: 'usage'; usage: Usage; sessionUsage?: Usage }

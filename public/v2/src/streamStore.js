@@ -746,6 +746,22 @@
     }));
   }
 
+  function pushArtifactBlock(convId, artifact){
+    if (!artifact || !artifact.filename) return;
+    const id = ensurePlaceholder(convId);
+    if (!id) return;
+    update(convId, cur => ({
+      ...cur,
+      messages: cur.messages.map(m => {
+        if (m.id !== id) return m;
+        const blocks = Array.isArray(m.contentBlocks) ? [...m.contentBlocks] : [];
+        blocks.push({ type: 'artifact', artifact });
+        const nextContent = m.content || (artifact.title || artifact.filename || 'Generated file');
+        return { ...m, contentBlocks: blocks, content: nextContent };
+      }),
+    }));
+  }
+
   function patchToolOutcomes(convId, outcomes){
     const s = states.get(convId);
     if (!s) return;
@@ -856,6 +872,10 @@
     }
     if (frame.type === 'tool_outcomes') {
       patchToolOutcomes(convId, frame.outcomes);
+      return;
+    }
+    if (frame.type === 'artifact') {
+      pushArtifactBlock(convId, frame.artifact);
       return;
     }
     if (frame.type === 'assistant_message' && frame.message) {

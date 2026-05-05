@@ -37,6 +37,7 @@ import type {
   KbAutoDreamConfig,
   AttachmentMeta,
   AttachmentKind,
+  ConversationArtifact,
   QueuedMessage,
   CliProfile,
   StreamErrorSource,
@@ -87,6 +88,36 @@ const CODE_EXTS = new Set([
 ]);
 const TEXT_EXTS = new Set(['.txt', '.log', '.csv', '.tsv', '.rtf']);
 
+const MIME_BY_EXT: Record<string, string> = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.svg': 'image/svg+xml',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
+  '.pdf': 'application/pdf',
+  '.md': 'text/markdown',
+  '.markdown': 'text/markdown',
+  '.txt': 'text/plain',
+  '.log': 'text/plain',
+  '.csv': 'text/csv',
+  '.tsv': 'text/tab-separated-values',
+  '.json': 'application/json',
+  '.html': 'text/html',
+  '.htm': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.mjs': 'application/javascript',
+  '.cjs': 'application/javascript',
+  '.ts': 'application/typescript',
+  '.tsx': 'application/typescript',
+  '.jsx': 'application/javascript',
+  '.py': 'text/x-python',
+  '.sh': 'application/x-sh',
+};
+
 function attachmentKindFromPath(p: string): AttachmentKind {
   const ext = path.extname(p).toLowerCase();
   if (!ext) return 'file';
@@ -104,6 +135,40 @@ function formatAttachmentSize(bytes: number | undefined): string | undefined {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+function mimeTypeFromPath(p: string): string {
+  return MIME_BY_EXT[path.extname(p).toLowerCase()] || 'application/octet-stream';
+}
+
+function extensionForMimeType(mimeType: string | undefined): string {
+  const normalized = (mimeType || '').split(';')[0].trim().toLowerCase();
+  if (normalized === 'image/png') return '.png';
+  if (normalized === 'image/jpeg' || normalized === 'image/jpg') return '.jpg';
+  if (normalized === 'image/gif') return '.gif';
+  if (normalized === 'image/webp') return '.webp';
+  if (normalized === 'image/svg+xml') return '.svg';
+  if (normalized === 'image/bmp') return '.bmp';
+  if (normalized === 'image/avif') return '.avif';
+  if (normalized === 'application/pdf') return '.pdf';
+  if (normalized === 'text/markdown') return '.md';
+  if (normalized === 'text/plain') return '.txt';
+  if (normalized === 'application/json') return '.json';
+  return '';
+}
+
+function sanitizeArtifactFilename(name: string): string {
+  const safe = (name || '').replace(/[\/\\]/g, '_').replace(/[\u0000-\u001f]/g, '').trim();
+  if (!safe || safe === '.' || safe === '..') {
+    return `artifact-${new Date().toISOString().replace(/[:.]/g, '-')}`;
+  }
+  return safe;
+}
+
+function splitDataUrlBase64(value: string, fallbackMimeType?: string): { dataBase64: string; mimeType?: string } {
+  const match = value.match(/^data:([^;,]+)?;base64,(.*)$/s);
+  if (!match) return { dataBase64: value, mimeType: fallbackMimeType };
+  return { dataBase64: match[2], mimeType: match[1] || fallbackMimeType };
 }
 
 /**
@@ -284,6 +349,79 @@ export class ChatService {
     }
     await this._migrateCliProfiles();
     await this._buildLookupMap();
+  }
+
+  async createConversationArtifact(
+    convId: string,
+    input: {
+      sourcePath?: string;
+      dataBase64?: string;
+      filename?: string;
+      mimeType?: string;
+      title?: string;
+      sourceToolId?: string | null;
+    },
+  ): Promise<ConversationArtifact | null> {
+    if (!this._convWorkspaceMap.has(convId)) return null;
+    const convDir = path.join(this.artifactsDir, convId);
+    await fsp.mkdir(convDir, { recursive: true });
+
+    let sourcePath = input.sourcePath ? path.resolve(input.sourcePath) : '';
+    let bytes: Buffer | null = null;
+    let size: number | undefined;
+    let mimeType = input.mimeType;
+
+    if (input.dataBase64) {
+      const parsed = splitDataUrlBase64(input.dataBase64, mimeType);
+      mimeType = parsed.mimeType || mimeType;
+      bytes = Buffer.from(parsed.dataBase64.replace(/\s+/g, ''), 'base64');
+      size = bytes.length;
+    } else if (sourcePath) {
+      const stat = await fsp.stat(sourcePath);
+      if (!stat.isFile()) {
+        throw new Error('Artifact source path is not a file');
+      }
+      size = stat.size;
+      mimeType = mimeType || mimeTypeFromPath(sourcePath);
+    } else {
+      throw new Error('Artifact sourcePath or dataBase64 is required');
+    }
+
+    const requestedName = input.filename
+      || (sourcePath ? path.basename(sourcePath) : '')
+      || `artifact${extensionForMimeType(mimeType)}`;
+    let safeName = sanitizeArtifactFilename(requestedName);
+    if (!path.extname(safeName)) {
+      safeName += extensionForMimeType(mimeType);
+    }
+
+    const ext = path.extname(safeName);
+    const stem = ext ? safeName.slice(0, -ext.length) : safeName;
+    let dest = path.join(convDir, safeName);
+    let counter = 1;
+    while (fs.existsSync(dest) && (!sourcePath || path.resolve(dest) !== sourcePath)) {
+      safeName = `${stem}-${counter}${ext}`;
+      dest = path.join(convDir, safeName);
+      counter += 1;
+    }
+
+    if (bytes) {
+      await fsp.writeFile(dest, bytes);
+    } else if (sourcePath && path.resolve(dest) !== sourcePath) {
+      await fsp.copyFile(sourcePath, dest);
+    }
+
+    const finalStat = await fsp.stat(dest);
+    const kind = attachmentKindFromPath(dest);
+    return {
+      filename: path.basename(dest),
+      path: dest,
+      kind,
+      size: finalStat.size || size,
+      mimeType: mimeType || mimeTypeFromPath(dest),
+      title: input.title,
+      sourceToolId: input.sourceToolId ?? null,
+    };
   }
 
   private async _migrateCliProfiles(): Promise<void> {

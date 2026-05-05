@@ -157,6 +157,41 @@ test('plan-enter frame does NOT set pendingInteraction', async () => {
   expect(state.uiState).toBeNull();
 });
 
+test('artifact frame appends a generated artifact block to the streaming placeholder', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  ws.dispatch({
+    type: 'artifact',
+    artifact: {
+      filename: 'chart.png',
+      path: '/tmp/data/chat/artifacts/c1/chart.png',
+      kind: 'image',
+      mimeType: 'image/png',
+      title: 'Generated chart',
+      sourceToolId: 'ig-1',
+    },
+  });
+
+  const state = Store.getState('c1');
+  const msg = state.messages[state.messages.length - 1];
+  expect(msg.role).toBe('assistant');
+  expect(msg.content).toBe('Generated chart');
+  expect(msg.contentBlocks).toEqual([
+    {
+      type: 'artifact',
+      artifact: {
+        filename: 'chart.png',
+        path: '/tmp/data/chat/artifacts/c1/chart.png',
+        kind: 'image',
+        mimeType: 'image/png',
+        title: 'Generated chart',
+        sourceToolId: 'ig-1',
+      },
+    },
+  ]);
+});
+
 test('isQuestion frame sets pendingInteraction with first question + options', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;
