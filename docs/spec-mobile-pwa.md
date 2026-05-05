@@ -19,7 +19,7 @@ See [ADR-0025](adr/0025-use-mobile-pwa-as-sole-mobile-client.md).
 
 **Source files:** `mobile/AgentCockpitPWA/`
 
-- `package.json` — isolated Vite React package. Scripts:
+- `package.json` — isolated Vite React package. Runtime dependencies include React, Vite, `marked`, and DOMPurify; assistant Markdown is rendered client-side and sanitized before insertion. Scripts:
   - `npm run dev` — Vite development server on port `5174`, with `/api`, `/auth`, and `/logo-full-no-text.svg` proxied to `http://localhost:3334`.
   - `npm run build` — production build that writes to `../../public/mobile`.
   - `npm run preview` — local Vite preview server.
@@ -78,6 +78,7 @@ The PWA currently covers:
 - Send message via `POST /api/chat/conversations/:id/message`.
 - Stop stream via `POST /api/chat/conversations/:id/abort`.
 - WebSocket replay and live streaming for text, assistant messages, title updates, usage, errors, done, and replay start.
+- Assistant message text, assistant content-block text, thinking blocks, and live streaming text render through `marked` with GitHub Flavored Markdown and hard line breaks enabled, then pass through DOMPurify before insertion. User-authored message text remains plain text after uploaded-file marker stripping, preserving line breaks and avoiding accidental interpretation of user text as HTML/Markdown.
 - Plan approval and clarifying-question cards from `tool_activity` meta-events, answered through `POST /api/chat/conversations/:id/input`.
 - Browser Notification API prompts and hidden-tab notifications for stream done/error and interaction-needed events when permission is granted. This is not remote push.
 - Queue read/write/clear via `GET`, `PUT`, and `DELETE /api/chat/conversations/:id/queue`.
