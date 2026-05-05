@@ -736,6 +736,41 @@ body{
   background: color-mix(in oklch, var(--status-error), transparent 92%);
 }
 
+/* Focused memory-update modal opened from inline chat notifications. */
+.mu-panel{
+  max-width: 700px;
+}
+.mu-body{
+  padding: 14px 18px 0;
+  overflow-y: auto;
+  flex: 1;
+}
+.mu-meta{
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  margin-bottom: 12px;
+  font-size: 12px; color: var(--text-3);
+}
+.mu-meta span{
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.mu-list{
+  gap: 8px;
+}
+.mu-missing .ws-mem-item-toggle{
+  cursor: default;
+}
+.mu-missing .ws-mem-item-toggle:hover{
+  background: transparent;
+}
+.mu-actions{
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--border);
+}
+
 /* ---------- SessionsModal ---------- */
 /* Reuses the FolderPicker `.fp-scrim` / `.fp-panel` shell. List view shows
    each past session as a row with Download + View actions; the detail view
