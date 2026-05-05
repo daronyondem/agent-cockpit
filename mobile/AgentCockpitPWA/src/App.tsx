@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import { AgentAPIError, AgentCockpitAPI } from './api';
 import type {
   AttachmentMeta,
@@ -1571,7 +1573,13 @@ function ChatScreen(props: {
             onShareFile={props.onShareFile}
           />
         ))}
-        {props.isStreaming && props.streamText ? <div className="message assistant"><strong>Assistant</strong><p>{props.streamText}</p><span className="meta">Streaming...</span></div> : null}
+        {props.isStreaming && props.streamText ? (
+          <div className="message assistant">
+            <strong>Assistant</strong>
+            <MarkdownContent content={props.streamText} />
+            <span className="meta">Streaming...</span>
+          </div>
+        ) : null}
         {props.loading ? <div className="mini-spinner" /> : null}
       </div>
       {conversation.messageQueue?.length ? (
@@ -1677,14 +1685,34 @@ function MessageTextWithFiles(props: {
 }) {
   const parsed = parseMessageFiles(props.content);
   const references = fileReferencesFromParsed(props.client, props.conversation, props.message.role, parsed);
+  const renderAsMarkdown = props.message.role === 'assistant';
   return (
     <div className="message-content">
-      {parsed.text ? <p className={props.thinking ? 'thinking' : undefined}>{parsed.text}</p> : null}
+      {parsed.text ? (
+        renderAsMarkdown || props.thinking
+          ? <MarkdownContent content={parsed.text} className={props.thinking ? 'thinking' : undefined} />
+          : <p className="plain-text">{parsed.text}</p>
+      ) : null}
       {references.map((reference) => (
         <FileCard key={reference.id} reference={reference} onOpen={props.onOpenFile} onShare={props.onShareFile} />
       ))}
     </div>
   );
+}
+
+function MarkdownContent(props: { content: string; className?: string }) {
+  const html = useMemo(() => renderMarkdown(props.content), [props.content]);
+  return (
+    <div
+      className={['markdown-body', props.className].filter(Boolean).join(' ')}
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+function renderMarkdown(content: string): string {
+  const raw = marked.parse(content || '', { breaks: true, gfm: true, async: false }) as string;
+  return DOMPurify.sanitize(raw);
 }
 
 function FileCard(props: { reference: FileReference; onOpen: (reference: FileReference) => void; onShare: (reference: FileReference) => void }) {
