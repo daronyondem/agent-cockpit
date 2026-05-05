@@ -556,7 +556,7 @@
   };
 
   /* Per-workspace settings — backs the Workspace Settings modal (gear button
-     next to each workspace group in the sidebar). Instructions are prepended
+     in the sidebar workspace action buttons). Instructions are prepended
      to every new session's system prompt; Memory + KB enable flags gate the
      respective pipelines for the workspace. All endpoints are scoped by the
      workspace hash that came off the conversation row. */

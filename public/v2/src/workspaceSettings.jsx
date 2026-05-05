@@ -1,7 +1,7 @@
 /* global React, Ico, AgentApi, useDialog, useToasts */
 
 /* ---------- WorkspaceSettingsModal — per-workspace settings dialog. ---------- */
-/* Opens from the gear button next to each workspace group in the sidebar.
+/* Opens from the gear button in the sidebar workspace action buttons.
    Three tabs:
      - Instructions: free-form system-prompt prefix (Save button).
      - Memory: enable toggle (immediate-save) + grouped browser with per-file

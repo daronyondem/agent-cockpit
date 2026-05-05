@@ -4,7 +4,7 @@
 /* Mirrors V1's chatShowFolderPicker (navigate dirs via GET /browse, create via POST */
 /* /mkdir, delete via POST /rmdir). `onSelect(path)` fires with the chosen folder; */
 /* `onUseDefault()` fires with no workingDir so the server picks its own default. */
-function FolderPicker({ open, onClose, onSelect, onUseDefault, busy = false }){
+function FolderPicker({ open, initialPath = '', onClose, onSelect, onUseDefault, busy = false }){
   const [data, setData] = React.useState(null);      // { currentPath, parent, dirs } | null
   const [showHidden, setShowHidden] = React.useState(false);
   const [err, setErr] = React.useState(null);
@@ -12,6 +12,7 @@ function FolderPicker({ open, onClose, onSelect, onUseDefault, busy = false }){
   const [newFolderName, setNewFolderName] = React.useState(null); // null = hidden, string = input value
   const [confirmDelete, setConfirmDelete] = React.useState(false);
   const newFolderInputRef = React.useRef(null);
+  const hasLoadedOpenRef = React.useRef(false);
 
   const load = React.useCallback(async (path) => {
     setLoading(true); setErr(null);
@@ -29,9 +30,18 @@ function FolderPicker({ open, onClose, onSelect, onUseDefault, busy = false }){
 
   // Initial load when the picker opens; reset state when it closes.
   React.useEffect(() => {
-    if (!open) { setData(null); setErr(null); setNewFolderName(null); setConfirmDelete(false); return; }
-    load('');
-  }, [open, load]);
+    if (!open) {
+      hasLoadedOpenRef.current = false;
+      setData(null);
+      setErr(null);
+      setNewFolderName(null);
+      setConfirmDelete(false);
+      return;
+    }
+    if (hasLoadedOpenRef.current) return;
+    hasLoadedOpenRef.current = true;
+    load(initialPath || '');
+  }, [open, initialPath, load]);
 
   // Reload current folder when showHidden flips.
   React.useEffect(() => {

@@ -71,19 +71,50 @@ window.VersionIndicator = VersionIndicator;
 
 /* ---------- helpers shared by the Sidebar ---------- */
 
-function groupByWorkspace(convs){
-  const groups = {};
-  for (const c of convs) {
-    const label = c.workingDir
-      ? c.workingDir.split('/').filter(Boolean).slice(-2).join('/')
-      : 'workspace';
-    if (!groups[label]) {
-      groups[label] = { label, fullPath: c.workingDir || '', hash: c.workspaceHash || '', kbEnabled: false, convs: [] };
+const ALL_WORKSPACES = '__all__';
+const WORKSPACE_FILTER_KEY = 'ac:v2:workspace-filter';
+
+function workspaceLabelForConv(c){
+  const parts = (c.workingDir || '').split('/').filter(Boolean);
+  if (parts.length >= 2) return parts.slice(-2).join('/');
+  return c.workingDir || 'Default workspace';
+}
+
+function workspaceKeyForConv(c){
+  return c.workspaceHash || `path:${c.workingDir || ''}`;
+}
+
+function buildWorkspaceOptions(convs){
+  const byKey = new Map();
+  for (const c of convs || []) {
+    const key = workspaceKeyForConv(c);
+    if (!byKey.has(key)) {
+      byKey.set(key, {
+        key,
+        hash: c.workspaceHash || '',
+        label: workspaceLabelForConv(c),
+        fullPath: c.workingDir || '',
+        kbEnabled: false,
+        count: 0,
+      });
     }
-    if (c.workspaceKbEnabled) groups[label].kbEnabled = true;
-    groups[label].convs.push(c);
+    const ws = byKey.get(key);
+    ws.count += 1;
+    if (c.workspaceKbEnabled) ws.kbEnabled = true;
+    if (!ws.fullPath && c.workingDir) ws.fullPath = c.workingDir;
   }
-  return Object.values(groups);
+  return Array.from(byKey.values()).sort((a, b) => (
+    a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }) ||
+    a.fullPath.localeCompare(b.fullPath, undefined, { sensitivity: 'base' })
+  ));
+}
+
+function sortConvsByActivity(convs){
+  return [...(convs || [])].sort((a, b) => {
+    const at = new Date(a.updatedAt || 0).getTime();
+    const bt = new Date(b.updatedAt || 0).getTime();
+    return bt - at;
+  });
 }
 
 function timeAgo(iso){
@@ -98,24 +129,16 @@ function timeAgo(iso){
   return `${d}d`;
 }
 
-/* Collapsed workspace groups are persisted as an object keyed by workspace
-   hash: `{ [hash]: true }`. Groups without a hash (e.g. the Unassigned
-   bucket) are never collapsible since there's no stable key. */
-const WS_COLLAPSE_KEY = 'ac:v2:ws-collapsed';
-
-function readWsCollapsed(){
+function readWorkspaceFilter(){
   try {
-    const raw = localStorage.getItem(WS_COLLAPSE_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw);
-    return (parsed && typeof parsed === 'object') ? parsed : {};
+    return window.localStorage.getItem(WORKSPACE_FILTER_KEY) || ALL_WORKSPACES;
   } catch (e) {
-    return {};
+    return ALL_WORKSPACES;
   }
 }
 
-function writeWsCollapsed(map){
-  try { localStorage.setItem(WS_COLLAPSE_KEY, JSON.stringify(map || {})); }
+function writeWorkspaceFilter(value){
+  try { window.localStorage.setItem(WORKSPACE_FILTER_KEY, value || ALL_WORKSPACES); }
   catch (e) {}
 }
 
@@ -197,7 +220,8 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
   const err = listState.error;
   const [query, setQuery] = React.useState('');
   const [debouncedQuery, setDebouncedQuery] = React.useState('');
-  const [wsCollapsed, setWsCollapsed] = React.useState(readWsCollapsed);
+  const [selectedWorkspaceKey, setSelectedWorkspaceKey] = React.useState(readWorkspaceFilter);
+  const [workspaceOptions, setWorkspaceOptions] = React.useState([]);
   const [sbWidth, setSbWidth] = React.useState(loadSbWidth);
   const [sbResizing, setSbResizing] = React.useState(false);
   const searchInputRef = React.useRef(null);
@@ -237,16 +261,6 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
     saveSbWidth(SB_WIDTH_DEFAULT);
   }, []);
 
-  function toggleWsCollapsed(hash){
-    if (!hash) return;
-    setWsCollapsed(prev => {
-      const next = { ...prev };
-      if (next[hash]) delete next[hash]; else next[hash] = true;
-      writeWsCollapsed(next);
-      return next;
-    });
-  }
-
   /* 300 ms debounce on the search input — matches V1. */
   React.useEffect(() => {
     const handle = setTimeout(() => setDebouncedQuery(query.trim()), 300);
@@ -266,6 +280,20 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
   React.useEffect(() => {
     StreamStore.loadConvList({ query: debouncedQuery, archived: viewingArchive });
   }, [debouncedQuery, viewingArchive]);
+
+  React.useEffect(() => {
+    if (!convs || debouncedQuery) return;
+    setWorkspaceOptions(buildWorkspaceOptions(convs));
+  }, [convs, debouncedQuery, viewingArchive]);
+
+  React.useEffect(() => {
+    if (!convs || debouncedQuery || selectedWorkspaceKey === ALL_WORKSPACES) return;
+    const hasWorkspace = buildWorkspaceOptions(convs).some(ws => ws.key === selectedWorkspaceKey);
+    if (!hasWorkspace) {
+      setSelectedWorkspaceKey(ALL_WORKSPACES);
+      writeWorkspaceFilter(ALL_WORKSPACES);
+    }
+  }, [convs, debouncedQuery, selectedWorkspaceKey]);
 
   /* Once-per-mount: seed `uiState: 'streaming'` for convs whose CLI stream
      survived the page refresh (buffered on the server, not in the wiped
@@ -290,7 +318,59 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const groups = convs ? groupByWorkspace(convs) : [];
+  const workspaceByKey = React.useMemo(() => {
+    const map = new Map();
+    workspaceOptions.forEach(ws => map.set(ws.key, ws));
+    return map;
+  }, [workspaceOptions]);
+  const activeConversation = React.useMemo(() => {
+    if (!activeId) return null;
+    const listed = (convs || []).find(c => c.id === activeId);
+    if (listed) return listed;
+    const state = StreamStore.getState ? StreamStore.getState(activeId) : null;
+    return state && state.conv ? state.conv : null;
+  }, [activeId, convs, convStates]);
+  const selectedWorkspace = selectedWorkspaceKey === ALL_WORKSPACES
+    ? null
+    : workspaceByKey.get(selectedWorkspaceKey) || null;
+  const activeConversationWorkspace = React.useMemo(() => {
+    if (!activeConversation || !activeConversation.workspaceHash) return null;
+    const key = workspaceKeyForConv(activeConversation);
+    return workspaceByKey.get(key) || {
+      key,
+      hash: activeConversation.workspaceHash || '',
+      label: workspaceLabelForConv(activeConversation),
+      fullPath: activeConversation.workingDir || '',
+      kbEnabled: !!activeConversation.workspaceKbEnabled,
+      count: 1,
+    };
+  }, [activeConversation, workspaceByKey]);
+  const actionWorkspace = selectedWorkspace && selectedWorkspace.hash
+    ? selectedWorkspace
+    : selectedWorkspaceKey === ALL_WORKSPACES
+      ? activeConversationWorkspace
+      : null;
+  const newConversationInitialPath = selectedWorkspace && selectedWorkspace.fullPath
+    ? selectedWorkspace.fullPath
+    : null;
+  const actionWorkspaceSource = selectedWorkspace && selectedWorkspace.hash
+    ? 'selected'
+    : actionWorkspace
+      ? 'active'
+      : null;
+  const visibleConvs = React.useMemo(() => {
+    if (!convs) return null;
+    const filtered = selectedWorkspaceKey === ALL_WORKSPACES
+      ? convs
+      : convs.filter(c => workspaceKeyForConv(c) === selectedWorkspaceKey);
+    return sortConvsByActivity(filtered);
+  }, [convs, selectedWorkspaceKey]);
+  const showWorkspaceLabel = selectedWorkspaceKey === ALL_WORKSPACES;
+
+  function onWorkspaceFilterChange(value){
+    setSelectedWorkspaceKey(value);
+    writeWorkspaceFilter(value);
+  }
 
   return (
     <aside className="sb">
@@ -302,13 +382,58 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
       <button
         className="sb-new"
         type="button"
-        onClick={onNewConversation || undefined}
+        onClick={onNewConversation ? () => onNewConversation(newConversationInitialPath) : undefined}
         disabled={!onNewConversation}
       >
         <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
           {Ico.plus(14)} New conversation
         </span>
       </button>
+
+      <div className="sb-workspace-filter">
+        <span className="sb-filter-label">Workspace</span>
+        <div className="sb-workspace-control">
+          <span className="sb-select-wrap">
+            <select
+              value={selectedWorkspaceKey}
+              onChange={(e) => onWorkspaceFilterChange(e.currentTarget.value)}
+              aria-label="Workspace filter"
+              title={selectedWorkspace ? selectedWorkspace.fullPath : 'Show conversations from every workspace'}
+              disabled={!workspaceOptions.length}
+            >
+              <option value={ALL_WORKSPACES}>All Workspaces</option>
+              {workspaceOptions.map(ws => (
+                <option key={ws.key} value={ws.key}>{ws.label}</option>
+              ))}
+            </select>
+            <span className="sb-select-chev" aria-hidden="true">{Ico.chevD(12)}</span>
+          </span>
+          {actionWorkspace && actionWorkspace.hash ? (
+            <span className="sb-workspace-actions">
+              {actionWorkspace.kbEnabled ? (
+                <button
+                  type="button"
+                  className="iconbtn persist"
+                  title={`Knowledge base: ${actionWorkspace.label}${actionWorkspaceSource === 'active' ? ' (active conversation)' : ''}`}
+                  onClick={() => { if (onOpenKb) onOpenKb(actionWorkspace.hash, actionWorkspace.label); }}
+                >{Ico.book(12)}</button>
+              ) : null}
+              <button
+                type="button"
+                className="iconbtn"
+                title={`Files: ${actionWorkspace.label}${actionWorkspaceSource === 'active' ? ' (active conversation)' : ''}`}
+                onClick={() => { if (onOpenFiles) onOpenFiles(actionWorkspace.hash, actionWorkspace.label); }}
+              >{Ico.folder(12)}</button>
+              <button
+                type="button"
+                className="iconbtn"
+                title={`Workspace settings: ${actionWorkspace.label}${actionWorkspaceSource === 'active' ? ' (active conversation)' : ''}`}
+                onClick={() => { if (onOpenWorkspaceSettings) onOpenWorkspaceSettings(actionWorkspace.hash, actionWorkspace.label); }}
+              >{Ico.settings(12)}</button>
+            </span>
+          ) : null}
+        </div>
+      </div>
 
       <div className="sb-search">
         {Ico.search(13)}
@@ -343,65 +468,21 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
           <div className="sb-empty u-dim" style={{padding:"12px 14px",fontSize:12}}>
             Loading conversations…
           </div>
-        ) : convs.length === 0 ? (
+        ) : visibleConvs.length === 0 ? (
           <div className="sb-empty u-dim" style={{padding:"12px 14px",fontSize:12}}>
             {debouncedQuery
-              ? <>No matches for <b>{debouncedQuery}</b>.</>
+              ? selectedWorkspace
+                ? <>No matches in <b>{selectedWorkspace.label}</b>.</>
+                : <>No matches for <b>{debouncedQuery}</b>.</>
               : viewingArchive
-                ? <>No archived conversations.</>
-                : <>No conversations yet. Click <b>New conversation</b> to start.</>}
+                ? selectedWorkspace
+                  ? <>No archived conversations in <b>{selectedWorkspace.label}</b>.</>
+                  : <>No archived conversations.</>
+                : selectedWorkspace
+                  ? <>No conversations in <b>{selectedWorkspace.label}</b>.</>
+                  : <>No conversations yet. Click <b>New conversation</b> to start.</>}
           </div>
-        ) : groups.map(g => {
-          /* Only workspaces with a stable `hash` are collapsible; the
-             Unassigned bucket always stays open. When the user has an
-             active search query we force-expand so hits aren't hidden
-             behind a collapsed header. */
-          const collapsible = !!g.hash;
-          const collapsed = collapsible && !debouncedQuery && !!wsCollapsed[g.hash];
-          return (
-          <React.Fragment key={g.label}>
-            <div
-              className={"sb-ws" + (collapsed ? " collapsed" : "")}
-              title={g.fullPath}
-              role={collapsible ? 'button' : undefined}
-              tabIndex={collapsible ? 0 : undefined}
-              onClick={collapsible ? () => toggleWsCollapsed(g.hash) : undefined}
-              onKeyDown={collapsible ? (e) => {
-                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleWsCollapsed(g.hash); }
-              } : undefined}
-              style={collapsible ? { cursor: 'pointer' } : undefined}
-            >
-              <span className={"ws-chev" + (collapsed ? " collapsed" : "")}>{Ico.chevD(12)}</span>
-              <span className="ws-name">{g.label}</span>
-              {g.kbEnabled && g.hash ? (
-                <button
-                  className="iconbtn persist"
-                  title="Knowledge base"
-                  onClick={(e) => { e.stopPropagation(); if (onOpenKb) onOpenKb(g.hash, g.label); }}
-                >{Ico.book(12)}</button>
-              ) : null}
-              <span className="actions">
-                {g.hash ? (
-                  <button
-                    className="iconbtn"
-                    title="Files"
-                    onClick={(e) => { e.stopPropagation(); if (onOpenFiles) onOpenFiles(g.hash, g.label); }}
-                  >{Ico.folder(12)}</button>
-                ) : (
-                  <button className="iconbtn" title="Files" disabled>{Ico.folder(12)}</button>
-                )}
-                {g.hash ? (
-                  <button
-                    className="iconbtn"
-                    title="Workspace settings"
-                    onClick={(e) => { e.stopPropagation(); if (onOpenWorkspaceSettings) onOpenWorkspaceSettings(g.hash, g.label); }}
-                  >{Ico.settings(12)}</button>
-                ) : (
-                  <button className="iconbtn" title="Workspace settings" disabled>{Ico.settings(12)}</button>
-                )}
-              </span>
-            </div>
-            {collapsed ? null : g.convs.map(c => {
+        ) : visibleConvs.map(c => {
               const isActive = c.id === activeId;
               const selectable = typeof onSelect === 'function';
               const state = convStates ? convStates[c.id] : null;
@@ -445,7 +526,12 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
                   ) : (
                     <span className="dot"/>
                   )}
-                  <span className="title">{c.title || 'Untitled'}</span>
+                  <span className="sb-row-main">
+                    <span className="title">{c.title || 'Untitled'}</span>
+                    {showWorkspaceLabel ? (
+                      <span className="workspace">{workspaceLabelForConv(c)}</span>
+                    ) : null}
+                  </span>
                   {viewingArchive && onRestore ? (
                     <button
                       type="button"
@@ -459,9 +545,6 @@ function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convSt
                   )}
                 </div>
               );
-            })}
-          </React.Fragment>
-          );
         })}
       </div>
 

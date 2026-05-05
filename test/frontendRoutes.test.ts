@@ -61,6 +61,30 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.mu-panel');
   });
 
+  test('desktop sidebar uses a workspace filter instead of workspace grouping', () => {
+    const primitivesSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/primitives.jsx'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8');
+    const folderPickerSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/folderPicker.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+
+    expect(primitivesSrc).toContain('const ALL_WORKSPACES');
+    expect(primitivesSrc).toContain('All Workspaces');
+    expect(primitivesSrc).toContain('selectedWorkspaceKey === ALL_WORKSPACES');
+    expect(primitivesSrc).toContain('sortConvsByActivity(filtered)');
+    expect(primitivesSrc).toContain('activeConversationWorkspace');
+    expect(primitivesSrc).toContain('active conversation');
+    expect(primitivesSrc).toContain('newConversationInitialPath');
+    expect(primitivesSrc).toContain('onNewConversation(newConversationInitialPath)');
+    expect(shellSrc).toContain('folderPickerInitialPath');
+    expect(shellSrc).toContain('initialPath={folderPickerInitialPath}');
+    expect(folderPickerSrc).toContain("function FolderPicker({ open, initialPath = ''");
+    expect(folderPickerSrc).toContain("load(initialPath || '')");
+    expect(primitivesSrc).not.toContain('function groupByWorkspace');
+    expect(cssSrc).toContain('.sb-workspace-filter');
+    expect(cssSrc).toContain('.sb-row .workspace');
+    expect(cssSrc).not.toContain('.sb-ws{');
+  });
+
   test('static frontend surface serves V2 and leaves removed assets unavailable', async () => {
     const app = express();
     app.get('/', (_req, res) => { res.redirect('/v2/'); });
@@ -75,12 +99,15 @@ describe('frontend routes', () => {
       expect(v2.status).toBe(200);
       expect(v2.headers['content-type']).toMatch(/text\/html/);
       expect(v2.body).toContain('<div id="root"');
-      expect(v2.body).toContain('src/app.css?v=128');
+      expect(v2.body).toContain('src/app.css?v=129');
+      expect(v2.body).toContain('src/api.js?v=124');
       expect(v2.body).toContain('src/cliUpdateStore.js?v=116');
       expect(v2.body).toContain('src/synthesisAtlas.js?v=117');
       expect(v2.body).toContain('src/screens/kbBrowser.jsx?v=120');
-      expect(v2.body).toContain('src/workspaceSettings.jsx?v=118');
-      expect(v2.body).toContain('src/shell.jsx?v=126');
+      expect(v2.body).toContain('src/workspaceSettings.jsx?v=120');
+      expect(v2.body).toContain('src/primitives.jsx?v=119');
+      expect(v2.body).toContain('src/folderPicker.jsx?v=117');
+      expect(v2.body).toContain('src/shell.jsx?v=128');
       expect(v2.body.indexOf('src/synthesisAtlas.js?v=117')).toBeLessThan(
         v2.body.indexOf('src/screens/kbBrowser.jsx?v=120'),
       );
