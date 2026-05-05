@@ -699,6 +699,23 @@ describe('KbDreamService', () => {
     await first;
   });
 
+  test('dream marks workspace running before async preflight yields', async () => {
+    let resolveEnabled!: (v: boolean) => void;
+    mockChatService.getWorkspaceKbEnabled.mockReturnValueOnce(
+      new Promise((resolve) => { resolveEnabled = resolve; }),
+    );
+
+    const first = service.dream('ws-hash');
+    await new Promise((r) => setImmediate(r));
+
+    await expect(service.dream('ws-hash')).rejects.toThrow(
+      'A dreaming run is already in progress for this workspace.',
+    );
+
+    resolveEnabled(true);
+    await first;
+  });
+
   // ── dream: db not available ────────────────────────────────────────────
 
   test('dream throws when KB database is not available', async () => {

@@ -248,6 +248,13 @@ export interface WorkspaceIndex {
    */
   kbAutoDigest?: boolean;
   /**
+   * Per-workspace automatic dreaming schedule. Default/off when absent.
+   * Interval mode starts incremental dreaming every N hours when pending
+   * synthesis exists. Window mode starts only inside the local server-time
+   * window and requests a cooperative stop at the window end.
+   */
+  kbAutoDream?: KbAutoDreamConfig;
+  /**
    * Per-workspace embedding configuration for the Knowledge Base vector
    * search layer.  Ollama with nomic-embed-text is the only supported
    * provider.  Changing the model after embeddings exist triggers a
@@ -832,6 +839,27 @@ export interface KbDigestProgress {
   etaMs?: number;
 }
 
+export type KbAutoDreamMode = 'off' | 'interval' | 'window';
+
+export interface KbAutoDreamConfig {
+  mode: KbAutoDreamMode;
+  /** Positive integer hours for interval mode. */
+  intervalHours?: number;
+  /** Local server time in HH:mm format for window mode. */
+  windowStart?: string;
+  /** Local server time in HH:mm format for window mode. */
+  windowEnd?: string;
+}
+
+export interface KbAutoDreamState extends KbAutoDreamConfig {
+  /** ISO timestamp for the next eligible scheduler start, or null when off. */
+  nextRunAt: string | null;
+  /** True when the current local server time is inside the configured window. */
+  windowActive?: boolean;
+  /** ISO timestamp for the current/next window end when mode is window. */
+  windowEndAt?: string | null;
+}
+
 /**
  * Snapshot of the KB state surfaced by `GET /kb`. The entries and raws
  * lists are paginated at the endpoint level; this object always holds
@@ -844,6 +872,8 @@ export interface KbState {
   entrySchemaVersion: number;
   /** Per-workspace auto-digest flag (mirrors WorkspaceIndex.kbAutoDigest). */
   autoDigest: boolean;
+  /** Per-workspace automatic dreaming schedule. */
+  autoDream: KbAutoDreamConfig;
   /** High-level counters for the header/badges. */
   counters: KbCounters;
   /** Folder tree, flat list sorted by folderPath. */
@@ -863,12 +893,23 @@ export interface KbState {
 /** API response shape for `GET /kb/synthesis`. */
 export interface KbSynthesisState {
   status: string;
+  stopping?: boolean;
   lastRunAt: string | null;
   lastRunError: string | null;
   topicCount: number;
   connectionCount: number;
   needsSynthesisCount: number;
   godNodes: string[];
+  dreamProgress?: {
+    phase: string;
+    done: number;
+    total: number;
+    startedAt?: number;
+    phaseStartedAt?: number;
+  } | null;
+  reflectionCount?: number;
+  staleReflectionCount?: number;
+  autoDream?: KbAutoDreamState;
   topics: KbSynthesisTopicSummary[];
   connections: KbSynthesisConnectionSummary[];
 }
@@ -951,6 +992,7 @@ export interface KbStateUpdateEvent {
     entries?: string[];
     folders?: boolean;
     synthesis?: boolean;
+    autoDream?: boolean;
     digestProgress?: KbDigestProgress | null;
     /**
      * Per-workspace digestion-session counter. Fires on every entry-

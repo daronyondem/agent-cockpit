@@ -34,6 +34,7 @@ import type {
   KbState,
   KbCounters,
   KbRawStatus,
+  KbAutoDreamConfig,
   AttachmentMeta,
   AttachmentKind,
   QueuedMessage,
@@ -46,6 +47,7 @@ import {
   KbDatabase,
 } from './knowledgeBase/db';
 import { computeDigestProgress } from './knowledgeBase/digest';
+import { DEFAULT_KB_AUTO_DREAM_CONFIG, normalizeKbAutoDreamConfig } from './knowledgeBase/autoDream';
 import { KbVectorStore } from './knowledgeBase/vectorStore';
 import type { EmbeddingConfig } from './knowledgeBase/embeddings';
 import { atomicWriteFile } from '../utils/atomicWrite';
@@ -2032,6 +2034,40 @@ export class ChatService {
     });
   }
 
+  async getWorkspaceKbAutoDream(hash: string): Promise<KbAutoDreamConfig> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return { ...DEFAULT_KB_AUTO_DREAM_CONFIG };
+    return normalizeKbAutoDreamConfig(index.kbAutoDream);
+  }
+
+  async setWorkspaceKbAutoDream(hash: string, autoDream: KbAutoDreamConfig): Promise<KbAutoDreamConfig | null> {
+    return this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
+      index.kbAutoDream = normalizeKbAutoDreamConfig(autoDream);
+      await this._writeWorkspaceIndex(hash, index);
+      return index.kbAutoDream;
+    });
+  }
+
+  async listKbEnabledWorkspaceHashes(): Promise<string[]> {
+    let dirs: string[];
+    try {
+      dirs = await fsp.readdir(this.workspacesDir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+
+    const hashes: string[] = [];
+    for (const hash of dirs) {
+      if (hash.startsWith('.')) continue;
+      const index = await this._readWorkspaceIndex(hash);
+      if (index?.kbEnabled) hashes.push(hash);
+    }
+    return hashes;
+  }
+
   /**
    * Build a `KbState` snapshot for the UI. This is what the
    * `GET /workspaces/:hash/kb` endpoint returns.
@@ -2056,11 +2092,11 @@ export class ChatService {
     if (!index) return null;
 
     if (!index.kbEnabled) {
-      return this._emptyKbSnapshot(Boolean(index.kbAutoDigest));
+      return this._emptyKbSnapshot(Boolean(index.kbAutoDigest), index.kbAutoDream);
     }
 
     const db = this.getKbDb(hash);
-    if (!db) return this._emptyKbSnapshot(Boolean(index.kbAutoDigest));
+    if (!db) return this._emptyKbSnapshot(Boolean(index.kbAutoDigest), index.kbAutoDream);
 
     const folderPath = opts.folderPath !== undefined
       ? normalizeFolderPath(opts.folderPath)
@@ -2073,6 +2109,7 @@ export class ChatService {
       version: KB_STATE_VERSION,
       entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
       autoDigest: Boolean(index.kbAutoDigest),
+      autoDream: normalizeKbAutoDreamConfig(index.kbAutoDream),
       counters: db.getCounters(),
       folders: db.listFolders(),
       raw: db.listRawInFolder(folderPath, {
@@ -2085,7 +2122,7 @@ export class ChatService {
   }
 
   /** Zero-value snapshot used when KB is disabled or not yet initialized. */
-  private _emptyKbSnapshot(autoDigest: boolean): KbState {
+  private _emptyKbSnapshot(autoDigest: boolean, autoDream?: KbAutoDreamConfig): KbState {
     const zeroCounters: KbCounters = {
       rawTotal: 0,
       rawByStatus: {
@@ -2107,6 +2144,7 @@ export class ChatService {
       version: KB_STATE_VERSION,
       entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
       autoDigest,
+      autoDream: normalizeKbAutoDreamConfig(autoDream),
       counters: zeroCounters,
       folders: [],
       raw: [],

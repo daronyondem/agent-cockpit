@@ -131,6 +131,12 @@ Together these guarantee that a workspace index always parses on disk and that c
   memoryEnabled: boolean|undefined, // Opt-in per-workspace Memory feature. Defaults to false.
   kbEnabled: boolean|undefined,     // Opt-in per-workspace Knowledge Base feature. Defaults to false.
   kbAutoDigest: boolean|undefined,  // Auto-digest new files after ingestion. Defaults to false.
+  kbAutoDream: {                    // Per-workspace automatic dreaming schedule. Defaults to { mode: 'off' }.
+    mode: 'off' | 'interval' | 'window',
+    intervalHours?: number,         // Positive integer hours for interval mode.
+    windowStart?: string,           // HH:mm local server time for window mode.
+    windowEnd?: string,             // HH:mm local server time for window mode.
+  } | undefined,
   kbEmbedding: {                    // Per-workspace embedding config (optional, Ollama-only)
     model?: string,                 // Ollama model name. Default 'nomic-embed-text'.
     ollamaHost?: string,            // Ollama server URL. Default 'http://localhost:11434'.
@@ -863,11 +869,27 @@ interface KbCounters {
   reflectionCount: number;
 }
 
+type KbAutoDreamMode = 'off' | 'interval' | 'window';
+
+interface KbAutoDreamConfig {
+  mode: KbAutoDreamMode;
+  intervalHours?: number; // positive integer hours for interval mode
+  windowStart?: string;   // HH:mm local server time for window mode
+  windowEnd?: string;     // HH:mm local server time for window mode
+}
+
+interface KbAutoDreamState extends KbAutoDreamConfig {
+  nextRunAt: string | null;       // next eligible scheduler start, or null when off
+  windowActive?: boolean;         // true while local server time is inside the configured window
+  windowEndAt?: string | null;    // current/next window end when mode is window
+}
+
 /** Full KB state snapshot returned by GET /workspaces/:hash/kb */
 interface KbState {
   version: number;              // DB schema version
   entrySchemaVersion: number;   // KB_ENTRY_SCHEMA_VERSION (currently 1)
   autoDigest: boolean;
+  autoDream: KbAutoDreamConfig;  // mirrors WorkspaceIndex.kbAutoDream, normalized to { mode: 'off' } when absent
   counters: KbCounters;
   folders: KbFolder[];
   raw: KbRawEntry[];            // one page of the focused folder
@@ -900,6 +922,7 @@ interface KbSynthesisState {
   } | null;
   reflectionCount: number;
   staleReflectionCount: number;
+  autoDream?: KbAutoDreamState;
   topics: KbSynthesisTopicSummary[];
   connections: KbSynthesisConnectionSummary[];
 }
@@ -982,6 +1005,7 @@ interface KbStateUpdateEvent {
     entries?: string[];
     folders?: boolean;
     synthesis?: boolean;
+    autoDream?: boolean;
     /**
      * Aggregate digestion progress. Emitted on every enqueue and every
      * task settle; a final `null` signal fires when the queue drains so

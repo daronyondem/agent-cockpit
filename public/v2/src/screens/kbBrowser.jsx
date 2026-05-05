@@ -464,6 +464,41 @@ function formatDreamRelative(iso){
   return `${day}d ago`;
 }
 
+function formatFutureRelative(iso){
+  if (!iso) return '';
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms)) return '';
+  if (ms <= 60_000) return 'now';
+  const mins = Math.ceil(ms / 60_000);
+  if (mins < 60) return `~${mins}m`;
+  const hrs = Math.ceil(mins / 60);
+  if (hrs < 24) return `~${hrs}h`;
+  const days = Math.ceil(hrs / 24);
+  return `~${days}d`;
+}
+
+function formatKbClock(value){
+  if (!value || typeof value !== 'string') return '';
+  const [h, m] = value.split(':').map(Number);
+  if (!Number.isFinite(h) || !Number.isFinite(m)) return value;
+  return new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatAutoDreamStatus(autoDream){
+  if (!autoDream || autoDream.mode === 'off') return 'Auto-Dream: off';
+  if (autoDream.mode === 'interval') {
+    const next = formatFutureRelative(autoDream.nextRunAt);
+    return next === 'now'
+      ? 'Auto-Dream: ready'
+      : `Next Auto-Dream: ${next || 'pending'}`;
+  }
+  const start = formatKbClock(autoDream.windowStart);
+  const end = formatKbClock(autoDream.windowEnd);
+  const next = formatFutureRelative(autoDream.nextRunAt);
+  if (autoDream.windowActive) return `Auto-Dream window active until ${formatFutureRelative(autoDream.windowEndAt) || end}`;
+  return `Auto-Dream window: ${start}-${end}${next ? ` · next ${next}` : ''}`;
+}
+
 /* Dream pipeline stepper. Markup and class names mirror the handoff
    `src/stepper.jsx` verbatim so that `public/v2/src/stepper.css` (also
    copied verbatim from the handoff) applies without any adaptation.
@@ -632,7 +667,7 @@ function KbSynthesisTab({ hash }){
       const d = e.detail;
       if (!d || d.hash !== hash) return;
       const ch = d.changed;
-      if (ch && (ch.dreamProgress || ch.synthesis || ch.stopping)) refetch();
+      if (ch && (ch.dreamProgress || ch.synthesis || ch.stopping || ch.autoDream)) refetch();
     };
     window.addEventListener('ac:kb-state-update', handler);
     return () => window.removeEventListener('ac:kb-state-update', handler);
@@ -720,6 +755,7 @@ function KbSynthesisTab({ hash }){
   const lastRunLabel = formatDreamRelative(data.lastRunAt);
   const pending = data.needsSynthesisCount || 0;
   const lastErr = data.lastRunError || '';
+  const autoDreamLabel = formatAutoDreamStatus(data.autoDream);
 
   return (
     <div className="kb-pane">
@@ -760,6 +796,7 @@ function KbSynthesisTab({ hash }){
           <div className="status">
             Last run: {lastRunLabel}
             {pending > 0 ? <> · <span>{pending} pending</span></> : null}
+            {autoDreamLabel ? <> · <span>{autoDreamLabel}</span></> : null}
             {lastErr ? <> · <span className="u-err">{lastErr}</span></> : null}
           </div>
         </div>
@@ -2362,6 +2399,11 @@ function KbSettingsTab({ hash }){
   const dialog = useDialog();
   const toast = useToasts();
   const [loading, setLoading] = React.useState(true);
+  const [autoDreamMode, setAutoDreamMode] = React.useState('off');
+  const [autoDreamInterval, setAutoDreamInterval] = React.useState(24);
+  const [autoDreamWindowStart, setAutoDreamWindowStart] = React.useState('02:00');
+  const [autoDreamWindowEnd, setAutoDreamWindowEnd] = React.useState('06:00');
+  const [savingAutoDream, setSavingAutoDream] = React.useState(false);
   const [model, setModel] = React.useState('');
   const [ollamaHost, setOllamaHost] = React.useState('');
   const [dimensions, setDimensions] = React.useState(KB_EMB_DEFAULTS.dimensions);
@@ -2372,10 +2414,18 @@ function KbSettingsTab({ hash }){
   React.useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    AgentApi.kb.getEmbeddingConfig(hash)
-      .then(res => {
+    Promise.all([
+      AgentApi.kb.getEmbeddingConfig(hash),
+      AgentApi.kb.getState(hash).catch(() => null),
+    ])
+      .then(([res, state]) => {
         if (cancelled) return;
         const cfg = (res && res.embeddingConfig) || {};
+        const autoDream = (state && state.autoDream) || { mode: 'off' };
+        setAutoDreamMode(autoDream.mode || 'off');
+        setAutoDreamInterval(Number.isFinite(autoDream.intervalHours) ? autoDream.intervalHours : 24);
+        setAutoDreamWindowStart(autoDream.windowStart || '02:00');
+        setAutoDreamWindowEnd(autoDream.windowEnd || '06:00');
         setModel(cfg.model || '');
         setOllamaHost(cfg.ollamaHost || '');
         setDimensions(Number.isFinite(cfg.dimensions) ? cfg.dimensions : KB_EMB_DEFAULTS.dimensions);
@@ -2416,6 +2466,29 @@ function KbSettingsTab({ hash }){
     }
   }
 
+  async function onSaveAutoDream(anchor){
+    setSavingAutoDream(true);
+    try {
+      const interval = parseInt(autoDreamInterval, 10);
+      const payload = autoDreamMode === 'interval'
+        ? { mode: 'interval', intervalHours: Number.isFinite(interval) ? interval : 24 }
+        : autoDreamMode === 'window'
+          ? { mode: 'window', windowStart: autoDreamWindowStart, windowEnd: autoDreamWindowEnd }
+          : { mode: 'off' };
+      const res = await AgentApi.kb.setAutoDream(hash, payload);
+      const saved = (res && res.autoDream) || payload;
+      setAutoDreamMode(saved.mode || 'off');
+      setAutoDreamInterval(Number.isFinite(saved.intervalHours) ? saved.intervalHours : 24);
+      setAutoDreamWindowStart(saved.windowStart || '02:00');
+      setAutoDreamWindowEnd(saved.windowEnd || '06:00');
+      toast.success('Auto-Dream saved');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Save failed', body: err.message || String(err) });
+    } finally {
+      setSavingAutoDream(false);
+    }
+  }
+
   if (loading) {
     return <div className="kb-pane"><div className="u-dim" style={{padding:"16px"}}>Loading…</div></div>;
   }
@@ -2431,6 +2504,59 @@ function KbSettingsTab({ hash }){
 
   return (
     <div className="kb-pane kb-settings-pane">
+      <h3 className="kb-settings-title">Auto-Dream</h3>
+      <p className="kb-settings-desc u-dim">
+        Automatic incremental synthesis for this workspace.
+      </p>
+      <div className="kb-settings-form">
+        <label className="kb-settings-field">
+          <span>Mode</span>
+          <select value={autoDreamMode} onChange={(e) => setAutoDreamMode(e.target.value)}>
+            <option value="off">Off</option>
+            <option value="interval">Every X hours</option>
+            <option value="window">Time window</option>
+          </select>
+        </label>
+        {autoDreamMode === 'interval' ? (
+          <label className="kb-settings-field">
+            <span>Run every</span>
+            <input
+              type="number"
+              min={1}
+              max={8760}
+              value={autoDreamInterval}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10);
+                setAutoDreamInterval(Number.isFinite(n) ? n : 24);
+              }}
+            />
+            <span className="u-dim">hours</span>
+          </label>
+        ) : null}
+        {autoDreamMode === 'window' ? (
+          <>
+            <div className="kb-settings-time-row">
+              <label className="kb-settings-field">
+                <span>Window start</span>
+                <input type="time" value={autoDreamWindowStart} onChange={(e) => setAutoDreamWindowStart(e.target.value)} />
+              </label>
+              <label className="kb-settings-field">
+                <span>Window end</span>
+                <input type="time" value={autoDreamWindowEnd} onChange={(e) => setAutoDreamWindowEnd(e.target.value)} />
+              </label>
+            </div>
+            <div className="kb-settings-info">
+              Window end requests a cooperative stop. An in-progress model call may finish before Auto-Dream pauses; remaining entries continue in the next window.
+            </div>
+          </>
+        ) : null}
+        <div className="kb-settings-actions">
+          <button className="btn" onClick={(e) => onSaveAutoDream(e.currentTarget)} disabled={savingAutoDream}>
+            {savingAutoDream ? 'Saving…' : 'Save Auto-Dream'}
+          </button>
+        </div>
+      </div>
+
       <h3 className="kb-settings-title">Embedding Configuration</h3>
       <p className="kb-settings-desc u-dim">
         Embeddings power vector search over your entries and topics. Requires{' '}

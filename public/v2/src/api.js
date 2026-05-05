@@ -468,6 +468,9 @@
     setAutoDigest: (hash, enabled) => kbFetch(hash, 'auto-digest', {
       method: 'PUT', body: { autoDigest: !!enabled },
     }).then(r => r.json()),
+    setAutoDream: (hash, autoDream) => kbFetch(hash, 'auto-dream', {
+      method: 'PUT', body: { autoDream: autoDream || { mode: 'off' } },
+    }).then(r => r.json()),
     digestRaw: (hash, rawId) => kbFetch(hash, 'raw/' + encodeURIComponent(rawId) + '/digest', {
       method: 'POST', body: {},
     }).then(r => r.json()),
