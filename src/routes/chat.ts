@@ -7,6 +7,7 @@ import { csrfGuard } from '../middleware/csrf';
 import { attachmentFromPath } from '../services/chatService';
 import type { ChatService } from '../services/chatService';
 import type { BackendRegistry } from '../services/backends/registry';
+import type { BaseBackendAdapter } from '../services/backends/base';
 import type { UpdateService } from '../services/updateService';
 import type { CliUpdateService } from '../services/cliUpdateService';
 import type { ClaudePlanUsageService } from '../services/claudePlanUsageService';
@@ -38,7 +39,7 @@ import {
 import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
-import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, StreamErrorSource, MemoryUpdateEvent, StreamJobRuntimeInfo } from '../types';
+import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, StreamErrorSource, MemoryUpdateEvent, StreamJobRuntimeInfo, SendMessageResult } from '../types';
 import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
@@ -434,6 +435,10 @@ export async function processStream(
         }
       } else if (event.type === 'result') {
         resultText = event.content;
+      } else if (event.type === 'goal_updated') {
+        emit({ type: 'goal_updated', goal: event.goal });
+      } else if (event.type === 'goal_cleared') {
+        emit({ type: 'goal_cleared', threadId: event.threadId });
       } else if (event.type === 'external_session') {
         // Vendor-agnostic: any backend that obtains its own session ID emits
         // this so we can persist it onto the active SessionEntry and rehydrate
@@ -1547,6 +1552,567 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   });
 
+  async function attachAndPipeStream(args: {
+    convId: string;
+    conv: NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>;
+    backendId: string;
+    runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
+    adapter: BaseBackendAdapter;
+    sendResult: SendMessageResult;
+    jobId: string;
+    needsTitleUpdate: boolean;
+    titleUpdateMessage: string | null;
+    model: string | null;
+    effort: EffortLevel | null;
+    logUserMessageId?: string | null;
+    logUserMessageTimestamp?: string | null;
+  }): Promise<void> {
+    const {
+      convId,
+      conv,
+      backendId,
+      runtime,
+      adapter,
+      sendResult,
+      jobId,
+      needsTitleUpdate,
+      titleUpdateMessage,
+      model,
+      effort,
+      logUserMessageId = null,
+      logUserMessageTimestamp = null,
+    } = args;
+    const { stream, abort, sendInput } = sendResult;
+    const startedAt = new Date().toISOString();
+    streamSupervisor.attachRuntime(convId, {
+      stream,
+      abort,
+      sendInput,
+      backend: backendId,
+      needsTitleUpdate,
+      titleUpdateMessage,
+      startedAt,
+      lastEventAt: startedAt,
+      jobId,
+    });
+    try {
+      await streamSupervisor.markRunning(jobId, {
+        startedAt,
+        lastEventAt: startedAt,
+        model,
+        effort,
+      });
+    } catch (err: unknown) {
+      console.warn(`[chat] Failed to mark stream job running for conv=${convId}:`, (err as Error).message);
+    }
+    const activeEntry = activeStreams.get(convId)!;
+    console.log(`[diag][chat] activeStreams.set conv=${convId.slice(0,8)} backend=${backendId} userMsgId=${logUserMessageId ?? 'null'} userMsgTs=${logUserMessageTimestamp ?? 'null'}`);
+
+    if (wsFns) {
+      wsFns.clearBuffer(convId);
+      if (!wsFns.isConnected(convId)) {
+        wsFns.startStreamGracePeriod(convId);
+      }
+
+      const watchWorkspaceHash = chatService.getWorkspaceHashForConv(convId);
+      const memoryOnForWatch = watchWorkspaceHash
+        ? await chatService.getWorkspaceMemoryEnabled(watchWorkspaceHash)
+        : false;
+      const watchWorkspacePath = conv.workingDir || adapter.workingDir || null;
+      if (memoryOnForWatch && watchWorkspaceHash && watchWorkspacePath) {
+        const memDir = adapter.getMemoryDir(watchWorkspacePath, { cliProfile: runtime.profile });
+        if (memDir) {
+          try {
+            fs.mkdirSync(memDir, { recursive: true });
+          } catch (err: unknown) {
+            console.warn(`[memoryWatcher] could not create ${memDir}:`, (err as Error).message);
+          }
+          memoryWatcher.watch(convId, memDir, async () => {
+            try {
+              const snapshot = await chatService.captureWorkspaceMemory(convId, backendId, runtime.profile);
+              if (snapshot) {
+                console.log(`[memoryWatcher] re-captured ${snapshot.files.length} memory file(s) for conv=${convId} backend=${backendId}`);
+                const nextFp = fingerprintMemoryFiles(snapshot);
+                const changedFiles = diffFingerprints(memoryFingerprints.get(convId), nextFp);
+                memoryFingerprints.set(convId, nextFp);
+                broadcastMemoryUpdate(watchWorkspaceHash, {
+                  type: 'memory_update',
+                  capturedAt: snapshot.capturedAt,
+                  fileCount: snapshot.files.length,
+                  changedFiles,
+                  sourceConversationId: convId,
+                  displayInChat: true,
+                });
+              }
+            } catch (err: unknown) {
+              console.error(`[memoryWatcher] capture failed for conv=${convId}:`, (err as Error).message);
+            }
+          });
+        }
+      }
+
+      const streamDone = processStream(
+        convId,
+        activeEntry,
+        (frame) => { wsFns!.send(convId, frame); },
+        () => activeStreams.get(convId) !== activeEntry,
+        async () => {
+          streamSupervisor.detachRuntime(convId, activeEntry);
+          if (activeEntry.jobId) {
+            try {
+              await streamSupervisor.completeJob(activeEntry.jobId);
+              activeEntry.jobId = undefined;
+            } catch (err: unknown) {
+              console.warn(`[chat] Failed to delete completed stream job for conv=${convId}:`, (err as Error).message);
+            }
+          }
+          memoryWatcher.unwatch(convId);
+          memoryFingerprints.delete(convId);
+          if (backendId === 'claude-code') {
+            claudePlanUsageService.maybeRefresh('turn-done', runtime.profile);
+          } else if (backendId === 'kiro') {
+            kiroPlanUsageService.maybeRefresh('turn-done');
+          } else if (backendId === 'codex') {
+            codexPlanUsageService.maybeRefresh('turn-done', runtime.profile);
+          }
+        },
+        { chatService, streamSupervisor, jobId },
+      ).catch((err) => {
+        console.error(`[chat] WS stream error for conv=${convId}:`, err);
+        if (wsFns) {
+          wsFns.send(convId, { type: 'error', error: (err as Error).message, terminal: true, source: 'server' });
+          wsFns.send(convId, { type: 'done' });
+        }
+        streamSupervisor.detachRuntime(convId, activeEntry);
+        if (activeEntry.jobId) {
+          void streamSupervisor.completeJob(activeEntry.jobId).catch((deleteErr: unknown) => {
+            console.warn(`[chat] Failed to delete stream job for conv=${convId}:`, (deleteErr as Error).message);
+          });
+        }
+        memoryWatcher.unwatch(convId);
+        memoryFingerprints.delete(convId);
+      });
+      activeEntry.done = streamDone;
+    }
+  }
+
+  async function buildGoalRunEnvironment(convId: string, isNewSession: boolean): Promise<{
+    systemPrompt: string;
+    mcpServers?: import('../types').McpServerConfig[];
+  }> {
+    const wsHash = chatService.getWorkspaceHashForConv(convId);
+    const memoryEnabled = wsHash
+      ? await chatService.getWorkspaceMemoryEnabled(wsHash)
+      : false;
+    const kbEnabled = wsHash
+      ? await chatService.getWorkspaceKbEnabled(wsHash)
+      : false;
+    const needsMemoryMcp = memoryEnabled && !!wsHash;
+    const needsKbMcp = kbEnabled && !!wsHash;
+
+    let systemPrompt = '';
+    if (isNewSession) {
+      const settings = await chatService.getSettings();
+      const globalPrompt = settings.systemPrompt || '';
+      const wsInstructions = wsHash ? (await chatService.getWorkspaceInstructions(wsHash)) || '' : '';
+      const contextPointers: string[] = [];
+      const ctx = chatService.getWorkspaceContext(convId);
+      if (ctx) contextPointers.push(ctx);
+      if (wsHash) {
+        const memPointer = await chatService.getWorkspaceMemoryPointer(wsHash);
+        if (memPointer) contextPointers.push(memPointer);
+        const kbPointer = await chatService.getWorkspaceKbPointer(wsHash);
+        if (kbPointer) contextPointers.push(kbPointer);
+      }
+      const memoryMcpAddendum = needsMemoryMcp
+        ? [
+            '# Persistent memory',
+            'You have access to a `memory_note` MCP tool (from the `agent-cockpit-memory` server). Call it whenever you learn something worth remembering across sessions:',
+            '- **user** — the user\'s role, expertise, preferences, or responsibilities',
+            '- **feedback** — a correction or confirmation the user has given you (include the reason if known)',
+            '- **project** — ongoing work context, goals, deadlines, constraints, or stakeholders',
+            '- **reference** — pointers to external systems (Linear, Slack, Grafana, etc.)',
+            '',
+            'Each call should capture ONE fact in natural language — do not batch unrelated facts. Pass the category in `type` when you know it. Keep notes terse. Do not call `memory_note` for ephemeral task state or things already visible in the current code.',
+          ].join('\n')
+        : '';
+      const kbMcpAddendum = needsKbMcp
+        ? (() => {
+            const kbPath = path.resolve(chatService.getKbKnowledgeDir(wsHash!));
+            return [
+              '# Knowledge Base',
+              'You have access to a workspace knowledge base via MCP tools (from the `agent-cockpit-kb-search` server) and the local filesystem.',
+              '',
+              '## Search tools (use these to find relevant knowledge)',
+              '- `search_topics(query)` — semantic + keyword search across all synthesized topics. Returns topic IDs, titles, summaries, and scores.',
+              '- `search_entries(query)` — semantic + keyword search across all digested entries. Returns entry IDs, titles, summaries, and scores.',
+              '- `get_topic(topic_id)` — full topic content, connections, and assigned entry list.',
+              '- `find_similar_topics(topic_id)` — topics with similar embeddings.',
+              '- `find_unconnected_similar(topic_id)` — similar topics with no existing connection.',
+              '- `kb_ingest(file_path)` — ingest a local file into the knowledge base.',
+              '',
+              '## Reading full content (use after search narrows results)',
+              `- Entries: \`${kbPath}/entries/<entryId>/entry.md\` — YAML frontmatter (title, tags, source) + digested markdown body.`,
+              `- Synthesis: \`${kbPath}/synthesis/*.md\` — cross-entry topic synthesis.`,
+              `- Reflections: \`${kbPath}/synthesis/reflections/*.md\` — cross-topic insights, patterns, contradictions, and gaps (generated during dreaming).`,
+              `- DB: \`${kbPath}/state.db\` — SQLite index of raw files, folders, and entries.`,
+              '',
+              '## Workflow',
+              'Use search tools first to find relevant topics and entries by semantic meaning, then read the entry files directly for full content. Search narrows the space; file reads give you depth.',
+            ].join('\n');
+          })()
+        : '';
+      const fileDeliveryAddendum = [
+        '# File delivery',
+        'When the user explicitly asks you to create, generate, or give them a downloadable file (e.g. "give me a CSV", "create a report file", "export this as JSON"), follow these steps:',
+        '1. Create the file in the current working directory.',
+        '2. After creating the file, output a reference on its own line using this exact format:',
+        '   <!-- FILE_DELIVERY:/absolute/path/to/file.ext -->',
+        '3. You may include multiple FILE_DELIVERY markers if the user asks for multiple files.',
+        '',
+        'Do NOT use FILE_DELIVERY for files you create as part of normal coding tasks (editing source code, config files, etc.). Only use it when the user explicitly wants a deliverable file to download.',
+      ].join('\n');
+      const parts = [globalPrompt, wsInstructions, ...contextPointers, memoryMcpAddendum, kbMcpAddendum, fileDeliveryAddendum].filter(Boolean);
+      systemPrompt = parts.join('\n\n');
+    }
+
+    let mcpServers: import('../types').McpServerConfig[] | undefined;
+    if (needsMemoryMcp && wsHash) {
+      const issued = memoryMcp.issueMemoryMcpSession(convId, wsHash);
+      mcpServers = issued.mcpServers;
+      console.log(`[memoryMcp] Issued token for conv=${convId} backend=codex`);
+    }
+    if (needsKbMcp && wsHash) {
+      const kbIssued = kbSearchMcp.issueKbSearchSession(convId, wsHash);
+      mcpServers = [...(mcpServers || []), ...kbIssued.mcpServers];
+      console.log(`[kbSearchMcp] Issued token for conv=${convId} backend=codex`);
+    }
+
+    return { systemPrompt, mcpServers };
+  }
+
+  async function resolveCodexGoalAdapter(conv: NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>) {
+    const runtime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
+    if (runtime.backendId !== 'codex') {
+      throw new Error(`Goals are only available for Codex conversations`);
+    }
+    const adapter = backendRegistry.get(runtime.backendId);
+    if (!adapter) {
+      throw new Error(`Unknown backend: ${runtime.backendId}`);
+    }
+    return { runtime, adapter, backendId: runtime.backendId };
+  }
+
+  router.get('/conversations/:id/goal', async (req: Request, res: Response) => {
+    try {
+      const convId = param(req, 'id');
+      const conv = await chatService.getConversation(convId);
+      if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+      const { runtime, adapter } = await resolveCodexGoalAdapter(conv);
+      const goal = await adapter.getGoal({
+        sessionId: conv.currentSessionId,
+        conversationId: convId,
+        cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
+        cliProfile: runtime.profile,
+        isNewSession: false,
+        workingDir: conv.workingDir || null,
+        systemPrompt: '',
+        externalSessionId: conv.externalSessionId || null,
+        model: conv.model || undefined,
+        effort: conv.effort || undefined,
+      });
+      res.json({ goal });
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/conversations/:id/goal', csrfGuard, async (req: Request, res: Response) => {
+    const convId = param(req, 'id');
+    const { objective, backend, model, effort, cliProfileId } = req.body as {
+      objective?: string;
+      backend?: string;
+      model?: string;
+      effort?: EffortLevel;
+      cliProfileId?: string;
+    };
+    if (!objective || typeof objective !== 'string' || !objective.trim()) {
+      return res.status(400).json({ error: 'Goal objective required' });
+    }
+
+    let conv = await chatService.getConversation(convId);
+    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+    if (hasInFlightTurn(convId)) {
+      return res.status(409).json({ error: 'Conversation is already streaming' });
+    }
+
+    let jobHandedOff = false;
+    let pendingMessageSend: PendingMessageSend | null = null;
+    try {
+      pendingMessageSend = await streamSupervisor.beginAcceptedTurn({
+        conversationId: convId,
+        sessionId: conv.currentSessionId,
+        backend: conv.backend,
+        cliProfileId: conv.cliProfileId || cliProfileId || null,
+        model: model !== undefined ? (model || null) : (conv.model || null),
+        effort: effort !== undefined ? (effort || null) : (conv.effort || null),
+        workingDir: conv.workingDir || null,
+      });
+      const jobId = pendingMessageSend.jobId;
+
+      try {
+        if (cliProfileId) {
+          if (cliProfileId !== conv.cliProfileId) {
+            if (conv.messages.length > 0) {
+              return res.status(409).json({ error: 'Cannot switch CLI profile after the active session has messages' });
+            }
+            await chatService.updateConversationCliProfile(convId, cliProfileId);
+          }
+        } else if (backend && backend !== conv.backend) {
+          await chatService.updateConversationBackend(convId, backend);
+        }
+      } catch (err: unknown) {
+        if (isCliProfileResolutionError(err)) {
+          return res.status(400).json({ error: (err as Error).message });
+        }
+        throw err;
+      }
+      if (model !== undefined && model !== (conv.model || undefined)) {
+        await chatService.updateConversationModel(convId, model || null);
+      }
+      if (effort !== undefined && effort !== (conv.effort || undefined)) {
+        await chatService.updateConversationEffort(convId, effort || null);
+      }
+      conv = (await chatService.getConversation(convId))!;
+
+      let runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
+      try {
+        runtime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
+      } catch (err: unknown) {
+        if (isCliProfileResolutionError(err)) {
+          return res.status(400).json({ error: (err as Error).message });
+        }
+        throw err;
+      }
+      const backendId = runtime.backendId;
+      if (backendId !== 'codex') {
+        return res.status(400).json({ error: 'Goals are only available for Codex conversations' });
+      }
+      if (cliProfileId && backend && backend !== backendId) {
+        return res.status(400).json({ error: `CLI profile vendor ${backendId} does not match backend ${backend}` });
+      }
+      await streamSupervisor.markPreparing(jobId, {
+        backend: backendId,
+        sessionId: conv.currentSessionId,
+        cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
+        model: conv.model || null,
+        effort: conv.effort || null,
+        workingDir: conv.workingDir || null,
+      });
+      if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
+        return res.json({ streamReady: false, aborted: true });
+      }
+
+      const adapter = backendRegistry.get(backendId);
+      if (!adapter) {
+        return res.status(400).json({ error: `Unknown backend: ${backendId}` });
+      }
+      const isNewSession = conv.messages.length === 0;
+      const { systemPrompt, mcpServers } = await buildGoalRunEnvironment(convId, isNewSession);
+      const refreshedConv = await chatService.getConversation(convId);
+      if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
+        return res.json({ streamReady: false, aborted: true });
+      }
+      const effectiveEffort = effort !== undefined
+        ? (refreshedConv?.effort || undefined)
+        : (conv.effort || undefined);
+      const sendResult = adapter.setGoalObjective(objective.trim(), {
+        sessionId: conv.currentSessionId,
+        conversationId: convId,
+        cliProfileId: runtime.cliProfileId || refreshedConv?.cliProfileId || conv.cliProfileId || undefined,
+        cliProfile: runtime.profile,
+        isNewSession,
+        workingDir: conv.workingDir || null,
+        systemPrompt,
+        externalSessionId: conv.externalSessionId || null,
+        model: model || conv.model || undefined,
+        effort: effectiveEffort,
+        mcpServers,
+      });
+      await attachAndPipeStream({
+        convId,
+        conv,
+        backendId,
+        runtime,
+        adapter,
+        sendResult,
+        jobId,
+        needsTitleUpdate: isNewSession && !conv.titleManuallySet,
+        titleUpdateMessage: objective.trim(),
+        model: model || conv.model || null,
+        effort: effectiveEffort || null,
+      });
+      jobHandedOff = true;
+      res.json({ streamReady: true });
+    } finally {
+      if (pendingMessageSend) {
+        streamSupervisor.clearPending(convId, pendingMessageSend);
+      }
+      if (!jobHandedOff) {
+        try {
+          if (pendingMessageSend) await streamSupervisor.completeJob(pendingMessageSend.jobId);
+        } catch (err: unknown) {
+          console.warn(`[chat] Failed to delete unstarted goal job for conv=${convId}:`, (err as Error).message);
+        }
+      }
+    }
+  });
+
+  router.post('/conversations/:id/goal/resume', csrfGuard, async (req: Request, res: Response) => {
+    const convId = param(req, 'id');
+    let conv = await chatService.getConversation(convId);
+    if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+    if (hasInFlightTurn(convId)) {
+      return res.status(409).json({ error: 'Conversation is already streaming' });
+    }
+
+    let jobHandedOff = false;
+    let pendingMessageSend: PendingMessageSend | null = null;
+    try {
+      const { runtime, adapter, backendId } = await resolveCodexGoalAdapter(conv);
+      pendingMessageSend = await streamSupervisor.beginAcceptedTurn({
+        conversationId: convId,
+        sessionId: conv.currentSessionId,
+        backend: backendId,
+        cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
+        model: conv.model || null,
+        effort: conv.effort || null,
+        workingDir: conv.workingDir || null,
+      });
+      const jobId = pendingMessageSend.jobId;
+      await streamSupervisor.markPreparing(jobId, {
+        backend: backendId,
+        sessionId: conv.currentSessionId,
+        cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
+        model: conv.model || null,
+        effort: conv.effort || null,
+        workingDir: conv.workingDir || null,
+      });
+      if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
+        return res.json({ streamReady: false, aborted: true });
+      }
+      conv = (await chatService.getConversation(convId))!;
+      const { systemPrompt, mcpServers } = await buildGoalRunEnvironment(convId, false);
+      const sendResult = adapter.resumeGoal({
+        sessionId: conv.currentSessionId,
+        conversationId: convId,
+        cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
+        cliProfile: runtime.profile,
+        isNewSession: false,
+        workingDir: conv.workingDir || null,
+        systemPrompt,
+        externalSessionId: conv.externalSessionId || null,
+        model: conv.model || undefined,
+        effort: conv.effort || undefined,
+        mcpServers,
+      });
+      await attachAndPipeStream({
+        convId,
+        conv,
+        backendId,
+        runtime,
+        adapter,
+        sendResult,
+        jobId,
+        needsTitleUpdate: false,
+        titleUpdateMessage: null,
+        model: conv.model || null,
+        effort: conv.effort || null,
+      });
+      jobHandedOff = true;
+      res.json({ streamReady: true });
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      res.status(400).json({ error: (err as Error).message });
+    } finally {
+      if (pendingMessageSend) {
+        streamSupervisor.clearPending(convId, pendingMessageSend);
+      }
+      if (!jobHandedOff) {
+        try {
+          if (pendingMessageSend) await streamSupervisor.completeJob(pendingMessageSend.jobId);
+        } catch (err: unknown) {
+          console.warn(`[chat] Failed to delete unstarted goal resume job for conv=${convId}:`, (err as Error).message);
+        }
+      }
+    }
+  });
+
+  router.post('/conversations/:id/goal/pause', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const convId = param(req, 'id');
+      const conv = await chatService.getConversation(convId);
+      if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+      const { runtime, adapter } = await resolveCodexGoalAdapter(conv);
+      const goal = await adapter.pauseGoal({
+        sessionId: conv.currentSessionId,
+        conversationId: convId,
+        cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
+        cliProfile: runtime.profile,
+        isNewSession: false,
+        workingDir: conv.workingDir || null,
+        systemPrompt: '',
+        externalSessionId: conv.externalSessionId || null,
+        model: conv.model || undefined,
+        effort: conv.effort || undefined,
+      });
+      if (goal && wsFns && !activeStreams.has(convId)) {
+        wsFns.send(convId, { type: 'goal_updated', goal });
+      }
+      res.json({ goal });
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
+  router.delete('/conversations/:id/goal', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const convId = param(req, 'id');
+      const conv = await chatService.getConversation(convId);
+      if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+      const { runtime, adapter } = await resolveCodexGoalAdapter(conv);
+      const result = await adapter.clearGoal({
+        sessionId: conv.currentSessionId,
+        conversationId: convId,
+        cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
+        cliProfile: runtime.profile,
+        isNewSession: false,
+        workingDir: conv.workingDir || null,
+        systemPrompt: '',
+        externalSessionId: conv.externalSessionId || null,
+        model: conv.model || undefined,
+        effort: conv.effort || undefined,
+      });
+      if (wsFns && !activeStreams.has(convId)) {
+        wsFns.send(convId, { type: 'goal_cleared', threadId: result.threadId || conv.externalSessionId || null });
+      }
+      res.json(result);
+    } catch (err: unknown) {
+      if (isCliProfileResolutionError(err)) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
+      res.status(400).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Send message + stream response ────────────────────────────────────────
   router.post('/conversations/:id/message', csrfGuard, async (req: Request, res: Response) => {
     const convId = param(req, 'id');
@@ -1775,7 +2341,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     const effectiveEffort = effort !== undefined
       ? (refreshedConv?.effort || undefined)
       : (conv.effort || undefined);
-    const { stream, abort, sendInput } = adapter.sendMessage(cliMessage, {
+    const sendResult = adapter.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
       conversationId: convId,
       cliProfileId: runtime.cliProfileId || refreshedConv?.cliProfileId || conv.cliProfileId || undefined,
@@ -1789,130 +2355,22 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       mcpServers,
     });
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
-    const startedAt = new Date().toISOString();
-    streamSupervisor.attachRuntime(convId, { stream, abort, sendInput, backend: backendId, needsTitleUpdate, titleUpdateMessage: needsTitleUpdate ? content.trim() : null, startedAt, lastEventAt: startedAt, jobId });
+    await attachAndPipeStream({
+      convId,
+      conv,
+      backendId,
+      runtime,
+      adapter,
+      sendResult,
+      jobId,
+      needsTitleUpdate,
+      titleUpdateMessage: needsTitleUpdate ? content.trim() : null,
+      model: model || conv.model || null,
+      effort: effectiveEffort || null,
+      logUserMessageId: userMsg?.id || null,
+      logUserMessageTimestamp: userMsg?.timestamp || null,
+    });
     jobHandedOff = true;
-    try {
-      await streamSupervisor.markRunning(jobId, {
-        startedAt,
-        lastEventAt: startedAt,
-        model: model || conv.model || null,
-        effort: effectiveEffort || null,
-      });
-    } catch (err: unknown) {
-      console.warn(`[chat] Failed to mark stream job running for conv=${convId}:`, (err as Error).message);
-    }
-    const activeEntry = activeStreams.get(convId)!;
-    console.log(`[diag][chat] activeStreams.set conv=${convId.slice(0,8)} backend=${backendId} userMsgId=${userMsg?.id ?? 'null'} userMsgTs=${userMsg?.timestamp ?? 'null'}`);
-
-    // Always pipe the stream — if no WS is connected yet (e.g. the user
-    // arrived via a stale page after a long sleep / network change), the
-    // stream still runs and frames buffer until either a reconnect replays
-    // them or the backend emits a terminal result/error.
-    if (wsFns) {
-      wsFns.clearBuffer(convId); // Fresh buffer for the new stream
-      // Mark disconnected buffering if no WS is connected at submission time.
-      // CLI lifetime is owned by activeStreams, not by browser transport.
-      if (!wsFns.isConnected(convId)) {
-        wsFns.startStreamGracePeriod(convId);
-      }
-
-      // Start real-time memory watching for this stream.  When Claude
-      // Code's extraction agent writes to its memory directory, the
-      // watcher debounces for 500ms then re-snapshots into workspace
-      // storage via captureWorkspaceMemory — so memories written mid-
-      // session aren't lost if the user closes the browser before
-      // the next session reset.  Best-effort: if the backend has no
-      // memory dir (or hasn't created one yet), nothing happens.
-      // Scoped to the processStream lifecycle so the watcher is always
-      // cleaned up in the onDone callback below.
-      // Gated on the per-workspace Memory toggle — watching is skipped
-      // entirely when Memory is disabled for this workspace.
-      const watchWorkspaceHash = chatService.getWorkspaceHashForConv(convId);
-      const memoryOnForWatch = watchWorkspaceHash
-        ? await chatService.getWorkspaceMemoryEnabled(watchWorkspaceHash)
-        : false;
-      const watchWorkspacePath = conv.workingDir || adapter.workingDir || null;
-      if (memoryOnForWatch && watchWorkspaceHash && watchWorkspacePath) {
-        const memDir = adapter.getMemoryDir(watchWorkspacePath, { cliProfile: runtime.profile });
-        if (memDir) {
-          // `fs.watch` requires the directory to exist — on brand new
-          // workspaces where the CLI hasn't written any memory yet the
-          // dir is absent, and without this `mkdirSync` the watcher
-          // silently fails to attach and mid-session memory writes
-          // never produce a `memory_update` frame.
-          try {
-            fs.mkdirSync(memDir, { recursive: true });
-          } catch (err: unknown) {
-            console.warn(`[memoryWatcher] could not create ${memDir}:`, (err as Error).message);
-          }
-          memoryWatcher.watch(convId, memDir, async () => {
-            try {
-              const snapshot = await chatService.captureWorkspaceMemory(convId, backendId, runtime.profile);
-              if (snapshot) {
-                console.log(`[memoryWatcher] re-captured ${snapshot.files.length} memory file(s) for conv=${convId} backend=${backendId}`);
-                const nextFp = fingerprintMemoryFiles(snapshot);
-                const changedFiles = diffFingerprints(memoryFingerprints.get(convId), nextFp);
-                memoryFingerprints.set(convId, nextFp);
-                broadcastMemoryUpdate(watchWorkspaceHash, {
-                  type: 'memory_update',
-                  capturedAt: snapshot.capturedAt,
-                  fileCount: snapshot.files.length,
-                  changedFiles,
-                  sourceConversationId: convId,
-                  displayInChat: true,
-                });
-              }
-            } catch (err: unknown) {
-              console.error(`[memoryWatcher] capture failed for conv=${convId}:`, (err as Error).message);
-            }
-          });
-        }
-      }
-
-      const streamDone = processStream(
-        convId,
-        activeEntry,
-        (frame) => { wsFns!.send(convId, frame); },
-        () => activeStreams.get(convId) !== activeEntry,
-        async () => {
-          streamSupervisor.detachRuntime(convId, activeEntry);
-          if (activeEntry.jobId) {
-            try {
-              await streamSupervisor.completeJob(activeEntry.jobId);
-              activeEntry.jobId = undefined;
-            } catch (err: unknown) {
-              console.warn(`[chat] Failed to delete completed stream job for conv=${convId}:`, (err as Error).message);
-            }
-          }
-          memoryWatcher.unwatch(convId);
-          memoryFingerprints.delete(convId);
-          if (backendId === 'claude-code') {
-            claudePlanUsageService.maybeRefresh('turn-done', runtime.profile);
-          } else if (backendId === 'kiro') {
-            kiroPlanUsageService.maybeRefresh('turn-done');
-          } else if (backendId === 'codex') {
-            codexPlanUsageService.maybeRefresh('turn-done', runtime.profile);
-          }
-        },
-        { chatService, streamSupervisor, jobId },
-      ).catch((err) => {
-        console.error(`[chat] WS stream error for conv=${convId}:`, err);
-        if (wsFns) {
-          wsFns.send(convId, { type: 'error', error: (err as Error).message, terminal: true, source: 'server' });
-          wsFns.send(convId, { type: 'done' });
-        }
-        streamSupervisor.detachRuntime(convId, activeEntry);
-        if (activeEntry.jobId) {
-          void streamSupervisor.completeJob(activeEntry.jobId).catch((deleteErr: unknown) => {
-            console.warn(`[chat] Failed to delete stream job for conv=${convId}:`, (deleteErr as Error).message);
-          });
-        }
-        memoryWatcher.unwatch(convId);
-        memoryFingerprints.delete(convId);
-      });
-      activeEntry.done = streamDone;
-    }
 
     res.json({ userMessage: userMsg, streamReady: true });
     } finally {

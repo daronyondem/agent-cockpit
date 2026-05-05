@@ -19,6 +19,8 @@ import type {
   CodexSandboxMode,
   EffortLevel,
   CliProfile,
+  CodexThreadGoal,
+  CodexThreadGoalStatus,
 } from '../../types';
 
 // ── Icon ────────────────────────────────────────────────────────────────────
@@ -32,6 +34,8 @@ const DEFAULT_CODEX_APPROVAL_POLICY: CodexApprovalPolicy = 'on-request';
 const DEFAULT_CODEX_SANDBOX_MODE: CodexSandboxMode = 'workspace-write';
 const CODEX_SUPPORTED_EFFORTS: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 const CODEX_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh'];
+const CODEX_APP_SERVER_ARGS = ['app-server', '--enable', 'goals'];
+const CODEX_CLIENT_CAPABILITIES = { experimentalApi: true };
 
 // Used as the polite-shutdown deadline before SIGKILL during process kill.
 const PROCESS_KILL_GRACE_MS = 1_000;
@@ -664,6 +668,18 @@ interface TurnStartResult {
   turn: { id: string; status?: string };
 }
 
+interface ThreadGoalGetResult {
+  goal: CodexThreadGoal | null;
+}
+
+interface ThreadGoalSetResult {
+  goal: CodexThreadGoal;
+}
+
+interface ThreadGoalClearResult {
+  cleared: boolean;
+}
+
 // `item/tool/requestUserInput` (server-to-client request, EXPERIMENTAL,
 // API v2 only). The server pauses the turn while waiting for our response.
 interface ToolRequestUserInputOption {
@@ -977,6 +993,7 @@ export class CodexAdapter extends BaseBackendAdapter {
         toolActivity: true,
         userQuestions: true,
         stdinInput: true,
+        goals: true,
       },
       resumeCapabilities: {
         activeTurnResume: 'unsupported',
@@ -1090,6 +1107,106 @@ export class CodexAdapter extends BaseBackendAdapter {
     return { stream, abort, sendInput };
   }
 
+  async getGoal(options: SendMessageOptions): Promise<CodexThreadGoal | null> {
+    const ctx = await this._getGoalThreadContext(options, { allowStart: false, reuseExistingMcp: true });
+    if (!ctx.threadId) return null;
+    const result = await ctx.client.request('thread/goal/get', { threadId: ctx.threadId }) as ThreadGoalGetResult;
+    return result.goal || null;
+  }
+
+  setGoalObjective(objective: string, options: SendMessageOptions = {} as SendMessageOptions): SendMessageResult {
+    return this._createGoalRun({ objective: objective.trim() }, options);
+  }
+
+  resumeGoal(options: SendMessageOptions = {} as SendMessageOptions): SendMessageResult {
+    return this._createGoalRun({ status: 'active' }, options);
+  }
+
+  async pauseGoal(options: SendMessageOptions): Promise<CodexThreadGoal | null> {
+    const ctx = await this._getGoalThreadContext(options, { allowStart: false, reuseExistingMcp: true });
+    if (!ctx.threadId) return null;
+    const result = await ctx.client.request('thread/goal/set', {
+      threadId: ctx.threadId,
+      status: 'paused',
+    }) as ThreadGoalSetResult;
+    return result.goal || null;
+  }
+
+  async clearGoal(options: SendMessageOptions): Promise<{ cleared: boolean; threadId?: string | null }> {
+    const ctx = await this._getGoalThreadContext(options, { allowStart: false, reuseExistingMcp: true });
+    if (!ctx.threadId) return { cleared: false, threadId: null };
+    const result = await ctx.client.request('thread/goal/clear', { threadId: ctx.threadId }) as ThreadGoalClearResult;
+    return { cleared: !!result.cleared, threadId: ctx.threadId };
+  }
+
+  private _createGoalRun(
+    goalPatch: { objective?: string; status?: Extract<CodexThreadGoalStatus, 'active'> },
+    options: SendMessageOptions,
+  ): SendMessageResult {
+    let aborted = false;
+    const state: {
+      client: CodexAppServerClient | null;
+      threadId: string | null;
+      turnId: string | null;
+      pendingUserInput: PendingUserInput | null;
+      subagentByThreadId: Map<string, string>;
+    } = {
+      client: null,
+      threadId: null,
+      turnId: null,
+      pendingUserInput: null,
+      subagentByThreadId: new Map(),
+    };
+
+    const stream = this._createGoalStream(goalPatch, options, {
+      get aborted() { return aborted; },
+      get client() { return state.client; },
+      set client(c: CodexAppServerClient | null) { state.client = c; },
+      get threadId() { return state.threadId; },
+      set threadId(t: string | null) { state.threadId = t; },
+      get turnId() { return state.turnId; },
+      set turnId(t: string | null) { state.turnId = t; },
+      get pendingUserInput() { return state.pendingUserInput; },
+      set pendingUserInput(p: PendingUserInput | null) { state.pendingUserInput = p; },
+      subagentByThreadId: state.subagentByThreadId,
+    });
+
+    const abort = () => {
+      aborted = true;
+      const { client, threadId, turnId } = state;
+      if (client && !client.isClosed && threadId && turnId) {
+        client.request('turn/interrupt', { threadId, turnId }).catch(() => {});
+      }
+    };
+
+    const sendInput = (text: string) => {
+      if (aborted) return;
+      if (typeof text !== 'string' || !text) return;
+      const { client, threadId, turnId, pendingUserInput } = state;
+      if (!client || client.isClosed || !threadId) return;
+
+      if (pendingUserInput) {
+        const first = pendingUserInput.questions[0];
+        const response: ToolRequestUserInputResponse = { answers: {} };
+        if (first) response.answers[first.id] = { answers: [text] };
+        state.pendingUserInput = null;
+        client.respond(pendingUserInput.reqId, response);
+        return;
+      }
+
+      if (!turnId) return;
+      client.request('turn/steer', {
+        threadId,
+        input: [{ type: 'text', text }],
+        expectedTurnId: turnId,
+      }).catch((err: Error) => {
+        console.warn(`[codex] goal turn/steer rejected: ${err.message}`);
+      });
+    };
+
+    return { stream, abort, sendInput };
+  }
+
   async generateSummary(
     messages: Pick<Message, 'role' | 'content'>[],
     fallback: string,
@@ -1185,7 +1302,7 @@ export class CodexAdapter extends BaseBackendAdapter {
 
   private async _refreshModels(profile?: CliProfile): Promise<ModelOption[]> {
     const runtime = resolveCodexCliRuntime(profile);
-    const proc = spawn(runtime.command, ['app-server'], {
+    const proc = spawn(runtime.command, CODEX_APP_SERVER_ARGS, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: runtime.env,
     });
@@ -1210,7 +1327,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       const client = new CodexAppServerClient(proc);
       await client.request('initialize', {
         clientInfo: { name: 'agent-cockpit', title: null, version: '1.0.0' },
-        capabilities: null,
+        capabilities: CODEX_CLIENT_CAPABILITIES,
       });
       const result = await client.request('model/list', {
         limit: 50,
@@ -1254,6 +1371,7 @@ export class CodexAdapter extends BaseBackendAdapter {
     conversationId: string,
     mcpServers: McpServerConfig[] = [],
     profile?: CliProfile,
+    options: { reuseExistingMcp?: boolean } = {},
   ): Promise<CodexAppServerClient> {
     const runtime = resolveCodexCliRuntime(profile);
     const mcpHash = hashMcpServers(mcpServers);
@@ -1262,7 +1380,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       existing
       && !existing.proc.killed
       && existing.proc.exitCode === null
-      && existing.mcpHash === mcpHash
+      && (options.reuseExistingMcp || existing.mcpHash === mcpHash)
       && existing.profileKey === runtime.profileKey
     ) {
       this._resetIdleTimer(conversationId);
@@ -1287,7 +1405,7 @@ export class CodexAdapter extends BaseBackendAdapter {
     }
 
     console.log(`[codex] Spawning codex app-server for conv=${conversationId}`);
-    const proc = spawn(runtime.command, ['app-server', ...configArgs], {
+    const proc = spawn(runtime.command, [...CODEX_APP_SERVER_ARGS, ...configArgs], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: runtime.env,
     });
@@ -1306,7 +1424,7 @@ export class CodexAdapter extends BaseBackendAdapter {
 
     await client.request('initialize', {
       clientInfo: { name: 'agent-cockpit', title: null, version: '1.0.0' },
-      capabilities: null,
+      capabilities: CODEX_CLIENT_CAPABILITIES,
     });
     console.log(`[codex] app-server initialized for conv=${conversationId}`);
 
@@ -1327,6 +1445,399 @@ export class CodexAdapter extends BaseBackendAdapter {
 
   // ── Private: streaming session ────────────────────────────────────────────
 
+  private async _resolveThread(
+    client: CodexAppServerClient,
+    entry: CodexProcessEntry,
+    convId: string,
+    options: SendMessageOptions,
+  ): Promise<{ threadId: string | null; externalSessionId?: string }> {
+    const { isNewSession, workingDir, systemPrompt, externalSessionId, model } = options;
+    const cwd = workingDir || this.workingDir || os.homedir();
+    let threadId = entry.threadId;
+
+    if (isNewSession && !threadId) {
+      const cleanPrompt = sanitizeSystemPrompt(systemPrompt);
+      const startParams: Record<string, unknown> = {
+        cwd,
+        ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
+        experimentalRawEvents: false,
+        persistExtendedHistory: false,
+      };
+      if (model) startParams.model = model;
+      if (cleanPrompt) startParams.developerInstructions = cleanPrompt;
+
+      const result = await client.request('thread/start', startParams) as ThreadStartResult;
+      threadId = result.thread.id;
+      entry.threadId = threadId;
+      console.log(`[codex] Started thread ${threadId} for conv=${convId}`);
+      return { threadId, externalSessionId: threadId };
+    }
+
+    if (threadId) {
+      return { threadId };
+    }
+
+    if (externalSessionId) {
+      const resumeParams: Record<string, unknown> = {
+        threadId: externalSessionId,
+        cwd,
+        ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
+        excludeTurns: true,
+        persistExtendedHistory: false,
+      };
+      if (model) resumeParams.model = model;
+
+      try {
+        const result = await client.request('thread/resume', resumeParams) as ThreadResumeResult;
+        threadId = result.thread.id;
+        entry.threadId = threadId;
+        const drained = client.drainNotifications();
+        console.log(`[codex] Resumed thread ${threadId} for conv=${convId} (drained ${drained} notifications)`);
+        return { threadId };
+      } catch (err) {
+        console.warn(`[codex] Resume failed for ${externalSessionId}: ${(err as Error).message}. Starting fresh thread.`);
+        const startParams: Record<string, unknown> = {
+          cwd,
+          ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
+          experimentalRawEvents: false,
+          persistExtendedHistory: false,
+        };
+        if (model) startParams.model = model;
+        const result = await client.request('thread/start', startParams) as ThreadStartResult;
+        threadId = result.thread.id;
+        entry.threadId = threadId;
+        return { threadId, externalSessionId: threadId };
+      }
+    }
+
+    return { threadId: null };
+  }
+
+  private async _getGoalThreadContext(
+    options: SendMessageOptions,
+    control: { allowStart: boolean; reuseExistingMcp?: boolean },
+  ): Promise<{
+    client: CodexAppServerClient;
+    entry: CodexProcessEntry;
+    convId: string;
+    threadId: string | null;
+    externalSessionId?: string;
+  }> {
+    const { sessionId, conversationId, mcpServers, cliProfile } = options;
+    const convId = conversationId || sessionId;
+    const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
+    const client = await this._getOrSpawnClient(convId, mcpServersForCodex, cliProfile, {
+      reuseExistingMcp: control.reuseExistingMcp,
+    });
+    const entry = this.processes.get(convId)!;
+    const resolved = await this._resolveThread(client, entry, convId, {
+      ...options,
+      isNewSession: control.allowStart ? options.isNewSession : false,
+    });
+    return {
+      client,
+      entry,
+      convId,
+      threadId: resolved.threadId,
+      ...(resolved.externalSessionId ? { externalSessionId: resolved.externalSessionId } : {}),
+    };
+  }
+
+  private async *_createGoalStream(
+    goalPatch: { objective?: string; status?: Extract<CodexThreadGoalStatus, 'active'> },
+    options: SendMessageOptions,
+    state: {
+      readonly aborted: boolean;
+      client: CodexAppServerClient | null;
+      threadId: string | null;
+      turnId: string | null;
+      pendingUserInput: PendingUserInput | null;
+      subagentByThreadId: Map<string, string>;
+    },
+  ): AsyncGenerator<StreamEvent> {
+    const { model, cliProfile } = options;
+    const runtime = resolveCodexCliRuntime(cliProfile);
+
+    let ctx: Awaited<ReturnType<CodexAdapter['_getGoalThreadContext']>>;
+    try {
+      ctx = await this._getGoalThreadContext(options, { allowStart: true });
+      state.client = ctx.client;
+    } catch (err) {
+      const errMsg = (err as Error).message;
+      if (errMsg.includes('ENOENT') || errMsg.includes('not found')) {
+        yield { type: 'error', error: 'Codex CLI is not installed. Install with `npm install -g @openai/codex`' };
+      } else {
+        yield { type: 'error', error: `Failed to start Codex: ${errMsg}` };
+      }
+      yield { type: 'done' };
+      return;
+    }
+
+    const { client, entry, convId, threadId } = ctx;
+    if (ctx.externalSessionId) {
+      yield { type: 'external_session', sessionId: ctx.externalSessionId };
+    }
+
+    if (!threadId) {
+      yield { type: 'error', error: 'No Codex thread ID available for this conversation' };
+      yield { type: 'done' };
+      return;
+    }
+
+    state.threadId = threadId;
+    yield {
+      type: 'backend_runtime',
+      externalSessionId: threadId,
+      processId: entry.proc.pid ?? null,
+    };
+
+    try {
+      const setParams: Record<string, unknown> = {
+        threadId,
+        status: 'active',
+      };
+      if (goalPatch.objective) setParams.objective = goalPatch.objective;
+      const setResult = await client.request('thread/goal/set', setParams) as ThreadGoalSetResult;
+      if (setResult.goal) yield { type: 'goal_updated', goal: setResult.goal };
+
+      const toolByItemId: Map<string, string> = new Map();
+      const notificationIterator = client.notifications()[Symbol.asyncIterator]();
+      let nextNotification = notificationIterator.next();
+      const goalResponseAt = Date.now();
+      let turnStarted = false;
+      let turnEnded = false;
+      const noTurnTimeoutMs = 5_000;
+
+      while (true) {
+        const next = !turnStarted
+          ? await Promise.race([
+              nextNotification.then((result) => ({ type: 'notification' as const, result })),
+              new Promise<{ type: 'timeout' }>((resolve) => setTimeout(() => resolve({ type: 'timeout' }), 250)),
+            ])
+          : await nextNotification.then((result) => ({ type: 'notification' as const, result }));
+
+        if (next.type === 'timeout') {
+          if (Date.now() - goalResponseAt >= noTurnTimeoutMs) {
+            client.stopNotifications();
+            break;
+          }
+          continue;
+        }
+
+        if (next.result.done) break;
+        const notification = next.result.value;
+        nextNotification = notificationIterator.next();
+
+        if (state.aborted) {
+          yield { type: 'error', error: 'Aborted by user' };
+          yield { type: 'done' };
+          return;
+        }
+
+        this._resetIdleTimer(convId);
+
+        const params = (notification.params || {}) as Record<string, unknown>;
+        const method = notification.method;
+
+        if (notification.id != null) {
+          const reqId = notification.id;
+
+          if (method === 'item/commandExecution/requestApproval'
+              || method === 'item/fileChange/requestApproval') {
+            client.respond(reqId, { decision: 'acceptForSession' });
+            continue;
+          }
+
+          if (method === 'item/permissions/requestApproval') {
+            client.respond(reqId, {
+              permissions: { network: undefined, fileSystem: undefined },
+              scope: 'session',
+            });
+            continue;
+          }
+
+          if (method === 'applyPatchApproval' || method === 'execCommandApproval') {
+            client.respond(reqId, { decision: 'approved' });
+            continue;
+          }
+
+          if (method === 'item/tool/requestUserInput') {
+            const p = params as unknown as ToolRequestUserInputParams;
+            const questions = Array.isArray(p.questions) ? p.questions : [];
+            state.pendingUserInput = { reqId, itemId: p.itemId, questions };
+            const first = questions[0];
+            yield {
+              type: 'tool_activity',
+              tool: 'AskUserQuestion',
+              id: p.itemId,
+              description: (first && first.header) || 'Question',
+              isQuestion: true,
+              questions: questions.map((q) => ({
+                question: q.question,
+                options: Array.isArray(q.options) ? q.options : [],
+              })) as unknown as string[],
+            };
+            continue;
+          }
+
+          client.respond(reqId, { error: { code: -32601, message: 'Not supported by client' } });
+          continue;
+        }
+
+        switch (method) {
+          case 'thread/goal/updated': {
+            const goal = (params as { goal?: CodexThreadGoal }).goal;
+            if (goal) yield { type: 'goal_updated', goal };
+            break;
+          }
+
+          case 'thread/goal/cleared': {
+            yield { type: 'goal_cleared', threadId: (params as { threadId?: string }).threadId || threadId };
+            break;
+          }
+
+          case 'turn/started': {
+            const turnId = (params as { turnId?: string; turn?: { id?: string } }).turnId
+              || (params as { turn?: { id?: string } }).turn?.id;
+            if (turnId) {
+              turnStarted = true;
+              state.turnId = turnId;
+              yield {
+                type: 'backend_runtime',
+                externalSessionId: threadId,
+                activeTurnId: turnId,
+                processId: entry.proc.pid ?? null,
+              };
+            }
+            break;
+          }
+
+          case 'serverRequest/resolved': {
+            const p = params as { requestId?: number };
+            const pending = state.pendingUserInput;
+            if (pending && typeof p.requestId === 'number' && p.requestId === pending.reqId) {
+              state.pendingUserInput = null;
+            }
+            break;
+          }
+
+          case 'item/agentMessage/delta': {
+            if (eventIsFromChildThread(params, state.subagentByThreadId)) break;
+            const delta = (params as { delta?: string }).delta;
+            if (typeof delta === 'string' && delta.length > 0) {
+              yield { type: 'text', content: delta, streaming: true };
+            }
+            break;
+          }
+
+          case 'item/reasoning/textDelta':
+          case 'item/reasoning/summaryTextDelta': {
+            if (eventIsFromChildThread(params, state.subagentByThreadId)) break;
+            const delta = (params as { delta?: string }).delta;
+            if (typeof delta === 'string' && delta.length > 0) {
+              yield { type: 'thinking', content: delta, streaming: true };
+            }
+            break;
+          }
+
+          case 'item/started': {
+            const item = (params as { item?: CodexThreadItem }).item;
+            if (!item) break;
+            const detail = extractCodexToolDetails(item);
+            if (detail) {
+              toolByItemId.set(item.id, detail.tool);
+              const parentAgentId = lookupParentAgentId(params, state.subagentByThreadId);
+              yield {
+                type: 'tool_activity',
+                ...detail,
+                ...(parentAgentId ? { parentAgentId } : {}),
+              };
+            }
+            break;
+          }
+
+          case 'item/completed': {
+            const item = (params as { item?: CodexThreadItem }).item;
+            if (!item) break;
+            recordSpawnAgentReceivers(item, state.subagentByThreadId);
+            if (!ITEM_TYPE_TO_TOOL[item.type] && item.type !== 'mcpToolCall' && item.type !== 'dynamicToolCall') {
+              break;
+            }
+            const outcome = deriveOutcomeFromItem(item);
+            const artifactEvent = codexImageArtifactEvent(item, state.threadId, runtime);
+            if (artifactEvent) {
+              yield artifactEvent;
+            }
+            yield {
+              type: 'tool_outcomes',
+              outcomes: [{
+                toolUseId: item.id,
+                isError: outcome.status === 'error',
+                outcome: outcome.outcome,
+                status: outcome.status,
+              }],
+            };
+            break;
+          }
+
+          case 'thread/tokenUsage/updated': {
+            const tokenUsage = (params as { tokenUsage?: {
+              total: { totalTokens: number; inputTokens: number; cachedInputTokens: number; outputTokens: number };
+              last: { totalTokens: number; inputTokens: number; cachedInputTokens: number; outputTokens: number };
+              modelContextWindow: number | null;
+            } }).tokenUsage;
+            if (!tokenUsage) break;
+            const totalTokens = tokenUsage.total.totalTokens || 0;
+            if (totalTokens === entry.lastTotalTokens) break;
+            entry.lastTotalTokens = totalTokens;
+            yield {
+              type: 'usage',
+              usage: deriveCodexUsage(tokenUsage),
+              ...(model ? { model } : {}),
+            };
+            break;
+          }
+
+          case 'turn/completed': {
+            if (!isParentTurnCompleted(params, state.threadId)) break;
+            turnEnded = true;
+            client.stopNotifications();
+            break;
+          }
+
+          case 'error': {
+            const errParam = (params as {
+              error?: { message?: string };
+              willRetry?: boolean;
+            });
+            const errMsg = errParam.error?.message || 'Codex error';
+            if (!errParam.willRetry) {
+              yield { type: 'error', error: errMsg };
+              turnEnded = true;
+              client.stopNotifications();
+            } else {
+              console.log(`[codex] Recoverable error (will retry): ${errMsg}`);
+            }
+            break;
+          }
+
+          default:
+            break;
+        }
+      }
+
+      if (!turnEnded && turnStarted) {
+        // Notification stream exited before turn/completed. Let processStream
+        // persist whatever content was already emitted and close the UI turn.
+      }
+
+      yield { type: 'done' };
+    } catch (err) {
+      yield { type: 'error', error: `Codex goal failed: ${(err as Error).message}` };
+      yield { type: 'done' };
+    }
+  }
+
   private async *_createStream(
     message: string,
     options: SendMessageOptions,
@@ -1339,9 +1850,8 @@ export class CodexAdapter extends BaseBackendAdapter {
       subagentByThreadId: Map<string, string>;
     },
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, conversationId, isNewSession, workingDir, systemPrompt, externalSessionId, model, effort, mcpServers, cliProfile } = options;
+    const { sessionId, conversationId, model, effort, mcpServers, cliProfile } = options;
     const convId = conversationId || sessionId;
-    const cwd = workingDir || this.workingDir || os.homedir();
     const runtime = resolveCodexCliRuntime(cliProfile);
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
 
@@ -1364,64 +1874,10 @@ export class CodexAdapter extends BaseBackendAdapter {
 
     try {
       // ── Resolve thread ───────────────────────────────────────────────
-      let threadId = entry.threadId;
-
-      // First message ever, or new session → start a new thread
-      if (isNewSession && !threadId) {
-        const cleanPrompt = sanitizeSystemPrompt(systemPrompt);
-        const startParams: Record<string, unknown> = {
-          cwd,
-          ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
-          experimentalRawEvents: false,
-          persistExtendedHistory: false,
-        };
-        if (model) startParams.model = model;
-        if (cleanPrompt) startParams.developerInstructions = cleanPrompt;
-
-        const result = await client.request('thread/start', startParams) as ThreadStartResult;
-        threadId = result.thread.id;
-        entry.threadId = threadId;
-        console.log(`[codex] Started thread ${threadId} for conv=${convId}`);
-        yield { type: 'external_session', sessionId: threadId };
-      }
-      // Existing process knows its thread — reuse
-      else if (threadId) {
-        // Already loaded
-      }
-      // Process was respawned (idle kill / cockpit restart) — resume from
-      // persisted externalSessionId
-      else if (externalSessionId) {
-        const resumeParams: Record<string, unknown> = {
-          threadId: externalSessionId,
-          cwd,
-          ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
-          excludeTurns: true,
-          persistExtendedHistory: false,
-        };
-        if (model) resumeParams.model = model;
-
-        try {
-          const result = await client.request('thread/resume', resumeParams) as ThreadResumeResult;
-          threadId = result.thread.id;
-          entry.threadId = threadId;
-          // Drain any history-replay notifications that may have been emitted
-          const drained = client.drainNotifications();
-          console.log(`[codex] Resumed thread ${threadId} for conv=${convId} (drained ${drained} notifications)`);
-        } catch (err) {
-          console.warn(`[codex] Resume failed for ${externalSessionId}: ${(err as Error).message}. Starting fresh thread.`);
-          // Fall back to a fresh thread so the conversation isn't dead-ended
-          const startParams: Record<string, unknown> = {
-            cwd,
-            ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
-            experimentalRawEvents: false,
-            persistExtendedHistory: false,
-          };
-          if (model) startParams.model = model;
-          const result = await client.request('thread/start', startParams) as ThreadStartResult;
-          threadId = result.thread.id;
-          entry.threadId = threadId;
-          yield { type: 'external_session', sessionId: threadId };
-        }
+      const resolved = await this._resolveThread(client, entry, convId, options);
+      const threadId = resolved.threadId;
+      if (resolved.externalSessionId) {
+        yield { type: 'external_session', sessionId: resolved.externalSessionId };
       }
 
       if (!threadId) {
@@ -1585,7 +2041,8 @@ export class CodexAdapter extends BaseBackendAdapter {
         // ── Notifications ───────────────────────────────────────────
         switch (method) {
           case 'turn/started': {
-            const turnId = (params as { turnId?: string }).turnId;
+            const turnId = (params as { turnId?: string; turn?: { id?: string } }).turnId
+              || (params as { turn?: { id?: string } }).turn?.id;
             if (turnId) {
               const event = emitRuntimeTurnId(turnId);
               if (event) yield event;

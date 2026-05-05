@@ -307,6 +307,7 @@ export interface WorkspaceIndex {
 export interface Conversation {
   id: string;
   title: string;
+  titleManuallySet?: boolean;
   backend: string;
   cliProfileId?: string;
   model?: string;
@@ -620,6 +621,31 @@ export interface DoneEvent {
   type: 'done';
 }
 
+// ── Codex Thread Goals ──────────────────────────────────────────────────────
+
+export type CodexThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete';
+
+export interface CodexThreadGoal {
+  threadId: string;
+  objective: string;
+  status: CodexThreadGoalStatus;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface GoalUpdatedEvent {
+  type: 'goal_updated';
+  goal: CodexThreadGoal;
+}
+
+export interface GoalClearedEvent {
+  type: 'goal_cleared';
+  threadId?: string | null;
+}
+
 /**
  * Emitted by a backend adapter as soon as it obtains a backend-managed
  * session ID that the cockpit needs to persist on the active `SessionEntry`
@@ -683,6 +709,8 @@ export type StreamEvent =
   | UsageEvent
   | ErrorEvent
   | DoneEvent
+  | GoalUpdatedEvent
+  | GoalClearedEvent
   | ExternalSessionEvent
   | BackendRuntimeEvent
   | MemoryUpdateEvent
@@ -1125,6 +1153,7 @@ export interface BackendCapabilities {
   toolActivity: boolean;
   userQuestions: boolean;
   stdinInput: boolean;
+  goals?: boolean;
 }
 
 export type BackendActiveTurnResumeSupport = 'unsupported' | 'supported';

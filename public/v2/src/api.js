@@ -771,6 +771,25 @@
     sessionDownloadUrl: (convId, sessionNumber) => chatUrl(
       'conversations/' + encodeURIComponent(convId) + '/sessions/' + encodeURIComponent(sessionNumber) + '/download'
     ),
+    getGoal: (convId) => chatFetch(
+      'conversations/' + encodeURIComponent(convId) + '/goal'
+    ).then(r => r.json()),
+    setGoal: (convId, body) => chatFetch(
+      'conversations/' + encodeURIComponent(convId) + '/goal',
+      { method: 'POST', body: body || {} },
+    ).then(r => r.json()),
+    resumeGoal: (convId) => chatFetch(
+      'conversations/' + encodeURIComponent(convId) + '/goal/resume',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    pauseGoal: (convId) => chatFetch(
+      'conversations/' + encodeURIComponent(convId) + '/goal/pause',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    clearGoal: (convId) => chatFetch(
+      'conversations/' + encodeURIComponent(convId) + '/goal',
+      { method: 'DELETE' },
+    ).then(r => r.json()),
   };
 
   window.AgentApi = {

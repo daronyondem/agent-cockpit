@@ -4,12 +4,81 @@ import fs from 'fs';
 import path from 'path';
 import WebSocket from 'ws';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
-import type { StreamEvent, ActiveStreamEntry } from '../src/types';
+import { MockBackendAdapter } from './helpers/mockBackendAdapter';
+import type { StreamEvent, ActiveStreamEntry, BackendMetadata, CodexThreadGoal, SendMessageOptions, SendMessageResult } from '../src/types';
 
 let env: ChatRouterEnv;
 
 beforeEach(async () => { env = await createChatRouterEnv(); });
 afterEach(async () => { await destroyChatRouterEnv(env); });
+
+class CodexGoalMockBackend extends MockBackendAdapter {
+  goal: CodexThreadGoal | null = null;
+  lastGoalObjective: string | null = null;
+  lastGoalOptions: SendMessageOptions | null = null;
+  pauseCalls = 0;
+  clearCalls = 0;
+
+  get metadata(): BackendMetadata {
+    return {
+      ...super.metadata,
+      id: 'codex',
+      label: 'Codex',
+      capabilities: {
+        thinking: true,
+        planMode: false,
+        agents: true,
+        toolActivity: true,
+        userQuestions: true,
+        stdinInput: true,
+        goals: true,
+      },
+    };
+  }
+
+  async getGoal(): Promise<CodexThreadGoal | null> {
+    return this.goal;
+  }
+
+  setGoalObjective(objective: string, options?: SendMessageOptions): SendMessageResult {
+    this.lastGoalObjective = objective;
+    this.lastGoalOptions = options || null;
+    this.goal = {
+      threadId: 'mock-thread',
+      objective,
+      status: 'active',
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const goal = this.goal;
+    return {
+      stream: (async function*() {
+        yield { type: 'external_session', sessionId: goal.threadId } as StreamEvent;
+        yield { type: 'goal_updated', goal } as StreamEvent;
+        yield { type: 'text', content: 'goal output', streaming: true } as StreamEvent;
+        yield { type: 'done' } as StreamEvent;
+      })(),
+      abort: () => {},
+      sendInput: () => {},
+    };
+  }
+
+  async pauseGoal(): Promise<CodexThreadGoal | null> {
+    this.pauseCalls += 1;
+    if (this.goal) this.goal = { ...this.goal, status: 'paused', updatedAt: this.goal.updatedAt + 1 };
+    return this.goal;
+  }
+
+  async clearGoal(): Promise<{ cleared: boolean; threadId?: string | null }> {
+    this.clearCalls += 1;
+    const threadId = this.goal?.threadId || 'mock-thread';
+    this.goal = null;
+    return { cleared: true, threadId };
+  }
+}
 
 async function startPendingMessage(content = 'first') {
   const conv = await env.chatService.createConversation('Pending Send Guard');
@@ -290,6 +359,59 @@ describe('GET /active-streams', () => {
     unblock();
     await new Promise(resolve => setTimeout(resolve, 100));
     expect(await env.streamJobs.listActive()).toEqual([]);
+  });
+});
+
+describe('Codex goal endpoints', () => {
+  test('starts a Codex goal stream without saving a user message', async () => {
+    const codexBackend = new CodexGoalMockBackend();
+    env.backendRegistry.register(codexBackend);
+    const conv = await env.chatService.createConversation('Goal Test', '/tmp/goal-test', 'codex');
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, {
+      objective: 'Ship the dashboard',
+      backend: 'codex',
+    });
+    const events = await eventsPromise;
+
+    expect(res.status).toBe(200);
+    expect(res.body.streamReady).toBe(true);
+    expect(codexBackend.lastGoalObjective).toBe('Ship the dashboard');
+    expect(codexBackend.lastGoalOptions?.isNewSession).toBe(true);
+    expect(events.find(e => e.type === 'goal_updated')?.goal.objective).toBe('Ship the dashboard');
+    expect(events.find(e => e.type === 'text')?.content).toBe('goal output');
+
+    const loaded = await env.chatService.getConversation(conv.id);
+    expect(loaded?.messages.some(m => m.role === 'user')).toBe(false);
+    expect(loaded?.messages.find(m => m.role === 'assistant')?.content).toBe('goal output');
+  });
+
+  test('pauses and clears an idle Codex goal without aborting a stream', async () => {
+    const codexBackend = new CodexGoalMockBackend();
+    env.backendRegistry.register(codexBackend);
+    const conv = await env.chatService.createConversation('Goal Controls', '/tmp/goal-controls', 'codex');
+    codexBackend.goal = {
+      threadId: 'mock-thread',
+      objective: 'Keep testing',
+      status: 'active',
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    const pause = await env.request('POST', `/api/chat/conversations/${conv.id}/goal/pause`, {});
+    expect(pause.status).toBe(200);
+    expect(pause.body.goal.status).toBe('paused');
+    expect(codexBackend.pauseCalls).toBe(1);
+
+    const clear = await env.request('DELETE', `/api/chat/conversations/${conv.id}/goal`);
+    expect(clear.status).toBe(200);
+    expect(clear.body).toEqual({ cleared: true, threadId: 'mock-thread' });
+    expect(codexBackend.clearCalls).toBe(1);
   });
 });
 
