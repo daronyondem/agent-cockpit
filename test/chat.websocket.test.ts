@@ -671,7 +671,13 @@ describe('WebSocket reconnection', () => {
 
     // Trigger CLI crash while disconnected
     triggerError!();
-    await new Promise(resolve => setTimeout(resolve, 200));
+    const deadline = Date.now() + 2000;
+    while (env.activeStreams.has(conv.id)) {
+      if (Date.now() > deadline) {
+        throw new Error('Timed out waiting for crashed stream to finish');
+      }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
 
     // Reconnect — set up listener before open to catch replay
     const port = (env.server.address() as any).port;

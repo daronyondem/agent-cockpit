@@ -50,6 +50,7 @@ describe('CodexAdapter', () => {
       toolActivity: true,
       userQuestions: true,
       stdinInput: true,
+      goals: true,
     });
     expect(meta.resumeCapabilities.activeTurnResume).toBe('unsupported');
     expect(meta.resumeCapabilities.sessionResume).toBe('supported');
@@ -147,7 +148,7 @@ describe('CodexAdapter', () => {
               proc.killed = true;
               proc.emit('close', 0, null);
             };
-            expect(args).toEqual(['app-server']);
+            expect(args).toEqual(['app-server', '--enable', 'goals']);
             return proc;
           },
           execFile: () => ({ stdin: { end: () => {} } }),
@@ -388,6 +389,143 @@ describe('CodexAdapter', () => {
     expect(events.filter((event) => (
       event.type === 'backend_runtime' && event.activeTurnId === 'turn-1'
     ))).toHaveLength(1);
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
+  test('setGoalObjective enables Codex goals and streams goal progress', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+    const initializeRequests: any[] = [];
+    const spawnArgs: string[][] = [];
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        return {
+          spawn: (_cmd: string, args: string[]) => {
+            spawnArgs.push(args);
+            const proc = new EventEmitter();
+            proc.pid = 6565;
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.killed = false;
+            proc.exitCode = null;
+            proc.kill = () => {
+              proc.killed = true;
+              proc.exitCode = 0;
+              setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+            };
+            proc.stdin = {
+              write: (line: string) => {
+                const req = JSON.parse(line);
+                if (req.method === 'initialize') {
+                  initializeRequests.push(req);
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: {},
+                  }) + '\n')));
+                } else if (req.method === 'thread/start') {
+                  setImmediate(() => proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                    jsonrpc: '2.0',
+                    id: req.id,
+                    result: { thread: { id: 'thread-goal' } },
+                  }) + '\n')));
+                } else if (req.method === 'thread/goal/set') {
+                  expect(req.params).toEqual({
+                    threadId: 'thread-goal',
+                    status: 'active',
+                    objective: 'ship the goal',
+                  });
+                  setImmediate(() => {
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      id: req.id,
+                      result: {
+                        goal: {
+                          threadId: 'thread-goal',
+                          objective: 'ship the goal',
+                          status: 'active',
+                          tokenBudget: null,
+                          tokensUsed: 0,
+                          timeUsedSeconds: 0,
+                          createdAt: 1,
+                          updatedAt: 1,
+                        },
+                      },
+                    }) + '\n'));
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'thread/goal/updated',
+                      params: {
+                        threadId: 'thread-goal',
+                        goal: {
+                          threadId: 'thread-goal',
+                          objective: 'ship the goal',
+                          status: 'active',
+                          tokenBudget: null,
+                          tokensUsed: 0,
+                          timeUsedSeconds: 0,
+                          createdAt: 1,
+                          updatedAt: 1,
+                        },
+                      },
+                    }) + '\n'));
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'turn/started',
+                      params: { threadId: 'thread-goal', turn: { id: 'turn-goal' } },
+                    }) + '\n'));
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'item/agentMessage/delta',
+                      params: { threadId: 'thread-goal', delta: 'working' },
+                    }) + '\n'));
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'turn/completed',
+                      params: { threadId: 'thread-goal' },
+                    }) + '\n'));
+                  });
+                }
+                return true;
+              },
+              end: () => {},
+            };
+            return proc;
+          },
+          execFile: () => ({ stdin: { end: () => {} } }),
+        };
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.setGoalObjective('ship the goal', {
+        sessionId: 'test-session-goal',
+        conversationId: 'test-conv-goal',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(spawnArgs[0]).toEqual(['app-server', '--enable', 'goals']);
+    expect(initializeRequests[0].params.capabilities).toEqual({ experimentalApi: true });
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'external_session', sessionId: 'thread-goal' },
+      { type: 'backend_runtime', externalSessionId: 'thread-goal', processId: 6565 },
+      { type: 'backend_runtime', externalSessionId: 'thread-goal', activeTurnId: 'turn-goal', processId: 6565 },
+      { type: 'text', content: 'working', streaming: true },
+    ]));
+    expect(events.filter(event => event.type === 'goal_updated')).toHaveLength(2);
     adapterRef.shutdown();
     jest.dontMock('child_process');
   });

@@ -42,6 +42,17 @@
    * }} PendingAttachment */
 
   /** @typedef {{
+   *   threadId: string,
+   *   objective: string,
+   *   status: 'active' | 'paused' | 'budgetLimited' | 'complete',
+   *   tokenBudget: number | null,
+   *   tokensUsed: number,
+   *   timeUsedSeconds: number,
+   *   createdAt: number,
+   *   updatedAt: number,
+   * }} ThreadGoal */
+
+  /** @typedef {{
    *   convId: string,
    *   conv: object | null,
    *   messages: object[],
@@ -69,6 +80,8 @@
    *   composerBackend: string | null,
    *   composerModel: string | null,
    *   composerEffort: string | null,
+   *   goal: ThreadGoal | null,
+   *   goalMode: boolean,
    *   pendingAttachments: PendingAttachment[],
    *   queue: QueuedMessage[],
    * }} ConvState */
@@ -224,6 +237,8 @@
       composerBackend: null,
       composerModel: null,
       composerEffort: null,
+      goal: null,
+      goalMode: false,
       pendingAttachments: [],
       queue: [],
       queueSuspended: false,
@@ -509,6 +524,16 @@
           ? hydrateAttachmentsFromDraft(draft.attachments)
           : cur.pendingAttachments,
       }));
+      if (data.backend === 'codex' && data.externalSessionId && AgentApi.conv && AgentApi.conv.getGoal) {
+        AgentApi.conv.getGoal(convId)
+          .then(goalData => {
+            const goal = goalData && goalData.goal ? goalData.goal : null;
+            update(convId, { goal });
+          })
+          .catch(() => {});
+      } else {
+        update(convId, { goal: null });
+      }
     } catch (err) {
       update(convId, { loadError: err.message || String(err) });
     }
@@ -876,6 +901,14 @@
     }
     if (frame.type === 'artifact') {
       pushArtifactBlock(convId, frame.artifact);
+      return;
+    }
+    if (frame.type === 'goal_updated') {
+      update(convId, { goal: frame.goal || null });
+      return;
+    }
+    if (frame.type === 'goal_cleared') {
+      update(convId, { goal: null });
       return;
     }
     if (frame.type === 'assistant_message' && frame.message) {
@@ -1256,11 +1289,110 @@
     }
   }
 
+  async function setGoal(convId, text){
+    const s = states.get(convId);
+    if (!s || s.sending || s.streaming) return;
+    const doneAtts = s.pendingAttachments.filter(f => f.status === 'done');
+    const hasUploading = s.pendingAttachments.some(f => f.status === 'uploading');
+    if (hasUploading) return;
+    if (!text || !String(text).trim()) return;
+
+    const attsSnapshot = s.pendingAttachments.slice();
+    const inputSnapshot = s.input;
+    const attachmentsMeta = doneAtts.map(f => f.result).filter(Boolean);
+    const objective = composeWireContent({ content: String(text || '').trim(), attachments: attachmentsMeta });
+    flushDraftNow(convId);
+
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [] });
+
+    try {
+      await ensureWsOpen(convId);
+    } catch (err) {
+      update(convId, { streamError: err.message || String(err), streamErrorSource: null, sending: false, pendingAttachments: attsSnapshot, input: inputSnapshot });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const tempAssistId = 'pending-assistant-' + Date.now();
+    const sendCliProfileId = s.composerCliProfileId || (s.conv && s.conv.cliProfileId) || '';
+    const sendBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
+    const sendModel = s.composerModel || null;
+    const sendEffort = s.composerEffort || null;
+
+    update(convId, cur => ({
+      ...cur,
+      messages: [
+        ...cur.messages,
+        { id: tempAssistId, role: 'assistant', content: '', backend: sendBackend, timestamp: now, contentBlocks: [] },
+      ],
+      streamingMsgId: tempAssistId,
+      streaming: true,
+      uiState: 'streaming',
+      input: '',
+      goalMode: false,
+    }));
+
+    try {
+      const body = { objective };
+      if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
+      if (sendBackend) body.backend = sendBackend;
+      if (sendModel)   body.model   = sendModel;
+      if (sendEffort)  body.effort  = sendEffort;
+      await AgentApi.conv.setGoal(convId, body);
+      update(convId, cur => ({
+        ...cur,
+        conv: cur.conv ? {
+          ...cur.conv,
+          cliProfileId: sendCliProfileId || cur.conv.cliProfileId,
+          backend: sendBackend || cur.conv.backend,
+          model:   sendModel   !== null ? sendModel   : cur.conv.model,
+          effort:  sendEffort  !== null ? sendEffort  : cur.conv.effort,
+        } : cur.conv,
+      }));
+      clearDraft(convId);
+    } catch (err) {
+      if (err && err.status === 409) {
+        update(convId, cur => ({
+          ...cur,
+          streamError: null,
+          streamErrorSource: null,
+          streaming: true,
+          streamingMsgId: null,
+          uiState: 'streaming',
+          messages: cur.messages.filter(m => m.id !== tempAssistId),
+          pendingAttachments: attsSnapshot,
+          input: inputSnapshot,
+        }));
+        ensureWsOpen(convId).catch(() => {});
+        return;
+      }
+      update(convId, cur => ({
+        ...cur,
+        streamError: err.message || String(err),
+        streamErrorSource: null,
+        streaming: false,
+        streamingMsgId: null,
+        uiState: 'error',
+        messages: cur.messages.filter(m => m.id !== tempAssistId),
+        pendingAttachments: attsSnapshot,
+        input: inputSnapshot,
+      }));
+    } finally {
+      update(convId, { sending: false });
+    }
+  }
+
   function setInput(convId, value){
     const s = states.get(convId);
     if (!s || s.input === value) return;
     update(convId, { input: value });
     scheduleDraftSave(convId);
+  }
+
+  function setGoalMode(convId, value){
+    const s = states.get(convId);
+    if (!s || s.goalMode === !!value) return;
+    update(convId, { goalMode: !!value });
   }
 
   /* Attachments — uploads land in the conv's artifacts dir and their typed
@@ -1394,7 +1526,7 @@
   function setComposerBackend(convId, value){
     const s = states.get(convId);
     if (!s || s.composerBackend === value) return;
-    update(convId, { composerBackend: value || null });
+    update(convId, { composerBackend: value || null, goalMode: value === 'codex' ? s.goalMode : false });
   }
   function setComposerCliProfile(convId, profileId, backendId){
     const s = states.get(convId);
@@ -1404,6 +1536,7 @@
       composerBackend: backendId || null,
       composerModel: null,
       composerEffort: null,
+      goalMode: backendId === 'codex' ? s.goalMode : false,
     });
   }
   function setComposerModel(convId, value){
@@ -1641,6 +1774,81 @@
     }
   }
 
+  async function pauseGoal(convId){
+    const s = states.get(convId);
+    if (!s || !s.goal) return;
+    try {
+      const data = await AgentApi.conv.pauseGoal(convId);
+      update(convId, { goal: data && data.goal ? data.goal : s.goal });
+    } catch (err) {
+      update(convId, { streamError: err.message || String(err), streamErrorSource: null, uiState: 'error' });
+    }
+  }
+
+  async function resumeGoal(convId){
+    const s = states.get(convId);
+    if (!s || s.sending || s.streaming) return;
+    update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null });
+    try {
+      await ensureWsOpen(convId);
+    } catch (err) {
+      update(convId, { streamError: err.message || String(err), streamErrorSource: null, sending: false });
+      return;
+    }
+
+    const now = new Date().toISOString();
+    const tempAssistId = 'pending-assistant-' + Date.now();
+    const backend = s.conv ? s.conv.backend : 'codex';
+    update(convId, cur => ({
+      ...cur,
+      messages: [...cur.messages, { id: tempAssistId, role: 'assistant', content: '', backend, timestamp: now, contentBlocks: [] }],
+      streamingMsgId: tempAssistId,
+      streaming: true,
+      uiState: 'streaming',
+    }));
+
+    try {
+      await AgentApi.conv.resumeGoal(convId);
+    } catch (err) {
+      if (err && err.status === 409) {
+        update(convId, cur => ({
+          ...cur,
+          streamError: null,
+          streamErrorSource: null,
+          streaming: true,
+          streamingMsgId: null,
+          uiState: 'streaming',
+          messages: cur.messages.filter(m => m.id !== tempAssistId),
+        }));
+        ensureWsOpen(convId).catch(() => {});
+        return;
+      }
+      update(convId, cur => ({
+        ...cur,
+        streamError: err.message || String(err),
+        streamErrorSource: null,
+        streaming: false,
+        streamingMsgId: null,
+        uiState: 'error',
+        messages: cur.messages.filter(m => m.id !== tempAssistId),
+      }));
+    } finally {
+      update(convId, { sending: false });
+    }
+  }
+
+  async function clearGoal(convId){
+    const s = states.get(convId);
+    if (!s || !s.goal) return;
+    const prev = s.goal;
+    update(convId, { goal: null });
+    try {
+      await AgentApi.conv.clearGoal(convId);
+    } catch (err) {
+      update(convId, { goal: prev, streamError: err.message || String(err), streamErrorSource: null, uiState: 'error' });
+    }
+  }
+
   /* Clear a stream error so the conversation returns to idle. When
      `resumeQueue` is true and the queue is non-empty, re-trigger the drainer
      — the head of the queue resumes immediately. Called from the
@@ -1798,6 +2006,8 @@
         streaming: false,
         streamingMsgId: null,
         pendingInteraction: null,
+        goal: null,
+        goalMode: false,
         uiState: null,
         resetting: false,
       }));
@@ -1991,6 +2201,8 @@
     load,
     ensureWsOpen,
     send,
+    setGoal,
+    setGoalMode,
     respond,
     setInput,
     setComposerCliProfile,
@@ -2009,6 +2221,9 @@
     clearQueue,
     resumeSuspendedQueue,
     stopStream,
+    pauseGoal,
+    resumeGoal,
+    clearGoal,
     clearStreamError,
     clearAllStreamErrors,
     reset,

@@ -99,15 +99,15 @@ describe('frontend routes', () => {
       expect(v2.status).toBe(200);
       expect(v2.headers['content-type']).toMatch(/text\/html/);
       expect(v2.body).toContain('<div id="root"');
-      expect(v2.body).toContain('src/app.css?v=129');
-      expect(v2.body).toContain('src/api.js?v=124');
+      expect(v2.body).toContain('src/app.css?v=130');
+      expect(v2.body).toContain('src/api.js?v=125');
       expect(v2.body).toContain('src/cliUpdateStore.js?v=116');
       expect(v2.body).toContain('src/synthesisAtlas.js?v=117');
       expect(v2.body).toContain('src/screens/kbBrowser.jsx?v=120');
       expect(v2.body).toContain('src/workspaceSettings.jsx?v=120');
       expect(v2.body).toContain('src/primitives.jsx?v=119');
       expect(v2.body).toContain('src/folderPicker.jsx?v=117');
-      expect(v2.body).toContain('src/shell.jsx?v=128');
+      expect(v2.body).toContain('src/shell.jsx?v=129');
       expect(v2.body.indexOf('src/synthesisAtlas.js?v=117')).toBeLessThan(
         v2.body.indexOf('src/screens/kbBrowser.jsx?v=120'),
       );

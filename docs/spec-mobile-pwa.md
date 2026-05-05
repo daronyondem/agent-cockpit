@@ -104,6 +104,7 @@ The PWA intentionally does not yet cover:
 - Memory and Knowledge Base mobile panels/live update bubbles.
 - Cross-CLI instruction compatibility notifications and pointer creation.
 - CLI update notifications and update actions. This is an intentional web-only parity decision because CLI binary updates are server-administration controls; see [parity-decisions.md](parity-decisions.md) and [ADR-0027](adr/0027-manage-cli-updates-from-web-cockpit.md).
+- Codex goal composer controls, `/goal` slash commands, and the goal status strip. Goal mode is desktop-web-only for v1 because it adds a separate composer send mode and persistent status/action surface. Mobile can still show normal assistant messages from a goal run started elsewhere through the existing conversation/WebSocket flow, but it does not fetch `/goal`, render goal state, or expose pause/resume/clear controls. See [ADR-0032](adr/0032-use-codex-thread-goals-for-goal-mode.md) and [parity-decisions.md](parity-decisions.md).
 - Service worker offline caching. The app is server-backed and currently requires network access to the Agent Cockpit host.
 - True remote push notifications. Browser notification support only works while the PWA/browser context is alive enough to receive WebSocket events.
 - Reuse of desktop V2 settings, Memory, KB, and usage management screens.

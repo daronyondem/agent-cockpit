@@ -7,6 +7,7 @@ import type {
   MemorySnapshot,
   EffortLevel,
   CliProfile,
+  CodexThreadGoal,
 } from '../../types';
 
 export interface BackendCallOptions {
@@ -66,6 +67,26 @@ export class BaseBackendAdapter {
 
   sendMessage(_message: string, _options?: SendMessageOptions): SendMessageResult {
     throw new Error('BaseBackendAdapter.sendMessage must be implemented by subclass');
+  }
+
+  async getGoal(_options: SendMessageOptions): Promise<CodexThreadGoal | null> {
+    throw new Error(`${this.constructor.name}.getGoal is not implemented`);
+  }
+
+  setGoalObjective(_objective: string, _options?: SendMessageOptions): SendMessageResult {
+    throw new Error(`${this.constructor.name}.setGoalObjective is not implemented`);
+  }
+
+  resumeGoal(_options?: SendMessageOptions): SendMessageResult {
+    throw new Error(`${this.constructor.name}.resumeGoal is not implemented`);
+  }
+
+  async pauseGoal(_options: SendMessageOptions): Promise<CodexThreadGoal | null> {
+    throw new Error(`${this.constructor.name}.pauseGoal is not implemented`);
+  }
+
+  async clearGoal(_options: SendMessageOptions): Promise<{ cleared: boolean; threadId?: string | null }> {
+    throw new Error(`${this.constructor.name}.clearGoal is not implemented`);
   }
 
   async generateSummary(

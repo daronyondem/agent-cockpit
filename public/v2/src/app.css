@@ -1618,6 +1618,69 @@ body{
   max-width: 760px; margin: 0 auto;
 }
 .feed.wide + .composer .composer-inner{ max-width: 880px; }
+.goal-strip{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.goal-strip-main{
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.goal-dot{
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--status-running);
+  flex: 0 0 auto;
+}
+.goal-strip.status-paused .goal-dot{ background: var(--status-awaiting); }
+.goal-strip.status-complete .goal-dot{ background: var(--status-success); }
+.goal-strip.status-budgetLimited .goal-dot{ background: var(--status-error); }
+.goal-status{
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.goal-elapsed{
+  font-family: var(--mono-font);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.goal-objective{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-strip-actions{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.goal-strip-actions button{
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  border-radius: var(--r-sm);
+  padding: 4px 7px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.goal-strip-actions button:hover{ border-color: var(--border-strong); color: var(--text); }
+.goal-strip-actions button:disabled{ opacity: .5; cursor: not-allowed; }
 .composer-box{
   background: var(--surface);
   border: 1px solid var(--border);
@@ -1756,6 +1819,36 @@ body{
   appearance: none; -webkit-appearance: none;
 }
 .composer-foot .pick-select:disabled{ cursor: not-allowed; }
+.goal-toggle{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.goal-toggle:hover{ border-color: var(--border-strong); color: var(--text); }
+.goal-toggle.active{
+  color: var(--text);
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+.goal-toggle input{
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.goal-toggle:has(input:disabled){
+  opacity: .55;
+  cursor: not-allowed;
+}
 /* Attachment tray (composer) — typed cards for images, PDFs, code, text,
    markdown, and folders. Grid so cards reflow; image cards show a thumb,
    others show an icon tile + meta. Uploading cards gain a dashed border
@@ -5185,6 +5278,13 @@ body{
   /* Composer — reduce chrome and let the pickers wrap on narrow widths. */
   .composer{
     padding: 8px 12px 12px;
+  }
+  .goal-strip{
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .goal-strip-actions{
+    justify-content: flex-end;
   }
   .composer-foot{
     flex-wrap: wrap;

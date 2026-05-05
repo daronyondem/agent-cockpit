@@ -661,6 +661,52 @@ function EmptyMain(){
   );
 }
 
+function goalStatusLabel(status){
+  if (status === 'active') return 'Goal active';
+  if (status === 'paused') return 'Goal paused';
+  if (status === 'complete') return 'Goal complete';
+  if (status === 'budgetLimited') return 'Goal budget limited';
+  return 'Goal';
+}
+
+function compactDuration(seconds){
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  if (total < 60) return total + 's';
+  const mins = Math.floor(total / 60);
+  if (mins < 60) return mins + 'm';
+  const hours = Math.floor(mins / 60);
+  const rem = mins % 60;
+  return rem ? `${hours}h ${rem}m` : `${hours}h`;
+}
+
+function GoalStrip({ convId, goal, streaming, sending }){
+  if (!goal) return null;
+  const status = goal.status || 'active';
+  const canPause = status === 'active';
+  const canResume = status === 'paused' && !streaming;
+  const elapsed = compactDuration(goal.timeUsedSeconds || 0);
+  const objective = typeof goal.objective === 'string' ? goal.objective : '';
+  return (
+    <div className={"goal-strip status-" + status}>
+      <div className="goal-strip-main">
+        <span className="goal-dot" aria-hidden="true"/>
+        <span className="goal-status">{goalStatusLabel(status)}</span>
+        {elapsed !== '0s' ? <span className="goal-elapsed">{elapsed}</span> : null}
+        {objective ? <span className="goal-objective" title={objective}>{objective}</span> : null}
+      </div>
+      <div className="goal-strip-actions">
+        {canPause ? (
+          <button type="button" onClick={() => StreamStore.pauseGoal(convId)} disabled={sending} title="Pause goal">Pause</button>
+        ) : null}
+        {status === 'paused' ? (
+          <button type="button" onClick={() => StreamStore.resumeGoal(convId)} disabled={sending || !canResume} title="Resume goal">Resume</button>
+        ) : null}
+        <button type="button" onClick={() => StreamStore.clearGoal(convId)} disabled={sending} title="Clear goal">Clear</button>
+      </div>
+    </div>
+  );
+}
+
 function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenWorkspaceSettings, onOpenSettings }){
   const state = useConversationState(convId);
   const backends = useBackendList();
@@ -822,8 +868,12 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     : profileLocked
       ? conv.backend
       : (state.composerBackend || conv.backend);
+  const goalCapable = topbarBackendId === 'codex';
+  const goalMode = goalCapable && !!state.goalMode;
+  const activeGoal = state.goal || null;
   const hasContent = !!(input || '').trim() || hasDoneFiles;
-  const canSend = hasContent && !sending && !streaming && !awaiting && !hasUploadingFiles;
+  const effectiveHasContent = goalMode ? !!(input || '').trim() : hasContent;
+  const canSend = effectiveHasContent && !sending && !streaming && !awaiting && !hasUploadingFiles;
   /* While the agent is streaming, Enter enqueues instead of sending. The
      send button turns into a stop-styled affordance; clicking it enqueues
      whatever is in the composer so the user can stack follow-ups. */
@@ -967,7 +1017,43 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
 
   function doSend(){
     if (!canSend) return;
-    StreamStore.send(convId, (input || '').trim());
+    const text = (input || '').trim();
+    if (handleGoalSlash(text)) return;
+    if (goalMode) {
+      StreamStore.setGoal(convId, text);
+      return;
+    }
+    StreamStore.send(convId, text);
+  }
+
+  function handleGoalSlash(text){
+    if (!text || !/^\/goal(?:\s|$)/i.test(text)) return false;
+    if (!goalCapable) {
+      toast.error('Goals are only available for Codex conversations');
+      return true;
+    }
+    const arg = text.replace(/^\/goal\b/i, '').trim();
+    if (!arg) {
+      StreamStore.setInput(convId, '');
+      StreamStore.setGoalMode(convId, true);
+      return true;
+    }
+    const command = arg.toLowerCase();
+    StreamStore.setInput(convId, '');
+    if (command === 'pause') {
+      StreamStore.pauseGoal(convId);
+      return true;
+    }
+    if (command === 'resume') {
+      StreamStore.resumeGoal(convId);
+      return true;
+    }
+    if (command === 'clear') {
+      StreamStore.clearGoal(convId);
+      return true;
+    }
+    StreamStore.setGoal(convId, arg);
+    return true;
   }
   /* Enqueue the current composer contents as a QueuedMessage behind the
      live run. Attachments detach from pendingAttachments and ride the
@@ -1216,6 +1302,14 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
 
       <div className="composer">
         <div className="composer-inner">
+          {activeGoal ? (
+            <GoalStrip
+              convId={convId}
+              goal={activeGoal}
+              streaming={streaming}
+              sending={sending}
+            />
+          ) : null}
           <div className="composer-box">
             <textarea
               ref={composerTextRef}
@@ -1223,7 +1317,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
               placeholder={
                 awaiting
                   ? 'Answer the prompt above to continue…'
-                  : streaming ? 'Agent is running — Enter queues behind the current run.' : 'Message Agent Cockpit…'
+                  : streaming ? 'Agent is running — Enter queues behind the current run.'
+                    : goalMode ? 'Set a Codex goal…' : 'Message Agent Cockpit…'
               }
               value={input || ''}
               onChange={(e)=>StreamStore.setInput(convId, e.target.value)}
@@ -1315,6 +1410,17 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                 backendId={topbarBackendId}
                 onOpenSettings={onOpenSettings}
               />
+              {goalCapable ? (
+                <label className={"goal-toggle" + (goalMode ? " active" : "")}>
+                  <input
+                    type="checkbox"
+                    checked={goalMode}
+                    onChange={(e) => StreamStore.setGoalMode(convId, e.target.checked)}
+                    disabled={awaiting || sending || streaming}
+                  />
+                  <span>Goal</span>
+                </label>
+              ) : null}
               {streaming ? (
                 hasContent ? (
                   <button
@@ -1342,8 +1448,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                   className="send"
                   onClick={doSend}
                   disabled={!canSend}
-                  title="Send"
-                  aria-label="Send"
+                  title={goalMode ? 'Set goal' : 'Send'}
+                  aria-label={goalMode ? 'Set goal' : 'Send'}
                   style={!canSend ? {opacity:.4,cursor:"not-allowed"} : undefined}
                 >
                   {Ico.up(14)}
