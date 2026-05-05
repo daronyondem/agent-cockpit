@@ -1506,6 +1506,83 @@ describe('unread', () => {
   });
 });
 
+// ── Memory update frames ───────────────────────────────────────────────────
+
+describe('memory_update frames', () => {
+  test('refresh-only memory_update dispatches workspace event without appending a chat bubble', async () => {
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    api.fetch.mockResolvedValueOnce(makeResponse({
+      id: 'c1',
+      workspaceHash: 'hash-1',
+      messages: [],
+      messageQueue: [],
+    }));
+    await Store.load('c1');
+    const ws = await openWs('c1');
+
+    const listener = jest.fn();
+    window.addEventListener('ac:memory-update', listener);
+    try {
+      ws.dispatch({
+        type: 'memory_update',
+        capturedAt: '2026-05-05T12:00:00.000Z',
+        fileCount: 1,
+        changedFiles: ['notes/example.md'],
+        sourceConversationId: 'other-conv',
+        displayInChat: false,
+      });
+
+      expect(Store.getState('c1').messages).toHaveLength(0);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener.mock.calls[0][0].detail).toMatchObject({
+        hash: 'hash-1',
+        capturedAt: '2026-05-05T12:00:00.000Z',
+        fileCount: 1,
+        changedFiles: ['notes/example.md'],
+        sourceConversationId: 'other-conv',
+        displayInChat: false,
+      });
+    } finally {
+      window.removeEventListener('ac:memory-update', listener);
+    }
+  });
+
+  test('displayable memory_update appends one in-chat memory bubble', async () => {
+    const Store = (window as any).StreamStore;
+    const api = (global as any).AgentApi;
+    api.fetch.mockResolvedValueOnce(makeResponse({
+      id: 'c1',
+      workspaceHash: 'hash-1',
+      messages: [],
+      messageQueue: [],
+    }));
+    await Store.load('c1');
+    const ws = await openWs('c1');
+
+    ws.dispatch({
+      type: 'memory_update',
+      capturedAt: '2026-05-05T12:00:00.000Z',
+      fileCount: 1,
+      changedFiles: ['notes/example.md'],
+      sourceConversationId: 'c1',
+      displayInChat: true,
+    });
+
+    const messages = Store.getState('c1').messages;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: 'memory',
+      timestamp: '2026-05-05T12:00:00.000Z',
+      memoryUpdate: {
+        fileCount: 1,
+        changedFiles: ['notes/example.md'],
+        sourceConversationId: 'c1',
+      },
+    });
+  });
+});
+
 // ── WebSocket revalidation on network change / sleep ───────────────────────
 
 describe('WebSocket revalidation', () => {

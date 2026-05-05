@@ -759,6 +759,8 @@ WS body.
     expect(memoryUpdateCalls[0].payload.type).toBe('memory_update');
     expect(memoryUpdateCalls[0].payload.fileCount).toBeGreaterThanOrEqual(1);
     expect(memoryUpdateCalls[0].payload.changedFiles).toHaveLength(1);
+    expect(memoryUpdateCalls[0].payload.sourceConversationId).toBe('conv-post-ws');
+    expect(memoryUpdateCalls[0].payload.displayInChat).toBe(true);
   });
 
   test('emits workspace memory_update after session extraction saves entries', async () => {
@@ -796,6 +798,8 @@ Extracted body.
     expect(memoryUpdateCalls[0].payload).toMatchObject({
       type: 'memory_update',
       fileCount: 1,
+      sourceConversationId: 'conv-extract-ws',
+      displayInChat: true,
     });
     expect(memoryUpdateCalls[0].payload.changedFiles).toHaveLength(1);
   });

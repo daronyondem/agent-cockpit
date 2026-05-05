@@ -731,11 +731,19 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   function broadcastMemoryUpdate(hash: string, frame: MemoryUpdateEvent): void {
     if (!wsFns) return;
     const sent = new Set<string>();
+    const sourceConversationId = frame.sourceConversationId || null;
+    const wantsChatDisplay = frame.displayInChat === undefined
+      ? !!sourceConversationId
+      : frame.displayInChat === true;
     wsFns.forEachConnected((convId) => {
       if (chatService.getWorkspaceHashForConv(convId) !== hash) return;
       if (sent.has(convId)) return;
       sent.add(convId);
-      wsFns!.send(convId, frame);
+      wsFns!.send(convId, {
+        ...frame,
+        sourceConversationId,
+        displayInChat: wantsChatDisplay && sourceConversationId === convId,
+      });
     });
   }
 
@@ -1851,6 +1859,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
                   capturedAt: snapshot.capturedAt,
                   fileCount: snapshot.files.length,
                   changedFiles,
+                  sourceConversationId: convId,
+                  displayInChat: true,
                 });
               }
             } catch (err: unknown) {
@@ -2684,6 +2694,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         capturedAt: snapshot?.capturedAt || new Date().toISOString(),
         fileCount: snapshot?.files.length || 0,
         changedFiles: [relPath],
+        sourceConversationId: null,
+        displayInChat: false,
       });
 
       res.json({ ok: true, snapshot });
@@ -2711,6 +2723,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         capturedAt: snapshot?.capturedAt || new Date().toISOString(),
         fileCount: snapshot?.files.length || 0,
         changedFiles: [],
+        sourceConversationId: null,
+        displayInChat: false,
       });
 
       res.json({ ok: true, deleted, snapshot });

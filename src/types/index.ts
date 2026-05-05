@@ -617,8 +617,12 @@ export interface MemoryUpdateEvent {
   capturedAt: string;
   /** Total number of `.md` files in the new snapshot. */
   fileCount: number;
-  /** Filenames added or whose content changed since the previous frame for this conversation. */
+  /** Filenames added or whose content changed since the source conversation's previous frame. */
   changedFiles: string[];
+  /** Conversation that caused the memory write, when the source is conversation-scoped. */
+  sourceConversationId?: string | null;
+  /** Whether this recipient should render an in-chat Memory update bubble. */
+  displayInChat?: boolean;
 }
 
 export type StreamEvent =

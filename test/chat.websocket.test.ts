@@ -861,6 +861,8 @@ describe('WebSocket reconnection', () => {
       type: 'memory_update',
       fileCount: 0,
       changedFiles: [relPath],
+      sourceConversationId: null,
+      displayInChat: false,
     });
     ws.close();
   });
