@@ -300,6 +300,83 @@ describe('setWorkspaceInstructions', () => {
   });
 });
 
+// ── Workspace Instruction Compatibility ────────────────────────────────────
+
+describe('workspace instruction compatibility', () => {
+  function makeWorkspace(name: string): { dir: string; hash: string } {
+    const dir = path.join(tmpDir, name);
+    fs.mkdirSync(dir, { recursive: true });
+    return { dir, hash: workspaceHash(dir) };
+  }
+
+  test('does not notify when no vendor instruction files exist', async () => {
+    const ws = makeWorkspace('instr-none');
+    await service.createConversation('Test', ws.dir);
+
+    const status = await service.getWorkspaceInstructionCompatibility(ws.hash);
+    expect(status).not.toBeNull();
+    expect(status!.hasAnyInstructions).toBe(false);
+    expect(status!.compatible).toBe(true);
+    expect(status!.shouldNotify).toBe(false);
+  });
+
+  test('notifies when AGENTS.md exists but vendor entrypoints are missing', async () => {
+    const ws = makeWorkspace('instr-agents');
+    fs.writeFileSync(path.join(ws.dir, 'AGENTS.md'), '# Agent Instructions\n');
+    await service.createConversation('Test', ws.dir);
+
+    const status = await service.getWorkspaceInstructionCompatibility(ws.hash);
+    expect(status!.shouldNotify).toBe(true);
+    expect(status!.primarySourceId).toBe('agents');
+    expect(status!.missingVendors.map(item => item.vendor).sort()).toEqual(['claude-code', 'kiro']);
+  });
+
+  test('creates missing pointers from AGENTS.md without overwriting existing files', async () => {
+    const ws = makeWorkspace('instr-create');
+    fs.writeFileSync(path.join(ws.dir, 'AGENTS.md'), '# Agent Instructions\n');
+    fs.writeFileSync(path.join(ws.dir, 'CLAUDE.md'), 'existing claude instructions\n');
+    await service.createConversation('Test', ws.dir);
+
+    const result = await service.createWorkspaceInstructionPointers(ws.hash);
+    expect(result).not.toBeNull();
+    expect(result!.created.map(item => item.path)).toEqual(['.kiro/steering/agents-md.md']);
+    expect(fs.readFileSync(path.join(ws.dir, 'CLAUDE.md'), 'utf8')).toBe('existing claude instructions\n');
+    expect(fs.readFileSync(path.join(ws.dir, '.kiro', 'steering', 'agents-md.md'), 'utf8')).toContain('#[[file:AGENTS.md]]');
+    expect(result!.status.shouldNotify).toBe(false);
+    expect(result!.status.compatible).toBe(true);
+  });
+
+  test('creates AGENTS.md first when only CLAUDE.md exists', async () => {
+    const ws = makeWorkspace('instr-claude-only');
+    fs.writeFileSync(path.join(ws.dir, 'CLAUDE.md'), '# Claude Instructions\n');
+    await service.createConversation('Test', ws.dir);
+
+    const result = await service.createWorkspaceInstructionPointers(ws.hash);
+    expect(result).not.toBeNull();
+    expect(result!.created.map(item => item.path)).toEqual(['AGENTS.md', '.kiro/steering/agents-md.md']);
+    expect(fs.readFileSync(path.join(ws.dir, 'AGENTS.md'), 'utf8')).toContain('[CLAUDE.md](CLAUDE.md)');
+    expect(fs.readFileSync(path.join(ws.dir, '.kiro', 'steering', 'agents-md.md'), 'utf8')).toContain('#[[file:AGENTS.md]]');
+    expect(result!.status.shouldNotify).toBe(false);
+  });
+
+  test('dismisses only the current compatibility fingerprint', async () => {
+    const ws = makeWorkspace('instr-dismiss');
+    fs.writeFileSync(path.join(ws.dir, 'AGENTS.md'), '# Agent Instructions\n');
+    await service.createConversation('Test', ws.dir);
+
+    const dismissed = await service.dismissWorkspaceInstructionCompatibility(ws.hash);
+    expect(dismissed!.dismissed).toBe(true);
+    expect(dismissed!.shouldNotify).toBe(false);
+
+    fs.mkdirSync(path.join(ws.dir, '.kiro', 'steering'), { recursive: true });
+    fs.writeFileSync(path.join(ws.dir, '.kiro', 'steering', 'agents-md.md'), '#[[file:AGENTS.md]]\n');
+    const changed = await service.getWorkspaceInstructionCompatibility(ws.hash);
+    expect(changed!.dismissed).toBe(false);
+    expect(changed!.shouldNotify).toBe(true);
+    expect(changed!.missingVendors.map(item => item.vendor)).toEqual(['claude-code']);
+  });
+});
+
 describe('getWorkspaceHashForConv', () => {
   test('returns hash for existing conversation', async () => {
     const conv = await service.createConversation('Test', '/tmp/hash-test');

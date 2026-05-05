@@ -1313,6 +1313,57 @@ describe('PUT /workspaces/:hash/instructions', () => {
   });
 });
 
+describe('Workspace instruction compatibility API', () => {
+  function makeWorkspace(name: string): string {
+    const dir = path.join(env.tmpDir, name);
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  test('returns compatibility status for a workspace', async () => {
+    const dir = makeWorkspace('compat-status');
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agent Instructions\n');
+    const conv = await env.chatService.createConversation('Test', dir);
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const res = await env.request('GET', `/api/chat/workspaces/${hash}/instruction-compatibility`);
+    expect(res.status).toBe(200);
+    expect(res.body.status.shouldNotify).toBe(true);
+    expect(res.body.status.missingVendors.map((item: any) => item.vendor).sort()).toEqual(['claude-code', 'kiro']);
+  });
+
+  test('creates pointer files', async () => {
+    const dir = makeWorkspace('compat-create');
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agent Instructions\n');
+    const conv = await env.chatService.createConversation('Test', dir);
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const res = await env.request('POST', `/api/chat/workspaces/${hash}/instruction-compatibility/pointers`, {});
+    expect(res.status).toBe(200);
+    expect(res.body.created.map((item: any) => item.path).sort()).toEqual(['.kiro/steering/agents-md.md', 'CLAUDE.md']);
+    expect(fs.existsSync(path.join(dir, 'CLAUDE.md'))).toBe(true);
+    expect(fs.existsSync(path.join(dir, '.kiro', 'steering', 'agents-md.md'))).toBe(true);
+    expect(res.body.status.shouldNotify).toBe(false);
+  });
+
+  test('dismisses current compatibility warning', async () => {
+    const dir = makeWorkspace('compat-dismiss');
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Agent Instructions\n');
+    const conv = await env.chatService.createConversation('Test', dir);
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const res = await env.request('PUT', `/api/chat/workspaces/${hash}/instruction-compatibility/dismissal`, {});
+    expect(res.status).toBe(200);
+    expect(res.body.status.dismissed).toBe(true);
+    expect(res.body.status.shouldNotify).toBe(false);
+  });
+
+  test('returns 404 for non-existent workspace', async () => {
+    const res = await env.request('GET', '/api/chat/workspaces/nonexistent123/instruction-compatibility');
+    expect(res.status).toBe(404);
+  });
+});
+
 describe('Workspace instructions in system prompt', () => {
   test('combines global system prompt with workspace instructions on new session', async () => {
     await env.chatService.saveSettings({ theme: 'system', systemPrompt: 'Global prompt' } as any);

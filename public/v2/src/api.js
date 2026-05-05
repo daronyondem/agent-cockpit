@@ -568,6 +568,17 @@
       'workspaces/' + encodeURIComponent(hash) + '/instructions',
       { method: 'PUT', body: { instructions: instructions || '' } },
     ).then(r => r.json()),
+    getInstructionCompatibility: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/instruction-compatibility'
+    ).then(r => r.json()),
+    createInstructionPointers: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/instruction-compatibility/pointers',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    dismissInstructionCompatibility: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/instruction-compatibility/dismissal',
+      { method: 'PUT', body: {} },
+    ).then(r => r.json()),
     getMemory: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/memory'
     ).then(r => r.json()),

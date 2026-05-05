@@ -599,6 +599,7 @@ function App(){
               onDeleted={onDeleted}
               onRenamed={onRenamed}
               onOpenMemoryUpdate={onOpenMemoryUpdate}
+              onOpenWorkspaceSettings={onOpenWorkspaceSettings}
               onOpenSettings={onOpenSettings}
             />
           </ChatErrorBoundary>
@@ -651,7 +652,7 @@ function EmptyMain(){
   );
 }
 
-function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenSettings }){
+function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenWorkspaceSettings, onOpenSettings }){
   const state = useConversationState(convId);
   const backends = useBackendList();
   const { profiles: cliProfiles } = useCliProfileSettings();
@@ -1295,6 +1296,11 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                 </button>
               </span>
               <ComposerNotifIcon conv={conv} convId={convId}/>
+              <ComposerInstructionCompatibilityIcon
+                workspaceHash={conv.workspaceHash}
+                workspaceLabel={wsLabel}
+                onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+              />
               <ComposerCliUpdateIcon
                 cliProfileId={topbarCliProfileId}
                 backendId={topbarBackendId}
@@ -3159,6 +3165,177 @@ function useFixedPopoverPosition(anchorRef, panelRef, open){
     };
   }, [open]);
   return pos;
+}
+
+function ComposerInstructionCompatibilityIcon({ workspaceHash, workspaceLabel, onOpenWorkspaceSettings }){
+  const toast = useToasts();
+  const buttonRef = React.useRef(null);
+  const panelRef = React.useRef(null);
+  const [open, setOpen] = React.useState(false);
+  const [status, setStatus] = React.useState(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState(null);
+  const pos = useFixedPopoverPosition(buttonRef, panelRef, open);
+
+  const refresh = React.useCallback(async () => {
+    if (!workspaceHash) {
+      setStatus(null);
+      return;
+    }
+    try {
+      const res = await AgentApi.workspace.getInstructionCompatibility(workspaceHash);
+      setStatus(res.status || null);
+    } catch {
+      setStatus(null);
+    }
+  }, [workspaceHash]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    if (!workspaceHash) {
+      setStatus(null);
+      return undefined;
+    }
+    AgentApi.workspace.getInstructionCompatibility(workspaceHash)
+      .then(res => { if (!cancelled) setStatus(res.status || null); })
+      .catch(() => { if (!cancelled) setStatus(null); });
+    return () => { cancelled = true; };
+  }, [workspaceHash]);
+
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (panelRef.current && panelRef.current.contains(e.target)) return;
+      if (buttonRef.current && buttonRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!status || !status.shouldNotify) setOpen(false);
+  }, [status && status.fingerprint, status && status.shouldNotify]);
+
+  if (!status || !status.shouldNotify) return null;
+
+  const missingLabels = (status.missingVendors || []).map(item => item.label).join(', ');
+  const presentSources = (status.sources || []).filter(source => source.present);
+  const sourceLabel = presentSources.map(source => source.label).join(', ') || 'project instructions';
+  const title = 'Instruction pointers needed';
+
+  async function createPointers(){
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await AgentApi.workspace.createInstructionPointers(workspaceHash);
+      setStatus(result.status || null);
+      const created = result.created || [];
+      toast.success(created.length ? 'Instruction pointers created' : 'Instruction pointers already exist');
+      if (!result.status || !result.status.shouldNotify) setOpen(false);
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy(false);
+      refresh();
+    }
+  }
+
+  async function dismiss(){
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const result = await AgentApi.workspace.dismissInstructionCompatibility(workspaceHash);
+      setStatus(result.status || null);
+      setOpen(false);
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function openInstructions(){
+    setOpen(false);
+    if (onOpenWorkspaceSettings) {
+      onOpenWorkspaceSettings(workspaceHash, workspaceLabel || 'workspace', 'instructions');
+    }
+  }
+
+  const style = pos
+    ? { top: pos.top, left: pos.left }
+    : { visibility: 'hidden', top: 0, left: 0 };
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="composer-notif state-pending state-instruction-warning"
+        aria-label={title}
+        aria-expanded={open ? 'true' : 'false'}
+        onClick={() => { setError(null); setOpen(v => !v); }}
+      >
+        {Ico.alert(14)}
+        <span className="composer-notif-pulse state-pending"/>
+      </button>
+      {open ? (
+        <div
+          ref={panelRef}
+          className="tt composer-action-popover"
+          data-variant="stat"
+          data-placement={pos && pos.placeAbove ? 'above' : 'below'}
+          data-pinned="true"
+          role="dialog"
+          aria-label={title}
+          style={style}
+        >
+          <span className="tt-arrow" style={{ left: pos ? pos.arrowX : 12 }}/>
+          <div className="tt-header">
+            <span className="tt-eye">Instructions</span>
+          </div>
+          <h4 className="tt-h">{title}</h4>
+          <div className="tt-section">
+            <div className="tt-rows">
+              <div className="tt-kv"><span>Found</span><b title={sourceLabel}>{sourceLabel}</b></div>
+              <div className="tt-kv"><span>Missing</span><b title={missingLabels}>{missingLabels}</b></div>
+            </div>
+          </div>
+          <div className="tt-section">
+            <div className="hint">
+              Create thin pointer files so every supported CLI reads the same workspace instructions.
+            </div>
+          </div>
+          {error ? (
+            <div className="tt-section">
+              <div className="tt-error-text">{error}</div>
+            </div>
+          ) : null}
+          <div className="tt-foot">
+            <span className="hint">No existing instruction files are overwritten.</span>
+            <span className="spacer"/>
+            <button type="button" className="tt-btn" onClick={openInstructions}>Open</button>
+            <button type="button" className="tt-btn" disabled={busy} onClick={dismiss}>Dismiss</button>
+            <button type="button" className="tt-btn primary" disabled={busy || !status.canCreatePointers} onClick={createPointers}>
+              {busy ? 'Working…' : 'Create pointers'}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
 }
 
 function formatInstallMethod(method){

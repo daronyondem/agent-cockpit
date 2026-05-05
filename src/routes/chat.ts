@@ -2138,6 +2138,36 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   });
 
+  router.get('/workspaces/:hash/instruction-compatibility', async (req: Request, res: Response) => {
+    try {
+      const status = await chatService.getWorkspaceInstructionCompatibility(param(req, 'hash'));
+      if (!status) return res.status(404).json({ error: 'Workspace not found' });
+      res.json({ status });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/instruction-compatibility/pointers', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const result = await chatService.createWorkspaceInstructionPointers(param(req, 'hash'));
+      if (!result) return res.status(404).json({ error: 'Workspace not found' });
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.put('/workspaces/:hash/instruction-compatibility/dismissal', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const status = await chatService.dismissWorkspaceInstructionCompatibility(param(req, 'hash'));
+      if (!status) return res.status(404).json({ error: 'Workspace not found' });
+      res.json({ status });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Workspace file delivery ─────────────────────────────────────────────────
   // Serves files from the workspace's working directory for the file delivery
   // feature. The CLI outputs <!-- FILE_DELIVERY:/path --> markers when the user

@@ -1602,6 +1602,11 @@ body{
   border-color: color-mix(in oklch, var(--status-awaiting), transparent 52%);
   background: color-mix(in oklch, var(--status-awaiting), transparent 92%);
 }
+.composer-notif.state-instruction-warning{
+  color: var(--status-error);
+  border-color: color-mix(in oklch, var(--status-error), transparent 56%);
+  background: color-mix(in oklch, var(--status-error), transparent 92%);
+}
 .composer-notif-pulse{
   position: absolute;
   top: 2px; right: 2px;
@@ -1610,6 +1615,8 @@ body{
   background: var(--accent, #6366f1);
   box-shadow: 0 0 0 2px var(--surface);
 }
+.composer-notif.state-cli-update .composer-notif-pulse{ background: var(--status-awaiting); }
+.composer-notif.state-instruction-warning .composer-notif-pulse{ background: var(--status-error); }
 .composer-notif-pulse.state-running{ animation: composer-notif-pulse 1.6s ease-in-out infinite; }
 @keyframes composer-notif-pulse{
   0%,100% { transform: scale(1);   opacity: 1;   }

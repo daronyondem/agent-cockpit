@@ -20,6 +20,7 @@ Agent Cockpit solves this by decoupling **your data** from **the AI provider**. 
 - **Remote web access to local or remote CLIs** — Install Agent Cockpit on your laptop or on a remote machine and drive it from any browser. Pair it with a tunnel like Cloudflare Tunnel to chat with your coding agents from your phone, tablet, or a café laptop while they operate on real files in their native environment.
 - **Mobile PWA** — Open `/mobile/` from any self-hosted backend, sign in with the same owner account, and install it to the home screen without Xcode, Expo, TestFlight, or App Store distribution.
 - **Integrated memory system** — Adds persistent memory to CLIs that don't have one (like Kiro) and captures memory on the fly from CLIs that do (like Claude Code). Every change to the CLI's own memory file is snapshotted locally, so your accumulated context is portable and vendor-neutral — not trapped inside whichever CLI happens to own it today.
+- **Cross-CLI instruction compatibility** — Detects when a workspace has instructions for one CLI vendor, such as `CLAUDE.md`, `AGENTS.md`, or Kiro steering files, but is missing the thin pointer files other supported CLIs need. Agent Cockpit shows an actionable composer warning and can create compatibility pointers without overwriting existing instruction files.
 - **Token and cost tracking** — Token usage and cost are tracked per conversation so you always know what a long-running task or an experiment is actually costing you.
 - **Message queue** — Keep typing while the CLI is still responding. Queued messages fire automatically as soon as the current response finishes, so your thinking isn't gated on the agent's latency — a feature rarely found in other chat UIs.
 - **File and image uploads** — Drag and drop, paste from the clipboard, or use the attach button to send images and text files directly into chat, with inline previews, just like any modern chat interface.
@@ -56,6 +57,7 @@ Beyond the headline capabilities above, Agent Cockpit also ships with:
 - **Real-time streaming** — responses stream live via WebSocket with automatic reconnection and state recovery
 - **Agent & tool visualization** — sub-agents, tool calls, thinking, and outcomes shown in real time with grouped activity panels and a compact progress timeline that collapses intermediate turns
 - **Multi-workspace support** — conversations are organized by workspace directory, each with its own system prompt and per-workspace memory and knowledge-base toggles
+- **Instruction compatibility checks** — composer notification warns when `AGENTS.md`, `CLAUDE.md`, or Kiro steering files are out of sync across supported CLI vendors, with one-click pointer creation
 - **Conversation management** — create, rename, search, archive, mark unread, and delete conversations grouped by workspace
 - **Session management** — reset CLI sessions and view session history with LLM-generated summaries
 - **Auto-generated titles** — conversation titles are generated automatically from the first message

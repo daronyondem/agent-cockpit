@@ -128,6 +128,7 @@ Together these guarantee that a workspace index always parses on disk and that c
 {
   workspacePath: string,        // Absolute path to the workspace directory
   instructions: string,         // Per-workspace instructions (appended to system prompt on new sessions)
+  instructionCompatibilityDismissedFingerprint: string|undefined, // Last dismissed CLI instruction compatibility warning. Fingerprint changes when detected instruction sources or missing vendor entrypoints change.
   memoryEnabled: boolean|undefined, // Opt-in per-workspace Memory feature. Defaults to false.
   kbEnabled: boolean|undefined,     // Opt-in per-workspace Knowledge Base feature. Defaults to false.
   kbAutoDigest: boolean|undefined,  // Auto-digest new files after ingestion. Defaults to false.
@@ -183,6 +184,42 @@ Together these guarantee that a workspace index always parses on disk and that c
   }]
 }
 ```
+
+## CLI Instruction Compatibility Status
+
+`GET /workspaces/:hash/instruction-compatibility` returns a computed, non-persisted status object:
+
+```javascript
+{
+  workspaceHash: string,
+  workspacePath: string,
+  sources: [{
+    id: 'agents' | 'claude' | 'kiro',
+    vendor: 'codex' | 'claude-code' | 'kiro',
+    label: string,
+    expectedPath: string,
+    present: boolean,
+    paths: string[]        // workspace-relative files detected for that source
+  }],
+  vendors: [{
+    vendor: 'codex' | 'claude-code' | 'kiro',
+    label: string,
+    sourceId: 'agents' | 'claude' | 'kiro',
+    expectedPath: string,
+    covered: boolean
+  }],
+  missingVendors: vendors[],
+  hasAnyInstructions: boolean,
+  compatible: boolean,
+  canCreatePointers: boolean,
+  fingerprint: string,     // sha256-derived 16-char fingerprint of present sources + missing vendors
+  dismissed: boolean,      // true when fingerprint matches WorkspaceIndex.instructionCompatibilityDismissedFingerprint
+  shouldNotify: boolean,   // true when action is needed and not dismissed
+  primarySourceId: 'agents' | 'claude' | 'kiro' | null
+}
+```
+
+Detection is filesystem-based and read-only: `AGENTS.md` covers Codex/vendor-neutral agents, `CLAUDE.md` covers Claude Code, and any `*.md` under `.kiro/steering/` covers Kiro. Pointer creation writes only missing files with exclusive-create semantics and never overwrites existing instruction files.
 
 ## Session File (`workspaces/{hash}/{convId}/session-N.json`)
 
