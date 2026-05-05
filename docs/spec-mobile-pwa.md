@@ -59,6 +59,7 @@ For reverse-proxy base paths, the API base is derived from the current URL by re
 The PWA currently covers:
 
 - Same-origin authenticated load via the existing web auth session.
+- App-like viewport locking: the document body does not scroll horizontally or vertically, the shell height tracks the visual viewport, and only intended panes (conversation list, transcript, modals, queues, attachment trays) scroll inside their own bounds. The viewport meta includes `interactive-widget=resizes-content`, and the React shell maintains a `--app-height` CSS variable from `window.visualViewport.height` so the top bar and composer stay anchored as the mobile keyboard appears.
 - Current-user display via `GET /api/me`.
 - Settings/default loading via `GET /api/chat/settings`.
 - Backend metadata loading via `GET /api/chat/backends`.
@@ -72,6 +73,7 @@ The PWA currently covers:
 - Opening a conversation scrolls the transcript to the newest message. The transcript continues following newly appended messages and streaming text.
 - Create conversation via `POST /api/chat/conversations`.
 - Rename, archive, restore, and delete conversation.
+- Reset session via `POST /api/chat/conversations/:id/reset`. The action closes the conversation sheet immediately, shows the chat loading state while the server archives/summarizes the ending session, replaces the open chat with the returned empty active session, clears pending interaction/attachment state, clears the in-memory list preview for that row, and then refreshes the authoritative conversation list so message count, title, and last-message preview match the server.
 - Full-conversation markdown download.
 - Send message via `POST /api/chat/conversations/:id/message`.
 - Stop stream via `POST /api/chat/conversations/:id/abort`.

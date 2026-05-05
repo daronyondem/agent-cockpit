@@ -145,8 +145,8 @@ Together these guarantee that a workspace index always parses on disk and that c
     model?: string,             // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
     effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
     currentSessionId: string,   // UUID of the active CLI session
-    lastActivity: string,       // ISO 8601, updated on every message
-    lastMessage: string|null,   // First 100 chars of last message content
+    lastActivity: string,       // ISO 8601, updated on every message and on session reset
+    lastMessage: string|null,   // First 100 chars of last active-session message content; reset to null when a new session starts
     usage: {                     // Cumulative token/cost tracking (null until first result)
       inputTokens: number,
       outputTokens: number,

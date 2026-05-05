@@ -318,6 +318,20 @@ describe('listConversations', () => {
     expect(list[1].id).toBe(c1.id);
   });
 
+  test('clears active-session summary metadata after reset', async () => {
+    (service as any)._generateSessionSummary = async (_msgs: any, fallback: string) => fallback;
+    const conv = await service.createConversation('Reset Summary');
+    await service.addMessage(conv.id, 'user', 'stale preview', 'claude-code');
+    const beforeReset = (await service.listConversations()).find((item) => item.id === conv.id)!;
+
+    await service.resetSession(conv.id);
+
+    const afterReset = (await service.listConversations()).find((item) => item.id === conv.id)!;
+    expect(afterReset.messageCount).toBe(0);
+    expect(afterReset.lastMessage).toBeNull();
+    expect(new Date(afterReset.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(beforeReset.updatedAt).getTime());
+  });
+
   test('includes workingDir in listing', async () => {
     await service.createConversation('Test', '/tmp/myproject');
     const list = await service.listConversations();

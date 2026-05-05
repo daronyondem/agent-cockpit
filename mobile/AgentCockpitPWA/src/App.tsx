@@ -15,6 +15,7 @@ import type {
   PendingAttachment,
   PendingInteraction,
   QueuedMessage,
+  ResetSessionResponse,
   SessionHistoryItem,
   Settings,
   StreamEvent,
@@ -58,6 +59,8 @@ type FilePreviewState = {
 };
 
 export default function App() {
+  useViewportHeightVar();
+
   const clientRef = useRef(new AgentCockpitAPI());
   const socketRef = useRef<WebSocket | null>(null);
   const listStreamSocketsRef = useRef<Map<string, WebSocket>>(new Map());
@@ -853,13 +856,44 @@ export default function App() {
       return;
     }
     try {
+      setLoading(true);
+      setErrorMessage(null);
+      setActionsVisible(false);
       const response = await clientRef.current.resetConversation(conversation.id);
       setActiveConversation(response.conversation);
+      setConversations((items) =>
+        items.map((item) =>
+          item.id === response.conversation.id
+            ? {
+                ...item,
+                title: response.conversation.title,
+                backend: response.conversation.backend,
+                cliProfileId: response.conversation.cliProfileId,
+                model: response.conversation.model,
+                effort: response.conversation.effort,
+                updatedAt: new Date().toISOString(),
+                messageCount: 0,
+                lastMessage: undefined,
+                archived: response.conversation.archived,
+              }
+            : item,
+        ),
+      );
       setStreamText('');
       setPendingInteraction(null);
       setPendingAttachments([]);
+      setSessions((current) => (
+        current.length
+          ? updateSessionsAfterReset(current, response)
+          : current
+      ));
+      setSessionPreviewTitle('');
+      setSessionPreviewMessages([]);
+      await refreshConversationList();
     } catch (error) {
       handleError(error);
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -2070,6 +2104,26 @@ function ProgressBar({ progress }: { progress: number }) {
   return <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div>;
 }
 
+function useViewportHeightVar() {
+  useEffect(() => {
+    const root = document.documentElement;
+    const update = () => {
+      root.style.setProperty('--app-height', `${window.visualViewport?.height || window.innerHeight}px`);
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    window.visualViewport?.addEventListener('resize', update);
+    window.visualViewport?.addEventListener('scroll', update);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+      window.visualViewport?.removeEventListener('resize', update);
+      window.visualViewport?.removeEventListener('scroll', update);
+    };
+  }, []);
+}
+
 function parseMessageFiles(content: string): { text: string; uploadedPaths: string[]; deliveredPaths: string[] } {
   const deliveredPaths: string[] = [];
   let text = content.replace(/<!--\s*FILE_DELIVERY:([\s\S]*?)-->/g, (_match, path: string) => {
@@ -2167,6 +2221,40 @@ function conversationListItemFromConversation(conversation: Conversation): Conve
     messageCount: conversation.messages.length,
     archived: conversation.archived,
   };
+}
+
+function updateSessionsAfterReset(sessions: SessionHistoryItem[], response: ResetSessionResponse): SessionHistoryItem[] {
+  const archived = response.archivedSession;
+  const updated = sessions.map((session) => {
+    if (archived && session.number === archived.number) {
+      return {
+        ...session,
+        sessionId: archived.sessionId || session.sessionId,
+        startedAt: archived.startedAt,
+        endedAt: archived.endedAt,
+        messageCount: archived.messageCount,
+        summary: archived.summary,
+        isCurrent: false,
+      };
+    }
+    return { ...session, isCurrent: false };
+  });
+  if (!updated.some((session) => session.number === response.newSessionNumber)) {
+    updated.push({
+      number: response.newSessionNumber,
+      sessionId: response.conversation.currentSessionId,
+      startedAt: new Date().toISOString(),
+      endedAt: undefined,
+      messageCount: 0,
+      summary: undefined,
+      isCurrent: true,
+    });
+  }
+  return updated.map((session) => (
+    session.number === response.newSessionNumber
+      ? { ...session, isCurrent: true, messageCount: 0, summary: undefined, endedAt: undefined }
+      : session
+  ));
 }
 
 function wireContent(message: QueuedMessage): string {

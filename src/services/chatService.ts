@@ -1116,6 +1116,9 @@ export class ChatService {
       if (!convEntry.titleManuallySet) {
         convEntry.title = 'New Chat';
       }
+      convEntry.lastActivity = now.toISOString();
+      convEntry.lastMessage = null;
+      delete convEntry.unread;
       convEntry.sessions.push({
         number: newSessionNumber,
         sessionId: newSessionId,
