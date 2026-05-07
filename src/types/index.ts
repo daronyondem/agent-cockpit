@@ -499,6 +499,8 @@ export interface Settings {
     dreamingStrongMatchThreshold?: number;
     /** Cosine similarity score below which an entry is routed to new-topic creation. Default 0.45. */
     dreamingBorderlineThreshold?: number;
+    /** Optional second extraction pass after each digestion chunk. Default false. */
+    kbGleaningEnabled?: boolean;
     /**
      * When true, PPTX ingestion shells out to LibreOffice to render each
      * slide as a PNG (better fidelity for decks that rely on visual
@@ -939,16 +941,69 @@ export interface KbEntry {
   tags: string[];
 }
 
+/** Source range that contributed to a digested KB entry. */
+export interface KbEntrySource {
+  entryId: string;
+  rawId: string;
+  nodeId: string | null;
+  chunkId: string;
+  startUnit: number;
+  endUnit: number;
+  docName: string | null;
+  unitType: 'page' | 'slide' | 'line' | 'section' | 'unknown' | null;
+  nodeTitle: string | null;
+}
+
 /** Aggregate counters rendered in the KB Browser header. */
 export interface KbCounters {
   rawTotal: number;
   rawByStatus: Record<KbRawStatus, number>;
+  failedByStage: {
+    conversion: number;
+    digestion: number;
+    unknown: number;
+  };
   entryCount: number;
   pendingCount: number; // ingested + pending-delete
   folderCount: number;
+  documentCount: number;
+  documentNodeCount: number;
+  entrySourceCount: number;
   topicCount: number;
   connectionCount: number;
   reflectionCount: number;
+  staleReflectionCount: number;
+  /** True when this workspace has an embedding config and can maintain vector indexes. */
+  embeddingConfigured?: boolean;
+  /** Number of KB entries currently present in the vector store, or null when unavailable. */
+  entryEmbeddedCount?: number | null;
+  /** Number of synthesis topics currently present in the vector store, or null when unavailable. */
+  topicEmbeddedCount?: number | null;
+  /** Non-fatal vector-store read error captured while building the state snapshot. */
+  embeddingIndexError?: string | null;
+}
+
+export type KbDigestChunkPhase = 'planning' | 'digesting' | 'parsing' | 'committing';
+
+export interface KbDigestChunkProgress {
+  /** Chunks that have completed CLI extraction + parsing in the active digestion session. */
+  done: number;
+  /** Chunks planned so far in the active digestion session. Grows as queued raws reach planning. */
+  total: number;
+  /** Chunks currently inside CLI extraction or parse handling. */
+  active: number;
+  /** Coarse phase of the most recently updated chunk/digest write step. */
+  phase: KbDigestChunkPhase;
+  /** Most recently updated raw/chunk. Aggregate sessions may have more than one active chunk. */
+  current?: {
+    rawId: string;
+    chunkId?: string;
+    index?: number;
+    total?: number;
+    startUnit?: number;
+    endUnit?: number;
+    unitType?: string;
+  };
 }
 
 /**
@@ -969,6 +1024,8 @@ export interface KbDigestProgress {
   avgMsPerItem: number;
   /** Estimated remaining wall-clock time (ms). Omitted until `done >= 2` to avoid noisy initial estimates. */
   etaMs?: number;
+  /** Live aggregate chunk progress for the active digestion session. */
+  chunks?: KbDigestChunkProgress;
 }
 
 export type KbAutoDreamMode = 'off' | 'interval' | 'window';
@@ -992,6 +1049,16 @@ export interface KbAutoDreamState extends KbAutoDreamConfig {
   windowEndAt?: string | null;
 }
 
+export type KbDreamPhase = 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection';
+
+export interface KbDreamProgress {
+  phase: KbDreamPhase;
+  done: number;
+  total: number;
+  startedAt?: number;
+  phaseStartedAt?: number;
+}
+
 /**
  * Snapshot of the KB state surfaced by `GET /kb`. The entries and raws
  * lists are paginated at the endpoint level; this object always holds
@@ -1006,6 +1073,12 @@ export interface KbState {
   autoDigest: boolean;
   /** Per-workspace automatic dreaming schedule. */
   autoDream: KbAutoDreamConfig;
+  /** Current synthesis status from the persisted KB metadata. */
+  dreamingStatus: string;
+  /** Live dream progress when the synthesis pipeline is running. */
+  dreamProgress: KbDreamProgress | null;
+  /** Entries that have been digested but still need the Dream/Synthesis pass. */
+  needsSynthesisCount: number;
   /** High-level counters for the header/badges. */
   counters: KbCounters;
   /** Folder tree, flat list sorted by folderPath. */
@@ -1032,13 +1105,7 @@ export interface KbSynthesisState {
   connectionCount: number;
   needsSynthesisCount: number;
   godNodes: string[];
-  dreamProgress?: {
-    phase: string;
-    done: number;
-    total: number;
-    startedAt?: number;
-    phaseStartedAt?: number;
-  } | null;
+  dreamProgress?: KbDreamProgress | null;
   reflectionCount?: number;
   staleReflectionCount?: number;
   autoDream?: KbAutoDreamState;
@@ -1046,7 +1113,7 @@ export interface KbSynthesisState {
   connections: KbSynthesisConnectionSummary[];
 }
 
-/** Topic summary for the synthesis tab list and atlas views. */
+/** Topic summary for the synthesis tab list view. */
 export interface KbSynthesisTopicSummary {
   topicId: string;
   title: string;
@@ -1056,7 +1123,7 @@ export interface KbSynthesisTopicSummary {
   isGodNode: boolean;
 }
 
-/** Connection summary for the synthesis tab list and atlas views. */
+/** Connection summary for the synthesis tab list view. */
 export interface KbSynthesisConnectionSummary {
   sourceTopic: string;
   targetTopic: string;
@@ -1136,7 +1203,7 @@ export interface KbStateUpdateEvent {
      * enqueue.
      */
     digestion?: { active: boolean; entriesCreated: number };
-    dreamProgress?: { phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection'; done: number; total: number };
+    dreamProgress?: KbDreamProgress;
     /** Emitted when a cooperative stop has been requested for an in-progress dream run. */
     stopping?: boolean;
     /** Per-raw substep text shown beneath the status badge during long operations. */

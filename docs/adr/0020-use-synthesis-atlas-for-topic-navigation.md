@@ -1,10 +1,10 @@
 ---
 id: 0020
 title: Use synthesis atlas for topic navigation
-status: Accepted
+status: Superseded
 date: 2026-05-02
 supersedes: []
-superseded-by: null
+superseded-by: 0035
 tags: [frontend, knowledge-base, synthesis, graph]
 affects:
   - public/v2/index.html

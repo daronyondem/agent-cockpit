@@ -30,6 +30,8 @@ import type { KbDatabase } from '../knowledgeBase/db';
 import type { KbVectorStore } from '../knowledgeBase/vectorStore';
 import { embedText, resolveConfig, type EmbeddingConfig } from '../knowledgeBase/embeddings';
 import type { KbIngestionService } from '../knowledgeBase/ingestion';
+import { extractMediaFiles, extractSourceRange } from '../knowledgeBase/sourceRange';
+import { expandGlossaryQuery } from '../knowledgeBase/glossary';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -42,6 +44,7 @@ interface KbSearchSession {
 /** Subset of ChatService used by KB Search MCP. */
 export interface KbSearchChatService {
   getKbDb(hash: string): KbDatabase | null;
+  getKbConvertedDir(hash: string): string;
   getKbVectorStore(hash: string, dimensions?: number): Promise<KbVectorStore | null>;
   getWorkspaceKbEmbeddingConfig(hash: string): Promise<EmbeddingConfig | undefined>;
 }
@@ -55,9 +58,40 @@ export interface KbSearchMcpServer {
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const KB_SEARCH_STUB_PATH = path.resolve(__dirname, 'stub.cjs');
+const MAX_SOURCE_RANGE_UNITS = 25;
+const MAX_SOURCE_RANGE_CHARS = 80_000;
+const DEFAULT_DOCUMENT_LIMIT = 20;
+const MAX_DOCUMENT_LIMIT = 100;
+const DEFAULT_STRUCTURE_NODE_LIMIT = 200;
+const MAX_STRUCTURE_NODE_LIMIT = 500;
+const CONFIDENCE_RANK: Record<string, number> = {
+  extracted: 0,
+  inferred: 1,
+  speculative: 2,
+};
 
 function mintToken(): string {
   return crypto.randomBytes(24).toString('hex');
+}
+
+function boundedInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed)) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
+function neighborhoodScore(
+  distance: number,
+  path: Array<{ confidence: string }>,
+  isGodNode: boolean,
+): number {
+  const confidenceFactor = path.reduce((factor, edge) => {
+    const rank = CONFIDENCE_RANK[edge.confidence] ?? CONFIDENCE_RANK.speculative;
+    return factor * (rank === 0 ? 1 : rank === 1 ? 0.85 : 0.6);
+  }, 1);
+  const distanceFactor = 1 / Math.max(1, distance);
+  const godPenalty = isGodNode ? 0.5 : 1;
+  return distanceFactor * confidenceFactor * godPenalty;
 }
 
 // ── Factory ─────────────────────────────────────────────────────────────────
@@ -115,6 +149,21 @@ export function createKbSearchMcpServer(
     byKey.delete(sessionKey);
   }
 
+  function expandSearchQuery(hash: string, query: string) {
+    const db = chatService.getKbDb(hash);
+    const glossary = db && typeof db.listGlossary === 'function' ? db.listGlossary() : [];
+    return expandGlossaryQuery(query, glossary);
+  }
+
+  function queryTrace(expansion: ReturnType<typeof expandGlossaryQuery>): Record<string, unknown> {
+    if (expansion.matches.length === 0) return { query: expansion.originalQuery };
+    return {
+      query: expansion.originalQuery,
+      expanded_query: expansion.expandedQuery,
+      glossary_matches: expansion.matches,
+    };
+  }
+
   // ── Tool handlers ───────────────────────────────────────────────────────
 
   async function handleSearchTopics(
@@ -124,24 +173,27 @@ export function createKbSearchMcpServer(
     const query = String(args.query ?? '');
     const limit = Number(args.limit) || 10;
     if (!query) return { topics: [] };
+    const expansion = expandSearchQuery(hash, query);
+    const searchQuery = expansion.expandedQuery;
 
     const cfg = await chatService.getWorkspaceKbEmbeddingConfig(hash);
-    if (!cfg) return { topics: [], warning: 'No embedding config' };
+    if (!cfg) return { topics: [], warning: 'No embedding config', ...queryTrace(expansion) };
     const resolved = resolveConfig(cfg);
 
     const store = await chatService.getKbVectorStore(hash, resolved.dimensions);
-    if (!store) return { topics: [], warning: 'Vector store unavailable' };
+    if (!store) return { topics: [], warning: 'Vector store unavailable', ...queryTrace(expansion) };
 
     let results;
     try {
-      const embedding = (await embedText(query, cfg)).embedding;
-      results = await store.hybridSearchTopics(query, embedding, limit);
+      const embedding = (await embedText(searchQuery, cfg)).embedding;
+      results = await store.hybridSearchTopics(searchQuery, embedding, limit);
     } catch {
       // Ollama unavailable — fall back to keyword-only search silently.
       console.warn('[kbSearchMcp] Ollama embedding failed for search_topics, falling back to keyword search');
-      results = await store.keywordSearchTopics(query, limit);
+      results = await store.keywordSearchTopics(searchQuery, limit);
     }
     return {
+      ...queryTrace(expansion),
       topics: results.map((r) => ({
         topic_id: r.id,
         title: r.title,
@@ -227,30 +279,143 @@ export function createKbSearchMcpServer(
     const query = String(args.query ?? '');
     const limit = Number(args.limit) || 10;
     if (!query) return { entries: [] };
+    const expansion = expandSearchQuery(hash, query);
+    const searchQuery = expansion.expandedQuery;
 
     const cfg = await chatService.getWorkspaceKbEmbeddingConfig(hash);
-    if (!cfg) return { entries: [], warning: 'No embedding config' };
+    if (!cfg) return { entries: [], warning: 'No embedding config', ...queryTrace(expansion) };
     const resolved = resolveConfig(cfg);
 
     const store = await chatService.getKbVectorStore(hash, resolved.dimensions);
-    if (!store) return { entries: [], warning: 'Vector store unavailable' };
+    if (!store) return { entries: [], warning: 'Vector store unavailable', ...queryTrace(expansion) };
 
     let results;
     try {
-      const embedding = (await embedText(query, cfg)).embedding;
-      results = await store.hybridSearchEntries(query, embedding, limit);
+      const embedding = (await embedText(searchQuery, cfg)).embedding;
+      results = await store.hybridSearchEntries(searchQuery, embedding, limit);
     } catch {
       // Ollama unavailable — fall back to keyword-only search silently.
       console.warn('[kbSearchMcp] Ollama embedding failed for search_entries, falling back to keyword search');
-      results = await store.keywordSearchEntries(query, limit);
+      results = await store.keywordSearchEntries(searchQuery, limit);
     }
     return {
+      ...queryTrace(expansion),
       entries: results.map((r) => ({
         entry_id: r.id,
         title: r.title,
         summary: r.summary,
         score: Math.round(r.score * 1000) / 1000,
       })),
+    };
+  }
+
+  async function handleListDocuments(
+    hash: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    const db = chatService.getKbDb(hash);
+    if (!db) return { documents: [], error: 'KB database unavailable' };
+    const query = String(args.query ?? '').trim();
+    const limit = boundedInteger(args.limit, DEFAULT_DOCUMENT_LIMIT, 1, MAX_DOCUMENT_LIMIT);
+    return {
+      documents: db.listDocuments({ query, limit }).map((d) => ({
+        raw_id: d.rawId,
+        doc_name: d.docName,
+        doc_description: d.docDescription,
+        unit_type: d.unitType,
+        unit_count: d.unitCount,
+        structure_status: d.structureStatus,
+        updated_at: d.updatedAt,
+      })),
+    };
+  }
+
+  async function handleGetDocumentStructure(
+    hash: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    const rawId = String(args.raw_id ?? '');
+    if (!rawId) return { error: 'raw_id is required' };
+    const db = chatService.getKbDb(hash);
+    if (!db) return { error: 'KB database unavailable' };
+    const document = db.getDocument(rawId);
+    if (!document) return { error: `Document "${rawId}" not found` };
+    const allNodes = db.listDocumentNodes(rawId);
+    const offset = boundedInteger(args.offset, 0, 0, Math.max(0, allNodes.length));
+    const limit = boundedInteger(args.limit, DEFAULT_STRUCTURE_NODE_LIMIT, 1, MAX_STRUCTURE_NODE_LIMIT);
+    const nodes = allNodes.slice(offset, offset + limit);
+    return {
+      document: {
+        raw_id: document.rawId,
+        doc_name: document.docName,
+        doc_description: document.docDescription,
+        unit_type: document.unitType,
+        unit_count: document.unitCount,
+        structure_status: document.structureStatus,
+        structure_error: document.structureError,
+      },
+      nodes: nodes.map((n) => ({
+        node_id: n.nodeId,
+        parent_node_id: n.parentNodeId,
+        title: n.title,
+        summary: n.summary,
+        start_unit: n.startUnit,
+        end_unit: n.endUnit,
+        sort_order: n.sortOrder,
+        source: n.source,
+        metadata: n.metadata,
+      })),
+      node_count: allNodes.length,
+      offset,
+      limit,
+      truncated: offset + nodes.length < allNodes.length,
+    };
+  }
+
+  async function handleGetSourceRange(
+    hash: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    const rawId = String(args.raw_id ?? '');
+    const startUnit = Number(args.start_unit);
+    const endUnit = Number(args.end_unit);
+    if (!rawId) return { error: 'raw_id is required' };
+    if (!Number.isInteger(startUnit) || !Number.isInteger(endUnit) || startUnit < 1 || endUnit < startUnit) {
+      return { error: 'start_unit and end_unit must be positive integers with end_unit >= start_unit' };
+    }
+    if (endUnit - startUnit + 1 > MAX_SOURCE_RANGE_UNITS) {
+      return { error: `Requested range is too large; max ${MAX_SOURCE_RANGE_UNITS} units` };
+    }
+
+    const db = chatService.getKbDb(hash);
+    if (!db) return { error: 'KB database unavailable' };
+    const document = db.getDocument(rawId);
+    if (!document) return { error: `Document "${rawId}" not found` };
+    if (endUnit > document.unitCount) {
+      return { error: `Requested range exceeds document unit_count ${document.unitCount}` };
+    }
+
+    const textPath = path.join(chatService.getKbConvertedDir(hash), rawId, 'text.md');
+    let text: string;
+    try {
+      text = await fsp.readFile(textPath, 'utf8');
+    } catch {
+      return { error: `Converted text not found for raw "${rawId}"` };
+    }
+
+    const extracted = extractSourceRange(text, document.unitType, startUnit, endUnit);
+    if (!extracted) return { error: `Could not extract ${document.unitType} range ${startUnit}-${endUnit}` };
+    const truncated = extracted.length > MAX_SOURCE_RANGE_CHARS;
+    const markdown = truncated ? extracted.slice(0, MAX_SOURCE_RANGE_CHARS) : extracted;
+
+    return {
+      raw_id: rawId,
+      unit_type: document.unitType,
+      start_unit: startUnit,
+      end_unit: endUnit,
+      markdown,
+      media_files: extractMediaFiles(markdown),
+      truncated,
     };
   }
 
@@ -298,6 +463,103 @@ export function createKbSearchMcpServer(
       console.warn('[kbSearchMcp] findUnconnectedSimilar failed (embeddings unavailable)');
       return { topics: [] };
     }
+  }
+
+  async function handleGetTopicNeighborhood(
+    hash: string,
+    args: Record<string, unknown>,
+  ): Promise<unknown> {
+    const topicId = String(args.topic_id ?? '');
+    if (!topicId) return { error: 'topic_id is required' };
+    const depthArg = Number(args.depth);
+    const limitArg = Number(args.limit);
+    const depth = Math.min(2, Math.max(1, Number.isInteger(depthArg) ? depthArg : 1));
+    const limit = Math.max(1, Math.min(50, Number.isInteger(limitArg) ? limitArg : 10));
+    const minConfidence = String(args.min_confidence ?? 'inferred');
+    const maxRank = CONFIDENCE_RANK[minConfidence] ?? CONFIDENCE_RANK.inferred;
+    const includeEntries = Boolean(args.include_entries);
+
+    const db = chatService.getKbDb(hash);
+    if (!db) return { error: 'KB database unavailable' };
+
+    const seed = db.getTopic(topicId);
+    if (!seed) return { error: `Topic "${topicId}" not found` };
+
+    const allConnections = db
+      .listAllConnections()
+      .filter((c) => (CONFIDENCE_RANK[c.confidence] ?? CONFIDENCE_RANK.speculative) <= maxRank);
+    const adjacency = new Map<string, typeof allConnections>();
+    for (const edge of allConnections) {
+      const sourceList = adjacency.get(edge.sourceTopic) ?? [];
+      sourceList.push(edge);
+      adjacency.set(edge.sourceTopic, sourceList);
+      const targetList = adjacency.get(edge.targetTopic) ?? [];
+      targetList.push(edge);
+      adjacency.set(edge.targetTopic, targetList);
+    }
+
+    const godNodes = new Set(db.detectGodNodes());
+    const queue: Array<{ topicId: string; distance: number; path: typeof allConnections }> = [
+      { topicId, distance: 0, path: [] },
+    ];
+    const visited = new Set<string>([topicId]);
+    const found: Array<{ topicId: string; distance: number; path: typeof allConnections; score: number }> = [];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (current.distance >= depth) continue;
+      for (const edge of adjacency.get(current.topicId) ?? []) {
+        const nextTopic = edge.sourceTopic === current.topicId ? edge.targetTopic : edge.sourceTopic;
+        if (visited.has(nextTopic)) continue;
+        visited.add(nextTopic);
+        const nextPath = [...current.path, edge];
+        const distance = current.distance + 1;
+        const score = neighborhoodScore(distance, nextPath, godNodes.has(nextTopic));
+        found.push({ topicId: nextTopic, distance, path: nextPath, score });
+        queue.push({ topicId: nextTopic, distance, path: nextPath });
+      }
+    }
+
+    const topics = found
+      .map((item) => {
+        const topic = db.getTopic(item.topicId);
+        if (!topic) return null;
+        const out: Record<string, unknown> = {
+          topic_id: topic.topicId,
+          title: topic.title,
+          summary: topic.summary,
+          distance: item.distance,
+          score: Math.round(item.score * 1000) / 1000,
+          path: item.path.map((edge) => ({
+            source_topic: edge.sourceTopic,
+            target_topic: edge.targetTopic,
+            relationship: edge.relationship,
+            confidence: edge.confidence,
+          })),
+        };
+        if (includeEntries) {
+          out.entries = db.listTopicEntryIds(topic.topicId).map((eid) => {
+            const entry = db.getEntry(eid);
+            return { entry_id: eid, title: entry?.title ?? eid };
+          });
+        }
+        return out;
+      })
+      .filter((item): item is Record<string, unknown> => item !== null)
+      .sort((a, b) =>
+        Number(a.distance) - Number(b.distance)
+        || Number(b.score) - Number(a.score)
+        || String(a.title).localeCompare(String(b.title)))
+      .slice(0, limit);
+
+    return {
+      seed_topic: {
+        topic_id: seed.topicId,
+        title: seed.title,
+        summary: seed.summary,
+      },
+      topics,
+    };
   }
 
   // ── Ingestion handler ──────────────────────────────────────────────────
@@ -391,9 +653,13 @@ export function createKbSearchMcpServer(
   > = {
     search_topics: handleSearchTopics,
     get_topic: handleGetTopic,
+    get_topic_neighborhood: handleGetTopicNeighborhood,
     find_similar_topics: handleFindSimilarTopics,
     find_unconnected_similar: handleFindUnconnectedSimilar,
     search_entries: handleSearchEntries,
+    list_documents: handleListDocuments,
+    get_document_structure: handleGetDocumentStructure,
+    get_source_range: handleGetSourceRange,
     kb_ingest: handleKbIngest,
   };
 

@@ -459,6 +459,13 @@
     getTopic:       (hash, topicId) => kbGet(hash, 'synthesis/' + encodeURIComponent(topicId)),
     getReflections: (hash) => kbGet(hash, 'reflections'),
     getReflection:  (hash, reflectionId) => kbGet(hash, 'reflections/' + encodeURIComponent(reflectionId)),
+    getRawTrace: (hash, rawId) => kbGet(hash, 'raw/' + encodeURIComponent(rawId) + '/trace'),
+    backfillStructure: (hash, force) => kbFetch(hash, 'structure/backfill', {
+      method: 'POST', body: { force: !!force },
+    }).then(r => r.json()),
+    rebuildRawStructure: (hash, rawId) => kbFetch(hash, 'raw/' + encodeURIComponent(rawId) + '/structure', {
+      method: 'POST', body: {},
+    }).then(r => r.json()),
     rawDownloadUrl: (hash, rawId) => kbUrl(hash, 'raw/' + encodeURIComponent(rawId)),
     rawMediaUrl:    (hash, rawId, mediaPath) => kbUrl(
       hash,
@@ -549,6 +556,16 @@
     }).then(r => r.json()),
     embeddingHealth: (hash) => kbFetch(hash, 'embedding-health', {
       method: 'POST', body: {},
+    }).then(r => r.json()),
+    getGlossary: (hash) => kbFetch(hash, 'glossary').then(r => r.json()),
+    createGlossaryTerm: (hash, term, expansion) => kbFetch(hash, 'glossary', {
+      method: 'POST', body: { term, expansion },
+    }).then(r => r.json()),
+    updateGlossaryTerm: (hash, id, term, expansion) => kbFetch(hash, 'glossary/' + encodeURIComponent(id), {
+      method: 'PUT', body: { term, expansion },
+    }).then(r => r.json()),
+    deleteGlossaryTerm: (hash, id) => kbFetch(hash, 'glossary/' + encodeURIComponent(id), {
+      method: 'DELETE',
     }).then(r => r.json()),
     /* Top-level chat routes, not workspace-scoped. */
     pandocStatus: () => chatFetch('kb/pandoc-status').then(r => r.json()),

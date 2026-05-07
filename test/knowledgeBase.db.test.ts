@@ -67,19 +67,73 @@ describe('schema + root folder', () => {
     expect(folders[0].folderPath).toBe('');
   });
 
+  test('digest session preserves live chunk progress', () => {
+    const startedAt = new Date().toISOString();
+    db.upsertDigestSession({
+      total: 1,
+      done: 0,
+      totalElapsedMs: 0,
+      startedAt,
+      chunkProgress: {
+        done: 1,
+        total: 2,
+        active: 1,
+        phase: 'parsing',
+        current: {
+          rawId: 'raw-1',
+          chunkId: 'chunk-0001-u1-25',
+          index: 1,
+          total: 2,
+          startUnit: 1,
+          endUnit: 25,
+          unitType: 'page',
+        },
+      },
+    });
+
+    expect(db.getDigestSession()).toMatchObject({
+      total: 1,
+      done: 0,
+      totalElapsedMs: 0,
+      startedAt,
+      chunkProgress: {
+        done: 1,
+        total: 2,
+        active: 1,
+        phase: 'parsing',
+        current: {
+          rawId: 'raw-1',
+          chunkId: 'chunk-0001-u1-25',
+          index: 1,
+          total: 2,
+          startUnit: 1,
+          endUnit: 25,
+          unitType: 'page',
+        },
+      },
+    });
+  });
+
   test('counters on an empty DB are all zero', () => {
     const c = db.getCounters();
     expect(c.rawTotal).toBe(0);
     expect(c.entryCount).toBe(0);
     expect(c.pendingCount).toBe(0);
     expect(c.folderCount).toBe(1); // root
+    expect(c.documentCount).toBe(0);
+    expect(c.documentNodeCount).toBe(0);
+    expect(c.entrySourceCount).toBe(0);
     expect(c.rawByStatus.ingesting).toBe(0);
     expect(c.rawByStatus.ingested).toBe(0);
     expect(c.rawByStatus.digested).toBe(0);
     expect(c.rawByStatus.failed).toBe(0);
+    expect(c.failedByStage.conversion).toBe(0);
+    expect(c.failedByStage.digestion).toBe(0);
+    expect(c.failedByStage.unknown).toBe(0);
     expect(c.topicCount).toBe(0);
     expect(c.connectionCount).toBe(0);
     expect(c.reflectionCount).toBe(0);
+    expect(c.staleReflectionCount).toBe(0);
   });
 });
 
@@ -200,13 +254,22 @@ describe('raw CRUD', () => {
       digestedAt: '2026-01-02T00:00:00Z',
       tags: ['a', 'b'],
     });
+    db.insertEntrySources([{
+      entryId: `${rawId}-summary`,
+      rawId,
+      chunkId: 'chunk-0001-u1-1',
+      startUnit: 1,
+      endUnit: 1,
+    }]);
     expect(db.entryExists(`${rawId}-summary`)).toBe(true);
+    expect(db.listEntrySources(`${rawId}-summary`)).toHaveLength(1);
     expect(db.countLocations(rawId)).toBe(1);
 
     const removed = db.deleteRaw(rawId);
     expect(removed).toEqual([`${rawId}-summary`]);
     expect(db.getRawById(rawId)).toBeNull();
     expect(db.entryExists(`${rawId}-summary`)).toBe(false);
+    expect(db.listEntrySources(`${rawId}-summary`)).toEqual([]);
     expect(db.countLocations(rawId)).toBe(0);
   });
 });
@@ -361,6 +424,166 @@ describe('raw_locations multi-location', () => {
   });
 });
 
+// ─── Document Structure ────────────────────────────────────────────────────
+
+describe('document structure', () => {
+  test('upsertDocumentStructure stores a document and ordered nodes', () => {
+    const rawFile = makeRawFile('document structure content');
+    const now = '2026-05-05T00:00:00.000Z';
+    db.insertRaw({
+      rawId: rawFile.rawId,
+      sha256: rawFile.sha256,
+      status: 'ingested',
+      byteLength: 26,
+      mimeType: 'text/markdown',
+      handler: 'passthrough/text',
+      uploadedAt: now,
+      metadata: null,
+    });
+
+    db.upsertDocumentStructure({
+      document: {
+        rawId: rawFile.rawId,
+        docName: 'Spec.md',
+        docDescription: 'A two-section document',
+        unitType: 'section',
+        unitCount: 2,
+        structureStatus: 'ready',
+        structureError: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      nodes: [
+        {
+          nodeId: 'root',
+          rawId: rawFile.rawId,
+          parentNodeId: null,
+          title: 'Spec.md',
+          summary: null,
+          startUnit: 1,
+          endUnit: 2,
+          sortOrder: 0,
+          source: 'fallback',
+          metadata: { path: 'Spec.md' },
+        },
+        {
+          nodeId: 'section-1',
+          rawId: rawFile.rawId,
+          parentNodeId: 'root',
+          title: 'Overview',
+          summary: 'Top section',
+          startUnit: 1,
+          endUnit: 1,
+          sortOrder: 1,
+          source: 'deterministic',
+          metadata: undefined,
+        },
+      ],
+    });
+
+    expect(db.getDocument(rawFile.rawId)).toMatchObject({
+      rawId: rawFile.rawId,
+      docName: 'Spec.md',
+      unitType: 'section',
+      unitCount: 2,
+      structureStatus: 'ready',
+    });
+    expect(db.listDocumentNodes(rawFile.rawId)).toEqual([
+      expect.objectContaining({
+        nodeId: 'root',
+        parentNodeId: null,
+        title: 'Spec.md',
+        metadata: { path: 'Spec.md' },
+      }),
+      expect.objectContaining({
+        nodeId: 'section-1',
+        parentNodeId: 'root',
+        title: 'Overview',
+        source: 'deterministic',
+      }),
+    ]);
+  });
+
+  test('upsertDocumentStructure replaces prior nodes for the same raw', () => {
+    const rawFile = makeRawFile('replace structure content');
+    const now = '2026-05-05T00:00:00.000Z';
+    db.insertRaw({
+      rawId: rawFile.rawId,
+      sha256: rawFile.sha256,
+      status: 'ingested',
+      byteLength: 25,
+      mimeType: 'application/pdf',
+      handler: 'pdf/rasterized-hybrid',
+      uploadedAt: now,
+      metadata: null,
+    });
+
+    const document = {
+      rawId: rawFile.rawId,
+      docName: 'Deck.pdf',
+      docDescription: null,
+      unitType: 'page' as const,
+      unitCount: 2,
+      structureStatus: 'ready' as const,
+      structureError: null,
+      createdAt: now,
+      updatedAt: now,
+    };
+    db.upsertDocumentStructure({
+      document,
+      nodes: [
+        { nodeId: 'page-1', rawId: rawFile.rawId, parentNodeId: null, title: 'Page 1', summary: null, startUnit: 1, endUnit: 1, sortOrder: 1, source: 'deterministic', metadata: undefined },
+        { nodeId: 'page-2', rawId: rawFile.rawId, parentNodeId: null, title: 'Page 2', summary: null, startUnit: 2, endUnit: 2, sortOrder: 2, source: 'deterministic', metadata: undefined },
+      ],
+    });
+    db.upsertDocumentStructure({
+      document: { ...document, unitCount: 1, updatedAt: '2026-05-05T00:01:00.000Z' },
+      nodes: [
+        { nodeId: 'fallback', rawId: rawFile.rawId, parentNodeId: null, title: 'Deck.pdf', summary: null, startUnit: 1, endUnit: 1, sortOrder: 0, source: 'fallback', metadata: undefined },
+      ],
+    });
+
+    expect(db.getDocument(rawFile.rawId)?.unitCount).toBe(1);
+    expect(db.listDocumentNodes(rawFile.rawId).map((n) => n.nodeId)).toEqual(['fallback']);
+  });
+
+  test('raw deletion cascades document structure', () => {
+    const rawFile = makeRawFile('cascade structure content');
+    const now = '2026-05-05T00:00:00.000Z';
+    db.insertRaw({
+      rawId: rawFile.rawId,
+      sha256: rawFile.sha256,
+      status: 'ingested',
+      byteLength: 25,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: now,
+      metadata: null,
+    });
+    db.upsertDocumentStructure({
+      document: {
+        rawId: rawFile.rawId,
+        docName: 'notes.txt',
+        docDescription: null,
+        unitType: 'line',
+        unitCount: 1,
+        structureStatus: 'ready',
+        structureError: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      nodes: [
+        { nodeId: 'all', rawId: rawFile.rawId, parentNodeId: null, title: 'notes.txt', summary: null, startUnit: 1, endUnit: 1, sortOrder: 0, source: 'fallback', metadata: undefined },
+      ],
+    });
+
+    db.deleteRaw(rawFile.rawId);
+
+    expect(db.getDocument(rawFile.rawId)).toBeNull();
+    expect(db.listDocumentNodes(rawFile.rawId)).toEqual([]);
+  });
+});
+
 // ─── Folders (create, rename, delete subtree) ────────────────────────────────
 
 describe('folder operations', () => {
@@ -455,14 +678,33 @@ describe('getCounters', () => {
     mk('d', 'digested');
     mk('e', 'failed');
     mk('f', 'pending-delete');
+    const digestionFailedRawId = mk('g', 'failed');
+    const now = '2026-01-01T00:00:00Z';
+    db.upsertDocumentStructure({
+      document: {
+        rawId: digestionFailedRawId,
+        docName: 'g',
+        docDescription: null,
+        unitType: 'line',
+        unitCount: 1,
+        structureStatus: 'ready',
+        structureError: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      nodes: [],
+    });
 
     const c = db.getCounters();
-    expect(c.rawTotal).toBe(6);
+    expect(c.rawTotal).toBe(7);
     expect(c.rawByStatus.ingesting).toBe(1);
     expect(c.rawByStatus.ingested).toBe(2);
     expect(c.rawByStatus.digested).toBe(1);
-    expect(c.rawByStatus.failed).toBe(1);
+    expect(c.rawByStatus.failed).toBe(2);
     expect(c.rawByStatus['pending-delete']).toBe(1);
+    expect(c.failedByStage.conversion).toBe(1);
+    expect(c.failedByStage.digestion).toBe(1);
+    expect(c.failedByStage.unknown).toBe(0);
     expect(c.pendingCount).toBe(3); // 2 ingested + 1 pending-delete
   });
 
@@ -482,6 +724,7 @@ describe('getCounters', () => {
     expect(c.topicCount).toBe(3);
     expect(c.connectionCount).toBe(2);
     expect(c.reflectionCount).toBe(1);
+    expect(c.staleReflectionCount).toBe(0);
   });
 });
 
@@ -529,6 +772,60 @@ describe('entry CRUD + tag filtering', () => {
     const entry = db.getEntry(`${rawId}-alpha`);
     expect(entry?.title).toBe('Alpha');
     expect(entry?.tags).toEqual(['core', 'shared']);
+  });
+
+  test('insertEntrySources stores source ranges with document labels', () => {
+    const rawId = seedRawWithEntries();
+    const now = '2026-01-02T00:00:00Z';
+    db.upsertDocumentStructure({
+      document: {
+        rawId,
+        docName: 'Manual.pdf',
+        docDescription: null,
+        unitType: 'page',
+        unitCount: 4,
+        structureStatus: 'ready',
+        structureError: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      nodes: [
+        {
+          nodeId: 'page-2',
+          rawId,
+          parentNodeId: null,
+          title: 'Page 2',
+          summary: null,
+          startUnit: 2,
+          endUnit: 2,
+          sortOrder: 2,
+          source: 'deterministic',
+          metadata: undefined,
+        },
+      ],
+    });
+    db.insertEntrySources([{
+      entryId: `${rawId}-alpha`,
+      rawId,
+      nodeId: 'page-2',
+      chunkId: 'chunk-0001-u2-2',
+      startUnit: 2,
+      endUnit: 2,
+    }]);
+
+    expect(db.listEntrySources(`${rawId}-alpha`)).toEqual([
+      expect.objectContaining({
+        entryId: `${rawId}-alpha`,
+        rawId,
+        nodeId: 'page-2',
+        chunkId: 'chunk-0001-u2-2',
+        startUnit: 2,
+        endUnit: 2,
+        docName: 'Manual.pdf',
+        unitType: 'page',
+        nodeTitle: 'Page 2',
+      }),
+    ]);
   });
 
   test('listEntries filters by rawId, tag, and folder', () => {
@@ -760,16 +1057,118 @@ describe('entry CRUD + tag filtering', () => {
 
   test('deleteEntriesByRawId cascades to entry_tags', () => {
     const rawId = seedRawWithEntries();
+    db.insertEntrySources([{
+      entryId: `${rawId}-alpha`,
+      rawId,
+      chunkId: 'chunk-0001-u1-1',
+      startUnit: 1,
+      endUnit: 1,
+    }]);
     const removed = db.deleteEntriesByRawId(rawId);
     expect(removed.sort()).toEqual([`${rawId}-alpha`, `${rawId}-beta`].sort());
     expect(db.listEntries({ tag: 'core' }).length).toBe(0);
     expect(db.listEntries({ tag: 'shared' }).length).toBe(0);
+    expect(db.listEntrySources(`${rawId}-alpha`)).toEqual([]);
+  });
+
+  test('deleteEntriesByRawId marks remaining co-topic entries stale before cascade', () => {
+    const rawId = seedRawWithEntries();
+    const other = makeRawFile('other entry source');
+    db.insertRaw({
+      rawId: other.rawId,
+      sha256: other.sha256,
+      status: 'digested',
+      byteLength: 18,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.insertEntry({
+      entryId: `${other.rawId}-gamma`,
+      rawId: other.rawId,
+      title: 'Gamma',
+      slug: 'gamma',
+      summary: 'remaining entry',
+      schemaVersion: 1,
+      digestedAt: '2026-01-02T00:00:00Z',
+      tags: [],
+    });
+    db.upsertTopic({ topicId: 'topic-shared', title: 'Shared', summary: null, content: null, updatedAt: '2026-01-03T00:00:00Z' });
+    db.assignEntries('topic-shared', [`${rawId}-alpha`, `${other.rawId}-gamma`]);
+    db.clearNeedsSynthesis([`${rawId}-alpha`, `${rawId}-beta`, `${other.rawId}-gamma`]);
+
+    db.deleteEntriesByRawId(rawId);
+
+    expect(db.listNeedsSynthesisEntryIds()).toEqual([`${other.rawId}-gamma`]);
+  });
+
+  test('deleteRaw marks remaining co-topic entries stale before raw cascade', () => {
+    const rawId = seedRawWithEntries();
+    const other = makeRawFile('other raw entry source');
+    db.insertRaw({
+      rawId: other.rawId,
+      sha256: other.sha256,
+      status: 'digested',
+      byteLength: 22,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.insertEntry({
+      entryId: `${other.rawId}-gamma`,
+      rawId: other.rawId,
+      title: 'Gamma',
+      slug: 'gamma',
+      summary: 'remaining entry',
+      schemaVersion: 1,
+      digestedAt: '2026-01-02T00:00:00Z',
+      tags: [],
+    });
+    db.upsertTopic({ topicId: 'topic-shared', title: 'Shared', summary: null, content: null, updatedAt: '2026-01-03T00:00:00Z' });
+    db.assignEntries('topic-shared', [`${rawId}-alpha`, `${other.rawId}-gamma`]);
+    db.clearNeedsSynthesis([`${rawId}-alpha`, `${rawId}-beta`, `${other.rawId}-gamma`]);
+
+    db.deleteRaw(rawId);
+
+    expect(db.listNeedsSynthesisEntryIds()).toEqual([`${other.rawId}-gamma`]);
   });
 
   test('entryIdTaken reports collisions for slug allocation', () => {
     const rawId = seedRawWithEntries();
     expect(db.entryIdTaken(`${rawId}-alpha`)).toBe(true);
     expect(db.entryIdTaken(`${rawId}-unknown`)).toBe(false);
+  });
+});
+
+// ─── Glossary ───────────────────────────────────────────────────────────────
+
+describe('glossary', () => {
+  test('add/list/update/delete glossary terms', () => {
+    const created = db.addGlossaryTerm('OEE', 'Overall Equipment Effectiveness', '2026-05-05T00:00:00Z');
+    expect(created).toMatchObject({
+      term: 'OEE',
+      expansion: 'Overall Equipment Effectiveness',
+    });
+    expect(db.listGlossary()).toHaveLength(1);
+
+    const updated = db.updateGlossaryTerm(created.id, 'OEE target', 'Overall Equipment Effectiveness target', '2026-05-05T00:01:00Z');
+    expect(updated).toMatchObject({
+      id: created.id,
+      term: 'OEE target',
+      expansion: 'Overall Equipment Effectiveness target',
+      updatedAt: '2026-05-05T00:01:00Z',
+    });
+
+    expect(db.deleteGlossaryTerm(created.id)).toBe(true);
+    expect(db.deleteGlossaryTerm(created.id)).toBe(false);
+    expect(db.listGlossary()).toEqual([]);
+  });
+
+  test('term uniqueness is case-insensitive', () => {
+    db.addGlossaryTerm('OEE', 'Overall Equipment Effectiveness');
+    expect(() => db.addGlossaryTerm('oee', 'duplicate')).toThrow(/UNIQUE/);
   });
 });
 
@@ -911,6 +1310,65 @@ describe('synthesis meta', () => {
     db.setSynthesisMeta('status', 'running');
     db.setSynthesisMeta('status', 'idle');
     expect(db.getSynthesisMeta('status')).toBe('idle');
+  });
+});
+
+describe('synthesis runs and topic history', () => {
+  test('tracks run lifecycle states', () => {
+    db.startSynthesisRun('run-1', 'incremental', '2026-05-05T00:00:00Z');
+    expect(db.getSynthesisRun('run-1')).toMatchObject({
+      runId: 'run-1',
+      mode: 'incremental',
+      status: 'running',
+      startedAt: '2026-05-05T00:00:00Z',
+      completedAt: null,
+      errorMessage: null,
+    });
+
+    db.finishSynthesisRun('run-1', 'completed', '2026-05-05T00:01:00Z');
+    expect(db.getSynthesisRun('run-1')).toMatchObject({
+      status: 'completed',
+      completedAt: '2026-05-05T00:01:00Z',
+      errorMessage: null,
+    });
+
+    db.startSynthesisRun('run-2', 'redream', '2026-05-05T00:02:00Z');
+    db.finishSynthesisRun('run-2', 'failed', '2026-05-05T00:03:00Z', 'boom');
+    expect(db.listSynthesisRuns().map((run) => run.runId)).toEqual(['run-2', 'run-1']);
+    expect(db.getSynthesisRun('run-2')).toMatchObject({
+      mode: 'redream',
+      status: 'failed',
+      errorMessage: 'boom',
+    });
+  });
+
+  test('stores topic history and preserves it across synthesis wipes', () => {
+    db.startSynthesisRun('run-history', 'incremental', '2026-05-05T00:00:00Z');
+    db.insertTopicHistory({
+      topicId: 'topic-a',
+      changeType: 'updated',
+      oldContent: 'old body',
+      newContent: 'new body',
+      entryIds: ['entry-1', 'entry-2'],
+      runId: 'run-history',
+      changedAt: '2026-05-05T00:01:00Z',
+    });
+
+    expect(db.listTopicHistory('topic-a')).toEqual([
+      expect.objectContaining({
+        topicId: 'topic-a',
+        changeType: 'updated',
+        oldContent: 'old body',
+        newContent: 'new body',
+        entryIds: ['entry-1', 'entry-2'],
+        runId: 'run-history',
+      }),
+    ]);
+
+    db.wipeSynthesis();
+
+    expect(db.getSynthesisRun('run-history')).not.toBeNull();
+    expect(db.listTopicHistory('topic-a')).toHaveLength(1);
   });
 });
 
@@ -1248,6 +1706,168 @@ describe('V1→V2 migration index ordering', () => {
       expect(migrated.countNeedsSynthesis()).toBe(1);
       // The index exists (verify by using it in a query).
       expect(migrated.listNeedsSynthesisEntryIds()).toEqual(['r1-test']);
+      migrated.insertEntrySources([{
+        entryId: 'r1-test',
+        rawId: 'r1',
+        chunkId: 'chunk-0001-u1-1',
+        startUnit: 1,
+        endUnit: 1,
+      }]);
+      expect(migrated.listEntrySources('r1-test')).toHaveLength(1);
+    } finally {
+      migrated.close();
+    }
+  });
+});
+
+describe('V2→V3 reflection migration', () => {
+  test('backfills original citation counts and bumps schema version', () => {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+    const Database = require('better-sqlite3');
+    const raw = new Database(dbPath);
+    raw.exec(`
+      PRAGMA foreign_keys = ON;
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta (key, value) VALUES ('schema_version', '2');
+      INSERT INTO meta (key, value) VALUES ('created_at', '2026-01-01T00:00:00Z');
+      CREATE TABLE raw (
+        raw_id TEXT PRIMARY KEY, sha256 TEXT NOT NULL, status TEXT NOT NULL,
+        byte_length INTEGER NOT NULL, mime_type TEXT, handler TEXT,
+        uploaded_at TEXT NOT NULL, digested_at TEXT, error_class TEXT,
+        error_message TEXT, metadata_json TEXT
+      );
+      CREATE TABLE folders (folder_path TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+      INSERT INTO folders (folder_path, created_at) VALUES ('', '2026-01-01T00:00:00Z');
+      CREATE TABLE raw_locations (
+        raw_id TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
+        folder_path TEXT NOT NULL REFERENCES folders(folder_path) ON DELETE RESTRICT,
+        filename TEXT NOT NULL, uploaded_at TEXT NOT NULL,
+        PRIMARY KEY (raw_id, folder_path, filename)
+      );
+      CREATE TABLE entries (
+        entry_id TEXT PRIMARY KEY, raw_id TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
+        title TEXT NOT NULL, slug TEXT NOT NULL, summary TEXT NOT NULL,
+        schema_version INTEGER NOT NULL, stale_schema INTEGER NOT NULL DEFAULT 0,
+        digested_at TEXT NOT NULL, needs_synthesis INTEGER NOT NULL DEFAULT 1
+      );
+      CREATE TABLE entry_tags (
+        entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+        tag TEXT NOT NULL, PRIMARY KEY (entry_id, tag)
+      );
+      CREATE TABLE synthesis_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      CREATE TABLE synthesis_topics (
+        topic_id TEXT PRIMARY KEY, title TEXT NOT NULL, summary TEXT,
+        content TEXT, updated_at TEXT NOT NULL
+      );
+      CREATE TABLE synthesis_topic_entries (
+        topic_id TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
+        entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+        PRIMARY KEY (topic_id, entry_id)
+      );
+      CREATE TABLE synthesis_connections (
+        source_topic TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
+        target_topic TEXT NOT NULL REFERENCES synthesis_topics(topic_id) ON DELETE CASCADE,
+        relationship TEXT NOT NULL, confidence TEXT NOT NULL DEFAULT 'inferred',
+        evidence TEXT, PRIMARY KEY (source_topic, target_topic)
+      );
+      CREATE TABLE synthesis_reflections (
+        reflection_id TEXT PRIMARY KEY, title TEXT NOT NULL, type TEXT NOT NULL,
+        summary TEXT, content TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+      CREATE TABLE synthesis_reflection_citations (
+        reflection_id TEXT NOT NULL REFERENCES synthesis_reflections(reflection_id) ON DELETE CASCADE,
+        entry_id TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+        PRIMARY KEY (reflection_id, entry_id)
+      );
+      INSERT INTO raw (raw_id, sha256, status, byte_length, mime_type, handler, uploaded_at)
+        VALUES ('r-v3', 'def456', 'digested', 10, 'text/plain', 'passthrough/text', '2026-01-01T00:00:00Z');
+      INSERT INTO entries (entry_id, raw_id, title, slug, summary, schema_version, digested_at)
+        VALUES
+          ('e-v3-a', 'r-v3', 'A', 'a', 'sum', 1, '2026-01-01T00:00:00Z'),
+          ('e-v3-b', 'r-v3', 'B', 'b', 'sum', 1, '2026-01-01T00:00:00Z');
+      INSERT INTO synthesis_reflections (reflection_id, title, type, summary, content, created_at)
+        VALUES ('ref-v3', 'Legacy Reflection', 'pattern', NULL, 'legacy content', '2026-01-01T00:00:00Z');
+      INSERT INTO synthesis_reflection_citations (reflection_id, entry_id)
+        VALUES ('ref-v3', 'e-v3-a'), ('ref-v3', 'e-v3-b');
+    `);
+    raw.close();
+
+    const migrated = new KbDatabase(dbPath);
+    try {
+      expect(migrated.getSchemaVersion()).toBe(KB_DB_SCHEMA_VERSION);
+      expect(migrated.listReflections()[0].citationCount).toBe(2);
+      migrated.upsertDocumentStructure({
+        document: {
+          rawId: 'r-v3',
+          docName: 'legacy.pdf',
+          docDescription: null,
+          unitType: 'page',
+          unitCount: 1,
+          structureStatus: 'ready',
+          structureError: null,
+          createdAt: '2026-01-01T00:00:00Z',
+          updatedAt: '2026-01-01T00:00:00Z',
+        },
+        nodes: [
+          { nodeId: 'page-1', rawId: 'r-v3', parentNodeId: null, title: 'Page 1', summary: null, startUnit: 1, endUnit: 1, sortOrder: 1, source: 'deterministic', metadata: undefined },
+        ],
+      });
+      expect(migrated.listDocumentNodes('r-v3')).toHaveLength(1);
+
+      migrated.deleteRaw('r-v3');
+
+      expect(migrated.listStaleReflectionIds()).toEqual(['ref-v3']);
+      expect(migrated.getDocument('r-v3')).toBeNull();
+    } finally {
+      migrated.close();
+    }
+  });
+});
+
+describe('V7→V8 digest session migration', () => {
+  test('adds chunk_progress_json to existing digest_session rows', () => {
+    db.close();
+    fs.rmSync(dbPath, { force: true });
+    const Database = require('better-sqlite3');
+    const raw = new Database(dbPath);
+    raw.exec(`
+      CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      INSERT INTO meta (key, value) VALUES ('schema_version', '7');
+      INSERT INTO meta (key, value) VALUES ('created_at', '2026-01-01T00:00:00Z');
+      CREATE TABLE digest_session (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        total INTEGER NOT NULL,
+        done INTEGER NOT NULL,
+        total_elapsed_ms INTEGER NOT NULL,
+        started_at TEXT NOT NULL
+      );
+      INSERT INTO digest_session (id, total, done, total_elapsed_ms, started_at)
+        VALUES (1, 1, 0, 0, '2026-01-01T00:00:00Z');
+    `);
+    raw.close();
+
+    const migrated = new KbDatabase(dbPath);
+    try {
+      migrated.upsertDigestSession({
+        total: 1,
+        done: 0,
+        totalElapsedMs: 0,
+        startedAt: '2026-01-01T00:00:00Z',
+        chunkProgress: {
+          done: 0,
+          total: 2,
+          active: 1,
+          phase: 'digesting',
+          current: { rawId: 'r1', chunkId: 'chunk-0001-u1-25' },
+        },
+      });
+      expect(migrated.getSchemaVersion()).toBe(KB_DB_SCHEMA_VERSION);
+      expect(migrated.getDigestSession()?.chunkProgress).toMatchObject({
+        total: 2,
+        active: 1,
+        phase: 'digesting',
+      });
     } finally {
       migrated.close();
     }
@@ -1563,6 +2183,7 @@ describe('synthesis reflections', () => {
 
     const stale = db.listStaleReflectionIds();
     expect(stale).toContain('ref-stale');
+    expect(db.getCounters().staleReflectionCount).toBe(1);
   });
 
   test('deleteReflections removes specific reflections', () => {

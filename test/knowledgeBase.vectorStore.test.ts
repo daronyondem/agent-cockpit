@@ -10,7 +10,7 @@
 //   - Hybrid search (reciprocal rank fusion)
 //   - findSimilarTopics
 //   - Stats (counts, embedded IDs)
-//   - Wipe all embeddings
+//   - Wipe all / topic-only embeddings
 //   - Dimension change detection (wipes tables, recreates schema)
 //   - Store metadata persistence
 
@@ -194,6 +194,17 @@ test('wipeAllEmbeddings clears all data but tables remain', async () => {
   // Tables still exist — can insert again.
   await store.upsertEntry('e2', 'C', 'c', [0, 0, 1]);
   expect(await store.entryCount()).toBe(1);
+});
+
+test('wipeTopicEmbeddings clears topics and preserves entries', async () => {
+  await store.upsertEntry('e1', 'A', 'a', [1, 0, 0]);
+  await store.upsertTopic('t1', 'B', 'b', [0, 1, 0]);
+
+  await store.wipeTopicEmbeddings();
+
+  expect(await store.entryCount()).toBe(1);
+  expect(await store.topicCount()).toBe(0);
+  expect((await store.embeddedEntryIds()).has('e1')).toBe(true);
 });
 
 // ── Metadata ────────────────────────────────────────────────────────────────

@@ -129,7 +129,14 @@ describe('getKbStateSnapshot / getKbDb', () => {
     expect(state!.raw).toEqual([]);
     expect(state!.folders).toEqual([]);
     expect(state!.counters.rawTotal).toBe(0);
+    expect(state!.counters.embeddingConfigured).toBe(false);
+    expect(state!.counters.entryEmbeddedCount).toBeNull();
+    expect(state!.counters.topicEmbeddedCount).toBeNull();
+    expect(state!.counters.embeddingIndexError).toBeNull();
     expect(state!.autoDigest).toBe(false);
+    expect(state!.dreamingStatus).toBe('idle');
+    expect(state!.dreamProgress).toBeNull();
+    expect(state!.needsSynthesisCount).toBe(0);
 
     // Should NOT have written state.db to disk for a disabled workspace.
     const dbPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'knowledge', 'state.db');
@@ -148,9 +155,145 @@ describe('getKbStateSnapshot / getKbDb', () => {
     // Root folder always exists after DB init.
     expect(state!.folders.some((f) => f.folderPath === '')).toBe(true);
     expect(state!.raw).toEqual([]);
+    expect(state!.counters.embeddingConfigured).toBe(false);
+    expect(state!.counters.entryEmbeddedCount).toBeNull();
+    expect(state!.counters.topicEmbeddedCount).toBeNull();
+    expect(state!.dreamingStatus).toBe('idle');
+    expect(state!.dreamProgress).toBeNull();
+    expect(state!.needsSynthesisCount).toBe(0);
 
     const dbPath = path.join(tmpDir, 'data', 'chat', 'workspaces', hash, 'knowledge', 'state.db');
     expect(fs.existsSync(dbPath)).toBe(true);
+  });
+
+  test('getKbStateSnapshot includes persisted dream progress', async () => {
+    await service.createConversation('KB Snap Dream', '/tmp/kb-snap-dream');
+    const hash = workspaceHash('/tmp/kb-snap-dream');
+    await service.setWorkspaceKbEnabled(hash, true);
+    const db = service.getKbDb(hash);
+    expect(db).not.toBeNull();
+    db!.setSynthesisMeta('status', 'running');
+    db!.setSynthesisMeta('dream_progress', JSON.stringify({
+      phase: 'reflection',
+      done: 3,
+      total: 9,
+      startedAt: 100,
+      phaseStartedAt: 200,
+    }));
+
+    const state = await service.getKbStateSnapshot(hash);
+
+    expect(state!.dreamingStatus).toBe('running');
+    expect(state!.dreamProgress).toEqual({
+      phase: 'reflection',
+      done: 3,
+      total: 9,
+      startedAt: 100,
+      phaseStartedAt: 200,
+    });
+  });
+
+  test('getKbStateSnapshot includes pending dream count', async () => {
+    await service.createConversation('KB Snap Dream Pending', '/tmp/kb-snap-dream-pending');
+    const hash = workspaceHash('/tmp/kb-snap-dream-pending');
+    await service.setWorkspaceKbEnabled(hash, true);
+    const db = service.getKbDb(hash)!;
+    db.insertRaw({
+      rawId: 'raw-dream-pending',
+      sha256: 'sha-dream-pending',
+      status: 'digested',
+      byteLength: 10,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.insertEntry({
+      entryId: 'entry-dream-pending',
+      rawId: 'raw-dream-pending',
+      title: 'Dream Pending',
+      slug: 'dream-pending',
+      summary: 'pending synthesis',
+      schemaVersion: 1,
+      digestedAt: '2026-01-01T00:00:00Z',
+      tags: [],
+    });
+
+    const state = await service.getKbStateSnapshot(hash);
+
+    expect(state!.needsSynthesisCount).toBe(1);
+  });
+
+  test('getKbStateSnapshot includes vector coverage counters when embeddings are configured', async () => {
+    await service.createConversation('KB Snap Vectors', '/tmp/kb-snap-vectors');
+    const hash = workspaceHash('/tmp/kb-snap-vectors');
+    await service.setWorkspaceKbEnabled(hash, true);
+    await service.setWorkspaceKbEmbeddingConfig(hash, {
+      model: 'test-embed',
+      ollamaHost: 'http://localhost:11434',
+      dimensions: 123,
+    });
+    const db = service.getKbDb(hash)!;
+    db.insertRaw({
+      rawId: 'raw-vector',
+      sha256: 'sha-vector',
+      status: 'digested',
+      byteLength: 10,
+      mimeType: 'text/plain',
+      handler: 'passthrough/text',
+      uploadedAt: '2026-01-01T00:00:00Z',
+      metadata: null,
+    });
+    db.insertEntry({
+      entryId: 'entry-present',
+      rawId: 'raw-vector',
+      title: 'Present',
+      slug: 'present',
+      summary: 'present entry',
+      schemaVersion: 1,
+      digestedAt: '2026-01-01T00:00:00Z',
+      tags: [],
+    });
+    db.upsertTopic({
+      topicId: 'topic-present',
+      title: 'Present Topic',
+      summary: 'present topic',
+      content: null,
+      updatedAt: '2026-01-01T00:00:00Z',
+    });
+    const store = {
+      embeddedEntryIds: jest.fn().mockResolvedValue(new Set(['entry-present', 'entry-stale'])),
+      embeddedTopicIds: jest.fn().mockResolvedValue(new Set(['topic-present', 'topic-stale'])),
+    };
+    const getStore = jest.spyOn(service, 'getKbVectorStore').mockResolvedValue(store as any);
+
+    const state = await service.getKbStateSnapshot(hash);
+
+    expect(getStore).toHaveBeenCalledWith(hash, 123);
+    expect(state!.counters.embeddingConfigured).toBe(true);
+    expect(state!.counters.entryEmbeddedCount).toBe(1);
+    expect(state!.counters.topicEmbeddedCount).toBe(1);
+    expect(state!.counters.embeddingIndexError).toBeNull();
+  });
+
+  test('getKbStateSnapshot keeps vector coverage failures non-fatal', async () => {
+    await service.createConversation('KB Snap Vector Error', '/tmp/kb-snap-vector-error');
+    const hash = workspaceHash('/tmp/kb-snap-vector-error');
+    await service.setWorkspaceKbEnabled(hash, true);
+    await service.setWorkspaceKbEmbeddingConfig(hash, {
+      model: 'test-embed',
+      ollamaHost: 'http://localhost:11434',
+      dimensions: 123,
+    });
+    jest.spyOn(service, 'getKbVectorStore').mockRejectedValue(new Error('vector unavailable'));
+
+    const state = await service.getKbStateSnapshot(hash);
+
+    expect(state).not.toBeNull();
+    expect(state!.counters.embeddingConfigured).toBe(true);
+    expect(state!.counters.entryEmbeddedCount).toBeNull();
+    expect(state!.counters.topicEmbeddedCount).toBeNull();
+    expect(state!.counters.embeddingIndexError).toBe('vector unavailable');
   });
 
   test('getKbDb returns a usable KbDatabase and caches it', async () => {

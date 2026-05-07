@@ -35,6 +35,7 @@ import {
 } from '../src/services/knowledgeBase/dream';
 import type { DreamOperation } from '../src/services/knowledgeBase/dreamOps';
 import * as dreamOpsMod from '../src/services/knowledgeBase/dreamOps';
+import * as embeddingsMod from '../src/services/knowledgeBase/embeddings';
 
 // ── extractAffectedTopicIds ───────────────────────────────────────────────
 
@@ -574,6 +575,8 @@ describe('KbDreamService', () => {
   function createMockDb() {
     return {
       setSynthesisMeta: jest.fn(),
+      startSynthesisRun: jest.fn(),
+      finishSynthesisRun: jest.fn(),
       listNeedsSynthesisEntryIds: jest.fn().mockReturnValue([]),
       listTopicSummaries: jest.fn().mockReturnValue([]),
       wipeSynthesis: jest.fn(),
@@ -584,6 +587,12 @@ describe('KbDreamService', () => {
       getEntry: jest.fn().mockReturnValue({ title: 'Test', summary: 'Summary', tags: [] }),
       clearNeedsSynthesis: jest.fn(),
       listTopicConnections: jest.fn().mockReturnValue([]),
+      listTopics: jest.fn().mockReturnValue([]),
+      listTopicEntryIds: jest.fn().mockReturnValue([]),
+      listStaleReflectionIds: jest.fn().mockReturnValue([]),
+      listAllConnections: jest.fn().mockReturnValue([]),
+      deleteReflections: jest.fn(),
+      wipeReflections: jest.fn(),
     };
   }
 
@@ -631,6 +640,7 @@ describe('KbDreamService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    (embeddingsMod.embedBatch as jest.Mock).mockResolvedValue([]);
     mockDb = createMockDb();
     mockChatService = createMockChatService(mockDb);
     mockKbSearchMcp = createMockKbSearchMcp();
@@ -737,6 +747,13 @@ describe('KbDreamService', () => {
     expect(result.errors).toEqual([]);
     expect(mockDb.setSynthesisMeta).toHaveBeenCalledWith('status', 'running');
     expect(mockDb.setSynthesisMeta).toHaveBeenCalledWith('status', 'idle');
+    expect(mockDb.startSynthesisRun).toHaveBeenCalledWith(expect.any(String), 'incremental', expect.any(String));
+    expect(mockDb.finishSynthesisRun).toHaveBeenCalledWith(
+      expect.any(String),
+      'completed',
+      expect.any(String),
+      null,
+    );
     expect(mockDb._deleteOrphanTopics).toHaveBeenCalled();
     expect(mockKbSearchMcp.revokeKbSearchSession).toHaveBeenCalledWith('ws-hash');
   });
@@ -749,8 +766,51 @@ describe('KbDreamService', () => {
     const result = await service.redream('ws-hash');
 
     expect(result.mode).toBe('full-rebuild');
+    expect(mockDb.startSynthesisRun).toHaveBeenCalledWith(expect.any(String), 'redream', expect.any(String));
     expect(mockDb.wipeSynthesis).toHaveBeenCalled();
     expect(mockDb.markAllNeedsSynthesis).toHaveBeenCalled();
+  });
+
+  test('redream wipes topic embeddings without deleting entry embeddings', async () => {
+    const mockStore = {
+      wipeTopicEmbeddings: jest.fn().mockResolvedValue(undefined),
+      wipeAllEmbeddings: jest.fn().mockResolvedValue(undefined),
+    };
+    mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue({
+      model: 'test',
+      ollamaHost: 'http://localhost:11434',
+      dimensions: 768,
+    });
+    mockChatService.getKbVectorStore.mockResolvedValue(mockStore as any);
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue([]);
+
+    await service.redream('ws-hash');
+
+    expect(mockStore.wipeTopicEmbeddings).toHaveBeenCalled();
+    expect(mockStore.wipeAllEmbeddings).not.toHaveBeenCalled();
+  });
+
+  test('redream refreshes entry embeddings during cold start', async () => {
+    const mockStore = {
+      wipeTopicEmbeddings: jest.fn().mockResolvedValue(undefined),
+      setModel: jest.fn().mockResolvedValue(undefined),
+      upsertEntry: jest.fn().mockResolvedValue(undefined),
+      upsertTopic: jest.fn().mockResolvedValue(undefined),
+      embeddedTopicIds: jest.fn().mockResolvedValue(new Set()),
+    };
+    mockChatService.getWorkspaceKbEmbeddingConfig.mockResolvedValue({
+      model: 'test',
+      ollamaHost: 'http://localhost:11434',
+      dimensions: 768,
+    });
+    mockChatService.getKbVectorStore.mockResolvedValue(mockStore as any);
+    mockDb.listNeedsSynthesisEntryIds.mockReturnValue(['entry-1']);
+    mockDb.listTopicSummaries.mockReturnValue([]);
+    (embeddingsMod.embedBatch as jest.Mock).mockResolvedValue([{ embedding: [1, 0, 0] }]);
+
+    await service.redream('ws-hash');
+
+    expect(mockStore.upsertEntry).toHaveBeenCalledWith('entry-1', 'Test', 'Summary', [1, 0, 0]);
   });
 
   // ── dream: cold-start path with entries but no topics ─────────────────
@@ -816,6 +876,12 @@ describe('KbDreamService', () => {
 
     // The error should be captured in result.errors.
     expect(result.errors.length).toBeGreaterThan(0);
+    expect(mockDb.finishSynthesisRun).toHaveBeenCalledWith(
+      expect.any(String),
+      'failed',
+      expect.any(String),
+      'settings boom',
+    );
     expect(mockKbSearchMcp.revokeKbSearchSession).toHaveBeenCalledWith('ws-hash');
   });
 
@@ -921,6 +987,12 @@ describe('KbDreamService', () => {
     expect(mockDb.setSynthesisMeta).toHaveBeenCalledWith('status', 'idle');
     // stopped_at meta persisted.
     expect(mockDb.setSynthesisMeta).toHaveBeenCalledWith('stopped_at', expect.any(String));
+    expect(mockDb.finishSynthesisRun).toHaveBeenCalledWith(
+      expect.any(String),
+      'stopped',
+      expect.any(String),
+      null,
+    );
     // last_run_at NOT touched on stop.
     const lastRunAtCalls = mockDb.setSynthesisMeta.mock.calls.filter(
       (c: unknown[]) => c[0] === 'last_run_at',

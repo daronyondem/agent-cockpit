@@ -6,6 +6,7 @@
 //     live in multiple folders (Option B multi-location)
 //   - entries: digested entries (metadata only; bodies live on disk)
 //   - entry_tags: tag index for search/browse
+//   - kb_entry_sources: source ranges that produced each digested entry
 //
 // All writes go through this class; no code outside `knowledgeBase/` should
 // talk to the DB directly. Concurrency is single-threaded per workspace —
@@ -29,6 +30,8 @@ import path from 'path';
 import crypto from 'crypto';
 import type {
   KbCounters,
+  KbDigestChunkProgress,
+  KbDreamProgress,
   KbEntry,
   KbErrorClass,
   KbFolder,
@@ -37,7 +40,7 @@ import type {
 } from '../../types';
 
 /** Version of the DB's own schema. Bumped on destructive schema changes. */
-export const KB_DB_SCHEMA_VERSION = 2;
+export const KB_DB_SCHEMA_VERSION = 8;
 
 /** Default page size for folder listings. */
 export const DEFAULT_RAW_PAGE_SIZE = 500;
@@ -83,6 +86,34 @@ const SCHEMA_DDL = `
   CREATE INDEX IF NOT EXISTS idx_raw_loc_folder   ON raw_locations(folder_path);
   CREATE INDEX IF NOT EXISTS idx_raw_loc_filename ON raw_locations(filename);
 
+  CREATE TABLE IF NOT EXISTS kb_documents (
+    raw_id           TEXT PRIMARY KEY REFERENCES raw(raw_id) ON DELETE CASCADE,
+    doc_name         TEXT NOT NULL,
+    doc_description  TEXT,
+    unit_type        TEXT NOT NULL,
+    unit_count       INTEGER NOT NULL DEFAULT 0,
+    structure_status TEXT NOT NULL DEFAULT 'ready',
+    structure_error  TEXT,
+    created_at       TEXT NOT NULL,
+    updated_at       TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS kb_document_nodes (
+    node_id        TEXT NOT NULL,
+    raw_id         TEXT NOT NULL REFERENCES kb_documents(raw_id) ON DELETE CASCADE,
+    parent_node_id TEXT,
+    title          TEXT NOT NULL,
+    summary        TEXT,
+    start_unit     INTEGER NOT NULL,
+    end_unit       INTEGER NOT NULL,
+    sort_order     INTEGER NOT NULL,
+    source         TEXT NOT NULL,
+    metadata_json  TEXT,
+    PRIMARY KEY (raw_id, node_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_kb_doc_nodes_raw_order ON kb_document_nodes(raw_id, sort_order);
+  CREATE INDEX IF NOT EXISTS idx_kb_doc_nodes_parent ON kb_document_nodes(raw_id, parent_node_id);
+
   CREATE TABLE IF NOT EXISTS entries (
     entry_id       TEXT PRIMARY KEY,
     raw_id         TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
@@ -102,6 +133,26 @@ const SCHEMA_DDL = `
     PRIMARY KEY (entry_id, tag)
   );
   CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
+
+  CREATE TABLE IF NOT EXISTS kb_entry_sources (
+    entry_id   TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+    raw_id     TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
+    node_id    TEXT,
+    chunk_id   TEXT NOT NULL,
+    start_unit INTEGER NOT NULL,
+    end_unit   INTEGER NOT NULL,
+    PRIMARY KEY (entry_id, raw_id, chunk_id, start_unit, end_unit)
+  );
+  CREATE INDEX IF NOT EXISTS idx_kb_entry_sources_raw ON kb_entry_sources(raw_id);
+  CREATE INDEX IF NOT EXISTS idx_kb_entry_sources_entry ON kb_entry_sources(entry_id);
+
+  CREATE TABLE IF NOT EXISTS kb_glossary (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    term       TEXT NOT NULL COLLATE NOCASE UNIQUE,
+    expansion  TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
 
   -- ── Synthesis (Dreaming) ──────────────────────────────────────────────────
 
@@ -135,6 +186,28 @@ const SCHEMA_DDL = `
   );
   CREATE INDEX IF NOT EXISTS idx_conn_target ON synthesis_connections(target_topic);
 
+  CREATE TABLE IF NOT EXISTS synthesis_runs (
+    run_id        TEXT PRIMARY KEY,
+    mode          TEXT NOT NULL,
+    status        TEXT NOT NULL,
+    started_at    TEXT NOT NULL,
+    completed_at  TEXT,
+    error_message TEXT
+  );
+
+  CREATE TABLE IF NOT EXISTS synthesis_topic_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic_id    TEXT NOT NULL,
+    change_type TEXT NOT NULL,
+    old_content TEXT,
+    new_content TEXT,
+    entry_ids   TEXT,
+    run_id      TEXT REFERENCES synthesis_runs(run_id),
+    changed_at  TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_topic_history_topic ON synthesis_topic_history(topic_id);
+  CREATE INDEX IF NOT EXISTS idx_topic_history_run ON synthesis_topic_history(run_id);
+
   -- ── Reflections (Phase E) ─────────────────────────────────────────────────
 
   CREATE TABLE IF NOT EXISTS synthesis_reflections (
@@ -165,7 +238,8 @@ const SCHEMA_DDL = `
     total             INTEGER NOT NULL,
     done              INTEGER NOT NULL,
     total_elapsed_ms  INTEGER NOT NULL,
-    started_at        TEXT NOT NULL
+    started_at        TEXT NOT NULL,
+    chunk_progress_json TEXT
   );
 `;
 
@@ -224,10 +298,79 @@ export interface InsertEntryParams {
   tags: string[];
 }
 
+/** Parameters for inserting one source range that contributed to an entry. */
+export interface InsertEntrySourceParams {
+  entryId: string;
+  rawId: string;
+  nodeId?: string | null;
+  chunkId: string;
+  startUnit: number;
+  endUnit: number;
+}
+
+/** Parameters for atomically replacing one raw's digested entries. */
+export interface ReplaceEntryParams extends InsertEntryParams {
+  sources: Array<Omit<InsertEntrySourceParams, 'entryId'>>;
+}
+
 /** Stored error details for a raw row (when status === 'failed'). */
 export interface RawError {
   errorClass: KbErrorClass;
   errorMessage: string;
+}
+
+export type KbDocumentUnitType = 'page' | 'slide' | 'line' | 'section' | 'unknown';
+export type KbDocumentStructureStatus = 'ready' | 'failed';
+export type KbDocumentNodeSource = 'deterministic' | 'ai' | 'fallback';
+
+export interface KbDocumentRow {
+  rawId: string;
+  docName: string;
+  docDescription: string | null;
+  unitType: KbDocumentUnitType;
+  unitCount: number;
+  structureStatus: KbDocumentStructureStatus;
+  structureError: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KbDocumentNodeRow {
+  nodeId: string;
+  rawId: string;
+  parentNodeId: string | null;
+  title: string;
+  summary: string | null;
+  startUnit: number;
+  endUnit: number;
+  sortOrder: number;
+  source: KbDocumentNodeSource;
+  metadata?: Record<string, unknown>;
+}
+
+export interface KbEntrySourceRow {
+  entryId: string;
+  rawId: string;
+  nodeId: string | null;
+  chunkId: string;
+  startUnit: number;
+  endUnit: number;
+  docName: string | null;
+  unitType: KbDocumentUnitType | null;
+  nodeTitle: string | null;
+}
+
+export interface KbGlossaryRow {
+  id: number;
+  term: string;
+  expansion: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpsertDocumentStructureParams {
+  document: KbDocumentRow;
+  nodes: KbDocumentNodeRow[];
 }
 
 // ── Synthesis types ─────────────────────────────────────────────────────────
@@ -270,6 +413,33 @@ export interface SynthesisConnectionRow {
   evidence: string | null;
 }
 
+export type SynthesisRunMode = 'incremental' | 'redream';
+export type SynthesisRunStatus = 'running' | 'completed' | 'failed' | 'stopped';
+
+export interface SynthesisRunRow {
+  runId: string;
+  mode: SynthesisRunMode;
+  status: SynthesisRunStatus;
+  startedAt: string;
+  completedAt: string | null;
+  errorMessage: string | null;
+}
+
+export interface InsertTopicHistoryParams {
+  topicId: string;
+  changeType: 'created' | 'updated' | 'merged_into' | 'split_from' | 'deleted';
+  oldContent: string | null;
+  newContent: string | null;
+  entryIds: string[];
+  runId?: string | null;
+  changedAt: string;
+}
+
+export interface SynthesisTopicHistoryRow extends InsertTopicHistoryParams {
+  id: number;
+  runId: string | null;
+}
+
 /** DB row shape for synthesis_reflections. */
 export interface SynthesisReflectionRow {
   reflectionId: string;
@@ -301,13 +471,7 @@ export interface SynthesisSnapshot {
   connectionCount: number;
   needsSynthesisCount: number;
   godNodes: string[];
-  dreamProgress: {
-    phase: string;
-    done: number;
-    total: number;
-    startedAt?: number;
-    phaseStartedAt?: number;
-  } | null;
+  dreamProgress: KbDreamProgress | null;
   reflectionCount: number;
   staleReflectionCount: number;
 }
@@ -330,6 +494,41 @@ export interface DigestSessionRow {
   done: number;
   totalElapsedMs: number;
   startedAt: string;
+  chunkProgress?: KbDigestChunkProgress | null;
+}
+
+function parseDigestChunkProgress(raw: string | null): KbDigestChunkProgress | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Partial<KbDigestChunkProgress>;
+    if (!parsed || typeof parsed !== 'object') return null;
+    const phase = parsed.phase === 'digesting' ||
+      parsed.phase === 'parsing' ||
+      parsed.phase === 'committing' ||
+      parsed.phase === 'planning'
+      ? parsed.phase
+      : 'planning';
+    const progress: KbDigestChunkProgress = {
+      done: Math.max(0, Number(parsed.done) || 0),
+      total: Math.max(0, Number(parsed.total) || 0),
+      active: Math.max(0, Number(parsed.active) || 0),
+      phase,
+    };
+    if (parsed.current && typeof parsed.current === 'object' && typeof parsed.current.rawId === 'string') {
+      progress.current = {
+        rawId: parsed.current.rawId,
+        chunkId: typeof parsed.current.chunkId === 'string' ? parsed.current.chunkId : undefined,
+        index: typeof parsed.current.index === 'number' && Number.isFinite(parsed.current.index) ? parsed.current.index : undefined,
+        total: typeof parsed.current.total === 'number' && Number.isFinite(parsed.current.total) ? parsed.current.total : undefined,
+        startUnit: typeof parsed.current.startUnit === 'number' && Number.isFinite(parsed.current.startUnit) ? parsed.current.startUnit : undefined,
+        endUnit: typeof parsed.current.endUnit === 'number' && Number.isFinite(parsed.current.endUnit) ? parsed.current.endUnit : undefined,
+        unitType: typeof parsed.current.unitType === 'string' ? parsed.current.unitType : undefined,
+      };
+    }
+    return progress;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -647,6 +846,7 @@ export class KbDatabase {
         )
         .all(rawId)
         .map((r) => r.entry_id);
+      this.markCoTopicEntriesStale(entries);
       // raw cascades → entries + entry_tags; raw_locations cascades too.
       // synthesis_topic_entries and synthesis_reflection_citations also
       // cascade-delete, potentially leaving orphan topics.
@@ -777,6 +977,13 @@ export class KbDatabase {
       .all();
   }
 
+  /** List every raw row across the workspace. Used by maintenance jobs. */
+  listAllRaw(): RawDbRow[] {
+    return this.db
+      .prepare<unknown[], RawDbRow>('SELECT * FROM raw ORDER BY uploaded_at, raw_id')
+      .all();
+  }
+
   /**
    * List raw IDs with `status = 'ingested'` across the whole workspace
    * (ready for digestion). Used by the "Digest All Pending" batch runner.
@@ -788,6 +995,194 @@ export class KbDatabase {
       )
       .all()
       .map((r) => r.raw_id);
+  }
+
+  // ── Document structure ──────────────────────────────────────────────────
+
+  upsertDocumentStructure(params: UpsertDocumentStructureParams): void {
+    this.transaction(() => {
+      const d = params.document;
+      this.db
+        .prepare(
+          `INSERT INTO kb_documents
+           (raw_id, doc_name, doc_description, unit_type, unit_count, structure_status, structure_error, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(raw_id) DO UPDATE SET
+             doc_name = excluded.doc_name,
+             doc_description = excluded.doc_description,
+             unit_type = excluded.unit_type,
+             unit_count = excluded.unit_count,
+             structure_status = excluded.structure_status,
+             structure_error = excluded.structure_error,
+             updated_at = excluded.updated_at`,
+        )
+        .run(
+          d.rawId,
+          d.docName,
+          d.docDescription,
+          d.unitType,
+          d.unitCount,
+          d.structureStatus,
+          d.structureError,
+          d.createdAt,
+          d.updatedAt,
+        );
+
+      this.db.prepare('DELETE FROM kb_document_nodes WHERE raw_id = ?').run(d.rawId);
+      const insertNode = this.db.prepare(
+        `INSERT INTO kb_document_nodes
+         (node_id, raw_id, parent_node_id, title, summary, start_unit, end_unit, sort_order, source, metadata_json)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const node of params.nodes) {
+        insertNode.run(
+          node.nodeId,
+          d.rawId,
+          node.parentNodeId,
+          node.title,
+          node.summary,
+          node.startUnit,
+          node.endUnit,
+          node.sortOrder,
+          node.source,
+          node.metadata ? JSON.stringify(node.metadata) : null,
+        );
+      }
+    });
+  }
+
+  getDocument(rawId: string): KbDocumentRow | null {
+    const row = this.db
+      .prepare<
+        unknown[],
+        {
+          raw_id: string;
+          doc_name: string;
+          doc_description: string | null;
+          unit_type: string;
+          unit_count: number;
+          structure_status: string;
+          structure_error: string | null;
+          created_at: string;
+          updated_at: string;
+        }
+      >('SELECT * FROM kb_documents WHERE raw_id = ?')
+      .get(rawId);
+    return row ? documentRowFromDb(row) : null;
+  }
+
+  listDocumentNodes(rawId: string): KbDocumentNodeRow[] {
+    const rows = this.db
+      .prepare<
+        unknown[],
+        {
+          node_id: string;
+          raw_id: string;
+          parent_node_id: string | null;
+          title: string;
+          summary: string | null;
+          start_unit: number;
+          end_unit: number;
+          sort_order: number;
+          source: string;
+          metadata_json: string | null;
+        }
+      >('SELECT * FROM kb_document_nodes WHERE raw_id = ? ORDER BY sort_order, start_unit, node_id')
+      .all(rawId);
+    return rows.map(documentNodeRowFromDb);
+  }
+
+  listDocuments(opts: { query?: string; limit?: number } = {}): KbDocumentRow[] {
+    const limit = opts.limit ?? 50;
+    const params: unknown[] = [];
+    let where = '';
+    if (opts.query && opts.query.trim() !== '') {
+      const needle = '%' + opts.query.trim().replace(/[\\%_]/g, (c) => '\\' + c) + '%';
+      where = "WHERE doc_name LIKE ? ESCAPE '\\' COLLATE NOCASE OR doc_description LIKE ? ESCAPE '\\' COLLATE NOCASE";
+      params.push(needle, needle);
+    }
+    const rows = this.db
+      .prepare<
+        unknown[],
+        {
+          raw_id: string;
+          doc_name: string;
+          doc_description: string | null;
+          unit_type: string;
+          unit_count: number;
+          structure_status: string;
+          structure_error: string | null;
+          created_at: string;
+          updated_at: string;
+        }
+      >(`SELECT * FROM kb_documents ${where} ORDER BY updated_at DESC, doc_name LIMIT ?`)
+      .all(...params, limit);
+    return rows.map(documentRowFromDb);
+  }
+
+  deleteDocumentStructure(rawId: string): void {
+    this.db.prepare('DELETE FROM kb_documents WHERE raw_id = ?').run(rawId);
+  }
+
+  // ── Glossary ────────────────────────────────────────────────────────────
+
+  listGlossary(): KbGlossaryRow[] {
+    const rows = this.db
+      .prepare<
+        unknown[],
+        {
+          id: number;
+          term: string;
+          expansion: string;
+          created_at: string;
+          updated_at: string;
+        }
+      >('SELECT id, term, expansion, created_at, updated_at FROM kb_glossary ORDER BY term COLLATE NOCASE')
+      .all();
+    return rows.map(glossaryRowFromDb);
+  }
+
+  getGlossaryTerm(id: number): KbGlossaryRow | null {
+    const row = this.db
+      .prepare<
+        unknown[],
+        {
+          id: number;
+          term: string;
+          expansion: string;
+          created_at: string;
+          updated_at: string;
+        }
+      >('SELECT id, term, expansion, created_at, updated_at FROM kb_glossary WHERE id = ?')
+      .get(id);
+    return row ? glossaryRowFromDb(row) : null;
+  }
+
+  addGlossaryTerm(term: string, expansion: string, now = new Date().toISOString()): KbGlossaryRow {
+    const info = this.db
+      .prepare(
+        `INSERT INTO kb_glossary (term, expansion, created_at, updated_at)
+         VALUES (?, ?, ?, ?)`,
+      )
+      .run(term.trim(), expansion.trim(), now, now);
+    return this.getGlossaryTerm(Number(info.lastInsertRowid))!;
+  }
+
+  updateGlossaryTerm(id: number, term: string, expansion: string, now = new Date().toISOString()): KbGlossaryRow | null {
+    const info = this.db
+      .prepare(
+        `UPDATE kb_glossary
+         SET term = ?, expansion = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(term.trim(), expansion.trim(), now, id);
+    if (info.changes === 0) return null;
+    return this.getGlossaryTerm(id);
+  }
+
+  deleteGlossaryTerm(id: number): boolean {
+    const info = this.db.prepare('DELETE FROM kb_glossary WHERE id = ?').run(id);
+    return info.changes > 0;
   }
 
   // ── Counters ─────────────────────────────────────────────────────────────
@@ -813,11 +1208,42 @@ export class KbDatabase {
       }
       rawTotal += row.n;
     }
+    const failedByStageRow = this.db
+      .prepare<
+        unknown[],
+        {
+          conversion: number;
+          digestion: number;
+        }
+      >(
+        `SELECT
+           COALESCE(SUM(CASE WHEN r.status = 'failed' AND d.raw_id IS NULL THEN 1 ELSE 0 END), 0) AS conversion,
+           COALESCE(SUM(CASE WHEN r.status = 'failed' AND d.raw_id IS NOT NULL THEN 1 ELSE 0 END), 0) AS digestion
+         FROM raw r
+         LEFT JOIN kb_documents d ON d.raw_id = r.raw_id`,
+      )
+      .get();
+    const conversionFailedCount = failedByStageRow?.conversion ?? 0;
+    const digestionFailedCount = failedByStageRow?.digestion ?? 0;
+    const failedByStage = {
+      conversion: conversionFailedCount,
+      digestion: digestionFailedCount,
+      unknown: Math.max(0, rawByStatus.failed - conversionFailedCount - digestionFailedCount),
+    };
     const entryCountRow = this.db
       .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM entries')
       .get();
     const folderCountRow = this.db
       .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM folders')
+      .get();
+    const documentCountRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM kb_documents')
+      .get();
+    const documentNodeCountRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM kb_document_nodes')
+      .get();
+    const entrySourceCountRow = this.db
+      .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM kb_entry_sources')
       .get();
     const topicCountRow = this.db
       .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_topics')
@@ -828,15 +1254,21 @@ export class KbDatabase {
     const reflectionCountRow = this.db
       .prepare<unknown[], { n: number }>('SELECT COUNT(*) AS n FROM synthesis_reflections')
       .get();
+    const staleReflectionCount = this._countStaleReflections();
     return {
       rawTotal,
       rawByStatus,
+      failedByStage,
       entryCount: entryCountRow?.n ?? 0,
       pendingCount: rawByStatus.ingested + rawByStatus['pending-delete'],
       folderCount: folderCountRow?.n ?? 0,
+      documentCount: documentCountRow?.n ?? 0,
+      documentNodeCount: documentNodeCountRow?.n ?? 0,
+      entrySourceCount: entrySourceCountRow?.n ?? 0,
       topicCount: topicCountRow?.n ?? 0,
       connectionCount: connectionCountRow?.n ?? 0,
       reflectionCount: reflectionCountRow?.n ?? 0,
+      staleReflectionCount,
     };
   }
 
@@ -868,6 +1300,123 @@ export class KbDatabase {
     });
   }
 
+  insertEntrySources(sources: InsertEntrySourceParams[]): void {
+    if (sources.length === 0) return;
+    const insert = this.db.prepare(
+      `INSERT OR IGNORE INTO kb_entry_sources
+       (entry_id, raw_id, node_id, chunk_id, start_unit, end_unit)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    this.transaction(() => {
+      for (const source of sources) {
+        insert.run(
+          source.entryId,
+          source.rawId,
+          source.nodeId ?? null,
+          source.chunkId,
+          source.startUnit,
+          source.endUnit,
+        );
+      }
+    });
+  }
+
+  /**
+   * Replace every entry for `rawId` in one DB transaction. Used by redigest
+   * after the caller has staged entry files, so a DB insertion failure cannot
+   * leave the raw with stale rows deleted and only some replacements inserted.
+   */
+  replaceEntriesForRawId(rawId: string, entries: ReplaceEntryParams[]): string[] {
+    return this.transaction(() => {
+      const staleIds = this.listEntryIdsByRawId(rawId);
+      this.markCoTopicEntriesStale(staleIds);
+      this.db.prepare('DELETE FROM entries WHERE raw_id = ?').run(rawId);
+
+      const insertEntry = this.db.prepare(
+        `INSERT INTO entries
+         (entry_id, raw_id, title, slug, summary, schema_version, stale_schema, digested_at)
+         VALUES (?, ?, ?, ?, ?, ?, 0, ?)`,
+      );
+      const insertTag = this.db.prepare(
+        'INSERT OR IGNORE INTO entry_tags (entry_id, tag) VALUES (?, ?)',
+      );
+      const insertSource = this.db.prepare(
+        `INSERT OR IGNORE INTO kb_entry_sources
+         (entry_id, raw_id, node_id, chunk_id, start_unit, end_unit)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      );
+
+      for (const entry of entries) {
+        if (entry.rawId !== rawId) {
+          throw new Error(`Entry ${entry.entryId} belongs to ${entry.rawId}, not ${rawId}.`);
+        }
+        insertEntry.run(
+          entry.entryId,
+          entry.rawId,
+          entry.title,
+          entry.slug,
+          entry.summary,
+          entry.schemaVersion,
+          entry.digestedAt,
+        );
+        for (const tag of entry.tags) {
+          insertTag.run(entry.entryId, tag);
+        }
+        for (const source of entry.sources) {
+          insertSource.run(
+            entry.entryId,
+            source.rawId,
+            source.nodeId ?? null,
+            source.chunkId,
+            source.startUnit,
+            source.endUnit,
+          );
+        }
+      }
+
+      return staleIds;
+    });
+  }
+
+  listEntrySources(entryId: string): KbEntrySourceRow[] {
+    const rows = this.db
+      .prepare<
+        unknown[],
+        {
+          entry_id: string;
+          raw_id: string;
+          node_id: string | null;
+          chunk_id: string;
+          start_unit: number;
+          end_unit: number;
+          doc_name: string | null;
+          unit_type: string | null;
+          node_title: string | null;
+        }
+      >(
+        `SELECT
+           s.entry_id, s.raw_id, s.node_id, s.chunk_id, s.start_unit, s.end_unit,
+           d.doc_name, d.unit_type, n.title AS node_title
+         FROM kb_entry_sources s
+         LEFT JOIN kb_documents d ON d.raw_id = s.raw_id
+         LEFT JOIN kb_document_nodes n ON n.raw_id = s.raw_id AND n.node_id = s.node_id
+         WHERE s.entry_id = ?
+         ORDER BY s.start_unit, s.end_unit, s.chunk_id`,
+      )
+      .all(entryId);
+    return rows.map((r) => ({
+      entryId: r.entry_id,
+      rawId: r.raw_id,
+      nodeId: r.node_id,
+      chunkId: r.chunk_id,
+      startUnit: r.start_unit,
+      endUnit: r.end_unit,
+      docName: r.doc_name,
+      unitType: r.unit_type as KbDocumentUnitType | null,
+      nodeTitle: r.node_title,
+    }));
+  }
+
   /**
    * Delete all entries for a raw ID and return their entryIds so the
    * caller can rm -rf `entries/<entryId>/` on disk. Used during redigest
@@ -875,16 +1424,30 @@ export class KbDatabase {
    */
   deleteEntriesByRawId(rawId: string): string[] {
     return this.transaction(() => {
-      const ids = this.db
-        .prepare<unknown[], { entry_id: string }>(
-          'SELECT entry_id FROM entries WHERE raw_id = ?',
-        )
-        .all(rawId)
-        .map((r) => r.entry_id);
+      const ids = this.listEntryIdsByRawId(rawId);
+      this.markCoTopicEntriesStale(ids);
       // entry_tags cascades on entries delete.
       this.db.prepare('DELETE FROM entries WHERE raw_id = ?').run(rawId);
       return ids;
     });
+  }
+
+  listEntryIdsByRawId(rawId: string): string[] {
+    return this.db
+      .prepare<unknown[], { entry_id: string }>(
+        'SELECT entry_id FROM entries WHERE raw_id = ? ORDER BY entry_id',
+      )
+      .all(rawId)
+      .map((r) => r.entry_id);
+  }
+
+  listEntryIds(): string[] {
+    return this.db
+      .prepare<unknown[], { entry_id: string }>(
+        'SELECT entry_id FROM entries ORDER BY entry_id',
+      )
+      .all()
+      .map((r) => r.entry_id);
   }
 
   entryExists(entryId: string): boolean {
@@ -1170,6 +1733,106 @@ export class KbDatabase {
     };
   }
 
+  startSynthesisRun(runId: string, mode: SynthesisRunMode, startedAt: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO synthesis_runs (run_id, mode, status, started_at, completed_at, error_message)
+         VALUES (?, ?, 'running', ?, NULL, NULL)`,
+      )
+      .run(runId, mode, startedAt);
+  }
+
+  finishSynthesisRun(
+    runId: string,
+    status: Exclude<SynthesisRunStatus, 'running'>,
+    completedAt: string,
+    errorMessage: string | null = null,
+  ): void {
+    this.db
+      .prepare(
+        `UPDATE synthesis_runs
+         SET status = ?, completed_at = ?, error_message = ?
+         WHERE run_id = ?`,
+      )
+      .run(status, completedAt, errorMessage, runId);
+  }
+
+  getSynthesisRun(runId: string): SynthesisRunRow | null {
+    const row = this.db
+      .prepare<
+        unknown[],
+        { run_id: string; mode: SynthesisRunMode; status: SynthesisRunStatus; started_at: string; completed_at: string | null; error_message: string | null }
+      >(
+        `SELECT run_id, mode, status, started_at, completed_at, error_message
+         FROM synthesis_runs
+         WHERE run_id = ?`,
+      )
+      .get(runId);
+    return row ? this._mapSynthesisRun(row) : null;
+  }
+
+  listSynthesisRuns(limit = 50): SynthesisRunRow[] {
+    const safeLimit = Math.max(1, Math.min(limit, 500));
+    const rows = this.db
+      .prepare<
+        unknown[],
+        { run_id: string; mode: SynthesisRunMode; status: SynthesisRunStatus; started_at: string; completed_at: string | null; error_message: string | null }
+      >(
+        `SELECT run_id, mode, status, started_at, completed_at, error_message
+         FROM synthesis_runs
+         ORDER BY started_at DESC
+         LIMIT ?`,
+      )
+      .all(safeLimit);
+    return rows.map((row) => this._mapSynthesisRun(row));
+  }
+
+  insertTopicHistory(params: InsertTopicHistoryParams): SynthesisTopicHistoryRow {
+    const entryIdsJson = JSON.stringify(params.entryIds);
+    const result = this.db
+      .prepare(
+        `INSERT INTO synthesis_topic_history
+           (topic_id, change_type, old_content, new_content, entry_ids, run_id, changed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        params.topicId,
+        params.changeType,
+        params.oldContent,
+        params.newContent,
+        entryIdsJson,
+        params.runId ?? null,
+        params.changedAt,
+      );
+    return {
+      id: Number(result.lastInsertRowid),
+      ...params,
+      runId: params.runId ?? null,
+      entryIds: params.entryIds,
+    };
+  }
+
+  listTopicHistory(topicId?: string): SynthesisTopicHistoryRow[] {
+    const select =
+      `SELECT id, topic_id, change_type, old_content, new_content, entry_ids, run_id, changed_at
+       FROM synthesis_topic_history`;
+    const order = ' ORDER BY changed_at DESC, id DESC';
+    const rows = topicId
+      ? this.db
+        .prepare<
+          unknown[],
+          { id: number; topic_id: string; change_type: InsertTopicHistoryParams['changeType']; old_content: string | null; new_content: string | null; entry_ids: string | null; run_id: string | null; changed_at: string }
+        >(`${select} WHERE topic_id = ?${order}`)
+        .all(topicId)
+      : this.db
+        .prepare<
+          unknown[],
+          { id: number; topic_id: string; change_type: InsertTopicHistoryParams['changeType']; old_content: string | null; new_content: string | null; entry_ids: string | null; run_id: string | null; changed_at: string }
+        >(`${select}${order}`)
+        .all();
+    return rows.map((row) => this._mapTopicHistory(row));
+  }
+
   /** Count entries that need synthesis. */
   countNeedsSynthesis(): number {
     const row = this.db
@@ -1329,6 +1992,15 @@ export class KbDatabase {
       )
       .all()
       .map((r) => ({ topicId: r.topic_id, title: r.title, summary: r.summary }));
+  }
+
+  listTopicIds(): string[] {
+    return this.db
+      .prepare<unknown[], { topic_id: string }>(
+        'SELECT topic_id FROM synthesis_topics ORDER BY topic_id',
+      )
+      .all()
+      .map((r) => r.topic_id);
   }
 
   // ── Synthesis Topic-Entry Membership ────────────────────────────────────
@@ -1710,9 +2382,10 @@ export class KbDatabase {
           done: number;
           total_elapsed_ms: number;
           started_at: string;
+          chunk_progress_json: string | null;
         }
       >(
-        'SELECT total, done, total_elapsed_ms, started_at FROM digest_session WHERE id = 1',
+        'SELECT total, done, total_elapsed_ms, started_at, chunk_progress_json FROM digest_session WHERE id = 1',
       )
       .get();
     if (!row) return null;
@@ -1721,6 +2394,7 @@ export class KbDatabase {
       done: row.done,
       totalElapsedMs: row.total_elapsed_ms,
       startedAt: row.started_at,
+      chunkProgress: parseDigestChunkProgress(row.chunk_progress_json),
     };
   }
 
@@ -1728,15 +2402,22 @@ export class KbDatabase {
   upsertDigestSession(row: DigestSessionRow): void {
     this.db
       .prepare(
-        `INSERT INTO digest_session (id, total, done, total_elapsed_ms, started_at)
-         VALUES (1, ?, ?, ?, ?)
+        `INSERT INTO digest_session (id, total, done, total_elapsed_ms, started_at, chunk_progress_json)
+         VALUES (1, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            total = excluded.total,
            done = excluded.done,
            total_elapsed_ms = excluded.total_elapsed_ms,
-           started_at = excluded.started_at`,
+           started_at = excluded.started_at,
+           chunk_progress_json = excluded.chunk_progress_json`,
       )
-      .run(row.total, row.done, row.totalElapsedMs, row.startedAt);
+      .run(
+        row.total,
+        row.done,
+        row.totalElapsedMs,
+        row.startedAt,
+        row.chunkProgress ? JSON.stringify(row.chunkProgress) : null,
+      );
   }
 
   /** Delete the digestion-session row when the queue drains. */
@@ -1745,6 +2426,57 @@ export class KbDatabase {
   }
 
   // ── Internals ────────────────────────────────────────────────────────────
+
+  private _mapSynthesisRun(row: {
+    run_id: string;
+    mode: SynthesisRunMode;
+    status: SynthesisRunStatus;
+    started_at: string;
+    completed_at: string | null;
+    error_message: string | null;
+  }): SynthesisRunRow {
+    return {
+      runId: row.run_id,
+      mode: row.mode,
+      status: row.status,
+      startedAt: row.started_at,
+      completedAt: row.completed_at,
+      errorMessage: row.error_message,
+    };
+  }
+
+  private _mapTopicHistory(row: {
+    id: number;
+    topic_id: string;
+    change_type: InsertTopicHistoryParams['changeType'];
+    old_content: string | null;
+    new_content: string | null;
+    entry_ids: string | null;
+    run_id: string | null;
+    changed_at: string;
+  }): SynthesisTopicHistoryRow {
+    let entryIds: string[] = [];
+    if (row.entry_ids) {
+      try {
+        const parsed = JSON.parse(row.entry_ids);
+        if (Array.isArray(parsed)) {
+          entryIds = parsed.filter((id): id is string => typeof id === 'string');
+        }
+      } catch {
+        entryIds = [];
+      }
+    }
+    return {
+      id: row.id,
+      topicId: row.topic_id,
+      changeType: row.change_type,
+      oldContent: row.old_content,
+      newContent: row.new_content,
+      entryIds,
+      runId: row.run_id,
+      changedAt: row.changed_at,
+    };
+  }
 
   private _initSchema(): void {
     this.db.exec(SCHEMA_DDL);
@@ -1767,6 +2499,16 @@ export class KbDatabase {
     this._migrateV2();
     // ── V3 migration: add original_citation_count to synthesis_reflections ──
     this._migrateV3();
+    // ── V4 migration: add document structure tables ────────────────────────
+    this._migrateV4();
+    // ── V5 migration: add entry source lineage table ───────────────────────
+    this._migrateV5();
+    // ── V6 migration: add glossary query-expansion table ──────────────────
+    this._migrateV6();
+    // ── V7 migration: add synthesis run + topic history tables ────────────
+    this._migrateV7();
+    // ── V8 migration: add live chunk progress to digest_session ────────────
+    this._migrateV8();
 
     // Create the needs_synthesis partial index AFTER the V2 migration so that
     // V1 databases already have the column by the time we reference it.
@@ -1806,7 +2548,7 @@ export class KbDatabase {
     // Update schema_version in meta.
     this.db
       .prepare('UPDATE meta SET value = ? WHERE key = ?')
-      .run(String(KB_DB_SCHEMA_VERSION), 'schema_version');
+      .run('2', 'schema_version');
   }
 
   /**
@@ -1817,18 +2559,82 @@ export class KbDatabase {
     const cols = this.db
       .prepare<unknown[], { name: string }>('PRAGMA table_info(synthesis_reflections)')
       .all();
-    if (cols.length === 0) return; // table doesn't exist yet (fresh DB, DDL runs later via SCHEMA_DDL)
+    if (cols.length === 0) return;
     const hasColumn = cols.some((c) => c.name === 'original_citation_count');
-    if (hasColumn) return;
-    this.db.exec(
-      'ALTER TABLE synthesis_reflections ADD COLUMN original_citation_count INTEGER NOT NULL DEFAULT 0',
-    );
-    // Backfill from current citation counts.
-    this.db.exec(
-      `UPDATE synthesis_reflections SET original_citation_count = (
-         SELECT COUNT(*) FROM synthesis_reflection_citations WHERE reflection_id = synthesis_reflections.reflection_id
-       )`,
-    );
+    if (!hasColumn) {
+      this.db.exec(
+        'ALTER TABLE synthesis_reflections ADD COLUMN original_citation_count INTEGER NOT NULL DEFAULT 0',
+      );
+      // Backfill from current citation counts.
+      this.db.exec(
+        `UPDATE synthesis_reflections SET original_citation_count = (
+           SELECT COUNT(*) FROM synthesis_reflection_citations WHERE reflection_id = synthesis_reflections.reflection_id
+         )`,
+      );
+    }
+    this.db
+      .prepare('UPDATE meta SET value = ? WHERE key = ?')
+      .run('3', 'schema_version');
+  }
+
+  /**
+   * V4 migration: add document structure tables for range-aware retrieval.
+   * `SCHEMA_DDL` creates the tables and indexes idempotently before this
+   * runs, so the migration only records that the DB has reached V4.
+   */
+  private _migrateV4(): void {
+    this.db
+      .prepare('UPDATE meta SET value = ? WHERE key = ?')
+      .run('4', 'schema_version');
+  }
+
+  /**
+   * V5 migration: add entry source lineage table for chunked digestion.
+   * `SCHEMA_DDL` creates the table and indexes idempotently before this
+   * runs, so the migration only records that the DB has reached V5.
+   */
+  private _migrateV5(): void {
+    this.db
+      .prepare('UPDATE meta SET value = ? WHERE key = ?')
+      .run('5', 'schema_version');
+  }
+
+  /**
+   * V6 migration: add glossary query-expansion table.
+   * `SCHEMA_DDL` creates the table idempotently before this runs.
+   */
+  private _migrateV6(): void {
+    this.db
+      .prepare('UPDATE meta SET value = ? WHERE key = ?')
+      .run('6', 'schema_version');
+  }
+
+  /**
+   * V7 migration: add synthesis run tracking and topic history tables.
+   * `SCHEMA_DDL` creates the tables and indexes idempotently before this
+   * runs, so the migration only records that the DB has reached V7.
+   */
+  private _migrateV7(): void {
+    this.db
+      .prepare('UPDATE meta SET value = ? WHERE key = ?')
+      .run('7', 'schema_version');
+  }
+
+  /**
+   * V8 migration: add `chunk_progress_json` to digest_session so live
+   * planning/chunk counters survive KB Browser refetches during digestion.
+   */
+  private _migrateV8(): void {
+    const cols = this.db
+      .prepare<unknown[], { name: string }>('PRAGMA table_info(digest_session)')
+      .all();
+    const hasColumn = cols.some((c) => c.name === 'chunk_progress_json');
+    if (!hasColumn) {
+      this.db.exec('ALTER TABLE digest_session ADD COLUMN chunk_progress_json TEXT');
+    }
+    this.db
+      .prepare('UPDATE meta SET value = ? WHERE key = ?')
+      .run(String(KB_DB_SCHEMA_VERSION), 'schema_version');
   }
 
   /**
@@ -2061,6 +2867,72 @@ function rawJoinRowToEntry(row: RawJoinRow): KbRawEntry {
     errorMessage: row.error_message,
     metadata: row.metadata_json ? parseMetadata(row.metadata_json) : undefined,
     entryCount: row.entry_count ?? 0,
+  };
+}
+
+function documentRowFromDb(row: {
+  raw_id: string;
+  doc_name: string;
+  doc_description: string | null;
+  unit_type: string;
+  unit_count: number;
+  structure_status: string;
+  structure_error: string | null;
+  created_at: string;
+  updated_at: string;
+}): KbDocumentRow {
+  return {
+    rawId: row.raw_id,
+    docName: row.doc_name,
+    docDescription: row.doc_description,
+    unitType: row.unit_type as KbDocumentUnitType,
+    unitCount: row.unit_count,
+    structureStatus: row.structure_status as KbDocumentStructureStatus,
+    structureError: row.structure_error,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function documentNodeRowFromDb(row: {
+  node_id: string;
+  raw_id: string;
+  parent_node_id: string | null;
+  title: string;
+  summary: string | null;
+  start_unit: number;
+  end_unit: number;
+  sort_order: number;
+  source: string;
+  metadata_json: string | null;
+}): KbDocumentNodeRow {
+  return {
+    nodeId: row.node_id,
+    rawId: row.raw_id,
+    parentNodeId: row.parent_node_id,
+    title: row.title,
+    summary: row.summary,
+    startUnit: row.start_unit,
+    endUnit: row.end_unit,
+    sortOrder: row.sort_order,
+    source: row.source as KbDocumentNodeSource,
+    metadata: row.metadata_json ? parseMetadata(row.metadata_json) : undefined,
+  };
+}
+
+function glossaryRowFromDb(row: {
+  id: number;
+  term: string;
+  expansion: string;
+  created_at: string;
+  updated_at: string;
+}): KbGlossaryRow {
+  return {
+    id: row.id,
+    term: row.term,
+    expansion: row.expansion,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 

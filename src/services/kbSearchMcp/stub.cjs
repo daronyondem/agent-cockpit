@@ -110,6 +110,38 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_topic_neighborhood',
+    description:
+      'Traverse synthesized topic connections around a seed topic. ' +
+      'Use this to inspect graph neighbors through explicit relationships.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        topic_id: {
+          type: 'string',
+          description: 'The seed topic ID.',
+        },
+        depth: {
+          type: 'number',
+          description: 'Traversal depth, capped at 2 (default 1).',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max topics to return (default 10).',
+        },
+        min_confidence: {
+          type: 'string',
+          description: 'Minimum confidence: extracted, inferred, or speculative (default inferred).',
+        },
+        include_entries: {
+          type: 'boolean',
+          description: 'Include assigned entry summaries for returned topics.',
+        },
+      },
+      required: ['topic_id'],
+    },
+  },
+  {
     name: 'search_entries',
     description:
       'Hybrid search (semantic + keyword) over all digested entries in the ' +
@@ -127,6 +159,72 @@ const TOOLS = [
         },
       },
       required: ['query'],
+    },
+  },
+  {
+    name: 'list_documents',
+    description:
+      'List converted knowledge-base documents and their structure status. ' +
+      'Use this before fetching document structure or source ranges.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Optional filename/description search query.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max results to return, clamped to 1-100 (default 20).',
+        },
+      },
+    },
+  },
+  {
+    name: 'get_document_structure',
+    description:
+      'Return a document range tree without full body text. Use this to inspect pages, slides, sections, or fallback ranges.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        raw_id: {
+          type: 'string',
+          description: 'Raw document ID.',
+        },
+        offset: {
+          type: 'number',
+          description: 'Zero-based node offset for large structures (default 0).',
+        },
+        limit: {
+          type: 'number',
+          description: 'Max structure nodes to return, clamped to 1-500 (default 200).',
+        },
+      },
+      required: ['raw_id'],
+    },
+  },
+  {
+    name: 'get_source_range',
+    description:
+      'Read a bounded page/slide/line/section range from a converted source document. ' +
+      'Use this instead of asking for the whole document.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        raw_id: {
+          type: 'string',
+          description: 'Raw document ID.',
+        },
+        start_unit: {
+          type: 'number',
+          description: 'First page/slide/line/section number to read, 1-based.',
+        },
+        end_unit: {
+          type: 'number',
+          description: 'Last page/slide/line/section number to read, inclusive.',
+        },
+      },
+      required: ['raw_id', 'start_unit', 'end_unit'],
     },
   },
   {

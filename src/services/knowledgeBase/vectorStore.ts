@@ -447,6 +447,12 @@ export class KbVectorStore {
     await this.db.exec('DELETE FROM topic_embeddings');
   }
 
+  /** Delete only topic vectors. Entry vectors remain available for retrieval. */
+  async wipeTopicEmbeddings(): Promise<void> {
+    await this.ready();
+    await this.db.exec('DELETE FROM topic_embeddings');
+  }
+
   // ── Cleanup ───────────────────────────────────────────────────────────
 
   async close(): Promise<void> {

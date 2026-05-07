@@ -644,7 +644,8 @@ interface CliUpdatesResponse {
     "cliConcurrency": 2,
     "dreamingStrongMatchThreshold": 0.75,
     "dreamingBorderlineThreshold": 0.45,
-    "convertSlidesToImages": false
+    "convertSlidesToImages": false,
+    "kbGleaningEnabled": false
   }
 }
 ```
@@ -661,7 +662,7 @@ The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the star
 
 The `memory` block configures the globally-shared **Memory CLI profile** used for `memory_note` MCP processing and post-session extraction (see Section 5 — Workspace Memory).
 
-The `knowledgeBase` block configures the globally-shared **Ingestion CLI profile**, **Digestion CLI profile**, and **Dreaming CLI profile** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). The matching legacy `*CliBackend` fields are retained as fallbacks and are aligned to the selected profile vendors on save. Ingestion is opt-in (must be vision-capable, currently used for AI-assisted page/slide/image conversion at ingest time); leaving it unset falls back to image-only references for visual content. Digestion and Dreaming require a configured profile/backend before they run. `cliConcurrency` (default 2) caps how many documents are processed in parallel by ingestion, digestion, and dreaming pipelines per workspace; within a single document, work stays sequential. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
+The `knowledgeBase` block configures the globally-shared **Ingestion CLI profile**, **Digestion CLI profile**, and **Dreaming CLI profile** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). The matching legacy `*CliBackend` fields are retained as fallbacks and are aligned to the selected profile vendors on save. Ingestion is opt-in (must be vision-capable, currently used for AI-assisted page/slide/image conversion at ingest time); leaving it unset falls back to image-only references for visual content. Digestion and Dreaming require a configured profile/backend before they run. `cliConcurrency` (default 2) caps how many documents are processed in parallel by ingestion, digestion, and dreaming pipelines per workspace; within a single document, work stays sequential. `kbGleaningEnabled` (default `false`) opts digestion into a second per-chunk pass that asks for missed entries after the first extraction. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
 
 **Migration:** `dreamingConcurrency` was renamed to `cliConcurrency` in the hybrid-ingestion design (PR 1). On read, `SettingsService.getSettings()` copies `dreamingConcurrency` forward to `cliConcurrency` when the new key is missing — disk state is left untouched until the next save. Existing settings files load without warnings; the deprecated `dreamingConcurrency` field stays on the `Settings` type for one release cycle, then is removed.
 
@@ -669,7 +670,7 @@ The `knowledgeBase` block configures the globally-shared **Ingestion CLI profile
 
 ## KB SQLite Schema (Complete)
 
-Each workspace owns one `knowledge/state.db` (better-sqlite3, WAL mode, `foreign_keys = ON`). Schema version is tracked in the `meta` table and bumped on migrations. Current version: **3** (`KB_DB_SCHEMA_VERSION`).
+Each workspace owns one `knowledge/state.db` (better-sqlite3, WAL mode, `foreign_keys = ON`). Schema version is tracked in the `meta` table and bumped on migrations. Current version: **8** (`KB_DB_SCHEMA_VERSION`).
 
 **Pragmas:** `journal_mode = WAL` (Write-Ahead Logging for concurrent reads), `foreign_keys = ON`.
 
@@ -716,6 +717,36 @@ CREATE TABLE IF NOT EXISTS raw_locations (
 CREATE INDEX IF NOT EXISTS idx_raw_loc_folder   ON raw_locations(folder_path);
 CREATE INDEX IF NOT EXISTS idx_raw_loc_filename ON raw_locations(filename);
 
+-- Per-raw document structure root metadata
+CREATE TABLE IF NOT EXISTS kb_documents (
+  raw_id           TEXT PRIMARY KEY REFERENCES raw(raw_id) ON DELETE CASCADE,
+  doc_name         TEXT NOT NULL,
+  doc_description  TEXT,
+  unit_type        TEXT NOT NULL,      -- 'page'|'slide'|'line'|'section'|'unknown'
+  unit_count       INTEGER NOT NULL DEFAULT 0,
+  structure_status TEXT NOT NULL DEFAULT 'ready', -- 'ready'|'failed'
+  structure_error  TEXT,
+  created_at       TEXT NOT NULL,      -- ISO 8601
+  updated_at       TEXT NOT NULL       -- ISO 8601
+);
+
+-- Deterministic or AI-assisted range nodes inside a document
+CREATE TABLE IF NOT EXISTS kb_document_nodes (
+  node_id        TEXT NOT NULL,
+  raw_id         TEXT NOT NULL REFERENCES kb_documents(raw_id) ON DELETE CASCADE,
+  parent_node_id TEXT,
+  title          TEXT NOT NULL,
+  summary        TEXT,
+  start_unit     INTEGER NOT NULL,
+  end_unit       INTEGER NOT NULL,
+  sort_order     INTEGER NOT NULL,
+  source         TEXT NOT NULL,        -- 'deterministic'|'ai'|'fallback'
+  metadata_json  TEXT,
+  PRIMARY KEY (raw_id, node_id)
+);
+CREATE INDEX IF NOT EXISTS idx_kb_doc_nodes_raw_order ON kb_document_nodes(raw_id, sort_order);
+CREATE INDEX IF NOT EXISTS idx_kb_doc_nodes_parent ON kb_document_nodes(raw_id, parent_node_id);
+
 -- Digested entry metadata (one or more entries per raw file)
 CREATE TABLE IF NOT EXISTS entries (
   entry_id        TEXT PRIMARY KEY,    -- format: <rawId>-<slug>[-<n>]
@@ -739,6 +770,28 @@ CREATE TABLE IF NOT EXISTS entry_tags (
   PRIMARY KEY (entry_id, tag)
 );
 CREATE INDEX IF NOT EXISTS idx_entry_tags_tag ON entry_tags(tag);
+
+-- Source ranges that contributed to each digested entry
+CREATE TABLE IF NOT EXISTS kb_entry_sources (
+  entry_id   TEXT NOT NULL REFERENCES entries(entry_id) ON DELETE CASCADE,
+  raw_id     TEXT NOT NULL REFERENCES raw(raw_id) ON DELETE CASCADE,
+  node_id    TEXT,                     -- representative node only for single-node chunks; NULL for merged ranges
+  chunk_id   TEXT NOT NULL,            -- deterministic chunk id from planDigestChunks()
+  start_unit INTEGER NOT NULL,
+  end_unit   INTEGER NOT NULL,
+  PRIMARY KEY (entry_id, raw_id, chunk_id, start_unit, end_unit)
+);
+CREATE INDEX IF NOT EXISTS idx_kb_entry_sources_raw ON kb_entry_sources(raw_id);
+CREATE INDEX IF NOT EXISTS idx_kb_entry_sources_entry ON kb_entry_sources(entry_id);
+
+-- Workspace glossary for query expansion in KB search tools
+CREATE TABLE IF NOT EXISTS kb_glossary (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  term       TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  expansion  TEXT NOT NULL,
+  created_at TEXT NOT NULL,            -- ISO 8601
+  updated_at TEXT NOT NULL             -- ISO 8601
+);
 
 -- Dream run metadata key/value store
 CREATE TABLE IF NOT EXISTS synthesis_meta (
@@ -775,6 +828,30 @@ CREATE TABLE IF NOT EXISTS synthesis_connections (
 );
 CREATE INDEX IF NOT EXISTS idx_conn_target ON synthesis_connections(target_topic);
 
+-- One row per Dream/Re-Dream run for auditable lifecycle status
+CREATE TABLE IF NOT EXISTS synthesis_runs (
+  run_id        TEXT PRIMARY KEY,
+  mode          TEXT NOT NULL,         -- 'incremental'|'redream'
+  status        TEXT NOT NULL,         -- 'running'|'completed'|'failed'|'stopped'
+  started_at    TEXT NOT NULL,         -- ISO 8601
+  completed_at  TEXT,                  -- ISO 8601, null while running
+  error_message TEXT                   -- fatal error or nonfatal warnings summary
+);
+
+-- Topic evolution history written by mutating topic operations
+CREATE TABLE IF NOT EXISTS synthesis_topic_history (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  topic_id    TEXT NOT NULL,
+  change_type TEXT NOT NULL,           -- 'created'|'updated'|'merged_into'|'split_from'|'deleted'
+  old_content TEXT,
+  new_content TEXT,
+  entry_ids   TEXT,                    -- JSON array of entry IDs assigned at change time
+  run_id      TEXT REFERENCES synthesis_runs(run_id),
+  changed_at  TEXT NOT NULL            -- ISO 8601
+);
+CREATE INDEX IF NOT EXISTS idx_topic_history_topic ON synthesis_topic_history(topic_id);
+CREATE INDEX IF NOT EXISTS idx_topic_history_run ON synthesis_topic_history(run_id);
+
 -- Reflections: cross-cluster insights from the Reflection phase
 CREATE TABLE IF NOT EXISTS synthesis_reflections (
   reflection_id          TEXT PRIMARY KEY,
@@ -805,7 +882,8 @@ CREATE TABLE IF NOT EXISTS digest_session (
   total             INTEGER NOT NULL,
   done              INTEGER NOT NULL,
   total_elapsed_ms  INTEGER NOT NULL,
-  started_at        TEXT NOT NULL
+  started_at        TEXT NOT NULL,
+  chunk_progress_json TEXT              -- optional KbDigestChunkProgress JSON for live chunk planning/digestion status
 );
 ```
 
@@ -814,9 +892,13 @@ CREATE TABLE IF NOT EXISTS digest_session (
 | Parent | Child | ON DELETE | Effect |
 |--------|-------|-----------|--------|
 | `raw` | `raw_locations` | CASCADE | Deleting raw removes all location rows |
+| `raw` | `kb_documents` | CASCADE | Deleting raw removes its document-structure root |
+| `kb_documents` | `kb_document_nodes` | CASCADE | Deleting document structure removes all range nodes |
 | `raw` | `entries` | CASCADE | Deleting raw removes all derived entries |
+| `raw` | `kb_entry_sources` | CASCADE | Deleting raw removes all entry source ranges |
 | `folders` | `raw_locations` | RESTRICT | Cannot delete folder with locations (must empty first) |
 | `entries` | `entry_tags` | CASCADE | Deleting entry removes its tags |
+| `entries` | `kb_entry_sources` | CASCADE | Deleting or redigesting entries removes old lineage |
 | `entries` | `synthesis_topic_entries` | CASCADE | Deleting entry removes its topic assignments (may orphan topics) |
 | `entries` | `synthesis_reflection_citations` | CASCADE | Deleting entry removes citation rows (may make reflections stale) |
 | `synthesis_topics` | `synthesis_topic_entries` | CASCADE | Deleting topic removes entry assignments |
@@ -832,8 +914,13 @@ CREATE TABLE IF NOT EXISTS digest_session (
 Schema version is stored in `meta.schema_version`. Migrations are applied at DB open time by `_initSchema()`:
 
 - **V1 → V2** (`_migrateV2`): Adds `needs_synthesis INTEGER NOT NULL DEFAULT 1` column to `entries` table. All existing entries get `needs_synthesis = 1` (pending).
-- **V2 → V3** (`_migrateV3`): Adds `original_citation_count INTEGER NOT NULL DEFAULT 0` to `synthesis_reflections` table. Backfills existing reflections by counting their current citation rows.
-- **V1 → V3**: Runs V2 then V3 sequentially.
+- **V2 → V3** (`_migrateV3`): Adds `original_citation_count INTEGER NOT NULL DEFAULT 0` to `synthesis_reflections` table. Backfills existing reflections by counting their current citation rows and updates `meta.schema_version` to `3` even when the column already exists.
+- **V3 → V4** (`_migrateV4`): Adds `kb_documents` and `kb_document_nodes` through the idempotent schema DDL and updates `meta.schema_version` to `4`.
+- **V4 → V5** (`_migrateV5`): Adds `kb_entry_sources` through the idempotent schema DDL and updates `meta.schema_version` to `5`.
+- **V5 → V6** (`_migrateV6`): Adds `kb_glossary` through the idempotent schema DDL and updates `meta.schema_version` to `6`.
+- **V6 → V7** (`_migrateV7`): Adds `synthesis_runs` and `synthesis_topic_history` through the idempotent schema DDL and updates `meta.schema_version` to `7`.
+- **V7 → V8** (`_migrateV8`): Adds nullable `digest_session.chunk_progress_json` so live chunk planning/digestion progress can be persisted while a digest session is active, then updates `meta.schema_version` to `KB_DB_SCHEMA_VERSION`.
+- **V1 → V8**: Runs V2, V3, V4, V5, V6, V7, then V8 sequentially.
 
 ### Legacy Migration (state.json → state.db)
 
@@ -926,12 +1013,25 @@ interface KbEntry {
 interface KbCounters {
   rawTotal: number;
   rawByStatus: Record<KbRawStatus, number>;  // count per status
+  failedByStage: {
+    conversion: number; // failed before any document structure row exists
+    digestion: number;  // failed after conversion wrote kb_documents
+    unknown: number;    // defensive remainder if status data cannot be classified
+  };
   entryCount: number;
-  pendingCount: number;   // ingested + pending-delete
+  pendingCount: number;   // internal digest queue aggregate: ingested + pending-delete
   folderCount: number;
+  documentCount: number;
+  documentNodeCount: number;
+  entrySourceCount: number;
   topicCount: number;
   connectionCount: number;
   reflectionCount: number;
+  staleReflectionCount: number;
+  embeddingConfigured?: boolean;      // true when the workspace has KB embedding config
+  entryEmbeddedCount?: number | null; // current DB entries that also exist in the PGLite vector store
+  topicEmbeddedCount?: number | null; // current DB topics that also exist in the PGLite vector store
+  embeddingIndexError?: string | null; // non-fatal vector-store read error, if coverage could not be checked
 }
 
 type KbAutoDreamMode = 'off' | 'interval' | 'window';
@@ -955,6 +1055,15 @@ interface KbState {
   entrySchemaVersion: number;   // KB_ENTRY_SCHEMA_VERSION (currently 1)
   autoDigest: boolean;
   autoDream: KbAutoDreamConfig;  // mirrors WorkspaceIndex.kbAutoDream, normalized to { mode: 'off' } when absent
+  dreamingStatus: KbSynthesisStatus; // persisted synthesis status, overlaid to running by GET /kb while the in-memory dream lock is active
+  dreamProgress: {
+    phase: 'routing' | 'verification' | 'synthesis' | 'discovery' | 'reflection';
+    done: number;
+    total: number;
+    startedAt?: number;
+    phaseStartedAt?: number;
+  } | null;
+  needsSynthesisCount: number;  // digested entries still awaiting Dream/Synthesis
   counters: KbCounters;
   folders: KbFolder[];
   raw: KbRawEntry[];            // one page of the focused folder
@@ -1059,6 +1168,31 @@ interface KbDigestProgress {
   avgMsPerItem: number;
   /** Estimated remaining wall-clock time (ms). Omitted until `done >= 2`. */
   etaMs?: number;
+  /** Live aggregate chunk planning/extraction status for the active session. */
+  chunks?: KbDigestChunkProgress;
+}
+
+type KbDigestChunkPhase = 'planning' | 'digesting' | 'parsing' | 'committing';
+
+interface KbDigestChunkProgress {
+  /** Chunks parsed successfully since the session opened. */
+  done: number;
+  /** Chunks planned so far; grows as queued raws reach the planner. */
+  total: number;
+  /** Chunks currently inside CLI extraction or parse handling. */
+  active: number;
+  /** Coarse phase for the most recently updated chunk/write step. */
+  phase: KbDigestChunkPhase;
+  /** Most recently updated raw/chunk; aggregate sessions may have more than one active chunk. */
+  current?: {
+    rawId: string;
+    chunkId?: string;
+    index?: number;
+    total?: number;
+    startUnit?: number;
+    endUnit?: number;
+    unitType?: string;
+  };
 }
 
 /** WebSocket frame emitted for KB state changes */
@@ -1073,9 +1207,10 @@ interface KbStateUpdateEvent {
     autoDream?: boolean;
     /**
      * Aggregate digestion progress. Emitted on every enqueue and every
-     * task settle; a final `null` signal fires when the queue drains so
-     * the UI can clear the indicator. Persisted to `digest_session` so
-     * `GET /kb` can rehydrate after a browser reload.
+     * task settle and on chunk planning/extraction phase changes; a final
+     * `null` signal fires when the queue drains so the UI can clear the
+     * indicator. Persisted to `digest_session` so `GET /kb` can rehydrate
+     * after a browser reload.
      */
     digestProgress?: KbDigestProgress | null;
     digestion?: { active: boolean; entriesCreated: number };
@@ -1112,12 +1247,13 @@ interface BackendRuntimeEvent {
 
 | Constant | Value | File | Purpose |
 |----------|-------|------|---------|
-| `KB_DB_SCHEMA_VERSION` | 3 | db.ts | Current SQLite schema version |
+| `KB_DB_SCHEMA_VERSION` | 8 | db.ts | Current SQLite schema version |
 | `KB_ENTRY_SCHEMA_VERSION` | 1 | digest.ts | Entry markdown format version |
 | `SYNTHESIS_BATCH_SIZE` | 10 | dream.ts | Entries per synthesis CLI batch |
 | `EMBED_BATCH_SIZE` | 50 | dream.ts | Texts per Ollama embedding call |
 | `DREAM_TIMEOUT_MS` | 1,200,000 (20 min) | dream.ts | Per-CLI-call timeout |
-| `digestTimeoutMs` | adaptive: `max(30 min, pageCount × 10 min)` | digest.ts | Per-CLI-call timeout, scales with handler `pageCount`/`slideCount` |
+| `DEFAULT_MAX_ESTIMATED_TOKENS_PER_CHUNK` | 3,000 | chunkPlanner.ts | Soft converted-text budget for structure-aware digestion chunks when per-unit text lengths are available |
+| `digestTimeoutMs` | adaptive per chunk: `max(30 min, chunkUnitCount × 10 min)` | digest.ts | Per-digestion CLI call timeout; chunked documents use the planned chunk unit count, whole-document fallback uses handler `pageCount`/`slideCount` |
 | `DEFAULT_TIMEOUT_MS` | 600,000 (10 min) | ingestion/pageConversion.ts | Per-image AI conversion timeout (one CLI call per page/slide/embedded image) |
 | `MAX_LONG_EDGE_PX` | 2576 | ingestion/pageConversion.ts | Long-edge cap (px) for images sent to vision models. Sources above this get a `.ai.png` downscaled sibling that handlers link to in `text.md` so digestion-time CLI reads also stay under the cap. |
 | `DISCOVERY_CANDIDATE_CAP` | 50 | dream.ts | Max connection candidates per run |

@@ -41,9 +41,12 @@ import { ingestFile, UnsupportedFileTypeError } from './handlers';
 import type { HandlerResult } from './handlers/types';
 import type { KbDatabase } from './db';
 import { normalizeFolderPath } from './db';
+import { buildDocumentStructure } from './documentStructure';
 import type { BackendRegistry } from '../backends/registry';
 import type { CliProfileRuntime } from '../cliProfiles';
 import type { WorkspaceTaskQueueRegistry } from './workspaceTaskQueue';
+import { resolveConfig, type EmbeddingConfig } from './embeddings';
+import type { KbVectorStore } from './vectorStore';
 
 /** Subset of chatService the orchestrator depends on — keeps tests light. */
 export interface KbIngestionChatService {
@@ -58,6 +61,8 @@ export interface KbIngestionChatService {
   getKbRawDir(hash: string): string;
   getKbConvertedDir(hash: string): string;
   getKbEntriesDir(hash: string): string;
+  getWorkspaceKbEmbeddingConfig?(hash: string): Promise<EmbeddingConfig | undefined>;
+  getKbVectorStore?(hash: string, dimensions?: number): Promise<KbVectorStore | null>;
 }
 
 /** Optional digestion orchestrator — called when auto-digest is enabled. */
@@ -115,12 +120,52 @@ export interface KbUploadResult {
   addedLocation: boolean;
 }
 
+export interface KbStructureBackfillItem {
+  rawId: string;
+  status: 'created' | 'rebuilt' | 'skipped' | 'failed';
+  reason?: string;
+  unitType?: string;
+  unitCount?: number;
+  nodeCount?: number;
+}
+
+export interface KbStructureBackfillResult {
+  checked: number;
+  created: number;
+  rebuilt: number;
+  skipped: number;
+  failed: number;
+  items: KbStructureBackfillItem[];
+}
+
 /** Thrown when the workspace is not found or KB is disabled. */
 export class KbDisabledError extends Error {
   constructor(hash: string) {
     super(`Knowledge Base is not enabled for workspace ${hash}.`);
     this.name = 'KbDisabledError';
   }
+}
+
+async function readJsonObject(filePath: string): Promise<Record<string, unknown> | null> {
+  try {
+    return parseJsonObject(await fsp.readFile(filePath, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+
+function parseJsonObject(value: string | null): Record<string, unknown> | null {
+  if (!value) return null;
+  try {
+    return objectOrNull(JSON.parse(value));
+  } catch {
+    return null;
+  }
+}
+
+function objectOrNull(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
 }
 
 /** Thrown when a raw file cannot be deleted because it doesn't exist. */
@@ -396,6 +441,56 @@ export class KbIngestionService {
   }
 
   /**
+   * Rebuild document structure from already-converted artifacts for one raw.
+   * This supports explicit operator retries without requiring a re-upload.
+   */
+  async rebuildDocumentStructure(hash: string, rawId: string): Promise<KbStructureBackfillItem> {
+    const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
+    if (!enabled) throw new KbDisabledError(hash);
+    await this._refreshConcurrency(hash);
+    return this._enqueue(hash, async () => {
+      const db = this.chatService.getKbDb(hash);
+      if (!db) throw new KbDisabledError(hash);
+      const raw = db.getRawById(rawId);
+      if (!raw) throw new KbRawNotFoundError(rawId);
+      const result = await this._rebuildDocumentStructureForRaw(hash, db, raw, true);
+      this._emitChange(hash, new Date().toISOString(), { raw: [rawId] });
+      return result;
+    });
+  }
+
+  /**
+   * Backfill missing document structures for converted raws. Existing
+   * structures are left untouched unless `force=true` is passed.
+   */
+  async backfillDocumentStructures(
+    hash: string,
+    opts: { force?: boolean } = {},
+  ): Promise<KbStructureBackfillResult> {
+    const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
+    if (!enabled) throw new KbDisabledError(hash);
+    await this._refreshConcurrency(hash);
+    return this._enqueueBarrier(hash, async () => {
+      const db = this.chatService.getKbDb(hash);
+      if (!db) throw new KbDisabledError(hash);
+
+      const items: KbStructureBackfillItem[] = [];
+      for (const raw of db.listAllRaw()) {
+        items.push(await this._rebuildDocumentStructureForRaw(hash, db, raw, Boolean(opts.force)));
+      }
+      this._emitChange(hash, new Date().toISOString(), { folders: true });
+      return {
+        checked: items.length,
+        created: items.filter((item) => item.status === 'created').length,
+        rebuilt: items.filter((item) => item.status === 'rebuilt').length,
+        skipped: items.filter((item) => item.status === 'skipped').length,
+        failed: items.filter((item) => item.status === 'failed').length,
+        items,
+      };
+    });
+  }
+
+  /**
    * Create a folder (and any missing ancestors). Idempotent — creating
    * an existing folder is a no-op but still emits a `folders: true`
    * frame so the UI refreshes after a no-op create. Returns the
@@ -572,6 +667,55 @@ export class KbIngestionService {
     };
   }
 
+  private async _rebuildDocumentStructureForRaw(
+    hash: string,
+    db: KbDatabase,
+    raw: NonNullable<ReturnType<KbDatabase['getRawById']>>,
+    force: boolean,
+  ): Promise<KbStructureBackfillItem> {
+    const rawId = raw.raw_id;
+    const existing = db.getDocument(rawId);
+    if (existing && !force) {
+      return { rawId, status: 'skipped', reason: 'structure-exists' };
+    }
+
+    const convertedDir = path.join(this.chatService.getKbConvertedDir(hash), rawId);
+    let text: string;
+    try {
+      text = await fsp.readFile(path.join(convertedDir, 'text.md'), 'utf8');
+    } catch {
+      return { rawId, status: 'skipped', reason: 'missing-converted-text' };
+    }
+
+    try {
+      const convertedMeta = await readJsonObject(path.join(convertedDir, 'meta.json'));
+      const rawMeta = parseJsonObject(raw.metadata_json);
+      const handlerMetadata = objectOrNull(convertedMeta?.metadata) ?? rawMeta ?? {};
+      const locations = db.listLocations(rawId);
+      const filename =
+        typeof convertedMeta?.filename === 'string' && convertedMeta.filename.trim() !== ''
+          ? convertedMeta.filename
+          : locations[0]?.filename ?? rawId;
+      const structure = buildDocumentStructure({
+        rawId,
+        filename,
+        text,
+        metadata: handlerMetadata,
+        now: new Date().toISOString(),
+      });
+      db.upsertDocumentStructure(structure);
+      return {
+        rawId,
+        status: existing ? 'rebuilt' : 'created',
+        unitType: structure.document.unitType,
+        unitCount: structure.document.unitCount,
+        nodeCount: structure.nodes.length,
+      };
+    } catch (err: unknown) {
+      return { rawId, status: 'failed', reason: (err as Error).message || String(err) };
+    }
+  }
+
   /**
    * Purge a raw row and all its disk artifacts. Caller must be inside
    * the workspace mutex — this method does not re-enqueue.
@@ -603,12 +747,10 @@ export class KbIngestionService {
     const convertedDir = path.join(this.chatService.getKbConvertedDir(hash), rawId);
     await fsp.rm(convertedDir, { recursive: true, force: true }).catch(() => undefined);
 
-    // 3) Mark co-topic entries as needing synthesis before deleting, so
-    //    the dreaming pipeline can update topics that referenced this content.
+    // 3) Delete entries. The DB method marks co-topic entries stale before
+    //    cascade-deleting topic assignments.
     const removedEntryIds = db.deleteEntriesByRawId(rawId);
-    if (removedEntryIds.length > 0) {
-      db.markCoTopicEntriesStale(removedEntryIds);
-    }
+    await this._deleteEntryEmbeddings(hash, removedEntryIds);
     const entriesDir = this.chatService.getKbEntriesDir(hash);
     for (const entryId of removedEntryIds) {
       const dir = path.join(entriesDir, entryId);
@@ -624,6 +766,31 @@ export class KbIngestionService {
     const changed: KbStateUpdateEvent['changed'] = { raw: [rawId] };
     if (removedEntryIds.length > 0) changed.entries = removedEntryIds;
     this._emitChange(hash, now, changed);
+  }
+
+  private async _deleteEntryEmbeddings(hash: string, entryIds: string[]): Promise<void> {
+    if (
+      entryIds.length === 0 ||
+      !this.chatService.getWorkspaceKbEmbeddingConfig ||
+      !this.chatService.getKbVectorStore
+    ) {
+      return;
+    }
+    try {
+      const cfg = await this.chatService.getWorkspaceKbEmbeddingConfig(hash);
+      if (!cfg) return;
+      const resolved = resolveConfig(cfg);
+      const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
+      if (!store) return;
+      for (const entryId of entryIds) {
+        await store.deleteEntry(entryId);
+      }
+    } catch (err: unknown) {
+      console.warn(
+        `[kb:ingestion] failed to delete stale entry embeddings for ${entryIds.join(',')}:`,
+        (err as Error).message,
+      );
+    }
   }
 
   /**
@@ -731,6 +898,15 @@ export class KbIngestionService {
             path.join(outDir, 'meta.json'),
             JSON.stringify(meta, null, 2),
             'utf8',
+          );
+          db.upsertDocumentStructure(
+            buildDocumentStructure({
+              rawId,
+              filename: file.filename,
+              text: result.text,
+              metadata: result.metadata ?? {},
+              now: meta.convertedAt,
+            }),
           );
         } catch (err: unknown) {
           errorMessage = `Handler succeeded but writing output failed: ${(err as Error).message}`;
