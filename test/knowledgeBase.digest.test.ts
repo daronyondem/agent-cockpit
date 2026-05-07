@@ -14,7 +14,7 @@
 //       · entries + entry_tags rows populated in the DB
 //       · KB state frames emit on every transition
 //   - Re-digest (second run on same raw) replaces stale entries
-//   - Slug collision allocator appends -2, -3 suffixes
+//   - Clear duplicate entries merge while retaining source ranges
 //   - CLI timeout / malformed output / schema rejection fail paths
 //   - Batch digest iterates every ingested raw and reports per-item results
 //   - KB disabled throws `KbDigestDisabledError`
@@ -32,6 +32,7 @@ import {
   KbDigestionService,
   KbDigestDisabledError,
   buildDigestPrompt,
+  buildGleaningPrompt,
   parseEntries,
   stringifyEntry,
   slugify,
@@ -39,6 +40,7 @@ import {
   DigestSchemaError,
   KB_ENTRY_SCHEMA_VERSION,
 } from '../src/services/knowledgeBase/digest';
+import * as embeddings from '../src/services/knowledgeBase/embeddings';
 import { WorkspaceTaskQueueRegistry } from '../src/services/knowledgeBase/workspaceTaskQueue';
 import { BaseBackendAdapter, type RunOneShotOptions } from '../src/services/backends/base';
 import { BackendRegistry } from '../src/services/backends/registry';
@@ -63,14 +65,22 @@ function workspaceHash(p: string): string {
 // failures per test so we don't have to rewire between cases.
 
 type RunOneShotFn = (prompt: string, opts?: RunOneShotOptions) => Promise<string>;
+type RunSessionShotFn = (prompts: string[], opts?: RunOneShotOptions) => Promise<string[]>;
 
 class StubBackend extends BaseBackendAdapter {
   public calls: Array<{ prompt: string; opts?: RunOneShotOptions }> = [];
+  public sessionCalls: Array<{ prompts: string[]; opts?: RunOneShotOptions }> = [];
   public runOneShotImpl: RunOneShotFn;
+  public runSessionShotImpl: RunSessionShotFn;
 
   constructor(impl: RunOneShotFn) {
     super();
     this.runOneShotImpl = impl;
+    this.runSessionShotImpl = async (prompts, opts) => {
+      const out: string[] = [];
+      for (const prompt of prompts) out.push(await this.runOneShotImpl(prompt, opts));
+      return out;
+    };
   }
 
   get metadata(): BackendMetadata {
@@ -91,6 +101,11 @@ class StubBackend extends BaseBackendAdapter {
   async runOneShot(prompt: string, opts?: RunOneShotOptions): Promise<string> {
     this.calls.push({ prompt, opts });
     return this.runOneShotImpl(prompt, opts);
+  }
+
+  async runSessionShot(prompts: string[], opts?: RunOneShotOptions): Promise<string[]> {
+    this.sessionCalls.push({ prompts, opts });
+    return this.runSessionShotImpl(prompts, opts);
   }
 }
 
@@ -154,6 +169,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  jest.restoreAllMocks();
   chatService.closeKbDatabases?.();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -481,6 +497,34 @@ describe('buildDigestPrompt', () => {
     // Path-resolution rule preserved from PR #207.
     expect(prompt).toMatch(/relative to the converted text file's directory/);
   });
+
+  test('buildGleaningPrompt asks only for missed additional entries', () => {
+    const prompt = buildGleaningPrompt();
+    expect(prompt).toContain('Review the source range');
+    expect(prompt).toContain('Return only additional entries');
+    expect(prompt).toContain('If nothing important was missed');
+  });
+});
+
+describe('BaseBackendAdapter runSessionShot default', () => {
+  test('replays prior prompts and outputs through runOneShot', async () => {
+    class OneShotOnlyAdapter extends BaseBackendAdapter {
+      prompts: string[] = [];
+      async runOneShot(prompt: string): Promise<string> {
+        this.prompts.push(prompt);
+        return `out-${this.prompts.length}`;
+      }
+    }
+    const adapter = new OneShotOnlyAdapter();
+
+    await expect(adapter.runSessionShot(['first', 'second'])).resolves.toEqual(['out-1', 'out-2']);
+    expect(adapter.prompts[0]).toBe('first');
+    expect(adapter.prompts[1]).toContain('## Prompt 1');
+    expect(adapter.prompts[1]).toContain('first');
+    expect(adapter.prompts[1]).toContain('## Response 1');
+    expect(adapter.prompts[1]).toContain('out-1');
+    expect(adapter.prompts[1]).toContain('## Next Prompt\nsecond');
+  });
 });
 
 // ─── End-to-end digest against seeded raw ────────────────────────────────────
@@ -550,9 +594,8 @@ Original body.`;
     const db = chatService.getKbDb(hash)!;
     expect(db.listEntries({ rawId })).toHaveLength(1);
     expect(db.entryIdTaken(`${rawId}-original`)).toBe(true);
+    expect(db.listEntrySources(`${rawId}-original`)).toHaveLength(1);
 
-    // Manually flip status back so a second run is accepted.
-    db.updateRawStatus(rawId, 'ingested');
     backend.runOneShotImpl = async () => `---
 title: Revised
 slug: revised
@@ -565,6 +608,8 @@ Revised body.`;
     // Old entry was wiped, new one inserted with a fresh slug.
     expect(db.entryIdTaken(`${rawId}-original`)).toBe(false);
     expect(db.entryIdTaken(`${rawId}-revised`)).toBe(true);
+    expect(db.listEntrySources(`${rawId}-original`)).toEqual([]);
+    expect(db.listEntrySources(`${rawId}-revised`)).toHaveLength(1);
     const remaining = db.listEntries({ rawId });
     expect(remaining.map((e) => e.slug)).toEqual(['revised']);
 
@@ -575,27 +620,397 @@ Revised body.`;
     expect(fs.existsSync(newDir)).toBe(true);
   });
 
-  test('appends -2 suffix on slug collisions within one run', async () => {
-    const rawId = await seedRaw('source with duplicated slugs', 'dup.md');
+  test('redigest staging failure preserves prior entries and files', async () => {
+    const rawId = await seedRaw('first run content', 'first.md');
     backend.runOneShotImpl = async () => `---
-title: First
-slug: same
-summary: First with same slug.
+title: Original
+slug: original
+summary: Originally.
+tags: [v1]
+---
+Original body.`;
+    await digestion.enqueueDigest(hash, rawId);
+    const db = chatService.getKbDb(hash)!;
+    const entriesRoot = chatService.getKbEntriesDir(hash);
+    const originalEntryId = `${rawId}-original`;
+    const originalPath = path.join(entriesRoot, originalEntryId, 'entry.md');
+    const originalMd = fs.readFileSync(originalPath, 'utf8');
+
+    const realWriteFile = fs.promises.writeFile.bind(fs.promises);
+    jest.spyOn(fs.promises, 'writeFile').mockImplementation(async (file, data, options) => {
+      if (String(file).includes(`${path.sep}.staging${path.sep}`)) {
+        throw new Error('disk full while staging');
+      }
+      return realWriteFile(file, data, options);
+    });
+
+    backend.runOneShotImpl = async () => `---
+title: Revised
+slug: revised
+summary: Updated.
+tags: [v2]
+---
+Revised body.`;
+
+    const result = await digestion.enqueueDigest(hash, rawId);
+
+    expect(result.error?.class).toBe('schema_rejection');
+    expect(db.entryIdTaken(originalEntryId)).toBe(true);
+    expect(db.entryIdTaken(`${rawId}-revised`)).toBe(false);
+    expect(db.listEntries({ rawId }).map((e) => e.slug)).toEqual(['original']);
+    expect(fs.existsSync(originalPath)).toBe(true);
+    expect(fs.readFileSync(originalPath, 'utf8')).toBe(originalMd);
+    expect(fs.existsSync(path.join(entriesRoot, `${rawId}-revised`))).toBe(false);
+    expect(db.getRawById(rawId)?.status).toBe('failed');
+  });
+
+  test('redigest recovers an interrupted file replacement before retrying', async () => {
+    const rawId = await seedRaw('first run content', 'first.md');
+    backend.runOneShotImpl = async () => `---
+title: Original
+slug: original
+summary: Originally.
+tags: [v1]
+---
+Original body.`;
+    await digestion.enqueueDigest(hash, rawId);
+    const db = chatService.getKbDb(hash)!;
+    const entriesRoot = chatService.getKbEntriesDir(hash);
+    const originalEntryId = `${rawId}-original`;
+    const revisedEntryId = `${rawId}-revised`;
+    const backupName = `${rawId}-interrupted`;
+    const backupRoot = path.join(entriesRoot, '.backup', backupName);
+
+    fs.mkdirSync(backupRoot, { recursive: true });
+    fs.renameSync(path.join(entriesRoot, originalEntryId), path.join(backupRoot, originalEntryId));
+    fs.mkdirSync(path.join(entriesRoot, revisedEntryId), { recursive: true });
+    fs.writeFileSync(path.join(entriesRoot, revisedEntryId, 'entry.md'), 'crashed replacement');
+    fs.mkdirSync(path.join(entriesRoot, '.staging', backupName), { recursive: true });
+    fs.writeFileSync(
+      path.join(backupRoot, 'manifest.json'),
+      JSON.stringify({
+        version: 1,
+        rawId,
+        stagingName: backupName,
+        staleIds: [originalEntryId],
+        replacementIds: [revisedEntryId],
+        replacementDigestedAt: '2099-01-01T00:00:00.000Z',
+      }),
+    );
+
+    backend.runOneShotImpl = async () => `---
+title: Revised
+slug: revised
+summary: Updated.
+tags: [v2]
+---
+Revised body.`;
+    digestion = new KbDigestionService({
+      chatService,
+      backendRegistry,
+      emit: (h, frame) => emitted.push({ hash: h, frame }),
+      queueRegistry: new WorkspaceTaskQueueRegistry(),
+    });
+
+    const result = await digestion.enqueueDigest(hash, rawId);
+
+    expect(result.error).toBeUndefined();
+    expect(db.entryIdTaken(originalEntryId)).toBe(false);
+    expect(db.entryIdTaken(revisedEntryId)).toBe(true);
+    expect(fs.existsSync(backupRoot)).toBe(false);
+    expect(fs.existsSync(path.join(entriesRoot, '.staging', backupName))).toBe(false);
+    expect(fs.readFileSync(path.join(entriesRoot, revisedEntryId, 'entry.md'), 'utf8')).toContain('Revised body.');
+  });
+
+  test('re-digest deletes stale entry embeddings before writing replacements', async () => {
+    const rawId = await seedRaw('first run content', 'first.md');
+    const db = chatService.getKbDb(hash)!;
+    const staleEntryId = `${rawId}-old`;
+    db.insertEntry({
+      entryId: staleEntryId,
+      rawId,
+      title: 'Old',
+      slug: 'old',
+      summary: 'Old summary.',
+      schemaVersion: KB_ENTRY_SCHEMA_VERSION,
+      digestedAt: '2026-01-02T00:00:00.000Z',
+      tags: [],
+    });
+
+    const store = {
+      deleteEntry: jest.fn().mockResolvedValue(undefined),
+      setModel: jest.fn().mockResolvedValue(undefined),
+      upsertEntry: jest.fn().mockResolvedValue(undefined),
+    };
+    jest.spyOn(chatService, 'getWorkspaceKbEmbeddingConfig').mockResolvedValue({
+      model: 'test-embed',
+      dimensions: 3,
+    });
+    jest.spyOn(chatService, 'getKbVectorStore').mockResolvedValue(store as any);
+    jest.spyOn(embeddings, 'embedBatch').mockResolvedValue([
+      { embedding: [0.1, 0.2, 0.3], model: 'test-embed', dimensions: 3 },
+    ]);
+
+    backend.runOneShotImpl = async () => `---
+title: New
+slug: new
+summary: New summary.
+tags: []
+---
+New body.`;
+
+    const result = await digestion.enqueueDigest(hash, rawId);
+
+    expect(result.error).toBeUndefined();
+    expect(store.deleteEntry).toHaveBeenCalledWith(staleEntryId);
+    expect(store.upsertEntry).toHaveBeenCalledWith(
+      `${rawId}-new`,
+      'New',
+      'New summary.',
+      [0.1, 0.2, 0.3],
+    );
+  });
+
+  test('chunk failure preserves prior entries in strict mode', async () => {
+    const pages = Array.from({ length: 30 }, (_, i) => `## Page ${i + 1}\nPage body ${i + 1}`).join('\n\n');
+    const rawId = await seedRaw(pages, 'chunked.md');
+    let call = 0;
+    backend.runOneShotImpl = async () => {
+      call += 1;
+      return `---
+title: Old ${call}
+slug: old-${call}
+summary: Existing chunk output.
+tags: []
+---
+Old body ${call}.`;
+    };
+    await digestion.enqueueDigest(hash, rawId);
+    const db = chatService.getKbDb(hash)!;
+    expect(db.listEntries({ rawId }).map((e) => e.slug).sort()).toEqual(['old-1', 'old-2']);
+
+    db.updateRawStatus(rawId, 'ingested');
+    call = 0;
+    backend.calls = [];
+    backend.runOneShotImpl = async () => {
+      call += 1;
+      if (call === 2) return 'not parseable';
+      return `---
+title: New
+slug: new
+summary: New chunk output.
+tags: []
+---
+New body.`;
+    };
+
+    const result = await digestion.enqueueDigest(hash, rawId);
+
+    expect(result.error?.class).toBe('malformed_output');
+    expect(backend.calls).toHaveLength(2);
+    expect(db.listEntries({ rawId }).map((e) => e.slug).sort()).toEqual(['old-1', 'old-2']);
+    expect(db.getRawById(rawId)?.status).toBe('failed');
+  });
+
+  test('text-heavy structured documents split into multiple digestion calls', async () => {
+    const content = Array.from(
+      { length: 6 },
+      (_, i) => `# Section ${i + 1}\n${'body '.repeat(1100)}`,
+    ).join('\n\n');
+    const rawId = await seedRaw(content, 'large-sections.md');
+    backend.runOneShotImpl = async (prompt) => {
+      const range = prompt.match(/- Unit range: (\d+)-(\d+)/);
+      const suffix = range ? `${range[1]}-${range[2]}` : 'unknown';
+      return `---
+title: Range ${suffix}
+slug: range-${suffix}
+summary: Range ${suffix}.
+tags: []
+---
+Body ${suffix}.`;
+    };
+
+    const result = await digestion.enqueueDigest(hash, rawId);
+
+    expect(result.error).toBeUndefined();
+    expect(backend.calls).toHaveLength(3);
+    expect(backend.calls.map((call) => call.prompt.match(/- Unit range: (\d+-\d+)/)?.[1])).toEqual([
+      '1-3',
+      '4-5',
+      '6-7',
+    ]);
+  });
+
+  test('gleaning is disabled by default and uses runOneShot only', async () => {
+    const rawId = await seedRaw('plain source', 'plain.md');
+    backend.runSessionShotImpl = jest.fn();
+    backend.runOneShotImpl = async () => `---
+title: Base
+slug: base
+summary: Base extraction.
+tags: []
+---
+Base body.`;
+
+    await digestion.enqueueDigest(hash, rawId);
+
+    expect(backend.calls).toHaveLength(1);
+    expect(backend.sessionCalls).toHaveLength(0);
+  });
+
+  test('gleaning enabled uses runSessionShot and merges additional entries', async () => {
+    await chatService.saveSettings({
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
+      defaultBackend: STUB_BACKEND_ID,
+      workingDirectory: '',
+      knowledgeBase: {
+        digestionCliBackend: STUB_BACKEND_ID,
+        kbGleaningEnabled: true,
+      },
+    });
+    const rawId = await seedRaw('gleaning source', 'glean.md');
+    backend.runSessionShotImpl = async () => [
+      `---
+title: Base
+slug: base
+summary: Base extraction.
+tags: []
+---
+Base body.`,
+      `---
+title: Base Duplicate
+slug: base
+summary: Duplicate base extraction.
+tags: [dupe]
+---
+Duplicate base body.
+---
+title: Gleaned
+slug: gleaned
+summary: Extra extraction.
+tags: [extra]
+---
+Gleaned body.`,
+    ];
+
+    const result = await digestion.enqueueDigest(hash, rawId);
+
+    expect(result.error).toBeUndefined();
+    expect(backend.calls).toHaveLength(0);
+    expect(backend.sessionCalls).toHaveLength(1);
+    expect(backend.sessionCalls[0].prompts).toHaveLength(2);
+    const db = chatService.getKbDb(hash)!;
+    expect(db.listEntries({ rawId }).map((e) => e.slug).sort()).toEqual(['base', 'gleaned']);
+  });
+
+  test('exact slug duplicates merge and keep multiple source ranges', async () => {
+    const pages = Array.from({ length: 30 }, (_, i) => `## Page ${i + 1}\nPage body ${i + 1}`).join('\n\n');
+    const rawId = await seedRaw(pages, 'dup.md');
+    let call = 0;
+    backend.runOneShotImpl = async () => {
+      call += 1;
+      return `---
+title: Shared Topic
+slug: shared
+summary: Shared extraction.
+tags: [chunk-${call}]
+---
+Shared body from chunk ${call}.`;
+    };
+    const result = await digestion.enqueueDigest(hash, rawId);
+    const db = chatService.getKbDb(hash)!;
+    expect(result.entryIds).toEqual([`${rawId}-shared`]);
+    expect(db.getEntry(`${rawId}-shared`)?.tags.sort()).toEqual(['chunk-1', 'chunk-2']);
+    expect(db.listEntrySources(`${rawId}-shared`).map((s) => [s.startUnit, s.endUnit])).toEqual([[1, 25], [26, 30]]);
+    const md = fs.readFileSync(
+      path.join(chatService.getKbEntriesDir(hash), `${rawId}-shared`, 'entry.md'),
+      'utf8',
+    );
+    expect(md).toContain('Shared body from chunk 1.');
+    expect(md).toContain('Shared body from chunk 2.');
+  });
+
+  test('merged structure chunks store range lineage without a misleading single node', async () => {
+    const rawId = await seedRaw('## Page 1\nPage body 1\n\n## Page 2\nPage body 2', 'merged-pages.md');
+    backend.runOneShotImpl = async () => `---
+title: Merged Pages
+slug: merged-pages
+summary: Covers both pages.
+tags: [merged]
+---
+Merged body.`;
+
+    await digestion.enqueueDigest(hash, rawId);
+
+    const db = chatService.getKbDb(hash)!;
+    const sources = db.listEntrySources(`${rawId}-merged-pages`);
+    expect(sources).toHaveLength(1);
+    expect(sources[0]).toMatchObject({
+      nodeId: null,
+      chunkId: 'chunk-0001-u1-2',
+      startUnit: 1,
+      endUnit: 2,
+    });
+  });
+
+  test('normalized title duplicates merge even when slugs differ', async () => {
+    const pages = Array.from({ length: 30 }, (_, i) => `## Page ${i + 1}\nPage body ${i + 1}`).join('\n\n');
+    const rawId = await seedRaw(pages, 'title-dupes.md');
+    let call = 0;
+    backend.runOneShotImpl = async () => {
+      call += 1;
+      return call === 1
+        ? `---
+title: Repeated Topic
+slug: repeated-a
+summary: First extraction.
+tags: [a]
+---
+First body.`
+        : `---
+title: Repeated   Topic
+slug: repeated-b
+summary: Second extraction.
+tags: [b]
+---
+Second body.`;
+    };
+
+    await digestion.enqueueDigest(hash, rawId);
+
+    const db = chatService.getKbDb(hash)!;
+    expect(db.entryIdTaken(`${rawId}-repeated-a`)).toBe(true);
+    expect(db.entryIdTaken(`${rawId}-repeated-b`)).toBe(false);
+    expect(db.getEntry(`${rawId}-repeated-a`)?.tags.sort()).toEqual(['a', 'b']);
+    expect(db.listEntrySources(`${rawId}-repeated-a`)).toHaveLength(2);
+    const md = fs.readFileSync(
+      path.join(chatService.getKbEntriesDir(hash), `${rawId}-repeated-a`, 'entry.md'),
+      'utf8',
+    );
+    expect(md).toContain('First body.');
+    expect(md).toContain('Second body.');
+  });
+
+  test('non-duplicate entries remain separate', async () => {
+    const rawId = await seedRaw('source with distinct entries', 'distinct.md');
+    backend.runOneShotImpl = async () => `---
+title: First Topic
+slug: first-topic
+summary: First extraction.
 tags: []
 ---
 First body.
 ---
-title: Second
-slug: same
-summary: Second with same slug.
+title: Second Topic
+slug: second-topic
+summary: Second extraction.
 tags: []
 ---
 Second body.`;
     const result = await digestion.enqueueDigest(hash, rawId);
-    expect(result.entryIds.sort()).toEqual([`${rawId}-same`, `${rawId}-same-2`].sort());
-    const db = chatService.getKbDb(hash)!;
-    expect(db.getEntry(`${rawId}-same`)?.title).toBe('First');
-    expect(db.getEntry(`${rawId}-same-2`)?.title).toBe('Second');
+    expect(result.entryIds.sort()).toEqual([`${rawId}-first-topic`, `${rawId}-second-topic`].sort());
   });
 
   test('records malformed_output failure class on parse error', async () => {
@@ -624,6 +1039,15 @@ Second body.`;
     const rawId = await seedRaw('some text', 'timeout.md');
     backend.runOneShotImpl = async () => {
       throw new Error('Operation timeout after 300s');
+    };
+    const result = await digestion.enqueueDigest(hash, rawId);
+    expect(result.error?.class).toBe('timeout');
+  });
+
+  test('records timeout class when Kiro reports TimedOut', async () => {
+    const rawId = await seedRaw('some text', 'kiro-timeout.md');
+    backend.runOneShotImpl = async () => {
+      throw new Error('CodewhispererChatResponseStream(DispatchFailure({ source: TimedOut }))');
     };
     const result = await digestion.enqueueDigest(hash, rawId);
     expect(result.error?.class).toBe('timeout');
@@ -853,6 +1277,72 @@ Body.`;
     expect(afterSnapshot?.digestProgress).toBeNull();
   });
 
+  test('reports live chunk planning and chunk completion progress', async () => {
+    const pages = Array.from({ length: 30 }, (_, i) => `## Page ${i + 1}\nPage body ${i + 1}`).join('\n\n');
+    const rawId = await seedRaw(pages, 'chunk-progress.md');
+    let call = 0;
+    let releaseFirst!: () => void;
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let signalFirstStarted!: () => void;
+    const firstStarted = new Promise<void>((resolve) => {
+      signalFirstStarted = resolve;
+    });
+
+    backend.runOneShotImpl = async () => {
+      call += 1;
+      if (call === 1) {
+        signalFirstStarted();
+        await firstHeld;
+      }
+      return `---
+title: Chunk ${call}
+slug: chunk-${call}
+summary: Chunk extraction.
+tags: []
+---
+Body ${call}.`;
+    };
+
+    emitted.length = 0;
+    const runPromise = digestion.enqueueDigest(hash, rawId);
+    await firstStarted;
+
+    const midProgress = digestion.getSessionProgress(hash);
+    expect(midProgress?.chunks).toMatchObject({
+      done: 0,
+      total: 2,
+      active: 1,
+      phase: 'digesting',
+      current: {
+        rawId,
+        chunkId: 'chunk-0001-u1-25',
+        index: 1,
+        total: 2,
+        startUnit: 1,
+        endUnit: 25,
+        unitType: 'page',
+      },
+    });
+
+    releaseFirst();
+    await runPromise;
+
+    const progress = extractProgressFrames(emitted);
+    const nonNull = progress.filter((p): p is NonNullable<typeof p> => p != null);
+    expect(nonNull.some((p) => p.chunks?.phase === 'planning')).toBe(true);
+    expect(nonNull.some((p) => p.chunks?.phase === 'parsing')).toBe(true);
+    const lastNonNull = nonNull[nonNull.length - 1];
+    expect(lastNonNull.chunks).toMatchObject({
+      done: 2,
+      total: 2,
+      active: 0,
+      phase: 'committing',
+      current: { rawId },
+    });
+  });
+
   test('crash recovery clears persisted digest_session on new KbDatabase', async () => {
     const db = chatService.getKbDb(hash)!;
     // Simulate a crash-frozen session row.
@@ -1034,7 +1524,13 @@ describe('adaptive digest timeout', () => {
   // pipeline reads the desired handler metadata without needing a real
   // PDF/PPTX handler in the test path.
   async function seedWithMeta(metadata: Record<string, unknown>): Promise<string> {
-    const rawId = await seedRaw('body', 'doc.md');
+    let content = 'body';
+    if (typeof metadata.pageCount === 'number') {
+      content = Array.from({ length: metadata.pageCount }, (_, i) => `## Page ${i + 1}\nbody ${i + 1}`).join('\n\n');
+    } else if (typeof metadata.slideCount === 'number') {
+      content = Array.from({ length: metadata.slideCount }, (_, i) => `## Slide ${i + 1}\nbody ${i + 1}`).join('\n\n');
+    }
+    const rawId = await seedRaw(content, 'doc.md');
     const metaPath = path.join(chatService.getKbConvertedDir(hash), rawId, 'meta.json');
     fs.writeFileSync(metaPath, JSON.stringify({ metadata }));
     return rawId;
@@ -1057,18 +1553,20 @@ body.`;
     expect(backend.calls[0].opts?.timeoutMs).toBe(30 * 60_000);
   });
 
-  test('scales to pageCount × 10 minutes for large PDFs', async () => {
+  test('scales chunk timeout to chunk unit count × 10 minutes for large PDFs', async () => {
     const rawId = await seedWithMeta({ pageCount: 185, rasterDpi: 150 });
     stubMinimalEntry();
     await digestion.enqueueDigest(hash, rawId);
-    expect(backend.calls[0].opts?.timeoutMs).toBe(185 * 10 * 60_000);
+    expect(backend.calls).toHaveLength(8);
+    expect(backend.calls[0].opts?.timeoutMs).toBe(25 * 10 * 60_000);
   });
 
-  test('uses slideCount × 10 minutes for PPTX', async () => {
+  test('uses chunk unit count × 10 minutes for PPTX slides', async () => {
     const rawId = await seedWithMeta({ slideCount: 50 });
     stubMinimalEntry();
     await digestion.enqueueDigest(hash, rawId);
-    expect(backend.calls[0].opts?.timeoutMs).toBe(50 * 10 * 60_000);
+    expect(backend.calls).toHaveLength(2);
+    expect(backend.calls[0].opts?.timeoutMs).toBe(25 * 10 * 60_000);
   });
 
   test('keeps the 30-minute floor when the unit count is small', async () => {

@@ -57,7 +57,7 @@ import {
 import { computeDigestProgress } from './knowledgeBase/digest';
 import { DEFAULT_KB_AUTO_DREAM_CONFIG, normalizeKbAutoDreamConfig } from './knowledgeBase/autoDream';
 import { KbVectorStore } from './knowledgeBase/vectorStore';
-import type { EmbeddingConfig } from './knowledgeBase/embeddings';
+import { resolveConfig, type EmbeddingConfig } from './knowledgeBase/embeddings';
 import { atomicWriteFile } from '../utils/atomicWrite';
 import { KeyedMutex } from '../utils/keyedMutex';
 
@@ -2519,13 +2519,18 @@ export class ChatService {
 
     const sessionRow = db.getDigestSession();
     const digestProgress = sessionRow ? computeDigestProgress(sessionRow) : null;
+    const synthesisSnapshot = db.getSynthesisSnapshot();
+    const counters = await this._withKbEmbeddingCounters(hash, db, index.kbEmbedding, db.getCounters());
 
     return {
       version: KB_STATE_VERSION,
       entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
       autoDigest: Boolean(index.kbAutoDigest),
       autoDream: normalizeKbAutoDreamConfig(index.kbAutoDream),
-      counters: db.getCounters(),
+      dreamingStatus: synthesisSnapshot.status,
+      dreamProgress: synthesisSnapshot.dreamProgress,
+      needsSynthesisCount: synthesisSnapshot.needsSynthesisCount,
+      counters,
       folders: db.listFolders(),
       raw: db.listRawInFolder(folderPath, {
         limit: opts.limit,
@@ -2534,6 +2539,39 @@ export class ChatService {
       digestProgress,
       updatedAt: new Date().toISOString(),
     };
+  }
+
+  private async _withKbEmbeddingCounters(
+    hash: string,
+    db: KbDatabase,
+    cfg: EmbeddingConfig | undefined,
+    counters: KbCounters,
+  ): Promise<KbCounters> {
+    const enriched: KbCounters = {
+      ...counters,
+      embeddingConfigured: Boolean(cfg),
+      entryEmbeddedCount: null,
+      topicEmbeddedCount: null,
+      embeddingIndexError: null,
+    };
+    if (!cfg) return enriched;
+    try {
+      const resolved = resolveConfig(cfg);
+      const store = await this.getKbVectorStore(hash, resolved.dimensions);
+      if (!store) {
+        enriched.embeddingIndexError = 'Vector store unavailable';
+        return enriched;
+      }
+      const [embeddedEntryIds, embeddedTopicIds] = await Promise.all([
+        store.embeddedEntryIds(),
+        store.embeddedTopicIds(),
+      ]);
+      enriched.entryEmbeddedCount = db.listEntryIds().filter((entryId) => embeddedEntryIds.has(entryId)).length;
+      enriched.topicEmbeddedCount = db.listTopicIds().filter((topicId) => embeddedTopicIds.has(topicId)).length;
+    } catch (err: unknown) {
+      enriched.embeddingIndexError = (err as Error).message || 'Vector store unavailable';
+    }
+    return enriched;
   }
 
   /** Zero-value snapshot used when KB is disabled or not yet initialized. */
@@ -2548,18 +2586,34 @@ export class ChatService {
         failed: 0,
         'pending-delete': 0,
       } as Record<KbRawStatus, number>,
+      failedByStage: {
+        conversion: 0,
+        digestion: 0,
+        unknown: 0,
+      },
       entryCount: 0,
       pendingCount: 0,
       folderCount: 0,
+      documentCount: 0,
+      documentNodeCount: 0,
+      entrySourceCount: 0,
       topicCount: 0,
       connectionCount: 0,
       reflectionCount: 0,
+      staleReflectionCount: 0,
+      embeddingConfigured: false,
+      entryEmbeddedCount: null,
+      topicEmbeddedCount: null,
+      embeddingIndexError: null,
     };
     return {
       version: KB_STATE_VERSION,
       entrySchemaVersion: KB_ENTRY_SCHEMA_VERSION,
       autoDigest,
       autoDream: normalizeKbAutoDreamConfig(autoDream),
+      dreamingStatus: 'idle',
+      dreamProgress: null,
+      needsSynthesisCount: 0,
       counters: zeroCounters,
       folders: [],
       raw: [],

@@ -115,6 +115,30 @@ export class BaseBackendAdapter {
   }
 
   /**
+   * Invoke the backend in a short sequential one-shot session. Used by KB
+   * gleaning so the second prompt can ask about missed material immediately
+   * after the initial extraction. Backends that can preserve an ephemeral
+   * session across prompts should override this. The base implementation
+   * replays prior prompts/responses into later one-shot calls, which is more
+   * expensive than a native session but keeps the feature functional for
+   * one-shot-only adapters.
+   */
+  async runSessionShot(prompts: string[], options?: RunOneShotOptions): Promise<string[]> {
+    const outputs: string[] = [];
+    const transcript: string[] = [];
+    for (let i = 0; i < prompts.length; i += 1) {
+      const prompt = prompts[i];
+      const contextualPrompt = transcript.length === 0
+        ? prompt
+        : `${transcript.join('\n\n')}\n\n## Next Prompt\n${prompt}`;
+      const output = await this.runOneShot(contextualPrompt, options);
+      outputs.push(output);
+      transcript.push(`## Prompt ${i + 1}\n${prompt}\n\n## Response ${i + 1}\n${output}`);
+    }
+    return outputs;
+  }
+
+  /**
    * Called during server shutdown.  Subclasses that spawn long-lived
    * processes should override this to kill them.
    */

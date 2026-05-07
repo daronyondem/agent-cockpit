@@ -39,6 +39,62 @@ describe('GET /workspaces/:hash/kb', () => {
     expect(res.body.state.folders.some((f: { folderPath: string }) => f.folderPath === '')).toBe(true);
   });
 
+  test('reports active Re-Dream as running in the KB and synthesis snapshots', async () => {
+    const conv = await env.chatService.createConversation('KB Redream Running', '/tmp/ws-kb-redream-running');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceKbEnabled(hash, true);
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      knowledgeBase: {
+        ...(settings.knowledgeBase || {}),
+        dreamingCliBackend: 'claude-code',
+      },
+    });
+    const db = env.chatService.getKbDb(hash)!;
+    const now = new Date().toISOString();
+    db.insertRaw({
+      rawId: 'redreamrunning01',
+      sha256: 'a'.repeat(64),
+      status: 'digested',
+      byteLength: 12,
+      mimeType: 'text/plain',
+      handler: 'test',
+      uploadedAt: now,
+      metadata: null,
+    });
+    db.insertEntry({
+      entryId: 'entry-redream-running',
+      rawId: 'redreamrunning01',
+      title: 'Entry',
+      slug: 'entry',
+      summary: 'Entry summary',
+      schemaVersion: 1,
+      digestedAt: now,
+      tags: [],
+    });
+    let releaseOneShot!: () => void;
+    const holdOneShot = new Promise<void>((resolve) => { releaseOneShot = resolve; });
+    env.mockBackend.setOneShotImpl(async () => {
+      await holdOneShot;
+      return JSON.stringify({ operations: [] });
+    });
+
+    const started = await env.request('POST', `/api/chat/workspaces/${hash}/kb/redream`, {});
+    expect(started.status).toBe(202);
+    const res = await env.request('GET', `/api/chat/workspaces/${hash}/kb`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.state.dreamingStatus).toBe('running');
+
+    const synthesis = await env.request('GET', `/api/chat/workspaces/${hash}/kb/synthesis`);
+    expect(synthesis.status).toBe(200);
+    expect(synthesis.body.status).toBe('running');
+
+    releaseOneShot();
+    await new Promise((r) => setTimeout(r, 80));
+  });
+
   test('returns 404 for unknown workspace', async () => {
     const res = await env.request('GET', '/api/chat/workspaces/nonexistent999/kb');
     expect(res.status).toBe(404);
@@ -151,6 +207,286 @@ describe('PUT /workspaces/:hash/kb/auto-dream', () => {
       { autoDream: { mode: 'off' } },
     );
     expect(res.status).toBe(404);
+  });
+});
+
+describe('KB glossary routes', () => {
+  test('create, list, update, and delete glossary terms', async () => {
+    const conv = await env.chatService.createConversation('KB Glossary', '/tmp/ws-kb-glossary');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceKbEnabled(hash, true);
+
+    const created = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/glossary`,
+      { term: 'OEE', expansion: 'Overall Equipment Effectiveness' },
+    );
+    expect(created.status).toBe(201);
+    expect(created.body.term).toMatchObject({
+      term: 'OEE',
+      expansion: 'Overall Equipment Effectiveness',
+    });
+
+    const listed = await env.request('GET', `/api/chat/workspaces/${hash}/kb/glossary`);
+    expect(listed.status).toBe(200);
+    expect(listed.body.glossary).toHaveLength(1);
+
+    const id = created.body.term.id;
+    const updated = await env.request(
+      'PUT',
+      `/api/chat/workspaces/${hash}/kb/glossary/${id}`,
+      { term: 'OEE target', expansion: 'Overall Equipment Effectiveness target' },
+    );
+    expect(updated.status).toBe(200);
+    expect(updated.body.term).toMatchObject({
+      id,
+      term: 'OEE target',
+      expansion: 'Overall Equipment Effectiveness target',
+    });
+
+    const deleted = await env.request('DELETE', `/api/chat/workspaces/${hash}/kb/glossary/${id}`);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.ok).toBe(true);
+
+    const empty = await env.request('GET', `/api/chat/workspaces/${hash}/kb/glossary`);
+    expect(empty.body.glossary).toEqual([]);
+  });
+
+  test('rejects blank and duplicate terms', async () => {
+    const conv = await env.chatService.createConversation('KB Glossary Bad', '/tmp/ws-kb-glossary-bad');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceKbEnabled(hash, true);
+
+    const blank = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/glossary`,
+      { term: '', expansion: 'x' },
+    );
+    expect(blank.status).toBe(400);
+
+    const first = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/glossary`,
+      { term: 'OEE', expansion: 'Overall Equipment Effectiveness' },
+    );
+    expect(first.status).toBe(201);
+
+    const duplicate = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/glossary`,
+      { term: 'oee', expansion: 'duplicate' },
+    );
+    expect(duplicate.status).toBe(409);
+  });
+
+  test('does not open or create KB state when glossary routes are disabled or unknown', async () => {
+    const conv = await env.chatService.createConversation('KB Glossary Disabled', '/tmp/ws-kb-glossary-disabled');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    const getKbDb = jest.spyOn(env.chatService, 'getKbDb');
+
+    const disabledGet = await env.request('GET', `/api/chat/workspaces/${hash}/kb/glossary`);
+    expect(disabledGet.status).toBe(400);
+
+    const disabledPost = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/kb/glossary`,
+      { term: 'OEE', expansion: 'Overall Equipment Effectiveness' },
+    );
+    expect(disabledPost.status).toBe(400);
+
+    const unknown = await env.request('GET', '/api/chat/workspaces/missing-workspace/kb/glossary');
+    expect(unknown.status).toBe(404);
+    expect(getKbDb).not.toHaveBeenCalled();
+    expect(fs.existsSync(env.chatService.getKbKnowledgeDir(hash))).toBe(false);
+  });
+});
+
+describe('GET /workspaces/:hash/kb/raw/:rawId/trace', () => {
+  test('returns per-document pipeline trace details', async () => {
+    const conv = await env.chatService.createConversation('KB Trace', '/tmp/ws-kb-trace');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceKbEnabled(hash, true);
+    const db = env.chatService.getKbDb(hash)!;
+    const now = '2026-05-05T00:00:00.000Z';
+    const rawId = 'abcdefabcdefabcd';
+
+    db.insertRaw({
+      rawId,
+      sha256: 'a'.repeat(64),
+      status: 'digested',
+      byteLength: 42,
+      mimeType: 'application/pdf',
+      handler: 'pdf/rasterized-hybrid',
+      uploadedAt: now,
+      metadata: { pageCount: 2 },
+    });
+    db.addLocation({ rawId, folderPath: '', filename: 'trace.pdf', uploadedAt: now });
+    db.setRawDigestedAt(rawId, now);
+    db.upsertDocumentStructure({
+      document: {
+        rawId,
+        docName: 'trace.pdf',
+        docDescription: null,
+        unitType: 'page',
+        unitCount: 2,
+        structureStatus: 'ready',
+        structureError: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      nodes: [
+        { nodeId: 'page-1', rawId, parentNodeId: null, title: 'Page 1', summary: null, startUnit: 1, endUnit: 1, sortOrder: 1, source: 'deterministic', metadata: undefined },
+        { nodeId: 'page-2', rawId, parentNodeId: null, title: 'Page 2', summary: null, startUnit: 2, endUnit: 2, sortOrder: 2, source: 'deterministic', metadata: undefined },
+      ],
+    });
+    db.insertEntry({
+      entryId: `${rawId}-entry`,
+      rawId,
+      title: 'Trace Entry',
+      slug: 'entry',
+      summary: 'Entry summary',
+      schemaVersion: 1,
+      digestedAt: now,
+      tags: ['trace'],
+    });
+    db.insertEntrySources([{
+      entryId: `${rawId}-entry`,
+      rawId,
+      nodeId: 'page-1',
+      chunkId: 'chunk-0001-u1-2',
+      startUnit: 1,
+      endUnit: 2,
+    }]);
+    db.upsertTopic({ topicId: 'trace-topic', title: 'Trace Topic', summary: 'Topic summary', content: 'Topic body', updatedAt: now });
+    db.assignEntries('trace-topic', [`${rawId}-entry`]);
+
+    const convertedDir = path.join(env.chatService.getKbConvertedDir(hash), rawId);
+    fs.mkdirSync(path.join(convertedDir, 'media'), { recursive: true });
+    fs.writeFileSync(path.join(convertedDir, 'text.md'), '## Page 1\nTrace\n## Page 2\nTrace');
+    fs.writeFileSync(path.join(convertedDir, 'meta.json'), '{}');
+    fs.writeFileSync(path.join(convertedDir, 'media', 'page-1.png'), 'png');
+
+    const res = await env.request('GET', `/api/chat/workspaces/${hash}/kb/raw/${rawId}/trace`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.raw.rawId).toBe(rawId);
+    expect(res.body.converted.textMd.exists).toBe(true);
+    expect(res.body.converted.mediaCount).toBe(1);
+    expect(res.body.structure.nodeCount).toBe(2);
+    expect(res.body.chunks).toEqual([
+      expect.objectContaining({ chunkId: 'chunk-0001-u1-2', digested: true }),
+    ]);
+    expect(res.body.entries[0]).toMatchObject({
+      entryId: `${rawId}-entry`,
+      title: 'Trace Entry',
+    });
+    expect(res.body.entries[0].sources).toHaveLength(1);
+    expect(res.body.topics[0]).toMatchObject({
+      topicId: 'trace-topic',
+      entryIds: [`${rawId}-entry`],
+    });
+  });
+
+  test('does not open or create KB state when trace is requested while disabled', async () => {
+    const conv = await env.chatService.createConversation('KB Trace Disabled', '/tmp/ws-kb-trace-disabled');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    const getKbDb = jest.spyOn(env.chatService, 'getKbDb');
+
+    const res = await env.request('GET', `/api/chat/workspaces/${hash}/kb/raw/abcdef/trace`);
+
+    expect(res.status).toBe(400);
+    expect(getKbDb).not.toHaveBeenCalled();
+    expect(fs.existsSync(env.chatService.getKbKnowledgeDir(hash))).toBe(false);
+  });
+});
+
+describe('POST /workspaces/:hash/kb/structure/backfill', () => {
+  test('creates missing document structure from converted artifacts', async () => {
+    const conv = await env.chatService.createConversation('KB Backfill', '/tmp/ws-kb-backfill');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceKbEnabled(hash, true);
+    const db = env.chatService.getKbDb(hash)!;
+    const rawId = 'baccf11baccf11aa';
+    const now = '2026-01-01T00:00:00.000Z';
+
+    db.insertRaw({
+      rawId,
+      sha256: 'b'.repeat(64),
+      status: 'digested',
+      byteLength: 32,
+      mimeType: 'application/pdf',
+      handler: 'pdf',
+      uploadedAt: now,
+      metadata: null,
+    });
+    db.addLocation({ rawId, folderPath: '', filename: 'backfill.pdf', uploadedAt: now });
+
+    const convertedDir = path.join(env.chatService.getKbConvertedDir(hash), rawId);
+    fs.mkdirSync(convertedDir, { recursive: true });
+    fs.writeFileSync(path.join(convertedDir, 'text.md'), '## Page 1\nAlpha\n\n## Page 2\nBeta');
+    fs.writeFileSync(path.join(convertedDir, 'meta.json'), JSON.stringify({
+      filename: 'backfill.pdf',
+      metadata: { pageCount: 2 },
+    }));
+
+    const res = await env.request('POST', `/api/chat/workspaces/${hash}/kb/structure/backfill`, {});
+
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(1);
+    expect(res.body.failed).toBe(0);
+    expect(db.getDocument(rawId)?.unitType).toBe('page');
+    expect(db.listDocumentNodes(rawId)).toHaveLength(2);
+  });
+});
+
+describe('POST /workspaces/:hash/kb/raw/:rawId/structure', () => {
+  test('rebuilds structure for a single raw', async () => {
+    const conv = await env.chatService.createConversation('KB Rebuild Structure', '/tmp/ws-kb-rebuild-structure');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceKbEnabled(hash, true);
+    const db = env.chatService.getKbDb(hash)!;
+    const rawId = '5eed5eed5eed5eed';
+    const now = '2026-01-01T00:00:00.000Z';
+
+    db.insertRaw({
+      rawId,
+      sha256: '5'.repeat(64),
+      status: 'ingested',
+      byteLength: 24,
+      mimeType: 'text/markdown',
+      handler: 'passthrough',
+      uploadedAt: now,
+      metadata: null,
+    });
+    db.addLocation({ rawId, folderPath: '', filename: 'single.md', uploadedAt: now });
+    db.upsertDocumentStructure({
+      document: {
+        rawId,
+        docName: 'single.md',
+        docDescription: null,
+        unitType: 'unknown',
+        unitCount: 1,
+        structureStatus: 'ready',
+        structureError: null,
+        createdAt: now,
+        updatedAt: now,
+      },
+      nodes: [
+        { nodeId: 'fallback-1', rawId, parentNodeId: null, title: 'Document', summary: null, startUnit: 1, endUnit: 1, sortOrder: 1, source: 'fallback', metadata: undefined },
+      ],
+    });
+
+    const convertedDir = path.join(env.chatService.getKbConvertedDir(hash), rawId);
+    fs.mkdirSync(convertedDir, { recursive: true });
+    fs.writeFileSync(path.join(convertedDir, 'text.md'), '## One\nAlpha\n\n## Two\nBeta');
+    fs.writeFileSync(path.join(convertedDir, 'meta.json'), JSON.stringify({ filename: 'single.md' }));
+
+    const res = await env.request('POST', `/api/chat/workspaces/${hash}/kb/raw/${rawId}/structure`, {});
+
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('rebuilt');
+    expect(db.getDocument(rawId)?.unitType).toBe('section');
+    expect(db.listDocumentNodes(rawId).map((n) => n.title)).toEqual(['One', 'Two']);
   });
 });
 

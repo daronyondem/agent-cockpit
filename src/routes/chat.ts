@@ -24,13 +24,17 @@ import {
   KbIngestionService,
   KbDisabledError,
   KbLocationConflictError,
+  KbRawNotFoundError,
   KbValidationError,
 } from '../services/knowledgeBase/ingestion';
 import {
   KbDigestionService,
   KbDigestDisabledError,
 } from '../services/knowledgeBase/digest';
+import type { KbDatabase } from '../services/knowledgeBase/db';
 import { KbDreamService } from '../services/knowledgeBase/dream';
+import { planDigestChunks } from '../services/knowledgeBase/chunkPlanner';
+import { estimateSourceUnitTextLengths } from '../services/knowledgeBase/sourceRange';
 import {
   KbDreamScheduler,
   getKbAutoDreamState,
@@ -46,6 +50,39 @@ import type { WsFunctions } from '../ws';
 function param(req: Request, name: string): string {
   const val = req.params[name];
   return Array.isArray(val) ? val[0] : val;
+}
+
+async function fileSummary(filePath: string): Promise<{ exists: boolean; bytes: number }> {
+  try {
+    const stat = await fs.promises.stat(filePath);
+    return { exists: stat.isFile(), bytes: stat.isFile() ? stat.size : 0 };
+  } catch {
+    return { exists: false, bytes: 0 };
+  }
+}
+
+async function listFilesRecursive(root: string, limit = 50): Promise<string[]> {
+  const found: string[] = [];
+  async function visit(dir: string): Promise<void> {
+    if (found.length >= limit) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (found.length >= limit) break;
+      const abs = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await visit(abs);
+      } else if (entry.isFile()) {
+        found.push(path.relative(root, abs).split(path.sep).join('/'));
+      }
+    }
+  }
+  await visit(root);
+  return found;
 }
 
 function isCliProfileResolutionError(err: unknown): boolean {
@@ -1747,8 +1784,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
               '- `search_topics(query)` — semantic + keyword search across all synthesized topics. Returns topic IDs, titles, summaries, and scores.',
               '- `search_entries(query)` — semantic + keyword search across all digested entries. Returns entry IDs, titles, summaries, and scores.',
               '- `get_topic(topic_id)` — full topic content, connections, and assigned entry list.',
+              '- `get_topic_neighborhood(topic_id, depth?, limit?, min_confidence?, include_entries?)` — graph neighbors connected through synthesized relationships.',
               '- `find_similar_topics(topic_id)` — topics with similar embeddings.',
               '- `find_unconnected_similar(topic_id)` — similar topics with no existing connection.',
+              '- `list_documents(query?)` — list converted source documents and unit counts.',
+              '- `get_document_structure(raw_id)` — inspect page, slide, section, or fallback ranges without reading full content.',
+              '- `get_source_range(raw_id, start_unit, end_unit)` — read a bounded converted source range with referenced media paths.',
               '- `kb_ingest(file_path)` — ingest a local file into the knowledge base.',
               '',
               '## Reading full content (use after search narrows results)',
@@ -1758,7 +1799,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
               `- DB: \`${kbPath}/state.db\` — SQLite index of raw files, folders, and entries.`,
               '',
               '## Workflow',
-              'Use search tools first to find relevant topics and entries by semantic meaning, then read the entry files directly for full content. Search narrows the space; file reads give you depth.',
+              'Use search tools first to find relevant topics and entries by semantic meaning. For large source documents, inspect structure first, then fetch only the needed source ranges. Search narrows the space; targeted reads give you depth.',
             ].join('\n');
           })()
         : '';
@@ -2274,8 +2315,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
               '- `search_topics(query)` — semantic + keyword search across all synthesized topics. Returns topic IDs, titles, summaries, and scores.',
               '- `search_entries(query)` — semantic + keyword search across all digested entries. Returns entry IDs, titles, summaries, and scores.',
               '- `get_topic(topic_id)` — full topic content, connections, and assigned entry list.',
+              '- `get_topic_neighborhood(topic_id, depth?, limit?, min_confidence?, include_entries?)` — graph neighbors connected through synthesized relationships.',
               '- `find_similar_topics(topic_id)` — topics with similar embeddings.',
               '- `find_unconnected_similar(topic_id)` — similar topics with no existing connection.',
+              '- `list_documents(query?)` — list converted source documents and unit counts.',
+              '- `get_document_structure(raw_id)` — inspect page, slide, section, or fallback ranges without reading full content.',
+              '- `get_source_range(raw_id, start_unit, end_unit)` — read a bounded converted source range with referenced media paths.',
               '- `kb_ingest(file_path)` — ingest a local file into the knowledge base.',
               '',
               '## Reading full content (use after search narrows results)',
@@ -2285,7 +2330,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
               `- DB: \`${kbPath}/state.db\` — SQLite index of raw files, folders, and entries.`,
               '',
               '## Workflow',
-              'Use search tools first to find relevant topics and entries by semantic meaning, then read the entry files directly for full content. Search narrows the space; file reads give you depth.',
+              'Use search tools first to find relevant topics and entries by semantic meaning. For large source documents, inspect structure first, then fetch only the needed source ranges. Search narrows the space; targeted reads give you depth.',
             ].join('\n');
           })()
         : '';
@@ -3246,6 +3291,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         offset: Number.isFinite(offsetParam) ? offsetParam : undefined,
       });
       if (state === null) return res.status(404).json({ error: 'Workspace not found' });
+      if (state && kbDreaming.isRunning(hash)) {
+        state.dreamingStatus = 'running';
+      }
       res.json({ enabled, state });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -3398,6 +3446,40 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   });
 
+  router.post('/workspaces/:hash/kb/structure/backfill', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const force = Boolean((req.body as { force?: unknown } | undefined)?.force);
+      const result = await kbIngestion.backfillDocumentStructures(hash, { force });
+      res.json(result);
+    } catch (err: unknown) {
+      if (err instanceof KbDisabledError) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/kb/raw/:rawId/structure', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const rawId = param(req, 'rawId');
+      if (!/^[a-f0-9]{1,64}$/i.test(rawId)) {
+        return res.status(400).json({ error: 'Invalid rawId.' });
+      }
+      const result = await kbIngestion.rebuildDocumentStructure(hash, rawId);
+      res.json(result);
+    } catch (err: unknown) {
+      if (err instanceof KbDisabledError) {
+        return res.status(400).json({ error: err.message });
+      }
+      if (err instanceof KbRawNotFoundError) {
+        return res.status(404).json({ error: err.message });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── KB auto-digest toggle ───────────────────────────────────────────────────
   // Sets the per-workspace "auto-digest" flag. When true, newly-ingested
   // files are automatically fed through the digestion CLI as soon as
@@ -3434,6 +3516,107 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         changed: { autoDream: true, synthesis: true },
       });
       res.json({ autoDream: result });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── KB glossary ───────────────────────────────────────────────────────────
+
+  async function openEnabledKbDb(hash: string, res: Response): Promise<KbDatabase | null> {
+    const workspacePath = await chatService.getWorkspacePath(hash);
+    if (!workspacePath) {
+      res.status(404).json({ error: 'Workspace not found' });
+      return null;
+    }
+    const enabled = await chatService.getWorkspaceKbEnabled(hash);
+    if (!enabled) {
+      res.status(400).json({ error: 'Knowledge Base is not enabled for this workspace.' });
+      return null;
+    }
+    const db = chatService.getKbDb(hash);
+    if (!db) {
+      res.status(404).json({ error: 'KB database unavailable' });
+      return null;
+    }
+    return db;
+  }
+
+  router.get('/workspaces/:hash/kb/glossary', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const db = await openEnabledKbDb(hash, res);
+      if (!db) return;
+      res.json({ glossary: db.listGlossary() });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/kb/glossary', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { term, expansion } = req.body as { term?: unknown; expansion?: unknown };
+      if (typeof term !== 'string' || term.trim() === '') {
+        return res.status(400).json({ error: 'term must be a non-empty string' });
+      }
+      if (typeof expansion !== 'string' || expansion.trim() === '') {
+        return res.status(400).json({ error: 'expansion must be a non-empty string' });
+      }
+      const hash = param(req, 'hash');
+      const db = await openEnabledKbDb(hash, res);
+      if (!db) return;
+      const row = db.addGlossaryTerm(term, expansion);
+      res.status(201).json({ term: row });
+    } catch (err: unknown) {
+      const message = (err as Error).message || String(err);
+      if (/UNIQUE constraint failed: kb_glossary\.term/i.test(message)) {
+        return res.status(409).json({ error: 'Glossary term already exists' });
+      }
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.put('/workspaces/:hash/kb/glossary/:id', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const id = Number(param(req, 'id'));
+      if (!Number.isInteger(id) || id < 1) {
+        return res.status(400).json({ error: 'Invalid glossary term id' });
+      }
+      const { term, expansion } = req.body as { term?: unknown; expansion?: unknown };
+      if (typeof term !== 'string' || term.trim() === '') {
+        return res.status(400).json({ error: 'term must be a non-empty string' });
+      }
+      if (typeof expansion !== 'string' || expansion.trim() === '') {
+        return res.status(400).json({ error: 'expansion must be a non-empty string' });
+      }
+      const hash = param(req, 'hash');
+      const db = await openEnabledKbDb(hash, res);
+      if (!db) return;
+      const row = db.updateGlossaryTerm(id, term, expansion);
+      if (!row) return res.status(404).json({ error: 'Glossary term not found' });
+      res.json({ term: row });
+    } catch (err: unknown) {
+      const message = (err as Error).message || String(err);
+      if (/UNIQUE constraint failed: kb_glossary\.term/i.test(message)) {
+        return res.status(409).json({ error: 'Glossary term already exists' });
+      }
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.delete('/workspaces/:hash/kb/glossary/:id', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const id = Number(param(req, 'id'));
+      if (!Number.isInteger(id) || id < 1) {
+        return res.status(400).json({ error: 'Invalid glossary term id' });
+      }
+      const hash = param(req, 'hash');
+      const db = await openEnabledKbDb(hash, res);
+      if (!db) return;
+      if (!db.deleteGlossaryTerm(id)) {
+        return res.status(404).json({ error: 'Glossary term not found' });
+      }
+      res.json({ ok: true });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -3624,7 +3807,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         body = '';
       }
       const locations = entry.rawId ? db.listLocations(entry.rawId) : [];
-      res.json({ entry, body, locations });
+      const sources = db.listEntrySources(entryId);
+      res.json({ entry, body, locations, sources });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
@@ -3681,6 +3865,178 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     } catch (err: unknown) {
       if (err instanceof KbDisabledError) return res.status(400).json({ error: err.message });
       if (err instanceof KbValidationError) return res.status(400).json({ error: err.message });
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get('/workspaces/:hash/kb/raw/:rawId/trace', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const rawId = param(req, 'rawId');
+      if (!/^[a-f0-9]{1,64}$/i.test(rawId)) {
+        return res.status(400).json({ error: 'Invalid rawId.' });
+      }
+      const db = await openEnabledKbDb(hash, res);
+      if (!db) return;
+      const raw = db.getRawById(rawId);
+      if (!raw) return res.status(404).json({ error: 'Raw file not found.' });
+
+      let metadata: Record<string, unknown> | null = null;
+      if (raw.metadata_json) {
+        try {
+          metadata = JSON.parse(raw.metadata_json) as Record<string, unknown>;
+        } catch {
+          metadata = null;
+        }
+      }
+
+      const convertedDir = path.join(chatService.getKbConvertedDir(hash), rawId);
+      const textMd = await fileSummary(path.join(convertedDir, 'text.md'));
+      const metaJson = await fileSummary(path.join(convertedDir, 'meta.json'));
+      const convertedFiles = await listFilesRecursive(convertedDir, 200);
+      const mediaFiles = convertedFiles.filter((file) => file !== 'text.md' && file !== 'meta.json');
+
+      const document = db.getDocument(rawId);
+      const nodes = document ? db.listDocumentNodes(rawId) : [];
+      let unitTextLengths: Record<number, number> | undefined;
+      if (document && textMd.exists) {
+        try {
+          const convertedText = await fs.promises.readFile(path.join(convertedDir, 'text.md'), 'utf8');
+          const documentUnitCount = Math.max(
+            document.unitCount,
+            nodes.reduce((max, node) => Math.max(max, node.endUnit), 0),
+          );
+          unitTextLengths = estimateSourceUnitTextLengths(convertedText, document.unitType, documentUnitCount);
+        } catch {
+          unitTextLengths = undefined;
+        }
+      }
+      const chunks = document
+        ? planDigestChunks(document, nodes, { unitTextLengths }).map((chunk) => ({
+          chunkId: chunk.chunkId,
+          nodeIds: chunk.nodeIds,
+          startUnit: chunk.startUnit,
+          endUnit: chunk.endUnit,
+          estimatedTokens: chunk.estimatedTokens,
+          reason: chunk.reason,
+        }))
+        : [];
+
+      const entries = db.listEntries({ rawId, limit: 1000 });
+      const entryDetails = entries.map((entry) => ({
+        entryId: entry.entryId,
+        title: entry.title,
+        summary: entry.summary,
+        digestedAt: entry.digestedAt,
+        tags: entry.tags,
+        sources: db.listEntrySources(entry.entryId),
+      }));
+      const sourceChunkIds = new Set(
+        entryDetails.flatMap((entry) => entry.sources.map((source) => source.chunkId)),
+      );
+
+      const topicMap = new Map<string, { topicId: string; title: string; summary: string | null; entryIds: Set<string> }>();
+      for (const entry of entries) {
+        for (const topicId of db.listEntryTopicIds(entry.entryId)) {
+          const topic = db.getTopic(topicId);
+          const existing = topicMap.get(topicId) ?? {
+            topicId,
+            title: topic?.title ?? topicId,
+            summary: topic?.summary ?? null,
+            entryIds: new Set<string>(),
+          };
+          existing.entryIds.add(entry.entryId);
+          topicMap.set(topicId, existing);
+        }
+      }
+
+      const embeddingCfg = await chatService.getWorkspaceKbEmbeddingConfig(hash);
+      let embeddings: {
+        configured: boolean;
+        entryEmbeddedCount: number | null;
+        entryTotal: number;
+        topicEmbeddedCount: number | null;
+        topicTotal: number;
+      } = {
+        configured: Boolean(embeddingCfg),
+        entryEmbeddedCount: null,
+        entryTotal: entries.length,
+        topicEmbeddedCount: null,
+        topicTotal: topicMap.size,
+      };
+      if (embeddingCfg) {
+        try {
+          const resolvedDimensions = embeddingCfg.dimensions ?? 768;
+          const store = await chatService.getKbVectorStore(hash, resolvedDimensions);
+          if (store) {
+            const embeddedEntryIds = await store.embeddedEntryIds();
+            const embeddedTopicIds = await store.embeddedTopicIds();
+            embeddings = {
+              configured: true,
+              entryEmbeddedCount: entries.filter((entry) => embeddedEntryIds.has(entry.entryId)).length,
+              entryTotal: entries.length,
+              topicEmbeddedCount: [...topicMap.keys()].filter((topicId) => embeddedTopicIds.has(topicId)).length,
+              topicTotal: topicMap.size,
+            };
+          }
+        } catch {
+          embeddings = { ...embeddings, configured: true };
+        }
+      }
+
+      const digestDebugFiles = (await listFilesRecursive(
+        path.join(chatService.getKbKnowledgeDir(hash), 'digest-debug'),
+        200,
+      )).filter((file) => file.startsWith(rawId));
+
+      res.json({
+        raw: {
+          rawId: raw.raw_id,
+          sha256: raw.sha256,
+          status: raw.status,
+          byteLength: raw.byte_length,
+          mimeType: raw.mime_type,
+          handler: raw.handler,
+          uploadedAt: raw.uploaded_at,
+          digestedAt: raw.digested_at,
+          errorClass: raw.error_class,
+          errorMessage: raw.error_message,
+          metadata,
+        },
+        locations: db.listLocations(rawId),
+        converted: {
+          textMd,
+          metaJson,
+          mediaCount: mediaFiles.length,
+          mediaFiles: mediaFiles.slice(0, 50),
+        },
+        structure: document ? {
+          document,
+          nodeCount: nodes.length,
+          nodes: nodes.slice(0, 100),
+        } : null,
+        chunks: chunks.map((chunk) => ({
+          ...chunk,
+          digested: sourceChunkIds.has(chunk.chunkId),
+        })),
+        digestion: {
+          status: raw.status,
+          digestedAt: raw.digested_at,
+          entryCount: entries.length,
+        },
+        entries: entryDetails,
+        embeddings,
+        topics: [...topicMap.values()].map((topic) => ({
+          topicId: topic.topicId,
+          title: topic.title,
+          summary: topic.summary,
+          entryIds: [...topic.entryIds].sort(),
+        })),
+        debug: {
+          digestDumps: digestDebugFiles,
+        },
+      });
+    } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -3827,13 +4183,14 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         return;
       }
       const snapshot = db.getSynthesisSnapshot();
+      const status = kbDreaming.isRunning(hash) ? 'running' : snapshot.status;
       const autoDream = await chatService.getWorkspaceKbAutoDream(hash);
       const topics = db.listTopics();
       const connections = db.listAllConnections();
       const godNodes = new Set(snapshot.godNodes);
 
       res.json({
-        status: snapshot.status,
+        status,
         stopping: kbDreaming.isStopRequested(hash),
         lastRunAt: snapshot.lastRunAt,
         lastRunError: snapshot.lastRunError,

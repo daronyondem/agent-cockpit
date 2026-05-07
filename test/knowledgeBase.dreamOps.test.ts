@@ -265,6 +265,25 @@ describe('applyOperations', () => {
     expect(topic!.content).toBe('Body');
   });
 
+  test('create_topic records created history when a run id is provided', () => {
+    db.startSynthesisRun('run-ops', 'incremental', '2026-05-05T00:00:00Z');
+    const ops: DreamOperation[] = [
+      { op: 'create_topic', topic_id: 'test-topic', title: 'Test', summary: 'Sum', content: 'Body' },
+    ];
+    applyOperations(db, ops, { runId: 'run-ops', changedAt: '2026-05-05T00:01:00Z' });
+
+    expect(db.listTopicHistory('test-topic')).toEqual([
+      expect.objectContaining({
+        topicId: 'test-topic',
+        changeType: 'created',
+        oldContent: null,
+        newContent: 'Body',
+        entryIds: [],
+        runId: 'run-ops',
+      }),
+    ]);
+  });
+
   test('update_topic modifies existing topic', () => {
     db.upsertTopic({ topicId: 't1', title: 'Old', summary: 'S', content: 'C', updatedAt: new Date().toISOString() });
     const ops: DreamOperation[] = [
@@ -274,6 +293,27 @@ describe('applyOperations', () => {
     expect(warnings).toHaveLength(0);
     expect(db.getTopic('t1')!.title).toBe('New');
     expect(db.getTopic('t1')!.content).toBe('C');
+  });
+
+  test('update_topic records old and new topic content with current entry ids', () => {
+    db.startSynthesisRun('run-ops', 'incremental', '2026-05-05T00:00:00Z');
+    seedRawAndEntry('e1');
+    db.upsertTopic({ topicId: 't1', title: 'Old', summary: 'S', content: 'Old body', updatedAt: new Date().toISOString() });
+    db.assignEntries('t1', ['e1']);
+    const ops: DreamOperation[] = [
+      { op: 'update_topic', topic_id: 't1', content: 'New body' },
+    ];
+
+    applyOperations(db, ops, { runId: 'run-ops', changedAt: '2026-05-05T00:01:00Z' });
+
+    expect(db.listTopicHistory('t1')).toEqual([
+      expect.objectContaining({
+        changeType: 'updated',
+        oldContent: 'Old body',
+        newContent: 'New body',
+        entryIds: ['e1'],
+      }),
+    ]);
   });
 
   test('update_topic warns when topic not found', () => {
@@ -290,6 +330,25 @@ describe('applyOperations', () => {
     const ops: DreamOperation[] = [{ op: 'delete_topic', topic_id: 't1' }];
     applyOperations(db, ops);
     expect(db.getTopic('t1')).toBeNull();
+  });
+
+  test('delete_topic records deleted history', () => {
+    db.startSynthesisRun('run-ops', 'incremental', '2026-05-05T00:00:00Z');
+    seedRawAndEntry('e1');
+    db.upsertTopic({ topicId: 't1', title: 'T', summary: 'S', content: 'Delete body', updatedAt: new Date().toISOString() });
+    db.assignEntries('t1', ['e1']);
+    const ops: DreamOperation[] = [{ op: 'delete_topic', topic_id: 't1' }];
+
+    applyOperations(db, ops, { runId: 'run-ops', changedAt: '2026-05-05T00:01:00Z' });
+
+    expect(db.listTopicHistory('t1')).toEqual([
+      expect.objectContaining({
+        changeType: 'deleted',
+        oldContent: 'Delete body',
+        newContent: null,
+        entryIds: ['e1'],
+      }),
+    ]);
   });
 
   test('assign_entries links entries to topic', () => {
@@ -334,6 +393,38 @@ describe('applyOperations', () => {
     expect(db.listTopicEntryIds('t-merged')).toContain('e1');
   });
 
+  test('merge_topics records merged source history rows', () => {
+    db.startSynthesisRun('run-ops', 'incremental', '2026-05-05T00:00:00Z');
+    const now = new Date().toISOString();
+    db.upsertTopic({ topicId: 't1', title: 'A', summary: 'S', content: 'A body', updatedAt: now });
+    db.upsertTopic({ topicId: 't2', title: 'B', summary: 'S', content: 'B body', updatedAt: now });
+    seedRawAndEntry('e1');
+    db.assignEntries('t1', ['e1']);
+    const ops: DreamOperation[] = [{
+      op: 'merge_topics',
+      source_topic_ids: ['t1', 't2'],
+      into_topic_id: 't-merged',
+      title: 'Merged',
+      summary: 'MS',
+      content: 'Merged body',
+    }];
+
+    applyOperations(db, ops, { runId: 'run-ops', changedAt: '2026-05-05T00:01:00Z' });
+
+    expect(db.listTopicHistory('t1')[0]).toMatchObject({
+      changeType: 'merged_into',
+      oldContent: 'A body',
+      newContent: 'Merged body',
+      entryIds: ['e1'],
+    });
+    expect(db.listTopicHistory('t2')[0]).toMatchObject({
+      changeType: 'merged_into',
+      oldContent: 'B body',
+      newContent: 'Merged body',
+      entryIds: [],
+    });
+  });
+
   test('split_topic splits one topic into two+', () => {
     const now = new Date().toISOString();
     db.upsertTopic({ topicId: 't1', title: 'Big', summary: 'S', content: 'C', updatedAt: now });
@@ -355,6 +446,32 @@ describe('applyOperations', () => {
     expect(db.listTopicEntryIds('tb')).toContain('e1');
   });
 
+  test('split_topic records source split history', () => {
+    db.startSynthesisRun('run-ops', 'incremental', '2026-05-05T00:00:00Z');
+    const now = new Date().toISOString();
+    db.upsertTopic({ topicId: 't1', title: 'Big', summary: 'S', content: 'Big body', updatedAt: now });
+    seedRawAndEntry('e1');
+    db.assignEntries('t1', ['e1']);
+    const ops: DreamOperation[] = [{
+      op: 'split_topic',
+      source_topic_id: 't1',
+      into: [
+        { topic_id: 'ta', title: 'A', summary: 'SA', content: 'CA' },
+        { topic_id: 'tb', title: 'B', summary: 'SB', content: 'CB' },
+      ],
+    }];
+
+    applyOperations(db, ops, { runId: 'run-ops', changedAt: '2026-05-05T00:01:00Z' });
+
+    expect(db.listTopicHistory('t1')[0]).toMatchObject({
+      changeType: 'split_from',
+      oldContent: 'Big body',
+      entryIds: ['e1'],
+    });
+    expect(db.listTopicHistory('t1')[0].newContent).toContain('ta');
+    expect(db.listTopicHistory('t1')[0].newContent).toContain('tb');
+  });
+
   test('add_connection creates a connection', () => {
     const now = new Date().toISOString();
     db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
@@ -370,6 +487,42 @@ describe('applyOperations', () => {
     const conns = db.listConnectionsForTopic('a');
     expect(conns).toHaveLength(1);
     expect(conns[0].relationship).toBe('influences');
+  });
+
+  test('add_connection skips missing topic references before SQLite constraints', () => {
+    const now = new Date().toISOString();
+    db.upsertTopic({ topicId: 'a', title: 'A', summary: 'S', content: 'C', updatedAt: now });
+    const ops: DreamOperation[] = [{
+      op: 'add_connection',
+      source_topic: 'a',
+      target_topic: 'missing',
+      relationship: 'influences',
+      confidence: 'inferred',
+    }];
+
+    const warnings = applyOperations(db, ops);
+
+    expect(warnings).toEqual([
+      'Operation 0 (add_connection): target topic "missing" not found; connection skipped',
+    ]);
+    expect(db.listAllConnections()).toHaveLength(0);
+  });
+
+  test('update_connection skips missing topic references before SQLite constraints', () => {
+    const ops: DreamOperation[] = [{
+      op: 'update_connection',
+      source_topic: 'missing-a',
+      target_topic: 'missing-b',
+      relationship: 'influences',
+      confidence: 'inferred',
+    }];
+
+    const warnings = applyOperations(db, ops);
+
+    expect(warnings).toEqual([
+      'Operation 0 (update_connection): source topic "missing-a" not found; connection skipped',
+    ]);
+    expect(db.listAllConnections()).toHaveLength(0);
   });
 
   test('remove_connection deletes a connection', () => {

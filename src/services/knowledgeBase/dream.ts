@@ -31,7 +31,7 @@ import type {
 import type { BaseBackendAdapter, RunOneShotOptions } from '../backends/base';
 import type { BackendRegistry } from '../backends/registry';
 import type { CliProfileRuntime } from '../cliProfiles';
-import type { KbDatabase } from './db';
+import type { KbDatabase, SynthesisRunMode, SynthesisRunStatus } from './db';
 import type { KbVectorStore } from './vectorStore';
 import {
   embedText,
@@ -45,6 +45,7 @@ import { regenerateSynthesisMarkdown } from './dreamMarkdown';
 import type { KbSearchMcpServer } from '../kbSearchMcp';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 
 // ── Prompt templates ────────────────────────────────────────────────────────
 
@@ -401,6 +402,13 @@ export interface DreamResult {
   stopped?: boolean;
 }
 
+interface DreamEntryMeta {
+  entryId: string;
+  title: string;
+  summary: string;
+  entryPath: string;
+}
+
 // ── Constants ───────────────────────────────────────────────────────────────
 
 const SYNTHESIS_BATCH_SIZE = 10;
@@ -513,10 +521,17 @@ export class KbDreamService {
     }
 
     const result: DreamResult = { mode, processedEntries: 0, skippedBatches: 0, errors: [] };
+    const runId = crypto.randomUUID();
+    const runMode: SynthesisRunMode = mode === 'full-rebuild' ? 'redream' : 'incremental';
+    let runStarted = false;
+    let finalRunStatus: Exclude<SynthesisRunStatus, 'running'> = 'completed';
+    let finalRunError: string | null = null;
 
     try {
       this.dreamStartedAt.set(hash, Date.now());
       this.dreamPhaseStartedAt.delete(hash);
+      db.startSynthesisRun(runId, runMode, new Date().toISOString());
+      runStarted = true;
       db.setSynthesisMeta('status', 'running');
       db.setSynthesisMeta('last_run_error', '');
       this._emitSynthesisChange(hash);
@@ -531,7 +546,7 @@ export class KbDreamService {
           const resolved = resolveConfig(embeddingCfg);
           const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
           if (store) {
-            await store.wipeAllEmbeddings();
+            await store.wipeTopicEmbeddings();
           }
         }
       }
@@ -576,13 +591,13 @@ export class KbDreamService {
         // Retrieval-based routing + synthesis.
         await this._runWithRetrieval(
           hash, db, adapter, baseRunOptions, runOptionsWithMcp, entryMeta,
-          embeddingCfg!, strongThreshold, borderlineThreshold, concurrency, result,
+          embeddingCfg!, strongThreshold, borderlineThreshold, concurrency, result, runId,
         );
       } else {
         // Cold start or no embeddings: all entries → new topic creation.
         await this._runColdStart(
           hash, db, adapter, baseRunOptions, runOptionsWithMcp, entryMeta,
-          embeddingCfg, concurrency, result,
+          embeddingCfg, concurrency, result, runId,
         );
       }
 
@@ -640,10 +655,26 @@ export class KbDreamService {
       }
     } catch (err) {
       const msg = (err as Error).message;
+      finalRunStatus = 'failed';
+      finalRunError = msg;
       db.setSynthesisMeta('status', 'failed');
       db.setSynthesisMeta('last_run_error', msg);
       result.errors.push(msg);
     } finally {
+      if (result.stopped) {
+        finalRunStatus = 'stopped';
+      }
+      if (!finalRunError && result.errors.length > 0) {
+        finalRunError = result.errors.join('; ');
+      }
+      if (runStarted) {
+        db.finishSynthesisRun(
+          runId,
+          finalRunStatus,
+          new Date().toISOString(),
+          finalRunError,
+        );
+      }
       this.running.delete(hash);
       this.stopRequested.delete(hash);
       this.dreamStartedAt.delete(hash);
@@ -664,12 +695,13 @@ export class KbDreamService {
     adapter: BaseBackendAdapter,
     baseRunOptions: RunOneShotOptions,
     runOptionsWithMcp: RunOneShotOptions,
-    entryMeta: Array<{ entryId: string; title: string; summary: string; entryPath: string }>,
+    entryMeta: DreamEntryMeta[],
     embeddingCfg: EmbeddingConfig,
     strongThreshold: number,
     borderlineThreshold: number,
     concurrency: number,
     result: DreamResult,
+    runId: string,
   ): Promise<void> {
     const resolved = resolveConfig(embeddingCfg);
     const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
@@ -677,7 +709,7 @@ export class KbDreamService {
       // Fall back to cold start if vector store is unavailable.
       await this._runColdStart(
         hash, db, adapter, baseRunOptions, runOptionsWithMcp, entryMeta,
-        embeddingCfg, concurrency, result,
+        embeddingCfg, concurrency, result, runId,
       );
       return;
     }
@@ -694,6 +726,7 @@ export class KbDreamService {
       const results = await embedBatch(slice, embeddingCfg);
       for (const r of results) embeddings.push(r.embedding);
     }
+    await this._upsertEntryEmbeddings(store, resolved.model, entryMeta, embeddings);
 
     // Search for matching topics per entry.
     const synthesisGroups = new Map<string, string[]>(); // topicId → entryIds
@@ -820,7 +853,7 @@ export class KbDreamService {
         if (r.status === 'fulfilled' && r.value) {
           const { operations, warnings } = r.value;
           if (warnings.length > 0) result.errors.push(...warnings);
-          const applyWarnings = applyOperations(db, operations);
+          const applyWarnings = applyOperations(db, operations, { runId });
           if (applyWarnings.length > 0) result.errors.push(...applyWarnings);
           const processedIds = batchGroup[i].entries.map((e) => e.entryId);
           db.clearNeedsSynthesis(processedIds);
@@ -850,7 +883,7 @@ export class KbDreamService {
           if (parsed) {
             const { operations, warnings } = parsed;
             if (warnings.length > 0) result.errors.push(...warnings);
-            const applyWarnings = applyOperations(db, operations);
+            const applyWarnings = applyOperations(db, operations, { runId });
             if (applyWarnings.length > 0) result.errors.push(...applyWarnings);
             db.clearNeedsSynthesis(batch.map((e) => e.entryId));
             result.processedEntries += batch.length;
@@ -874,11 +907,21 @@ export class KbDreamService {
     adapter: BaseBackendAdapter,
     baseRunOptions: RunOneShotOptions,
     runOptionsWithMcp: RunOneShotOptions,
-    entryMeta: Array<{ entryId: string; title: string; summary: string; entryPath: string }>,
+    entryMeta: DreamEntryMeta[],
     embeddingCfg: EmbeddingConfig | undefined,
     concurrency: number,
     result: DreamResult,
+    runId: string,
   ): Promise<void> {
+    try {
+      await this._embedEntryMetas(hash, entryMeta, embeddingCfg);
+    } catch (err: unknown) {
+      console.warn(
+        `[kb] dream: entry embedding refresh failed for ${hash}:`,
+        (err as Error).message,
+      );
+    }
+
     // Sort entries by tags for better topic clustering.
     const entriesWithTags = entryMeta.map((e) => {
       const entry = db.getEntry(e.entryId);
@@ -909,7 +952,7 @@ export class KbDreamService {
         if (parsed) {
           const { operations, warnings } = parsed;
           if (warnings.length > 0) result.errors.push(...warnings);
-          const applyWarnings = applyOperations(db, operations);
+          const applyWarnings = applyOperations(db, operations, { runId });
           if (applyWarnings.length > 0) result.errors.push(...applyWarnings);
           db.clearNeedsSynthesis(batch.map((e) => e.entryId));
           result.processedEntries += batch.length;
@@ -922,6 +965,45 @@ export class KbDreamService {
       }
       done++;
       this._emitDreamProgress('synthesis', done, batches.length, hash);
+    }
+  }
+
+  private async _embedEntryMetas(
+    hash: string,
+    entryMeta: DreamEntryMeta[],
+    embeddingCfg: EmbeddingConfig | undefined,
+  ): Promise<void> {
+    if (!embeddingCfg || entryMeta.length === 0) return;
+    const resolved = resolveConfig(embeddingCfg);
+    const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
+    if (!store) return;
+
+    const embeddings: number[][] = [];
+    for (let i = 0; i < entryMeta.length; i += EMBED_BATCH_SIZE) {
+      const slice = entryMeta.slice(i, i + EMBED_BATCH_SIZE);
+      const texts = slice.map((e) => `${e.title} — ${e.summary}`);
+      const results = await embedBatch(texts, embeddingCfg);
+      for (const r of results) embeddings.push(r.embedding);
+    }
+    await this._upsertEntryEmbeddings(store, resolved.model, entryMeta, embeddings);
+  }
+
+  private async _upsertEntryEmbeddings(
+    store: KbVectorStore,
+    model: string,
+    entryMeta: DreamEntryMeta[],
+    embeddings: number[][],
+  ): Promise<void> {
+    await store.setModel(model);
+    for (let i = 0; i < entryMeta.length; i++) {
+      const embedding = embeddings[i];
+      if (!Array.isArray(embedding)) continue;
+      await store.upsertEntry(
+        entryMeta[i].entryId,
+        entryMeta[i].title,
+        entryMeta[i].summary,
+        embedding,
+      );
     }
   }
 
@@ -1085,6 +1167,14 @@ export class KbDreamService {
           const { accepted, warnings } = parsed;
           if (warnings.length > 0) result.errors.push(...warnings);
           for (const conn of accepted) {
+            const sourceTopic = db.getTopic(conn.sourceTopic);
+            const targetTopic = db.getTopic(conn.targetTopic);
+            if (!sourceTopic || !targetTopic) {
+              result.errors.push(
+                `Discovery connection skipped: ${!sourceTopic ? `source topic "${conn.sourceTopic}"` : `target topic "${conn.targetTopic}"`} not found`,
+              );
+              continue;
+            }
             db.upsertConnection({
               sourceTopic: conn.sourceTopic,
               targetTopic: conn.targetTopic,

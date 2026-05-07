@@ -1124,6 +1124,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
 
   const concurrency = Number.isFinite(kb.cliConcurrency) ? kb.cliConcurrency : 2;
   const convertSlides = !!kb.convertSlidesToImages;
+  const gleaningEnabled = !!kb.kbGleaningEnabled;
 
   const [pandoc, setPandoc] = React.useState(null);
   const [libreOffice, setLibreOffice] = React.useState(null);
@@ -1315,6 +1316,11 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
           onChange={(e) => onConcurrency(e.target.value)}
         />
       </Field>
+      <Toggle
+        checked={gleaningEnabled}
+        onChange={(checked) => patchKb({ kbGleaningEnabled: checked })}
+        label="Run a second digestion pass for missed entries"
+      />
 
       <div className="settings-section-title">Conversion</div>
       <Toggle

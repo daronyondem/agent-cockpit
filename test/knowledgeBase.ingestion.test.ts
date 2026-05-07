@@ -51,6 +51,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  jest.restoreAllMocks();
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
@@ -100,6 +101,17 @@ describe('enqueueUpload', () => {
     const meta = JSON.parse(fs.readFileSync(path.join(outDir, 'meta.json'), 'utf8'));
     expect(meta.rawId).toBe(result.entry.rawId);
     expect(meta.handler).toBe('passthrough/text');
+
+    const db = chatService.getKbDb(hash)!;
+    const document = db.getDocument(result.entry.rawId);
+    expect(document).toMatchObject({
+      rawId: result.entry.rawId,
+      docName: 'hello.md',
+      unitType: 'section',
+      unitCount: 1,
+      structureStatus: 'ready',
+    });
+    expect(db.listDocumentNodes(result.entry.rawId).map((n) => n.title)).toEqual(['hello.md']);
 
     // WS emit fired at least twice: once on stage, once on status transition.
     expect(emitted.length).toBeGreaterThanOrEqual(2);
@@ -194,6 +206,39 @@ describe('deleteRaw', () => {
     // At least one kb_state_update emitted for the delete.
     expect(emitted.length).toBeGreaterThanOrEqual(1);
     expect(emitted.some((e) => (e.frame.changed.raw || []).includes(res.entry.rawId))).toBe(true);
+  });
+
+  test('deletes embeddings for entries removed with the raw', async () => {
+    const res = await ingestion.enqueueUpload(hash, {
+      buffer: Buffer.from('# Some content'),
+      filename: 'note.md',
+      mimeType: 'text/markdown',
+    });
+    await ingestion.waitForIdle(hash);
+    const db = chatService.getKbDb(hash)!;
+    const entryId = `${res.entry.rawId}-entry`;
+    db.insertEntry({
+      entryId,
+      rawId: res.entry.rawId,
+      title: 'Entry',
+      slug: 'entry',
+      summary: 'Entry summary.',
+      schemaVersion: 1,
+      digestedAt: '2026-01-02T00:00:00.000Z',
+      tags: [],
+    });
+
+    const store = { deleteEntry: jest.fn().mockResolvedValue(undefined) };
+    jest.spyOn(chatService, 'getWorkspaceKbEmbeddingConfig').mockResolvedValue({
+      model: 'test-embed',
+      dimensions: 3,
+    });
+    jest.spyOn(chatService, 'getKbVectorStore').mockResolvedValue(store as any);
+
+    const removed = await ingestion.deleteRaw(hash, res.entry.rawId);
+
+    expect(removed).toBe(true);
+    expect(store.deleteEntry).toHaveBeenCalledWith(entryId);
   });
 
   test('returns false for an unknown rawId', async () => {

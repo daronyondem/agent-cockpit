@@ -11,7 +11,12 @@
 //   assign_entries, unassign_entries,
 //   add_connection, update_connection, remove_connection
 
-import type { KbDatabase, UpsertTopicParams, InsertConnectionParams } from './db';
+import type {
+  KbDatabase,
+  UpsertTopicParams,
+  InsertConnectionParams,
+  InsertTopicHistoryParams,
+} from './db';
 
 // ── Operation types ─────────────────────────────────────────────────────────
 
@@ -107,6 +112,11 @@ export type DreamOperation =
 export interface ParseResult {
   operations: DreamOperation[];
   warnings: string[];
+}
+
+export interface ApplyOperationsOptions {
+  runId?: string;
+  changedAt?: string;
 }
 
 const VALID_OPS = new Set([
@@ -265,15 +275,16 @@ function validateOp(
 export function applyOperations(
   db: KbDatabase,
   operations: DreamOperation[],
+  options: ApplyOperationsOptions = {},
 ): string[] {
   const warnings: string[] = [];
-  const now = new Date().toISOString();
+  const now = options.changedAt ?? new Date().toISOString();
 
   db.transaction(() => {
     for (let i = 0; i < operations.length; i++) {
       const op = operations[i];
       try {
-        applyOne(db, op, now);
+        applyOne(db, op, now, options.runId);
       } catch (err) {
         warnings.push(`Operation ${i} (${op.op}): ${(err as Error).message}`);
       }
@@ -283,7 +294,7 @@ export function applyOperations(
   return warnings;
 }
 
-function applyOne(db: KbDatabase, op: DreamOperation, now: string): void {
+function applyOne(db: KbDatabase, op: DreamOperation, now: string, runId?: string): void {
   switch (op.op) {
     case 'create_topic': {
       const params: UpsertTopicParams = {
@@ -294,12 +305,22 @@ function applyOne(db: KbDatabase, op: DreamOperation, now: string): void {
         updatedAt: now,
       };
       db.upsertTopic(params);
+      recordTopicHistory(db, {
+        topicId: op.topic_id,
+        changeType: 'created',
+        oldContent: null,
+        newContent: op.content,
+        entryIds: [],
+        runId,
+        changedAt: now,
+      });
       break;
     }
 
     case 'update_topic': {
       const existing = db.getTopic(op.topic_id);
       if (!existing) throw new Error(`Topic "${op.topic_id}" not found`);
+      const entryIds = db.listTopicEntryIds(op.topic_id);
       const params: UpsertTopicParams = {
         topicId: op.topic_id,
         title: op.title ?? existing.title,
@@ -308,12 +329,28 @@ function applyOne(db: KbDatabase, op: DreamOperation, now: string): void {
         updatedAt: now,
       };
       db.upsertTopic(params);
+      recordTopicHistory(db, {
+        topicId: op.topic_id,
+        changeType: 'updated',
+        oldContent: existing.content,
+        newContent: params.content,
+        entryIds,
+        runId,
+        changedAt: now,
+      });
       break;
     }
 
     case 'merge_topics': {
       // Collect all entry assignments from source topics.
       const allEntryIds = new Set<string>();
+      const sourceSnapshots = op.source_topic_ids
+        .filter((srcId) => srcId !== op.into_topic_id)
+        .map((srcId) => ({
+          topicId: srcId,
+          topic: db.getTopic(srcId),
+          entryIds: db.listTopicEntryIds(srcId),
+        }));
       for (const srcId of op.source_topic_ids) {
         for (const eid of db.listTopicEntryIds(srcId)) {
           allEntryIds.add(eid);
@@ -335,6 +372,17 @@ function applyOne(db: KbDatabase, op: DreamOperation, now: string): void {
       });
       // Reassign all collected entries.
       db.assignEntries(op.into_topic_id, [...allEntryIds]);
+      for (const snapshot of sourceSnapshots) {
+        recordTopicHistory(db, {
+          topicId: snapshot.topicId,
+          changeType: 'merged_into',
+          oldContent: snapshot.topic?.content ?? null,
+          newContent: op.content,
+          entryIds: snapshot.entryIds,
+          runId,
+          changedAt: now,
+        });
+      }
       break;
     }
 
@@ -343,6 +391,7 @@ function applyOne(db: KbDatabase, op: DreamOperation, now: string): void {
       const sourceEntryIds = db.listTopicEntryIds(op.source_topic_id);
       // Collect connections from source topic before deleting.
       const sourceConnections = db.listConnectionsForTopic(op.source_topic_id);
+      const sourceTopic = db.getTopic(op.source_topic_id);
       // Delete source topic.
       db.deleteTopic(op.source_topic_id);
       // Create each new topic.
@@ -377,11 +426,37 @@ function applyOne(db: KbDatabase, op: DreamOperation, now: string): void {
           evidence: conn.evidence,
         });
       }
+      recordTopicHistory(db, {
+        topicId: op.source_topic_id,
+        changeType: 'split_from',
+        oldContent: sourceTopic?.content ?? null,
+        newContent: JSON.stringify(op.into.map((topic) => ({
+          topic_id: topic.topic_id,
+          title: topic.title,
+          content: topic.content,
+        }))),
+        entryIds: sourceEntryIds,
+        runId,
+        changedAt: now,
+      });
       break;
     }
 
     case 'delete_topic':
-      db.deleteTopic(op.topic_id);
+      {
+        const existing = db.getTopic(op.topic_id);
+        const entryIds = db.listTopicEntryIds(op.topic_id);
+        db.deleteTopic(op.topic_id);
+        recordTopicHistory(db, {
+          topicId: op.topic_id,
+          changeType: 'deleted',
+          oldContent: existing?.content ?? null,
+          newContent: null,
+          entryIds,
+          runId,
+          changedAt: now,
+        });
+      }
       break;
 
     case 'assign_entries':
@@ -393,6 +468,7 @@ function applyOne(db: KbDatabase, op: DreamOperation, now: string): void {
       break;
 
     case 'add_connection': {
+      assertConnectionTopicsExist(db, op.source_topic, op.target_topic);
       const params: InsertConnectionParams = {
         sourceTopic: op.source_topic,
         targetTopic: op.target_topic,
@@ -405,6 +481,7 @@ function applyOne(db: KbDatabase, op: DreamOperation, now: string): void {
     }
 
     case 'update_connection': {
+      assertConnectionTopicsExist(db, op.source_topic, op.target_topic);
       // Read existing, merge fields, upsert.
       const params: InsertConnectionParams = {
         sourceTopic: op.source_topic,
@@ -424,6 +501,22 @@ function applyOne(db: KbDatabase, op: DreamOperation, now: string): void {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+function assertConnectionTopicsExist(db: KbDatabase, sourceTopic: string, targetTopic: string): void {
+  if (!db.getTopic(sourceTopic)) {
+    throw new Error(`source topic "${sourceTopic}" not found; connection skipped`);
+  }
+  if (!db.getTopic(targetTopic)) {
+    throw new Error(`target topic "${targetTopic}" not found; connection skipped`);
+  }
+}
+
+function recordTopicHistory(
+  db: KbDatabase,
+  params: InsertTopicHistoryParams,
+): void {
+  db.insertTopicHistory(params);
+}
 
 function isNonEmptyString(val: unknown): val is string {
   return typeof val === 'string' && val.length > 0;

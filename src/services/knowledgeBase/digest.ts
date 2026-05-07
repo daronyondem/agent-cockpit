@@ -32,8 +32,11 @@
 // (Dreaming). Each digest run is self-contained for a single raw file.
 
 import path from 'path';
+import crypto from 'crypto';
 import { promises as fsp } from 'fs';
 import type {
+  KbDigestChunkPhase,
+  KbDigestChunkProgress,
   KbDigestProgress,
   KbErrorClass,
   KbStateUpdateEvent,
@@ -42,10 +45,12 @@ import type {
 import type { BaseBackendAdapter, RunOneShotOptions } from '../backends/base';
 import type { BackendRegistry } from '../backends/registry';
 import type { CliProfileRuntime } from '../cliProfiles';
-import type { KbDatabase } from './db';
+import type { InsertEntrySourceParams, KbDatabase, ReplaceEntryParams } from './db';
 import type { KbVectorStore } from './vectorStore';
 import { embedBatch, resolveConfig, type EmbeddingConfig } from './embeddings';
 import type { WorkspaceTaskQueueRegistry } from './workspaceTaskQueue';
+import { planDigestChunks, type KbDigestChunk } from './chunkPlanner';
+import { estimateSourceUnitTextLengths, extractSourceRange } from './sourceRange';
 
 /** Version bumped whenever the entry frontmatter/format contract changes. */
 export const KB_ENTRY_SCHEMA_VERSION = 1;
@@ -64,6 +69,7 @@ export function computeDigestProgress(counters: {
   total: number;
   done: number;
   totalElapsedMs: number;
+  chunkProgress?: KbDigestChunkProgress | null;
 }): KbDigestProgress {
   const avgMsPerItem = counters.done > 0
     ? Math.round(counters.totalElapsedMs / counters.done)
@@ -77,7 +83,35 @@ export function computeDigestProgress(counters: {
     const remaining = Math.max(0, counters.total - counters.done);
     snapshot.etaMs = remaining * avgMsPerItem;
   }
+  const chunkProgress = normalizeDigestChunkProgress(counters.chunkProgress);
+  if (chunkProgress) snapshot.chunks = chunkProgress;
   return snapshot;
+}
+
+function normalizeDigestChunkProgress(
+  chunkProgress: KbDigestChunkProgress | null | undefined,
+): KbDigestChunkProgress | null {
+  if (!chunkProgress) return null;
+  const done = Math.max(0, Math.floor(Number(chunkProgress.done) || 0));
+  const total = Math.max(0, Math.floor(Number(chunkProgress.total) || 0));
+  const active = Math.max(0, Math.floor(Number(chunkProgress.active) || 0));
+  if (done === 0 && total === 0 && active === 0 && !chunkProgress.current) return null;
+  const phase = isDigestChunkPhase(chunkProgress.phase) ? chunkProgress.phase : 'planning';
+  const normalized: KbDigestChunkProgress = {
+    done: total > 0 ? Math.min(done, total) : done,
+    total,
+    active,
+    phase,
+  };
+  if (chunkProgress.current) normalized.current = chunkProgress.current;
+  return normalized;
+}
+
+function isDigestChunkPhase(value: unknown): value is KbDigestChunkPhase {
+  return value === 'planning' ||
+    value === 'digesting' ||
+    value === 'parsing' ||
+    value === 'committing';
 }
 
 /** Subset of chatService the digestion orchestrator depends on. */
@@ -137,6 +171,22 @@ export interface ParsedEntry {
   summary: string;
   tags: string[];
   body: string;
+}
+
+type EntrySourceDraft = Omit<InsertEntrySourceParams, 'entryId'>;
+
+interface EntryReplacementManifest {
+  version: 1;
+  rawId: string;
+  stagingName: string;
+  staleIds: string[];
+  replacementIds: string[];
+  replacementDigestedAt: string;
+}
+
+interface ParsedEntryWithSources {
+  entry: ParsedEntry;
+  sources: EntrySourceDraft[];
 }
 
 /** Thrown when parsing CLI output fails. Caught and classified internally. */
@@ -200,8 +250,11 @@ export class KbDigestionService {
       done: number;
       totalElapsedMs: number;
       startedAt: string;
+      chunkProgress: KbDigestChunkProgress | null;
+      activeChunkKeys: Set<string>;
     }
   >();
+  private readonly recoveryByWorkspace = new Map<string, Promise<void>>();
 
   constructor(opts: KbDigestionOptions) {
     this.chatService = opts.chatService;
@@ -227,6 +280,9 @@ export class KbDigestionService {
   async enqueueDigest(hash: string, rawId: string): Promise<DigestResult> {
     const enabled = await this.chatService.getWorkspaceKbEnabled(hash);
     if (!enabled) throw new KbDigestDisabledError(hash);
+    const db = this.chatService.getKbDb(hash);
+    if (!db) throw new KbDigestDisabledError(hash);
+    await this._recoverWorkspaceEntryReplacements(hash, db);
     await this._refreshConcurrency(hash);
     this._trackPending(hash, 1);
     try {
@@ -255,6 +311,7 @@ export class KbDigestionService {
     if (!enabled) throw new KbDigestDisabledError(hash);
     const db = this.chatService.getKbDb(hash);
     if (!db) throw new KbDigestDisabledError(hash);
+    await this._recoverWorkspaceEntryReplacements(hash, db);
 
     const ingested = db.listIngestedRawIds();
     const pending = db.listPendingDeleteRaw().map((r) => r.raw_id);
@@ -318,6 +375,8 @@ export class KbDigestionService {
         done: 0,
         totalElapsedMs: 0,
         startedAt: new Date().toISOString(),
+        chunkProgress: null,
+        activeChunkKeys: new Set<string>(),
       };
       this.sessions.set(hash, session);
     }
@@ -366,6 +425,145 @@ export class KbDigestionService {
     });
   }
 
+  private _recordChunkPlanning(hash: string, rawId: string): void {
+    const session = this.sessions.get(hash);
+    if (!session) return;
+    session.chunkProgress = {
+      done: session.chunkProgress?.done ?? 0,
+      total: session.chunkProgress?.total ?? 0,
+      active: session.activeChunkKeys.size,
+      phase: 'planning',
+      current: { rawId },
+    };
+    this._persistSession(hash, session);
+    this._emitProgress(hash, session);
+  }
+
+  private _recordChunksPlanned(
+    hash: string,
+    rawId: string,
+    chunks: KbDigestChunk[],
+    unitType: string,
+  ): void {
+    const session = this.sessions.get(hash);
+    if (!session) return;
+    const prior = session.chunkProgress;
+    session.chunkProgress = {
+      done: prior?.done ?? 0,
+      total: (prior?.total ?? 0) + chunks.length,
+      active: session.activeChunkKeys.size,
+      phase: 'planning',
+      current: { rawId, total: chunks.length, unitType },
+    };
+    this._persistSession(hash, session);
+    this._emitProgress(hash, session);
+  }
+
+  private _recordChunkStarted(
+    hash: string,
+    rawId: string,
+    chunk: KbDigestChunk,
+    index: number,
+    total: number,
+    unitType: string,
+  ): void {
+    const session = this.sessions.get(hash);
+    if (!session) return;
+    session.activeChunkKeys.add(chunkProgressKey(rawId, chunk.chunkId));
+    this._setChunkProgress(hash, session, 'digesting', rawId, chunk, index, total, unitType);
+  }
+
+  private _recordChunkPhase(
+    hash: string,
+    rawId: string,
+    chunk: KbDigestChunk,
+    index: number,
+    total: number,
+    unitType: string,
+    phase: KbDigestChunkPhase,
+  ): void {
+    const session = this.sessions.get(hash);
+    if (!session) return;
+    this._setChunkProgress(hash, session, phase, rawId, chunk, index, total, unitType);
+  }
+
+  private _recordChunkDone(
+    hash: string,
+    rawId: string,
+    chunk: KbDigestChunk,
+    index: number,
+    total: number,
+    unitType: string,
+  ): void {
+    const session = this.sessions.get(hash);
+    if (!session) return;
+    session.activeChunkKeys.delete(chunkProgressKey(rawId, chunk.chunkId));
+    const prior = session.chunkProgress;
+    const chunkTotal = Math.max(prior?.total ?? total, total);
+    session.chunkProgress = {
+      done: Math.min((prior?.done ?? 0) + 1, chunkTotal),
+      total: chunkTotal,
+      active: session.activeChunkKeys.size,
+      phase: 'digesting',
+      current: makeCurrentChunk(rawId, chunk, index, total, unitType),
+    };
+    this._persistSession(hash, session);
+    this._emitProgress(hash, session);
+  }
+
+  private _recordChunkStopped(hash: string, rawId: string, chunk: KbDigestChunk): void {
+    const session = this.sessions.get(hash);
+    if (!session) return;
+    session.activeChunkKeys.delete(chunkProgressKey(rawId, chunk.chunkId));
+    if (session.chunkProgress) session.chunkProgress.active = session.activeChunkKeys.size;
+    this._persistSession(hash, session);
+    this._emitProgress(hash, session);
+  }
+
+  private _recordChunkCommitting(hash: string, rawId: string): void {
+    const session = this.sessions.get(hash);
+    if (!session) return;
+    const prior = session.chunkProgress;
+    session.chunkProgress = {
+      done: prior?.done ?? 0,
+      total: prior?.total ?? 0,
+      active: session.activeChunkKeys.size,
+      phase: 'committing',
+      current: { rawId },
+    };
+    this._persistSession(hash, session);
+    this._emitProgress(hash, session);
+  }
+
+  private _setChunkProgress(
+    hash: string,
+    session: {
+      chunkProgress: KbDigestChunkProgress | null;
+      activeChunkKeys: Set<string>;
+      total: number;
+      done: number;
+      totalElapsedMs: number;
+      startedAt: string;
+    },
+    phase: KbDigestChunkPhase,
+    rawId: string,
+    chunk: KbDigestChunk,
+    index: number,
+    total: number,
+    unitType: string,
+  ): void {
+    const prior = session.chunkProgress;
+    session.chunkProgress = {
+      done: prior?.done ?? 0,
+      total: Math.max(prior?.total ?? total, total),
+      active: session.activeChunkKeys.size,
+      phase,
+      current: makeCurrentChunk(rawId, chunk, index, total, unitType),
+    };
+    this._persistSession(hash, session);
+    this._emitProgress(hash, session);
+  }
+
   /** Write the current session state to the KB DB (best-effort; swallows DB errors). */
   private _persistSession(
     hash: string,
@@ -374,6 +572,7 @@ export class KbDigestionService {
       done: number;
       totalElapsedMs: number;
       startedAt: string;
+      chunkProgress?: KbDigestChunkProgress | null;
     },
   ): void {
     try {
@@ -383,6 +582,7 @@ export class KbDigestionService {
         done: session.done,
         totalElapsedMs: session.totalElapsedMs,
         startedAt: session.startedAt,
+        chunkProgress: session.chunkProgress ?? null,
       });
     } catch (err: unknown) {
       console.warn(
@@ -408,7 +608,12 @@ export class KbDigestionService {
   /** Emit a `digestProgress` frame for the current session. */
   private _emitProgress(
     hash: string,
-    session: { total: number; done: number; totalElapsedMs: number },
+    session: {
+      total: number;
+      done: number;
+      totalElapsedMs: number;
+      chunkProgress?: KbDigestChunkProgress | null;
+    },
   ): void {
     this._emitChange(hash, new Date().toISOString(), {
       digestProgress: computeDigestProgress(session),
@@ -469,7 +674,12 @@ export class KbDigestionService {
         error: { class: 'unknown', message: `No raw row for ${rawId}` },
       };
     }
-    if (raw.status !== 'ingested' && raw.status !== 'pending-delete') {
+    if (
+      raw.status !== 'ingested' &&
+      raw.status !== 'pending-delete' &&
+      raw.status !== 'failed' &&
+      raw.status !== 'digested'
+    ) {
       // Nothing to do; don't mutate state.
       return { rawId, entryIds: [], purged: false };
     }
@@ -550,6 +760,7 @@ export class KbDigestionService {
     const cliBackend = settings.knowledgeBase?.digestionCliBackend;
     const cliModel = settings.knowledgeBase?.digestionCliModel;
     const cliEffort = settings.knowledgeBase?.digestionCliEffort;
+    const gleaningEnabled = Boolean(settings.knowledgeBase?.kbGleaningEnabled);
 
     if (!cliProfileId && !cliBackend) {
       return this._failRaw(hash, rawId, db, 'unknown',
@@ -569,116 +780,264 @@ export class KbDigestionService {
         `Configured Digestion CLI profile "${runtime.cliProfileId || runtime.backendId}" uses unregistered backend "${runtime.backendId}".`);
     }
 
-    const prompt = buildDigestPrompt({
-      filename: firstLoc.filename,
-      folderPath: firstLoc.folderPath,
-      rawId,
-      handler: raw.handler ?? 'unknown',
-      mimeType: raw.mime_type ?? 'application/octet-stream',
-      convertedTextPath: path.relative(
-        this.chatService.getKbKnowledgeDir(hash),
-        textPath,
-      ),
-      convertedText,
-      handlerMetadata: convertedMeta.metadata as Record<string, unknown> | undefined,
-    });
-
-    this._emitChange(hash, new Date().toISOString(), {
-      raw: [rawId],
-      substep: { rawId, text: 'Running CLI analysis\u2026' },
-    });
-
-    // Adaptive timeout: scale with the document's unit count so large
-    // multi-hundred-page PDFs aren't killed mid-run, but small docs still
-    // bail quickly on stalls. `pageCount` (PDFs) and `slideCount` (PPTX)
-    // are written by hybrid handlers; other formats fall through to the
-    // 30-minute floor.
     const handlerMeta = convertedMeta.metadata as Record<string, unknown> | undefined;
-    const unitCount =
+    const handlerUnitCount =
       typeof handlerMeta?.pageCount === 'number' ? handlerMeta.pageCount :
       typeof handlerMeta?.slideCount === 'number' ? handlerMeta.slideCount :
       0;
-    const digestTimeoutMs = Math.max(30 * 60_000, unitCount * 10 * 60_000);
 
-    let rawOutput = '';
-    const runOptions: RunOneShotOptions = {
-      model: cliModel,
-      effort: cliEffort,
-      timeoutMs: digestTimeoutMs,
-      workingDir: this.chatService.getKbKnowledgeDir(hash),
-      allowTools: true,
-      cliProfile: runtime.profile,
-    };
-    try {
-      rawOutput = await adapter.runOneShot(prompt, runOptions);
-    } catch (err: unknown) {
-      const message = (err as Error).message || String(err);
-      const klass: KbErrorClass = /timeout/i.test(message) ? 'timeout' : 'cli_error';
-      return this._failRaw(hash, rawId, db, klass, message);
-    }
+    this._recordChunkPlanning(hash, rawId);
+    const document = db.getDocument(rawId);
+    const documentNodes = document ? db.listDocumentNodes(rawId) : [];
+    const documentUnitCount = document
+      ? Math.max(
+        document.unitCount,
+        documentNodes.reduce((max, node) => Math.max(max, node.endUnit), 0),
+      )
+      : 0;
+    const unitTextLengths = document
+      ? estimateSourceUnitTextLengths(convertedText, document.unitType, documentUnitCount)
+      : undefined;
+    const chunks = document
+      ? planDigestChunks(document, documentNodes, { unitTextLengths })
+      : [makeWholeDocumentChunk(rawId, handlerUnitCount)];
+    const chunkUnitType = document?.unitType ?? 'unknown';
+    this._recordChunksPlanned(hash, rawId, chunks, chunkUnitType);
+    const convertedTextRelPath = path.relative(
+      this.chatService.getKbKnowledgeDir(hash),
+      textPath,
+    );
 
-    this._emitChange(hash, new Date().toISOString(), {
-      raw: [rawId],
-      substep: { rawId, text: 'Parsing entries\u2026' },
-    });
+    const parsedWithSources: ParsedEntryWithSources[] = [];
+    const rawOutputs: string[] = [];
+    for (let i = 0; i < chunks.length; i += 1) {
+      const chunk = chunks[i];
+      const chunkText = document
+        ? extractSourceRange(convertedText, document.unitType, chunk.startUnit, chunk.endUnit)
+        : convertedText;
+      if (!chunkText) {
+        return this._failRaw(hash, rawId, db, 'malformed_output',
+          `Could not extract chunk ${chunk.chunkId} range ${chunk.startUnit}-${chunk.endUnit}.`);
+      }
+      const chunkNodes = documentNodes.filter((n) => chunk.nodeIds.includes(n.nodeId));
+      const prompt = buildDigestPrompt({
+        filename: firstLoc.filename,
+        folderPath: firstLoc.folderPath,
+        rawId,
+        handler: raw.handler ?? 'unknown',
+        mimeType: raw.mime_type ?? 'application/octet-stream',
+        convertedTextPath: convertedTextRelPath,
+        convertedText: chunkText,
+        handlerMetadata: handlerMeta,
+        chunk: {
+          chunkId: chunk.chunkId,
+          index: i + 1,
+          total: chunks.length,
+          unitType: chunkUnitType,
+          startUnit: chunk.startUnit,
+          endUnit: chunk.endUnit,
+          nodeTitles: chunkNodes.map((n) => n.title),
+        },
+      });
 
-    let parsed: ParsedEntry[];
-    try {
-      parsed = parseEntries(rawOutput);
-    } catch (err: unknown) {
-      const debugPath = await this._dumpDebugOutput(hash, rawId, rawOutput);
-      const suffix = debugPath ? ` (debug dump: ${debugPath})` : '';
-      return this._failRaw(hash, rawId, db, 'malformed_output', (err as Error).message + suffix);
-    }
-    if (parsed.length === 0) {
-      const debugPath = await this._dumpDebugOutput(hash, rawId, rawOutput);
-      const suffix = debugPath ? ` (debug dump: ${debugPath})` : '';
-      return this._failRaw(hash, rawId, db, 'malformed_output',
-        'Digest CLI returned no entries. Expected at least one frontmatter block.' + suffix);
-    }
+      this._recordChunkStarted(hash, rawId, chunk, i + 1, chunks.length, chunkUnitType);
+      this._emitChange(hash, new Date().toISOString(), {
+        raw: [rawId],
+        substep: {
+          rawId,
+          text: chunks.length === 1
+            ? 'Running CLI analysis\u2026'
+            : `Running CLI analysis for chunk ${i + 1}/${chunks.length} (${chunk.startUnit}-${chunk.endUnit})\u2026`,
+        },
+      });
 
-    // Remove any stale entries for this raw before writing fresh ones
-    // (re-digest case). Mark co-topic entries as needing synthesis before
-    // deletion so the dreaming pipeline knows to update affected topics.
-    const staleIds = db.deleteEntriesByRawId(rawId);
-    if (staleIds.length > 0) {
-      db.markCoTopicEntriesStale(staleIds);
+      const chunkUnitCount = document ? chunk.endUnit - chunk.startUnit + 1 : handlerUnitCount;
+      const digestTimeoutMs = Math.max(30 * 60_000, chunkUnitCount * 10 * 60_000);
+      const runOptions: RunOneShotOptions = {
+        model: cliModel,
+        effort: cliEffort,
+        timeoutMs: digestTimeoutMs,
+        workingDir: this.chatService.getKbKnowledgeDir(hash),
+        allowTools: true,
+        cliProfile: runtime.profile,
+      };
+
+      let rawOutput = '';
+      let gleanOutput = '';
+      try {
+        if (gleaningEnabled) {
+          const outputs = await adapter.runSessionShot(
+            [prompt, buildGleaningPrompt()],
+            runOptions,
+          );
+          rawOutput = outputs[0] ?? '';
+          gleanOutput = outputs[1] ?? '';
+        } else {
+          rawOutput = await adapter.runOneShot(prompt, runOptions);
+        }
+      } catch (err: unknown) {
+        this._recordChunkStopped(hash, rawId, chunk);
+        const message = (err as Error).message || String(err);
+        const klass = classifyCliError(message);
+        return this._failRaw(hash, rawId, db, klass, `Chunk ${chunk.chunkId} failed: ${message}`);
+      }
+      rawOutputs.push(`## ${chunk.chunkId}\n\n${rawOutput}`);
+
+      this._recordChunkPhase(hash, rawId, chunk, i + 1, chunks.length, chunkUnitType, 'parsing');
+      this._emitChange(hash, new Date().toISOString(), {
+        raw: [rawId],
+        substep: {
+          rawId,
+          text: chunks.length === 1 ? 'Parsing entries\u2026' : `Parsing chunk ${i + 1}/${chunks.length}\u2026`,
+        },
+      });
+
+      let chunkParsed: ParsedEntry[];
+      try {
+        chunkParsed = parseEntries(rawOutput);
+      } catch (err: unknown) {
+        this._recordChunkStopped(hash, rawId, chunk);
+        const debugPath = await this._dumpDebugOutput(hash, rawId, rawOutput, chunk.chunkId);
+        const suffix = debugPath ? ` (debug dump: ${debugPath})` : '';
+        return this._failRaw(hash, rawId, db, 'malformed_output',
+          `Chunk ${chunk.chunkId}: ${(err as Error).message}${suffix}`);
+      }
+      if (chunkParsed.length === 0) {
+        this._recordChunkStopped(hash, rawId, chunk);
+        const debugPath = await this._dumpDebugOutput(hash, rawId, rawOutput, chunk.chunkId);
+        const suffix = debugPath ? ` (debug dump: ${debugPath})` : '';
+        return this._failRaw(hash, rawId, db, 'malformed_output',
+          `Chunk ${chunk.chunkId} returned no entries. Expected at least one frontmatter block.${suffix}`);
+      }
+      const chunkSource = makeEntrySourceForChunk(rawId, chunk);
+      parsedWithSources.push(
+        ...chunkParsed.map((entry) => ({ entry, sources: [chunkSource] })),
+      );
+      if (gleanOutput.trim()) {
+        try {
+          parsedWithSources.push(
+            ...parseEntries(gleanOutput).map((entry) => ({ entry, sources: [chunkSource] })),
+          );
+        } catch (err: unknown) {
+          this._recordChunkStopped(hash, rawId, chunk);
+          const debugPath = await this._dumpDebugOutput(hash, rawId, gleanOutput, `${chunk.chunkId}-glean`);
+          const suffix = debugPath ? ` (debug dump: ${debugPath})` : '';
+          return this._failRaw(hash, rawId, db, 'malformed_output',
+            `Gleaning for ${chunk.chunkId}: ${(err as Error).message}${suffix}`);
+        }
+      }
+      this._recordChunkDone(hash, rawId, chunk, i + 1, chunks.length, chunkUnitType);
     }
+    const parsed = mergeDuplicateParsedEntries(parsedWithSources);
+    this._recordChunkCommitting(hash, rawId);
+
     const entriesRoot = this.chatService.getKbEntriesDir(hash);
-    for (const staleId of staleIds) {
-      await fsp.rm(path.join(entriesRoot, staleId), { recursive: true, force: true }).catch(() => undefined);
-      await fsp.rm(path.join(entriesRoot, `${staleId}.md`), { force: true }).catch(() => undefined);
-    }
-
     const writtenEntryIds: string[] = [];
     const now = new Date().toISOString();
+    const staleIds = db.listEntryIdsByRawId(rawId);
+    const staleIdSet = new Set(staleIds);
+    const reservedEntryIds = new Set<string>();
+    const replacementRunName = `${rawId}-${crypto.randomUUID()}`;
+    const stagingRoot = path.join(entriesRoot, '.staging', replacementRunName);
+    const backupRoot = path.join(entriesRoot, '.backup', replacementRunName);
+    const stagedEntries: Array<{
+      entryId: string;
+      stagedDir: string;
+      finalDir: string;
+      replacement: ReplaceEntryParams;
+    }> = [];
+    const installedDirs: string[] = [];
+    const backedUpPaths: Array<{ from: string; to: string }> = [];
     try {
-      for (const entry of parsed) {
-        const entryId = this._allocateEntryId(db, rawId, entry.slug);
-        const entryDir = path.join(entriesRoot, entryId);
-        await fsp.mkdir(entryDir, { recursive: true });
+      await fsp.mkdir(stagingRoot, { recursive: true });
+      for (const item of parsed) {
+        const entry = item.entry;
+        const entryId = this._allocateEntryId(db, rawId, entry.slug, {
+          reservedIds: reservedEntryIds,
+          reusableIds: staleIdSet,
+        });
+        const stagedDir = path.join(stagingRoot, entryId);
+        await fsp.mkdir(stagedDir, { recursive: true });
         await fsp.writeFile(
-          path.join(entryDir, 'entry.md'),
+          path.join(stagedDir, 'entry.md'),
           stringifyEntry(entry, { uploadedAt: raw.uploaded_at, digestedAt: now }),
           'utf8',
         );
-        db.insertEntry({
+        stagedEntries.push({
           entryId,
-          rawId,
-          title: entry.title,
-          slug: entry.slug,
-          summary: entry.summary,
-          schemaVersion: KB_ENTRY_SCHEMA_VERSION,
-          digestedAt: now,
-          tags: entry.tags,
+          stagedDir,
+          finalDir: path.join(entriesRoot, entryId),
+          replacement: {
+            entryId,
+            rawId,
+            title: entry.title,
+            slug: entry.slug,
+            summary: entry.summary,
+            schemaVersion: KB_ENTRY_SCHEMA_VERSION,
+            digestedAt: now,
+            tags: entry.tags,
+            sources: item.sources,
+          },
         });
-        writtenEntryIds.push(entryId);
       }
+
+      // Move old entry files out of the way only after every replacement has
+      // been staged. The manifest lets the next process recover this window
+      // if a crash lands between filesystem installation and the DB commit.
+      await fsp.mkdir(backupRoot, { recursive: true });
+      await fsp.writeFile(
+        path.join(backupRoot, 'manifest.json'),
+        JSON.stringify({
+          version: 1,
+          rawId,
+          stagingName: replacementRunName,
+          staleIds,
+          replacementIds: stagedEntries.map((entry) => entry.entryId),
+          replacementDigestedAt: now,
+        } satisfies EntryReplacementManifest, null, 2),
+        'utf8',
+      );
+      for (const staleId of staleIds) {
+        const entryDir = path.join(entriesRoot, staleId);
+        if (await pathExists(entryDir)) {
+          const backupDir = path.join(backupRoot, staleId);
+          await fsp.rename(entryDir, backupDir);
+          backedUpPaths.push({ from: backupDir, to: entryDir });
+        }
+        const legacyEntryFile = path.join(entriesRoot, `${staleId}.md`);
+        if (await pathExists(legacyEntryFile)) {
+          const backupFile = path.join(backupRoot, `${staleId}.md`);
+          await fsp.rename(legacyEntryFile, backupFile);
+          backedUpPaths.push({ from: backupFile, to: legacyEntryFile });
+        }
+      }
+      for (const staged of stagedEntries) {
+        await fsp.rename(staged.stagedDir, staged.finalDir);
+        installedDirs.push(staged.finalDir);
+      }
+
+      const removedEntryIds = db.replaceEntriesForRawId(rawId, stagedEntries.map((entry) => entry.replacement));
+      await this._deleteEntryEmbeddings(hash, removedEntryIds);
+      writtenEntryIds.push(...stagedEntries.map((entry) => entry.entryId));
+      await fsp.rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
     } catch (err: unknown) {
-      const debugPath = await this._dumpDebugOutput(hash, rawId, rawOutput);
+      for (const installedDir of [...installedDirs].reverse()) {
+        await fsp.rm(installedDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+      for (const backup of [...backedUpPaths].reverse()) {
+        if (!(await pathExists(backup.from))) continue;
+        await fsp.rm(backup.to, { recursive: true, force: true }).catch(() => undefined);
+        await fsp.mkdir(path.dirname(backup.to), { recursive: true });
+        await fsp.rename(backup.from, backup.to).catch(() => undefined);
+      }
+      await fsp.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
+      await fsp.rm(backupRoot, { recursive: true, force: true }).catch(() => undefined);
+      const debugPath = await this._dumpDebugOutput(hash, rawId, rawOutputs.join('\n\n'));
       const suffix = debugPath ? ` (debug dump: ${debugPath})` : '';
       return this._failRaw(hash, rawId, db, 'schema_rejection',
         `Failed to write entry: ${(err as Error).message}${suffix}`);
+    } finally {
+      await fsp.rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
     }
 
     // Mark the raw as digested and clear any previous error state.
@@ -687,7 +1046,7 @@ export class KbDigestionService {
 
     // ── Embed new entries (best-effort — failures don't block digestion) ──
     try {
-      await this._embedEntries(hash, parsed, writtenEntryIds);
+      await this._embedEntries(hash, parsed.map((item) => item.entry), writtenEntryIds);
     } catch (err: unknown) {
       console.warn(
         `[kb] digest: embedding failed for raw ${rawId}:`,
@@ -752,11 +1111,10 @@ export class KbDigestionService {
       { recursive: true, force: true },
     ).catch(() => undefined);
 
-    // 3) Mark co-topic entries stale, then delete entries on disk.
+    // 3) Delete entries. The DB method marks co-topic entries stale before
+    // cascade-deleting topic assignments.
     const removedEntryIds = db.deleteEntriesByRawId(rawId);
-    if (removedEntryIds.length > 0) {
-      db.markCoTopicEntriesStale(removedEntryIds);
-    }
+    await this._deleteEntryEmbeddings(hash, removedEntryIds);
     const entriesDir = this.chatService.getKbEntriesDir(hash);
     for (const entryId of removedEntryIds) {
       await fsp.rm(path.join(entriesDir, entryId), { recursive: true, force: true }).catch(() => undefined);
@@ -766,6 +1124,25 @@ export class KbDigestionService {
     // 4) Delete raw row (cascades to raw_locations + entry rows).
     db.deleteRaw(rawId);
     return removedEntryIds;
+  }
+
+  private async _deleteEntryEmbeddings(hash: string, entryIds: string[]): Promise<void> {
+    if (entryIds.length === 0) return;
+    try {
+      const cfg = await this.chatService.getWorkspaceKbEmbeddingConfig(hash);
+      if (!cfg) return;
+      const resolved = resolveConfig(cfg);
+      const store = await this.chatService.getKbVectorStore(hash, resolved.dimensions);
+      if (!store) return;
+      for (const entryId of entryIds) {
+        await store.deleteEntry(entryId);
+      }
+    } catch (err: unknown) {
+      console.warn(
+        `[kb] digest: failed to delete stale entry embeddings for entries ${entryIds.join(',')}:`,
+        (err as Error).message,
+      );
+    }
   }
 
   /**
@@ -793,12 +1170,14 @@ export class KbDigestionService {
     hash: string,
     rawId: string,
     rawOutput: string,
+    label?: string,
   ): Promise<string> {
     try {
       const debugDir = path.join(this.chatService.getKbKnowledgeDir(hash), 'digest-debug');
       await fsp.mkdir(debugDir, { recursive: true });
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
-      const filePath = path.join(debugDir, `${rawId}-${stamp}.txt`);
+      const suffix = label ? `-${label.replace(/[^a-z0-9_-]+/gi, '-')}` : '';
+      const filePath = path.join(debugDir, `${rawId}${suffix}-${stamp}.txt`);
       await fsp.writeFile(filePath, rawOutput, 'utf8');
       return filePath;
     } catch {
@@ -812,15 +1191,97 @@ export class KbDigestionService {
    * same slug) and within a single run (the CLI emitted two entries with
    * the same slug).
    */
-  private _allocateEntryId(db: KbDatabase, rawId: string, slug: string): string {
+  private _allocateEntryId(
+    db: KbDatabase,
+    rawId: string,
+    slug: string,
+    opts: { reservedIds?: Set<string>; reusableIds?: Set<string> } = {},
+  ): string {
     const base = `${rawId}-${slug}`;
-    if (!db.entryIdTaken(base)) return base;
+    const reserve = (entryId: string): string => {
+      opts.reservedIds?.add(entryId);
+      return entryId;
+    };
+    const isTaken = (entryId: string): boolean => (
+      Boolean(opts.reservedIds?.has(entryId))
+      || (!opts.reusableIds?.has(entryId) && db.entryIdTaken(entryId))
+    );
+    if (!isTaken(base)) return reserve(base);
     for (let n = 2; n < 1000; n += 1) {
       const candidate = `${base}-${n}`;
-      if (!db.entryIdTaken(candidate)) return candidate;
+      if (!isTaken(candidate)) return reserve(candidate);
     }
     // Extreme fallback — should never happen in practice.
-    return `${base}-${Date.now()}`;
+    return reserve(`${base}-${Date.now()}`);
+  }
+
+  private async _recoverWorkspaceEntryReplacements(hash: string, db: KbDatabase): Promise<void> {
+    const existing = this.recoveryByWorkspace.get(hash);
+    if (existing) return existing;
+
+    const recovery = this._recoverWorkspaceEntryReplacementsOnce(hash, db)
+      .catch((err: unknown) => {
+        this.recoveryByWorkspace.delete(hash);
+        throw err;
+      });
+    this.recoveryByWorkspace.set(hash, recovery);
+    return recovery;
+  }
+
+  private async _recoverWorkspaceEntryReplacementsOnce(hash: string, db: KbDatabase): Promise<void> {
+    const entriesRoot = this.chatService.getKbEntriesDir(hash);
+    const backupParent = path.join(entriesRoot, '.backup');
+    const stagingParent = path.join(entriesRoot, '.staging');
+
+    let backupEntries: string[];
+    try {
+      backupEntries = await fsp.readdir(backupParent);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      backupEntries = [];
+    }
+
+    for (const backupName of backupEntries) {
+      const backupRoot = path.join(backupParent, backupName);
+      const manifest = await readEntryReplacementManifest(path.join(backupRoot, 'manifest.json'));
+      if (!manifest) continue;
+
+      if (this._entryReplacementCommitted(db, manifest)) {
+        await fsp.rm(backupRoot, { recursive: true, force: true });
+        continue;
+      }
+
+      for (const replacementId of manifest.replacementIds) {
+        await fsp.rm(path.join(entriesRoot, replacementId), { recursive: true, force: true }).catch(() => undefined);
+        await fsp.rm(path.join(entriesRoot, `${replacementId}.md`), { force: true }).catch(() => undefined);
+      }
+
+      const backedUp = await fsp.readdir(backupRoot, { withFileTypes: true }).catch(() => []);
+      for (const entry of backedUp) {
+        if (entry.name === 'manifest.json') continue;
+        const from = path.join(backupRoot, entry.name);
+        const to = path.join(entriesRoot, entry.name);
+        await fsp.rm(to, { recursive: true, force: true }).catch(() => undefined);
+        await fsp.rename(from, to).catch(() => undefined);
+      }
+      await fsp.rm(backupRoot, { recursive: true, force: true });
+    }
+
+    await fsp.rm(stagingParent, { recursive: true, force: true }).catch(() => undefined);
+    await removeIfEmpty(backupParent);
+  }
+
+  private _entryReplacementCommitted(db: KbDatabase, manifest: EntryReplacementManifest): boolean {
+    if (manifest.replacementIds.length === 0) return false;
+    const replacementSet = new Set(manifest.replacementIds);
+    const currentIds = db.listEntryIdsByRawId(manifest.rawId);
+    if (currentIds.length !== replacementSet.size) return false;
+    for (const entryId of currentIds) {
+      if (!replacementSet.has(entryId)) return false;
+      const entry = db.getEntry(entryId);
+      if (!entry || entry.digestedAt !== manifest.replacementDigestedAt) return false;
+    }
+    return true;
   }
 
   private _emitChange(
@@ -842,6 +1303,54 @@ export class KbDigestionService {
   }
 }
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await fsp.access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readEntryReplacementManifest(filePath: string): Promise<EntryReplacementManifest | null> {
+  try {
+    const parsed = JSON.parse(await fsp.readFile(filePath, 'utf8')) as Partial<EntryReplacementManifest>;
+    if (
+      parsed.version !== 1 ||
+      typeof parsed.rawId !== 'string' ||
+      typeof parsed.stagingName !== 'string' ||
+      typeof parsed.replacementDigestedAt !== 'string' ||
+      !Array.isArray(parsed.staleIds) ||
+      !Array.isArray(parsed.replacementIds) ||
+      !parsed.staleIds.every((id) => typeof id === 'string') ||
+      !parsed.replacementIds.every((id) => typeof id === 'string')
+    ) {
+      return null;
+    }
+    return {
+      version: 1,
+      rawId: parsed.rawId,
+      stagingName: parsed.stagingName,
+      staleIds: parsed.staleIds,
+      replacementIds: parsed.replacementIds,
+      replacementDigestedAt: parsed.replacementDigestedAt,
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function removeIfEmpty(dirPath: string): Promise<void> {
+  try {
+    const remaining = await fsp.readdir(dirPath);
+    if (remaining.length === 0) {
+      await fsp.rmdir(dirPath);
+    }
+  } catch {
+    // Best-effort cleanup only.
+  }
+}
+
 // ─── Prompt builder ─────────────────────────────────────────────────────────
 
 export interface BuildDigestPromptInput {
@@ -853,6 +1362,15 @@ export interface BuildDigestPromptInput {
   convertedTextPath: string;
   convertedText: string;
   handlerMetadata?: Record<string, unknown>;
+  chunk?: {
+    chunkId: string;
+    index: number;
+    total: number;
+    unitType: string;
+    startUnit: number;
+    endUnit: number;
+    nodeTitles: string[];
+  };
 }
 
 /**
@@ -935,6 +1453,18 @@ export function buildDigestPrompt(input: BuildDigestPromptInput): string {
     header.push(`- Handler metadata:`);
     header.push(...metaLines);
   }
+  if (input.chunk) {
+    header.push(``);
+    header.push(`## Chunk context`);
+    header.push(``);
+    header.push(`- Chunk: ${input.chunk.chunkId} (${input.chunk.index} of ${input.chunk.total})`);
+    header.push(`- Unit type: ${input.chunk.unitType}`);
+    header.push(`- Unit range: ${input.chunk.startUnit}-${input.chunk.endUnit}`);
+    if (input.chunk.nodeTitles.length > 0) {
+      header.push(`- Structure nodes: ${input.chunk.nodeTitles.join(' | ')}`);
+    }
+    header.push(`- The converted text below is only this chunk's source range, not necessarily the whole document.`);
+  }
   header.push(``);
   header.push(`## Converted text`);
   header.push(``);
@@ -945,6 +1475,19 @@ export function buildDigestPrompt(input: BuildDigestPromptInput): string {
   header.push(`Now produce the entries.`);
 
   return header.join('\n');
+}
+
+export function buildGleaningPrompt(): string {
+  return [
+    '# Knowledge Base gleaning pass',
+    '',
+    'Review the source range and the entries you just extracted.',
+    'Identify important entities, relationships, concepts, or facts that were missed or under-represented.',
+    'Return only additional entries in the exact same frontmatter + Markdown format.',
+    'If nothing important was missed, return no entries.',
+    '',
+    'Do not repeat entries you already extracted.',
+  ].join('\n');
 }
 
 // ─── Parser + stringifier ───────────────────────────────────────────────────
@@ -1186,4 +1729,123 @@ function yamlString(value: string): string {
     return '"' + value.replace(/"/g, '\\"') + '"';
   }
   return value;
+}
+
+function chunkProgressKey(rawId: string, chunkId: string): string {
+  return `${rawId}:${chunkId}`;
+}
+
+function makeCurrentChunk(
+  rawId: string,
+  chunk: KbDigestChunk,
+  index: number,
+  total: number,
+  unitType: string,
+): NonNullable<KbDigestChunkProgress['current']> {
+  return {
+    rawId,
+    chunkId: chunk.chunkId,
+    index,
+    total,
+    startUnit: chunk.startUnit,
+    endUnit: chunk.endUnit,
+    unitType,
+  };
+}
+
+function makeWholeDocumentChunk(rawId: string, unitCount: number): KbDigestChunk {
+  const endUnit = Math.max(1, unitCount || 1);
+  return {
+    chunkId: `chunk-0001-u1-${endUnit}`,
+    rawId,
+    nodeIds: [],
+    startUnit: 1,
+    endUnit,
+    estimatedTokens: endUnit * 500,
+    reason: 'fallback',
+  };
+}
+
+function classifyCliError(message: string): KbErrorClass {
+  return /\b(?:timeout|time(?:d)?[-_\s]*out)\b/i.test(message) ? 'timeout' : 'cli_error';
+}
+
+function makeEntrySourceForChunk(rawId: string, chunk: KbDigestChunk): EntrySourceDraft {
+  return {
+    rawId,
+    nodeId: chunk.nodeIds.length === 1 ? chunk.nodeIds[0] : null,
+    chunkId: chunk.chunkId,
+    startUnit: chunk.startUnit,
+    endUnit: chunk.endUnit,
+  };
+}
+
+function mergeDuplicateParsedEntries(items: ParsedEntryWithSources[]): ParsedEntryWithSources[] {
+  const bySlug = new Map<string, ParsedEntryWithSources>();
+  const byTitle = new Map<string, ParsedEntryWithSources>();
+  const merged: ParsedEntryWithSources[] = [];
+
+  for (const item of items) {
+    const slugKey = item.entry.slug;
+    const titleKey = normalizeEntryTitleKey(item.entry.title);
+    const existing = bySlug.get(slugKey) || byTitle.get(titleKey);
+    if (existing) {
+      existing.entry.summary = mergeEntrySummaries(existing.entry.summary, item.entry.summary);
+      existing.entry.body = mergeEntryBodies(existing.entry.body, item.entry.body);
+      existing.entry.tags = uniqueStrings([...existing.entry.tags, ...item.entry.tags]);
+      existing.sources = mergeEntrySources(existing.sources, item.sources);
+      bySlug.set(slugKey, existing);
+      byTitle.set(titleKey, existing);
+      continue;
+    }
+
+    const clone: ParsedEntryWithSources = {
+      entry: {
+        ...item.entry,
+        tags: uniqueStrings(item.entry.tags),
+      },
+      sources: mergeEntrySources([], item.sources),
+    };
+    merged.push(clone);
+    bySlug.set(slugKey, clone);
+    byTitle.set(titleKey, clone);
+  }
+
+  return merged;
+}
+
+function normalizeEntryTitleKey(title: string): string {
+  return slugify(title) || title.toLowerCase().trim().replace(/\s+/g, ' ');
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return values.filter((value, index, arr) => value && arr.indexOf(value) === index);
+}
+
+function mergeEntrySummaries(a: string, b: string): string {
+  const left = a.trim();
+  const right = b.trim();
+  if (!left) return right;
+  if (!right || left === right) return left;
+  return `${left} ${right}`;
+}
+
+function mergeEntryBodies(a: string, b: string): string {
+  const left = a.trim();
+  const right = b.trim();
+  if (!left) return right;
+  if (!right || left === right) return left;
+  return `${left}\n\n***\n\n${right}`;
+}
+
+function mergeEntrySources(a: EntrySourceDraft[], b: EntrySourceDraft[]): EntrySourceDraft[] {
+  const out: EntrySourceDraft[] = [];
+  const seen = new Set<string>();
+  for (const source of [...a, ...b]) {
+    const key = `${source.rawId}|${source.chunkId}|${source.startUnit}|${source.endUnit}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...source });
+  }
+  return out;
 }
