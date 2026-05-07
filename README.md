@@ -3,31 +3,55 @@
 </p>
 
 <p align="center">
-  A unified web interface for AI coding agents. Own your data, switch between providers freely.
+  Run AI assistants from your browser. Keep your data. Switch vendors anytime.
+</p>
+
+<p align="center">
+  <em>Built for command-line AI agents like Claude Code, OpenAI Codex, and Kiro.</em>
 </p>
 
 ---
 
 ## Why Agent Cockpit?
 
-When you use vendor-hosted AI interfaces — Anthropic's Claude, Amazon's Kiro, Google's Gemini, OpenAI's ChatGPT — each one builds up memory and context about you: your preferences, your codebase knowledge, your working style. That memory is locked inside their platform. If a better model comes along from another provider, you can't take your conversation history, accumulated context, or customizations with you. You end up explaining yourself from scratch.
+When you use vendor-hosted AI interfaces — Anthropic's Claude, Amazon's Kiro, OpenAI's ChatGPT — each one builds up memory and context about you. Your conversation history, accumulated knowledge, working preferences, and the documents you've uploaded all sit inside their platform. The moment a better model ships from another provider, you can't take any of it with you. You start over.
 
-Agent Cockpit solves this by decoupling **your data** from **the AI provider**. It sits on your machine, talks to CLI-based coding agents, and keeps all conversations, sessions, and context locally on disk in open JSON files. When you switch to a different CLI backend, the new agent can access everything the previous one built up. Your investment in AI-assisted workflows stays with you, not with a vendor.
+Agent Cockpit decouples **your data** from **the AI vendor**. It runs on your own machine, talks to command-line AI agents, and stores every conversation, session, and knowledge-base entry locally on disk as open JSON and Markdown files. When you switch vendors, the new agent inherits everything the previous one built up — for code, for writing, for research, for whatever you use AI for.
 
-## Highlighted features
+The bet is simple: vendors will keep changing, but your context shouldn't reset every time. The model is rented; the context is yours.
 
-- **Own your data across any CLI** — Every conversation, session, and memory update is stored locally as open JSON on your own disk. Switch between Claude Code, Kiro, Codex, and future backends without losing history or context. When a better model ships from another vendor, your accumulated context comes with you instead of being locked inside their platform.
-- **Remote web access to local or remote CLIs** — Install Agent Cockpit on your laptop or on a remote machine and drive it from any browser. Pair it with a tunnel like Cloudflare Tunnel to chat with your coding agents from your phone, tablet, or a café laptop while they operate on real files in their native environment.
-- **Mobile PWA** — Open `/mobile/` from any self-hosted backend, sign in with the same owner account, and install it to the home screen without Xcode, Expo, TestFlight, or App Store distribution.
-- **Integrated memory system** — Adds persistent memory to CLIs that don't have one (like Kiro) and captures memory on the fly from CLIs that do (like Claude Code). Every change to the CLI's own memory file is snapshotted locally, so your accumulated context is portable and vendor-neutral — not trapped inside whichever CLI happens to own it today.
-- **Cross-CLI instruction compatibility** — Detects when a workspace has instructions for one CLI vendor, such as `CLAUDE.md`, `AGENTS.md`, or Kiro steering files, but is missing the thin pointer files other supported CLIs need. Agent Cockpit shows an actionable composer warning and can create compatibility pointers without overwriting existing instruction files.
-- **Token and cost tracking** — Token usage and cost are tracked per conversation so you always know what a long-running task or an experiment is actually costing you.
-- **Message queue** — Keep typing while the CLI is still responding. Queued messages fire automatically as soon as the current response finishes, so your thinking isn't gated on the agent's latency — a feature rarely found in other chat UIs.
-- **File and image uploads** — Drag and drop, paste from the clipboard, or use the attach button to send images and text files directly into chat, with inline previews, just like any modern chat interface.
-- **Pick your CLI, model, and effort** — Switch backends per-conversation, choose the model (including Claude Opus 4.7), and set the reasoning effort up to `xhigh` when the CLI supports it.
-- **Workspace file explorer** — Browse and edit files in the conversation's working directory directly from the browser, so you can review what the agent changed without leaving Agent Cockpit.
-- **Markdown export & copy** — Download any conversation or individual session as a Markdown file, or copy any single message in its original Markdown with one click.
-- **Knowledge base** — Upload PDFs, Word docs, PowerPoints, images, spreadsheets, and text files into a per-workspace knowledge base. Agent Cockpit automatically converts and analyzes each file, extracts structured entries, organizes them into topics, and discovers connections between ideas — surfaced as an interactive 3D knowledge graph your AI agents can search and reason over during conversations. Organize uploads into folders, watch live digestion progress and ETAs, let the system find patterns you missed, and give every future conversation deep, queryable context that goes far beyond what fits in a single prompt or memory file.
+## Who is this for?
+
+Agent Cockpit is for you if any of these apply:
+
+- You pay for more than one AI vendor and want a single interface across them.
+- You want your conversations, knowledge base, and accumulated context on **your own machine**, not in a vendor's cloud.
+- You want to switch vendors without losing history — because models keep getting better and lock-in keeps getting worse.
+- You use AI for more than coding: research, writing, knowledge work, decision-making, running your day.
+- You're comfortable self-hosting (Node.js, a server you control, optional tunnel for remote access).
+
+It is **not** a hosted SaaS. If you want zero-setup, this isn't it. If you only ever use one vendor and never plan to switch, you don't need it.
+
+## What it does
+
+Three things, at the core:
+
+### 1. Unified interface across AI vendors
+Use Claude Code, OpenAI Codex, and Kiro from a single browser-based UI. Switch backends per conversation. Pick the model, set the reasoning effort, and keep your workflow consistent regardless of which vendor you're using.
+
+### 2. Your data stays on your disk
+Every conversation, session, memory snapshot, and knowledge-base entry is stored locally as open JSON or Markdown. No vendor cloud, no proprietary database, no lock-in. If you stop using Agent Cockpit tomorrow, your data is still right there in plain files.
+
+### 3. Context is portable across vendors
+The integrated memory system snapshots every change to a CLI's memory file. Cross-CLI instruction compatibility keeps `CLAUDE.md`, `AGENTS.md`, and Kiro steering files in sync. The knowledge base feeds context to whichever vendor you ask next. Switching backends doesn't reset your context — your accumulated knowledge follows you.
+
+## The Knowledge Base
+
+The KB is the longest-lived part of Agent Cockpit. While conversations come and go, the KB accumulates everything you want your AI to know about — in your files, on your disk, queryable by any vendor you point at it.
+
+Upload PDFs, Word documents, PowerPoints, images, spreadsheets, and text files into a per-workspace knowledge base. Agent Cockpit converts and analyzes each file, extracts structured entries, organizes them into topics, and discovers connections between ideas — surfaced as an interactive 3D knowledge graph that your AI agents can search and reason over during conversations.
+
+Use it for code documentation. Use it for board prep. Use it for personal reading notes. Use it for whatever you want to be able to ask an AI about later — and have the answer grounded in *your* sources.
 
 ## Supported Backends
 
@@ -41,6 +65,17 @@ Switch between backends per-conversation using the dropdown in the chat input ar
 
 See [BACKENDS.md](BACKENDS.md) for a comparison of feature support across backends.
 
+## How it gets used
+
+Agent Cockpit is the substrate. The real value comes from the patterns you build on top of it. A few examples:
+
+- **Personal knowledge work.** Ingest your reading list, meeting notes, and research into the KB. Ask any AI agent to reason over them. Switch agents based on which model handles your question best.
+- **Multi-vendor coding.** Run Claude Code on the hard problem, switch to Codex for fast iteration, use Kiro for spec work. Same workspace, same files, same accumulated memory.
+- **Persona profiles for the people you work with.** One conversation per person. Add context about them over time. Use it to prep for the next interaction — without ever sending those notes to a vendor's cloud.
+- **Workflow execution from a tablet.** Give the CLI full filesystem access on a server you control, then describe a workflow in plain language. Let the agent run it on the host machine while you watch the stream from your phone.
+
+These aren't features the tool conceptualizes — they're patterns the substrate enables. The tool is the runway; what you take off with is up to you.
+
 ## How It Works
 
 Agent Cockpit runs on the same machine as your CLI tools. When you send a message through the browser, the server spawns a CLI process locally, streams the response back over WebSocket, and stores the conversation as a JSON file on disk. The CLI runs with full access to your local filesystem and tools, just as it would in your terminal.
@@ -50,9 +85,9 @@ This means:
 - **Expose the server for remote access.** Use a tunnel like [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) to chat with your coding agents from any browser, anywhere, while they operate on your local files and environment.
 - **First-party owner auth protects access.** Create one local owner account per backend; exposed first-run setup can be guarded with `AUTH_SETUP_TOKEN`.
 
-## Additional features
+## Also included
 
-Beyond the headline capabilities above, Agent Cockpit also ships with:
+Beyond the core, Agent Cockpit also ships with:
 
 - **Real-time streaming** — responses stream live via WebSocket with automatic reconnection and state recovery
 - **Agent & tool visualization** — sub-agents, tool calls, thinking, and outcomes shown in real time with grouped activity panels and a compact progress timeline that collapses intermediate turns
