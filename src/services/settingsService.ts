@@ -89,6 +89,9 @@ export class SettingsService {
       cliProfiles: profiles,
       ...(defaultProfile ? { defaultBackend: defaultProfile.vendor } : {}),
     };
+    if (next.defaultBackend !== 'codex' || next.defaultServiceTier !== 'fast') {
+      delete next.defaultServiceTier;
+    }
     if (settings.memory) {
       next.memory = this._normalizeMemorySettings(settings.memory, profiles);
     }

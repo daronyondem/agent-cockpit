@@ -13,6 +13,7 @@ import {
   isParentTurnCompleted,
   deriveCodexUsage,
   buildCodexThreadSecurityParams,
+  buildCodexServiceTierArgs,
   normalizeCodexModelOption,
   buildCodexTurnStartParams,
   resolveCodexCliRuntime,
@@ -35,6 +36,16 @@ describe('CodexAdapter', () => {
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
     });
+  });
+
+  test('buildCodexServiceTierArgs forces Fast mode only when requested', () => {
+    expect(buildCodexServiceTierArgs()).toEqual([]);
+    expect(buildCodexServiceTierArgs('fast')).toEqual([
+      '-c',
+      'service_tier="fast"',
+      '-c',
+      'features.fast_mode=true',
+    ]);
   });
 
   test('metadata has correct shape', () => {
@@ -1373,6 +1384,41 @@ describe('CodexAdapter.runOneShot', () => {
     const configIdx = capturedArgs!.indexOf('-c');
     expect(configIdx).toBeGreaterThan(-1);
     expect(capturedArgs![configIdx + 1]).toBe('model_reasoning_effort="xhigh"');
+  });
+
+  test('forwards Fast service tier config to codex exec', async () => {
+    let capturedArgs: string[] | null = null;
+    let resultPromise!: Promise<string>;
+
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: () => ({
+          on: () => {},
+          stdout: { on: () => {} },
+          stderr: { on: () => {} },
+          stdin: { write: () => true, end: () => {} },
+          kill: () => {},
+          killed: false,
+          exitCode: null,
+        }),
+        execFile: (_cmd: string, args: string[], _opts: object, cb: (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void) => {
+          capturedArgs = args;
+          setImmediate(() => cb(null, 'ok', ''));
+          return { stdin: { end: () => {} } };
+        },
+      }));
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp', serviceTier: 'fast' });
+    });
+
+    await resultPromise;
+    expect(capturedArgs).not.toBeNull();
+    const cFlagIndices = capturedArgs!.reduce<number[]>((acc, v, i) => (v === '-c' ? [...acc, i] : acc), []);
+    expect(cFlagIndices.map((i) => capturedArgs![i + 1])).toEqual([
+      'service_tier="fast"',
+      'features.fast_mode=true',
+    ]);
   });
 
   test('passes mcpServers as -c flags when mcpServers are provided', async () => {

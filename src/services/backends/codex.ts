@@ -18,6 +18,7 @@ import type {
   CodexApprovalPolicy,
   CodexSandboxMode,
   EffortLevel,
+  ServiceTier,
   CliProfile,
   CodexThreadGoal,
   CodexThreadGoalStatus,
@@ -36,6 +37,7 @@ const CODEX_SUPPORTED_EFFORTS: EffortLevel[] = ['none', 'minimal', 'low', 'mediu
 const CODEX_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh'];
 const CODEX_APP_SERVER_ARGS = ['app-server', '--enable', 'goals'];
 const CODEX_CLIENT_CAPABILITIES = { experimentalApi: true };
+const CODEX_FAST_SERVICE_TIER_ARGS = ['-c', 'service_tier="fast"', '-c', 'features.fast_mode=true'];
 
 // Used as the polite-shutdown deadline before SIGKILL during process kill.
 const PROCESS_KILL_GRACE_MS = 1_000;
@@ -116,6 +118,14 @@ function hashMcpServers(servers: McpServerConfig[]): string {
     env: s.env,
   }));
   return crypto.createHash('sha1').update(JSON.stringify(sorted)).digest('hex').slice(0, 12);
+}
+
+function codexServiceTierKey(serviceTier?: ServiceTier): string {
+  return serviceTier === 'fast' ? 'fast' : '';
+}
+
+export function buildCodexServiceTierArgs(serviceTier?: ServiceTier): string[] {
+  return serviceTier === 'fast' ? [...CODEX_FAST_SERVICE_TIER_ARGS] : [];
 }
 
 async function buildCodexConfigArgs(
@@ -804,6 +814,8 @@ interface CodexProcessEntry {
   mcpHash: string;
   /** Hash of the Codex command/config/env profile used to spawn this process. */
   profileKey: string;
+  /** Service tier override used to spawn this process, or '' for profile default. */
+  serviceTierKey: string;
   /**
    * Last `total.totalTokens` we emitted a usage event for. Codex re-emits a
    * `thread/tokenUsage/updated` notification at every turn boundary that
@@ -1371,10 +1383,11 @@ export class CodexAdapter extends BaseBackendAdapter {
     conversationId: string,
     mcpServers: McpServerConfig[] = [],
     profile?: CliProfile,
-    options: { reuseExistingMcp?: boolean } = {},
+    options: { reuseExistingMcp?: boolean; serviceTier?: ServiceTier } = {},
   ): Promise<CodexAppServerClient> {
     const runtime = resolveCodexCliRuntime(profile);
     const mcpHash = hashMcpServers(mcpServers);
+    const serviceTierKey = codexServiceTierKey(options.serviceTier);
     const existing = this.processes.get(conversationId);
     if (
       existing
@@ -1382,6 +1395,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       && existing.proc.exitCode === null
       && (options.reuseExistingMcp || existing.mcpHash === mcpHash)
       && existing.profileKey === runtime.profileKey
+      && existing.serviceTierKey === serviceTierKey
     ) {
       this._resetIdleTimer(conversationId);
       return existing.client;
@@ -1394,18 +1408,25 @@ export class CodexAdapter extends BaseBackendAdapter {
       if (existing.profileKey !== runtime.profileKey) {
         console.log(`[codex] CLI profile changed for conv=${conversationId}, respawning app-server`);
       }
+      if (existing.serviceTierKey !== serviceTierKey) {
+        console.log(`[codex] service tier changed for conv=${conversationId}, respawning app-server`);
+      }
       if (existing.idleTimer) clearTimeout(existing.idleTimer);
       existing.proc.kill('SIGTERM');
       this.processes.delete(conversationId);
     }
 
     const configArgs = await buildCodexConfigArgs(mcpServers, runtime);
+    const serviceTierArgs = buildCodexServiceTierArgs(options.serviceTier);
+    if (serviceTierArgs.length > 0) {
+      console.log(`[codex] Forcing Fast mode for conv=${conversationId}`);
+    }
     if (configArgs.length > 0) {
       console.log(`[codex] Injecting ${mcpServers.length} MCP server(s) via -c flags for conv=${conversationId}`);
     }
 
     console.log(`[codex] Spawning codex app-server for conv=${conversationId}`);
-    const proc = spawn(runtime.command, [...CODEX_APP_SERVER_ARGS, ...configArgs], {
+    const proc = spawn(runtime.command, [...CODEX_APP_SERVER_ARGS, ...serviceTierArgs, ...configArgs], {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: runtime.env,
     });
@@ -1436,6 +1457,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       idleTimer: null,
       mcpHash,
       profileKey: runtime.profileKey,
+      serviceTierKey,
       lastTotalTokens: 0,
     });
     this._resetIdleTimer(conversationId);
@@ -1523,11 +1545,12 @@ export class CodexAdapter extends BaseBackendAdapter {
     threadId: string | null;
     externalSessionId?: string;
   }> {
-    const { sessionId, conversationId, mcpServers, cliProfile } = options;
+    const { sessionId, conversationId, mcpServers, cliProfile, serviceTier } = options;
     const convId = conversationId || sessionId;
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
     const client = await this._getOrSpawnClient(convId, mcpServersForCodex, cliProfile, {
       reuseExistingMcp: control.reuseExistingMcp,
+      serviceTier,
     });
     const entry = this.processes.get(convId)!;
     const resolved = await this._resolveThread(client, entry, convId, {
@@ -1850,14 +1873,14 @@ export class CodexAdapter extends BaseBackendAdapter {
       subagentByThreadId: Map<string, string>;
     },
   ): AsyncGenerator<StreamEvent> {
-    const { sessionId, conversationId, model, effort, mcpServers, cliProfile } = options;
+    const { sessionId, conversationId, model, effort, serviceTier, mcpServers, cliProfile } = options;
     const convId = conversationId || sessionId;
     const runtime = resolveCodexCliRuntime(cliProfile);
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
 
     let client: CodexAppServerClient;
     try {
-      client = await this._getOrSpawnClient(convId, mcpServersForCodex, cliProfile);
+      client = await this._getOrSpawnClient(convId, mcpServersForCodex, cliProfile, { serviceTier });
       state.client = client;
     } catch (err) {
       const errMsg = (err as Error).message;
@@ -2238,7 +2261,7 @@ export class CodexAdapter extends BaseBackendAdapter {
    * `CODEX_HOME` so OAuth/API-key state is isolated.
    */
   private async _execOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { timeoutMs = 60000, workingDir, model, effort, mcpServers, cliProfile } = options;
+    const { timeoutMs = 60000, workingDir, model, effort, serviceTier, mcpServers, cliProfile } = options;
     const runtime = resolveCodexCliRuntime(cliProfile);
     const cwd = workingDir || this.workingDir || os.homedir();
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
@@ -2253,7 +2276,7 @@ export class CodexAdapter extends BaseBackendAdapter {
     } else {
       args.push('--ask-for-approval', this.approvalPolicy, '--sandbox', this.sandbox);
     }
-    args.push('--skip-git-repo-check', '-C', cwd, ...configArgs);
+    args.push('--skip-git-repo-check', '-C', cwd, ...buildCodexServiceTierArgs(serviceTier), ...configArgs);
     const modelCatalog = this._cachedModels(runtime) || FALLBACK_MODELS;
     if (codexModelSupportsEffort(modelCatalog, model, effort)) {
       args.push('-c', `model_reasoning_effort=${tomlEscapeString(effort!)}`);

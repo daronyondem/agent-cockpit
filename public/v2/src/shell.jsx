@@ -1382,6 +1382,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                 composerBackend={state.composerBackend || conv.backend || null}
                 composerModel={state.composerModel || conv.model || null}
                 composerEffort={state.composerEffort || conv.effort || null}
+                composerServiceTier={state.composerServiceTier != null ? state.composerServiceTier : (conv.serviceTier || 'default')}
                 profileLocked={profileLocked}
                 disabled={awaiting || sending}
               />
@@ -2521,11 +2522,11 @@ function formatMsgElapsed(ms){
   return `${min}m ${sec < 10 ? '0' : ''}${sec}s`;
 }
 
-/* Three cascading pickers below the composer: Profile → Model → Effort.
+/* Cascading pickers below the composer: Profile → Model → Effort → Speed.
    Values flush to the server with the next /message POST (see StreamStore.send).
    Each chip wraps a transparent native <select> so we get native dropdown
    UX, keyboard/a11y for free, and the chip's styled shell. */
-function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, profileLocked, disabled }){
+function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, composerServiceTier, profileLocked, disabled }){
   const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled) : [];
   const selectedProfile = activeProfiles.find(p => p.id === composerCliProfileId)
     || (composerBackend ? activeProfiles.find(p => p.vendor === composerBackend) : null)
@@ -2562,6 +2563,7 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
   const effort = effortLevels.includes(composerEffort)
     ? composerEffort
     : (effortLevels.includes('high') ? 'high' : (effortLevels[0] || null));
+  const serviceTier = composerServiceTier === 'fast' ? 'fast' : 'default';
 
   /* If picker state drifted out of the backend's catalog (e.g. backend change
       invalidated the chosen model), push the reconciled value back down so
@@ -2629,6 +2631,20 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
           title="Adaptive reasoning effort"
         />
       ) : null}
+      {effectiveBackendId === 'codex' ? (
+        <PickChip
+          label="Speed"
+          value={serviceTier === 'fast' ? 'Fast' : 'Default'}
+          disabled={disabled}
+          options={[
+            { value: 'default', label: 'Default' },
+            { value: 'fast', label: 'Fast' },
+          ]}
+          currentValue={serviceTier}
+          onChange={v => StreamStore.setComposerServiceTier(convId, v)}
+          title="Codex service tier"
+        />
+      ) : null}
     </span>
   );
 }
@@ -2640,17 +2656,18 @@ function costTierDot(tier){
 }
 
 function PickChip({ label, value, options, currentValue, onChange, disabled, title, icon }){
+  const accessibleLabel = title || label;
   return (
-    <span className="pick" title={title} aria-disabled={disabled ? 'true' : 'false'}>
+    <span className="pick" title={accessibleLabel} aria-disabled={disabled ? 'true' : 'false'}>
       {icon ? <span className="pick-icon">{icon}</span> : null}
-      <span>{label}</span> <b>{value}</b>
+      <b>{value}</b>
       <span className="chev">{Ico.chevD(10)}</span>
       <select
         className="pick-select"
         value={currentValue}
         onChange={e => onChange(e.target.value)}
         disabled={disabled}
-        aria-label={title}
+        aria-label={accessibleLabel}
       >
         {options.map(o => (
           <option key={o.value} value={o.value}>{o.label}</option>

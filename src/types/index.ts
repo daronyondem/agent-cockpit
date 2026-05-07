@@ -144,6 +144,9 @@ export interface SessionHistoryItem {
 /** Adaptive reasoning effort level. Supported values are model/backend-specific. */
 export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/** Backend service tier override. Omit to use the selected CLI profile's own configuration. */
+export type ServiceTier = 'fast';
+
 /**
  * Broad type grouping for an attachment, used by the composer to pick an icon
  * tile + color. Derived server-side from file extension at upload time so the
@@ -231,6 +234,8 @@ export interface ConversationEntry {
   model?: string;
   /** Adaptive reasoning effort level for supported models. */
   effort?: EffortLevel;
+  /** Backend service tier override. Currently used by Codex Fast mode. */
+  serviceTier?: ServiceTier;
   currentSessionId: string;
   lastActivity: string;
   lastMessage: string | null;
@@ -312,6 +317,7 @@ export interface Conversation {
   cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
+  serviceTier?: ServiceTier;
   workingDir: string;
   workspaceHash: string;
   currentSessionId: string;
@@ -348,6 +354,7 @@ export interface ConversationListItem {
   cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
+  serviceTier?: ServiceTier;
   workingDir: string;
   workspaceHash: string;
   /** Per-workspace Knowledge Base toggle. Defaults to false for legacy workspaces. */
@@ -434,6 +441,8 @@ export interface Settings {
   defaultModel?: string;
   /** Default adaptive reasoning effort. Only applies when defaultBackend/model supports it. */
   defaultEffort?: EffortLevel;
+  /** Default backend service tier override. Currently only Codex uses `fast`. */
+  defaultServiceTier?: ServiceTier;
   workingDirectory?: string;
   /**
    * Globally-configured Memory CLI used for:
@@ -751,6 +760,7 @@ export interface DurableStreamJob {
   cliProfileId?: string | null;
   model?: string | null;
   effort?: EffortLevel | null;
+  serviceTier?: ServiceTier | null;
   workingDir?: string | null;
   createdAt: string;
   updatedAt: string;
@@ -1304,6 +1314,8 @@ export interface SendMessageOptions {
    * (or backends whose selected model doesn't) ignore this.
    */
   effort?: EffortLevel;
+  /** Backend service tier override. Currently used by Codex Fast mode. */
+  serviceTier?: ServiceTier;
   /**
    * MCP servers to expose to the backend for this session.  Currently
    * only used by ACP-based backends (e.g. Kiro) to forward the

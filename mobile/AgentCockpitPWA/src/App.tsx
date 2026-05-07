@@ -20,6 +20,7 @@ import type {
   QueuedMessage,
   ResetSessionResponse,
   SessionHistoryItem,
+  ServiceTier,
   Settings,
   StreamEvent,
   Usage,
@@ -92,6 +93,7 @@ export default function App() {
   const [selectedBackend, setSelectedBackend] = useState<string | undefined>();
   const [selectedModel, setSelectedModel] = useState<string | undefined>();
   const [selectedEffort, setSelectedEffort] = useState<EffortLevel | undefined>();
+  const [selectedServiceTier, setSelectedServiceTier] = useState<ServiceTier | 'default' | undefined>();
 
   const [newConversationVisible, setNewConversationVisible] = useState(false);
   const [newTitle, setNewTitle] = useState('');
@@ -135,6 +137,8 @@ export default function App() {
     [selectedBackendMetadata, selectedModel],
   );
   const supportedEfforts = selectedModelMetadata?.supportedEffortLevels || [];
+  const selectedBackendID = selectedProfile?.vendor || selectedBackendMetadata?.id || selectedBackend;
+  const serviceTierEnabled = selectedBackendID === 'codex';
   const hasUploadingAttachments = pendingAttachments.some((attachment) => attachment.status === 'uploading');
   const profileSelectionLocked = (activeConversation?.messages.length || 0) > 0;
 
@@ -224,6 +228,7 @@ export default function App() {
     setSelectedBackend(backendID);
     setSelectedModel(loadedSettings.defaultModel);
     setSelectedEffort(loadedSettings.defaultEffort);
+    setSelectedServiceTier(loadedSettings.defaultBackend === 'codex' ? loadedSettings.defaultServiceTier : undefined);
     if (profileID) {
       void loadProfileMetadata(profileID);
     }
@@ -289,6 +294,7 @@ export default function App() {
     setSelectedBackend(conversation.cliProfileId ? undefined : conversation.backend || settings?.defaultBackend);
     setSelectedModel(conversation.model || settings?.defaultModel);
     setSelectedEffort(conversation.effort || settings?.defaultEffort);
+    setSelectedServiceTier(conversation.backend === 'codex' ? (conversation.serviceTier || 'default') : undefined);
   }
 
   async function createConversation() {
@@ -300,7 +306,9 @@ export default function App() {
         cliProfileId: selectedCliProfileId,
         model: selectedModel,
         effort: selectedEffort,
+        serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
       });
+      hydrateSelectionFromConversation(conversation);
       setNewConversationVisible(false);
       setNewTitle('');
       setNewWorkingDir('');
@@ -343,10 +351,15 @@ export default function App() {
         cliProfileId: selectedCliProfileId,
         model: selectedModel,
         effort: selectedEffort,
+        serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
       });
       setActiveConversation((current) =>
         current && current.id === conversation.id
-          ? { ...current, messages: [...current.messages, response.userMessage] }
+          ? {
+              ...current,
+              serviceTier: selectedServiceTier === 'fast' ? 'fast' : undefined,
+              messages: [...current.messages, response.userMessage],
+            }
           : current,
       );
       if (response.streamReady) {
@@ -874,6 +887,7 @@ export default function App() {
                 cliProfileId: response.conversation.cliProfileId,
                 model: response.conversation.model,
                 effort: response.conversation.effort,
+                serviceTier: response.conversation.serviceTier,
                 updatedAt: new Date().toISOString(),
                 messageCount: 0,
                 lastMessage: undefined,
@@ -1183,10 +1197,12 @@ export default function App() {
     if (profileSelectionLocked) {
       return;
     }
+    const profile = availableProfiles.find((item) => item.id === profileID);
     setSelectedCliProfileId(profileID);
     setSelectedBackend(undefined);
     setSelectedModel(undefined);
     setSelectedEffort(undefined);
+    setSelectedServiceTier(profile?.vendor === 'codex' ? (selectedServiceTier || settings?.defaultServiceTier) : undefined);
   }
 
   function chooseBackend(backendID: string) {
@@ -1197,6 +1213,7 @@ export default function App() {
     setSelectedBackend(backendID);
     setSelectedModel(undefined);
     setSelectedEffort(undefined);
+    setSelectedServiceTier(backendID === 'codex' ? (selectedServiceTier || settings?.defaultServiceTier) : undefined);
   }
 
   function handleError(error: unknown) {
@@ -1263,6 +1280,7 @@ export default function App() {
           selectedBackend={selectedBackendMetadata?.label || selectedBackend}
           selectedModel={selectedModelMetadata?.label || selectedModel}
           selectedEffort={selectedEffort}
+          selectedServiceTier={serviceTierEnabled ? selectedServiceTier : undefined}
           client={clientRef.current}
           onBack={() => {
             socketRef.current?.close();
@@ -1329,6 +1347,8 @@ export default function App() {
           selectedBackendMetadata={selectedBackendMetadata}
           selectedModel={selectedModel}
           selectedEffort={selectedEffort}
+          selectedServiceTier={selectedServiceTier}
+          serviceTierEnabled={serviceTierEnabled}
           supportedEfforts={supportedEfforts}
           locked={profileSelectionLocked}
           onClose={() => setSettingsVisible(false)}
@@ -1336,6 +1356,7 @@ export default function App() {
           onBackend={chooseBackend}
           onModel={setSelectedModel}
           onEffort={setSelectedEffort}
+          onServiceTier={setSelectedServiceTier}
         />
       ) : null}
 
@@ -1507,6 +1528,7 @@ function ChatScreen(props: {
   selectedBackend?: string;
   selectedModel?: string;
   selectedEffort?: EffortLevel;
+  selectedServiceTier?: ServiceTier | 'default';
   client: AgentCockpitAPI;
   onBack: () => void;
   onSend: () => void;
@@ -1602,7 +1624,10 @@ function ChatScreen(props: {
       ) : null}
       <AttachmentTray attachments={props.pendingAttachments} onRemove={props.onRemoveAttachment} onOcr={props.onOcrAttachment} />
       <button className="selection-bar" onClick={props.onOpenSettings}>
-        {(props.selectedProfile || props.selectedBackend || 'Backend') + ' / ' + (props.selectedModel || 'Model') + (props.selectedEffort ? ` / ${props.selectedEffort}` : '')}
+        {(props.selectedProfile || props.selectedBackend || 'Backend')
+          + ' / ' + (props.selectedModel || 'Model')
+          + (props.selectedEffort ? ` / ${props.selectedEffort}` : '')
+          + (props.selectedServiceTier === 'fast' ? ' / Fast' : '')}
       </button>
       <footer className="composer">
         <Button label="Attach" onClick={props.onAttach} />
@@ -1886,6 +1911,8 @@ function RunSettingsModal(props: {
   selectedBackendMetadata?: BackendMetadata;
   selectedModel?: string;
   selectedEffort?: EffortLevel;
+  selectedServiceTier?: ServiceTier | 'default';
+  serviceTierEnabled: boolean;
   supportedEfforts: EffortLevel[];
   locked: boolean;
   onClose: () => void;
@@ -1893,6 +1920,7 @@ function RunSettingsModal(props: {
   onBackend: (id: string) => void;
   onModel: (id: string | undefined) => void;
   onEffort: (effort: EffortLevel | undefined) => void;
+  onServiceTier: (serviceTier: ServiceTier | 'default' | undefined) => void;
 }) {
   return (
     <Modal title="Run Settings" onClose={props.onClose}>
@@ -1914,6 +1942,15 @@ function RunSettingsModal(props: {
           <strong>Effort</strong>
           <div className="choice-grid">
             {props.supportedEfforts.map((effort) => <Choice key={effort} label={effort} selected={props.selectedEffort === effort} onClick={() => props.onEffort(effort)} />)}
+          </div>
+        </>
+      ) : null}
+      {props.serviceTierEnabled ? (
+        <>
+          <strong>Speed</strong>
+          <div className="choice-grid">
+            <Choice label="Default" selected={!props.selectedServiceTier || props.selectedServiceTier === 'default'} onClick={() => props.onServiceTier('default')} />
+            <Choice label="Fast" selected={props.selectedServiceTier === 'fast'} onClick={() => props.onServiceTier('fast')} />
           </div>
         </>
       ) : null}
@@ -2271,6 +2308,7 @@ function conversationListItemFromConversation(conversation: Conversation): Conve
     cliProfileId: conversation.cliProfileId,
     model: conversation.model,
     effort: conversation.effort,
+    serviceTier: conversation.serviceTier,
     workingDir: conversation.workingDir,
     workspaceHash: conversation.workspaceHash,
     workspaceKbEnabled: false,

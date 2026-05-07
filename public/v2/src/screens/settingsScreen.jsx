@@ -346,13 +346,20 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
       defaultBackend: profile.vendor,
       defaultModel: newModel,
       defaultEffort: defaultEffortFor(e),
+      defaultServiceTier: profile.vendor === 'codex' && settings.defaultServiceTier === 'fast' ? 'fast' : undefined,
     });
   }
   function onBackendChange(v){
     const m = modelsForBackend(backends, v);
     const newModel = defaultModelId(m);
     const e = effortLevelsForModel(backends, v, newModel);
-    onPatch({ defaultCliProfileId: undefined, defaultBackend: v, defaultModel: newModel, defaultEffort: defaultEffortFor(e) });
+    onPatch({
+      defaultCliProfileId: undefined,
+      defaultBackend: v,
+      defaultModel: newModel,
+      defaultEffort: defaultEffortFor(e),
+      defaultServiceTier: v === 'codex' && settings.defaultServiceTier === 'fast' ? 'fast' : undefined,
+    });
   }
   function onModelChange(v){
     const e = selectedProfile
@@ -412,6 +419,18 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
             value={effort}
             onChange={(v) => onPatch({ defaultEffort: v })}
             options={efforts.map(lv => ({ id: lv, label: lv }))}
+          />
+        </Field>
+      ) : null}
+      {backendId === 'codex' ? (
+        <Field label="Default speed" hint="Fast forces Codex Fast mode for new Codex conversations.">
+          <Seg
+            value={settings.defaultServiceTier === 'fast' ? 'fast' : 'default'}
+            onChange={(v) => onPatch({ defaultServiceTier: v === 'fast' ? 'fast' : undefined })}
+            options={[
+              { id: 'default', label: 'Default' },
+              { id: 'fast', label: 'Fast' },
+            ]}
           />
         </Field>
       ) : null}

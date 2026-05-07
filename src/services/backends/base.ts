@@ -6,6 +6,7 @@ import type {
   Message,
   MemorySnapshot,
   EffortLevel,
+  ServiceTier,
   CliProfile,
   CodexThreadGoal,
 } from '../../types';
@@ -20,6 +21,8 @@ export interface RunOneShotOptions {
   model?: string;
   /** Optional reasoning effort; backends ignore if unsupported. */
   effort?: EffortLevel;
+  /** Optional backend service tier override; backends ignore if unsupported. */
+  serviceTier?: ServiceTier;
   /** Hard timeout in ms (default: 60s). */
   timeoutMs?: number;
   /** Working directory for the spawned CLI. */

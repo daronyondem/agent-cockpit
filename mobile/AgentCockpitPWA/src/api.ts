@@ -14,6 +14,7 @@ import type {
   ResetSessionResponse,
   SendMessageResponse,
   SessionHistoryItem,
+  ServiceTier,
   Settings,
 } from './types';
 
@@ -98,6 +99,7 @@ export class AgentCockpitAPI {
     cliProfileId?: string;
     model?: string;
     effort?: EffortLevel;
+    serviceTier?: ServiceTier | 'default';
   }): Promise<Conversation> {
     return this.request<Conversation>('POST', '/api/chat/conversations', {
       csrf: true,
@@ -138,6 +140,7 @@ export class AgentCockpitAPI {
       cliProfileId?: string;
       model?: string;
       effort?: EffortLevel;
+      serviceTier?: ServiceTier | 'default';
     },
   ): Promise<SendMessageResponse> {
     return this.request<SendMessageResponse>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/message`, {

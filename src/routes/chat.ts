@@ -43,7 +43,7 @@ import {
 import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
-import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, StreamErrorSource, MemoryUpdateEvent, StreamJobRuntimeInfo, SendMessageResult } from '../types';
+import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, StreamJobRuntimeInfo, SendMessageResult } from '../types';
 import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
@@ -88,6 +88,13 @@ async function listFilesRecursive(root: string, limit = 50): Promise<string[]> {
 function isCliProfileResolutionError(err: unknown): boolean {
   const message = (err as Error).message || '';
   return message.startsWith('CLI profile') || message.includes('CLI profile vendor');
+}
+
+function parseServiceTier(value: unknown): ServiceTier | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === '' || value === 'default') return null;
+  if (value === 'fast') return 'fast';
+  throw new Error('serviceTier must be "fast" or "default"');
 }
 
 // ── Stream processing ────────────────────────────────────────────────────────
@@ -1263,6 +1270,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   // ── Create conversation ────────────────────────────────────────────────────
   router.post('/conversations', csrfGuard, async (req: Request, res: Response) => {
     try {
+      const serviceTier = parseServiceTier(req.body.serviceTier);
       const conv = await chatService.createConversation(
         req.body.title,
         req.body.workingDir,
@@ -1270,9 +1278,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         req.body.model,
         req.body.effort,
         req.body.cliProfileId,
+        serviceTier,
       );
       res.json(conv);
     } catch (err: unknown) {
+      if ((err as Error).message.startsWith('serviceTier must')) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
       if (isCliProfileResolutionError(err)) {
         return res.status(400).json({ error: (err as Error).message });
       }
@@ -1601,6 +1613,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     titleUpdateMessage: string | null;
     model: string | null;
     effort: EffortLevel | null;
+    serviceTier?: ServiceTier | null;
     logUserMessageId?: string | null;
     logUserMessageTimestamp?: string | null;
   }): Promise<void> {
@@ -1616,6 +1629,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       titleUpdateMessage,
       model,
       effort,
+      serviceTier = null,
       logUserMessageId = null,
       logUserMessageTimestamp = null,
     } = args;
@@ -1638,6 +1652,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         lastEventAt: startedAt,
         model,
         effort,
+        serviceTier,
       });
     } catch (err: unknown) {
       console.warn(`[chat] Failed to mark stream job running for conv=${convId}:`, (err as Error).message);
@@ -1861,6 +1876,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
         effort: conv.effort || undefined,
+        serviceTier: conv.serviceTier || undefined,
       });
       res.json({ goal });
     } catch (err: unknown) {
@@ -1880,6 +1896,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       effort?: EffortLevel;
       cliProfileId?: string;
     };
+    let serviceTier: ServiceTier | null | undefined;
+    try {
+      serviceTier = parseServiceTier(req.body.serviceTier);
+    } catch (err: unknown) {
+      return res.status(400).json({ error: (err as Error).message });
+    }
     if (!objective || typeof objective !== 'string' || !objective.trim()) {
       return res.status(400).json({ error: 'Goal objective required' });
     }
@@ -1900,6 +1922,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         cliProfileId: conv.cliProfileId || cliProfileId || null,
         model: model !== undefined ? (model || null) : (conv.model || null),
         effort: effort !== undefined ? (effort || null) : (conv.effort || null),
+        serviceTier: serviceTier !== undefined ? serviceTier : (conv.serviceTier || null),
         workingDir: conv.workingDir || null,
       });
       const jobId = pendingMessageSend.jobId;
@@ -1927,6 +1950,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       if (effort !== undefined && effort !== (conv.effort || undefined)) {
         await chatService.updateConversationEffort(convId, effort || null);
       }
+      if (serviceTier !== undefined && serviceTier !== (conv.serviceTier || null)) {
+        await chatService.updateConversationServiceTier(convId, serviceTier);
+      }
       conv = (await chatService.getConversation(convId))!;
 
       let runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
@@ -1951,6 +1977,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
         model: conv.model || null,
         effort: conv.effort || null,
+        serviceTier: conv.serviceTier || null,
         workingDir: conv.workingDir || null,
       });
       if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
@@ -1970,6 +1997,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       const effectiveEffort = effort !== undefined
         ? (refreshedConv?.effort || undefined)
         : (conv.effort || undefined);
+      const effectiveServiceTier = serviceTier !== undefined
+        ? (refreshedConv?.serviceTier || undefined)
+        : (conv.serviceTier || undefined);
       const sendResult = adapter.setGoalObjective(objective.trim(), {
         sessionId: conv.currentSessionId,
         conversationId: convId,
@@ -1981,6 +2011,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         externalSessionId: conv.externalSessionId || null,
         model: model || conv.model || undefined,
         effort: effectiveEffort,
+        serviceTier: effectiveServiceTier,
         mcpServers,
       });
       await attachAndPipeStream({
@@ -1995,6 +2026,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         titleUpdateMessage: objective.trim(),
         model: model || conv.model || null,
         effort: effectiveEffort || null,
+        serviceTier: effectiveServiceTier || null,
       });
       jobHandedOff = true;
       res.json({ streamReady: true });
@@ -2031,6 +2063,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
         model: conv.model || null,
         effort: conv.effort || null,
+        serviceTier: conv.serviceTier || null,
         workingDir: conv.workingDir || null,
       });
       const jobId = pendingMessageSend.jobId;
@@ -2040,6 +2073,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
         model: conv.model || null,
         effort: conv.effort || null,
+        serviceTier: conv.serviceTier || null,
         workingDir: conv.workingDir || null,
       });
       if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
@@ -2058,6 +2092,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
         effort: conv.effort || undefined,
+        serviceTier: conv.serviceTier || undefined,
         mcpServers,
       });
       await attachAndPipeStream({
@@ -2072,6 +2107,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         titleUpdateMessage: null,
         model: conv.model || null,
         effort: conv.effort || null,
+        serviceTier: conv.serviceTier || null,
       });
       jobHandedOff = true;
       res.json({ streamReady: true });
@@ -2111,6 +2147,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
         effort: conv.effort || undefined,
+        serviceTier: conv.serviceTier || undefined,
       });
       if (goal && wsFns && !activeStreams.has(convId)) {
         wsFns.send(convId, { type: 'goal_updated', goal });
@@ -2141,6 +2178,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
         effort: conv.effort || undefined,
+        serviceTier: conv.serviceTier || undefined,
       });
       if (wsFns && !activeStreams.has(convId)) {
         wsFns.send(convId, { type: 'goal_cleared', threadId: result.threadId || conv.externalSessionId || null });
@@ -2164,6 +2202,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       effort?: EffortLevel;
       cliProfileId?: string;
     };
+    let serviceTier: ServiceTier | null | undefined;
+    try {
+      serviceTier = parseServiceTier(req.body.serviceTier);
+    } catch (err: unknown) {
+      return res.status(400).json({ error: (err as Error).message });
+    }
 
     if (!content || typeof content !== 'string' || !content.trim()) {
       return res.status(400).json({ error: 'Message content required' });
@@ -2186,6 +2230,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         cliProfileId: conv.cliProfileId || cliProfileId || null,
         model: model !== undefined ? (model || null) : (conv.model || null),
         effort: effort !== undefined ? (effort || null) : (conv.effort || null),
+        serviceTier: serviceTier !== undefined ? serviceTier : (conv.serviceTier || null),
         workingDir: conv.workingDir || null,
       });
       const jobId = pendingMessageSend.jobId;
@@ -2213,6 +2258,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     if (effort !== undefined && effort !== (conv.effort || undefined)) {
       await chatService.updateConversationEffort(convId, effort || null);
     }
+    if (serviceTier !== undefined && serviceTier !== (conv.serviceTier || null)) {
+      await chatService.updateConversationServiceTier(convId, serviceTier);
+    }
     conv = (await chatService.getConversation(convId))!;
 
     let runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
@@ -2234,6 +2282,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       cliProfileId: runtime.cliProfileId || conv.cliProfileId || null,
       model: conv.model || null,
       effort: conv.effort || null,
+      serviceTier: conv.serviceTier || null,
       workingDir: conv.workingDir || null,
     });
     const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backendId);
@@ -2386,6 +2435,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     const effectiveEffort = effort !== undefined
       ? (refreshedConv?.effort || undefined)
       : (conv.effort || undefined);
+    const effectiveServiceTier = serviceTier !== undefined
+      ? (refreshedConv?.serviceTier || undefined)
+      : (conv.serviceTier || undefined);
     const sendResult = adapter.sendMessage(cliMessage, {
       sessionId: conv.currentSessionId,
       conversationId: convId,
@@ -2397,6 +2449,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       externalSessionId: conv.externalSessionId || null,
       model: model || conv.model || undefined,
       effort: effectiveEffort,
+      serviceTier: effectiveServiceTier,
       mcpServers,
     });
     const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
@@ -2412,6 +2465,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       titleUpdateMessage: needsTitleUpdate ? content.trim() : null,
       model: model || conv.model || null,
       effort: effectiveEffort || null,
+      serviceTier: effectiveServiceTier || null,
       logUserMessageId: userMsg?.id || null,
       logUserMessageTimestamp: userMsg?.timestamp || null,
     });
@@ -2604,6 +2658,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         allowTools: true,
         workingDir: conv.workingDir || undefined,
         cliProfile: runtime.profile,
+        serviceTier: conv.serviceTier || undefined,
       });
       const cleaned = (markdown || '').trim();
       if (!cleaned) {

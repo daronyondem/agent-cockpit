@@ -151,6 +151,7 @@ Together these guarantee that a workspace index always parses on disk and that c
     cliProfileId?: string,      // Runtime CLI profile selected for this conversation. When present, runtime adapter selection resolves through Settings.cliProfiles[id].vendor.
     model?: string,             // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
     effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
+    serviceTier?: string,       // Codex-only service tier override. Current value: 'fast'. Absent = use the selected Codex profile/config default.
     currentSessionId: string,   // UUID of the active CLI session
     lastActivity: string,       // ISO 8601, updated on every message and on session reset
     lastMessage: string|null,   // First 100 chars of last active-session message content; reset to null when a new session starts
@@ -409,6 +410,7 @@ interface DurableStreamJob {
   cliProfileId?: string|null;
   model?: string|null;
   effort?: string|null;
+  serviceTier?: string|null;
   workingDir?: string|null;
   createdAt: string;
   updatedAt: string;
@@ -538,6 +540,7 @@ Flat object assembled from workspace index + active session file:
   backend: string,
   model?: string,               // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5')
   effort?: string,              // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+  serviceTier?: string,         // Codex-only service tier override; currently 'fast'
   workingDir: string,           // The workspace path
   currentSessionId: string,
   sessionNumber: number,        // Active session number
@@ -657,6 +660,8 @@ interface CliUpdatesResponse {
 `memory.cliProfileId` selects the profile used by the Memory CLI for `memory_note` formatting/deduping and post-session extraction. `memory.cliBackend` is retained as a legacy fallback and is kept aligned to the selected profile vendor on settings save. If `cliProfileId` is absent, runtime resolution falls back to `cliBackend`, then `defaultBackend`.
 
 `defaultEffort` is the default adaptive reasoning level for new conversations. It only applies when the chosen model matches `defaultModel` AND the model supports that effort level; otherwise the per-conversation selection falls back to `high` (or, defensively, the first supported level of the chosen model). The settings modal only renders the **Default Effort** field when `defaultBackend`/`defaultModel` resolve to a model that declares `supportedEffortLevels`; changing the default model to one without effort support drops `defaultEffort` on save.
+
+`defaultServiceTier` is the Codex-only default speed tier for new conversations. The only stored value is `"fast"`; absence means the selected Codex profile/config decides the tier. The settings modal only renders **Default Speed** when the selected default profile/backend resolves to Codex. `SettingsService.saveSettings()` drops `defaultServiceTier` when the default runtime is not Codex or the value is unsupported. A conversation-level `serviceTier: "fast"` forces Codex Fast mode; explicit request values `null`, `""`, or `"default"` clear the override so the selected Codex profile/config applies.
 
 The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the start of each new session. It is additive — Claude Code's built-in system prompt is preserved. Legacy `customInstructions` objects in the JSON file are auto-migrated to `systemPrompt` on first read by `SettingsService`; the `customInstructions` field no longer exists in the `Settings` type.
 
