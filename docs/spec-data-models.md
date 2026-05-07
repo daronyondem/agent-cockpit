@@ -274,14 +274,14 @@ Governed memory writes surface their decision through `MemoryWriteOutcome`:
   type: 'user' | 'feedback' | 'project' | 'reference' | 'unknown',
   source: 'cli-capture' | 'memory-note' | 'session-extraction',
   status: 'active' | 'superseded' | 'redacted' | 'deleted',
-  score: number,        // rounded BM25-style lexical score
+  score: number,        // rounded BM25-style lexical score plus exact/type boosts
   snippet: string,      // compact text around the first matching term
   content: string,
   metadata: MemoryEntryMetadata
 }
 ```
 
-The default search status filter is `active + redacted`; superseded and deleted entries are excluded unless a future caller explicitly opts into those lifecycle states. This first search layer is local and lexical only: it uses tokenized name/description/type/filename/content with BM25-style scoring and does not require the KB's Ollama embedding configuration.
+The default search status filter is `active + redacted`; superseded and deleted entries are excluded unless a caller explicitly opts into those lifecycle states. The MCP `memory_search` tool exposes that as `status:'active' | 'all'`, while the REST/UI search route exposes detailed lifecycle values. This first search layer is local and lexical only: it uses tokenized name/description/type/filename/content with BM25-style scoring, repeated name/description field weighting, explicit exact-match and type boosts, and recency as the tie-breaker before filename. It does not require the KB's Ollama embedding configuration.
 
 Manual consolidation proposals and audits use the following action shape:
 
@@ -311,7 +311,7 @@ Merge/split/normalize actions can be turned into exact, reviewed drafts through 
 }
 ```
 
-Drafts have `{ id, createdAt, action, summary, operations }`. `create` writes a new `notes/` file and marks selected source entries superseded in sidecar metadata. `replace` rewrites only selected `notes/*` entries in place; `claude/*` entries are never replaced because they are mirrored native CLI captures. Redacted, deleted, and already-superseded sources are rejected for draft generation and skipped during draft apply.
+Drafts have `{ id, createdAt, action, summary, operations }`. `create` writes a new `notes/` file and marks selected source entries superseded in sidecar metadata. `replace` rewrites only selected `notes/*` entries in place; `claude/*` entries are never replaced because they are mirrored native CLI captures. Redacted, deleted, and already-superseded sources are rejected for draft generation and skipped during draft apply. Memory Review draft apply may receive an edited draft payload, but the persisted generated operation metadata remains authoritative; only `operations[].content` is accepted from the reviewed payload before the same Markdown validation and redaction pipeline runs.
 
 Memory Review runs persist scheduled/manual proposal + draft state under `memory/reviews/<runId>.json`:
 

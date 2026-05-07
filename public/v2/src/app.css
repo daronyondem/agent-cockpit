@@ -1214,10 +1214,37 @@ body{
 }
 .mr-diff-head{
   display: flex; justify-content: space-between; gap: 10px;
+  align-items: flex-start;
   padding: 8px 10px;
   border-bottom: 1px solid var(--border);
   background: var(--bg);
   font-size: 12px; font-weight: 600;
+}
+.mr-diff-title{
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.mr-diff-tools{
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.mr-diff-tools .btn{
+  padding: 4px 7px;
+  font-size: 11.5px;
+  box-shadow: none;
+}
+.mr-edit-state{
+  border: 1px solid color-mix(in oklch, var(--status-awaiting), transparent 54%);
+  border-radius: var(--r-sm);
+  padding: 3px 6px;
+  color: color-mix(in oklch, var(--status-awaiting), var(--text) 28%);
+  background: color-mix(in oklch, var(--status-awaiting), transparent 90%);
+  font-size: 11px;
 }
 .mr-diff-grid{
   display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -1267,6 +1294,31 @@ body{
 .mr-code-line.is-changed .mr-code-line-num{
   color: color-mix(in oklch, var(--status-awaiting), var(--text) 32%);
   background: color-mix(in oklch, var(--status-awaiting), transparent 88%);
+}
+.mr-edit-panel{
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  padding: 10px;
+}
+.mr-edit-textarea{
+  display: block;
+  width: 100%;
+  min-height: 220px;
+  max-height: 520px;
+  resize: vertical;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--bg);
+  color: var(--text);
+  padding: 10px;
+  font-family: var(--mono-font);
+  font-size: 12px;
+  line-height: 1.45;
+  outline: none;
+}
+.mr-edit-textarea:focus{
+  border-color: color-mix(in oklch, var(--accent), transparent 35%);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent), transparent 82%);
 }
 .mr-empty-inline{
   font-size: 12px;

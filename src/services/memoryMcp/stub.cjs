@@ -89,6 +89,13 @@ const TOOLS = [
           enum: ['user', 'feedback', 'project', 'reference', 'unknown'],
           description: 'Optional memory type filter.',
         },
+        status: {
+          type: 'string',
+          enum: ['active', 'all'],
+          description:
+            'Memory lifecycle scope. Defaults to active, which includes active and redacted entries. ' +
+            'Use all to include superseded and deleted entries too.',
+        },
         include_content: {
           type: 'boolean',
           description: 'Whether to include memory file content. Defaults to true.',

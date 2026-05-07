@@ -3534,7 +3534,16 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   router.post('/workspaces/:hash/memory/reviews/:runId/drafts/:draftId/apply', csrfGuard, async (req: Request, res: Response) => {
     try {
       const hash = param(req, 'hash');
-      const run = await memoryMcp.applyMemoryReviewDraft(hash, param(req, 'runId'), param(req, 'draftId'));
+      const body = (req.body || {}) as { draft?: MemoryConsolidationDraft };
+      if (body.draft !== undefined && (!body.draft || typeof body.draft !== 'object' || Array.isArray(body.draft))) {
+        return res.status(400).json({ error: 'draft must be an object' });
+      }
+      const run = await memoryMcp.applyMemoryReviewDraft(
+        hash,
+        param(req, 'runId'),
+        param(req, 'draftId'),
+        body.draft ? { draft: body.draft } : undefined,
+      );
       const status = await chatService.getMemoryReviewStatus(hash);
       res.json({ ok: true, status, run });
     } catch (err: unknown) {

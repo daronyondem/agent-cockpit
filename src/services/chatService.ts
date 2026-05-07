@@ -38,6 +38,7 @@ import type {
   MemoryScope,
   MemorySource,
   MemoryStatus,
+  MemoryType,
   MemoryRedaction,
   MemoryConsolidationAudit,
   MemoryReviewRun,
@@ -398,6 +399,52 @@ function memorySearchText(file: MemoryFile): string {
     file.filename,
     file.content || '',
   ].join('\n');
+}
+
+function normalizeMemorySearchField(value: string | null | undefined): string {
+  return tokenizeMemorySearch(value || '').join(' ');
+}
+
+function memorySearchExactBoost(file: MemoryFile, normalizedQuery: string, queryTerms: string[]): number {
+  if (!normalizedQuery) return 0;
+  let boost = 0;
+  const fields = [
+    { value: file.name, exact: 6, contains: 3, term: 0.5 },
+    { value: file.description, exact: 4, contains: 2, term: 0.35 },
+    { value: file.filename, exact: 3, contains: 1.5, term: 0.25 },
+  ];
+
+  for (const field of fields) {
+    const normalized = normalizeMemorySearchField(field.value);
+    if (!normalized) continue;
+    if (normalized === normalizedQuery) {
+      boost += field.exact;
+    } else if (normalized.includes(normalizedQuery)) {
+      boost += field.contains;
+    }
+    const tokens = new Set(normalized.split(' ').filter(Boolean));
+    const matchedTerms = queryTerms.filter((term) => tokens.has(term)).length;
+    boost += matchedTerms * field.term;
+  }
+
+  return boost;
+}
+
+function memorySearchTypeBoost(
+  file: MemoryFile,
+  queryTerms: string[],
+  allowedTypes: Set<MemoryType> | null,
+): number {
+  let boost = 0;
+  if (allowedTypes?.has(file.type)) boost += 0.75;
+  if (queryTerms.includes(file.type)) boost += 2;
+  return boost;
+}
+
+function memorySearchTimestamp(file: MemoryFile): number {
+  const raw = file.metadata?.updatedAt || file.metadata?.createdAt || '';
+  const value = Date.parse(raw);
+  return Number.isFinite(value) ? value : 0;
 }
 
 function memorySearchSnippet(content: string, queryTerms: string[]): string {
@@ -2229,11 +2276,12 @@ export class ChatService {
     const query = typeof options.query === 'string' ? options.query.trim() : '';
     const queryTerms = [...new Set(tokenizeMemorySearch(query))];
     if (queryTerms.length === 0) return [];
+    const normalizedQuery = queryTerms.join(' ');
 
     const limit = Number.isInteger(options.limit)
       ? Math.max(1, Math.min(20, options.limit || 5))
       : 5;
-    const allowedTypes = options.types && options.types.length
+    const allowedTypes: Set<MemoryType> | null = options.types && options.types.length
       ? new Set(options.types)
       : null;
     const allowedStatuses = options.statuses && options.statuses.length
@@ -2269,10 +2317,12 @@ export class ChatService {
         const lenNorm = k1 * (1 - b + b * (doc.tokens.length / Math.max(1, avgLen)));
         score += idf * ((tf * (k1 + 1)) / (tf + lenNorm));
       }
-      return { ...doc, score };
+      score += memorySearchExactBoost(doc.file, normalizedQuery, queryTerms);
+      score += memorySearchTypeBoost(doc.file, queryTerms, allowedTypes);
+      return { ...doc, score, updatedAtMs: memorySearchTimestamp(doc.file) };
     })
       .filter((doc) => doc.score > 0)
-      .sort((a, b) => b.score - a.score || a.file.filename.localeCompare(b.file.filename))
+      .sort((a, b) => b.score - a.score || b.updatedAtMs - a.updatedAtMs || a.file.filename.localeCompare(b.file.filename))
       .slice(0, limit);
 
     return scored.map((doc) => {

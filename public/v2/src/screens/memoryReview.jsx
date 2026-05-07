@@ -200,10 +200,10 @@ function MemoryReviewPage({ hash, label, runId, onClose }){
                   acting={acting}
                   applyDone={!!applyDone[item.id]}
                   regenDone={!!regenDone[item.id]}
-                  onApply={() => runAction(
+                  onApply={(reviewedDraft) => runAction(
                     'apply:' + item.id,
                     'Applying memory draft...',
-                    () => AgentApi.workspace.applyMemoryReviewDraft(hash, run.id, item.id),
+                    () => AgentApi.workspace.applyMemoryReviewDraft(hash, run.id, item.id, reviewedDraft ? { draft: reviewedDraft } : undefined),
                     'Memory draft applied',
                   )}
                   onDiscard={() => runAction(
@@ -266,6 +266,8 @@ function MemoryReviewSafeActionCard({ item, acting, onApply, onDiscard }){
 }
 
 function MemoryReviewDraftCard({ item, filesByName, acting, applyDone, regenDone, onApply, onDiscard, onRegenerate }){
+  const [contentEdits, setContentEdits] = React.useState({});
+  const [editing, setEditing] = React.useState({});
   const busy = acting && acting.key && acting.key.endsWith(item.id);
   const applyBusy = acting && acting.key === 'apply:' + item.id;
   const discardBusy = acting && acting.key === 'discard:' + item.id;
@@ -275,6 +277,38 @@ function MemoryReviewDraftCard({ item, filesByName, acting, applyDone, regenDone
   const done = applied || dismissed;
   const draft = item.draft || null;
   const operations = (draft && Array.isArray(draft.operations)) ? draft.operations : [];
+  React.useEffect(() => {
+    setContentEdits({});
+    setEditing({});
+  }, [item.id, draft && draft.id, item.status]);
+  const operationContent = (operation, idx) => (
+    Object.prototype.hasOwnProperty.call(contentEdits, idx)
+      ? contentEdits[idx]
+      : operation.content || ''
+  );
+  const setOperationContent = (idx, value) => {
+    setContentEdits((prev) => ({ ...prev, [idx]: value }));
+  };
+  const toggleOperationEdit = (idx) => {
+    setEditing((prev) => ({ ...prev, [idx]: !prev[idx] }));
+  };
+  const resetOperationEdit = (idx) => {
+    setContentEdits((prev) => {
+      const next = { ...prev };
+      delete next[idx];
+      return next;
+    });
+  };
+  const buildReviewedDraft = () => {
+    if (!draft) return null;
+    return {
+      ...draft,
+      operations: operations.map((operation, idx) => ({
+        ...operation,
+        content: operationContent(operation, idx),
+      })),
+    };
+  };
   return (
     <div className={'mr-card status-' + item.status}>
       <div className="mr-card-head">
@@ -290,7 +324,17 @@ function MemoryReviewDraftCard({ item, filesByName, acting, applyDone, regenDone
       {operations.length ? (
         <div className="mr-diffs">
           {operations.map((operation, idx) => (
-            <MemoryReviewOperationDiff key={idx} operation={operation} filesByName={filesByName}/>
+            <MemoryReviewOperationDiff
+              key={idx}
+              operation={operation}
+              filesByName={filesByName}
+              after={operationContent(operation, idx)}
+              editing={!!editing[idx]}
+              edited={operationContent(operation, idx) !== (operation.content || '')}
+              onChange={(value) => setOperationContent(idx, value)}
+              onToggleEdit={() => toggleOperationEdit(idx)}
+              onReset={() => resetOperationEdit(idx)}
+            />
           ))}
         </div>
       ) : !item.failure ? (
@@ -301,7 +345,7 @@ function MemoryReviewDraftCard({ item, filesByName, acting, applyDone, regenDone
           type="button"
           className={'btn primary' + (applyDone ? ' mr-btn-success' : '')}
           disabled={busy || done || !draft || applyDone}
-          onClick={onApply}
+          onClick={() => onApply(buildReviewedDraft())}
         >
           {applyBusy
             ? <MemoryReviewButtonProgress label="Applying..."/>
@@ -364,7 +408,7 @@ function MemoryReviewDecisionNote({ status }){
   );
 }
 
-function MemoryReviewOperationDiff({ operation, filesByName }){
+function MemoryReviewOperationDiff({ operation, filesByName, after, editing, edited, onChange, onToggleEdit, onReset }){
   const sourceNames = operation.operation === 'create'
     ? (operation.supersedes || [])
     : operation.filename ? [operation.filename] : [];
@@ -372,18 +416,42 @@ function MemoryReviewOperationDiff({ operation, filesByName }){
     const file = filesByName.get(name);
     return `# ${name}\n\n${file ? file.content : '(not in current snapshot)'}`;
   }).join('\n\n---\n\n');
-  const after = operation.content || '';
-  const diff = buildMemoryReviewLineDiff(before || '(new entry)', after);
+  const afterContent = typeof after === 'string' ? after : operation.content || '';
+  const diff = buildMemoryReviewLineDiff(before || '(new entry)', afterContent);
   return (
     <div className="mr-diff">
       <div className="mr-diff-head">
-        <span>{formatMemoryReviewDraftOperation(operation.operation)}</span>
-        <span className="u-dim">{operation.reason || ''}</span>
+        <div className="mr-diff-title">
+          <span>{formatMemoryReviewDraftOperation(operation.operation)}</span>
+          <span className="u-dim">{operation.reason || ''}</span>
+        </div>
+        <div className="mr-diff-tools">
+          {edited ? <span className="mr-edit-state">Edited</span> : null}
+          <button type="button" className="btn ghost" onClick={onToggleEdit}>
+            {Ico.edit(12)} {editing ? 'Done editing' : 'Edit markdown'}
+          </button>
+          {edited ? (
+            <button type="button" className="btn ghost" onClick={onReset}>
+              {Ico.reset(12)} Reset
+            </button>
+          ) : null}
+        </div>
       </div>
       <div className="mr-diff-grid">
         <MemoryReviewDiffPane title="Before" lines={diff.before}/>
         <MemoryReviewDiffPane title="After" lines={diff.after}/>
       </div>
+      {editing ? (
+        <div className="mr-edit-panel">
+          <textarea
+            className="mr-edit-textarea"
+            value={afterContent}
+            onChange={(event) => onChange(event.target.value)}
+            spellCheck="false"
+            aria-label="Edited memory markdown"
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

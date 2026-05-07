@@ -44,6 +44,7 @@ import type {
   Message,
   MemoryFile,
   MemoryRedaction,
+  MemoryStatus,
   MemoryConsolidationAction,
   MemoryConsolidationActionType,
   MemoryConsolidationApplyResult,
@@ -625,6 +626,42 @@ function boundedMemorySearchLimit(value: unknown): number {
   return Math.max(1, Math.min(MAX_MEMORY_SEARCH_LIMIT, parsed));
 }
 
+function memorySearchStatusScope(value: unknown): MemoryStatus[] | undefined {
+  if (value === undefined || value === null || value === '') return undefined;
+  if (typeof value !== 'string') throw new Error('status must be active or all');
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === 'active') return ['active', 'redacted'];
+  if (normalized === 'all') return ['active', 'redacted', 'superseded', 'deleted'];
+  throw new Error('status must be active or all');
+}
+
+function draftWithEditedContent(
+  base: MemoryConsolidationDraft,
+  edited?: MemoryConsolidationDraft,
+): MemoryConsolidationDraft {
+  if (!edited) return base;
+  if (!Array.isArray(edited.operations)) {
+    throw new Error('draft.operations must be an array');
+  }
+  if (edited.operations.length !== base.operations.length) {
+    throw new Error('draft.operations must match generated operations');
+  }
+
+  return {
+    ...base,
+    operations: base.operations.map((operation, index) => {
+      const editedOperation = edited.operations[index];
+      if (!editedOperation || typeof editedOperation.content !== 'string') {
+        throw new Error('draft.operations[].content must be strings');
+      }
+      return {
+        ...operation,
+        content: editedOperation.content,
+      };
+    }),
+  };
+}
+
 function parseMemoryCliOutcome(cleaned: string): ParsedMemoryCliOutcome | null {
   const raw = parseJsonObject(cleaned);
   if (!raw) return null;
@@ -1090,11 +1127,12 @@ export function createMemoryMcpServer({
       return res.status(401).json({ error: 'Invalid or missing memory token' });
     }
 
-    const { query, limit, type, types, include_content: includeContent } = (req.body || {}) as {
+    const { query, limit, type, types, status, include_content: includeContent } = (req.body || {}) as {
       query?: string;
       limit?: number;
       type?: string;
       types?: string[];
+      status?: string;
       include_content?: boolean;
     };
     if (!query || typeof query !== 'string' || !query.trim()) {
@@ -1120,10 +1158,17 @@ export function createMemoryMcpServer({
         || item === 'reference'
         || item === 'unknown',
       );
+      let memoryStatuses: MemoryStatus[] | undefined;
+      try {
+        memoryStatuses = memorySearchStatusScope(status);
+      } catch (err: unknown) {
+        return res.status(400).json({ error: (err as Error).message });
+      }
       const results = await chatService.searchWorkspaceMemory(hash, {
         query,
         limit: boundedMemorySearchLimit(limit),
         ...(memoryTypes.length ? { types: memoryTypes } : {}),
+        ...(memoryStatuses ? { statuses: memoryStatuses } : {}),
       });
 
       return res.json({
@@ -2054,6 +2099,7 @@ export function createMemoryMcpServer({
     hash: string,
     runId: string,
     draftId: string,
+    args?: { draft?: MemoryConsolidationDraft },
   ): Promise<MemoryReviewRun> {
     const run = await getMemoryReviewRunOrThrow(hash, runId);
     const item = run.drafts.find((candidate) => candidate.id === draftId);
@@ -2075,9 +2121,10 @@ export function createMemoryMcpServer({
       return saveMemoryReviewRunAndEmit(hash, finalizeMemoryReviewRun(run));
     }
 
+    const reviewedDraft = draftWithEditedContent(item.draft, args?.draft);
     const result = await applyMemoryConsolidationDraft(hash, {
       summary: run.summary,
-      draft: item.draft,
+      draft: reviewedDraft,
     });
     item.result = result;
     item.updatedAt = new Date().toISOString();

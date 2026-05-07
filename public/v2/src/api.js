@@ -654,9 +654,9 @@
       'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId) + '/actions/' + encodeURIComponent(itemId) + '/discard',
       { method: 'POST', body: {} },
     ).then(r => r.json()),
-    applyMemoryReviewDraft: (hash, runId, draftId) => chatFetch(
+    applyMemoryReviewDraft: (hash, runId, draftId, payload) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId) + '/drafts/' + encodeURIComponent(draftId) + '/apply',
-      { method: 'POST', body: {} },
+      { method: 'POST', body: payload || {} },
     ).then(r => r.json()),
     discardMemoryReviewDraft: (hash, runId, draftId) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId) + '/drafts/' + encodeURIComponent(draftId) + '/discard',

@@ -39,6 +39,10 @@ describe('workspace memory', () => {
     return JSON.parse(fs.readFileSync(path.join(memoryDir(hash), 'state.json'), 'utf8'));
   }
 
+  function writeMemoryState(hash: string, state: MemoryMetadataIndex): void {
+    fs.writeFileSync(path.join(memoryDir(hash), 'state.json'), JSON.stringify(state, null, 2));
+  }
+
   function makeSnapshot(): MemorySnapshot {
     return {
       capturedAt: '2026-04-07T12:00:00Z',
@@ -480,6 +484,110 @@ Old TypeScript preference that should not be searched.
       status: 'active',
       snippet: expect.stringMatching(/TypeScript/i),
     });
+  });
+
+  test('searchWorkspaceMemory boosts exact and type matches and breaks score ties by recency', async () => {
+    await service.createConversation('Mem Search Ranking', '/tmp/mem-search-ranking');
+    const hash = workspaceHash('/tmp/mem-search-ranking');
+
+    const densePath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: dense_fruit_note
+description: dense fruit note
+type: user
+---
+
+Apple apple apple apple apple apple apple apple apple.
+`,
+      source: 'memory-note',
+      filenameHint: 'dense-fruit-note',
+    });
+    const exactPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: apple
+description: direct title match
+type: user
+---
+
+Keep this short.
+`,
+      source: 'memory-note',
+      filenameHint: 'apple-exact',
+    });
+
+    const exactResults = await service.searchWorkspaceMemory(hash, {
+      query: 'apple',
+      limit: 2,
+    });
+    expect(exactResults.map((result) => result.filename)).toEqual([exactPath, densePath]);
+
+    const userPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: roadmap
+description: shared roadmap
+type: user
+---
+
+Roadmap notes.
+`,
+      source: 'memory-note',
+      filenameHint: 'roadmap-user',
+    });
+    const projectPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: roadmap
+description: shared roadmap
+type: project
+---
+
+Roadmap notes.
+`,
+      source: 'memory-note',
+      filenameHint: 'roadmap-project',
+    });
+
+    const typeResults = await service.searchWorkspaceMemory(hash, {
+      query: 'project roadmap',
+      limit: 2,
+    });
+    expect(typeResults[0].filename).toBe(projectPath);
+    expect(typeResults.map((result) => result.filename)).toContain(userPath);
+
+    const olderTiePath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: tie_match
+description: same tie match
+type: feedback
+---
+
+Tie match content.
+`,
+      source: 'memory-note',
+      filenameHint: 'tie-match-old',
+    });
+    const newerTiePath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: tie_match
+description: same tie match
+type: feedback
+---
+
+Tie match content.
+`,
+      source: 'memory-note',
+      filenameHint: 'tie-match-new',
+    });
+    const state = readMemoryState(hash);
+    state.entries[olderTiePath].updatedAt = '2026-01-01T00:00:00.000Z';
+    state.entries[newerTiePath].updatedAt = '2026-02-01T00:00:00.000Z';
+    writeMemoryState(hash, state);
+
+    const tieResults = await service.searchWorkspaceMemory(hash, {
+      query: 'tie match',
+      types: ['feedback'],
+      limit: 2,
+    });
+    expect(tieResults.map((result) => result.filename)).toEqual([newerTiePath, olderTiePath]);
   });
 
   test('deleteMemoryEntry removes a file and refreshes snapshot', async () => {

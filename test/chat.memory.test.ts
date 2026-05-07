@@ -465,13 +465,22 @@ describe('Memory Review scheduling and runs', () => {
     expect(draftRegenerated.body.run.drafts[0].status).toBe('pending');
     expect(draftRegenerated.body.run.drafts[0].discardedAt).toBeUndefined();
 
+    const reviewedDraft = draftRegenerated.body.run.drafts[0].draft;
+    reviewedDraft.operations[0].content = reviewedDraft.operations[0].content.replace(
+      'Use node:test for focused service coverage.',
+      'Use node:test for focused service coverage, including REST route tests.',
+    );
     const draftApplied = await env.request(
       'POST',
       `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/drafts/${draftId}/apply`,
-      {},
+      { draft: reviewedDraft },
     );
     expect(draftApplied.status).toBe(200);
     expect(draftApplied.body.run.drafts[0].status).toBe('applied');
+    const createdDraftFile = draftApplied.body.run.drafts[0].result.createdFiles[0];
+    const memoryAfterDraftApply = await env.chatService.getWorkspaceMemory(hash);
+    const createdDraftMemory = memoryAfterDraftApply!.files.find((file) => file.filename === createdDraftFile)!;
+    expect(createdDraftMemory.content).toContain('including REST route tests');
 
     const actionId = restarted.body.run.safeActions[0].id;
     const actionApplied = await env.request(

@@ -137,6 +137,13 @@ describe('memoryMcp.issueMemoryMcpSession', () => {
     expect(searchEndpointEntry?.value).toMatch(/\/api\/chat\/mcp\/memory\/search$/);
   });
 
+  test('stub exposes active/all status scope on memory_search', () => {
+    const stubSource = fs.readFileSync(MEMORY_MCP_STUB_PATH, 'utf8');
+    expect(stubSource).toContain("name: 'memory_search'");
+    expect(stubSource).toContain("status: {");
+    expect(stubSource).toContain("enum: ['active', 'all']");
+  });
+
   test('reissuing a session for the same conversation+workspace returns the same token', () => {
     // The MCP stub is spawned once per ACP session (on session/new) and
     // captures its bearer token from its spawn-time env forever.  The chat
@@ -1246,6 +1253,64 @@ The rollout deadline is Friday.
       snippet: expect.stringMatching(/TypeScript/i),
     });
     expect(res.body.results[0]).not.toHaveProperty('content');
+  });
+
+  test('honors memory_search status all scope', async () => {
+    const hash = workspaceHash('/tmp/mem-search-status-all');
+    await service.createConversation('conv-search-status-all', '/tmp/mem-search-status-all');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const activePath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: active_typescript
+description: active TypeScript guidance
+type: user
+---
+
+Use TypeScript examples.
+`,
+      source: 'memory-note',
+      filenameHint: 'active-typescript',
+    });
+    const oldPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: old_typescript
+description: old TypeScript guidance
+type: user
+---
+
+Old TypeScript examples.
+`,
+      source: 'memory-note',
+      filenameHint: 'old-typescript',
+    });
+    await service.patchMemoryEntryMetadata(hash, [{
+      filename: oldPath,
+      patch: { status: 'superseded' },
+    }]);
+
+    const session = memoryMcp.issueMemoryMcpSession('conv-search-status-all', hash);
+    await startHttpServer(memoryMcp.router);
+    const defaultRes = await makeRequest('POST', '/mcp/memory/search', {
+      query: 'typescript',
+      limit: 5,
+    }, {
+      'x-memory-token': session.token,
+    });
+    expect(defaultRes.status).toBe(200);
+    expect(defaultRes.body.results.map((result: { filename: string }) => result.filename)).toEqual([activePath]);
+
+    const allRes = await makeRequest('POST', '/mcp/memory/search', {
+      query: 'typescript',
+      status: 'all',
+      limit: 5,
+    }, {
+      'x-memory-token': session.token,
+    });
+    expect(allRes.status).toBe(200);
+    expect(allRes.body.results.map((result: { filename: string }) => result.filename)).toEqual(
+      expect.arrayContaining([activePath, oldPath]),
+    );
   });
 });
 

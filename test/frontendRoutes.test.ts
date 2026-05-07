@@ -115,6 +115,9 @@ describe('frontend routes', () => {
     expect(reviewSrc).toContain('MemoryReviewButtonProgress');
     expect(reviewSrc).toContain('buildMemoryReviewLineDiff');
     expect(reviewSrc).toContain('MemoryReviewDiffPane');
+    expect(reviewSrc).toContain('Edit markdown');
+    expect(reviewSrc).toContain('mr-edit-textarea');
+    expect(reviewSrc).toContain('buildReviewedDraft');
     expect(reviewSrc).toContain('Generating draft review...');
     expect(reviewSrc).toContain('No open review items.');
     expect(reviewSrc).toContain('MemoryReviewButtonProgress label="Applying..."');
@@ -130,6 +133,7 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.mr-btn-success');
     expect(cssSrc).toContain('.mr-item-note');
     expect(cssSrc).toContain('.mr-code-line.is-changed');
+    expect(cssSrc).toContain('.mr-edit-textarea');
     expect(cssSrc).toContain('.state-memory-review');
   });
 
@@ -242,12 +246,12 @@ describe('frontend routes', () => {
       expect(v2.status).toBe(200);
       expect(v2.headers['content-type']).toMatch(/text\/html/);
       expect(v2.body).toContain('<div id="root"');
-      expect(v2.body).toContain('src/app.css?v=141');
-      expect(v2.body).toContain('src/api.js?v=126');
+      expect(v2.body).toContain('src/app.css?v=142');
+      expect(v2.body).toContain('src/api.js?v=127');
       expect(v2.body).toContain('src/cliUpdateStore.js?v=116');
       expect(v2.body).toContain('src/synthesisAtlas.js?v=117');
       expect(v2.body).toContain('src/screens/kbBrowser.jsx?v=142');
-      expect(v2.body).toContain('src/screens/memoryReview.jsx?v=118');
+      expect(v2.body).toContain('src/screens/memoryReview.jsx?v=119');
       expect(v2.body).toContain('src/workspaceSettings.jsx?v=123');
       expect(v2.body).toContain('src/primitives.jsx?v=119');
       expect(v2.body).toContain('src/folderPicker.jsx?v=117');
