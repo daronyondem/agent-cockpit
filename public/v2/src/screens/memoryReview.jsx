@@ -178,6 +178,7 @@ function MemoryReviewPage({ hash, label, runId, onClose }){
                   key={item.id}
                   item={item}
                   acting={acting}
+                  applyDone={!!applyDone[item.id]}
                   onApply={() => runAction(
                     'apply:' + item.id,
                     'Applying metadata update...',
@@ -232,7 +233,7 @@ function MemoryReviewPage({ hash, label, runId, onClose }){
   );
 }
 
-function MemoryReviewSafeActionCard({ item, acting, onApply, onDiscard }){
+function MemoryReviewSafeActionCard({ item, acting, applyDone, onApply, onDiscard }){
   const busy = acting && acting.key && acting.key.endsWith(item.id);
   const applyBusy = acting && acting.key === 'apply:' + item.id;
   const discardBusy = acting && acting.key === 'discard:' + item.id;
@@ -246,7 +247,7 @@ function MemoryReviewSafeActionCard({ item, acting, onApply, onDiscard }){
         </div>
         <span className={'mr-pill status-' + item.status}>{formatMemoryReviewItemStatus(item.status)}</span>
       </div>
-      {busy ? <MemoryReviewInlineProgress label={acting.label}/> : null}
+      {busy && !applyBusy ? <MemoryReviewInlineProgress label={acting.label}/> : null}
       <MemoryReviewDecisionNote status={item.status}/>
       <div className="mr-kv">
         <span>Entry</span><b>{item.action && item.action.filename ? item.action.filename : '-'}</b>
@@ -254,8 +255,17 @@ function MemoryReviewSafeActionCard({ item, acting, onApply, onDiscard }){
       </div>
       {item.failure ? <div className="mr-item-error">{item.failure}</div> : null}
       <div className="mr-actions">
-        <button type="button" className="btn primary" disabled={busy || done} onClick={onApply}>
-          {applyBusy ? 'Applying...' : <>{Ico.check(13)} Apply</>}
+        <button
+          type="button"
+          className={'btn primary' + (applyDone ? ' mr-btn-success' : '')}
+          disabled={busy || done || applyDone}
+          onClick={onApply}
+        >
+          {applyBusy
+            ? <MemoryReviewButtonProgress label="Applying..."/>
+            : applyDone
+              ? <>{Ico.check(13)} Applied</>
+              : <>{Ico.check(13)} Apply</>}
         </button>
         <button type="button" className="btn ghost" disabled={busy || done} onClick={onDiscard}>
           {discardBusy ? 'Dismissing...' : <>{Ico.x(13)} Dismiss</>}

@@ -313,6 +313,15 @@ describe('POST /workspaces/:hash/memory/consolidate', () => {
 });
 
 describe('Memory Review scheduling and runs', () => {
+  async function waitForMemoryReviewRun(hash: string, runId: string, status: string): Promise<any> {
+    for (let i = 0; i < 50; i += 1) {
+      const run = await env.chatService.getMemoryReviewRun(hash, runId);
+      if (run?.status === status) return run;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    throw new Error(`Timed out waiting for Memory Review ${runId} to reach ${status}`);
+  }
+
   test('persists a workspace Memory Review schedule', async () => {
     const conv = await env.chatService.createConversation('Review Schedule', '/tmp/ws-mem-review-schedule');
     const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
@@ -375,57 +384,86 @@ describe('Memory Review scheduling and runs', () => {
       filenameHint: 'old-testing-b',
     });
 
+    const proposalOutput = () => JSON.stringify({
+      summary: 'Review has one metadata action and one draft.',
+      actions: [
+        {
+          action: 'mark_superseded',
+          filename: oldPath,
+          supersededBy: newPath,
+          reason: 'Friday replaces Thursday.',
+        },
+        {
+          action: 'merge_candidates',
+          filenames: [firstPath, secondPath],
+          reason: 'Duplicate testing preferences.',
+        },
+      ],
+    });
+    const draftOutput = () => JSON.stringify({
+      summary: 'Merge testing preferences.',
+      operations: [{
+        operation: 'create',
+        filenameHint: 'node-test-preference',
+        supersedes: [firstPath, secondPath],
+        reason: 'Duplicate service testing preferences.',
+        content: '---\nname: node_test_preference\ndescription: user prefers node:test for services\ntype: feedback\n---\n\nUse node:test for focused service coverage.',
+      }],
+    });
+    let holdNextProposal = true;
+    let releaseProposal: (() => void) | null = null;
+
     env.mockBackend.setOneShotImpl(async (prompt) => {
       if (prompt.includes('Draft exact')) {
         expect(prompt).toContain(firstPath);
         expect(prompt).toContain(secondPath);
-        return JSON.stringify({
-          summary: 'Merge testing preferences.',
-          operations: [{
-            operation: 'create',
-            filenameHint: 'node-test-preference',
-            supersedes: [firstPath, secondPath],
-            reason: 'Duplicate service testing preferences.',
-            content: '---\nname: node_test_preference\ndescription: user prefers node:test for services\ntype: feedback\n---\n\nUse node:test for focused service coverage.',
-          }],
-        });
+        return draftOutput();
       }
-      return JSON.stringify({
-        summary: 'Review has one metadata action and one draft.',
-        actions: [
-          {
-            action: 'mark_superseded',
-            filename: oldPath,
-            supersededBy: newPath,
-            reason: 'Friday replaces Thursday.',
-          },
-          {
-            action: 'merge_candidates',
-            filenames: [firstPath, secondPath],
-            reason: 'Duplicate testing preferences.',
-          },
-        ],
+      if (!holdNextProposal) return proposalOutput();
+      holdNextProposal = false;
+      return new Promise((resolve) => {
+        releaseProposal = () => resolve(proposalOutput());
       });
     });
 
     const created = await env.request('POST', `/api/chat/workspaces/${hash}/memory/reviews`, {});
-    expect(created.status).toBe(200);
-    expect(created.body.run.status).toBe('pending_review');
-    expect(created.body.run.safeActions).toHaveLength(1);
-    expect(created.body.run.drafts).toHaveLength(1);
+    expect(created.status).toBe(202);
+    expect(created.body.run.status).toBe('running');
+    expect(created.body.run.safeActions).toHaveLength(0);
+    expect(created.body.run.drafts).toHaveLength(0);
     expect(created.body.status).toMatchObject({
+      enabled: true,
+      pending: true,
+      pendingRuns: 1,
+      latestRunStatus: 'running',
+    });
+    for (let i = 0; i < 20 && !releaseProposal; i += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(releaseProposal).toBeTruthy();
+    releaseProposal!();
+
+    const completedCreated = await waitForMemoryReviewRun(hash, created.body.run.id, 'pending_review');
+    expect(completedCreated.safeActions).toHaveLength(1);
+    expect(completedCreated.drafts).toHaveLength(1);
+    expect(await env.chatService.getMemoryReviewStatus(hash)).toMatchObject({
       enabled: true,
       pending: true,
       pendingRuns: 1,
       pendingDrafts: 1,
       pendingSafeActions: 1,
     });
+    expect(env.mockBackend._oneShotCalls.slice(0, 2).map((call) => call.options?.timeoutMs)).toEqual([
+      10 * 60_000,
+      10 * 60_000,
+    ]);
 
     const restarted = await env.request('POST', `/api/chat/workspaces/${hash}/memory/reviews`, {});
-    expect(restarted.status).toBe(200);
+    expect(restarted.status).toBe(202);
     expect(restarted.body.run.id).not.toBe(created.body.run.id);
-    expect(restarted.body.run.status).toBe('pending_review');
-    expect(restarted.body.status).toMatchObject({
+    expect(restarted.body.run.status).toBe('running');
+    const completedRestarted = await waitForMemoryReviewRun(hash, restarted.body.run.id, 'pending_review');
+    expect(await env.chatService.getMemoryReviewStatus(hash)).toMatchObject({
       enabled: true,
       pending: true,
       pendingRuns: 1,
@@ -447,7 +485,7 @@ describe('Memory Review scheduling and runs', () => {
     expect(convRes.body.memoryReview.pending).toBe(true);
     expect(convRes.body.memoryReview.latestRunId).toBe(restarted.body.run.id);
 
-    const draftId = restarted.body.run.drafts[0].id;
+    const draftId = completedRestarted.drafts[0].id;
     const draftDismissed = await env.request(
       'POST',
       `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/drafts/${draftId}/discard`,
@@ -482,7 +520,7 @@ describe('Memory Review scheduling and runs', () => {
     const createdDraftMemory = memoryAfterDraftApply!.files.find((file) => file.filename === createdDraftFile)!;
     expect(createdDraftMemory.content).toContain('including REST route tests');
 
-    const actionId = restarted.body.run.safeActions[0].id;
+    const actionId = completedRestarted.safeActions[0].id;
     const actionApplied = await env.request(
       'POST',
       `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/actions/${actionId}/apply`,

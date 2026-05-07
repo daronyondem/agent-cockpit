@@ -458,6 +458,7 @@ interface ParsedMemoryCliOutcome {
 const DEFAULT_MEMORY_SEARCH_LIMIT = 5;
 const MAX_MEMORY_SEARCH_LIMIT = 20;
 const MAX_MEMORY_SEARCH_CONTENT_CHARS = 4000;
+const MEMORY_CONSOLIDATION_CLI_TIMEOUT_MS = 10 * 60_000;
 
 function addRedaction(redaction: MemoryRedaction[], kind: string, reason: string): void {
   if (!redaction.some((item) => item.kind === kind && item.reason === reason)) {
@@ -1573,7 +1574,7 @@ export function createMemoryMcpServer({
       rawOutput = await adapter.runOneShot(buildMemoryConsolidationPrompt({ entries }), {
         model: settings.memory?.cliModel,
         effort: settings.memory?.cliEffort,
-        timeoutMs: 120_000,
+        timeoutMs: MEMORY_CONSOLIDATION_CLI_TIMEOUT_MS,
         cliProfile: memoryRuntime.profile,
       });
     } catch (err: unknown) {
@@ -1642,7 +1643,7 @@ export function createMemoryMcpServer({
       }), {
         model: settings.memory?.cliModel,
         effort: settings.memory?.cliEffort,
-        timeoutMs: 120_000,
+        timeoutMs: MEMORY_CONSOLIDATION_CLI_TIMEOUT_MS,
         cliProfile: memoryRuntime.profile,
       });
     } catch (err: unknown) {
@@ -1938,63 +1939,9 @@ export function createMemoryMcpServer({
     };
   }
 
-  async function createMemoryReviewRun(
-    hash: string,
-    args: { source: MemoryReviewRunSource; replaceExisting?: boolean },
-  ): Promise<MemoryReviewRun> {
-    const enabled = await chatService.getWorkspaceMemoryEnabled(hash);
-    if (!enabled) throw new Error('Memory is disabled for this workspace');
-
-    const existingRuns = await chatService.listMemoryReviewRuns(hash);
-    const actionableRuns = existingRuns
-      .filter((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
-    const existing = actionableRuns[0];
-    if (existing && !args.replaceExisting) return existing;
-
-    if (runningReviewRuns.has(hash)) {
-      throw new Error('Cannot start a new Memory Review while another review is still generating.');
-    }
-
-    if (args.replaceExisting && actionableRuns.length > 0) {
-      const retiredAt = new Date().toISOString();
-      for (const prior of actionableRuns) {
-        prior.status = 'dismissed';
-        prior.updatedAt = retiredAt;
-        prior.completedAt = prior.completedAt || retiredAt;
-        prior.summary = prior.summary || 'Memory Review dismissed before a new review was started.';
-        for (const item of [...prior.safeActions, ...prior.drafts]) {
-          if (item.status === 'applied' || item.status === 'discarded') continue;
-          item.status = 'discarded';
-          item.discardedAt = retiredAt;
-          item.updatedAt = retiredAt;
-        }
-        await saveMemoryReviewRunAndEmit(hash, prior);
-      }
-    }
-
-    const running = (await chatService.listMemoryReviewRuns(hash))
-      .find((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
-    if (running) return running;
-
-    runningReviewRuns.add(hash);
-    const now = new Date().toISOString();
-    let run: MemoryReviewRun = {
-      version: 1,
-      id: `memreview_${crypto.randomBytes(8).toString('hex')}`,
-      workspaceHash: hash,
-      status: 'running',
-      source: args.source,
-      createdAt: now,
-      updatedAt: now,
-      summary: 'Memory Review is generating drafts.',
-      sourceSnapshotFingerprint: await chatService.getMemorySnapshotFingerprint(hash),
-      safeActions: [],
-      drafts: [],
-      failures: [],
-    };
-
+  async function generateMemoryReviewRun(hash: string, initialRun: MemoryReviewRun): Promise<MemoryReviewRun> {
+    let run = initialRun;
     try {
-      await saveMemoryReviewRunAndEmit(hash, run);
       const proposal = await proposeMemoryConsolidation(hash);
       run = {
         ...run,
@@ -2051,6 +1998,83 @@ export function createMemoryMcpServer({
     } finally {
       runningReviewRuns.delete(hash);
     }
+  }
+
+  async function startMemoryReviewRunInternal(
+    hash: string,
+    args: { source: MemoryReviewRunSource; replaceExisting?: boolean },
+  ): Promise<{ run: MemoryReviewRun; completion?: Promise<MemoryReviewRun> }> {
+    const enabled = await chatService.getWorkspaceMemoryEnabled(hash);
+    if (!enabled) throw new Error('Memory is disabled for this workspace');
+
+    const existingRuns = await chatService.listMemoryReviewRuns(hash);
+    const actionableRuns = existingRuns
+      .filter((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
+    const existing = actionableRuns[0];
+    if (existing && !args.replaceExisting) return { run: existing };
+
+    if (runningReviewRuns.has(hash)) {
+      throw new Error('Cannot start a new Memory Review while another review is still generating.');
+    }
+
+    if (args.replaceExisting && actionableRuns.length > 0) {
+      const retiredAt = new Date().toISOString();
+      for (const prior of actionableRuns) {
+        prior.status = 'dismissed';
+        prior.updatedAt = retiredAt;
+        prior.completedAt = prior.completedAt || retiredAt;
+        prior.summary = prior.summary || 'Memory Review dismissed before a new review was started.';
+        for (const item of [...prior.safeActions, ...prior.drafts]) {
+          if (item.status === 'applied' || item.status === 'discarded') continue;
+          item.status = 'discarded';
+          item.discardedAt = retiredAt;
+          item.updatedAt = retiredAt;
+        }
+        await saveMemoryReviewRunAndEmit(hash, prior);
+      }
+    }
+
+    const running = (await chatService.listMemoryReviewRuns(hash))
+      .find((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
+    if (running) return { run: running };
+
+    runningReviewRuns.add(hash);
+    const now = new Date().toISOString();
+    const run: MemoryReviewRun = {
+      version: 1,
+      id: `memreview_${crypto.randomBytes(8).toString('hex')}`,
+      workspaceHash: hash,
+      status: 'running',
+      source: args.source,
+      createdAt: now,
+      updatedAt: now,
+      summary: 'Memory Review is generating drafts.',
+      sourceSnapshotFingerprint: await chatService.getMemorySnapshotFingerprint(hash),
+      safeActions: [],
+      drafts: [],
+      failures: [],
+    };
+
+    await saveMemoryReviewRunAndEmit(hash, run);
+    const completion = generateMemoryReviewRun(hash, run);
+    completion.catch(() => {});
+    return { run, completion };
+  }
+
+  async function startMemoryReviewRun(
+    hash: string,
+    args: { source: MemoryReviewRunSource; replaceExisting?: boolean },
+  ): Promise<MemoryReviewRun> {
+    const started = await startMemoryReviewRunInternal(hash, args);
+    return started.run;
+  }
+
+  async function createMemoryReviewRun(
+    hash: string,
+    args: { source: MemoryReviewRunSource; replaceExisting?: boolean },
+  ): Promise<MemoryReviewRun> {
+    const started = await startMemoryReviewRunInternal(hash, args);
+    return started.completion ? started.completion : started.run;
   }
 
   async function getMemoryReviewRunOrThrow(hash: string, runId: string): Promise<MemoryReviewRun> {
@@ -2208,6 +2232,7 @@ export function createMemoryMcpServer({
     draftMemoryConsolidation,
     applyMemoryConsolidation,
     applyMemoryConsolidationDraft,
+    startMemoryReviewRun,
     createMemoryReviewRun,
     applyMemoryReviewSafeAction,
     applyMemoryReviewDraft,
