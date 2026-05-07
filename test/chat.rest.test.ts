@@ -1036,6 +1036,53 @@ describe('POST /conversations/:id/message active-stream guard', () => {
   });
 });
 
+describe('Codex service tier request handling', () => {
+  test('persists Fast tier on message send and passes it to the backend', async () => {
+    const codexBackend = new CodexGoalMockBackend();
+    codexBackend.setMockEvents([{ type: 'done' } as StreamEvent]);
+    env.backendRegistry.register(codexBackend);
+    const conv = await env.chatService.createConversation('Fast REST', '/tmp/fast-rest', 'codex');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'hello',
+      backend: 'codex',
+      serviceTier: 'fast',
+    });
+
+    expect(res.status).toBe(200);
+    expect(codexBackend._lastOptions?.serviceTier).toBe('fast');
+    expect((await env.chatService.getConversation(conv.id))?.serviceTier).toBe('fast');
+  });
+
+  test('default service tier clears a stored Codex Fast override', async () => {
+    const codexBackend = new CodexGoalMockBackend();
+    codexBackend.setMockEvents([{ type: 'done' } as StreamEvent]);
+    env.backendRegistry.register(codexBackend);
+    const conv = await env.chatService.createConversation('Default REST', '/tmp/default-rest', 'codex', undefined, undefined, undefined, 'fast');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'hello',
+      backend: 'codex',
+      serviceTier: 'default',
+    });
+
+    expect(res.status).toBe(200);
+    expect(codexBackend._lastOptions?.serviceTier).toBeUndefined();
+    expect((await env.chatService.getConversation(conv.id))?.serviceTier).toBeUndefined();
+  });
+
+  test('rejects invalid service tier values on conversation create', async () => {
+    const res = await env.request('POST', '/api/chat/conversations', {
+      title: 'Bad Tier',
+      backend: 'codex',
+      serviceTier: 'turbo',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('serviceTier must be "fast" or "default"');
+  });
+});
+
 // ── DELETE /conversations/:id/upload/:filename ─────────────────────────────��──
 
 describe('DELETE /conversations/:id/upload/:filename', () => {

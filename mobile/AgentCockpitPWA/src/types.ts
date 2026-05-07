@@ -1,4 +1,5 @@
 export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+export type ServiceTier = 'fast';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
@@ -96,6 +97,7 @@ export type ConversationListItem = {
   cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
+  serviceTier?: ServiceTier;
   workingDir: string;
   workspaceHash: string;
   workspaceKbEnabled: boolean;
@@ -113,6 +115,7 @@ export type Conversation = {
   cliProfileId?: string;
   model?: string;
   effort?: EffortLevel;
+  serviceTier?: ServiceTier;
   workingDir: string;
   workspaceHash: string;
   currentSessionId: string;
@@ -158,6 +161,7 @@ export type Settings = {
   defaultCliProfileId?: string;
   defaultModel?: string;
   defaultEffort?: EffortLevel;
+  defaultServiceTier?: ServiceTier;
   workingDirectory?: string;
 };
 

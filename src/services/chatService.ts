@@ -32,6 +32,7 @@ import type {
   MemorySnapshot,
   MemoryFile,
   EffortLevel,
+  ServiceTier,
   KbState,
   KbCounters,
   KbRawStatus,
@@ -746,6 +747,7 @@ export class ChatService {
     model?: string,
     effort?: EffortLevel,
     cliProfileId?: string,
+    serviceTier?: ServiceTier | null,
   ): Promise<Conversation> {
     const id = this._newId();
     const now = new Date().toISOString();
@@ -780,6 +782,8 @@ export class ChatService {
       }
 
       const effective = this._effectiveEffort(resolvedBackend, model, effort);
+      const requestedServiceTier = serviceTier === undefined ? settings.defaultServiceTier : serviceTier || undefined;
+      const effectiveServiceTier = this._effectiveServiceTier(resolvedBackend, requestedServiceTier);
       const convEntry: ConversationEntry = {
         id,
         title: title || 'New Chat',
@@ -787,6 +791,7 @@ export class ChatService {
         ...(resolvedCliProfileId ? { cliProfileId: resolvedCliProfileId } : {}),
         model: model || undefined,
         effort: effective,
+        serviceTier: effectiveServiceTier,
         currentSessionId: sessionId,
         lastActivity: now,
         lastMessage: null,
@@ -821,6 +826,7 @@ export class ChatService {
         cliProfileId: convEntry.cliProfileId,
         model: convEntry.model,
         effort: convEntry.effort,
+        serviceTier: convEntry.serviceTier,
         workingDir: workspacePath,
         workspaceHash: hash,
         currentSessionId: sessionId,
@@ -845,6 +851,11 @@ export class ChatService {
     if (supported.includes(requested)) return requested;
     if (supported.includes('high')) return 'high';
     return supported[0];
+  }
+
+  private _effectiveServiceTier(backend: string, requested: ServiceTier | undefined): ServiceTier | undefined {
+    if (backend !== 'codex') return undefined;
+    return requested === 'fast' ? 'fast' : undefined;
   }
 
   async getConversation(id: string): Promise<Conversation | null> {
@@ -875,6 +886,7 @@ export class ChatService {
       cliProfileId: convEntry.cliProfileId,
       model: convEntry.model,
       effort: convEntry.effort,
+      serviceTier: convEntry.serviceTier,
       workingDir: index.workspacePath,
       workspaceHash: hash,
       currentSessionId: convEntry.currentSessionId,
@@ -915,6 +927,7 @@ export class ChatService {
           cliProfileId: conv.cliProfileId,
           model: conv.model,
           effort: conv.effort,
+          serviceTier: conv.serviceTier,
           workingDir: index.workspacePath,
           workspaceHash: hash,
           workspaceKbEnabled: Boolean(index.kbEnabled),
@@ -1047,6 +1060,9 @@ export class ChatService {
         const activeSession = convEntry.sessions.find(s => s.active);
         if (activeSession?.usage) activeSession.usage.contextUsagePercentage = undefined;
       }
+      if (backend !== 'codex') {
+        delete convEntry.serviceTier;
+      }
       await this._writeWorkspaceIndex(hash, index);
     });
   }
@@ -1067,6 +1083,9 @@ export class ChatService {
         if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
         const activeSession = convEntry.sessions.find(s => s.active);
         if (activeSession?.usage) activeSession.usage.contextUsagePercentage = undefined;
+      }
+      if (runtime.backendId !== 'codex') {
+        delete convEntry.serviceTier;
       }
       await this._writeWorkspaceIndex(hash, index);
     });
@@ -1121,6 +1140,20 @@ export class ChatService {
       const { index, convEntry } = result;
       convEntry.effort = effort
         ? this._effectiveEffort(convEntry.backend, convEntry.model, effort)
+        : undefined;
+      await this._writeWorkspaceIndex(hash, index);
+    });
+  }
+
+  async updateConversationServiceTier(convId: string, serviceTier: ServiceTier | null): Promise<void> {
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return;
+    await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return;
+      const { index, convEntry } = result;
+      convEntry.serviceTier = serviceTier
+        ? this._effectiveServiceTier(convEntry.backend, serviceTier)
         : undefined;
       await this._writeWorkspaceIndex(hash, index);
     });

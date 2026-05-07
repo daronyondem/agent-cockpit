@@ -94,7 +94,7 @@ The PWA currently covers:
 - Text previews, image previews, file downloads, and Web Share API / fallback download for delivered files.
 - Session list, preview, and markdown download.
 - Workspace tree browsing, text preview/edit/save, copy, image/binary open, file/folder creation, rename/move, delete, upload progress/cancel, and conflict overwrite retry.
-- CLI profile/backend/model/effort selection. Profile/backend switching is locked once the active session has messages; model and effort remain selectable.
+- CLI profile/backend/model/effort/Codex speed selection. Profile/backend switching is locked once the active session has messages; model, effort, and Codex speed remain selectable. Codex speed offers Default/Fast, sends `serviceTier` on conversation create/send, and clears stale Fast selection when the chosen runtime is not Codex.
 - Mobile-first installable shell with manifest, app icon, standalone display mode, and iOS home-screen metadata.
 
 ## Deferred Slices

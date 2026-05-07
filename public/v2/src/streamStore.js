@@ -80,6 +80,7 @@
    *   composerBackend: string | null,
    *   composerModel: string | null,
    *   composerEffort: string | null,
+   *   composerServiceTier: string | null,
    *   goal: ThreadGoal | null,
    *   goalMode: boolean,
    *   pendingAttachments: PendingAttachment[],
@@ -237,6 +238,7 @@
       composerBackend: null,
       composerModel: null,
       composerEffort: null,
+      composerServiceTier: null,
       goal: null,
       goalMode: false,
       pendingAttachments: [],
@@ -519,6 +521,7 @@
         composerBackend: cur.composerBackend != null ? cur.composerBackend : (data.backend || null),
         composerModel:   cur.composerModel   != null ? cur.composerModel   : (data.model   || null),
         composerEffort:  cur.composerEffort  != null ? cur.composerEffort  : (data.effort  || null),
+        composerServiceTier: cur.composerServiceTier != null ? cur.composerServiceTier : (data.serviceTier || null),
         input: draft ? draft.text : cur.input,
         pendingAttachments: draft && draft.attachments.length
           ? hydrateAttachmentsFromDraft(draft.attachments)
@@ -1210,6 +1213,9 @@
     const sendBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
     const sendModel = s.composerModel || null;
     const sendEffort = s.composerEffort || null;
+    const sendServiceTier = s.composerServiceTier !== null
+      ? s.composerServiceTier
+      : (s.conv && s.conv.serviceTier) || null;
 
     update(convId, cur => ({
       ...cur,
@@ -1231,6 +1237,7 @@
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
       if (sendEffort)  body.effort  = sendEffort;
+      if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/message', {
         method: 'POST',
         body,
@@ -1249,6 +1256,7 @@
             backend: sendBackend || cur.conv.backend,
             model:   sendModel   !== null ? sendModel   : cur.conv.model,
             effort:  sendEffort  !== null ? sendEffort  : cur.conv.effort,
+            serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
           } : cur.conv,
         }));
         bumpConvListActivity(convId, authoritativeUser.timestamp);
@@ -1318,6 +1326,9 @@
     const sendBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
     const sendModel = s.composerModel || null;
     const sendEffort = s.composerEffort || null;
+    const sendServiceTier = s.composerServiceTier !== null
+      ? s.composerServiceTier
+      : (s.conv && s.conv.serviceTier) || null;
 
     update(convId, cur => ({
       ...cur,
@@ -1338,6 +1349,7 @@
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
       if (sendEffort)  body.effort  = sendEffort;
+      if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       await AgentApi.conv.setGoal(convId, body);
       update(convId, cur => ({
         ...cur,
@@ -1347,6 +1359,7 @@
           backend: sendBackend || cur.conv.backend,
           model:   sendModel   !== null ? sendModel   : cur.conv.model,
           effort:  sendEffort  !== null ? sendEffort  : cur.conv.effort,
+          serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
         } : cur.conv,
       }));
       clearDraft(convId);
@@ -1526,7 +1539,11 @@
   function setComposerBackend(convId, value){
     const s = states.get(convId);
     if (!s || s.composerBackend === value) return;
-    update(convId, { composerBackend: value || null, goalMode: value === 'codex' ? s.goalMode : false });
+    update(convId, {
+      composerBackend: value || null,
+      composerServiceTier: value === 'codex' ? s.composerServiceTier : null,
+      goalMode: value === 'codex' ? s.goalMode : false,
+    });
   }
   function setComposerCliProfile(convId, profileId, backendId){
     const s = states.get(convId);
@@ -1536,6 +1553,7 @@
       composerBackend: backendId || null,
       composerModel: null,
       composerEffort: null,
+      composerServiceTier: backendId === 'codex' ? s.composerServiceTier : null,
       goalMode: backendId === 'codex' ? s.goalMode : false,
     });
   }
@@ -1548,6 +1566,12 @@
     const s = states.get(convId);
     if (!s || s.composerEffort === value) return;
     update(convId, { composerEffort: value || null });
+  }
+  function setComposerServiceTier(convId, value){
+    const s = states.get(convId);
+    const next = value === 'fast' ? 'fast' : (value === 'default' ? 'default' : null);
+    if (!s || s.composerServiceTier === next) return;
+    update(convId, { composerServiceTier: next });
   }
 
   /* ── Message queue ───────────────────────────────────────────────────────
@@ -1923,6 +1947,9 @@
     const sendBackend = s.composerBackend || (s.conv && s.conv.backend) || '';
     const sendModel = s.composerModel || null;
     const sendEffort = s.composerEffort || null;
+    const sendServiceTier = s.composerServiceTier !== null
+      ? s.composerServiceTier
+      : (s.conv && s.conv.serviceTier) || null;
 
     update(convId, cur => ({
       ...cur,
@@ -1943,6 +1970,7 @@
       if (sendBackend) body.backend = sendBackend;
       if (sendModel)   body.model   = sendModel;
       if (sendEffort)  body.effort  = sendEffort;
+      if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
       const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/message', {
         method: 'POST',
         body,
@@ -1953,6 +1981,14 @@
         update(convId, cur => ({
           ...cur,
           messages: cur.messages.map(m => m.id === tempUserId ? authoritativeUser : m),
+          conv: cur.conv ? {
+            ...cur.conv,
+            cliProfileId: sendCliProfileId || cur.conv.cliProfileId,
+            backend: sendBackend || cur.conv.backend,
+            model: sendModel !== null ? sendModel : cur.conv.model,
+            effort: sendEffort !== null ? sendEffort : cur.conv.effort,
+            serviceTier: sendServiceTier === 'fast' ? 'fast' : undefined,
+          } : cur.conv,
         }));
         bumpConvListActivity(convId, authoritativeUser.timestamp);
       }
@@ -2209,6 +2245,7 @@
     setComposerBackend,
     setComposerModel,
     setComposerEffort,
+    setComposerServiceTier,
     addAttachments,
     removeAttachment,
     ocrAttachment,

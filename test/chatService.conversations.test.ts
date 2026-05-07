@@ -185,6 +185,62 @@ describe('createConversation', () => {
     expect(conv.cliProfileId).toBe(profile.id);
   });
 
+  test('stores Codex Fast service tier and exposes it on get/list', async () => {
+    const conv = await service.createConversation(
+      'Fast Codex',
+      '/tmp/fast-codex',
+      'codex',
+      undefined,
+      undefined,
+      undefined,
+      'fast',
+    );
+
+    expect(conv.serviceTier).toBe('fast');
+    expect((await service.getConversation(conv.id))?.serviceTier).toBe('fast');
+    expect((await service.listConversations()).find((item) => item.id === conv.id)?.serviceTier).toBe('fast');
+  });
+
+  test('applies defaultServiceTier only to Codex conversations and allows explicit default override', async () => {
+    const settings = await service.getSettings();
+    await service.saveSettings({
+      ...settings,
+      defaultBackend: 'codex',
+      defaultCliProfileId: undefined,
+      defaultServiceTier: 'fast',
+    });
+
+    const codexDefault = await service.createConversation('Default Fast', '/tmp/default-fast', 'codex');
+    const codexExplicitDefault = await service.createConversation(
+      'Explicit Default',
+      '/tmp/explicit-default',
+      'codex',
+      undefined,
+      undefined,
+      undefined,
+      null,
+    );
+    const claude = await service.createConversation('Claude Ignores Fast', '/tmp/claude-fast', 'claude-code');
+
+    expect(codexDefault.serviceTier).toBe('fast');
+    expect(codexExplicitDefault.serviceTier).toBeUndefined();
+    expect(claude.serviceTier).toBeUndefined();
+  });
+
+  test('updates and clears Codex service tier and drops it on backend switch', async () => {
+    const conv = await service.createConversation('Service Tier Update', '/tmp/service-tier-update', 'codex');
+
+    await service.updateConversationServiceTier(conv.id, 'fast');
+    expect((await service.getConversation(conv.id))?.serviceTier).toBe('fast');
+
+    await service.updateConversationServiceTier(conv.id, null);
+    expect((await service.getConversation(conv.id))?.serviceTier).toBeUndefined();
+
+    await service.updateConversationServiceTier(conv.id, 'fast');
+    await service.updateConversationBackend(conv.id, 'claude-code');
+    expect((await service.getConversation(conv.id))?.serviceTier).toBeUndefined();
+  });
+
   test('migrates existing vendor-only conversations to server-configured profiles on initialize', async () => {
     const migrateTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-cli-profile-migrate-'));
     try {
