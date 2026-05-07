@@ -3460,9 +3460,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   router.post('/workspaces/:hash/memory/reviews', csrfGuard, async (req: Request, res: Response) => {
     try {
       const hash = param(req, 'hash');
-      const run = await memoryMcp.createMemoryReviewRun(hash, { source: 'manual', replaceExisting: true });
+      const run = await memoryMcp.startMemoryReviewRun(hash, { source: 'manual', replaceExisting: true });
       const status = await chatService.getMemoryReviewStatus(hash);
-      res.json({ ok: true, run, status });
+      res.status(run.status === 'running' ? 202 : 200).json({ ok: true, run, status });
     } catch (err: unknown) {
       return res.status(memoryConsolidationErrorStatus(err)).json({ error: (err as Error).message });
     }

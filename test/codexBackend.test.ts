@@ -1320,6 +1320,44 @@ describe('CodexAdapter.runOneShot', () => {
     await expect(resultPromise).rejects.toThrow('Codex CLI is not installed');
   });
 
+  test('rejects as timeout when codex exec exits cleanly after SIGTERM', async () => {
+    let resultPromise!: Promise<string>;
+    let killedWithSigterm = false;
+
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: () => ({
+          on: () => {},
+          stdout: { on: () => {} },
+          stderr: { on: () => {} },
+          stdin: { write: () => true, end: () => {} },
+          kill: () => {},
+          killed: false,
+          exitCode: null,
+        }),
+        execFile: (_cmd: string, _args: string[], _opts: object, cb: (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void) => ({
+          stdin: { end: () => {} },
+          kill: (signal?: NodeJS.Signals) => {
+            if (signal === 'SIGTERM') {
+              killedWithSigterm = true;
+              setTimeout(() => cb(null, '', ''), 0);
+            }
+            return true;
+          },
+        }),
+      }));
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('p', { workingDir: '/tmp', timeoutMs: 10 });
+    });
+
+    const assertion = expect(resultPromise).rejects.toThrow(/timeout after 0\.01s/);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await assertion;
+    expect(killedWithSigterm).toBe(true);
+    jest.dontMock('child_process');
+  });
+
   test('forwards model option as -m argument to codex exec', async () => {
     let capturedArgs: string[] | null = null;
     let resultPromise!: Promise<string>;

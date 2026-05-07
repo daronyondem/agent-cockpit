@@ -2287,11 +2287,34 @@ export class CodexAdapter extends BaseBackendAdapter {
     args.push(prompt);
 
     return new Promise<string>((resolve, reject) => {
-      const child = execFile(
+      let timedOut = false;
+      let killTimer: NodeJS.Timeout | null = null;
+      let child: ChildProcess;
+      const timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        try {
+          child.kill('SIGTERM');
+        } catch {}
+        killTimer = setTimeout(() => {
+          try {
+            child.kill('SIGKILL');
+          } catch {}
+        }, PROCESS_KILL_GRACE_MS);
+        killTimer.unref?.();
+      }, timeoutMs);
+      timeoutTimer.unref?.();
+
+      child = execFile(
         runtime.command,
         args,
-        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, env: runtime.env },
+        { maxBuffer: 4 * 1024 * 1024, env: runtime.env },
         (err, stdout, stderr) => {
+          clearTimeout(timeoutTimer);
+          if (killTimer) clearTimeout(killTimer);
+          if (timedOut) {
+            reject(new Error(`codex exec failed: Process killed (timeout after ${timeoutMs / 1000}s)`));
+            return;
+          }
           if (err) {
             const execErr = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string };
             if (execErr.code === 'ENOENT') {

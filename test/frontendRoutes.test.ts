@@ -122,6 +122,8 @@ describe('frontend routes', () => {
     expect(reviewSrc).toContain('No open review items.');
     expect(reviewSrc).toContain('MemoryReviewButtonProgress label="Applying..."');
     expect(reviewSrc).toContain('Applied');
+    expect(reviewSrc).toContain('applyDone={!!applyDone[item.id]}');
+    expect(reviewSrc).toContain("busy && !applyBusy");
     expect(reviewSrc).toContain('!applyBusy && !regenerateBusy');
     expect(reviewSrc).toContain('Regenerating draft...');
     expect(reviewSrc).toContain('Regenerated');
