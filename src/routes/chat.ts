@@ -40,16 +40,41 @@ import {
   getKbAutoDreamState,
   validateKbAutoDreamConfig,
 } from '../services/knowledgeBase/autoDream';
+import {
+  MemoryReviewScheduler,
+  validateMemoryReviewScheduleConfig,
+} from '../services/memoryReview';
 import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
-import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, StreamJobRuntimeInfo, SendMessageResult } from '../types';
+import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, MemoryReviewUpdateEvent, StreamJobRuntimeInfo, SendMessageResult, MemoryStatus, MemoryType, MemoryConsolidationAction, MemoryConsolidationDraft } from '../types';
 import type { WsFunctions } from '../ws';
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
 function param(req: Request, name: string): string {
   const val = req.params[name];
   return Array.isArray(val) ? val[0] : val;
+}
+
+function queryStrings(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => queryStrings(item));
+  }
+  if (typeof value !== 'string') return [];
+  return value.split(',').map((item) => item.trim()).filter(Boolean);
+}
+
+function memoryConsolidationErrorStatus(err: unknown): number {
+  const message = (err as Error).message || '';
+  if (message.includes('disabled')) return 403;
+  if (message.includes('still generating')) return 409;
+  if (message.startsWith('Only ')
+    || message.startsWith('Cannot ')
+    || message.startsWith('Referenced ')
+    || message.startsWith('draft.')
+    || message.startsWith('Memory CLI output must')) return 400;
+  if (message.startsWith('Memory CLI failed') || message.startsWith('Memory CLI returned')) return 502;
+  return 500;
 }
 
 async function fileSummary(filePath: string): Promise<{ exists: boolean; bytes: number }> {
@@ -796,6 +821,17 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     });
   }
 
+  function broadcastMemoryReviewUpdate(hash: string, frame: MemoryReviewUpdateEvent): void {
+    if (!wsFns) return;
+    const sent = new Set<string>();
+    wsFns.forEachConnected((convId) => {
+      if (chatService.getWorkspaceHashForConv(convId) !== hash) return;
+      if (sent.has(convId)) return;
+      sent.add(convId);
+      wsFns!.send(convId, frame);
+    });
+  }
+
   // Per-workspace task queue registry. Shared between the ingestion and
   // digestion services so `Settings.knowledgeBase.cliConcurrency` is a
   // unified budget across both pipelines per workspace. Folder ops use
@@ -844,16 +880,18 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   });
   const kbDreamScheduler = new KbDreamScheduler({ chatService, kbDreaming });
 
-  // Memory MCP server — exposes `memory_note` tool to non-Claude CLIs via the
-  // stdio stub in `src/services/memoryMcp/stub.cjs`.  The router is mounted
+  // Memory MCP server — exposes `memory_search` and `memory_note` tools via
+  // the stdio stub in `src/services/memoryMcp/stub.cjs`.  The router is mounted
   // at `/mcp/memory/notes` below; the `issue`/`revoke` helpers are used by
   // the Kiro backend wiring to hand out per-session bearer tokens.
   const memoryMcp: MemoryMcpServer = createMemoryMcpServer({
     chatService,
     backendRegistry,
     emitMemoryUpdate: broadcastMemoryUpdate,
+    emitMemoryReviewUpdate: broadcastMemoryReviewUpdate,
   });
   router.use('/mcp', memoryMcp.router);
+  const memoryReviewScheduler = new MemoryReviewScheduler({ chatService, runner: memoryMcp });
 
   function fingerprintMemoryFiles(snapshot: { files: Array<{ filename: string; content: string }> }): Map<string, string> {
     const fp = new Map<string, string>();
@@ -1259,6 +1297,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
             failedItems: counters.rawByStatus.failed,
           };
         }
+      }
+      if (await chatService.getWorkspaceMemoryEnabled(conv.workspaceHash)) {
+        (conv as unknown as Record<string, unknown>).memoryReview = await chatService.getMemoryReviewStatus(conv.workspaceHash);
       }
 
       res.json(conv);
@@ -1779,7 +1820,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       const memoryMcpAddendum = needsMemoryMcp
         ? [
             '# Persistent memory',
-            'You have access to a `memory_note` MCP tool (from the `agent-cockpit-memory` server). Call it whenever you learn something worth remembering across sessions:',
+            'You have access to `memory_search` and `memory_note` MCP tools (from the `agent-cockpit-memory` server). Use `memory_search` when prior preferences, feedback, project context, or references may affect the answer. Call `memory_note` whenever you learn something worth remembering across sessions:',
             '- **user** — the user\'s role, expertise, preferences, or responsibilities',
             '- **feedback** — a correction or confirmation the user has given you (include the reason if known)',
             '- **project** — ongoing work context, goals, deadlines, constraints, or stakeholders',
@@ -2300,7 +2341,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       ? await chatService.getWorkspaceMemoryEnabled(wsHashForSend)
       : false;
     // All memory-enabled sessions get the Memory MCP stub so they can
-    // persist notes via `memory_note`. Kiro spawns it over ACP's
+    // search memory and persist notes. Kiro spawns it over ACP's
     // `mcpServers`; Claude Code spawns it via `--mcp-config`.
     const needsMemoryMcp = memoryEnabledForSend && !!wsHashForSend;
     const kbEnabledForSend = wsHashForSend
@@ -2336,15 +2377,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       const settings = await chatService.getSettings();
       const globalPrompt = settings.systemPrompt || '';
       const wsInstructions = wsHashForSend ? (await chatService.getWorkspaceInstructions(wsHashForSend)) || '' : '';
-      // Append an addendum that teaches the CLI to call the `memory_note`
-      // MCP tool when it learns something worth remembering. Runs for
+      // Append an addendum that teaches the CLI to use memory MCP tools
+      // for targeted recall and durable writes. Runs for
       // Claude Code too: its native `#` flow covers explicit saves, but
       // `memory_note` captures incidental durable facts mentioned
       // conversationally.
       const memoryMcpAddendum = needsMemoryMcp
         ? [
             '# Persistent memory',
-            'You have access to a `memory_note` MCP tool (from the `agent-cockpit-memory` server). Call it whenever you learn something worth remembering across sessions:',
+            'You have access to `memory_search` and `memory_note` MCP tools (from the `agent-cockpit-memory` server). Use `memory_search` when prior preferences, feedback, project context, or references may affect the answer. Call `memory_note` whenever you learn something worth remembering across sessions:',
             '- **user** — the user\'s role, expertise, preferences, or responsibilities',
             '- **feedback** — a correction or confirmation the user has given you (include the reason if known)',
             '- **project** — ongoing work context, goals, deadlines, constraints, or stakeholders',
@@ -3247,6 +3288,132 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   });
 
+  router.get('/workspaces/:hash/memory/search', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
+      if (!query) return res.status(400).json({ error: 'query is required' });
+
+      const enabled = await chatService.getWorkspaceMemoryEnabled(hash);
+      if (!enabled) {
+        return res.json({ enabled, query, results: [] });
+      }
+
+      const rawTypes = queryStrings(req.query.type).concat(queryStrings(req.query.types));
+      const types = rawTypes.filter((item): item is MemoryType =>
+        item === 'user'
+        || item === 'feedback'
+        || item === 'project'
+        || item === 'reference'
+        || item === 'unknown',
+      );
+      const rawStatuses = queryStrings(req.query.status).concat(queryStrings(req.query.statuses));
+      const statuses = rawStatuses.filter((item): item is MemoryStatus =>
+        item === 'active'
+        || item === 'superseded'
+        || item === 'redacted'
+        || item === 'deleted',
+      );
+      const limit = req.query.limit === undefined ? undefined : Number(req.query.limit);
+
+      const results = await chatService.searchWorkspaceMemory(hash, {
+        query,
+        ...(Number.isInteger(limit) ? { limit } : {}),
+        ...(types.length ? { types } : {}),
+        ...(statuses.length ? { statuses } : {}),
+      });
+      return res.json({ enabled, query, results });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/consolidate/propose', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const proposal = await memoryMcp.proposeMemoryConsolidation(hash);
+      return res.json({ ok: true, proposal });
+    } catch (err: unknown) {
+      return res.status(memoryConsolidationErrorStatus(err)).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/consolidate/draft', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const body = (req.body || {}) as { action?: MemoryConsolidationAction };
+      if (!body.action || typeof body.action !== 'object') {
+        return res.status(400).json({ error: 'action must be an object' });
+      }
+      const draft = await memoryMcp.draftMemoryConsolidation(hash, { action: body.action });
+      return res.json({ ok: true, draft });
+    } catch (err: unknown) {
+      return res.status(memoryConsolidationErrorStatus(err)).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/consolidate/apply', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const body = (req.body || {}) as { summary?: string; actions?: MemoryConsolidationAction[] };
+      if (!Array.isArray(body.actions)) {
+        return res.status(400).json({ error: 'actions must be an array' });
+      }
+      const result = await memoryMcp.applyMemoryConsolidation(hash, {
+        summary: typeof body.summary === 'string' ? body.summary : undefined,
+        actions: body.actions,
+      });
+      return res.json(result);
+    } catch (err: unknown) {
+      return res.status(memoryConsolidationErrorStatus(err)).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/consolidate/drafts/apply', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const body = (req.body || {}) as { summary?: string; draft?: MemoryConsolidationDraft };
+      if (!body.draft || typeof body.draft !== 'object' || !Array.isArray(body.draft.operations)) {
+        return res.status(400).json({ error: 'draft.operations must be an array' });
+      }
+      const result = await memoryMcp.applyMemoryConsolidationDraft(hash, {
+        summary: typeof body.summary === 'string' ? body.summary : undefined,
+        draft: body.draft,
+      });
+      return res.json(result);
+    } catch (err: unknown) {
+      return res.status(memoryConsolidationErrorStatus(err)).json({ error: (err as Error).message });
+    }
+  });
+
+  router.put('/workspaces/:hash/memory/entries/restore', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const body = (req.body || {}) as { relPath?: string };
+      const relPath = typeof body.relPath === 'string' ? body.relPath : '';
+      if (!relPath) return res.status(400).json({ error: 'relPath required' });
+
+      const restored = await chatService.restoreMemoryEntry(hash, relPath);
+      if (!restored) return res.status(404).json({ error: 'Entry not found' });
+      const snapshot = await chatService.getWorkspaceMemory(hash);
+
+      broadcastMemoryUpdate(hash, {
+        type: 'memory_update',
+        capturedAt: snapshot?.capturedAt || new Date().toISOString(),
+        fileCount: snapshot?.files.length || 0,
+        changedFiles: [relPath],
+        sourceConversationId: null,
+        displayInChat: false,
+      });
+
+      return res.json({ ok: true, restored, snapshot });
+    } catch (err: unknown) {
+      const msg = (err as Error).message || 'Restore failed';
+      const status = /superseded/i.test(msg) || /traversal/i.test(msg) ? 400 : 500;
+      return res.status(status).json({ error: msg });
+    }
+  });
+
   router.put('/workspaces/:hash/memory/enabled', csrfGuard, async (req: Request, res: Response) => {
     try {
       const { enabled } = req.body as { enabled?: boolean };
@@ -3259,6 +3426,144 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       res.json({ enabled: result });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get('/workspaces/:hash/memory/review-schedule', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const schedule = await chatService.getWorkspaceMemoryReviewSchedule(hash);
+      const scheduleUpdatedAt = await chatService.getWorkspaceMemoryReviewScheduleUpdatedAt(hash);
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ schedule, scheduleUpdatedAt, status });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.put('/workspaces/:hash/memory/review-schedule', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const body = (req.body || {}) as { schedule?: unknown };
+      const result = validateMemoryReviewScheduleConfig(body.schedule || req.body);
+      if (result.error || !result.config) return res.status(400).json({ error: result.error || 'Invalid schedule' });
+      const schedule = await chatService.setWorkspaceMemoryReviewSchedule(hash, result.config);
+      if (!schedule) return res.status(404).json({ error: 'Workspace not found' });
+      const scheduleUpdatedAt = await chatService.getWorkspaceMemoryReviewScheduleUpdatedAt(hash);
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ schedule, scheduleUpdatedAt, status });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/reviews', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const run = await memoryMcp.createMemoryReviewRun(hash, { source: 'manual', replaceExisting: true });
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ ok: true, run, status });
+    } catch (err: unknown) {
+      return res.status(memoryConsolidationErrorStatus(err)).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get('/workspaces/:hash/memory/reviews', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const pendingOnly = req.query.pending === '1' || req.query.pending === 'true';
+      let runs = await chatService.listMemoryReviewRuns(hash);
+      if (pendingOnly) {
+        runs = runs.filter((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
+      }
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ status, runs });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get('/workspaces/:hash/memory/reviews/pending', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const runs = (await chatService.listMemoryReviewRuns(hash))
+        .filter((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ status, runs });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get('/workspaces/:hash/memory/reviews/:runId', async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const run = await chatService.getMemoryReviewRun(hash, param(req, 'runId'));
+      if (!run) return res.status(404).json({ error: 'Memory Review not found' });
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ status, run });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/reviews/:runId/actions/:itemId/apply', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const run = await memoryMcp.applyMemoryReviewSafeAction(hash, param(req, 'runId'), param(req, 'itemId'));
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ ok: true, status, run });
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/reviews/:runId/actions/:itemId/discard', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const run = await memoryMcp.discardMemoryReviewItem(hash, param(req, 'runId'), param(req, 'itemId'));
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ ok: true, status, run });
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/reviews/:runId/drafts/:draftId/apply', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const run = await memoryMcp.applyMemoryReviewDraft(hash, param(req, 'runId'), param(req, 'draftId'));
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ ok: true, status, run });
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/reviews/:runId/drafts/:draftId/discard', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const run = await memoryMcp.discardMemoryReviewItem(hash, param(req, 'runId'), param(req, 'draftId'));
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ ok: true, status, run });
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
+    }
+  });
+
+  router.post('/workspaces/:hash/memory/reviews/:runId/drafts/:draftId/regenerate', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'hash');
+      const run = await memoryMcp.regenerateMemoryReviewDraft(hash, param(req, 'runId'), param(req, 'draftId'));
+      const status = await chatService.getMemoryReviewStatus(hash);
+      res.json({ ok: true, status, run });
+    } catch (err: unknown) {
+      const message = (err as Error).message;
+      res.status(/not found/i.test(message) ? 404 : memoryConsolidationErrorStatus(err)).json({ error: message });
     }
   });
 
@@ -4531,6 +4836,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
     streamSupervisor.abortAndDetachAllRuntime();
     kbDreamScheduler.stop();
+    memoryReviewScheduler.stop();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
     cliProfileAuth.shutdown();
@@ -4542,5 +4848,5 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     wsFns = fns;
   }
 
-  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, kbDreamScheduler };
+  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, kbDreamScheduler, memoryReviewScheduler };
 }

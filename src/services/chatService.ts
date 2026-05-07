@@ -31,6 +31,18 @@ import type {
   Settings,
   MemorySnapshot,
   MemoryFile,
+  MemoryEntryMetadata,
+  MemoryMetadataIndex,
+  MemorySearchOptions,
+  MemorySearchResult,
+  MemoryScope,
+  MemorySource,
+  MemoryStatus,
+  MemoryRedaction,
+  MemoryConsolidationAudit,
+  MemoryReviewRun,
+  MemoryReviewScheduleConfig,
+  ConversationMemoryReviewStatus,
   EffortLevel,
   ServiceTier,
   KbState,
@@ -57,6 +69,7 @@ import {
 } from './knowledgeBase/db';
 import { computeDigestProgress } from './knowledgeBase/digest';
 import { DEFAULT_KB_AUTO_DREAM_CONFIG, normalizeKbAutoDreamConfig } from './knowledgeBase/autoDream';
+import { DEFAULT_MEMORY_REVIEW_SCHEDULE, normalizeMemoryReviewScheduleConfig } from './memoryReview';
 import { KbVectorStore } from './knowledgeBase/vectorStore';
 import { resolveConfig, type EmbeddingConfig } from './knowledgeBase/embeddings';
 import { atomicWriteFile } from '../utils/atomicWrite';
@@ -295,6 +308,112 @@ function slugify(input: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 40);
   return cleaned || 'note';
+}
+
+function memoryEntryId(filename: string): string {
+  const digest = crypto.createHash('sha256').update(filename).digest('hex').slice(0, 16);
+  return `mem_${digest}`;
+}
+
+function memoryFileFingerprint(file: MemoryFile): string {
+  const metadata = file.metadata;
+  const payload = {
+    filename: file.filename,
+    type: file.type,
+    name: file.name,
+    description: file.description,
+    content: file.content,
+    status: metadata?.status || 'active',
+    supersededBy: metadata?.supersededBy || null,
+    supersedes: metadata?.supersedes || [],
+    redaction: metadata?.redaction || [],
+  };
+  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 24);
+}
+
+function validMemoryReviewRunId(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function normalizeMemorySource(value: unknown, fallback: MemorySource): MemorySource {
+  if (value === 'cli-capture' || value === 'memory-note' || value === 'session-extraction') return value;
+  return fallback;
+}
+
+function memorySourceFromFilename(filename: string): MemorySource {
+  if (filename.startsWith('notes/session_')) return 'session-extraction';
+  if (filename.startsWith('notes/')) return 'memory-note';
+  return 'cli-capture';
+}
+
+function normalizeMemoryStatus(value: unknown): MemoryStatus {
+  if (value === 'active' || value === 'superseded' || value === 'redacted' || value === 'deleted') return value;
+  return 'active';
+}
+
+function normalizeMemoryScope(value: unknown): MemoryScope {
+  if (value === 'user') return 'user';
+  return 'workspace';
+}
+
+function normalizeStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((item): item is string => typeof item === 'string' && item.length > 0);
+  return strings.length ? strings : undefined;
+}
+
+function normalizeMemoryRedaction(value: unknown): Array<{ kind: string; reason: string }> | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const redaction = value
+    .filter((item): item is { kind: string; reason: string } =>
+      !!item
+      && typeof item === 'object'
+      && typeof (item as { kind?: unknown }).kind === 'string'
+      && typeof (item as { reason?: unknown }).reason === 'string',
+    )
+    .map((item) => ({ kind: item.kind, reason: item.reason }));
+  return redaction.length ? redaction : undefined;
+}
+
+const MEMORY_SEARCH_STOPWORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'by', 'for', 'from', 'has', 'have',
+  'in', 'is', 'it', 'of', 'on', 'or', 'that', 'the', 'this', 'to', 'was', 'with',
+]);
+
+function tokenizeMemorySearch(value: string): string[] {
+  const matches = value.toLowerCase().match(/[a-z0-9][a-z0-9_-]*/g) || [];
+  return matches
+    .map((token) => token.replace(/^_+|_+$/g, ''))
+    .filter((token) => token.length >= 2 && !MEMORY_SEARCH_STOPWORDS.has(token));
+}
+
+function memorySearchText(file: MemoryFile): string {
+  return [
+    file.name || '',
+    file.name || '',
+    file.description || '',
+    file.description || '',
+    file.description || '',
+    file.type,
+    file.filename,
+    file.content || '',
+  ].join('\n');
+}
+
+function memorySearchSnippet(content: string, queryTerms: string[]): string {
+  const compact = content.replace(/\s+/g, ' ').trim();
+  if (!compact) return '';
+  const lower = compact.toLowerCase();
+  let index = -1;
+  for (const term of queryTerms) {
+    const found = lower.indexOf(term.toLowerCase());
+    if (found !== -1 && (index === -1 || found < index)) index = found;
+  }
+  const start = index === -1 ? 0 : Math.max(0, index - 90);
+  const end = Math.min(compact.length, start + 260);
+  const prefix = start > 0 ? '...' : '';
+  const suffix = end < compact.length ? '...' : '';
+  return `${prefix}${compact.slice(start, end)}${suffix}`;
 }
 
 interface ConvLookupResult {
@@ -1780,6 +1899,10 @@ export class ChatService {
     return path.join(this._memoryDir(hash), 'snapshot.json');
   }
 
+  private _memoryStatePath(hash: string): string {
+    return path.join(this._memoryDir(hash), 'state.json');
+  }
+
   private _memoryFilesDir(hash: string): string {
     return path.join(this._memoryDir(hash), 'files');
   }
@@ -1790,6 +1913,143 @@ export class ChatService {
 
   private _memoryNotesDir(hash: string): string {
     return path.join(this._memoryFilesDir(hash), 'notes');
+  }
+
+  private _memoryReviewsDir(hash: string): string {
+    return path.join(this._memoryDir(hash), 'reviews');
+  }
+
+  private _memoryReviewRunPath(hash: string, runId: string): string {
+    return path.join(this._memoryReviewsDir(hash), `${runId}.json`);
+  }
+
+  private _emptyMemoryMetadataIndex(): MemoryMetadataIndex {
+    return {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      entries: {},
+    };
+  }
+
+  private _normalizeMemoryMetadata(
+    raw: unknown,
+    fallbackFilename: string,
+    fallbackSource: MemorySource,
+    now: string,
+  ): MemoryEntryMetadata {
+    const candidate = raw && typeof raw === 'object'
+      ? raw as Partial<MemoryEntryMetadata>
+      : {};
+    const filename = typeof candidate.filename === 'string' && candidate.filename
+      ? candidate.filename
+      : fallbackFilename;
+    const createdAt = typeof candidate.createdAt === 'string' && candidate.createdAt
+      ? candidate.createdAt
+      : now;
+    const updatedAt = typeof candidate.updatedAt === 'string' && candidate.updatedAt
+      ? candidate.updatedAt
+      : createdAt;
+    const confidence = typeof candidate.confidence === 'number' && Number.isFinite(candidate.confidence)
+      ? candidate.confidence
+      : undefined;
+    return {
+      entryId: typeof candidate.entryId === 'string' && candidate.entryId
+        ? candidate.entryId
+        : memoryEntryId(filename),
+      filename,
+      status: normalizeMemoryStatus(candidate.status),
+      scope: normalizeMemoryScope(candidate.scope),
+      source: normalizeMemorySource(candidate.source, fallbackSource),
+      createdAt,
+      updatedAt,
+      ...(typeof candidate.sourceConversationId === 'string' && candidate.sourceConversationId
+        ? { sourceConversationId: candidate.sourceConversationId }
+        : {}),
+      ...(normalizeStringArray(candidate.supersedes) ? { supersedes: normalizeStringArray(candidate.supersedes) } : {}),
+      ...(typeof candidate.supersededBy === 'string' && candidate.supersededBy
+        ? { supersededBy: candidate.supersededBy }
+        : {}),
+      ...(confidence !== undefined ? { confidence } : {}),
+      ...(normalizeMemoryRedaction(candidate.redaction) ? { redaction: normalizeMemoryRedaction(candidate.redaction) } : {}),
+    };
+  }
+
+  private async _readMemoryMetadataIndex(hash: string): Promise<MemoryMetadataIndex> {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(await fsp.readFile(this._memoryStatePath(hash), 'utf8'));
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return this._emptyMemoryMetadataIndex();
+      throw err;
+    }
+
+    const now = new Date().toISOString();
+    const entries: Record<string, MemoryEntryMetadata> = {};
+    const rawEntries = raw && typeof raw === 'object'
+      ? (raw as { entries?: unknown }).entries
+      : null;
+    if (rawEntries && typeof rawEntries === 'object') {
+      for (const [filename, entry] of Object.entries(rawEntries as Record<string, unknown>)) {
+        const normalized = this._normalizeMemoryMetadata(entry, filename, memorySourceFromFilename(filename), now);
+        entries[normalized.filename] = normalized;
+      }
+    }
+
+    return {
+      version: 1,
+      updatedAt: raw && typeof raw === 'object' && typeof (raw as { updatedAt?: unknown }).updatedAt === 'string'
+        ? (raw as { updatedAt: string }).updatedAt
+        : now,
+      entries,
+    };
+  }
+
+  private async _writeMemoryMetadataIndex(hash: string, index: MemoryMetadataIndex): Promise<void> {
+    await fsp.mkdir(this._memoryDir(hash), { recursive: true });
+    await atomicWriteFile(this._memoryStatePath(hash), JSON.stringify(index, null, 2));
+  }
+
+  private async _attachMemoryMetadata(
+    hash: string,
+    files: MemoryFile[],
+    persist: boolean,
+  ): Promise<MemoryFile[]> {
+    if (files.length === 0) {
+      if (persist) {
+        await this._writeMemoryMetadataIndex(hash, this._emptyMemoryMetadataIndex());
+      }
+      return files;
+    }
+
+    const existing = await this._readMemoryMetadataIndex(hash);
+    const now = new Date().toISOString();
+    const entries: Record<string, MemoryEntryMetadata> = {};
+    const enriched = files.map((file) => {
+      const source = normalizeMemorySource(file.source, 'cli-capture');
+      const previous = existing.entries[file.filename] || file.metadata;
+      const metadata = this._normalizeMemoryMetadata(previous, file.filename, source, now);
+      const nextMetadata: MemoryEntryMetadata = {
+        ...metadata,
+        filename: file.filename,
+        source,
+      };
+      entries[file.filename] = nextMetadata;
+      return {
+        ...file,
+        source,
+        metadata: nextMetadata,
+      };
+    });
+
+    if (persist) {
+      await this._writeMemoryMetadataIndex(hash, {
+        version: 1,
+        updatedAt: now,
+        entries,
+      });
+    }
+
+    return enriched;
   }
 
   /**
@@ -1909,9 +2169,10 @@ export class ChatService {
     // Merge preserved notes back into the snapshot.
     const notes = await this._readNotesFromDisk(hash);
 
+    const mergedFiles = await this._attachMemoryMetadata(hash, [...claudeFiles, ...notes], true);
     const merged: MemorySnapshot = {
       ...snapshot,
-      files: [...claudeFiles, ...notes],
+      files: mergedFiles,
     };
 
     await atomicWriteFile(
@@ -1942,12 +2203,13 @@ export class ChatService {
     const notes = await this._readNotesFromDisk(hash);
     if (!snapshot) {
       if (notes.length === 0) return null;
+      const files = await this._attachMemoryMetadata(hash, notes, false);
       return {
         capturedAt: new Date().toISOString(),
         sourceBackend: 'memory-note',
         sourcePath: null,
         index: '',
-        files: notes,
+        files,
       };
     }
 
@@ -1956,7 +2218,79 @@ export class ChatService {
     const claudeFiles = (snapshot.files || []).filter(
       (f) => (f.source || 'cli-capture') === 'cli-capture',
     );
-    return { ...snapshot, files: [...claudeFiles, ...notes] };
+    const files = await this._attachMemoryMetadata(hash, [...claudeFiles, ...notes], false);
+    return { ...snapshot, files };
+  }
+
+  async searchWorkspaceMemory(
+    hash: string,
+    options: MemorySearchOptions,
+  ): Promise<MemorySearchResult[]> {
+    const query = typeof options.query === 'string' ? options.query.trim() : '';
+    const queryTerms = [...new Set(tokenizeMemorySearch(query))];
+    if (queryTerms.length === 0) return [];
+
+    const limit = Number.isInteger(options.limit)
+      ? Math.max(1, Math.min(20, options.limit || 5))
+      : 5;
+    const allowedTypes = options.types && options.types.length
+      ? new Set(options.types)
+      : null;
+    const allowedStatuses = options.statuses && options.statuses.length
+      ? new Set(options.statuses)
+      : new Set<MemoryStatus>(['active', 'redacted']);
+
+    const snapshot = await this.getWorkspaceMemory(hash);
+    const files = (snapshot?.files || [])
+      .filter((file) => file.metadata)
+      .filter((file) => allowedStatuses.has(file.metadata!.status))
+      .filter((file) => !allowedTypes || allowedTypes.has(file.type));
+    if (files.length === 0) return [];
+
+    const docs = files.map((file) => {
+      const tokens = tokenizeMemorySearch(memorySearchText(file));
+      const counts = new Map<string, number>();
+      for (const token of tokens) {
+        counts.set(token, (counts.get(token) || 0) + 1);
+      }
+      return { file, tokens, counts };
+    });
+    const avgLen = docs.reduce((sum, doc) => sum + doc.tokens.length, 0) / Math.max(1, docs.length);
+    const k1 = 1.2;
+    const b = 0.75;
+
+    const scored = docs.map((doc) => {
+      let score = 0;
+      for (const term of queryTerms) {
+        const tf = doc.counts.get(term) || 0;
+        if (tf === 0) continue;
+        const df = docs.reduce((count, candidate) => count + (candidate.counts.has(term) ? 1 : 0), 0);
+        const idf = Math.log(1 + (docs.length - df + 0.5) / (df + 0.5));
+        const lenNorm = k1 * (1 - b + b * (doc.tokens.length / Math.max(1, avgLen)));
+        score += idf * ((tf * (k1 + 1)) / (tf + lenNorm));
+      }
+      return { ...doc, score };
+    })
+      .filter((doc) => doc.score > 0)
+      .sort((a, b) => b.score - a.score || a.file.filename.localeCompare(b.file.filename))
+      .slice(0, limit);
+
+    return scored.map((doc) => {
+      const metadata = doc.file.metadata!;
+      return {
+        filename: doc.file.filename,
+        entryId: metadata.entryId,
+        name: doc.file.name,
+        description: doc.file.description,
+        type: doc.file.type,
+        source: normalizeMemorySource(doc.file.source, memorySourceFromFilename(doc.file.filename)),
+        status: metadata.status,
+        score: Math.round(doc.score * 1000) / 1000,
+        snippet: memorySearchSnippet(doc.file.content, queryTerms),
+        content: doc.file.content,
+        metadata,
+      };
+    });
   }
 
   /**
@@ -2000,6 +2334,185 @@ export class ChatService {
     await this._refreshSnapshotIndex(hash);
 
     return `notes/${name}`;
+  }
+
+  /**
+   * Replace an existing Agent Cockpit-owned note entry in place. Claude
+   * capture files are immutable from this path because the next native
+   * capture can rewrite that subtree.
+   */
+  async replaceMemoryNoteEntry(hash: string, relPath: string, content: string): Promise<boolean> {
+    if (!relPath.startsWith('notes/')) {
+      throw new Error('Only notes entries can be replaced');
+    }
+    if (!relPath.endsWith('.md')) {
+      throw new Error('Only .md entries can be replaced');
+    }
+
+    const notesDir = this._memoryNotesDir(hash);
+    const resolved = path.resolve(this._memoryFilesDir(hash), relPath);
+    if (!resolved.startsWith(path.resolve(notesDir) + path.sep)) {
+      throw new Error('Path traversal rejected');
+    }
+
+    try {
+      await fsp.access(resolved);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+      throw err;
+    }
+
+    await atomicWriteFile(resolved, content);
+    await this._refreshSnapshotIndex(hash);
+    return true;
+  }
+
+  /**
+   * Restore a superseded entry to active state and remove its entry ID
+   * from replacement entries' `supersedes[]` lists.
+   */
+  async restoreMemoryEntry(hash: string, relPath: string): Promise<MemoryEntryMetadata | null> {
+    const snapshot = await this.getWorkspaceMemory(hash);
+    if (!snapshot || !snapshot.files.length) return null;
+
+    const existing = await this._readMemoryMetadataIndex(hash);
+    const now = new Date().toISOString();
+    const entries: Record<string, MemoryEntryMetadata> = {};
+    for (const file of snapshot.files) {
+      const source = normalizeMemorySource(file.source, memorySourceFromFilename(file.filename));
+      const metadata = this._normalizeMemoryMetadata(
+        existing.entries[file.filename] || file.metadata,
+        file.filename,
+        source,
+        now,
+      );
+      entries[file.filename] = {
+        ...metadata,
+        filename: file.filename,
+        source,
+      };
+    }
+
+    const current = entries[relPath];
+    if (!current) return null;
+    if (current.status !== 'superseded') {
+      throw new Error('Only superseded memory entries can be restored');
+    }
+
+    const { supersededBy: _supersededBy, ...restoredBase } = current;
+    const restored = this._normalizeMemoryMetadata(
+      {
+        ...restoredBase,
+        status: 'active',
+        updatedAt: now,
+      },
+      current.filename,
+      current.source,
+      now,
+    );
+    entries[relPath] = restored;
+
+    for (const [filename, entry] of Object.entries(entries)) {
+      if (filename === relPath || !entry.supersedes?.includes(current.entryId)) continue;
+      const nextSupersedes = entry.supersedes.filter((entryId) => entryId !== current.entryId);
+      const { supersedes: _supersedes, ...entryBase } = entry;
+      entries[filename] = this._normalizeMemoryMetadata(
+        {
+          ...entryBase,
+          ...(nextSupersedes.length ? { supersedes: nextSupersedes } : {}),
+          updatedAt: now,
+        },
+        entry.filename,
+        entry.source,
+        now,
+      );
+    }
+
+    await this._writeMemoryMetadataIndex(hash, {
+      version: 1,
+      updatedAt: now,
+      entries,
+    });
+    await this._refreshSnapshotIndex(hash);
+
+    return restored;
+  }
+
+  /**
+   * Patch Agent Cockpit-owned lifecycle metadata for existing memory files.
+   * The markdown files remain untouched; the sidecar and snapshot are
+   * reconciled so future reads expose the same metadata.
+   */
+  async patchMemoryEntryMetadata(
+    hash: string,
+    updates: Array<{
+      filename: string;
+      patch: {
+        status?: MemoryStatus;
+        scope?: MemoryScope;
+        sourceConversationId?: string;
+        supersedes?: string[];
+        supersededBy?: string;
+        confidence?: number;
+        redaction?: MemoryRedaction[];
+      };
+    }>,
+  ): Promise<MemoryEntryMetadata[]> {
+    if (updates.length === 0) return [];
+
+    const snapshot = await this.getWorkspaceMemory(hash);
+    if (!snapshot || !snapshot.files.length) return [];
+
+    const existing = await this._readMemoryMetadataIndex(hash);
+    const now = new Date().toISOString();
+    const entries: Record<string, MemoryEntryMetadata> = {};
+    for (const file of snapshot.files) {
+      const source = normalizeMemorySource(file.source, memorySourceFromFilename(file.filename));
+      const metadata = this._normalizeMemoryMetadata(
+        existing.entries[file.filename] || file.metadata,
+        file.filename,
+        source,
+        now,
+      );
+      entries[file.filename] = {
+        ...metadata,
+        filename: file.filename,
+        source,
+      };
+    }
+
+    const patched: MemoryEntryMetadata[] = [];
+    for (const update of updates) {
+      const current = entries[update.filename];
+      if (!current) continue;
+      const next = this._normalizeMemoryMetadata(
+        {
+          ...current,
+          ...update.patch,
+          entryId: current.entryId,
+          filename: current.filename,
+          source: current.source,
+          createdAt: current.createdAt,
+          updatedAt: now,
+        },
+        current.filename,
+        current.source,
+        now,
+      );
+      entries[update.filename] = next;
+      patched.push(next);
+    }
+
+    if (patched.length === 0) return [];
+
+    await this._writeMemoryMetadataIndex(hash, {
+      version: 1,
+      updatedAt: now,
+      entries,
+    });
+    await this._refreshSnapshotIndex(hash);
+
+    return patched;
   }
 
   /**
@@ -2063,6 +2576,34 @@ export class ChatService {
   }
 
   /**
+   * Persist a reviewable audit record for manual memory consolidation.
+   * Consolidation never deletes files; this file captures metadata-only
+   * supersession changes plus any advisory actions the user left unapplied.
+   */
+  async saveMemoryConsolidationAudit(
+    hash: string,
+    audit: Omit<MemoryConsolidationAudit, 'version' | 'createdAt'> & { createdAt?: string },
+  ): Promise<string> {
+    const createdAt = audit.createdAt || new Date().toISOString();
+    const dir = path.join(this._memoryDir(hash), 'audits');
+    await fsp.mkdir(dir, { recursive: true });
+    const safeTimestamp = createdAt.replace(/[:.]/g, '-');
+    const name = `consolidation_${safeTimestamp}.json`;
+    const relPath = `audits/${name}`;
+    const payload: MemoryConsolidationAudit = {
+      version: 1,
+      createdAt,
+      summary: audit.summary,
+      applied: audit.applied,
+      skipped: audit.skipped,
+      appliedDraftOperations: audit.appliedDraftOperations,
+      skippedDraftOperations: audit.skippedDraftOperations,
+    };
+    await atomicWriteFile(path.join(dir, name), JSON.stringify(payload, null, 2));
+    return relPath;
+  }
+
+  /**
    * Rewrite `snapshot.json` from the current on-disk state without
    * re-running capture. Used after note writes and deletions so
    * `getWorkspaceMemory()` stays consistent.
@@ -2110,10 +2651,11 @@ export class ChatService {
     }
 
     const notes = await this._readNotesFromDisk(hash);
+    const files = await this._attachMemoryMetadata(hash, [...claudeFiles, ...notes], true);
     const next: MemorySnapshot = {
       ...snapshot,
       capturedAt: new Date().toISOString(),
-      files: [...claudeFiles, ...notes],
+      files,
     };
     await atomicWriteFile(snapshotPath, JSON.stringify(next, null, 2));
   }
@@ -2133,6 +2675,189 @@ export class ChatService {
       await this._writeWorkspaceIndex(hash, index);
       return index.memoryEnabled;
     });
+  }
+
+  async getWorkspaceMemoryReviewSchedule(hash: string): Promise<MemoryReviewScheduleConfig> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return { ...DEFAULT_MEMORY_REVIEW_SCHEDULE };
+    return normalizeMemoryReviewScheduleConfig(index.memoryReviewSchedule);
+  }
+
+  async getWorkspaceMemoryReviewScheduleUpdatedAt(hash: string): Promise<string | undefined> {
+    const index = await this._readWorkspaceIndex(hash);
+    return index?.memoryReviewScheduleUpdatedAt;
+  }
+
+  async setWorkspaceMemoryReviewSchedule(
+    hash: string,
+    schedule: MemoryReviewScheduleConfig,
+  ): Promise<MemoryReviewScheduleConfig | null> {
+    return this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
+      const next = normalizeMemoryReviewScheduleConfig(schedule);
+      const prev = normalizeMemoryReviewScheduleConfig(index.memoryReviewSchedule);
+      index.memoryReviewSchedule = next;
+      if (JSON.stringify(prev) !== JSON.stringify(next)) {
+        index.memoryReviewScheduleUpdatedAt = new Date().toISOString();
+      }
+      await this._writeWorkspaceIndex(hash, index);
+      return index.memoryReviewSchedule;
+    });
+  }
+
+  async listMemoryEnabledWorkspaceHashes(): Promise<string[]> {
+    let dirs: string[];
+    try {
+      dirs = await fsp.readdir(this.workspacesDir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+
+    const hashes: string[] = [];
+    for (const hash of dirs) {
+      if (hash.startsWith('.')) continue;
+      const index = await this._readWorkspaceIndex(hash);
+      if (index?.memoryEnabled) hashes.push(hash);
+    }
+    return hashes;
+  }
+
+  async saveMemoryReviewRun(hash: string, run: MemoryReviewRun): Promise<MemoryReviewRun> {
+    if (!validMemoryReviewRunId(run.id)) {
+      throw new Error('Invalid memory review run id');
+    }
+    await fsp.mkdir(this._memoryReviewsDir(hash), { recursive: true });
+    await atomicWriteFile(this._memoryReviewRunPath(hash, run.id), JSON.stringify(run, null, 2));
+    return run;
+  }
+
+  async getMemoryReviewRun(hash: string, runId: string): Promise<MemoryReviewRun | null> {
+    if (!validMemoryReviewRunId(runId)) return null;
+    try {
+      const raw = await fsp.readFile(this._memoryReviewRunPath(hash, runId), 'utf8');
+      return JSON.parse(raw) as MemoryReviewRun;
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  async listMemoryReviewRuns(hash: string): Promise<MemoryReviewRun[]> {
+    let names: string[];
+    try {
+      names = await fsp.readdir(this._memoryReviewsDir(hash));
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+
+    const runs: MemoryReviewRun[] = [];
+    for (const name of names) {
+      if (!name.endsWith('.json')) continue;
+      const runId = name.slice(0, -'.json'.length);
+      if (!validMemoryReviewRunId(runId)) continue;
+      const run = await this.getMemoryReviewRun(hash, runId);
+      if (run) runs.push(run);
+    }
+    runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
+    return runs;
+  }
+
+  async getMemoryReviewSourceFingerprints(
+    hash: string,
+    filenames: string[],
+  ): Promise<Record<string, string>> {
+    const unique = [...new Set(filenames.filter(Boolean))];
+    const snapshot = await this.getWorkspaceMemory(hash);
+    const byFilename = new Map((snapshot?.files || []).map((file) => [file.filename, file]));
+    const fingerprints: Record<string, string> = {};
+    for (const filename of unique) {
+      const file = byFilename.get(filename);
+      fingerprints[filename] = file ? memoryFileFingerprint(file) : `missing:${filename}`;
+    }
+    return fingerprints;
+  }
+
+  async getMemorySnapshotFingerprint(hash: string): Promise<string> {
+    const snapshot = await this.getWorkspaceMemory(hash);
+    const files = (snapshot?.files || [])
+      .slice()
+      .sort((a, b) => a.filename.localeCompare(b.filename))
+      .map((file) => `${file.filename}:${memoryFileFingerprint(file)}`);
+    return crypto.createHash('sha256').update(files.join('\n')).digest('hex');
+  }
+
+  async hasMemoryChangedSinceLastReview(hash: string): Promise<boolean> {
+    const current = await this.getMemorySnapshotFingerprint(hash);
+    const runs = await this.listMemoryReviewRuns(hash);
+    const latest = runs.find((run) => run.status !== 'running');
+    if (!latest) {
+      const snapshot = await this.getWorkspaceMemory(hash);
+      return (snapshot?.files || []).length > 0;
+    }
+    return latest.sourceSnapshotFingerprint !== current;
+  }
+
+  async hasMemoryChangedSinceLastScheduledReview(hash: string, since?: string): Promise<boolean> {
+    const current = await this.getMemorySnapshotFingerprint(hash);
+    const runs = await this.listMemoryReviewRuns(hash);
+    const latest = runs.find((run) => (
+      run.source === 'scheduled'
+      && run.status !== 'running'
+      && (!since || run.createdAt >= since)
+    ));
+    if (!latest) {
+      const snapshot = await this.getWorkspaceMemory(hash);
+      return (snapshot?.files || []).length > 0;
+    }
+    return latest.sourceSnapshotFingerprint !== current;
+  }
+
+  async getMemoryReviewStatus(hash: string): Promise<ConversationMemoryReviewStatus> {
+    const enabled = await this.getWorkspaceMemoryEnabled(hash);
+    const runs = await this.listMemoryReviewRuns(hash);
+    const actionableRuns = runs.filter((run) => run.status === 'pending_review' || run.status === 'running' || run.status === 'failed');
+    const latest = actionableRuns[0] || runs[0];
+    const lastRun = runs[0];
+    const pendingDrafts = actionableRuns.reduce(
+      (sum, run) => sum + run.drafts.filter((item) => item.status === 'pending' || item.status === 'stale' || item.status === 'failed').length,
+      0,
+    );
+    const pendingSafeActions = actionableRuns.reduce(
+      (sum, run) => sum + run.safeActions.filter((item) => item.status === 'pending' || item.status === 'stale' || item.status === 'failed').length,
+      0,
+    );
+    const failedItems = actionableRuns.reduce(
+      (sum, run) => sum
+        + run.failures.length
+        + run.drafts.filter((item) => item.status === 'failed' || item.status === 'stale').length
+        + run.safeActions.filter((item) => item.status === 'failed' || item.status === 'stale').length,
+      0,
+    );
+    return {
+      enabled,
+      pending: actionableRuns.length > 0 || failedItems > 0,
+      pendingRuns: actionableRuns.length,
+      pendingDrafts,
+      pendingSafeActions,
+      failedItems,
+      ...(latest ? {
+        latestRunId: latest.id,
+        latestRunStatus: latest.status,
+        latestRunCreatedAt: latest.createdAt,
+        latestRunUpdatedAt: latest.updatedAt,
+        latestRunSource: latest.source,
+      } : {}),
+      ...(lastRun ? {
+        lastRunId: lastRun.id,
+        lastRunStatus: lastRun.status,
+        lastRunCreatedAt: lastRun.createdAt,
+        lastRunUpdatedAt: lastRun.updatedAt,
+        lastRunSource: lastRun.source,
+      } : {}),
+    };
   }
 
   /**
