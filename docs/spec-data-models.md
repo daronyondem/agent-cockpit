@@ -69,7 +69,7 @@ agent-cockpit/
 │           ├── cliUpdateStore.js       # Web-only cached CLI update status/action store
 │           ├── streamStore.js          # Per-conversation streaming, queue, draft, and WebSocket state
 │           ├── shell.jsx               # Root app shell, sidebar wiring, chat surface
-│           ├── screens/                # Real V2 screens: KB, files, settings
+│           ├── screens/                # Real V2 screens: KB, files, settings, Memory Review
 │           └── *.css / *.jsx / *.js    # Shared primitives, dialogs, tooltips, plan usage stores, modals
 ├── test/                               # Jest test suite (TypeScript via ts-jest)
 └── data/                               # Runtime data (gitignored, created at startup)
@@ -79,6 +79,9 @@ agent-cockpit/
     │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled` and `kbEnabled` flags)
     │   │   ├── memory/                 # Per-workspace memory store (opt-in per workspace)
     │   │   │   ├── snapshot.json       # Merged snapshot: claude captures + notes (parsed metadata + content)
+    │   │   │   ├── state.json          # Agent Cockpit sidecar lifecycle metadata keyed by memory filename
+    │   │   │   ├── audits/             # Manual consolidation audit JSON files
+    │   │   │   ├── reviews/            # Durable Memory Review run JSON files
     │   │   │   └── files/              # Raw .md entries, split by source
     │   │   │       ├── claude/         # Claude Code native captures; wiped and rewritten on each capture
     │   │   │       │   ├── MEMORY.md   # Source index from Claude Code (if present)
@@ -117,7 +120,7 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
 
 All mutable JSON files under `data/` are written with two primitives to survive concurrent access without corruption:
 
-- **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, usage ledger, memory `snapshot.json`), `SettingsService`, `ClaudePlanUsageService`, and `KiroPlanUsageService`.
+- **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, usage ledger, memory `snapshot.json`, memory `state.json`), `SettingsService`, `ClaudePlanUsageService`, and `KiroPlanUsageService`.
 - **Per-key mutex** — `src/utils/keyedMutex.ts` exports `KeyedMutex.run<T>(key, fn)`. Callers sharing a key are serialized FIFO; different keys run concurrently. `ChatService` holds one `_indexLock` keyed by workspace hash (every read-modify-write on a workspace `index.json` runs inside `_indexLock.run(hash, ...)`) and one `_ledgerLock` keyed by the constant `'__usage_ledger__'` (wrapping ledger record/clear). Not reentrant — locked regions must not recursively acquire the same key.
 
 Together these guarantee that a workspace index always parses on disk and that concurrent mutators do not clobber each other's updates. `ChatService._buildLookupMap` also catches per-workspace `JSON.parse` failures at startup, logs them, and continues, so a single corrupt file cannot crash the server into a restart loop.
@@ -130,6 +133,15 @@ Together these guarantee that a workspace index always parses on disk and that c
   instructions: string,         // Per-workspace instructions (appended to system prompt on new sessions)
   instructionCompatibilityDismissedFingerprint: string|undefined, // Last dismissed CLI instruction compatibility warning. Fingerprint changes when detected instruction sources or missing vendor entrypoints change.
   memoryEnabled: boolean|undefined, // Opt-in per-workspace Memory feature. Defaults to false.
+  memoryReviewSchedule: {            // Per-workspace Memory Review schedule. Defaults to { mode: 'off' }.
+    mode: 'off' | 'window',
+    days?: 'daily' | 'weekdays' | 'custom',
+    customDays?: number[],           // 0=Sunday through 6=Saturday, used when days='custom'.
+    windowStart?: string,            // HH:mm in timezone/server-local time for window mode.
+    windowEnd?: string,              // HH:mm in timezone/server-local time for window mode.
+    timezone?: string,               // Optional IANA timezone.
+  } | undefined,
+  memoryReviewScheduleUpdatedAt: string|undefined, // Last schedule change; scheduled-run guards ignore older runs.
   kbEnabled: boolean|undefined,     // Opt-in per-workspace Knowledge Base feature. Defaults to false.
   kbAutoDigest: boolean|undefined,  // Auto-digest new files after ingestion. Defaults to false.
   kbAutoDream: {                    // Per-workspace automatic dreaming schedule. Defaults to { mode: 'off' }.
@@ -185,6 +197,189 @@ Together these guarantee that a workspace index always parses on disk and that c
   }]
 }
 ```
+
+## Workspace Memory Store (`workspaces/{hash}/memory/`)
+
+`snapshot.json` remains the merged content snapshot consumed by existing callers:
+
+```typescript
+{
+  capturedAt: string,
+  sourceBackend: string,
+  sourcePath: string | null,
+  index: string,
+  files: Array<{
+    filename: string,
+    name: string | null,
+    description: string | null,
+    type: 'user' | 'feedback' | 'project' | 'reference' | 'unknown',
+    content: string,
+    source?: 'cli-capture' | 'memory-note' | 'session-extraction',
+    metadata?: MemoryEntryMetadata
+  }>
+}
+```
+
+`state.json` is the Agent Cockpit-owned lifecycle sidecar. It is keyed by the same workspace-relative filenames used in `snapshot.files[].filename`:
+
+```typescript
+{
+  version: 1,
+  updatedAt: string,
+  entries: {
+    [filename: string]: {
+      entryId: string,          // stable `mem_<sha256(filename)[:16]>` unless migrated later
+      filename: string,         // e.g. `claude/foo.md` or `notes/note_...md`
+      status: 'active' | 'superseded' | 'redacted' | 'deleted',
+      scope: 'workspace' | 'user',
+      source: 'cli-capture' | 'memory-note' | 'session-extraction',
+      createdAt: string,
+      updatedAt: string,
+      sourceConversationId?: string,
+      supersedes?: string[],
+      supersededBy?: string,
+      confidence?: number,
+      redaction?: { kind: string, reason: string }[]
+    }
+  }
+}
+```
+
+Current write paths store records only for files that exist. `deleteMemoryEntry()` and `clearWorkspaceMemory()` prune sidecar records for removed files; the `deleted` lifecycle state is reserved for a future audited-forget workflow. Older workspaces without `state.json` still load: `ChatService.getWorkspaceMemory()` synthesizes active workspace metadata in returned `MemoryFile.metadata`, and the next memory write materializes `state.json`.
+
+Governed memory writes surface their decision through `MemoryWriteOutcome`:
+
+```typescript
+{
+  action: 'saved' | 'skipped_duplicate' | 'skipped_ephemeral' | 'redacted_saved' | 'superseded_saved',
+  reason: string,
+  filename?: string,          // new file for saved/redacted/superseded writes
+  skipped?: string | boolean, // duplicate filename or true for ephemeral skips
+  duplicateOf?: string,
+  superseded?: string[],      // filenames marked superseded by this write
+  redaction?: { kind: string, reason: string }[]
+}
+```
+
+`MemoryUpdateEvent` frames may include `writeOutcomes?: MemoryWriteOutcome[]` in addition to `capturedAt`, `fileCount`, `changedFiles`, `sourceConversationId`, and `displayInChat`. `memory_note` skip decisions can emit a frame with empty `changedFiles` and a populated `writeOutcomes` list so the source conversation can explain why no file changed.
+
+`ChatService.searchWorkspaceMemory(hash, { query, limit?, types?, statuses? })` returns lexical memory matches shaped as:
+
+```typescript
+{
+  filename: string,
+  entryId: string,
+  name: string | null,
+  description: string | null,
+  type: 'user' | 'feedback' | 'project' | 'reference' | 'unknown',
+  source: 'cli-capture' | 'memory-note' | 'session-extraction',
+  status: 'active' | 'superseded' | 'redacted' | 'deleted',
+  score: number,        // rounded BM25-style lexical score plus exact/type boosts
+  snippet: string,      // compact text around the first matching term
+  content: string,
+  metadata: MemoryEntryMetadata
+}
+```
+
+The default search status filter is `active + redacted`; superseded and deleted entries are excluded unless a caller explicitly opts into those lifecycle states. The MCP `memory_search` tool exposes that as `status:'active' | 'all'`, while the REST/UI search route exposes detailed lifecycle values. This first search layer is local and lexical only: it uses tokenized name/description/type/filename/content with BM25-style scoring, repeated name/description field weighting, explicit exact-match and type boosts, and recency as the tie-breaker before filename. It does not require the KB's Ollama embedding configuration.
+
+Manual consolidation proposals and audits use the following action shape:
+
+```typescript
+{
+  action: 'mark_superseded' | 'merge_candidates' | 'split_candidate' | 'normalize_candidate' | 'keep',
+  reason: string,
+  filename?: string,
+  supersededBy?: string,
+  filenames?: string[],
+  title?: string
+}
+```
+
+`mark_superseded` is the only action applied automatically by `/memory/consolidate/apply`. It updates sidecar metadata only: the stale entry gets `status:'superseded'` and `supersededBy:<replacement entryId>`, and the replacement entry's `supersedes[]` includes the stale entry ID.
+
+Merge/split/normalize actions can be turned into exact, reviewed drafts through `/memory/consolidate/draft`. Draft operations are:
+
+```typescript
+{
+  operation: 'create' | 'replace',
+  reason: string,
+  content: string,      // complete markdown memory file after deterministic redaction
+  filename?: string,    // replace target, or created filename after apply
+  filenameHint?: string,
+  supersedes?: string[] // source filenames for create operations
+}
+```
+
+Drafts have `{ id, createdAt, action, summary, operations }`. `create` writes a new `notes/` file and marks selected source entries superseded in sidecar metadata. `replace` rewrites only selected `notes/*` entries in place; `claude/*` entries are never replaced because they are mirrored native CLI captures. Redacted, deleted, and already-superseded sources are rejected for draft generation and skipped during draft apply. Memory Review draft apply may receive an edited draft payload, but the persisted generated operation metadata remains authoritative; only `operations[].content` is accepted from the reviewed payload before the same Markdown validation and redaction pipeline runs.
+
+Memory Review runs persist scheduled/manual proposal + draft state under `memory/reviews/<runId>.json`:
+
+```typescript
+{
+  version: 1,
+  id: string,                         // `memreview_<hex>`
+  workspaceHash: string,
+  status: 'running' | 'pending_review' | 'completed' | 'partially_applied' | 'dismissed' | 'failed',
+  source: 'manual' | 'scheduled',
+  createdAt: string,
+  updatedAt: string,
+  completedAt?: string,
+  summary: string,
+  sourceSnapshotFingerprint: string,  // sha256 over current memory filenames + content/lifecycle fingerprints
+  proposal?: {
+    id: string,
+    createdAt: string,
+    summary: string,
+    actions: MemoryConsolidationAction[]
+  },
+  safeActions: Array<{
+    id: string,
+    status: 'pending' | 'applied' | 'discarded' | 'stale' | 'failed',
+    action: MemoryConsolidationAction, // currently only mark_superseded is created here
+    sourceFingerprints: Record<string, string>,
+    createdAt: string,
+    updatedAt: string,
+    appliedAt?: string,
+    discardedAt?: string,
+    failure?: string,
+    result?: MemoryConsolidationApplyResult
+  }>,
+  drafts: Array<{
+    id: string,
+    status: 'pending' | 'applied' | 'discarded' | 'stale' | 'failed',
+    action: MemoryConsolidationAction, // merge/split/normalize source action
+    sourceFingerprints: Record<string, string>,
+    createdAt: string,
+    updatedAt: string,
+    draft?: MemoryConsolidationDraft,
+    appliedAt?: string,
+    discardedAt?: string,
+    regeneratedAt?: string,
+    failure?: string,
+    result?: MemoryConsolidationDraftApplyResult
+  }>,
+  failures: Array<{ action?: MemoryConsolidationAction, message: string }>
+}
+```
+
+`sourceFingerprints` guard apply/regenerate paths against stale memory: when a source file's content, type, name/description, or lifecycle metadata changes after review generation, the item is marked `stale` instead of being applied. Item status `discarded` means the user dismissed that item from the current review run; it is retained in the persisted run as a review decision/audit record, does not apply memory changes, and does not suppress future review generation. Regenerating a discarded draft clears `discardedAt` and moves the item back to `pending` with a fresh draft. `Conversation.memoryReview` carries the compact composer/settings summary `{ enabled, pending, pendingRuns, pendingDrafts, pendingSafeActions, failedItems, latestRunId?, latestRunStatus?, latestRunCreatedAt?, latestRunUpdatedAt?, latestRunSource?, lastRunId?, lastRunStatus?, lastRunCreatedAt?, lastRunUpdatedAt?, lastRunSource? }`. `latestRun*` points at the actionable run the composer should open when one exists; `lastRun*` always points at the newest persisted run so Workspace Settings can show when the most recent review ran and whether it was manual or scheduled.
+
+Every apply call that has applied or skipped actions writes `memory/audits/consolidation_<timestamp>.json`:
+
+```typescript
+{
+  version: 1,
+  createdAt: string,
+  summary: string,
+  applied: MemoryConsolidationAction[],
+  skipped: Array<{ action: MemoryConsolidationAction, reason: string }>,
+  appliedDraftOperations?: MemoryConsolidationDraftOperation[],
+  skippedDraftOperations?: Array<{ operation: MemoryConsolidationDraftOperation, reason: string }>
+}
+```
+
+Audits are append-only review records. They do not change `snapshot.json` directly and never contain full redacted memory content.
 
 ## CLI Instruction Compatibility Status
 

@@ -1064,6 +1064,7 @@
     }
     if (frame.type === 'memory_update') {
       const changed = Array.isArray(frame.changedFiles) ? frame.changedFiles : [];
+      const writeOutcomes = Array.isArray(frame.writeOutcomes) ? frame.writeOutcomes : [];
       const fileCount = typeof frame.fileCount === 'number' ? frame.fileCount : 0;
       const capturedAt = typeof frame.capturedAt === 'string' ? frame.capturedAt : new Date().toISOString();
       const sourceConversationId = typeof frame.sourceConversationId === 'string' ? frame.sourceConversationId : null;
@@ -1079,6 +1080,7 @@
               changedFiles: changed,
               sourceConversationId,
               displayInChat,
+              writeOutcomes,
             },
           }));
         }
@@ -1088,9 +1090,26 @@
         id: 'mem_' + capturedAt + '_' + Math.random().toString(36).slice(2, 8),
         role: 'memory',
         timestamp: capturedAt,
-        memoryUpdate: { capturedAt, fileCount, changedFiles: changed, sourceConversationId },
+        memoryUpdate: { capturedAt, fileCount, changedFiles: changed, sourceConversationId, writeOutcomes },
       };
       update(convId, cur => ({ ...cur, messages: [...cur.messages, synth] }));
+      return;
+    }
+    if (frame.type === 'memory_review_update') {
+      const review = frame.review || null;
+      const cur = states.get(convId);
+      if (!cur || !cur.conv) return;
+      try {
+        if (typeof window !== 'undefined' && cur.conv.workspaceHash) {
+          window.dispatchEvent(new CustomEvent('ac:memory-review-update', {
+            detail: { hash: cur.conv.workspaceHash, review, updatedAt: frame.updatedAt || null },
+          }));
+        }
+      } catch (_) { /* noop */ }
+      update(convId, curState => ({
+        ...curState,
+        conv: { ...curState.conv, memoryReview: review },
+      }));
       return;
     }
     if (frame.type === 'kb_state_update') {

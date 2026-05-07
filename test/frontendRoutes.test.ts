@@ -61,6 +61,82 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.mu-panel');
   });
 
+  test('workspace memory panel exposes search and lifecycle filters', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/api.js'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/workspaceSettings.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+
+    expect(apiSrc).toContain('searchMemory: (hash, opts) =>');
+    expect(apiSrc).toContain('proposeMemoryConsolidation: (hash) =>');
+    expect(apiSrc).toContain('draftMemoryConsolidation: (hash, action) =>');
+    expect(apiSrc).toContain('applyMemoryConsolidation: (hash, payload) =>');
+    expect(apiSrc).toContain('applyMemoryConsolidationDraft: (hash, payload) =>');
+    expect(apiSrc).toContain('getMemoryReviewSchedule: (hash) =>');
+    expect(apiSrc).toContain('startMemoryReview: (hash) =>');
+    expect(apiSrc).toContain('restoreMemoryEntry: (hash, relPath) =>');
+    expect(apiSrc).toContain("'/memory/search' + qs");
+    expect(workspaceSettingsSrc).toContain("placeholder=\"Search memory\"");
+    expect(workspaceSettingsSrc).toContain('Start new review');
+    expect(workspaceSettingsSrc).toContain('Review running...');
+    expect(workspaceSettingsSrc).toContain('Audit Current Review');
+    expect(workspaceSettingsSrc).toContain('MemoryReviewSettingsProgress');
+    expect(workspaceSettingsSrc).toContain('Last run');
+    expect(workspaceSettingsSrc).toContain('formatSettingsMemoryReviewSource');
+    expect(workspaceSettingsSrc).not.toContain('Minimum gap');
+    expect(workspaceSettingsSrc).toContain('function MemoryReviewScheduleEditor');
+    expect(workspaceSettingsSrc).toContain('function MemoryConsolidationReview');
+    expect(workspaceSettingsSrc).toContain('function MemoryConsolidationDraftReview');
+    expect(workspaceSettingsSrc).toContain('Apply draft');
+    expect(workspaceSettingsSrc).toContain('Restore entry');
+    expect(workspaceSettingsSrc).toContain('ws-mem-draft-compare');
+    expect(workspaceSettingsSrc).toContain('MEMORY_STATUS_LABELS');
+    expect(workspaceSettingsSrc).toContain('MEMORY_ALL_STATUSES');
+    expect(workspaceSettingsSrc).toContain('Filter memory state');
+    expect(cssSrc).toContain('.ws-mem-controls');
+    expect(cssSrc).toContain('.ws-mem-schedule');
+    expect(cssSrc).toContain('.ws-mem-review-last');
+    expect(cssSrc).toContain('.ws-mem-review-progress');
+    expect(cssSrc).toContain('.ws-mem-status');
+  });
+
+  test('Memory Review has a dedicated page and composer notification action', () => {
+    const indexSrc = fs.readFileSync(path.join(ROOT, 'public/v2/index.html'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8');
+    const reviewSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/memoryReview.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+
+    expect(indexSrc).toContain('src/screens/memoryReview.jsx');
+    expect(shellSrc).toContain('MemoryReviewPage');
+    expect(shellSrc).toContain('ComposerMemoryReviewIcon');
+    expect(shellSrc).toContain('onOpenMemoryReview(conv.workspaceHash');
+    expect(shellSrc).not.toContain('Run now');
+    expect(reviewSrc).toContain('window.MemoryReviewPage = MemoryReviewPage');
+    expect(reviewSrc).toContain('MemoryReviewInlineProgress');
+    expect(reviewSrc).toContain('MemoryReviewButtonProgress');
+    expect(reviewSrc).toContain('buildMemoryReviewLineDiff');
+    expect(reviewSrc).toContain('MemoryReviewDiffPane');
+    expect(reviewSrc).toContain('Edit markdown');
+    expect(reviewSrc).toContain('mr-edit-textarea');
+    expect(reviewSrc).toContain('buildReviewedDraft');
+    expect(reviewSrc).toContain('Generating draft review...');
+    expect(reviewSrc).toContain('No open review items.');
+    expect(reviewSrc).toContain('MemoryReviewButtonProgress label="Applying..."');
+    expect(reviewSrc).toContain('Applied');
+    expect(reviewSrc).toContain('!applyBusy && !regenerateBusy');
+    expect(reviewSrc).toContain('Regenerating draft...');
+    expect(reviewSrc).toContain('Regenerated');
+    expect(reviewSrc).toContain('Dismissed from this review');
+    expect(reviewSrc).toContain('applyMemoryReviewDraft');
+    expect(reviewSrc).toContain('discardMemoryReviewAction');
+    expect(cssSrc).toContain('.main-memory-review');
+    expect(cssSrc).toContain('.mr-progress');
+    expect(cssSrc).toContain('.mr-btn-success');
+    expect(cssSrc).toContain('.mr-item-note');
+    expect(cssSrc).toContain('.mr-code-line.is-changed');
+    expect(cssSrc).toContain('.mr-edit-textarea');
+    expect(cssSrc).toContain('.state-memory-review');
+  });
+
   test('kb raw tab explains structure backfill and exposes bulk redigest controls', () => {
     const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/kbBrowser.jsx'), 'utf8');
 
@@ -170,12 +246,13 @@ describe('frontend routes', () => {
       expect(v2.status).toBe(200);
       expect(v2.headers['content-type']).toMatch(/text\/html/);
       expect(v2.body).toContain('<div id="root"');
-      expect(v2.body).toContain('src/app.css?v=139');
-      expect(v2.body).toContain('src/api.js?v=125');
+      expect(v2.body).toContain('src/app.css?v=142');
+      expect(v2.body).toContain('src/api.js?v=127');
       expect(v2.body).toContain('src/cliUpdateStore.js?v=116');
       expect(v2.body).toContain('src/synthesisAtlas.js?v=117');
       expect(v2.body).toContain('src/screens/kbBrowser.jsx?v=142');
-      expect(v2.body).toContain('src/workspaceSettings.jsx?v=120');
+      expect(v2.body).toContain('src/screens/memoryReview.jsx?v=119');
+      expect(v2.body).toContain('src/workspaceSettings.jsx?v=123');
       expect(v2.body).toContain('src/primitives.jsx?v=119');
       expect(v2.body).toContain('src/folderPicker.jsx?v=117');
       expect(v2.body).toContain('src/shell.jsx?v=129');

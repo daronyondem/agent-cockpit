@@ -13,11 +13,20 @@ import type {
   SendMessageOptions,
   SendMessageResult,
   Message,
+  MemoryMetadataIndex,
   MemorySnapshot,
 } from '../src/types';
 
 function workspaceHash(p: string): string {
   return crypto.createHash('sha256').update(p).digest('hex').substring(0, 16);
+}
+
+function memoryDir(root: string, hash: string): string {
+  return path.join(root, 'data', 'chat', 'workspaces', hash, 'memory');
+}
+
+function readMemoryState(root: string, hash: string): MemoryMetadataIndex {
+  return JSON.parse(fs.readFileSync(path.join(memoryDir(root, hash), 'state.json'), 'utf8'));
 }
 
 const TEST_RESUME_CAPABILITIES: BackendMetadata['resumeCapabilities'] = {
@@ -122,8 +131,17 @@ describe('memoryMcp.issueMemoryMcpSession', () => {
     expect(Array.isArray(a.mcpServers[0].env)).toBe(true);
     const tokenEntry = a.mcpServers[0].env.find((e) => e.name === 'MEMORY_TOKEN');
     const endpointEntry = a.mcpServers[0].env.find((e) => e.name === 'MEMORY_ENDPOINT');
+    const searchEndpointEntry = a.mcpServers[0].env.find((e) => e.name === 'MEMORY_SEARCH_ENDPOINT');
     expect(tokenEntry?.value).toBe(a.token);
     expect(endpointEntry?.value).toMatch(/\/api\/chat\/mcp\/memory\/notes$/);
+    expect(searchEndpointEntry?.value).toMatch(/\/api\/chat\/mcp\/memory\/search$/);
+  });
+
+  test('stub exposes active/all status scope on memory_search', () => {
+    const stubSource = fs.readFileSync(MEMORY_MCP_STUB_PATH, 'utf8');
+    expect(stubSource).toContain("name: 'memory_search'");
+    expect(stubSource).toContain("status: {");
+    expect(stubSource).toContain("enum: ['active', 'all']");
   });
 
   test('reissuing a session for the same conversation+workspace returns the same token', () => {
@@ -225,6 +243,43 @@ type: feedback
     expect(snapshot?.files).toHaveLength(1);
     expect(snapshot?.files[0].type).toBe('feedback');
     expect(snapshot?.files[0].source).toBe('session-extraction');
+  });
+
+  test('redacts sensitive values from extracted entries before saving', async () => {
+    const hash = workspaceHash('/tmp/mem-extract-redact');
+    await service.createConversation('extract-redact', '/tmp/mem-extract-redact');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+    const token = 'sk-proj-1234567890abcdefghijklmnop';
+
+    stubCli.queueResponse(`---
+name: extracted_token_note
+description: extracted token note
+type: project
+---
+
+The deployment token is ${token}.
+`);
+
+    const count = await memoryMcp.extractMemoryFromSession({
+      workspaceHash: hash,
+      conversationId: 'conv-extract-redact',
+      messages: [
+        { role: 'user', content: 'remember the deployment setup' } as any,
+        { role: 'assistant', content: 'noted' } as any,
+      ],
+    });
+    expect(count).toBe(1);
+
+    const snapshot = await service.getWorkspaceMemory(hash);
+    expect(snapshot?.files).toHaveLength(1);
+    expect(snapshot?.files[0].content).not.toContain(token);
+    expect(snapshot?.files[0].content).toContain('[REDACTED: api_token]');
+    expect(snapshot?.files[0].metadata).toMatchObject({
+      status: 'redacted',
+      source: 'session-extraction',
+      sourceConversationId: 'conv-extract-redact',
+      redaction: [{ kind: 'api_token', reason: 'API tokens must not be written to memory.' }],
+    });
   });
 
   test('parses a multi-entry === delimited response and saves all entries', async () => {
@@ -437,6 +492,555 @@ User stated they prefer TypeScript.
     expect(res.status).toBe(200);
     expect(res.body.ok).toBe(true);
     expect(res.body.skipped).toBe('existing_memory_file.md');
+    expect(res.body.outcome).toMatchObject({
+      action: 'skipped_duplicate',
+      duplicateOf: 'existing_memory_file.md',
+    });
+  });
+
+  test('accepts JSON skipped_ephemeral decisions without writing a file', async () => {
+    const hash = workspaceHash('/tmp/mem-post-ephemeral');
+    await service.createConversation('conv-post-ephemeral', '/tmp/mem-post-ephemeral');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const memoryUpdateCalls: any[] = [];
+    const wsMemoryMcp = createMemoryMcpServer({
+      chatService: service,
+      backendRegistry: registry,
+      emitMemoryUpdate: (workspaceHash, payload) => {
+        memoryUpdateCalls.push({ workspaceHash, payload });
+      },
+    });
+    const session = wsMemoryMcp.issueMemoryMcpSession('conv-post-ephemeral', hash);
+
+    stubCli.queueResponse(JSON.stringify({
+      action: 'skipped_ephemeral',
+      reason: 'This is one-off task state.',
+    }));
+
+    await startHttpServer(wsMemoryMcp.router);
+    const res = await makeRequest('POST', '/mcp/memory/notes', { content: 'temporary scratch note' }, {
+      'x-memory-token': session.token,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.skipped).toBe(true);
+    expect(res.body.outcome).toMatchObject({
+      action: 'skipped_ephemeral',
+      reason: 'This is one-off task state.',
+    });
+
+    const snapshot = await service.getWorkspaceMemory(hash);
+    expect(snapshot).toBeNull();
+    expect(memoryUpdateCalls).toHaveLength(1);
+    expect(memoryUpdateCalls[0].payload.changedFiles).toEqual([]);
+    expect(memoryUpdateCalls[0].payload.writeOutcomes).toEqual([res.body.outcome]);
+  });
+
+  test('redacts sensitive values before prompting the Memory CLI and marks saved metadata redacted', async () => {
+    const hash = workspaceHash('/tmp/mem-post-redact');
+    await service.createConversation('conv-post-redact', '/tmp/mem-post-redact');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+    const session = memoryMcp.issueMemoryMcpSession('conv-post-redact', hash);
+    const token = 'sk-proj-1234567890abcdefghijklmnop';
+
+    stubCli.queueResponse(JSON.stringify({
+      action: 'saved',
+      reason: 'The note contains a durable integration detail.',
+      entry: `---
+name: redacted_token_note
+description: redacted token handling
+type: project
+---
+
+The integration token was [REDACTED: api_token].
+`,
+    }));
+
+    await startHttpServer(memoryMcp.router);
+    const res = await makeRequest('POST', '/mcp/memory/notes', { content: `Store this token: ${token}` }, {
+      'x-memory-token': session.token,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.outcome).toMatchObject({
+      action: 'redacted_saved',
+      filename: expect.stringContaining('redacted-token-note'),
+    });
+    expect(res.body.outcome.redaction).toEqual([
+      { kind: 'api_token', reason: 'API tokens must not be written to memory.' },
+    ]);
+
+    expect(stubCli._oneShotCalls).toHaveLength(1);
+    expect(stubCli._oneShotCalls[0].prompt).not.toContain(token);
+    expect(stubCli._oneShotCalls[0].prompt).toContain('[REDACTED: api_token]');
+
+    const snapshot = await service.getWorkspaceMemory(hash);
+    const entry = snapshot?.files.find((file) => file.filename === res.body.filename);
+    expect(entry?.content).not.toContain(token);
+    expect(entry?.metadata).toMatchObject({
+      status: 'redacted',
+      sourceConversationId: 'conv-post-redact',
+      redaction: [{ kind: 'api_token', reason: 'API tokens must not be written to memory.' }],
+    });
+  });
+
+  test('accepts JSON superseded_saved decisions and marks older entries superseded', async () => {
+    const hash = workspaceHash('/tmp/mem-post-supersede');
+    await service.createConversation('conv-post-supersede', '/tmp/mem-post-supersede');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const oldRelPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: old_memory
+description: old memory
+type: project
+---
+
+Old body.
+`,
+      source: 'memory-note',
+      filenameHint: 'old-memory',
+    });
+    const oldEntryId = readMemoryState(tmpDir, hash).entries[oldRelPath].entryId;
+
+    const session = memoryMcp.issueMemoryMcpSession('conv-post-supersede', hash);
+    stubCli.queueResponse(JSON.stringify({
+      action: 'superseded_saved',
+      reason: 'The new note replaces the old project memory.',
+      supersedes: [oldRelPath],
+      entry: `---
+name: new_memory
+description: new memory
+type: project
+---
+
+New body.
+`,
+    }));
+
+    await startHttpServer(memoryMcp.router);
+    const res = await makeRequest('POST', '/mcp/memory/notes', { content: 'replace the old project memory' }, {
+      'x-memory-token': session.token,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body.outcome).toMatchObject({
+      action: 'superseded_saved',
+      filename: expect.stringContaining('new-memory'),
+      superseded: [oldRelPath],
+    });
+
+    const state = readMemoryState(tmpDir, hash);
+    const newEntryId = state.entries[res.body.filename].entryId;
+    expect(state.entries[res.body.filename]).toMatchObject({
+      status: 'active',
+      supersedes: [oldEntryId],
+    });
+    expect(state.entries[oldRelPath]).toMatchObject({
+      status: 'superseded',
+      supersededBy: newEntryId,
+    });
+  });
+
+  test('proposes manual consolidation without exposing redacted content', async () => {
+    const hash = workspaceHash('/tmp/mem-consolidate-propose');
+    await service.createConversation('consolidate-propose', '/tmp/mem-consolidate-propose');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const oldRelPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: old_token_memory
+description: old token memory
+type: project
+---
+
+The sensitive token is sk-proj-secretsecretsecretsecret.
+`,
+      source: 'memory-note',
+      filenameHint: 'old-token-memory',
+    });
+    const newRelPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: current_token_policy
+description: current token policy
+type: project
+---
+
+Tokens must not be stored in memory.
+`,
+      source: 'memory-note',
+      filenameHint: 'current-token-policy',
+    });
+    await service.patchMemoryEntryMetadata(hash, [{
+      filename: oldRelPath,
+      patch: {
+        status: 'redacted',
+        redaction: [{ kind: 'api_token', reason: 'API tokens must not be written to memory.' }],
+      },
+    }]);
+
+    stubCli.queueResponse(JSON.stringify({
+      summary: 'Found one stale redacted project memory.',
+      actions: [
+        {
+          action: 'mark_superseded',
+          filename: oldRelPath,
+          supersededBy: newRelPath,
+          reason: 'The current policy replaces the old token memory.',
+        },
+        {
+          action: 'merge_candidates',
+          filenames: [oldRelPath, newRelPath],
+          reason: 'Both entries concern token handling.',
+        },
+      ],
+    }));
+
+    const proposal = await memoryMcp.proposeMemoryConsolidation(hash);
+
+    expect(proposal.summary).toBe('Found one stale redacted project memory.');
+    expect(proposal.actions).toEqual([
+      {
+        action: 'mark_superseded',
+        filename: oldRelPath,
+        supersededBy: newRelPath,
+        reason: 'The current policy replaces the old token memory.',
+      },
+      {
+        action: 'merge_candidates',
+        filenames: [oldRelPath, newRelPath],
+        reason: 'Both entries concern token handling.',
+      },
+    ]);
+    expect(stubCli._oneShotCalls[0].prompt).not.toContain('sk-proj-secretsecretsecretsecret');
+    expect(stubCli._oneShotCalls[0].prompt).toContain('redacted content withheld');
+  });
+
+  test('applies only supersession consolidation actions and writes an audit', async () => {
+    const hash = workspaceHash('/tmp/mem-consolidate-apply');
+    await service.createConversation('consolidate-apply', '/tmp/mem-consolidate-apply');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const oldRelPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: old_project_deadline
+description: old deadline
+type: project
+---
+
+The deadline is Thursday.
+`,
+      source: 'memory-note',
+      filenameHint: 'old-project-deadline',
+    });
+    const newRelPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: new_project_deadline
+description: new deadline
+type: project
+---
+
+The deadline is Friday.
+`,
+      source: 'memory-note',
+      filenameHint: 'new-project-deadline',
+    });
+    const oldEntryId = readMemoryState(tmpDir, hash).entries[oldRelPath].entryId;
+    const newEntryId = readMemoryState(tmpDir, hash).entries[newRelPath].entryId;
+    const memoryUpdateCalls: any[] = [];
+    const wsMemoryMcp = createMemoryMcpServer({
+      chatService: service,
+      backendRegistry: registry,
+      emitMemoryUpdate: (workspaceHash, payload) => {
+        memoryUpdateCalls.push({ workspaceHash, payload });
+      },
+    });
+
+    const result = await wsMemoryMcp.applyMemoryConsolidation(hash, {
+      summary: 'Deadline cleanup.',
+      actions: [
+        {
+          action: 'mark_superseded',
+          filename: oldRelPath,
+          supersededBy: newRelPath,
+          reason: 'Friday replaces Thursday.',
+        },
+        {
+          action: 'normalize_candidate',
+          filename: newRelPath,
+          title: 'New deadline',
+          reason: 'Title could be clearer.',
+        },
+      ],
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.applied).toHaveLength(1);
+    expect(result.skipped).toHaveLength(1);
+    expect(result.auditPath).toMatch(/^audits\/consolidation_/);
+    expect(fs.existsSync(path.join(memoryDir(tmpDir, hash), result.auditPath!))).toBe(true);
+
+    const state = readMemoryState(tmpDir, hash);
+    expect(state.entries[oldRelPath]).toMatchObject({
+      status: 'superseded',
+      supersededBy: newEntryId,
+    });
+    expect(state.entries[newRelPath].supersedes).toEqual([oldEntryId]);
+    expect(memoryUpdateCalls).toHaveLength(1);
+    expect(memoryUpdateCalls[0].payload.changedFiles.sort()).toEqual([newRelPath, oldRelPath].sort());
+  });
+
+  test('drafts merge consolidation operations with full non-redacted source content', async () => {
+    const hash = workspaceHash('/tmp/mem-consolidate-draft');
+    await service.createConversation('consolidate-draft', '/tmp/mem-consolidate-draft');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const firstRelPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: node_tests
+description: node test preference
+type: feedback
+---
+
+Use node:test for small service tests.
+`,
+      source: 'memory-note',
+      filenameHint: 'node-tests',
+    });
+    const secondRelPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: service_tests
+description: service test preference
+type: feedback
+---
+
+Prefer node:test for service-level coverage.
+`,
+      source: 'memory-note',
+      filenameHint: 'service-tests',
+    });
+
+    stubCli.queueResponse(JSON.stringify({
+      summary: 'Merge duplicate testing preferences.',
+      operations: [{
+        operation: 'create',
+        filenameHint: 'node-test-preference',
+        supersedes: [firstRelPath, secondRelPath],
+        reason: 'Both entries describe the same testing preference.',
+        content: `---
+name: node_test_preference
+description: user prefers node:test for service tests
+type: feedback
+---
+
+Use node:test for focused service-level coverage.
+`,
+      }],
+    }));
+
+    const draft = await memoryMcp.draftMemoryConsolidation(hash, {
+      action: {
+        action: 'merge_candidates',
+        filenames: [firstRelPath, secondRelPath],
+        reason: 'Duplicate testing preferences.',
+      },
+    });
+
+    expect(draft.summary).toBe('Merge duplicate testing preferences.');
+    expect(draft.operations).toEqual([{
+      operation: 'create',
+      filenameHint: 'node-test-preference',
+      supersedes: [firstRelPath, secondRelPath],
+      reason: 'Both entries describe the same testing preference.',
+      content: `---
+name: node_test_preference
+description: user prefers node:test for service tests
+type: feedback
+---
+
+Use node:test for focused service-level coverage.`,
+    }]);
+    expect(stubCli._oneShotCalls[0].prompt).toContain(firstRelPath);
+    expect(stubCli._oneShotCalls[0].prompt).toContain('Use node:test for small service tests.');
+    expect(stubCli._oneShotCalls[0].prompt).toContain('Draft exact');
+  });
+
+  test('does not draft rewrites for redacted source entries', async () => {
+    const hash = workspaceHash('/tmp/mem-consolidate-draft-redacted');
+    await service.createConversation('consolidate-draft-redacted', '/tmp/mem-consolidate-draft-redacted');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const relPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: token_policy
+description: token policy
+type: project
+---
+
+Token sk-proj-secretsecretsecretsecret must never be stored.
+`,
+      source: 'memory-note',
+      filenameHint: 'token-policy',
+    });
+    await service.patchMemoryEntryMetadata(hash, [{
+      filename: relPath,
+      patch: {
+        status: 'redacted',
+        redaction: [{ kind: 'api_token', reason: 'API tokens must not be written to memory.' }],
+      },
+    }]);
+
+    await expect(memoryMcp.draftMemoryConsolidation(hash, {
+      action: {
+        action: 'normalize_candidate',
+        filename: relPath,
+        reason: 'Clean up redacted entry.',
+      },
+    })).rejects.toThrow(/redacted/);
+    expect(stubCli._oneShotCalls).toHaveLength(0);
+  });
+
+  test('applies create draft operations by writing a note and superseding sources', async () => {
+    const hash = workspaceHash('/tmp/mem-consolidate-apply-draft');
+    await service.createConversation('consolidate-apply-draft', '/tmp/mem-consolidate-apply-draft');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const firstRelPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: old_testing_a
+description: testing preference a
+type: feedback
+---
+
+Use node:test for services.
+`,
+      source: 'memory-note',
+      filenameHint: 'old-testing-a',
+    });
+    const secondRelPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: old_testing_b
+description: testing preference b
+type: feedback
+---
+
+Use node:test for service modules.
+`,
+      source: 'memory-note',
+      filenameHint: 'old-testing-b',
+    });
+    const firstEntryId = readMemoryState(tmpDir, hash).entries[firstRelPath].entryId;
+    const secondEntryId = readMemoryState(tmpDir, hash).entries[secondRelPath].entryId;
+    const memoryUpdateCalls: any[] = [];
+    const wsMemoryMcp = createMemoryMcpServer({
+      chatService: service,
+      backendRegistry: registry,
+      emitMemoryUpdate: (workspaceHash, payload) => {
+        memoryUpdateCalls.push({ workspaceHash, payload });
+      },
+    });
+
+    const result = await wsMemoryMcp.applyMemoryConsolidationDraft(hash, {
+      summary: 'Apply merged testing preference.',
+      draft: {
+        id: 'draft-test',
+        createdAt: '2026-04-07T12:00:00.000Z',
+        summary: 'Merge testing preferences.',
+        action: {
+          action: 'merge_candidates',
+          filenames: [firstRelPath, secondRelPath],
+          reason: 'Duplicate testing preferences.',
+        },
+        operations: [{
+          operation: 'create',
+          filenameHint: 'node-test-preference',
+          supersedes: [firstRelPath, secondRelPath],
+          reason: 'Merged duplicate preferences.',
+          content: `---
+name: node_test_preference
+description: user prefers node:test for services
+type: feedback
+---
+
+Use node:test for focused service coverage.
+`,
+        }],
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.applied).toHaveLength(1);
+    expect(result.createdFiles).toHaveLength(1);
+    expect(result.auditPath).toMatch(/^audits\/consolidation_/);
+
+    const createdPath = result.createdFiles[0];
+    const state = readMemoryState(tmpDir, hash);
+    expect(state.entries[createdPath].supersedes).toEqual([firstEntryId, secondEntryId]);
+    expect(state.entries[firstRelPath]).toMatchObject({
+      status: 'superseded',
+      supersededBy: state.entries[createdPath].entryId,
+    });
+    expect(state.entries[secondRelPath]).toMatchObject({
+      status: 'superseded',
+      supersededBy: state.entries[createdPath].entryId,
+    });
+    const audit = JSON.parse(fs.readFileSync(path.join(memoryDir(tmpDir, hash), result.auditPath!), 'utf8'));
+    expect(audit.appliedDraftOperations).toHaveLength(1);
+    expect(audit.applied).toEqual([]);
+    expect(memoryUpdateCalls).toHaveLength(1);
+    expect(memoryUpdateCalls[0].payload.changedFiles.sort()).toEqual([createdPath, firstRelPath, secondRelPath].sort());
+  });
+
+  test('applies replace draft operations only to selected notes entries', async () => {
+    const hash = workspaceHash('/tmp/mem-consolidate-replace-draft');
+    await service.createConversation('consolidate-replace-draft', '/tmp/mem-consolidate-replace-draft');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const relPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: messy_title
+description: old description
+type: project
+---
+
+Keep the body.
+`,
+      source: 'memory-note',
+      filenameHint: 'messy-title',
+    });
+
+    const result = await memoryMcp.applyMemoryConsolidationDraft(hash, {
+      draft: {
+        id: 'draft-replace',
+        createdAt: '2026-04-07T12:00:00.000Z',
+        summary: 'Normalize metadata.',
+        action: {
+          action: 'normalize_candidate',
+          filename: relPath,
+          reason: 'Clean title.',
+        },
+        operations: [{
+          operation: 'replace',
+          filename: relPath,
+          reason: 'Normalize name and description.',
+          content: `---
+name: project_memory_title
+description: clear project memory description
+type: project
+---
+
+Keep the body.
+`,
+        }],
+      },
+    });
+
+    expect(result.applied).toHaveLength(1);
+    expect(result.createdFiles).toHaveLength(0);
+    const snapshot = await service.getWorkspaceMemory(hash);
+    const file = snapshot!.files.find((item) => item.filename === relPath);
+    expect(file?.name).toBe('project_memory_title');
+    expect(file?.description).toBe('clear project memory description');
+    expect(readMemoryState(tmpDir, hash).entries[relPath].status).toBe('active');
   });
 
   test('returns 502 when CLI returns empty output', async () => {
@@ -560,6 +1164,153 @@ Body.
     expect(stubCli._oneShotCalls).toHaveLength(1);
     const sentPrompt = stubCli._oneShotCalls[0].prompt;
     expect(sentPrompt).toContain('(none yet)');
+  });
+});
+
+describe('POST /mcp/memory/search', () => {
+  afterEach(async () => {
+    await stopHttpServer();
+  });
+
+  test('returns 401 when x-memory-token is missing', async () => {
+    await startHttpServer(memoryMcp.router);
+    const res = await makeRequest('POST', '/mcp/memory/search', { query: 'typescript' });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toMatch(/invalid or missing/i);
+  });
+
+  test('returns 400 when query is missing', async () => {
+    await startHttpServer(memoryMcp.router);
+    const session = memoryMcp.issueMemoryMcpSession('conv-search-400', 'hash-search-400');
+    const res = await makeRequest('POST', '/mcp/memory/search', {}, {
+      'x-memory-token': session.token,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/query is required/i);
+  });
+
+  test('returns 403 when memory is disabled for the workspace', async () => {
+    const hash = workspaceHash('/tmp/mem-search-disabled');
+    await service.createConversation('conv-search-disabled', '/tmp/mem-search-disabled');
+    const session = memoryMcp.issueMemoryMcpSession('conv-search-disabled', hash);
+
+    await startHttpServer(memoryMcp.router);
+    const res = await makeRequest('POST', '/mcp/memory/search', { query: 'typescript' }, {
+      'x-memory-token': session.token,
+    });
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/memory is disabled/i);
+  });
+
+  test('returns lexical memory results and omits content when requested', async () => {
+    const hash = workspaceHash('/tmp/mem-search-ok');
+    await service.createConversation('conv-search-ok', '/tmp/mem-search-ok');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const relPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: prefers_typescript
+description: user prefers TypeScript examples
+type: user
+---
+
+Use TypeScript examples when showing frontend code.
+`,
+      source: 'memory-note',
+      filenameHint: 'prefers-typescript',
+    });
+    await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: unrelated_deadline
+description: rollout deadline
+type: project
+---
+
+The rollout deadline is Friday.
+`,
+      source: 'memory-note',
+      filenameHint: 'deadline',
+    });
+
+    const session = memoryMcp.issueMemoryMcpSession('conv-search-ok', hash);
+    await startHttpServer(memoryMcp.router);
+    const res = await makeRequest('POST', '/mcp/memory/search', {
+      query: 'typescript frontend examples',
+      limit: 3,
+      include_content: false,
+    }, {
+      'x-memory-token': session.token,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.query).toBe('typescript frontend examples');
+    expect(res.body.results).toHaveLength(1);
+    expect(res.body.results[0]).toMatchObject({
+      filename: relPath,
+      type: 'user',
+      status: 'active',
+      score: expect.any(Number),
+      snippet: expect.stringMatching(/TypeScript/i),
+    });
+    expect(res.body.results[0]).not.toHaveProperty('content');
+  });
+
+  test('honors memory_search status all scope', async () => {
+    const hash = workspaceHash('/tmp/mem-search-status-all');
+    await service.createConversation('conv-search-status-all', '/tmp/mem-search-status-all');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    const activePath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: active_typescript
+description: active TypeScript guidance
+type: user
+---
+
+Use TypeScript examples.
+`,
+      source: 'memory-note',
+      filenameHint: 'active-typescript',
+    });
+    const oldPath = await service.addMemoryNoteEntry(hash, {
+      content: `---
+name: old_typescript
+description: old TypeScript guidance
+type: user
+---
+
+Old TypeScript examples.
+`,
+      source: 'memory-note',
+      filenameHint: 'old-typescript',
+    });
+    await service.patchMemoryEntryMetadata(hash, [{
+      filename: oldPath,
+      patch: { status: 'superseded' },
+    }]);
+
+    const session = memoryMcp.issueMemoryMcpSession('conv-search-status-all', hash);
+    await startHttpServer(memoryMcp.router);
+    const defaultRes = await makeRequest('POST', '/mcp/memory/search', {
+      query: 'typescript',
+      limit: 5,
+    }, {
+      'x-memory-token': session.token,
+    });
+    expect(defaultRes.status).toBe(200);
+    expect(defaultRes.body.results.map((result: { filename: string }) => result.filename)).toEqual([activePath]);
+
+    const allRes = await makeRequest('POST', '/mcp/memory/search', {
+      query: 'typescript',
+      status: 'all',
+      limit: 5,
+    }, {
+      'x-memory-token': session.token,
+    });
+    expect(allRes.status).toBe(200);
+    expect(allRes.body.results.map((result: { filename: string }) => result.filename)).toEqual(
+      expect.arrayContaining([activePath, oldPath]),
+    );
   });
 });
 
@@ -761,6 +1512,12 @@ WS body.
     expect(memoryUpdateCalls[0].payload.changedFiles).toHaveLength(1);
     expect(memoryUpdateCalls[0].payload.sourceConversationId).toBe('conv-post-ws');
     expect(memoryUpdateCalls[0].payload.displayInChat).toBe(true);
+    expect(memoryUpdateCalls[0].payload.writeOutcomes).toEqual([
+      expect.objectContaining({
+        action: 'saved',
+        filename: res.body.filename,
+      }),
+    ]);
   });
 
   test('emits workspace memory_update after session extraction saves entries', async () => {

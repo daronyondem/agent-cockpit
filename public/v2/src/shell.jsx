@@ -263,6 +263,7 @@ function App(){
   const [restarting, setRestarting] = React.useState(false);
   const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label } | null
   const [memoryUpdateView, setMemoryUpdateView] = React.useState(null); // { hash, label, update } | null
+  const [memoryReviewView, setMemoryReviewView] = React.useState(null); // { hash, label, runId } | null
   const [sbOpen, setSbOpen] = React.useState(false); // mobile-only sidebar overlay; ignored on desktop
   const [user, setUser] = React.useState(null); // { displayName, email, provider } | null
   const convStates = useConvStates();
@@ -389,6 +390,7 @@ function App(){
     setFilesView(null);
     setSettingsView(null);
     setMemoryUpdateView(null);
+    setMemoryReviewView(null);
     /* Push the active id into StreamStore synchronously *before* markRead
        so any `done` frame that fires between this call and the React-effect
        sync below already sees the new active id and doesn't re-flag the
@@ -408,6 +410,7 @@ function App(){
 
   const onOpenKb = React.useCallback((hash, label) => {
     setMemoryUpdateView(null);
+    setMemoryReviewView(null);
     setFilesView(null);
     setSettingsView(null);
     setKbView({ hash, label });
@@ -416,6 +419,7 @@ function App(){
 
   const onOpenFiles = React.useCallback((hash, label) => {
     setMemoryUpdateView(null);
+    setMemoryReviewView(null);
     setKbView(null);
     setSettingsView(null);
     setFilesView({ hash, label });
@@ -424,6 +428,7 @@ function App(){
 
   const onOpenSettings = React.useCallback((initialTab) => {
     setMemoryUpdateView(null);
+    setMemoryReviewView(null);
     setKbView(null);
     setFilesView(null);
     setSettingsView({ initialTab: initialTab || null });
@@ -446,6 +451,7 @@ function App(){
         setFilesView(null);
         setSettingsView(null);
         setMemoryUpdateView(null);
+        setMemoryReviewView(null);
       }
       return next;
     });
@@ -486,13 +492,22 @@ function App(){
 
   const onOpenWorkspaceSettings = React.useCallback((hash, label, initialTab) => {
     setMemoryUpdateView(null);
+    setMemoryReviewView(null);
     setWorkspaceSettings({ hash, label, initialTab: initialTab || null });
     setSbOpen(false);
   }, []);
 
   const onOpenMemoryUpdate = React.useCallback((hash, label, update) => {
     setWorkspaceSettings(null);
+    setMemoryReviewView(null);
     setMemoryUpdateView({ hash, label, update: update || null });
+    setSbOpen(false);
+  }, []);
+
+  const onOpenMemoryReview = React.useCallback((hash, label, runId) => {
+    setWorkspaceSettings(null);
+    setMemoryUpdateView(null);
+    setMemoryReviewView({ hash, label, runId: runId || null });
     setSbOpen(false);
   }, []);
 
@@ -537,6 +552,7 @@ function App(){
       setKbView(null);
       setFilesView(null);
       setSettingsView(null);
+      setMemoryReviewView(null);
       setViewingArchive(false);
       setActiveConvId(conv.id);
     } catch (err) {
@@ -594,6 +610,13 @@ function App(){
         <section className="main main-kb">
           <KbBrowser hash={kbView.hash} label={kbView.label} onClose={() => setKbView(null)}/>
         </section>
+      ) : memoryReviewView ? (
+        <MemoryReviewPage
+          hash={memoryReviewView.hash}
+          label={memoryReviewView.label}
+          runId={memoryReviewView.runId}
+          onClose={() => setMemoryReviewView(null)}
+        />
       ) : activeConvId
         ? <ChatErrorBoundary key={activeConvId}>
             <ChatLive
@@ -602,6 +625,7 @@ function App(){
               onDeleted={onDeleted}
               onRenamed={onRenamed}
               onOpenMemoryUpdate={onOpenMemoryUpdate}
+              onOpenMemoryReview={onOpenMemoryReview}
               onOpenWorkspaceSettings={onOpenWorkspaceSettings}
               onOpenSettings={onOpenSettings}
             />
@@ -633,6 +657,7 @@ function App(){
         hash={workspaceSettings ? workspaceSettings.hash : null}
         label={workspaceSettings ? workspaceSettings.label : null}
         initialTab={workspaceSettings ? workspaceSettings.initialTab : null}
+        onOpenMemoryReview={onOpenMemoryReview}
         onClose={onCloseWorkspaceSettings}
       />
       <MemoryUpdateModal
@@ -707,7 +732,7 @@ function GoalStrip({ convId, goal, streaming, sending }){
   );
 }
 
-function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenWorkspaceSettings, onOpenSettings }){
+function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenMemoryReview, onOpenWorkspaceSettings, onOpenSettings }){
   const state = useConversationState(convId);
   const backends = useBackendList();
   const { profiles: cliProfiles } = useCliProfileSettings();
@@ -1401,6 +1426,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                 </button>
               </span>
               <ComposerNotifIcon conv={conv} convId={convId}/>
+              <ComposerMemoryReviewIcon conv={conv} workspaceLabel={wsLabel} onOpenMemoryReview={onOpenMemoryReview}/>
               <ComposerInstructionCompatibilityIcon
                 workspaceHash={conv.workspaceHash}
                 workspaceLabel={wsLabel}
@@ -3725,6 +3751,109 @@ function DreamStepper({ progress }){
   );
 }
 
+function ComposerMemoryReviewIcon({ conv, workspaceLabel, onOpenMemoryReview }){
+  const buttonRef = React.useRef(null);
+  const panelRef = React.useRef(null);
+  const [open, setOpen] = React.useState(false);
+  const review = conv && conv.memoryReview;
+  const pos = useFixedPopoverPosition(buttonRef, panelRef, open);
+
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (panelRef.current && panelRef.current.contains(e.target)) return;
+      if (buttonRef.current && buttonRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!review || !review.pending) setOpen(false);
+  }, [review && review.pending, review && review.latestRunId]);
+
+  if (!review || !review.enabled || !review.pending) return null;
+
+  const drafts = Math.max(0, review.pendingDrafts || 0);
+  const safeActions = Math.max(0, review.pendingSafeActions || 0);
+  const failed = Math.max(0, review.failedItems || 0);
+  const count = drafts + safeActions + failed;
+  const title = count === 1 ? '1 Memory Review item' : `${count} Memory Review items`;
+  const style = pos
+    ? { top: pos.top, left: pos.left }
+    : { visibility: 'hidden', top: 0, left: 0 };
+
+  function openReview(){
+    setOpen(false);
+    if (onOpenMemoryReview && conv && conv.workspaceHash) {
+      onOpenMemoryReview(conv.workspaceHash, workspaceLabel || 'workspace', review.latestRunId || null);
+    }
+  }
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className="composer-notif state-pending state-memory-review"
+        aria-label={title}
+        aria-expanded={open ? 'true' : 'false'}
+        onClick={() => setOpen(v => !v)}
+      >
+        {Ico.moon(14)}
+        <span className="composer-notif-pulse state-pending"/>
+      </button>
+      {open ? (
+        <div
+          ref={panelRef}
+          className="tt composer-action-popover"
+          data-variant="stat"
+          data-placement={pos && pos.placeAbove ? 'above' : 'below'}
+          data-pinned="true"
+          role="dialog"
+          aria-label={title}
+          style={style}
+        >
+          <span className="tt-arrow" style={{ left: pos ? pos.arrowX : 12 }}/>
+          <div className="tt-header">
+            <span className="tt-eye">Memory Review</span>
+          </div>
+          <h4 className="tt-h">{title}</h4>
+          <div className="tt-section">
+            <div className="tt-rows">
+              <div className="tt-kv"><span>Drafts</span><b>{drafts || '-'}</b></div>
+              <div className="tt-kv"><span>Metadata</span><b>{safeActions || '-'}</b></div>
+              <div className="tt-kv"><span>Needs attention</span><b>{failed || '-'}</b></div>
+            </div>
+          </div>
+          <div className="tt-foot">
+            <span className="hint">{formatMemoryReviewComposerStatus(review.latestRunStatus)}</span>
+            <span className="spacer"/>
+            <button type="button" className="tt-btn primary" onClick={openReview}>Review</button>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function formatMemoryReviewComposerStatus(status){
+  if (status === 'running') return 'Generating drafts';
+  if (status === 'failed') return 'Review needs attention';
+  return 'Ready to review';
+}
+
 const CHAT_IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;
 
 function FileViewerCode({ content, language, line }){
@@ -3820,12 +3949,19 @@ function FileViewerPanel({ filename, viewPath, imageUrl, displayPath, line, onCl
 function MemoryUpdateBubble({ message, onOpen }){
   const mu = message.memoryUpdate || { changedFiles: [], fileCount: 0, capturedAt: message.timestamp };
   const changed = Array.isArray(mu.changedFiles) ? mu.changedFiles : [];
+  const outcomes = Array.isArray(mu.writeOutcomes) ? mu.writeOutcomes : [];
+  const skipped = outcomes.filter(o => o && String(o.action || '').startsWith('skipped_'));
   const [expanded, setExpanded] = React.useState(false);
-  const headline = changed.length === 0
-    ? `Memory snapshot refreshed (${mu.fileCount} file${mu.fileCount === 1 ? '' : 's'})`
-    : `Memory updated: ${changed.length} file${changed.length === 1 ? '' : 's'} changed`;
-  const preview = changed.slice(0, 5);
-  const extra = Math.max(0, changed.length - preview.length);
+  const headline = (() => {
+    if (outcomes.length && changed.length === 0 && skipped.length === outcomes.length) {
+      return `Memory note skipped: ${formatMemoryOutcomeAction(skipped[0].action)}`;
+    }
+    if (outcomes.length) return `Memory updated: ${outcomes.length} decision${outcomes.length === 1 ? '' : 's'}`;
+    if (changed.length === 0) return `Memory snapshot refreshed (${mu.fileCount} file${mu.fileCount === 1 ? '' : 's'})`;
+    return `Memory updated: ${changed.length} file${changed.length === 1 ? '' : 's'} changed`;
+  })();
+  const preview = outcomes.length ? outcomes.slice(0, 5) : changed.slice(0, 5);
+  const extra = Math.max(0, (outcomes.length || changed.length) - preview.length);
   return (
     <div className="msg msg-memory">
       <span className="avatar avatar-memory" aria-hidden="true">{Ico.moon(14)}</span>
@@ -3845,7 +3981,19 @@ function MemoryUpdateBubble({ message, onOpen }){
             <span className={"memory-caret" + (expanded ? ' open' : '')}>▸</span>
             <span className="memory-headline">{headline}</span>
           </button>
-          {expanded && changed.length > 0 ? (
+          {expanded && outcomes.length > 0 ? (
+            <ul className="memory-files">
+              {preview.map((o, idx) => (
+                <li key={`${o.action || 'outcome'}_${idx}`}>
+                  <span>{formatMemoryOutcomeAction(o.action)}</span>
+                  {o.filename ? <span className="u-mono"> · {o.filename}</span> : null}
+                  {o.duplicateOf ? <span className="u-mono"> · {o.duplicateOf}</span> : null}
+                  {o.reason ? <div className="u-dim">{o.reason}</div> : null}
+                </li>
+              ))}
+              {extra > 0 ? <li className="u-dim">+{extra} more</li> : null}
+            </ul>
+          ) : expanded && changed.length > 0 ? (
             <ul className="memory-files">
               {preview.map(f => (<li key={f} className="u-mono">{f}</li>))}
               {extra > 0 ? <li className="u-dim">+{extra} more</li> : null}
@@ -3858,6 +4006,17 @@ function MemoryUpdateBubble({ message, onOpen }){
       </div>
     </div>
   );
+}
+
+function formatMemoryOutcomeAction(action){
+  switch (action) {
+    case 'saved': return 'Saved';
+    case 'redacted_saved': return 'Saved with redaction';
+    case 'superseded_saved': return 'Saved and superseded older memory';
+    case 'skipped_duplicate': return 'Skipped duplicate';
+    case 'skipped_ephemeral': return 'Skipped ephemeral';
+    default: return 'Memory decision';
+  }
 }
 
 /* Plan approval + clarifying question cards. Shown in the feed when the

@@ -269,6 +269,10 @@ export interface WorkspaceIndex {
    * no MCP memory_note exposure, no post-session extraction.
    */
   memoryEnabled?: boolean;
+  /** Per-workspace Memory Review schedule. Default/off when absent. */
+  memoryReviewSchedule?: MemoryReviewScheduleConfig;
+  /** Timestamp of the last Memory Review schedule change. Resets scheduled-run guards. */
+  memoryReviewScheduleUpdatedAt?: string;
   /**
    * Whether per-workspace Knowledge Base is enabled. When false/undefined,
    * the workspace behaves exactly as before the KB feature: no KB pointer
@@ -331,6 +335,8 @@ export interface Conversation {
   archived?: boolean;
   /** KB status snapshot, populated when workspace has KB enabled. */
   kb?: ConversationKbStatus;
+  /** Pending Memory Review snapshot for composer notifications. */
+  memoryReview?: ConversationMemoryReviewStatus;
 }
 
 /** KB status block on conversation responses (avoids extra round-trip for the KB status icon). */
@@ -344,6 +350,25 @@ export interface ConversationKbStatus {
   autoDigest: boolean;
   dreamingStatus: 'idle' | 'running' | 'failed';
   failedItems: number;
+}
+
+export interface ConversationMemoryReviewStatus {
+  enabled: boolean;
+  pending: boolean;
+  pendingRuns: number;
+  pendingDrafts: number;
+  pendingSafeActions: number;
+  failedItems: number;
+  latestRunId?: string;
+  latestRunStatus?: MemoryReviewRunStatus;
+  latestRunCreatedAt?: string;
+  latestRunUpdatedAt?: string;
+  latestRunSource?: MemoryReviewRunSource;
+  lastRunId?: string;
+  lastRunStatus?: MemoryReviewRunStatus;
+  lastRunCreatedAt?: string;
+  lastRunUpdatedAt?: string;
+  lastRunSource?: MemoryReviewRunSource;
 }
 
 export interface ConversationListItem {
@@ -707,6 +732,14 @@ export interface MemoryUpdateEvent {
   sourceConversationId?: string | null;
   /** Whether this recipient should render an in-chat Memory update bubble. */
   displayInChat?: boolean;
+  /** Governed write decisions that caused, skipped, or annotated this update. */
+  writeOutcomes?: MemoryWriteOutcome[];
+}
+
+export interface MemoryReviewUpdateEvent {
+  type: 'memory_review_update';
+  updatedAt: string;
+  review: ConversationMemoryReviewStatus;
 }
 
 export type StreamEvent =
@@ -725,6 +758,7 @@ export type StreamEvent =
   | ExternalSessionEvent
   | BackendRuntimeEvent
   | MemoryUpdateEvent
+  | MemoryReviewUpdateEvent
   | KbStateUpdateEvent;
 
 export type StreamErrorSource = 'backend' | 'transport' | 'abort' | 'server';
@@ -783,6 +817,233 @@ export type MemoryType = 'user' | 'feedback' | 'project' | 'reference' | 'unknow
 /** Where a memory file came from. */
 export type MemorySource = 'cli-capture' | 'memory-note' | 'session-extraction';
 
+/** Lifecycle state assigned by Agent Cockpit's workspace memory sidecar. */
+export type MemoryStatus = 'active' | 'superseded' | 'redacted' | 'deleted';
+
+/** Sharing boundary for a memory entry. V1 only writes workspace-scoped entries. */
+export type MemoryScope = 'workspace' | 'user';
+
+export interface MemoryRedaction {
+  kind: string;
+  reason: string;
+}
+
+export type MemoryWriteAction =
+  | 'saved'
+  | 'skipped_duplicate'
+  | 'skipped_ephemeral'
+  | 'redacted_saved'
+  | 'superseded_saved';
+
+export interface MemoryWriteOutcome {
+  action: MemoryWriteAction;
+  reason: string;
+  filename?: string;
+  skipped?: string | boolean;
+  duplicateOf?: string;
+  superseded?: string[];
+  redaction?: MemoryRedaction[];
+}
+
+export interface MemorySearchOptions {
+  query: string;
+  limit?: number;
+  types?: MemoryType[];
+  statuses?: MemoryStatus[];
+}
+
+export interface MemorySearchResult {
+  filename: string;
+  entryId: string;
+  name: string | null;
+  description: string | null;
+  type: MemoryType;
+  source: MemorySource;
+  status: MemoryStatus;
+  score: number;
+  snippet: string;
+  content: string;
+  metadata: MemoryEntryMetadata;
+}
+
+export type MemoryConsolidationActionType =
+  | 'mark_superseded'
+  | 'merge_candidates'
+  | 'split_candidate'
+  | 'normalize_candidate'
+  | 'keep';
+
+export interface MemoryConsolidationAction {
+  action: MemoryConsolidationActionType;
+  reason: string;
+  filename?: string;
+  supersededBy?: string;
+  filenames?: string[];
+  title?: string;
+}
+
+export interface MemoryConsolidationProposal {
+  id: string;
+  createdAt: string;
+  summary: string;
+  actions: MemoryConsolidationAction[];
+}
+
+export type MemoryConsolidationDraftOperationType = 'create' | 'replace';
+
+export interface MemoryConsolidationDraftOperation {
+  operation: MemoryConsolidationDraftOperationType;
+  reason: string;
+  content: string;
+  filename?: string;
+  filenameHint?: string;
+  supersedes?: string[];
+}
+
+export interface MemoryConsolidationDraft {
+  id: string;
+  createdAt: string;
+  action: MemoryConsolidationAction;
+  summary: string;
+  operations: MemoryConsolidationDraftOperation[];
+}
+
+export interface MemoryConsolidationSkippedAction {
+  action: MemoryConsolidationAction;
+  reason: string;
+}
+
+export interface MemoryConsolidationSkippedDraftOperation {
+  operation: MemoryConsolidationDraftOperation;
+  reason: string;
+}
+
+export interface MemoryConsolidationApplyResult {
+  ok: true;
+  applied: MemoryConsolidationAction[];
+  skipped: MemoryConsolidationSkippedAction[];
+  auditPath: string | null;
+  snapshot: MemorySnapshot | null;
+}
+
+export interface MemoryConsolidationDraftApplyResult {
+  ok: true;
+  applied: MemoryConsolidationDraftOperation[];
+  skipped: MemoryConsolidationSkippedDraftOperation[];
+  createdFiles: string[];
+  changedFiles: string[];
+  auditPath: string | null;
+  snapshot: MemorySnapshot | null;
+}
+
+export interface MemoryConsolidationAudit {
+  version: 1;
+  createdAt: string;
+  summary: string;
+  applied: MemoryConsolidationAction[];
+  skipped: MemoryConsolidationSkippedAction[];
+  appliedDraftOperations?: MemoryConsolidationDraftOperation[];
+  skippedDraftOperations?: MemoryConsolidationSkippedDraftOperation[];
+}
+
+export type MemoryReviewScheduleDays = 'daily' | 'weekdays' | 'custom';
+
+export type MemoryReviewScheduleConfig =
+  | { mode: 'off' }
+  | {
+      mode: 'window';
+      days: MemoryReviewScheduleDays;
+      customDays?: number[];
+      windowStart: string;
+      windowEnd: string;
+      timezone?: string;
+    };
+
+export type MemoryReviewRunStatus =
+  | 'running'
+  | 'pending_review'
+  | 'completed'
+  | 'partially_applied'
+  | 'dismissed'
+  | 'failed';
+
+export type MemoryReviewRunSource = 'manual' | 'scheduled';
+
+export type MemoryReviewItemStatus = 'pending' | 'applied' | 'discarded' | 'stale' | 'failed';
+
+export interface MemoryReviewSafeActionItem {
+  id: string;
+  status: MemoryReviewItemStatus;
+  action: MemoryConsolidationAction;
+  sourceFingerprints: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
+  appliedAt?: string;
+  discardedAt?: string;
+  failure?: string;
+  result?: MemoryConsolidationApplyResult;
+}
+
+export interface MemoryReviewDraftItem {
+  id: string;
+  status: MemoryReviewItemStatus;
+  action: MemoryConsolidationAction;
+  sourceFingerprints: Record<string, string>;
+  createdAt: string;
+  updatedAt: string;
+  draft?: MemoryConsolidationDraft;
+  appliedAt?: string;
+  discardedAt?: string;
+  regeneratedAt?: string;
+  failure?: string;
+  result?: MemoryConsolidationDraftApplyResult;
+}
+
+export interface MemoryReviewRunFailure {
+  action?: MemoryConsolidationAction;
+  message: string;
+}
+
+export interface MemoryReviewRun {
+  version: 1;
+  id: string;
+  workspaceHash: string;
+  status: MemoryReviewRunStatus;
+  source: MemoryReviewRunSource;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string;
+  summary: string;
+  sourceSnapshotFingerprint: string;
+  proposal?: MemoryConsolidationProposal;
+  safeActions: MemoryReviewSafeActionItem[];
+  drafts: MemoryReviewDraftItem[];
+  failures: MemoryReviewRunFailure[];
+}
+
+export interface MemoryEntryMetadata {
+  /** Stable ID derived from the workspace-relative filename unless explicitly migrated later. */
+  entryId: string;
+  /** Relative path inside `memory/files/`, using forward slashes. */
+  filename: string;
+  status: MemoryStatus;
+  scope: MemoryScope;
+  source: MemorySource;
+  createdAt: string;
+  updatedAt: string;
+  sourceConversationId?: string;
+  supersedes?: string[];
+  supersededBy?: string;
+  confidence?: number;
+  redaction?: MemoryRedaction[];
+}
+
+export interface MemoryMetadataIndex {
+  version: 1;
+  updatedAt: string;
+  entries: Record<string, MemoryEntryMetadata>;
+}
+
 export interface MemoryFile {
   /**
    * Relative path inside the workspace memory files dir, using forward
@@ -808,6 +1069,13 @@ export interface MemoryFile {
    * from older snapshots that don't carry the field.
    */
   source?: MemorySource;
+  /**
+   * Agent Cockpit-owned lifecycle metadata loaded from
+   * `memory/state.json`. Older workspaces and legacy snapshots may not
+   * carry this field; callers should treat absence as active workspace
+   * memory until `ChatService` synthesizes it.
+   */
+  metadata?: MemoryEntryMetadata;
 }
 
 export interface MemorySnapshot {

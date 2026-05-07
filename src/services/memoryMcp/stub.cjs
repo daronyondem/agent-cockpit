@@ -2,15 +2,16 @@
 /**
  * Agent Cockpit Memory MCP stdio shim.
  *
- * Spawned by non-Claude CLIs (e.g. Kiro) as an MCP server via ACP's
- * `mcpServers` config. Implements the minimal subset of the MCP protocol
- * (`initialize`, `tools/list`, `tools/call`) and forwards `memory_note`
- * calls to Agent Cockpit's HTTP endpoint over localhost.
+ * Spawned by CLIs as an MCP server via ACP's `mcpServers` config or a
+ * backend-specific MCP launch mechanism. Implements the minimal subset of the MCP protocol
+ * (`initialize`, `tools/list`, `tools/call`) and forwards memory tool
+ * calls to Agent Cockpit's HTTP endpoints over localhost.
  *
  * Environment variables:
  *   MEMORY_TOKEN     — per-session bearer token issued by the cockpit
- *   MEMORY_ENDPOINT  — full URL of the POST endpoint, e.g.
+ *   MEMORY_ENDPOINT  — full URL of the note POST endpoint, e.g.
  *                      http://127.0.0.1:3335/chat/api/chat/mcp/memory/notes
+ *   MEMORY_SEARCH_ENDPOINT — full URL of the search POST endpoint.
  *
  * This file is intentionally dependency-free and CommonJS so it can be
  * spawned with `node stub.cjs` from any Node environment without
@@ -25,6 +26,7 @@ const https = require('https');
 
 const TOKEN = process.env.MEMORY_TOKEN || '';
 const ENDPOINT = process.env.MEMORY_ENDPOINT || '';
+const SEARCH_ENDPOINT = process.env.MEMORY_SEARCH_ENDPOINT || ENDPOINT.replace(/\/notes(?:\?.*)?$/, '/search');
 
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + '\n');
@@ -66,18 +68,54 @@ const TOOLS = [
       required: ['content'],
     },
   },
+  {
+    name: 'memory_search',
+    description:
+      'Search durable workspace memory for relevant user preferences, feedback, project context, ' +
+      'decisions, and references before answering questions that may depend on prior context.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query in natural language.',
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results to return. Defaults to 5, max 20.',
+        },
+        type: {
+          type: 'string',
+          enum: ['user', 'feedback', 'project', 'reference', 'unknown'],
+          description: 'Optional memory type filter.',
+        },
+        status: {
+          type: 'string',
+          enum: ['active', 'all'],
+          description:
+            'Memory lifecycle scope. Defaults to active, which includes active and redacted entries. ' +
+            'Use all to include superseded and deleted entries too.',
+        },
+        include_content: {
+          type: 'boolean',
+          description: 'Whether to include memory file content. Defaults to true.',
+        },
+      },
+      required: ['query'],
+    },
+  },
 ];
 
-function postMemoryNote(args) {
+function postJson(endpoint, args) {
   return new Promise((resolve, reject) => {
-    if (!ENDPOINT || !TOKEN) {
-      return reject(new Error('MEMORY_ENDPOINT and MEMORY_TOKEN must be set'));
+    if (!endpoint || !TOKEN) {
+      return reject(new Error('MEMORY endpoint and MEMORY_TOKEN must be set'));
     }
     let url;
     try {
-      url = new URL(ENDPOINT);
+      url = new URL(endpoint);
     } catch (err) {
-      return reject(new Error('Invalid MEMORY_ENDPOINT: ' + err.message));
+      return reject(new Error('Invalid MEMORY endpoint: ' + err.message));
     }
     const payload = JSON.stringify(args);
     const mod = url.protocol === 'https:' ? https : http;
@@ -113,18 +151,30 @@ function postMemoryNote(args) {
   });
 }
 
+function postMemoryNote(args) {
+  return postJson(ENDPOINT, args);
+}
+
+function postMemorySearch(args) {
+  return postJson(SEARCH_ENDPOINT, args);
+}
+
 async function handleToolCall(id, params) {
   const toolName = params && params.name;
   const toolArgs = (params && params.arguments) || {};
-  if (toolName !== 'memory_note') {
+  if (toolName !== 'memory_note' && toolName !== 'memory_search') {
     send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Unknown tool: ' + toolName } });
     return;
   }
   try {
-    const { status, data } = await postMemoryNote(toolArgs);
+    const { status, data } = toolName === 'memory_search'
+      ? await postMemorySearch(toolArgs)
+      : await postMemoryNote(toolArgs);
     if (status >= 200 && status < 300) {
       let text;
-      if (data && data.skipped) {
+      if (toolName === 'memory_search') {
+        text = JSON.stringify(data || { results: [] }, null, 2);
+      } else if (data && data.skipped) {
         text = 'Memory note skipped (duplicate of ' + data.skipped + ')';
       } else if (data && data.filename) {
         text = 'Memory note saved: ' + data.filename;
@@ -140,7 +190,8 @@ async function handleToolCall(id, params) {
       });
     } else {
       const errText =
-        'Memory note failed (HTTP ' + status + '): ' + (data && data.error ? data.error : 'unknown error');
+        (toolName === 'memory_search' ? 'Memory search failed' : 'Memory note failed') +
+        ' (HTTP ' + status + '): ' + (data && data.error ? data.error : 'unknown error');
       log(errText);
       send({
         jsonrpc: '2.0',
@@ -158,7 +209,7 @@ async function handleToolCall(id, params) {
       id,
       result: {
         isError: true,
-        content: [{ type: 'text', text: 'Memory note failed: ' + err.message }],
+        content: [{ type: 'text', text: (toolName === 'memory_search' ? 'Memory search failed: ' : 'Memory note failed: ') + err.message }],
       },
     });
   }

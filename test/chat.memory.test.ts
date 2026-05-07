@@ -64,6 +64,437 @@ describe('GET /workspaces/:hash/memory', () => {
   });
 });
 
+describe('GET /workspaces/:hash/memory/search', () => {
+  test('rejects an empty query', async () => {
+    const conv = await env.chatService.createConversation('Search Bad', '/tmp/ws-mem-search-bad');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const res = await env.request('GET', `/api/chat/workspaces/${hash}/memory/search`);
+
+    expect(res.status).toBe(400);
+  });
+
+  test('returns no results while memory is disabled', async () => {
+    const conv = await env.chatService.createConversation('Search Disabled', '/tmp/ws-mem-search-disabled');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: disabled\ndescription: TypeScript preference\ntype: user\n---\n\nUse TypeScript.',
+      source: 'memory-note',
+      filenameHint: 'disabled',
+    });
+
+    const res = await env.request('GET', `/api/chat/workspaces/${hash}/memory/search?query=typescript`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ enabled: false, query: 'typescript', results: [] });
+  });
+
+  test('searches enabled workspace memory and honors type/status filters', async () => {
+    const conv = await env.chatService.createConversation('Search Enabled', '/tmp/ws-mem-search-enabled');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceMemoryEnabled(hash, true);
+    const activePath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: active_pref\ndescription: TypeScript examples\ntype: user\n---\n\nUse TypeScript examples.',
+      source: 'memory-note',
+      filenameHint: 'active-pref',
+    });
+    await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: old_pref\ndescription: old TypeScript examples\ntype: user\n---\n\nOld TypeScript guidance.',
+      source: 'memory-note',
+      filenameHint: 'old-pref',
+    });
+    const snapshot = await env.chatService.getWorkspaceMemory(hash);
+    const oldPath = snapshot!.files.find((file) => file.filename !== activePath)!.filename;
+    await env.chatService.patchMemoryEntryMetadata(hash, [{
+      filename: oldPath,
+      patch: { status: 'superseded' },
+    }]);
+
+    const defaultRes = await env.request('GET', `/api/chat/workspaces/${hash}/memory/search?query=typescript&type=user`);
+    expect(defaultRes.status).toBe(200);
+    expect(defaultRes.body.enabled).toBe(true);
+    expect(defaultRes.body.results.map((result: any) => result.filename)).toEqual([activePath]);
+    expect(defaultRes.body.results[0]).toMatchObject({
+      filename: activePath,
+      type: 'user',
+      status: 'active',
+      snippet: expect.stringMatching(/TypeScript/i),
+    });
+
+    const supersededRes = await env.request(
+      'GET',
+      `/api/chat/workspaces/${hash}/memory/search?query=typescript&status=superseded`,
+    );
+    expect(supersededRes.status).toBe(200);
+    expect(supersededRes.body.results.map((result: any) => result.filename)).toEqual([oldPath]);
+  });
+});
+
+describe('POST /workspaces/:hash/memory/consolidate', () => {
+  test('proposes and applies safe supersession actions', async () => {
+    const conv = await env.chatService.createConversation('Consolidate', '/tmp/ws-mem-consolidate');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceMemoryEnabled(hash, true);
+    const oldPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: old_deadline\ndescription: old deadline\ntype: project\n---\n\nThe deadline is Thursday.',
+      source: 'memory-note',
+      filenameHint: 'old-deadline',
+    });
+    const newPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: new_deadline\ndescription: new deadline\ntype: project\n---\n\nThe deadline is Friday.',
+      source: 'memory-note',
+      filenameHint: 'new-deadline',
+    });
+
+    env.mockBackend.setOneShotImpl(async (prompt) => {
+      expect(prompt).toContain(oldPath);
+      expect(prompt).toContain(newPath);
+      return JSON.stringify({
+        summary: 'One deadline entry is stale.',
+        actions: [{
+          action: 'mark_superseded',
+          filename: oldPath,
+          supersededBy: newPath,
+          reason: 'Friday replaces Thursday.',
+        }],
+      });
+    });
+
+    const proposed = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/consolidate/propose`,
+      {},
+    );
+    expect(proposed.status).toBe(200);
+    expect(proposed.body.proposal.actions).toEqual([{
+      action: 'mark_superseded',
+      filename: oldPath,
+      supersededBy: newPath,
+      reason: 'Friday replaces Thursday.',
+    }]);
+
+    const applied = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/consolidate/apply`,
+      {
+        summary: proposed.body.proposal.summary,
+        actions: proposed.body.proposal.actions,
+      },
+    );
+    expect(applied.status).toBe(200);
+    expect(applied.body.applied).toHaveLength(1);
+    expect(applied.body.auditPath).toMatch(/^audits\/consolidation_/);
+    expect(applied.body.snapshot.files.find((file: any) => file.filename === oldPath).metadata.status).toBe('superseded');
+  });
+
+  test('drafts and applies reviewed consolidation rewrites', async () => {
+    const conv = await env.chatService.createConversation('Consolidate Draft', '/tmp/ws-mem-consolidate-draft');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceMemoryEnabled(hash, true);
+    const firstPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: old_testing_a\ndescription: old testing a\ntype: feedback\n---\n\nUse node:test for services.',
+      source: 'memory-note',
+      filenameHint: 'old-testing-a',
+    });
+    const secondPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: old_testing_b\ndescription: old testing b\ntype: feedback\n---\n\nUse node:test for service modules.',
+      source: 'memory-note',
+      filenameHint: 'old-testing-b',
+    });
+
+    env.mockBackend.setOneShotImpl(async (prompt) => {
+      expect(prompt).toContain('Draft exact');
+      expect(prompt).toContain(firstPath);
+      expect(prompt).toContain(secondPath);
+      return JSON.stringify({
+        summary: 'Merge testing preferences.',
+        operations: [{
+          operation: 'create',
+          filenameHint: 'node-test-preference',
+          supersedes: [firstPath, secondPath],
+          reason: 'Duplicate service testing preferences.',
+          content: '---\nname: node_test_preference\ndescription: user prefers node:test for services\ntype: feedback\n---\n\nUse node:test for focused service coverage.',
+        }],
+      });
+    });
+
+    const drafted = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/consolidate/draft`,
+      {
+        action: {
+          action: 'merge_candidates',
+          filenames: [firstPath, secondPath],
+          reason: 'Duplicate testing preferences.',
+        },
+      },
+    );
+    expect(drafted.status).toBe(200);
+    expect(drafted.body.draft.operations).toHaveLength(1);
+
+    const applied = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/consolidate/drafts/apply`,
+      {
+        summary: drafted.body.draft.summary,
+        draft: drafted.body.draft,
+      },
+    );
+    expect(applied.status).toBe(200);
+    expect(applied.body.applied).toHaveLength(1);
+    expect(applied.body.createdFiles).toHaveLength(1);
+    expect(applied.body.snapshot.files.find((file: any) => file.filename === firstPath).metadata.status).toBe('superseded');
+  });
+
+  test('restores a superseded memory entry', async () => {
+    const conv = await env.chatService.createConversation('Restore Memory', '/tmp/ws-mem-restore');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceMemoryEnabled(hash, true);
+    const oldPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: old_pref\ndescription: old preference\ntype: user\n---\n\nOld preference.',
+      source: 'memory-note',
+      filenameHint: 'old-pref',
+    });
+    const newPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: new_pref\ndescription: new preference\ntype: user\n---\n\nNew preference.',
+      source: 'memory-note',
+      filenameHint: 'new-pref',
+    });
+    const snapshot = await env.chatService.getWorkspaceMemory(hash);
+    const oldEntryId = snapshot!.files.find((file) => file.filename === oldPath)!.metadata!.entryId;
+    const newEntryId = snapshot!.files.find((file) => file.filename === newPath)!.metadata!.entryId;
+    await env.chatService.patchMemoryEntryMetadata(hash, [
+      { filename: oldPath, patch: { status: 'superseded', supersededBy: newEntryId } },
+      { filename: newPath, patch: { supersedes: [oldEntryId] } },
+    ]);
+
+    const restored = await env.request(
+      'PUT',
+      `/api/chat/workspaces/${hash}/memory/entries/restore`,
+      { relPath: oldPath },
+    );
+
+    expect(restored.status).toBe(200);
+    expect(restored.body.restored.status).toBe('active');
+    const oldFile = restored.body.snapshot.files.find((file: any) => file.filename === oldPath);
+    const newFile = restored.body.snapshot.files.find((file: any) => file.filename === newPath);
+    expect(oldFile.metadata.status).toBe('active');
+    expect(oldFile.metadata.supersededBy).toBeUndefined();
+    expect(newFile.metadata.supersedes).toBeUndefined();
+  });
+
+  test('rejects apply payloads without an actions array', async () => {
+    const conv = await env.chatService.createConversation('Consolidate Bad', '/tmp/ws-mem-consolidate-bad');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceMemoryEnabled(hash, true);
+
+    const res = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/consolidate/apply`,
+      { actions: 'all' },
+    );
+
+    expect(res.status).toBe(400);
+  });
+
+  test('rejects draft apply payloads without operations', async () => {
+    const conv = await env.chatService.createConversation('Consolidate Draft Bad', '/tmp/ws-mem-consolidate-draft-bad');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceMemoryEnabled(hash, true);
+
+    const res = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/consolidate/drafts/apply`,
+      { draft: { operations: 'all' } },
+    );
+
+    expect(res.status).toBe(400);
+  });
+});
+
+describe('Memory Review scheduling and runs', () => {
+  test('persists a workspace Memory Review schedule', async () => {
+    const conv = await env.chatService.createConversation('Review Schedule', '/tmp/ws-mem-review-schedule');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+
+    const initial = await env.request('GET', `/api/chat/workspaces/${hash}/memory/review-schedule`);
+    expect(initial.status).toBe(200);
+    expect(initial.body.schedule).toEqual({ mode: 'off' });
+    expect(initial.body.status).toMatchObject({ enabled: false, pending: false });
+
+    const put = await env.request(
+      'PUT',
+      `/api/chat/workspaces/${hash}/memory/review-schedule`,
+      {
+        schedule: {
+          mode: 'window',
+          days: 'weekdays',
+          windowStart: '01:00',
+          windowEnd: '04:00',
+          timezone: 'America/Los_Angeles',
+        },
+      },
+    );
+    expect(put.status).toBe(200);
+    expect(put.body.schedule).toMatchObject({
+      mode: 'window',
+      days: 'weekdays',
+      windowStart: '01:00',
+      windowEnd: '04:00',
+      timezone: 'America/Los_Angeles',
+    });
+    expect(typeof put.body.scheduleUpdatedAt).toBe('string');
+
+    const reloaded = await env.request('GET', `/api/chat/workspaces/${hash}/memory/review-schedule`);
+    expect(reloaded.body.schedule).toEqual(put.body.schedule);
+    expect(reloaded.body.scheduleUpdatedAt).toBe(put.body.scheduleUpdatedAt);
+  });
+
+  test('creates a pending Memory Review run and applies reviewed items', async () => {
+    const conv = await env.chatService.createConversation('Review Run', '/tmp/ws-mem-review-run');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceMemoryEnabled(hash, true);
+    const oldPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: old_deadline\ndescription: old deadline\ntype: project\n---\n\nThe deadline is Thursday.',
+      source: 'memory-note',
+      filenameHint: 'old-deadline',
+    });
+    const newPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: new_deadline\ndescription: new deadline\ntype: project\n---\n\nThe deadline is Friday.',
+      source: 'memory-note',
+      filenameHint: 'new-deadline',
+    });
+    const firstPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: old_testing_a\ndescription: old testing a\ntype: feedback\n---\n\nUse node:test for services.',
+      source: 'memory-note',
+      filenameHint: 'old-testing-a',
+    });
+    const secondPath = await env.chatService.addMemoryNoteEntry(hash, {
+      content: '---\nname: old_testing_b\ndescription: old testing b\ntype: feedback\n---\n\nUse node:test for service modules.',
+      source: 'memory-note',
+      filenameHint: 'old-testing-b',
+    });
+
+    env.mockBackend.setOneShotImpl(async (prompt) => {
+      if (prompt.includes('Draft exact')) {
+        expect(prompt).toContain(firstPath);
+        expect(prompt).toContain(secondPath);
+        return JSON.stringify({
+          summary: 'Merge testing preferences.',
+          operations: [{
+            operation: 'create',
+            filenameHint: 'node-test-preference',
+            supersedes: [firstPath, secondPath],
+            reason: 'Duplicate service testing preferences.',
+            content: '---\nname: node_test_preference\ndescription: user prefers node:test for services\ntype: feedback\n---\n\nUse node:test for focused service coverage.',
+          }],
+        });
+      }
+      return JSON.stringify({
+        summary: 'Review has one metadata action and one draft.',
+        actions: [
+          {
+            action: 'mark_superseded',
+            filename: oldPath,
+            supersededBy: newPath,
+            reason: 'Friday replaces Thursday.',
+          },
+          {
+            action: 'merge_candidates',
+            filenames: [firstPath, secondPath],
+            reason: 'Duplicate testing preferences.',
+          },
+        ],
+      });
+    });
+
+    const created = await env.request('POST', `/api/chat/workspaces/${hash}/memory/reviews`, {});
+    expect(created.status).toBe(200);
+    expect(created.body.run.status).toBe('pending_review');
+    expect(created.body.run.safeActions).toHaveLength(1);
+    expect(created.body.run.drafts).toHaveLength(1);
+    expect(created.body.status).toMatchObject({
+      enabled: true,
+      pending: true,
+      pendingRuns: 1,
+      pendingDrafts: 1,
+      pendingSafeActions: 1,
+    });
+
+    const restarted = await env.request('POST', `/api/chat/workspaces/${hash}/memory/reviews`, {});
+    expect(restarted.status).toBe(200);
+    expect(restarted.body.run.id).not.toBe(created.body.run.id);
+    expect(restarted.body.run.status).toBe('pending_review');
+    expect(restarted.body.status).toMatchObject({
+      enabled: true,
+      pending: true,
+      pendingRuns: 1,
+      pendingDrafts: 1,
+      pendingSafeActions: 1,
+    });
+
+    const retired = await env.request(
+      'GET',
+      `/api/chat/workspaces/${hash}/memory/reviews/${created.body.run.id}`,
+    );
+    expect(retired.status).toBe(200);
+    expect(retired.body.run.status).toBe('dismissed');
+    expect(retired.body.run.safeActions[0].status).toBe('discarded');
+    expect(retired.body.run.drafts[0].status).toBe('discarded');
+
+    const convRes = await env.request('GET', `/api/chat/conversations/${conv.id}`);
+    expect(convRes.status).toBe(200);
+    expect(convRes.body.memoryReview.pending).toBe(true);
+    expect(convRes.body.memoryReview.latestRunId).toBe(restarted.body.run.id);
+
+    const draftId = restarted.body.run.drafts[0].id;
+    const draftDismissed = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/drafts/${draftId}/discard`,
+      {},
+    );
+    expect(draftDismissed.status).toBe(200);
+    expect(draftDismissed.body.run.drafts[0].status).toBe('discarded');
+
+    const draftRegenerated = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/drafts/${draftId}/regenerate`,
+      {},
+    );
+    expect(draftRegenerated.status).toBe(200);
+    expect(draftRegenerated.body.run.drafts[0].status).toBe('pending');
+    expect(draftRegenerated.body.run.drafts[0].discardedAt).toBeUndefined();
+
+    const reviewedDraft = draftRegenerated.body.run.drafts[0].draft;
+    reviewedDraft.operations[0].content = reviewedDraft.operations[0].content.replace(
+      'Use node:test for focused service coverage.',
+      'Use node:test for focused service coverage, including REST route tests.',
+    );
+    const draftApplied = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/drafts/${draftId}/apply`,
+      { draft: reviewedDraft },
+    );
+    expect(draftApplied.status).toBe(200);
+    expect(draftApplied.body.run.drafts[0].status).toBe('applied');
+    const createdDraftFile = draftApplied.body.run.drafts[0].result.createdFiles[0];
+    const memoryAfterDraftApply = await env.chatService.getWorkspaceMemory(hash);
+    const createdDraftMemory = memoryAfterDraftApply!.files.find((file) => file.filename === createdDraftFile)!;
+    expect(createdDraftMemory.content).toContain('including REST route tests');
+
+    const actionId = restarted.body.run.safeActions[0].id;
+    const actionApplied = await env.request(
+      'POST',
+      `/api/chat/workspaces/${hash}/memory/reviews/${restarted.body.run.id}/actions/${actionId}/apply`,
+      {},
+    );
+    expect(actionApplied.status).toBe(200);
+    expect(actionApplied.body.run.safeActions[0].status).toBe('applied');
+    expect(actionApplied.body.run.status).toBe('completed');
+    expect(actionApplied.body.status.pending).toBe(false);
+  });
+});
+
 // ── Workspace memory: enable toggle + entry deletion ─────────────────────
 
 describe('PUT /workspaces/:hash/memory/enabled', () => {
