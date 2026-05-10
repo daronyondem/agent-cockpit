@@ -392,6 +392,7 @@ describe('frontend routes', () => {
       expect(v2.body).toContain('src/app.css?v=160');
       expect(v2.body).toContain('src/api.js?v=137');
       expect(v2.body).toContain('src/streamStore.js?v=121');
+      expect(v2.body).toContain('src/usageProjection.js?v=116');
       expect(v2.body).toContain('src/cliUpdateStore.js?v=116');
       expect(v2.body).toContain('src/synthesisAtlas.js?v=117');
       expect(v2.body).toContain('src/screens/kbBrowser.jsx?v=142');
@@ -401,6 +402,9 @@ describe('frontend routes', () => {
       expect(v2.body).toContain('src/primitives.jsx?v=119');
       expect(v2.body).toContain('src/folderPicker.jsx?v=117');
       expect(v2.body).toContain('src/shell.jsx?v=131');
+      expect(v2.body.indexOf('src/usageProjection.js?v=116')).toBeLessThan(
+        v2.body.indexOf('src/chip-renderers.jsx?v=117'),
+      );
       expect(v2.body.indexOf('src/synthesisAtlas.js?v=117')).toBeLessThan(
         v2.body.indexOf('src/screens/kbBrowser.jsx?v=142'),
       );

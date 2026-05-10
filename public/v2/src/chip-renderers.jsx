@@ -97,25 +97,37 @@ function _formatFetchedAt(iso){
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function _buildRateLimitBars(rateLimits){
+function _buildRateLimitBars(rateLimits, fetchedAt, stale){
   const out = [];
+  const projection = window.UsageProjection;
   for (const key of Object.keys(rateLimits || {})) {
     if (key === 'extra_usage') continue;
     const v = rateLimits[key];
     if (!v || typeof v.utilization !== 'number') continue;
+    const projectionInfo = projection && typeof projection.buildProjection === 'function'
+      ? projection.buildProjection({
+          actualPct: v.utilization,
+          fetchedAt,
+          resetAtMs: projection.parseIsoMs(v.resets_at),
+          durationMs: projection.durationFromClaudeKey(key),
+          stale,
+        })
+      : null;
     out.push({
       key,
       label: _deriveRateLimitLabel(key),
       pct: v.utilization,
       pctLabel: Math.round(v.utilization) + '%',
       resetLabel: _formatResetAt(v.resets_at),
+      projectionLabel: projectionInfo && projectionInfo.label,
+      projectionClass: projectionInfo && projectionInfo.className,
     });
   }
   return out;
 }
 
 function PlanUsageSection({ data }){
-  const bars = _buildRateLimitBars(data.rateLimits);
+  const bars = _buildRateLimitBars(data.rateLimits, data.fetchedAt, !!data.stale);
   const extra = data.rateLimits ? data.rateLimits.extra_usage : null;
   const tier = _humanizeTier(data.planTier);
   const fetchedLabel = _formatFetchedAt(data.fetchedAt);
@@ -137,9 +149,12 @@ function PlanUsageSection({ data }){
                   <span>
                     <b>{bar.pctLabel}</b>
                     {bar.resetLabel ? <em> · {bar.resetLabel}</em> : null}
+                    {bar.projectionLabel ? <em> · {bar.projectionLabel}</em> : null}
                   </span>
                 </div>
-                <div className="tt-bar"><i style={{width: Math.min(100, Math.max(0, bar.pct)) + '%'}}/></div>
+                <div className={'tt-bar ' + (bar.projectionClass || 'tt-bar-proj-unknown')}>
+                  <i style={{width: Math.min(100, Math.max(0, bar.pct)) + '%'}}/>
+                </div>
               </div>
             ))}
             {extra && extra.is_enabled ? (
@@ -401,20 +416,35 @@ function _formatResetAtEpoch(epochSeconds){
   return `resets in ${Math.floor(h / 24)}d`;
 }
 
-function _buildCodexBars(rateLimits){
+function _buildCodexBars(rateLimits, fetchedAt, stale){
   const out = [];
+  const projection = window.UsageProjection;
   const windows = [
     { key: 'primary', win: rateLimits && rateLimits.primary },
     { key: 'secondary', win: rateLimits && rateLimits.secondary },
   ];
   for (const { key, win } of windows) {
     if (!win || typeof win.usedPercent !== 'number') continue;
+    const durationMs = typeof win.windowDurationMins === 'number' && Number.isFinite(win.windowDurationMins)
+      ? win.windowDurationMins * 60 * 1000
+      : null;
+    const projectionInfo = projection && typeof projection.buildProjection === 'function'
+      ? projection.buildProjection({
+          actualPct: win.usedPercent,
+          fetchedAt,
+          resetAtMs: projection.epochSecondsToMs(win.resetsAt),
+          durationMs,
+          stale,
+        })
+      : null;
     out.push({
       key,
       label: _codexWindowLabel(win.windowDurationMins),
       pct: win.usedPercent,
       pctLabel: Math.round(win.usedPercent) + '%',
       resetLabel: _formatResetAtEpoch(win.resetsAt),
+      projectionLabel: projectionInfo && projectionInfo.label,
+      projectionClass: projectionInfo && projectionInfo.className,
     });
   }
   return out;
@@ -428,12 +458,12 @@ function CodexPlanUsageSection({ data }){
   // rate-limits if a credentials race left account null.
   const planType = (account && account.planType) || (rateLimits && rateLimits.planType) || null;
   const tier = _humanizeCodexPlan(planType);
-  const bars = _buildCodexBars(rateLimits);
-  const credits = rateLimits && rateLimits.credits;
-  const showCredits = !!(credits && credits.hasCredits);
   const fetchedLabel = _formatFetchedAt(data && data.fetchedAt);
   const errored = !!(data && data.lastError);
   const stale = !!(data && data.stale);
+  const bars = _buildCodexBars(rateLimits, data && data.fetchedAt, stale);
+  const credits = rateLimits && rateLimits.credits;
+  const showCredits = !!(credits && credits.hasCredits);
   const footerColor = errored
     ? 'var(--status-error)'
     : (stale ? 'var(--status-warning)' : 'var(--text-3)');
@@ -450,9 +480,12 @@ function CodexPlanUsageSection({ data }){
                   <span>
                     <b>{bar.pctLabel}</b>
                     {bar.resetLabel ? <em> · {bar.resetLabel}</em> : null}
+                    {bar.projectionLabel ? <em> · {bar.projectionLabel}</em> : null}
                   </span>
                 </div>
-                <div className="tt-bar"><i style={{width: Math.min(100, Math.max(0, bar.pct)) + '%'}}/></div>
+                <div className={'tt-bar ' + (bar.projectionClass || 'tt-bar-proj-unknown')}>
+                  <i style={{width: Math.min(100, Math.max(0, bar.pct)) + '%'}}/>
+                </div>
               </div>
             ))}
             {showCredits ? (
