@@ -1641,9 +1641,7 @@ export class ChatService {
       const sessionFile = await this._readSessionFile(hash, convId, currentSessionNumber);
       const currentMessages = sessionFile ? sessionFile.messages : [];
 
-      const fallback = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
-      const summaryRuntime = await this._resolveRuntimeForConversation(convEntry);
-      const summary = await this._generateSessionSummary(currentMessages, fallback, summaryRuntime);
+      const summary = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
 
       activeSession.active = false;
       activeSession.summary = summary;
@@ -1712,6 +1710,46 @@ export class ChatService {
       newSessionNumber: summarySnapshot.newSessionNumber,
       archivedSession: summarySnapshot.archivedSession,
     };
+  }
+
+  async generateAndStoreSessionSummary(
+    convId: string,
+    sessionNumber: number,
+    opts: { backendId?: string; cliProfileId?: string | null } = {},
+  ): Promise<string | null> {
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return null;
+
+    const snapshot = await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return null;
+      const { convEntry } = result;
+      const session = convEntry.sessions.find((candidate) => candidate.number === sessionNumber);
+      if (!session || session.active) return null;
+      const sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
+      const messages = sessionFile ? sessionFile.messages : [];
+      return {
+        messages,
+        fallback: `Session ${sessionNumber} (${messages.length} messages)`,
+        backendId: opts.backendId || convEntry.backend,
+        cliProfileId: opts.cliProfileId === undefined ? convEntry.cliProfileId : opts.cliProfileId || undefined,
+      };
+    });
+    if (!snapshot) return null;
+
+    const runtime = await this.resolveCliProfileRuntime(snapshot.cliProfileId, snapshot.backendId);
+    const summary = await this._generateSessionSummary(snapshot.messages, snapshot.fallback, runtime);
+
+    return this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return null;
+      const { index, convEntry } = result;
+      const session = convEntry.sessions.find((candidate) => candidate.number === sessionNumber);
+      if (!session || session.active) return null;
+      session.summary = summary;
+      await this._writeWorkspaceIndex(hash, index);
+      return summary;
+    });
   }
 
   async getSessionHistory(convId: string): Promise<SessionHistoryItem[] | null> {

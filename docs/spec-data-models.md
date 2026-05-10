@@ -77,6 +77,7 @@ agent-cockpit/
     │   ├── stream-jobs.json            # Durable active CLI turn registry for server-restart reconciliation
     │   ├── workspaces/{hash}/          # Workspace-based storage (see below)
     │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled`, `kbEnabled`, and `contextMapEnabled` flags)
+    │   │   ├── session-finalizers.json # Persisted background jobs for reset/archive finalizers
     │   │   ├── memory/                 # Per-workspace memory store (opt-in per workspace)
     │   │   │   ├── snapshot.json       # Merged snapshot: claude captures + notes (parsed metadata + content)
     │   │   │   ├── state.json          # Agent Cockpit sidecar lifecycle metadata keyed by memory filename
@@ -122,7 +123,7 @@ All workspace hashes throughout the system use: `SHA-256(workspacePath).substrin
 
 All mutable JSON files under `data/` are written with two primitives to survive concurrent access without corruption:
 
-- **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, usage ledger, memory `snapshot.json`, memory `state.json`), `SettingsService`, `ClaudePlanUsageService`, and `KiroPlanUsageService`.
+- **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, usage ledger, memory `snapshot.json`, memory `state.json`), `SessionFinalizerQueue` (`session-finalizers.json`), `SettingsService`, `ClaudePlanUsageService`, and `KiroPlanUsageService`.
 - **Per-key mutex** — `src/utils/keyedMutex.ts` exports `KeyedMutex.run<T>(key, fn)`. Callers sharing a key are serialized FIFO; different keys run concurrently. `ChatService` holds one `_indexLock` keyed by workspace hash (every read-modify-write on a workspace `index.json` runs inside `_indexLock.run(hash, ...)`) and one `_ledgerLock` keyed by the constant `'__usage_ledger__'` (wrapping ledger record/clear). Not reentrant — locked regions must not recursively acquire the same key.
 
 Together these guarantee that a workspace index always parses on disk and that concurrent mutators do not clobber each other's updates. `ChatService._buildLookupMap` also catches per-workspace `JSON.parse` failures at startup, logs them, and continues, so a single corrupt file cannot crash the server into a restart loop.
@@ -196,7 +197,7 @@ Together these guarantee that a workspace index always parses on disk and that c
     sessions: [{
       number: number,           // 1-based session number
       sessionId: string,        // UUID passed to CLI
-      summary: string|null,     // LLM-generated summary (null for active session)
+      summary: string|null,     // Fallback summary immediately on reset, later patched by the summary finalizer; null for active session.
       active: boolean,          // true for current session, false for archived
       messageCount: number,
       startedAt: string,        // ISO 8601
@@ -208,6 +209,40 @@ Together these guarantee that a workspace index always parses on disk and that c
   }]
 }
 ```
+
+## Session Finalizer Store (`workspaces/{hash}/session-finalizers.json`)
+
+Persisted queue for post-reset/archive work that must survive process restarts but must not block the reset/archive HTTP response.
+
+```typescript
+{
+  version: 1,
+  jobs: Array<{
+    id: string,
+    identity: string,          // type + payload.source + conversationId + sessionNumber
+    workspaceHash: string,
+    conversationId: string,
+    sessionNumber: number,
+    type: 'session_summary' | 'memory_extraction' | 'context_map_conversation_final_pass',
+    status: 'pending' | 'running' | 'retrying' | 'completed' | 'failed',
+    attempts: number,
+    maxAttempts: number,
+    createdAt: string,
+    updatedAt: string,
+    startedAt?: string,
+    completedAt?: string,
+    nextAttemptAt?: string,
+    errorMessage?: string,
+    payload?: {
+      backendId?: string,
+      cliProfileId?: string,
+      source?: 'session_reset' | 'archive'
+    }
+  }>
+}
+```
+
+`SessionFinalizerQueue.start()` converts leftover `running` jobs back to `pending` after restart. `enqueue()` de-duplicates by `identity`, persists the job, and schedules asynchronous processing. The reset route enqueues `session_summary`, `memory_extraction`, and a `context_map_conversation_final_pass` with source `session_reset`; archive enqueues only the Context Map finalizer with source `archive` when Context Map is enabled.
 
 ## Workspace Memory Store (`workspaces/{hash}/memory/`)
 
@@ -405,7 +440,7 @@ For each newly processed conversation span, `ContextMapService` resolves the Con
 
 Extraction and synthesis use separate process-wide concurrency limiters in the server process. `Settings.contextMap.extractionConcurrency` (default 3, clamped 1..6) controls extraction spans/source packets and extraction JSON repair calls; `Settings.contextMap.synthesisConcurrency` (default 3, clamped 1..6) controls chunk synthesis, final arbiter, and synthesis/arbiter JSON repair calls. Parallel extraction and chunk synthesis results are merged back in deterministic source/chunk order before candidate IDs, source spans, candidate synthesis metadata, or run timing metadata are persisted.
 
-Initial scans and manual rebuild scans also process product-owned workspace source packets ([ADR-0045](adr/0045-scan-workspace-markdown-recursively-for-context-map.md)); scheduled scans discover the same source set but only extract packets whose `source_cursors` row is missing, has a different `last_processed_source_hash`, or is currently `missing` ([ADR-0046](adr/0046-track-context-map-workspace-source-cursors.md)). Manual rebuild is deliberately a full re-evaluation path for the currently selected source set and does not skip unchanged source packets. Currently supported source packets are `workspace_instruction` (`sourceId:'workspace-instructions'`), `file`, and `code_outline`: known high-signal Markdown files are loaded first, then up to 120 additional `.md` files are discovered recursively under the workspace root using deterministic path scoring/order, and selected software-workspace files are summarized into bounded code-outline packets. The recursive scan skips hard infrastructure/generated-state directories (`.git`, `node_modules`, and `data/chat`), ignores files over 1 MB, and truncates each source body to the Context Map source character limit. Thin compatibility shims are skipped when the canonical source exists: a short `CLAUDE.md` that defers to `AGENTS.md` is not scanned separately, and a root `SPEC.md` redirect/index is not scanned separately when `docs/SPEC.md` exists. Selected Markdown files that become empty, unreadable, oversized, or shim-skipped are treated as unprocessable and can mark an existing source cursor `missing`; lower-ranked recursive Markdown files outside the 120-file cap remain discovered/deferred so their existing cursors are not marked missing only because of the cap. Source-packet prompts tell the processor not to expand README/spec feature lists into every listed feature. The service enforces a smaller deterministic budget before synthesis: four candidates for workspace instructions, three for `AGENTS.md`/`CLAUDE.md`, five for `README.md`/`SPEC.md`/`docs/SPEC.md`, four for `workflows/*` and `context/contact-*`, three for `drafts/*`, two for blog/theme content under `repos/*`, five for other Markdown source packets, and eight for code-outline packets. Source packet candidate payloads include `sourceSpan: { sourceType, sourceId, runId, sourceHash, locator }`, and source evidence refs can point at these non-conversation sources. Candidate ids for source packets are stable across `(sourceType, sourceId, sourceHash, candidateType, payload with runId provenance stripped recursively)`, so repeated manual scans skip exact duplicate candidates instead of duplicating pending work even though each run gets a new run id; semantic run-level de-duplication also prevents repeated entity/type/relationship suggestions from different source packets in the same run. If source discovery no longer sees a previously active source cursor, or a selected source is discovered but cannot be packetized, the service marks that cursor `missing`, records `sourceCursorsMarkedMissing` and sampled `staleSources` in run metadata, and leaves existing graph/candidate/evidence data untouched.
+Initial scans and manual rebuild scans also process product-owned workspace source packets ([ADR-0045](adr/0045-scan-workspace-markdown-recursively-for-context-map.md)); scheduled scans discover the same source set but only extract packets whose `source_cursors` row is missing, has a different `last_processed_source_hash`, or is currently `missing` ([ADR-0046](adr/0046-track-context-map-workspace-source-cursors.md)). Manual rebuild is deliberately a full re-evaluation path for the currently selected source set and does not skip unchanged source packets. Reset/archive finalizer scans are conversation-scoped and skip workspace source packets entirely. Currently supported source packets are `workspace_instruction` (`sourceId:'workspace-instructions'`), `file`, and `code_outline`: known high-signal Markdown files are loaded first, then up to 120 additional `.md` files are discovered recursively under the workspace root using deterministic path scoring/order, and selected software-workspace files are summarized into bounded code-outline packets. The recursive scan skips hard infrastructure/generated-state directories (`.git`, `node_modules`, and `data/chat`), ignores files over 1 MB, and truncates each source body to the Context Map source character limit. Thin compatibility shims are skipped when the canonical source exists: a short `CLAUDE.md` that defers to `AGENTS.md` is not scanned separately, and a root `SPEC.md` redirect/index is not scanned separately when `docs/SPEC.md` exists. Selected Markdown files that become empty, unreadable, oversized, or shim-skipped are treated as unprocessable and can mark an existing source cursor `missing`; lower-ranked recursive Markdown files outside the 120-file cap remain discovered/deferred so their existing cursors are not marked missing only because of the cap. Source-packet prompts tell the processor not to expand README/spec feature lists into every listed feature. The service enforces a smaller deterministic budget before synthesis: four candidates for workspace instructions, three for `AGENTS.md`/`CLAUDE.md`, five for `README.md`/`SPEC.md`/`docs/SPEC.md`, four for `workflows/*` and `context/contact-*`, three for `drafts/*`, two for blog/theme content under `repos/*`, five for other Markdown source packets, and eight for code-outline packets. Source packet candidate payloads include `sourceSpan: { sourceType, sourceId, runId, sourceHash, locator }`, and source evidence refs can point at these non-conversation sources. Candidate ids for source packets are stable across `(sourceType, sourceId, sourceHash, candidateType, payload with runId provenance stripped recursively)`, so repeated manual scans skip exact duplicate candidates instead of duplicating pending work even though each run gets a new run id; semantic run-level de-duplication also prevents repeated entity/type/relationship suggestions from different source packets in the same run. If source discovery no longer sees a previously active source cursor, or a selected source is discovered but cannot be packetized, the service marks that cursor `missing`, records `sourceCursorsMarkedMissing` and sampled `staleSources` in run metadata, and leaves existing graph/candidate/evidence data untouched.
 
 After persistence, `ContextMapService` auto-applies safe additive candidates and leaves the rest pending as Needs Attention. Auto-apply always requires a pending candidate with `payload.sourceSpan`; `new_entity` and durable non-generic `new_relationship` candidates use a `0.80` confidence threshold, additive `entity_update` candidates use `0.90`, `alias_addition` uses `0.94`, and `sensitivity_classification` / `evidence_link` use `0.96`. `new_entity` auto-apply also requires a known built-in/existing entity type, a non-secret sensitivity, and a durable body (`summaryMarkdown`, `notesMarkdown`, or facts). `new_relationship` auto-apply also requires evidence, a predicate other than `relates_to`, non-identical subject/object endpoints, and no pending endpoint dependencies. `entity_update` auto-apply is deliberately narrower than manual apply: it can add facts, aliases, evidence, or fill an empty summary/notes field, but cannot rename an entity, change its type/status/sensitivity, or overwrite an existing summary/notes field. `sensitivity_classification` auto-apply only permits moves to a more restrictive sensitivity class; downgrades, no-ops, and work-vs-personal lateral changes remain pending for review. Processor auto-apply records `appliedBy:'processor'` in the candidate audit event. Each completed run re-evaluates existing pending candidates as well as newly inserted candidates, so candidates created under an older policy can be applied later if they satisfy the current safe rules. Run metadata records `candidatesInserted`, `candidatesAutoApplied`, `existingCandidatesAutoApplied`, `candidatesNeedingAttention`, and sampled `autoApplyFailures`.
 

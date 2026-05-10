@@ -1594,7 +1594,7 @@ describe('Context Map MCP runtime wiring', () => {
 });
 
 describe('Context Map reset/archive final processing', () => {
-  test('session reset runs a best-effort Context Map final pass before archiving the session', async () => {
+  test('session reset enqueues an asynchronous conversation-only Context Map final pass', async () => {
     const conv = await env.chatService.createConversation('Context Map Reset Final', '/tmp/ws-context-map-reset-final');
     const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
     await env.chatService.setWorkspaceContextMapEnabled(hash, true);
@@ -1605,13 +1605,11 @@ describe('Context Map reset/archive final processing', () => {
 
     expect(res.status).toBe(200);
     const db = env.chatService.getContextMapDb(hash)!;
-    expect(db.listRuns({ source: 'session_reset' })).toMatchObject([
-      { source: 'session_reset', status: 'completed' },
-    ]);
+    await waitForCondition(() => db.listRuns({ source: 'session_reset' }).some((run) => run.status === 'completed'));
     expect(db.listSourceSpans(conv.id)).toHaveLength(1);
   });
 
-  test('archive runs a best-effort Context Map final pass before archiving the conversation', async () => {
+  test('archive enqueues an asynchronous conversation-only Context Map final pass', async () => {
     const conv = await env.chatService.createConversation('Context Map Archive Final', '/tmp/ws-context-map-archive-final');
     const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
     await env.chatService.setWorkspaceContextMapEnabled(hash, true);
@@ -1622,9 +1620,7 @@ describe('Context Map reset/archive final processing', () => {
 
     expect(res.status).toBe(200);
     const db = env.chatService.getContextMapDb(hash)!;
-    expect(db.listRuns({ source: 'archive' })).toMatchObject([
-      { source: 'archive', status: 'completed' },
-    ]);
+    await waitForCondition(() => db.listRuns({ source: 'archive' }).some((run) => run.status === 'completed'));
     expect(db.listSourceSpans(conv.id)).toHaveLength(1);
   });
 });

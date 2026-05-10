@@ -13,6 +13,7 @@ import { BackendRegistry } from '../../src/services/backends/registry';
 import type { ActiveStreamEntry } from '../../src/types';
 import type { StreamJobRegistry } from '../../src/services/streamJobRegistry';
 import type { ContextMapService } from '../../src/services/contextMap/service';
+import type { SessionFinalizerQueue } from '../../src/services/sessionFinalizerQueue';
 import { MockBackendAdapter } from './mockBackendAdapter';
 
 export const DEFAULT_WORKSPACE = '/tmp/test-workspace';
@@ -35,6 +36,7 @@ export interface ChatRouterEnv {
   activeStreams: Map<string, ActiveStreamEntry>;
   streamJobs: StreamJobRegistry;
   contextMapService: ContextMapService;
+  sessionFinalizers: SessionFinalizerQueue;
   reconcileInterruptedJobs: () => Promise<{ interrupted: number; removed: number }>;
   chatShutdown: () => Promise<void>;
   wsFns: WsFunctions;
@@ -96,7 +98,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     codexPlanUsageService: mockCodexPlanUsage,
   });
   await chatResult.reconcileInterruptedJobs();
-  const { activeStreams, streamJobs, contextMapService, reconcileInterruptedJobs, shutdown: chatShutdown } = chatResult;
+  const { activeStreams, streamJobs, contextMapService, sessionFinalizers, reconcileInterruptedJobs, shutdown: chatShutdown } = chatResult;
   app.use('/api/chat', chatResult.router);
 
   const server = await new Promise<http.Server>((resolve) => {
@@ -230,7 +232,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     });
   };
 
-  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, streamJobs, contextMapService, reconcileInterruptedJobs, chatShutdown, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
+  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, streamJobs, contextMapService, sessionFinalizers, reconcileInterruptedJobs, chatShutdown, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
 }
 
 async function removeTmpDirWithRetry(tmpDir: string): Promise<void> {
@@ -267,6 +269,7 @@ async function waitForActiveStreamsToDrain(activeStreams: Map<string, ActiveStre
 export async function destroyChatRouterEnv(env: ChatRouterEnv): Promise<void> {
   await waitForActiveStreamsToDrain(env.activeStreams);
   env.wsShutdown();
+  await env.chatShutdown();
   await new Promise<void>((resolve, reject) => {
     env.server.close((err?: Error) => {
       if (err) reject(err);
