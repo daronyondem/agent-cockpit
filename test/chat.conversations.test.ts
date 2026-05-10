@@ -349,6 +349,13 @@ describe('POST /conversations/:id/reset', () => {
       const sessions = await env.chatService.getSessionHistory(conv.id);
       return sessions?.[0]?.summary === 'Async summary';
     });
+    await waitForCondition(async () => {
+      const jobs = await env.sessionFinalizers.listJobs();
+      return jobs.some((job) => job.conversationId === conv.id
+        && job.sessionNumber === 1
+        && job.type === 'session_summary'
+        && job.status === 'completed');
+    });
     const jobs = await env.sessionFinalizers.listJobs();
     expect(jobs).toEqual(expect.arrayContaining([
       expect.objectContaining({
