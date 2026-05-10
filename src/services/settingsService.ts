@@ -3,6 +3,13 @@ import path from 'path';
 import type { CliProfile, Settings } from '../types';
 import { atomicWriteFile } from '../utils/atomicWrite';
 import { ensureServerConfiguredCliProfiles, isCliVendor, serverConfiguredCliProfileId } from './cliProfiles';
+import {
+  DEFAULT_CONTEXT_MAP_CLI_CONCURRENCY,
+  DEFAULT_CONTEXT_MAP_EXTRACTION_CONCURRENCY,
+  DEFAULT_CONTEXT_MAP_SCAN_INTERVAL_MINUTES,
+  DEFAULT_CONTEXT_MAP_SYNTHESIS_CONCURRENCY,
+  MAX_CONTEXT_MAP_PROCESSOR_CONCURRENCY,
+} from './contextMap/defaults';
 
 interface PersistedSettings extends Settings {
   customInstructions?: { aboutUser?: string; responseStyle?: string };
@@ -14,6 +21,12 @@ export const DEFAULT_SETTINGS: Settings = {
   systemPrompt: '',
   defaultBackend: 'claude-code',
   workingDirectory: '',
+  contextMap: {
+    scanIntervalMinutes: DEFAULT_CONTEXT_MAP_SCAN_INTERVAL_MINUTES,
+    cliConcurrency: DEFAULT_CONTEXT_MAP_CLI_CONCURRENCY,
+    extractionConcurrency: DEFAULT_CONTEXT_MAP_EXTRACTION_CONCURRENCY,
+    synthesisConcurrency: DEFAULT_CONTEXT_MAP_SYNTHESIS_CONCURRENCY,
+  },
 };
 
 export class SettingsService {
@@ -50,17 +63,17 @@ export class SettingsService {
         kb.cliConcurrency = kb.dreamingConcurrency;
       }
 
-      return this._withDefaultCliProfile(settings);
+      return this._withDefaultCliProfile(this._withContextMapDefaults(settings));
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return this._withDefaultCliProfile({ ...DEFAULT_SETTINGS });
+        return this._withDefaultCliProfile(this._withContextMapDefaults({ ...DEFAULT_SETTINGS }));
       }
       throw err;
     }
   }
 
   async saveSettings(settings: Settings): Promise<Settings> {
-    const normalized = this._withDefaultCliProfile(this._normalizeCliProfiles(settings));
+    const normalized = this._withDefaultCliProfile(this._normalizeCliProfiles(this._withContextMapDefaults(settings)));
     await atomicWriteFile(this._settingsFile, JSON.stringify(normalized, null, 2));
     return normalized;
   }
@@ -70,6 +83,21 @@ export class SettingsService {
       settings,
       [settings.defaultBackend || DEFAULT_SETTINGS.defaultBackend],
     ).settings;
+  }
+
+  private _withContextMapDefaults(settings: Settings): Settings {
+    const contextMap = { ...(settings.contextMap || {}) } as NonNullable<Settings['contextMap']> & { sources?: unknown };
+    delete contextMap.sources;
+    return {
+      ...settings,
+      contextMap: {
+        scanIntervalMinutes: DEFAULT_CONTEXT_MAP_SCAN_INTERVAL_MINUTES,
+        cliConcurrency: DEFAULT_CONTEXT_MAP_CLI_CONCURRENCY,
+        extractionConcurrency: DEFAULT_CONTEXT_MAP_EXTRACTION_CONCURRENCY,
+        synthesisConcurrency: DEFAULT_CONTEXT_MAP_SYNTHESIS_CONCURRENCY,
+        ...contextMap,
+      },
+    };
   }
 
   private _normalizeCliProfiles(settings: Settings): Settings {
@@ -97,6 +125,9 @@ export class SettingsService {
     }
     if (settings.knowledgeBase) {
       next.knowledgeBase = this._normalizeKnowledgeBaseSettings(settings.knowledgeBase, profiles);
+    }
+    if (settings.contextMap) {
+      next.contextMap = this._normalizeContextMapSettings(settings.contextMap, profiles);
     }
     if (settings.defaultCliProfileId && !defaultProfile) {
       delete next.defaultCliProfileId;
@@ -130,6 +161,39 @@ export class SettingsService {
     if (digestion.backend) next.digestionCliBackend = digestion.backend;
     if (dreaming.profileId) next.dreamingCliProfileId = dreaming.profileId;
     if (dreaming.backend) next.dreamingCliBackend = dreaming.backend;
+    return next;
+  }
+
+  private _normalizeContextMapSettings(
+    contextMap: NonNullable<Settings['contextMap']>,
+    profiles: CliProfile[],
+  ): NonNullable<Settings['contextMap']> {
+    const selection = this._normalizeProfileSelection(profiles, contextMap.cliProfileId, contextMap.cliBackend);
+    const next = { ...contextMap } as NonNullable<Settings['contextMap']> & { sources?: unknown };
+    delete next.sources;
+    delete next.cliProfileId;
+    if (selection.profileId) next.cliProfileId = selection.profileId;
+    if (selection.backend) next.cliBackend = selection.backend;
+    if (typeof next.scanIntervalMinutes === 'number' && Number.isFinite(next.scanIntervalMinutes)) {
+      next.scanIntervalMinutes = Math.max(1, Math.min(1440, Math.round(next.scanIntervalMinutes)));
+    } else if (next.scanIntervalMinutes !== undefined) {
+      delete next.scanIntervalMinutes;
+    }
+    if (typeof next.cliConcurrency === 'number' && Number.isFinite(next.cliConcurrency)) {
+      next.cliConcurrency = Math.max(1, Math.min(10, Math.round(next.cliConcurrency)));
+    } else if (next.cliConcurrency !== undefined) {
+      delete next.cliConcurrency;
+    }
+    if (typeof next.extractionConcurrency === 'number' && Number.isFinite(next.extractionConcurrency)) {
+      next.extractionConcurrency = Math.max(1, Math.min(MAX_CONTEXT_MAP_PROCESSOR_CONCURRENCY, Math.round(next.extractionConcurrency)));
+    } else if (next.extractionConcurrency !== undefined) {
+      delete next.extractionConcurrency;
+    }
+    if (typeof next.synthesisConcurrency === 'number' && Number.isFinite(next.synthesisConcurrency)) {
+      next.synthesisConcurrency = Math.max(1, Math.min(MAX_CONTEXT_MAP_PROCESSOR_CONCURRENCY, Math.round(next.synthesisConcurrency)));
+    } else if (next.synthesisConcurrency !== undefined) {
+      delete next.synthesisConcurrency;
+    }
     return next;
   }
 

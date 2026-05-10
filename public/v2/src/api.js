@@ -88,6 +88,7 @@
       const err = await res.json().catch(() => ({ error: res.statusText }));
       const e = new Error(err.error || res.statusText || `HTTP ${res.status}`);
       e.status = res.status;
+      e.body = err;
       throw e;
     }
     return res;
@@ -572,7 +573,7 @@
     libreOfficeStatus: () => chatFetch('kb/libreoffice-status').then(r => r.json()),
   };
 
-  /* Per-workspace settings — backs the Workspace Settings modal (gear button
+  /* Per-workspace settings — backs the Workspace Settings page (gear button
      in the sidebar workspace action buttons). Instructions are prepended
      to every new session's system prompt; Memory + KB enable flags gate the
      respective pipelines for the workspace. All endpoints are scoped by the
@@ -681,6 +682,67 @@
     clearMemory: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/memory/entries',
       { method: 'DELETE' },
+    ).then(r => r.json()),
+    getContextMapSettings: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/settings'
+    ).then(r => r.json()),
+    getContextMapReview: (hash, status) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/review' + (status ? '?status=' + encodeURIComponent(status) : '')
+    ).then(r => r.json()),
+    getContextMapGraph: (hash, opts) => {
+      const p = new URLSearchParams();
+      if (opts && opts.query) p.set('query', opts.query);
+      if (opts && opts.type) p.set('type', opts.type);
+      if (opts && opts.status) p.set('status', opts.status);
+      if (opts && opts.sensitivity) p.set('sensitivity', opts.sensitivity);
+      if (opts && opts.limit) p.set('limit', String(opts.limit));
+      const qs = p.toString();
+      return chatFetch(
+        'workspaces/' + encodeURIComponent(hash) + '/context-map/graph' + (qs ? '?' + qs : '')
+      ).then(r => r.json());
+    },
+    getContextMapEntity: (hash, entityId) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/entities/' + encodeURIComponent(entityId)
+    ).then(r => r.json()),
+    updateContextMapEntity: (hash, entityId, entity) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/entities/' + encodeURIComponent(entityId),
+      { method: 'PUT', body: { entity: entity || {} } },
+    ).then(r => r.json()),
+    setContextMapEnabled: (hash, enabled) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/enabled',
+      { method: 'PUT', body: { enabled: !!enabled } },
+    ).then(r => r.json()),
+    setContextMapSettings: (hash, settings) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/settings',
+      { method: 'PUT', body: { settings: settings || {} } },
+    ).then(r => r.json()),
+    runContextMapScan: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/scan',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    stopContextMapScan: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/scan/stop',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    clearContextMap: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map',
+      { method: 'DELETE' },
+    ).then(r => r.json()),
+    updateContextMapCandidate: (hash, candidateId, payload) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/candidates/' + encodeURIComponent(candidateId),
+      { method: 'PUT', body: payload || {} },
+    ).then(r => r.json()),
+    applyContextMapCandidate: (hash, candidateId, opts) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/candidates/' + encodeURIComponent(candidateId) + '/apply',
+      { method: 'POST', body: opts && opts.includeDependencies ? { includeDependencies: true } : {} },
+    ).then(r => r.json()),
+    discardContextMapCandidate: (hash, candidateId) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/candidates/' + encodeURIComponent(candidateId) + '/discard',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    reopenContextMapCandidate: (hash, candidateId) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/context-map/candidates/' + encodeURIComponent(candidateId) + '/reopen',
+      { method: 'POST', body: {} },
     ).then(r => r.json()),
     getKb: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/kb'

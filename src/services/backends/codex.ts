@@ -2261,7 +2261,8 @@ export class CodexAdapter extends BaseBackendAdapter {
    * `CODEX_HOME` so OAuth/API-key state is isolated.
    */
   private async _execOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { timeoutMs = 60000, workingDir, model, effort, serviceTier, mcpServers, cliProfile } = options;
+    const { timeoutMs = 60000, abortSignal, workingDir, model, effort, serviceTier, mcpServers, cliProfile } = options;
+    if (abortSignal?.aborted) throw new Error('codex exec stopped');
     const runtime = resolveCodexCliRuntime(cliProfile);
     const cwd = workingDir || this.workingDir || os.homedir();
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
@@ -2288,21 +2289,32 @@ export class CodexAdapter extends BaseBackendAdapter {
 
     return new Promise<string>((resolve, reject) => {
       let timedOut = false;
+      let aborted = false;
       let killTimer: NodeJS.Timeout | null = null;
-      let child: ChildProcess;
-      const timeoutTimer = setTimeout(() => {
-        timedOut = true;
+      let child: ChildProcess | null = null;
+      const killChild = () => {
+        const target = child;
+        if (!target) return;
         try {
-          child.kill('SIGTERM');
+          target.kill('SIGTERM');
         } catch {}
         killTimer = setTimeout(() => {
           try {
-            child.kill('SIGKILL');
+            target.kill('SIGKILL');
           } catch {}
         }, PROCESS_KILL_GRACE_MS);
         killTimer.unref?.();
+      };
+      const onAbort = () => {
+        aborted = true;
+        killChild();
+      };
+      const timeoutTimer = setTimeout(() => {
+        timedOut = true;
+        killChild();
       }, timeoutMs);
       timeoutTimer.unref?.();
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
 
       child = execFile(
         runtime.command,
@@ -2311,6 +2323,11 @@ export class CodexAdapter extends BaseBackendAdapter {
         (err, stdout, stderr) => {
           clearTimeout(timeoutTimer);
           if (killTimer) clearTimeout(killTimer);
+          abortSignal?.removeEventListener('abort', onAbort);
+          if (aborted || abortSignal?.aborted) {
+            reject(new Error('codex exec failed: Process stopped by caller'));
+            return;
+          }
           if (timedOut) {
             reject(new Error(`codex exec failed: Process killed (timeout after ${timeoutMs / 1000}s)`));
             return;

@@ -1,8 +1,8 @@
-/* global React, AgentApi, Ico, useDialog, useToasts, CliUpdateStore */
+/* global React, AgentApi, Ico, Tip, useDialog, useToasts, CliUpdateStore */
 
-/* SettingsScreen — full-screen modal-swap pane for V2 app settings.
+/* SettingsScreen — full-screen V2 app settings page.
    Mirrors the V1 layout (General / CLI Config / Memory / Knowledge Base /
-   Security / Usage / Server) backed by `GET/PUT /settings` plus `GET /backends`,
+   Context Map / Security / Usage / Server) backed by `GET/PUT /settings` plus `GET /backends`,
    auth/security endpoints, `GET /usage-stats` (+ DELETE), and `POST /server/restart`.
    All form tabs share a single
    in-memory `settings` object; clicking Save on any form tab POSTs the full
@@ -14,6 +14,7 @@ const SETTINGS_TABS = [
   { id: 'cli',     label: 'CLI Config' },
   { id: 'memory',  label: 'Memory' },
   { id: 'kb',      label: 'Knowledge Base' },
+  { id: 'contextMap', label: 'Context Map' },
   { id: 'security', label: 'Security' },
   { id: 'usage',   label: 'Usage' },
   { id: 'server',  label: 'Server' },
@@ -169,11 +170,31 @@ function defaultEffortFor(levels){
   return levels.includes('high') ? 'high' : levels[0];
 }
 
+function SettingsHelpTooltip({ children }){
+  return (
+    <div className="tt-section settings-help-tooltip">
+      <div className="tt-body-text">{children}</div>
+    </div>
+  );
+}
+
 /* Reusable labelled-row primitive used by every form tab. */
-function Field({ label, hint, children }){
+function Field({ label, hint, help, children }){
   return (
     <label className="settings-field">
-      <span className="settings-field-label">{label}</span>
+      <span className="settings-field-label-row">
+        <span className="settings-field-label">{label}</span>
+        {help ? (
+          <Tip variant="explain" rich={<SettingsHelpTooltip>{help}</SettingsHelpTooltip>}>
+            <button
+              type="button"
+              className="settings-help-btn"
+              aria-label={`${label} help`}
+              onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+            >?</button>
+          </Tip>
+        ) : null}
+      </span>
       {children}
       {hint ? <span className="settings-field-hint u-dim">{hint}</span> : null}
     </label>
@@ -303,6 +324,7 @@ function SettingsScreen({ onClose, initialTab }){
             : tab === 'cli'     ? <CliProfilesTab settings={settings} backends={backends} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'memory'  ? <SettingsMemoryTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'kb'      ? <SettingsKbTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
+            : tab === 'contextMap' ? <SettingsContextMapTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'security' ? <SecurityTab/>
             : tab === 'usage'   ? <UsageTab/>
             : tab === 'server'  ? <ServerTab/>
@@ -1348,6 +1370,147 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
         label="Convert PPTX slides to images during ingestion"
       />
       {convertWarning ? <div className="settings-warning u-err">{convertWarning}</div> : null}
+
+      <div className="settings-actions">
+        <button className="btn" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>
+      </div>
+    </div>
+  );
+}
+
+/* ──────────────────── Context Map tab ──────────────────── */
+
+function SettingsContextMapTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
+  const contextMap = settings.contextMap || {};
+  const profiles = activeCliProfiles(settings);
+  const fallbackBackend = settings.defaultBackend || (backends[0] && backends[0].id) || '';
+  const selectedProfile = profileForSetting(profiles, contextMap.cliProfileId, contextMap.cliBackend, fallbackBackend);
+  React.useEffect(() => {
+    if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
+  }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
+  const models = selectedProfile
+    ? modelsForProfile(backends, profileBackends, selectedProfile)
+    : modelsForBackend(backends, fallbackBackend);
+  const modelId = contextMap.cliModel || defaultModelId(models) || '';
+  const efforts = selectedProfile
+    ? effortLevelsForProfile(backends, profileBackends, selectedProfile, modelId)
+    : effortLevelsForModel(backends, fallbackBackend, modelId);
+  const effort = contextMap.cliEffort || defaultEffortFor(efforts) || '';
+  const scanInterval = Number.isFinite(contextMap.scanIntervalMinutes) ? contextMap.scanIntervalMinutes : 5;
+  const scanConcurrency = Number.isFinite(contextMap.cliConcurrency) ? contextMap.cliConcurrency : 1;
+  const extractionConcurrency = Number.isFinite(contextMap.extractionConcurrency) ? contextMap.extractionConcurrency : 3;
+  const synthesisConcurrency = Number.isFinite(contextMap.synthesisConcurrency) ? contextMap.synthesisConcurrency : 3;
+  const processorConcurrency = extractionConcurrency === synthesisConcurrency
+    ? extractionConcurrency
+    : Math.max(extractionConcurrency, synthesisConcurrency);
+
+  function patchContext(next){
+    onPatch(prev => ({ contextMap: { ...(prev.contextMap || {}), ...next } }));
+  }
+  function onProfileChange(v){
+    const profile = profiles.find(p => p.id === v);
+    if (!profile) return;
+    const m = modelsForProfile(backends, profileBackends, profile);
+    const newModel = defaultModelId(m);
+    const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
+    patchContext({
+      cliProfileId: profile.id,
+      cliBackend: profile.vendor,
+      cliModel: newModel,
+      cliEffort: defaultEffortFor(e),
+    });
+  }
+  function onModelChange(v){
+    const e = selectedProfile
+      ? effortLevelsForProfile(backends, profileBackends, selectedProfile, v)
+      : effortLevelsForModel(backends, fallbackBackend, v);
+    patchContext({ cliModel: v, cliEffort: defaultEffortFor(e) });
+  }
+  function onScanInterval(v){
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n)) return;
+    patchContext({ scanIntervalMinutes: Math.max(1, Math.min(1440, n)) });
+  }
+  function onScanConcurrency(v){
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n)) return;
+    patchContext({ cliConcurrency: Math.max(1, Math.min(10, n)) });
+  }
+  function onProcessorConcurrency(v){
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n)) return;
+    const concurrency = Math.max(1, Math.min(6, n));
+    patchContext({
+      extractionConcurrency: concurrency,
+      synthesisConcurrency: concurrency,
+    });
+  }
+
+  return (
+    <div className="settings-form settings-form-wide">
+      <p className="settings-desc u-dim">
+        Processor defaults used by workspaces that enable Context Map and keep the workspace processor mode set to global.
+      </p>
+
+      <div className="settings-section-title">Processor</div>
+      <Field label="Context Map CLI profile">
+        <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
+          {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
+          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      </Field>
+      {models.length ? (
+        <Field label="Context Map model">
+          <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+            {models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+          </select>
+        </Field>
+      ) : null}
+      {efforts.length ? (
+        <Field label="Context Map effort">
+          <Seg
+            value={effort}
+            onChange={(v) => patchContext({ cliEffort: v })}
+            options={efforts.map(lv => ({ id: lv, label: lv }))}
+          />
+        </Field>
+      ) : null}
+
+      <div className="settings-section-title">Schedule</div>
+      <Field label="Scan interval" hint="Minutes between background checks for enabled workspaces.">
+        <input
+          type="number"
+          min={1}
+          max={1440}
+          value={scanInterval}
+          onChange={(e) => onScanInterval(e.target.value)}
+        />
+      </Field>
+      <Field
+        label="Concurrent Workspace Scans"
+        help="How many workspaces Agent Cockpit may scan at the same time when multiple enabled workspaces are due. Most users should leave this at 1; raising it helps only when you actively use several workspaces and want their background scans to overlap."
+      >
+        <input
+          type="number"
+          min={1}
+          max={10}
+          value={scanConcurrency}
+          onChange={(e) => onScanConcurrency(e.target.value)}
+        />
+      </Field>
+
+      <Field
+        label="Processor concurrency"
+        help="How many Context Map CLI processor calls may run at the same time across all active scans. Higher values can finish scans faster, but they also use more CLI/model capacity. This one setting controls both extraction and cleanup work."
+      >
+        <input
+          type="number"
+          min={1}
+          max={6}
+          value={processorConcurrency}
+          onChange={(e) => onProcessorConcurrency(e.target.value)}
+        />
+      </Field>
 
       <div className="settings-actions">
         <button className="btn" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>

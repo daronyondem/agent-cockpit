@@ -114,6 +114,114 @@ describe('getWorkspaceKbEnabled / setWorkspaceKbEnabled', () => {
   });
 });
 
+// ── Workspace Context Map ──────────────────────────────────────────────────
+
+describe('getWorkspaceContextMapEnabled / setWorkspaceContextMapEnabled', () => {
+  test('defaults to false and persists after set', async () => {
+    await service.createConversation('Context Map Toggle', '/tmp/context-map-toggle');
+    const hash = workspaceHash('/tmp/context-map-toggle');
+
+    expect(await service.getWorkspaceContextMapEnabled(hash)).toBe(false);
+
+    const result = await service.setWorkspaceContextMapEnabled(hash, true);
+    expect(result).toBe(true);
+    expect(await service.getWorkspaceContextMapEnabled(hash)).toBe(true);
+  });
+
+  test('setWorkspaceContextMapEnabled returns null for unknown workspace', async () => {
+    expect(await service.setWorkspaceContextMapEnabled('nopehash', true)).toBeNull();
+  });
+
+  test('enable/disable is independent of memoryEnabled and kbEnabled', async () => {
+    await service.createConversation('Context Map Split', '/tmp/context-map-split');
+    const hash = workspaceHash('/tmp/context-map-split');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+    await service.setWorkspaceKbEnabled(hash, true);
+    await service.setWorkspaceContextMapEnabled(hash, false);
+
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(true);
+    expect(await service.getWorkspaceKbEnabled(hash)).toBe(true);
+    expect(await service.getWorkspaceContextMapEnabled(hash)).toBe(false);
+
+    await service.setWorkspaceContextMapEnabled(hash, true);
+    await service.setWorkspaceMemoryEnabled(hash, false);
+    await service.setWorkspaceKbEnabled(hash, false);
+
+    expect(await service.getWorkspaceMemoryEnabled(hash)).toBe(false);
+    expect(await service.getWorkspaceKbEnabled(hash)).toBe(false);
+    expect(await service.getWorkspaceContextMapEnabled(hash)).toBe(true);
+  });
+
+  test('lists only Context Map enabled workspaces', async () => {
+    await service.createConversation('Context Map Enabled', '/tmp/context-map-enabled');
+    await service.createConversation('Context Map Disabled', '/tmp/context-map-disabled');
+    const enabledHash = workspaceHash('/tmp/context-map-enabled');
+    const disabledHash = workspaceHash('/tmp/context-map-disabled');
+
+    await service.setWorkspaceContextMapEnabled(enabledHash, true);
+
+    expect(await service.listContextMapEnabledWorkspaceHashes()).toEqual([enabledHash]);
+    expect(await service.getWorkspaceContextMapEnabled(disabledHash)).toBe(false);
+  });
+});
+
+describe('getWorkspaceContextMapSettings / setWorkspaceContextMapSettings', () => {
+  test('returns global-mode defaults for a workspace with no override', async () => {
+    await service.createConversation('Context Map Defaults', '/tmp/context-map-defaults');
+    const hash = workspaceHash('/tmp/context-map-defaults');
+
+    expect(await service.getWorkspaceContextMapSettings(hash)).toEqual({ processorMode: 'global' });
+  });
+
+  test('returns null for unknown workspace', async () => {
+    expect(await service.getWorkspaceContextMapSettings('nopehash')).toBeNull();
+    expect(await service.setWorkspaceContextMapSettings('nopehash', { processorMode: 'global' })).toBeNull();
+  });
+
+  test('persists a normalized workspace override', async () => {
+    await service.createConversation('Context Map Settings', '/tmp/context-map-settings');
+    const hash = workspaceHash('/tmp/context-map-settings');
+    const settings = await service.getSettings();
+    const profile = {
+      id: 'profile-codex-context',
+      name: 'Codex Context',
+      vendor: 'codex',
+      authMode: 'account',
+      configDir: '/tmp/codex-context',
+      createdAt: '2026-05-07T00:00:00.000Z',
+      updatedAt: '2026-05-07T00:00:00.000Z',
+    };
+    await service.saveSettings({
+      ...settings,
+      cliProfiles: [...(settings.cliProfiles || []), profile],
+    } as any);
+
+    const saved = await service.setWorkspaceContextMapSettings(hash, {
+      processorMode: 'override',
+      cliProfileId: profile.id,
+      cliBackend: 'claude-code',
+      cliModel: 'gpt-5.4',
+      cliEffort: 'high',
+      scanIntervalMinutes: 0,
+      sources: {
+        conversations: true,
+        memory: false,
+        git: 'yes',
+      },
+    } as any);
+
+    expect(saved).toEqual({
+      processorMode: 'override',
+      cliProfileId: profile.id,
+      cliBackend: 'codex',
+      cliModel: 'gpt-5.4',
+      cliEffort: 'high',
+      scanIntervalMinutes: 1,
+    });
+    expect(await service.getWorkspaceContextMapSettings(hash)).toEqual(saved);
+  });
+});
+
 describe('getKbStateSnapshot / getKbDb', () => {
   test('getKbStateSnapshot returns null for unknown workspace', async () => {
     expect(await service.getKbStateSnapshot('nopehash')).toBeNull();

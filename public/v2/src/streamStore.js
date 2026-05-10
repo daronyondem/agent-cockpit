@@ -1112,6 +1112,23 @@
       }));
       return;
     }
+    if (frame.type === 'context_map_update') {
+      const contextMap = frame.contextMap || null;
+      const cur = states.get(convId);
+      if (!cur || !cur.conv) return;
+      try {
+        if (typeof window !== 'undefined' && cur.conv.workspaceHash) {
+          window.dispatchEvent(new CustomEvent('ac:context-map-update', {
+            detail: { hash: cur.conv.workspaceHash, contextMap, updatedAt: frame.updatedAt || null },
+          }));
+        }
+      } catch (_) { /* noop */ }
+      update(convId, curState => ({
+        ...curState,
+        conv: { ...curState.conv, contextMap },
+      }));
+      return;
+    }
     if (frame.type === 'kb_state_update') {
       const changed = frame.changed || {};
       const cur = states.get(convId);

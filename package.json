@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
     "auth:reset": "tsx scripts/auth-reset.ts",
+    "context-map:report": "tsx scripts/context-map-report.ts",
     "mobile:dev": "npm --prefix mobile/AgentCockpitPWA run dev",
     "mobile:build": "npm --prefix mobile/AgentCockpitPWA run build",
     "mobile:typecheck": "npm --prefix mobile/AgentCockpitPWA run typecheck",

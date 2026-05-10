@@ -1,4 +1,4 @@
-/* global React, ReactDOM, Sidebar, Ico, AgentApi, StreamStore, KbBrowser, FilesBrowser, DialogProvider, useDialog, ToastProvider, useToasts, marked, DOMPurify, FileLinkUtils, UpdateModal, RestartOverlay, WorkspaceSettingsModal, MemoryUpdateModal, SessionsModal, CliUpdateStore */
+/* global React, ReactDOM, Sidebar, Ico, AgentApi, StreamStore, KbBrowser, FilesBrowser, DialogProvider, useDialog, ToastProvider, useToasts, marked, DOMPurify, FileLinkUtils, UpdateModal, RestartOverlay, WorkspaceSettingsPage, MemoryUpdateModal, SessionsModal, CliUpdateStore */
 
 /* Agent Cockpit v2 — real app entry.
    PR 4a scope: long-conversation rendering — progress-breadcrumb
@@ -261,7 +261,7 @@ function App(){
   const [viewingArchive, setViewingArchive] = React.useState(false);
   const [updateTarget, setUpdateTarget] = React.useState(null); // { localVersion, remoteVersion } | null
   const [restarting, setRestarting] = React.useState(false);
-  const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label } | null
+  const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label, initialTab } | null
   const [memoryUpdateView, setMemoryUpdateView] = React.useState(null); // { hash, label, update } | null
   const [memoryReviewView, setMemoryReviewView] = React.useState(null); // { hash, label, runId } | null
   const [sbOpen, setSbOpen] = React.useState(false); // mobile-only sidebar overlay; ignored on desktop
@@ -389,6 +389,7 @@ function App(){
     setKbView(null);
     setFilesView(null);
     setSettingsView(null);
+    setWorkspaceSettings(null);
     setMemoryUpdateView(null);
     setMemoryReviewView(null);
     /* Push the active id into StreamStore synchronously *before* markRead
@@ -409,6 +410,7 @@ function App(){
   }, []);
 
   const onOpenKb = React.useCallback((hash, label) => {
+    setWorkspaceSettings(null);
     setMemoryUpdateView(null);
     setMemoryReviewView(null);
     setFilesView(null);
@@ -418,6 +420,7 @@ function App(){
   }, []);
 
   const onOpenFiles = React.useCallback((hash, label) => {
+    setWorkspaceSettings(null);
     setMemoryUpdateView(null);
     setMemoryReviewView(null);
     setKbView(null);
@@ -427,6 +430,7 @@ function App(){
   }, []);
 
   const onOpenSettings = React.useCallback((initialTab) => {
+    setWorkspaceSettings(null);
     setMemoryUpdateView(null);
     setMemoryReviewView(null);
     setKbView(null);
@@ -450,6 +454,7 @@ function App(){
         setKbView(null);
         setFilesView(null);
         setSettingsView(null);
+        setWorkspaceSettings(null);
         setMemoryUpdateView(null);
         setMemoryReviewView(null);
       }
@@ -491,6 +496,9 @@ function App(){
   }, []);
 
   const onOpenWorkspaceSettings = React.useCallback((hash, label, initialTab) => {
+    setKbView(null);
+    setFilesView(null);
+    setSettingsView(null);
     setMemoryUpdateView(null);
     setMemoryReviewView(null);
     setWorkspaceSettings({ hash, label, initialTab: initialTab || null });
@@ -552,6 +560,7 @@ function App(){
       setKbView(null);
       setFilesView(null);
       setSettingsView(null);
+      setWorkspaceSettings(null);
       setMemoryReviewView(null);
       setViewingArchive(false);
       setActiveConvId(conv.id);
@@ -598,7 +607,17 @@ function App(){
           <line x1="3" y1="18" x2="21" y2="18"/>
         </svg>
       </button>
-      {settingsView ? (
+      {workspaceSettings ? (
+        <section className="main main-settings">
+          <WorkspaceSettingsPage
+            hash={workspaceSettings.hash}
+            label={workspaceSettings.label}
+            initialTab={workspaceSettings.initialTab}
+            onOpenMemoryReview={onOpenMemoryReview}
+            onClose={onCloseWorkspaceSettings}
+          />
+        </section>
+      ) : settingsView ? (
         <section className="main main-settings">
           <SettingsScreen initialTab={settingsView.initialTab} onClose={() => setSettingsView(null)}/>
         </section>
@@ -652,14 +671,6 @@ function App(){
         onRestarting={() => { setUpdateTarget(null); setRestarting(true); }}
       />
       <RestartOverlay open={restarting}/>
-      <WorkspaceSettingsModal
-        open={!!workspaceSettings}
-        hash={workspaceSettings ? workspaceSettings.hash : null}
-        label={workspaceSettings ? workspaceSettings.label : null}
-        initialTab={workspaceSettings ? workspaceSettings.initialTab : null}
-        onOpenMemoryReview={onOpenMemoryReview}
-        onClose={onCloseWorkspaceSettings}
-      />
       <MemoryUpdateModal
         open={!!memoryUpdateView}
         hash={memoryUpdateView ? memoryUpdateView.hash : null}
@@ -1427,6 +1438,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
               </span>
               <ComposerNotifIcon conv={conv} convId={convId}/>
               <ComposerMemoryReviewIcon conv={conv} workspaceLabel={wsLabel} onOpenMemoryReview={onOpenMemoryReview}/>
+              <ComposerContextMapIcon conv={conv} workspaceLabel={wsLabel} onOpenWorkspaceSettings={onOpenWorkspaceSettings}/>
               <ComposerInstructionCompatibilityIcon
                 workspaceHash={conv.workspaceHash}
                 workspaceLabel={wsLabel}
@@ -3852,6 +3864,114 @@ function formatMemoryReviewComposerStatus(status){
   if (status === 'running') return 'Generating drafts';
   if (status === 'failed') return 'Review needs attention';
   return 'Ready to review';
+}
+
+function ComposerContextMapIcon({ conv, workspaceLabel, onOpenWorkspaceSettings }){
+  const buttonRef = React.useRef(null);
+  const panelRef = React.useRef(null);
+  const [open, setOpen] = React.useState(false);
+  const contextMap = conv && conv.contextMap;
+  const pos = useFixedPopoverPosition(buttonRef, panelRef, open);
+
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const onDown = (e) => {
+      if (panelRef.current && panelRef.current.contains(e.target)) return;
+      if (buttonRef.current && buttonRef.current.contains(e.target)) return;
+      setOpen(false);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', onDown);
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open]);
+
+  React.useEffect(() => {
+    if (!contextMap || !contextMap.pending) setOpen(false);
+  }, [contextMap && contextMap.pending, contextMap && contextMap.latestRunId]);
+
+  if (!contextMap || !contextMap.enabled || !contextMap.pending) return null;
+
+  const pending = Math.max(0, contextMap.pendingCandidates || 0);
+  const stale = Math.max(0, contextMap.staleCandidates || 0);
+  const conflicts = Math.max(0, contextMap.conflictCandidates || 0);
+  const failures = Math.max(0, (contextMap.failedCandidates || 0) + (contextMap.failedRuns || 0));
+  const running = Math.max(0, contextMap.runningRuns || 0) > 0 || contextMap.latestRunStatus === 'running';
+  const reviewCount = pending + stale + conflicts + failures;
+  const title = running
+    ? 'Context Map scanning'
+    : reviewCount === 1 ? '1 Context Map item needs attention' : `${reviewCount} Context Map items need attention`;
+  const style = pos
+    ? { top: pos.top, left: pos.left }
+    : { visibility: 'hidden', top: 0, left: 0 };
+
+  function openContextMap(){
+    setOpen(false);
+    if (onOpenWorkspaceSettings && conv && conv.workspaceHash) {
+      onOpenWorkspaceSettings(conv.workspaceHash, workspaceLabel || 'workspace', 'contextMap');
+    }
+  }
+
+  return (
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        className={"composer-notif state-context-map " + (running ? 'state-running' : 'state-pending')}
+        aria-label={title}
+        aria-expanded={open ? 'true' : 'false'}
+        onClick={() => setOpen(v => !v)}
+      >
+        {Ico.graph(14)}
+        <span className={"composer-notif-pulse " + (running ? 'state-running' : 'state-pending')}/>
+      </button>
+      {open ? (
+        <div
+          ref={panelRef}
+          className="tt composer-action-popover"
+          data-variant="stat"
+          data-placement={pos && pos.placeAbove ? 'above' : 'below'}
+          data-pinned="true"
+          role="dialog"
+          aria-label={title}
+          style={style}
+        >
+          <span className="tt-arrow" style={{ left: pos ? pos.arrowX : 12 }}/>
+          <div className="tt-header">
+            <span className="tt-eye">Context Map</span>
+          </div>
+          <h4 className="tt-h">{title}</h4>
+          <div className="tt-section">
+            <div className="tt-rows">
+              <div className="tt-kv"><span>Needs attention</span><b>{pending || '-'}</b></div>
+              <div className="tt-kv"><span>Conflicts</span><b>{conflicts || '-'}</b></div>
+              <div className="tt-kv"><span>Stale</span><b>{stale || '-'}</b></div>
+              <div className="tt-kv"><span>Failures</span><b>{failures || '-'}</b></div>
+            </div>
+          </div>
+          <div className="tt-foot">
+            <span className="hint">{formatContextMapComposerStatus(contextMap.latestRunStatus)}</span>
+            <span className="spacer"/>
+            <button type="button" className="tt-btn primary" onClick={openContextMap}>Open map</button>
+          </div>
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+function formatContextMapComposerStatus(status){
+  if (status === 'running') return 'Scanning workspace';
+  if (status === 'failed') return 'Processor needs attention';
+  return 'Ready';
 }
 
 const CHAT_IMAGE_EXTS = /\.(png|jpe?g|gif|webp|svg|bmp)$/i;

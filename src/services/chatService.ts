@@ -44,6 +44,7 @@ import type {
   MemoryReviewRun,
   MemoryReviewScheduleConfig,
   ConversationMemoryReviewStatus,
+  ConversationContextMapStatus,
   EffortLevel,
   ServiceTier,
   KbState,
@@ -62,12 +63,17 @@ import type {
   WorkspaceInstructionSourceId,
   WorkspaceInstructionSourceStatus,
   WorkspaceInstructionVendorStatus,
+  ContextMapWorkspaceSettings,
 } from '../types';
 import {
   openKbDatabase,
   normalizeFolderPath,
   KbDatabase,
 } from './knowledgeBase/db';
+import {
+  ContextMapDatabase,
+  openContextMapDatabase,
+} from './contextMap/db';
 import { computeDigestProgress } from './knowledgeBase/digest';
 import { DEFAULT_KB_AUTO_DREAM_CONFIG, normalizeKbAutoDreamConfig } from './knowledgeBase/autoDream';
 import { DEFAULT_MEMORY_REVIEW_SCHEDULE, normalizeMemoryReviewScheduleConfig } from './memoryReview';
@@ -116,6 +122,16 @@ const VENDOR_INSTRUCTION_SOURCE: Record<CliVendor, WorkspaceInstructionSourceId>
   'claude-code': 'claude',
   kiro: 'kiro',
 };
+
+const CONTEXT_MAP_EFFORT_LEVELS = new Set<EffortLevel>([
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]);
 
 /* ── Attachment metadata helpers ─────────────────────────────────────────────
  * Shared between upload-response enrichment and queue migration. Both paths
@@ -209,6 +225,49 @@ function sanitizeArtifactFilename(name: string): string {
     return `artifact-${new Date().toISOString().replace(/[:.]/g, '-')}`;
   }
   return safe;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function normalizeContextMapScanInterval(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(1, Math.min(1440, Math.round(value)));
+}
+
+function normalizeContextMapWorkspaceSettings(
+  value: unknown,
+  profiles: CliProfile[],
+): ContextMapWorkspaceSettings {
+  const raw = isPlainObject(value) ? value : {};
+  const processorMode = raw.processorMode === 'override' ? 'override' : 'global';
+  const settings: ContextMapWorkspaceSettings = { processorMode };
+
+  const scanIntervalMinutes = normalizeContextMapScanInterval(raw.scanIntervalMinutes);
+  if (scanIntervalMinutes !== undefined) settings.scanIntervalMinutes = scanIntervalMinutes;
+
+  if (processorMode !== 'override') return settings;
+
+  const cliProfileId = typeof raw.cliProfileId === 'string' ? raw.cliProfileId.trim() : '';
+  const selectedProfile = cliProfileId
+    ? profiles.find((profile) => profile.id === cliProfileId && !profile.disabled)
+    : undefined;
+  if (selectedProfile) {
+    settings.cliProfileId = selectedProfile.id;
+    settings.cliBackend = selectedProfile.vendor;
+  } else if (typeof raw.cliBackend === 'string' && isCliVendor(raw.cliBackend)) {
+    settings.cliBackend = raw.cliBackend;
+  }
+
+  const cliModel = typeof raw.cliModel === 'string' ? raw.cliModel.trim() : '';
+  if (cliModel) settings.cliModel = cliModel;
+
+  if (typeof raw.cliEffort === 'string' && CONTEXT_MAP_EFFORT_LEVELS.has(raw.cliEffort as EffortLevel)) {
+    settings.cliEffort = raw.cliEffort as EffortLevel;
+  }
+
+  return settings;
 }
 
 function splitDataUrlBase64(value: string, fallbackMimeType?: string): { dataBase64: string; mimeType?: string } {
@@ -622,6 +681,8 @@ export class ChatService {
    * `closeKbDatabases()` on shutdown.
    */
   private _kbDbs: Map<string, KbDatabase> = new Map();
+  /** Per-workspace Context Map database cache. Mirrors `_kbDbs` lifecycle. */
+  private _contextMapDbs: Map<string, ContextMapDatabase> = new Map();
   /** Per-workspace PGLite vector store cache. Mirrors `_kbDbs` lifecycle. */
   private _kbVectorStores: Map<string, KbVectorStore> = new Map();
   /**
@@ -843,6 +904,10 @@ export class ChatService {
 
   private _workspaceIndexPath(hash: string): string {
     return path.join(this._workspaceDir(hash), 'index.json');
+  }
+
+  private _contextMapDir(hash: string): string {
+    return path.join(this._workspaceDir(hash), 'context-map');
   }
 
   private _sessionFilePath(hash: string, convId: string, sessionNumber: number): string {
@@ -3289,6 +3354,137 @@ export class ChatService {
       if (index?.kbEnabled) hashes.push(hash);
     }
     return hashes;
+  }
+
+  /** Per-workspace Context Map enable/disable (stored on the workspace index). */
+  async getWorkspaceContextMapEnabled(hash: string): Promise<boolean> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return false;
+    return Boolean(index.contextMapEnabled);
+  }
+
+  async setWorkspaceContextMapEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
+    return this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
+      index.contextMapEnabled = Boolean(enabled);
+      await this._writeWorkspaceIndex(hash, index);
+      return index.contextMapEnabled;
+    });
+  }
+
+  async getWorkspaceContextMapSettings(hash: string): Promise<ContextMapWorkspaceSettings | null> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    const settings = await this.getSettings();
+    return normalizeContextMapWorkspaceSettings(index.contextMap, settings.cliProfiles || []);
+  }
+
+  async setWorkspaceContextMapSettings(
+    hash: string,
+    settings: unknown,
+  ): Promise<ContextMapWorkspaceSettings | null> {
+    return this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
+      const globalSettings = await this.getSettings();
+      index.contextMap = normalizeContextMapWorkspaceSettings(settings, globalSettings.cliProfiles || []);
+      await this._writeWorkspaceIndex(hash, index);
+      return index.contextMap;
+    });
+  }
+
+  async listContextMapEnabledWorkspaceHashes(): Promise<string[]> {
+    let dirs: string[];
+    try {
+      dirs = await fsp.readdir(this.workspacesDir);
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw err;
+    }
+
+    const hashes: string[] = [];
+    for (const hash of dirs) {
+      if (hash.startsWith('.')) continue;
+      const index = await this._readWorkspaceIndex(hash);
+      if (index?.contextMapEnabled) hashes.push(hash);
+    }
+    return hashes;
+  }
+
+  async getContextMapStatus(hash: string): Promise<ConversationContextMapStatus> {
+    const enabled = await this.getWorkspaceContextMapEnabled(hash);
+    if (!enabled) {
+      return {
+        enabled: false,
+        pending: false,
+        pendingCandidates: 0,
+        staleCandidates: 0,
+        conflictCandidates: 0,
+        failedCandidates: 0,
+        runningRuns: 0,
+        failedRuns: 0,
+      };
+    }
+
+    const db = this.getContextMapDb(hash);
+    const candidates = db ? db.listCandidates() : [];
+    const runs = db ? db.listRuns() : [];
+    const latest = runs.length ? runs[runs.length - 1] : undefined;
+    const failedRuns = runs.filter((run) => run.status === 'failed').length;
+    const runningRuns = runs.filter((run) => run.status === 'running').length;
+    const pendingCandidates = candidates.filter((candidate) => candidate.status === 'pending').length;
+    const staleCandidates = candidates.filter((candidate) => candidate.status === 'stale').length;
+    const conflictCandidates = candidates.filter((candidate) => candidate.status === 'conflict').length;
+    const failedCandidates = candidates.filter((candidate) => candidate.status === 'failed').length;
+
+    return {
+      enabled: true,
+      pending: pendingCandidates + staleCandidates + conflictCandidates + failedCandidates + failedRuns + runningRuns > 0,
+      pendingCandidates,
+      staleCandidates,
+      conflictCandidates,
+      failedCandidates,
+      runningRuns,
+      failedRuns,
+      ...(latest ? {
+        latestRunId: latest.runId,
+        latestRunStatus: latest.status,
+        latestRunCreatedAt: latest.startedAt,
+        latestRunUpdatedAt: latest.completedAt || latest.startedAt,
+        latestRunSource: latest.source,
+        lastRunId: latest.runId,
+        lastRunStatus: latest.status,
+        lastRunCreatedAt: latest.startedAt,
+        lastRunUpdatedAt: latest.completedAt || latest.startedAt,
+        lastRunSource: latest.source,
+      } : {}),
+    };
+  }
+
+  getContextMapDb(hash: string): ContextMapDatabase | null {
+    if (!hash) return null;
+    const cached = this._contextMapDbs.get(hash);
+    if (cached) return cached;
+    fs.mkdirSync(this._contextMapDir(hash), { recursive: true });
+    const db = openContextMapDatabase(this._contextMapDir(hash));
+    this._contextMapDbs.set(hash, db);
+    return db;
+  }
+
+  /** Close every cached Context Map database. Call during graceful shutdown. */
+  closeContextMapDatabases(): void {
+    for (const [hash, db] of this._contextMapDbs.entries()) {
+      try {
+        db.close();
+      } catch (err: unknown) {
+        console.warn(
+          `[context-map] closeContextMapDatabases: failed to close ${hash}:`,
+          (err as Error).message,
+        );
+      }
+    }
+    this._contextMapDbs.clear();
   }
 
   /**

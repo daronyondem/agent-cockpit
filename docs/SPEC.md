@@ -22,6 +22,7 @@ In-flight or pending design proposals that complement (but have not yet been fol
 
 | Document | Status | Description |
 |----------|--------|-------------|
+| [design-context-map.md](design-context-map.md) | Proposed | Context Map full-scope design: workspace entity/relationship graph, evidence model, background processor with synthesis/ranking, auto-apply plus needs-attention workflow, read-only MCP retrieval, and global-default/workspace-override settings |
 | [design-kb-ingestion-hybrid.md](design-kb-ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |
 | [design-kb-vnext-implementation-plan.md](design-kb-vnext-implementation-plan.md) | Proposed | Phased Knowledge Base vNext plan: document structure, chunked digestion, gleaning, glossary expansion, graph retrieval, synthesis history, and pipeline visualization |
 

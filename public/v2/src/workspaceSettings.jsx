@@ -1,21 +1,23 @@
-/* global React, Ico, AgentApi, useDialog, useToasts */
+/* global React, Ico, AgentApi, Tip, useDialog, useToasts */
 
-/* ---------- WorkspaceSettingsModal — per-workspace settings dialog. ---------- */
+/* ---------- WorkspaceSettingsPage — per-workspace settings screen. ---------- */
 /* Opens from the gear button in the sidebar workspace action buttons.
-   Three tabs:
+   Four tabs:
      - Instructions: free-form system-prompt prefix (Save button).
      - Memory: enable toggle (immediate-save) + searchable, lifecycle-filtered
        grouped browser with per-file delete and a "Clear all" footer. Refetches
        snapshot after each mutation.
      - Knowledge Base: enable toggle (immediate-save). Full KB management lives
        in the dedicated KB Browser screen.
-   Reuses FolderPicker's `.fp-scrim` / `.fp-panel` shell so the visual
-   vocabulary stays consistent with the rest of the V2 modals. */
+     - Context Map: enable toggle (immediate-save), workspace processor overrides,
+       active-map browsing, and needs-attention items.
+   Reuses the same full-screen `settings-shell` structure as global Settings. */
 
 const WS_SETTINGS_TABS = [
   { id: 'instructions', label: 'Instructions' },
   { id: 'memory',       label: 'Memory' },
   { id: 'kb',           label: 'Knowledge Base' },
+  { id: 'contextMap',   label: 'Context Map' },
 ];
 
 const MEMORY_TYPE_ORDER = ['user', 'feedback', 'project', 'reference', 'unknown'];
@@ -32,8 +34,71 @@ const MEMORY_STATUS_LABELS = {
 };
 const MEMORY_ALL_STATUSES = 'active,redacted,superseded,deleted';
 
-function WorkspaceSettingsModal({ open, hash, label, initialTab, onOpenMemoryReview, onClose }){
-  const [tab, setTab] = React.useState(initialTab || 'instructions');
+function activeWorkspaceCliProfiles(settings){
+  return Array.isArray(settings && settings.cliProfiles)
+    ? settings.cliProfiles.filter(p => p && !p.disabled)
+    : [];
+}
+
+function workspaceProfileForBackend(profiles, backendId){
+  if (!backendId) return null;
+  return profiles.find(p => p.id === 'server-configured-' + backendId)
+    || profiles.find(p => p.vendor === backendId)
+    || null;
+}
+
+function workspaceProfileForSetting(profiles, profileId, backendId, fallbackBackend){
+  return (profileId ? profiles.find(p => p.id === profileId) : null)
+    || workspaceProfileForBackend(profiles, backendId)
+    || workspaceProfileForBackend(profiles, fallbackBackend)
+    || null;
+}
+
+function workspaceBackendForProfile(backends, profileBackends, profile){
+  if (!profile) return null;
+  return (profileBackends && profileBackends[profile.id])
+    || (backends || []).find(b => b.id === profile.vendor)
+    || null;
+}
+
+function workspaceModelsForProfile(backends, profileBackends, profile){
+  const b = workspaceBackendForProfile(backends, profileBackends, profile);
+  return (b && Array.isArray(b.models)) ? b.models : [];
+}
+
+function workspaceDefaultModelId(models){
+  const def = (models || []).find(m => m.default);
+  return (def || (models || [])[0] || {}).id;
+}
+
+function workspaceEffortLevelsForProfile(backends, profileBackends, profile, modelId){
+  const models = workspaceModelsForProfile(backends, profileBackends, profile);
+  const m = models.find(x => x.id === modelId);
+  if (!m || !Array.isArray(m.supportedEffortLevels)) return [];
+  return m.supportedEffortLevels;
+}
+
+function workspaceDefaultEffort(levels){
+  if (!levels || !levels.length) return undefined;
+  return levels.includes('high') ? 'high' : levels[0];
+}
+
+function contextMapRunsFromReview(reviewOrRuns){
+  if (Array.isArray(reviewOrRuns)) return reviewOrRuns;
+  return Array.isArray(reviewOrRuns && reviewOrRuns.runs) ? reviewOrRuns.runs : [];
+}
+
+function nextContextMapInitialScanNotice(runs, previous){
+  const latestRun = contextMapRunsFromReview(runs)[0] || null;
+  if (!latestRun) return previous || null;
+  if (latestRun.source !== 'initial_scan') return null;
+  if (latestRun.status === 'running') return previous || 'rolling';
+  if (latestRun.status === 'completed') return previous ? 'completed' : null;
+  return null;
+}
+
+function WorkspaceSettingsPage({ hash, label, initialTab, onOpenMemoryReview, onClose }){
+  const [tab, setTab] = React.useState(() => WS_SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'instructions');
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(null);
   const [instructions, setInstructions] = React.useState('');
@@ -45,16 +110,33 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onOpenMemoryRev
   const [memoryReviewStatus, setMemoryReviewStatus] = React.useState(null);
   const [reviewStarting, setReviewStarting] = React.useState(false);
   const [kbEnabled, setKbEnabled] = React.useState(false);
+  const [contextMapEnabled, setContextMapEnabled] = React.useState(false);
+  const [contextMapSettings, setContextMapSettings] = React.useState({ processorMode: 'global' });
+  const [contextMapReview, setContextMapReview] = React.useState({ candidates: [], counts: {}, runs: [] });
+  const [contextMapReviewStatus, setContextMapReviewStatus] = React.useState('pending');
+  const [contextMapInitialScanNotice, setContextMapInitialScanNotice] = React.useState(null);
+  const [contextMapGraph, setContextMapGraph] = React.useState({ entities: [], relationships: [], counts: {} });
+  const [contextMapEntityDetail, setContextMapEntityDetail] = React.useState(null);
+  const [contextMapEntityDetailLoading, setContextMapEntityDetailLoading] = React.useState(false);
+  const [contextMapSelectedEntityId, setContextMapSelectedEntityId] = React.useState(null);
+  const [contextMapGraphLoading, setContextMapGraphLoading] = React.useState(false);
+  const [contextMapReviewLoading, setContextMapReviewLoading] = React.useState(false);
+  const [contextMapCandidateBusy, setContextMapCandidateBusy] = React.useState(null);
+  const [contextMapScanBusy, setContextMapScanBusy] = React.useState(false);
+  const [contextMapStopBusy, setContextMapStopBusy] = React.useState(false);
+  const [globalSettings, setGlobalSettings] = React.useState({});
+  const [backends, setBackends] = React.useState([]);
+  const [profileBackends, setProfileBackends] = React.useState({});
   const dialog = useDialog();
   const toast = useToasts();
 
-  /* Load state on open. The three endpoints are independent so we fire them
-     in parallel; any failure flips the whole modal into an error state since
+  /* Load state on open. The endpoints are independent so we fire them
+     in parallel; any failure flips the whole page into an error state since
      partial UI would be confusing. */
   React.useEffect(() => {
-    if (!open || !hash) return;
+    if (!hash) return;
     let cancelled = false;
-    setTab(initialTab || 'instructions');
+    setTab(WS_SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'instructions');
     setLoading(true); setLoadError(null);
     setInstructionsDirty(false);
     Promise.all([
@@ -62,7 +144,12 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onOpenMemoryRev
       AgentApi.workspace.getMemory(hash).catch(() => ({})),
       AgentApi.workspace.getMemoryReviewSchedule(hash).catch(() => ({})),
       AgentApi.workspace.getKb(hash).catch(() => ({})),
-    ]).then(([instrRes, memRes, reviewScheduleRes, kbRes]) => {
+      AgentApi.workspace.getContextMapSettings(hash).catch(() => ({})),
+      AgentApi.workspace.getContextMapReview(hash, 'pending').catch(() => ({ candidates: [], counts: {}, runs: [] })),
+      AgentApi.workspace.getContextMapGraph(hash, { limit: 100 }).catch(() => ({ entities: [], relationships: [], counts: {} })),
+      AgentApi.settings.get().catch(() => ({})),
+      AgentApi.settings.backends().catch(() => ({ backends: [] })),
+    ]).then(([instrRes, memRes, reviewScheduleRes, kbRes, contextMapRes, contextMapReviewRes, contextMapGraphRes, settingsRes, backendsRes]) => {
       if (cancelled) return;
       setInstructions(instrRes.instructions || '');
       setMemoryEnabled(!!memRes.enabled);
@@ -71,16 +158,40 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onOpenMemoryRev
       setMemoryReviewStatus(reviewScheduleRes.status || null);
       setReviewStarting(false);
       setKbEnabled(!!kbRes.enabled);
+      setContextMapEnabled(!!contextMapRes.enabled);
+      setContextMapSettings(contextMapRes.settings || { processorMode: 'global' });
+      setContextMapReview(contextMapReviewRes || { candidates: [], counts: {}, runs: [] });
+      setContextMapReviewStatus('pending');
+      setContextMapInitialScanNotice(prev => nextContextMapInitialScanNotice(contextMapRunsFromReview(contextMapReviewRes), prev));
+      setContextMapGraph(contextMapGraphRes || { entities: [], relationships: [], counts: {} });
+      setContextMapEntityDetail(null);
+      setContextMapEntityDetailLoading(false);
+      setContextMapSelectedEntityId(null);
+      setContextMapReviewLoading(false);
+      setContextMapGraphLoading(false);
+      setContextMapCandidateBusy(null);
+      setContextMapScanBusy(false);
+      setContextMapStopBusy(false);
+      setGlobalSettings(settingsRes || {});
+      setBackends((backendsRes && backendsRes.backends) || []);
     }).catch(e => {
       if (!cancelled) setLoadError(e.message || String(e));
     }).finally(() => {
       if (!cancelled) setLoading(false);
     });
     return () => { cancelled = true; };
-  }, [open, hash]);
+  }, [hash, initialTab]);
 
   React.useEffect(() => {
-    if (!open || !hash) return;
+    if (contextMapInitialScanNotice !== 'started') return undefined;
+    const timer = window.setTimeout(() => {
+      setContextMapInitialScanNotice(prev => prev === 'started' ? 'rolling' : prev);
+    }, 1400);
+    return () => window.clearTimeout(timer);
+  }, [contextMapInitialScanNotice]);
+
+  React.useEffect(() => {
+    if (!hash) return;
     let cancelled = false;
     const onMemoryUpdate = (event) => {
       if (!event || !event.detail || event.detail.hash !== hash) return;
@@ -97,10 +208,10 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onOpenMemoryRev
       cancelled = true;
       window.removeEventListener('ac:memory-update', onMemoryUpdate);
     };
-  }, [open, hash]);
+  }, [hash]);
 
   React.useEffect(() => {
-    if (!open || !hash) return;
+    if (!hash) return;
     const onReviewUpdate = (event) => {
       if (!event || !event.detail || event.detail.hash !== hash) return;
       const review = event.detail.review || null;
@@ -109,10 +220,76 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onOpenMemoryRev
     };
     window.addEventListener('ac:memory-review-update', onReviewUpdate);
     return () => window.removeEventListener('ac:memory-review-update', onReviewUpdate);
-  }, [open, hash]);
+  }, [hash]);
 
   React.useEffect(() => {
-    if (!open || !hash || tab !== 'memory') return undefined;
+    if (!hash) return;
+    let cancelled = false;
+    const onContextMapUpdate = (event) => {
+      if (!event || !event.detail || event.detail.hash !== hash) return;
+      const status = contextMapReviewStatus || 'pending';
+      const nextContextMap = event.detail.contextMap || null;
+      if (nextContextMap && typeof nextContextMap.enabled === 'boolean') {
+        setContextMapEnabled(nextContextMap.enabled);
+      }
+      if (nextContextMap && nextContextMap.latestRunSource === 'initial_scan') {
+        if (nextContextMap.latestRunStatus === 'running') {
+          setContextMapInitialScanNotice(prev => prev || 'rolling');
+        } else if (nextContextMap.latestRunStatus === 'completed') {
+          setContextMapInitialScanNotice(prev => prev ? 'completed' : prev);
+        }
+      }
+      if (nextContextMap && nextContextMap.latestRunStatus !== 'running') {
+        setContextMapStopBusy(false);
+      }
+      Promise.all([
+        AgentApi.workspace.getContextMapReview(hash, status).catch(() => ({ candidates: [], counts: {}, runs: [] })),
+        AgentApi.workspace.getContextMapGraph(hash, { limit: 100 }).catch(() => ({ entities: [], relationships: [], counts: {} })),
+      ]).then(([reviewRes, graphRes]) => {
+        if (cancelled) return;
+        setContextMapReview(reviewRes || { candidates: [], counts: {}, runs: [] });
+        setContextMapInitialScanNotice(prev => nextContextMapInitialScanNotice(contextMapRunsFromReview(reviewRes), prev));
+        setContextMapGraph(graphRes || { entities: [], relationships: [], counts: {} });
+      }).catch(() => {
+        // Best-effort live refresh; manual refresh keeps the canonical fallback.
+      });
+    };
+    window.addEventListener('ac:context-map-update', onContextMapUpdate);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('ac:context-map-update', onContextMapUpdate);
+    };
+  }, [hash, contextMapReviewStatus]);
+
+  React.useEffect(() => {
+    if (!hash || tab !== 'contextMap') return undefined;
+    const runs = contextMapRunsFromReview(contextMapReview);
+    const running = runs.some(run => run && run.status === 'running');
+    const waitingForInitialScan = contextMapInitialScanNotice === 'started' || contextMapInitialScanNotice === 'rolling';
+    if (!running && !waitingForInitialScan) return undefined;
+    let cancelled = false;
+    const refresh = () => {
+      AgentApi.workspace.getContextMapReview(hash, contextMapReviewStatus || 'pending').then((reviewRes) => {
+        if (cancelled) return;
+        setContextMapReview(reviewRes || { candidates: [], counts: {}, runs: [] });
+        const nextRuns = contextMapRunsFromReview(reviewRes);
+        setContextMapInitialScanNotice(prev => nextContextMapInitialScanNotice(nextRuns, prev));
+        if (!nextRuns.some(run => run && run.status === 'running')) {
+          setContextMapStopBusy(false);
+        }
+      }).catch(() => {
+        // Best-effort status refresh; explicit actions still surface errors.
+      });
+    };
+    const timer = setInterval(refresh, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [hash, tab, contextMapReviewStatus, contextMapReview && contextMapReview.runs, contextMapInitialScanNotice]);
+
+  React.useEffect(() => {
+    if (!hash || tab !== 'memory') return undefined;
     let cancelled = false;
     const running = reviewStarting || (memoryReviewStatus && memoryReviewStatus.latestRunStatus === 'running');
     const refresh = () => {
@@ -130,20 +307,19 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onOpenMemoryRev
       cancelled = true;
       clearInterval(timer);
     };
-  }, [open, hash, tab, reviewStarting, memoryReviewStatus && memoryReviewStatus.latestRunStatus]);
+  }, [hash, tab, reviewStarting, memoryReviewStatus && memoryReviewStatus.latestRunStatus]);
 
-  /* Escape closes unless we're mid-save (closing mid-PUT would leave a stale
-     success toast in the air). */
-  React.useEffect(() => {
-    if (!open) return;
-    const onKey = (e) => {
-      if (e.key === 'Escape' && !saving) { e.preventDefault(); onClose(); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [open, saving, onClose]);
+  const loadProfileBackend = React.useCallback((profileId) => {
+    if (!profileId || profileBackends[profileId]) return;
+    AgentApi.getCliProfileMetadata(profileId)
+      .then((backend) => {
+        if (!backend) return;
+        setProfileBackends(prev => ({ ...prev, [profileId]: backend }));
+      })
+      .catch(() => {});
+  }, [profileBackends]);
 
-  if (!open) return null;
+  if (!hash) return null;
 
   async function saveInstructions(anchor){
     if (saving) return;
@@ -196,6 +372,457 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onOpenMemoryRev
         title: 'Failed to update knowledge base setting',
         body: err.message || String(err),
       });
+    }
+  }
+
+  async function toggleContextMap(enabled){
+    const prev = contextMapEnabled;
+    setContextMapEnabled(enabled);
+    if (!enabled) {
+      setContextMapInitialScanNotice(null);
+      setContextMapEntityDetail(null);
+      setContextMapSelectedEntityId(null);
+    }
+    try {
+      const res = await AgentApi.workspace.setContextMapEnabled(hash, enabled);
+      if (enabled && res && res.initialScanStarted) {
+        setContextMapInitialScanNotice('started');
+      }
+      const reviewRes = await refreshContextMapReview();
+      if (enabled && res && res.initialScanStarted) {
+        const latestContextMapRun = Array.isArray(reviewRes && reviewRes.runs) ? reviewRes.runs[0] : null;
+        if (latestContextMapRun && latestContextMapRun.source === 'initial_scan' && latestContextMapRun.status === 'completed') {
+          setContextMapInitialScanNotice('completed');
+        }
+      }
+      await refreshContextMapGraph();
+    } catch (err) {
+      setContextMapEnabled(prev);
+      setContextMapInitialScanNotice(null);
+      dialog.alert({
+        variant: 'error',
+        title: 'Failed to update Context Map setting',
+        body: err.message || String(err),
+      });
+    }
+  }
+
+  async function refreshContextMapReview(status = contextMapReviewStatus){
+    setContextMapReviewLoading(true);
+    try {
+      const res = await AgentApi.workspace.getContextMapReview(hash, status);
+      setContextMapReview(res || { candidates: [], counts: {}, runs: [] });
+      setContextMapInitialScanNotice(prev => nextContextMapInitialScanNotice(contextMapRunsFromReview(res), prev));
+      return res || { candidates: [], counts: {}, runs: [] };
+    } catch (err) {
+      dialog.alert({
+        variant: 'error',
+        title: 'Failed to refresh Context Map review',
+        body: err.message || String(err),
+      });
+      return null;
+    } finally {
+      setContextMapReviewLoading(false);
+    }
+  }
+
+  async function changeContextMapReviewStatus(status){
+    if (status === contextMapReviewStatus) return;
+    setContextMapReviewStatus(status);
+    await refreshContextMapReview(status);
+  }
+
+  async function refreshContextMapGraph(opts){
+    setContextMapGraphLoading(true);
+    try {
+      const res = await AgentApi.workspace.getContextMapGraph(hash, { limit: 100, ...(opts || {}) });
+      setContextMapGraph(res || { entities: [], relationships: [], counts: {} });
+    } catch (err) {
+      dialog.alert({
+        variant: 'error',
+        title: 'Failed to refresh Context Map',
+        body: err.message || String(err),
+      });
+    } finally {
+      setContextMapGraphLoading(false);
+    }
+  }
+
+  async function loadContextMapEntity(entityId, anchor){
+    if (!entityId) return;
+    setContextMapSelectedEntityId(entityId);
+    setContextMapEntityDetailLoading(true);
+    setContextMapEntityDetail(prev => prev && prev.entityId === entityId ? prev : null);
+    try {
+      const res = await AgentApi.workspace.getContextMapEntity(hash, entityId);
+      setContextMapEntityDetail((res && res.entity) || null);
+    } catch (err) {
+      setContextMapSelectedEntityId(null);
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Entity detail failed',
+        body: err.message || String(err),
+      });
+    } finally {
+      setContextMapEntityDetailLoading(false);
+    }
+  }
+
+  async function updateContextMapEntity(entityId, patch, anchor){
+    if (!entityId) return null;
+    try {
+      const res = await AgentApi.workspace.updateContextMapEntity(hash, entityId, patch || {});
+      const entity = (res && res.entity) || null;
+      if (entity) {
+        setContextMapEntityDetail(entity);
+        setContextMapGraph(prev => ({
+          ...(prev || { entities: [], relationships: [], counts: {} }),
+          entities: Array.isArray(prev && prev.entities)
+            ? prev.entities.map(row => row.entityId === entity.entityId ? { ...row, ...entity } : row)
+            : [],
+        }));
+      }
+      toast.success('Context Map entity updated');
+      return entity;
+    } catch (err) {
+      await dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Failed to update Context Map entity',
+        body: err.message || String(err),
+      });
+      return null;
+    }
+  }
+
+  async function runContextMapScan(anchor){
+    if (contextMapScanBusy) return;
+    setContextMapScanBusy(true);
+    try {
+      const res = await AgentApi.workspace.runContextMapScan(hash);
+      setContextMapReviewStatus('pending');
+      await refreshContextMapReview('pending');
+      await refreshContextMapGraph();
+      if (res && res.started) setContextMapInitialScanNotice(prev => prev || 'rolling');
+      toast.success(res && res.started ? 'Context Map scan started' : 'Context Map scan requested');
+    } catch (err) {
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Scan failed',
+        body: err.message || String(err),
+      });
+    } finally {
+      setContextMapScanBusy(false);
+    }
+  }
+
+  async function stopContextMapScan(anchor){
+    if (contextMapStopBusy) return;
+    setContextMapStopBusy(true);
+    try {
+      await AgentApi.workspace.stopContextMapScan(hash);
+      setContextMapInitialScanNotice(null);
+      await refreshContextMapReview(contextMapReviewStatus || 'pending');
+      toast.success('Context Map scan stopped');
+    } catch (err) {
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Stop scan failed',
+        body: err.message || String(err),
+      });
+    } finally {
+      setContextMapStopBusy(false);
+    }
+  }
+
+  async function clearContextMap(anchor){
+    if (contextMapScanBusy || contextMapCandidateBusy) return;
+    const ok = await dialog.confirm({
+      anchor,
+      title: 'Clear Context Map',
+      body: 'Clear all Context Map entities, relationships, candidates, runs, and evidence for this workspace? The workspace setting will stay unchanged.',
+      confirmLabel: 'Clear map',
+      cancelLabel: 'Cancel',
+      destructive: true,
+    });
+    if (!ok) return;
+    setContextMapScanBusy(true);
+    try {
+      await AgentApi.workspace.clearContextMap(hash);
+      setContextMapGraph({ entities: [], relationships: [], counts: {} });
+      setContextMapReview({ candidates: [], counts: {}, runs: [] });
+      setContextMapInitialScanNotice(null);
+      setContextMapEntityDetail(null);
+      setContextMapSelectedEntityId(null);
+      toast.success('Context Map cleared');
+    } catch (err) {
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Clear failed',
+        body: err.message || String(err),
+      });
+    } finally {
+      setContextMapScanBusy(false);
+    }
+  }
+
+  async function updateContextMapCandidate(candidateId, payloadText, confidenceText, anchor){
+    if (!candidateId || contextMapCandidateBusy) return false;
+    let payload;
+    try {
+      payload = JSON.parse(payloadText || '{}');
+    } catch (err) {
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Invalid candidate JSON',
+        body: err.message || String(err),
+      });
+      return false;
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Invalid candidate JSON',
+        body: 'Candidate payload must be a JSON object.',
+      });
+      return false;
+    }
+    const confidence = confidenceText === '' ? undefined : Number(confidenceText);
+    if (confidence !== undefined && !Number.isFinite(confidence)) {
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Invalid confidence',
+        body: 'Confidence must be a number between 0 and 1.',
+      });
+      return false;
+    }
+    setContextMapCandidateBusy(candidateId);
+    try {
+      await AgentApi.workspace.updateContextMapCandidate(hash, candidateId, { payload, confidence });
+      await refreshContextMapReview();
+      toast.success('Context Map item updated');
+      return true;
+    } catch (err) {
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Update failed',
+        body: err.message || String(err),
+      });
+      return false;
+    } finally {
+      setContextMapCandidateBusy(null);
+    }
+  }
+
+  async function discardContextMapCandidate(candidateId, anchor){
+    if (!candidateId || contextMapCandidateBusy) return;
+    const ok = await dialog.confirm({
+      anchor,
+      title: 'Dismiss candidate',
+      body: 'Dismiss this Context Map item? Nothing will be applied to the map.',
+      confirmLabel: 'Dismiss',
+      cancelLabel: 'Cancel',
+      destructive: true,
+    });
+    if (!ok) return;
+    setContextMapCandidateBusy(candidateId);
+    try {
+      await AgentApi.workspace.discardContextMapCandidate(hash, candidateId);
+      await refreshContextMapReview();
+    } catch (err) {
+      dialog.alert({
+        variant: 'error',
+        title: 'Dismiss failed',
+        body: err.message || String(err),
+      });
+    } finally {
+      setContextMapCandidateBusy(null);
+    }
+  }
+
+  async function applyContextMapCandidate(candidateId, anchor){
+    if (!candidateId || contextMapCandidateBusy) return;
+    setContextMapCandidateBusy(candidateId);
+    try {
+      const res = await AgentApi.workspace.applyContextMapCandidate(hash, candidateId);
+      await refreshContextMapReview();
+      await refreshContextMapGraph();
+      const count = contextMapAppliedItemCount(res);
+      toast.success(count > 1 ? `Applied ${count} Context Map items` : (count > 0 ? 'Context Map item applied' : 'Context Map item already applied'));
+    } catch (err) {
+      const dependencies = Array.isArray(err && err.body && err.body.dependencies) ? err.body.dependencies : [];
+      if (err && err.status === 409 && dependencies.length > 0) {
+        const ok = await dialog.confirm({
+          anchor,
+          title: 'Apply related Context Map items?',
+          body: (
+            <div className="ws-cm-dependency-confirm">
+          <p>This relationship cannot be added by itself because one or both endpoint entities still need attention.</p>
+          <p>Agent Cockpit will apply only the entity items below first, then apply this relationship. Other needs-attention, dismissed, and active items will not be changed.</p>
+              <ul className="ws-cm-dependency-list">
+                {dependencies.map(dep => (
+                  <li key={dep.candidateId}>
+                    <b>{dep.role === 'subject' ? 'Subject' : 'Object'}:</b>
+                    {' '}{dep.name || dep.candidateId}
+                    {dep.typeSlug ? <span> · {dep.typeSlug}</span> : null}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ),
+          confirmLabel: `Apply ${dependencies.length + 1} items`,
+          cancelLabel: 'Inspect manually',
+        });
+        if (ok) {
+          try {
+            const res = await AgentApi.workspace.applyContextMapCandidate(hash, candidateId, { includeDependencies: true });
+            await refreshContextMapReview();
+            await refreshContextMapGraph();
+            const count = contextMapAppliedItemCount(res);
+            toast.success(count > 1 ? `Applied ${count} Context Map items` : 'Context Map item applied');
+          } catch (applyErr) {
+            dialog.alert({
+              anchor,
+              variant: 'error',
+              title: 'Apply failed',
+              body: applyErr.message || String(applyErr),
+            });
+          }
+        }
+        return;
+      }
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Apply failed',
+        body: err.message || String(err),
+      });
+    } finally {
+      setContextMapCandidateBusy(null);
+    }
+  }
+
+  async function applyAllContextMapCandidates(anchor){
+    if (contextMapCandidateBusy) return;
+    const ok = await dialog.confirm({
+      anchor,
+      title: 'Accept all Context Map suggestions',
+      body: 'Apply every pending Context Map suggestion. Dismissed suggestions will stay dismissed. Entity suggestions are applied before relationships so relationship endpoints can resolve cleanly.',
+      confirmLabel: 'Accept all',
+      cancelLabel: 'Cancel',
+    });
+    if (!ok) return;
+    setContextMapCandidateBusy('__all__');
+    try {
+      const reviewRes = await AgentApi.workspace.getContextMapReview(hash, 'pending');
+      const candidates = Array.isArray(reviewRes && reviewRes.candidates) ? reviewRes.candidates : [];
+      const pending = candidates
+        .filter(candidate => candidate && candidate.status === 'pending')
+        .sort(compareContextMapCandidateApplyOrder);
+      if (!pending.length) {
+        await refreshContextMapReview(contextMapReviewStatus || 'pending');
+        toast.success('No Context Map suggestions to apply');
+        return;
+      }
+      let appliedCount = 0;
+      for (const candidate of pending) {
+        try {
+          const res = await AgentApi.workspace.applyContextMapCandidate(hash, candidate.candidateId);
+          appliedCount += contextMapAppliedItemCount(res);
+        } catch (err) {
+          const dependencies = Array.isArray(err && err.body && err.body.dependencies) ? err.body.dependencies : [];
+          if (err && err.status === 409 && dependencies.length > 0) {
+            const res = await AgentApi.workspace.applyContextMapCandidate(hash, candidate.candidateId, { includeDependencies: true });
+            appliedCount += contextMapAppliedItemCount(res);
+            continue;
+          }
+          throw err;
+        }
+      }
+      await refreshContextMapReview(contextMapReviewStatus || 'pending');
+      await refreshContextMapGraph();
+      toast.success(appliedCount > 1 ? `Applied ${appliedCount} Context Map items` : 'Context Map suggestions accepted');
+    } catch (err) {
+      await refreshContextMapReview(contextMapReviewStatus || 'pending');
+      await refreshContextMapGraph();
+      dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Accept all failed',
+        body: err.message || String(err),
+      });
+    } finally {
+      setContextMapCandidateBusy(null);
+    }
+  }
+
+  function contextMapAppliedItemCount(res){
+    const primaryApplied = Array.isArray(res && res.applied) && res.applied.length > 0 ? 1 : 0;
+    const dependencyCount = Array.isArray(res && res.dependenciesApplied) ? res.dependenciesApplied.length : 0;
+    return primaryApplied + dependencyCount;
+  }
+
+  function compareContextMapCandidateApplyOrder(a, b){
+    const pa = contextMapCandidateApplyPriority(a && a.candidateType);
+    const pb = contextMapCandidateApplyPriority(b && b.candidateType);
+    if (pa !== pb) return pa - pb;
+    return String(a && a.candidateId || '').localeCompare(String(b && b.candidateId || ''));
+  }
+
+  function contextMapCandidateApplyPriority(type){
+    if (type === 'new_entity') return 10;
+    if (type === 'entity_update' || type === 'entity_merge' || type === 'alias_addition' || type === 'sensitivity_classification') return 20;
+    if (type === 'evidence_link') return 30;
+    if (type === 'new_relationship') return 80;
+    if (type === 'relationship_update' || type === 'relationship_removal') return 90;
+    return 50;
+  }
+
+  async function reopenContextMapCandidate(candidateId){
+    if (!candidateId || contextMapCandidateBusy) return;
+    setContextMapCandidateBusy(candidateId);
+    try {
+      await AgentApi.workspace.reopenContextMapCandidate(hash, candidateId);
+      await refreshContextMapReview();
+    } catch (err) {
+      dialog.alert({
+        variant: 'error',
+        title: 'Restore failed',
+        body: err.message || String(err),
+      });
+    } finally {
+      setContextMapCandidateBusy(null);
+    }
+  }
+
+  function patchContextMapSettings(patch){
+    setContextMapSettings(prev => ({ ...(prev || { processorMode: 'global' }), ...patch }));
+  }
+
+  async function saveContextMapSettings(anchor){
+    if (saving) return;
+    setSaving(true);
+    try {
+      const res = await AgentApi.workspace.setContextMapSettings(hash, contextMapSettings || { processorMode: 'global' });
+      setContextMapSettings(res.settings || contextMapSettings || { processorMode: 'global' });
+      toast.success('Context Map settings saved');
+    } catch (err) {
+      await dialog.alert({
+        anchor,
+        variant: 'error',
+        title: 'Save failed',
+        body: err.message || String(err),
+      });
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -303,62 +930,104 @@ function WorkspaceSettingsModal({ open, hash, label, initialTab, onOpenMemoryRev
   }
 
   return (
-    <div className="fp-scrim" onClick={saving ? undefined : onClose}>
-      <div className="fp-panel ws-panel" role="dialog" aria-modal="true" aria-label={`Workspace settings: ${label || ''}`} onClick={(e) => e.stopPropagation()}>
-        <div className="fp-head">
-          <span className="fp-title">Workspace Settings: {label || ''}</span>
-          <button className="fp-close" type="button" aria-label="Close" title="Close" onClick={onClose} disabled={saving}>{Ico.x(14)}</button>
+    <div className="settings-shell workspace-settings-shell">
+      <div className="settings-top">
+        <div className="settings-title-block">
+          <div className="settings-title">Workspace Settings</div>
+          <div className="settings-subtitle u-dim">{label || 'Workspace'}</div>
         </div>
+        <button type="button" className="btn" onClick={onClose} disabled={saving}>Close</button>
+      </div>
 
-        <div className="ws-tabs">
-          {WS_SETTINGS_TABS.map(t => (
-            <button
-              key={t.id}
-              type="button"
-              className={`ws-tab ${tab === t.id ? 'active' : ''}`}
-              onClick={() => setTab(t.id)}
-            >{t.label}</button>
-          ))}
-        </div>
+      <div className="settings-tabs">
+        {WS_SETTINGS_TABS.map(t => (
+          <div
+            key={t.id}
+            className={`settings-tab ${tab === t.id ? 'active' : ''}`}
+            onClick={() => setTab(t.id)}
+          >{t.label}</div>
+        ))}
+      </div>
 
-        <div className="ws-body">
-          {loading ? (
-            <div className="u-dim" style={{padding:'16px'}}>Loading…</div>
-          ) : loadError ? (
-            <div className="u-err" style={{padding:'16px'}}>{loadError}</div>
-          ) : tab === 'instructions' ? (
-            <InstructionsTab
-              instructions={instructions}
-              setInstructions={(v) => { setInstructions(v); setInstructionsDirty(true); }}
-              dirty={instructionsDirty}
-              saving={saving}
-              onSave={saveInstructions}
-            />
-          ) : tab === 'memory' ? (
-            <MemoryTab
-              hash={hash}
-              enabled={memoryEnabled}
-              snapshot={memorySnapshot}
-              onToggle={toggleMemory}
-              onDelete={deleteMemoryEntry}
-              onClearAll={clearAllMemory}
-              onRefresh={refreshMemory}
-              schedule={memoryReviewSchedule}
-              reviewStatus={memoryReviewStatus}
-              reviewStarting={reviewStarting}
-              onScheduleChange={saveMemoryReviewSchedule}
-              onReviewNow={startMemoryReview}
-              onAuditReview={auditMemoryReview}
-            />
-          ) : tab === 'kb' ? (
-            <KbTab enabled={kbEnabled} onToggle={toggleKb}/>
-          ) : null}
-        </div>
+      <div className="settings-body workspace-settings-body">
+        {loading ? (
+          <div className="u-dim" style={{padding:'16px'}}>Loading…</div>
+        ) : loadError ? (
+          <div className="u-err" style={{padding:'16px'}}>{loadError}</div>
+        ) : tab === 'instructions' ? (
+          <InstructionsTab
+            instructions={instructions}
+            setInstructions={(v) => { setInstructions(v); setInstructionsDirty(true); }}
+            dirty={instructionsDirty}
+            saving={saving}
+            onSave={saveInstructions}
+          />
+        ) : tab === 'memory' ? (
+          <MemoryTab
+            hash={hash}
+            enabled={memoryEnabled}
+            snapshot={memorySnapshot}
+            onToggle={toggleMemory}
+            onDelete={deleteMemoryEntry}
+            onClearAll={clearAllMemory}
+            onRefresh={refreshMemory}
+            schedule={memoryReviewSchedule}
+            reviewStatus={memoryReviewStatus}
+            reviewStarting={reviewStarting}
+            onScheduleChange={saveMemoryReviewSchedule}
+            onReviewNow={startMemoryReview}
+            onAuditReview={auditMemoryReview}
+          />
+        ) : tab === 'kb' ? (
+          <KbTab enabled={kbEnabled} onToggle={toggleKb}/>
+        ) : tab === 'contextMap' ? (
+          <ContextMapTab
+            enabled={contextMapEnabled}
+            settings={contextMapSettings}
+            review={contextMapReview}
+            initialScanNotice={contextMapInitialScanNotice}
+            graph={contextMapGraph}
+            entityDetail={contextMapEntityDetail}
+            entityDetailLoading={contextMapEntityDetailLoading}
+            selectedEntityId={contextMapSelectedEntityId}
+            graphLoading={contextMapGraphLoading}
+            reviewLoading={contextMapReviewLoading}
+            reviewStatus={contextMapReviewStatus}
+            candidateBusy={contextMapCandidateBusy}
+            scanBusy={contextMapScanBusy}
+            scanStopping={contextMapStopBusy}
+            globalSettings={globalSettings}
+            backends={backends}
+            profileBackends={profileBackends}
+            loadProfileBackend={loadProfileBackend}
+            onToggle={toggleContextMap}
+            onPatch={patchContextMapSettings}
+            onSave={saveContextMapSettings}
+            onRefreshReview={refreshContextMapReview}
+            onReviewStatusChange={changeContextMapReviewStatus}
+            onRefreshGraph={refreshContextMapGraph}
+            onSelectEntity={loadContextMapEntity}
+            onUpdateEntity={updateContextMapEntity}
+            onCloseEntityDetail={() => {
+              setContextMapEntityDetail(null);
+              setContextMapSelectedEntityId(null);
+            }}
+            onRunScan={runContextMapScan}
+            onStopScan={stopContextMapScan}
+            onClearMap={clearContextMap}
+            onUpdateCandidate={updateContextMapCandidate}
+            onApplyCandidate={applyContextMapCandidate}
+            onApplyAllCandidates={applyAllContextMapCandidates}
+            onDiscardCandidate={discardContextMapCandidate}
+            onReopenCandidate={reopenContextMapCandidate}
+            saving={saving}
+          />
+        ) : null}
       </div>
     </div>
   );
 }
-window.WorkspaceSettingsModal = WorkspaceSettingsModal;
+window.WorkspaceSettingsPage = WorkspaceSettingsPage;
 
 function MemoryUpdateModal({ open, hash, label, update, onClose, onViewAll }){
   const [loading, setLoading] = React.useState(true);
@@ -406,7 +1075,7 @@ function MemoryUpdateModal({ open, hash, label, update, onClose, onViewAll }){
 
   return (
     <div className="fp-scrim" onClick={onClose}>
-      <div className="fp-panel ws-panel mu-panel" role="dialog" aria-modal="true" aria-label={`Memory update: ${label || ''}`} onClick={(e) => e.stopPropagation()}>
+      <div className="fp-panel mu-panel" role="dialog" aria-modal="true" aria-label={`Memory update: ${label || ''}`} onClick={(e) => e.stopPropagation()}>
         <div className="fp-head">
           <span className="fp-title">Memory Update: {label || ''}</span>
           <button className="fp-close" type="button" aria-label="Close" title="Close" onClick={onClose}>{Ico.x(14)}</button>
@@ -518,7 +1187,7 @@ function formatSettingsMemoryReviewStatus(status){
 
 function InstructionsTab({ instructions, setInstructions, dirty, saving, onSave }){
   return (
-    <div className="ws-form">
+    <div className="settings-form settings-form-wide ws-form">
       <p className="ws-desc u-dim">
         Additional instructions prepended to every new CLI session in this workspace.
         Combined with the global system prompt.
@@ -632,7 +1301,7 @@ function MemoryTab({ hash, enabled, snapshot, onToggle, onDelete, onClearAll, on
   }
 
   return (
-    <div className="ws-form">
+    <div className="settings-form settings-form-wide ws-form">
       <p className="ws-desc u-dim">
         When enabled, memory from prior sessions is injected into every new
         session's system prompt. Claude Code sessions contribute via their
@@ -1053,7 +1722,7 @@ function MemoryEntryRow({ entry, onDelete, onRestore, defaultExpanded = false, s
 
 function KbTab({ enabled, onToggle }){
   return (
-    <div className="ws-form">
+    <div className="settings-form settings-form-wide ws-form">
       <p className="ws-desc u-dim">
         When enabled, files you upload to this workspace are ingested, digested
         into structured entries, and (on demand) synthesized into a cross-linked
@@ -1074,6 +1743,921 @@ function KbTab({ enabled, onToggle }){
       ) : (
         <p className="ws-empty u-dim">Knowledge Base is disabled for this workspace.</p>
       )}
+    </div>
+  );
+}
+
+function WorkspaceSettingsHelpTooltip({ children }){
+  return (
+    <div className="tt-section settings-help-tooltip">
+      <div className="tt-body-text">{children}</div>
+    </div>
+  );
+}
+
+function ContextMapTab({
+  enabled,
+  settings,
+  review,
+  initialScanNotice,
+  graph,
+  entityDetail,
+  entityDetailLoading,
+  selectedEntityId,
+  graphLoading,
+  reviewLoading,
+  reviewStatus,
+  candidateBusy,
+  scanBusy,
+  scanStopping,
+  globalSettings,
+  backends,
+  profileBackends,
+  loadProfileBackend,
+  onToggle,
+  onPatch,
+  onSave,
+  onRefreshReview,
+  onReviewStatusChange,
+  onRefreshGraph,
+  onSelectEntity,
+  onUpdateEntity,
+  onCloseEntityDetail,
+  onRunScan,
+  onStopScan,
+  onClearMap,
+  onUpdateCandidate,
+  onApplyCandidate,
+  onApplyAllCandidates,
+  onDiscardCandidate,
+  onReopenCandidate,
+  saving,
+}){
+  const contextMapTopRef = React.useRef(null);
+  const ctx = settings || { processorMode: 'global' };
+  const globalContext = (globalSettings && globalSettings.contextMap) || {};
+  const profiles = activeWorkspaceCliProfiles(globalSettings);
+  const fallbackBackend = globalContext.cliBackend || (globalSettings && globalSettings.defaultBackend) || (backends[0] && backends[0].id) || '';
+  const selectedProfile = workspaceProfileForSetting(profiles, ctx.cliProfileId, ctx.cliBackend, fallbackBackend);
+  const mode = ctx.processorMode === 'override' ? 'override' : 'global';
+  React.useEffect(() => {
+    if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
+  }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
+
+  const models = selectedProfile ? workspaceModelsForProfile(backends, profileBackends, selectedProfile) : [];
+  const modelId = ctx.cliModel || workspaceDefaultModelId(models) || '';
+  const efforts = selectedProfile ? workspaceEffortLevelsForProfile(backends, profileBackends, selectedProfile, modelId) : [];
+  const effort = ctx.cliEffort || workspaceDefaultEffort(efforts) || '';
+  const candidates = Array.isArray(review && review.candidates) ? review.candidates : [];
+  const pendingCount = (review && review.counts && review.counts.pending) || 0;
+  const discardedCount = (review && review.counts && review.counts.discarded) || 0;
+  const contextMapRuns = Array.isArray(review && review.runs) ? review.runs : [];
+  const latestContextMapRun = contextMapRuns[0] || null;
+  const runningContextMapRun = contextMapRuns.find(run => run && run.status === 'running') || null;
+  const currentReviewStatus = reviewStatus || 'pending';
+  const activeGraph = graph || { entities: [], relationships: [], counts: {} };
+  const activeEntities = Array.isArray(activeGraph.entities) ? activeGraph.entities : [];
+  const activeRelationships = Array.isArray(activeGraph.relationships) ? activeGraph.relationships : [];
+  const activeCounts = activeGraph.counts || {};
+  const [graphQuery, setGraphQuery] = React.useState('');
+  const [graphType, setGraphType] = React.useState('');
+  const [graphStatus, setGraphStatus] = React.useState('active');
+  const [graphSensitivity, setGraphSensitivity] = React.useState('');
+  const [editingCandidateId, setEditingCandidateId] = React.useState(null);
+  const [candidateEditPayload, setCandidateEditPayload] = React.useState('');
+  const [candidateEditConfidence, setCandidateEditConfidence] = React.useState('');
+  const [editingEntity, setEditingEntity] = React.useState(false);
+  const [entityEditDraft, setEntityEditDraft] = React.useState(null);
+  const [entityEditSaving, setEntityEditSaving] = React.useState(false);
+
+  React.useEffect(() => {
+    setEditingEntity(false);
+    setEntityEditDraft(null);
+  }, [entityDetail && entityDetail.entityId]);
+
+  React.useEffect(() => {
+    if (!entityDetail && !entityDetailLoading) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') onCloseEntityDetail();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [entityDetail && entityDetail.entityId, entityDetailLoading, onCloseEntityDetail]);
+
+  function scrollContextMapTopIntoView(){
+    const node = contextMapTopRef.current;
+    if (!node) return;
+    window.requestAnimationFrame(() => {
+      node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  async function runScanFromContextMap(anchor){
+    scrollContextMapTopIntoView();
+    try {
+      await onRunScan(anchor);
+    } finally {
+      scrollContextMapTopIntoView();
+    }
+  }
+
+  function editableCandidatePayload(candidate){
+    const payload = Object.assign({}, (candidate && candidate.payload) || {});
+    delete payload.sourceSpan;
+    return payload;
+  }
+
+  function beginCandidateEdit(candidate){
+    setEditingCandidateId(candidate.candidateId);
+    setCandidateEditPayload(JSON.stringify(editableCandidatePayload(candidate), null, 2));
+    setCandidateEditConfidence(String(candidate.confidence ?? 1));
+  }
+
+  function cancelCandidateEdit(){
+    setEditingCandidateId(null);
+    setCandidateEditPayload('');
+    setCandidateEditConfidence('');
+  }
+
+  async function saveCandidateEdit(candidate, anchor){
+    const ok = await onUpdateCandidate(
+      candidate.candidateId,
+      candidateEditPayload,
+      candidateEditConfidence,
+      anchor,
+    );
+    if (ok) cancelCandidateEdit();
+  }
+
+  function refreshGraphWithFilters(){
+    onRefreshGraph({
+      query: graphQuery.trim(),
+      type: graphType,
+      status: graphStatus,
+      sensitivity: graphSensitivity,
+    });
+  }
+
+  function clearGraphFilters(){
+    setGraphQuery('');
+    setGraphType('');
+    setGraphStatus('active');
+    setGraphSensitivity('');
+    onRefreshGraph({ query: '', type: '', status: 'active', sensitivity: '' });
+  }
+
+  function beginEntityEdit(entity){
+    setEditingEntity(true);
+    setEntityEditDraft({
+      name: entity.name || '',
+      typeSlug: entity.typeSlug || 'project',
+      status: entity.status || 'active',
+      sensitivity: entity.sensitivity || 'normal',
+      confidence: String(entity.confidence ?? 1),
+      summaryMarkdown: entity.summaryMarkdown || '',
+      notesMarkdown: entity.notesMarkdown || '',
+    });
+  }
+
+  function patchEntityEdit(patch){
+    setEntityEditDraft(prev => ({ ...(prev || {}), ...patch }));
+  }
+
+  async function saveEntityEdit(anchor){
+    if (!entityDetail || !entityEditDraft || entityEditSaving) return;
+    const confidence = Number(entityEditDraft.confidence);
+    setEntityEditSaving(true);
+    try {
+      const entity = await onUpdateEntity(entityDetail.entityId, {
+        name: entityEditDraft.name,
+        typeSlug: entityEditDraft.typeSlug,
+        status: entityEditDraft.status,
+        sensitivity: entityEditDraft.sensitivity,
+        confidence: Number.isFinite(confidence) ? confidence : entityDetail.confidence,
+        summaryMarkdown: entityEditDraft.summaryMarkdown || null,
+        notesMarkdown: entityEditDraft.notesMarkdown || null,
+      }, anchor);
+      if (entity) {
+        setEditingEntity(false);
+        setEntityEditDraft(null);
+        refreshGraphWithFilters();
+      }
+    } finally {
+      setEntityEditSaving(false);
+    }
+  }
+
+  function onModeChange(nextMode){
+    if (nextMode === 'global') {
+      onPatch({
+        processorMode: 'global',
+        cliProfileId: undefined,
+        cliBackend: undefined,
+        cliModel: undefined,
+        cliEffort: undefined,
+      });
+    } else {
+      if (selectedProfile) {
+        const m = workspaceModelsForProfile(backends, profileBackends, selectedProfile);
+        const newModel = workspaceDefaultModelId(m);
+        const e = workspaceEffortLevelsForProfile(backends, profileBackends, selectedProfile, newModel);
+        onPatch({
+          processorMode: 'override',
+          cliProfileId: selectedProfile.id,
+          cliBackend: selectedProfile.vendor,
+          cliModel: newModel,
+          cliEffort: workspaceDefaultEffort(e),
+        });
+      } else {
+        onPatch({ processorMode: 'override' });
+      }
+    }
+  }
+
+  function onProfileChange(v){
+    const profile = profiles.find(p => p.id === v);
+    if (!profile) return;
+    const m = workspaceModelsForProfile(backends, profileBackends, profile);
+    const newModel = workspaceDefaultModelId(m);
+    const e = workspaceEffortLevelsForProfile(backends, profileBackends, profile, newModel);
+    onPatch({
+      processorMode: 'override',
+      cliProfileId: profile.id,
+      cliBackend: profile.vendor,
+      cliModel: newModel,
+      cliEffort: workspaceDefaultEffort(e),
+    });
+  }
+
+  function onModelChange(v){
+    const e = selectedProfile ? workspaceEffortLevelsForProfile(backends, profileBackends, selectedProfile, v) : [];
+    onPatch({ cliModel: v, cliEffort: workspaceDefaultEffort(e) });
+  }
+
+  function onScanInterval(v){
+    if (v === '') {
+      onPatch({ scanIntervalMinutes: undefined });
+      return;
+    }
+    const n = parseInt(v, 10);
+    if (!Number.isFinite(n)) return;
+    onPatch({ scanIntervalMinutes: Math.max(1, Math.min(1440, n)) });
+  }
+
+  function candidateTitle(candidate){
+    const payload = (candidate && candidate.payload) || {};
+    const value = payload.name || payload.title || payload.subjectName || payload.typeSlug || (candidate && candidate.candidateType);
+    return value == null ? 'Candidate' : String(value);
+  }
+
+  function candidateSummary(candidate){
+    const payload = Object.assign({}, (candidate && candidate.payload) || {});
+    delete payload.sourceSpan;
+    const text = JSON.stringify(payload);
+    return text.length > 220 ? text.slice(0, 220) + '...' : text;
+  }
+
+  function statusLabel(status){
+    if (status === 'pending') return 'Needs attention';
+    if (status === 'discarded') return 'Dismissed';
+    if (status === 'active') return 'Applied';
+    if (status === 'stale') return 'Stale';
+    if (status === 'conflict') return 'Conflict';
+    if (status === 'failed') return 'Failed';
+    if (status === 'stopped') return 'Stopped';
+    return status || 'Unknown';
+  }
+
+  function runSourceLabel(source){
+    if (source === 'initial_scan') return 'Initial scan';
+    if (source === 'manual_rebuild') return 'Manual scan';
+    if (source === 'session_reset') return 'Session reset';
+    if (source === 'archive') return 'Archive';
+    if (source === 'scheduled') return 'Scheduled';
+    return source || 'Scan';
+  }
+
+  function shortCandidateId(value){
+    const text = value == null ? '' : String(value);
+    return text.length > 10 ? text.slice(0, 10) : text;
+  }
+
+  function candidateSourceParts(candidate){
+    const sourceSpan = candidate && candidate.payload && candidate.payload.sourceSpan;
+    if (!sourceSpan) {
+      return {
+        key: 'unknown',
+        label: 'Unknown source',
+        meta: candidate && candidate.runId ? `Run ${shortCandidateId(candidate.runId)}` : '',
+      };
+    }
+    const sourceType = sourceSpan.sourceType || 'source';
+    if (sourceType === 'file') {
+      const sourceId = sourceSpan.sourceId || (sourceSpan.locator && sourceSpan.locator.path) || 'file';
+      return {
+        key: `file:${sourceId}:${sourceSpan.runId || ''}`,
+        label: `File · ${sourceId}`,
+        meta: sourceSpan.runId ? `Run ${shortCandidateId(sourceSpan.runId)}` : '',
+      };
+    }
+    if (sourceType === 'workspace_instruction') {
+      return {
+        key: `workspace_instruction:${sourceSpan.sourceId || 'workspace'}:${sourceSpan.runId || ''}`,
+        label: 'Workspace instructions',
+        meta: sourceSpan.runId ? `Run ${shortCandidateId(sourceSpan.runId)}` : '',
+      };
+    }
+    if (sourceType === 'conversation_message') {
+      const conversationId = sourceSpan.conversationId || 'conversation';
+      const range = sourceSpan.startMessageId && sourceSpan.endMessageId
+        ? `${sourceSpan.startMessageId} -> ${sourceSpan.endMessageId}`
+        : '';
+      return {
+        key: `conversation:${conversationId}:${sourceSpan.spanId || ''}`,
+        label: `Conversation · ${shortCandidateId(conversationId)}`,
+        meta: range,
+      };
+    }
+    return {
+      key: `${sourceType}:${sourceSpan.sourceId || sourceSpan.runId || 'source'}`,
+      label: sourceType,
+      meta: sourceSpan.runId ? `Run ${shortCandidateId(sourceSpan.runId)}` : '',
+    };
+  }
+
+  function groupContextMapCandidates(items){
+    const groups = [];
+    const byKey = new Map();
+    items.forEach(candidate => {
+      const parts = candidateSourceParts(candidate);
+      let group = byKey.get(parts.key);
+      if (!group) {
+        group = { key: parts.key, label: parts.label, meta: parts.meta, items: [] };
+        byKey.set(parts.key, group);
+        groups.push(group);
+      }
+      group.items.push(candidate);
+    });
+    return groups;
+  }
+
+  function entitySummary(entity){
+    return entity.summaryMarkdown || entity.notesMarkdown || (Array.isArray(entity.facts) && entity.facts[0]) || '';
+  }
+
+  const graphTypeOptions = Array.from(new Set([
+    'person',
+    'organization',
+    'project',
+    'workflow',
+    'document',
+    'feature',
+    'concept',
+    'decision',
+    'tool',
+    'asset',
+    ...activeEntities.map(entity => entity.typeSlug).filter(Boolean),
+  ])).sort();
+
+  function scanNoticeLabel(){
+    if (runningContextMapRun) return 'Keep rolling';
+    if (initialScanNotice === 'started') return 'Initial scan started';
+    if (initialScanNotice === 'rolling') return 'Keep rolling';
+    if (initialScanNotice === 'completed') return 'Initial scan completed';
+    return '';
+  }
+
+  const scanNotice = runningContextMapRun ? 'rolling' : initialScanNotice;
+  const scanNoticeSource = runningContextMapRun ? runSourceLabel(runningContextMapRun.source) : null;
+  const candidateGroups = groupContextMapCandidates(candidates);
+  const acceptingAllCandidates = candidateBusy === '__all__';
+  const candidateActionBusy = !!candidateBusy;
+  const acceptAllDisabled = !enabled || reviewLoading || candidateActionBusy || !!editingCandidateId || pendingCount <= 0;
+
+  return (
+    <div ref={contextMapTopRef} className="settings-form settings-form-wide ws-form ws-form-context-map">
+      <p className="ws-desc u-dim">
+        Context Map keeps workspace entities, relationships, and evidence in a separate self-maintained map.
+      </p>
+      <label className="toggle ws-toggle">
+        <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)}/>
+        <span className="tgl"/>
+        <span>Enable Context Map for this workspace</span>
+      </label>
+      <div className="ws-cm-run-status">
+        {latestContextMapRun ? (
+          <>
+            <span>Last scan</span>
+            <b>{runSourceLabel(latestContextMapRun.source)}</b>
+            <span>{formatMemoryUpdateTime(latestContextMapRun.startedAt)}</span>
+            <span className="u-dim">{statusLabel(latestContextMapRun.status)}</span>
+          </>
+        ) : (
+          <span className="u-dim">Last scan: None yet</span>
+        )}
+      </div>
+      {scanNotice ? (
+        <div className={'ws-cm-initial-scan is-' + scanNotice}>
+          <span>{scanNoticeLabel()}{scanNoticeSource ? ` · ${scanNoticeSource}` : ''}</span>
+          {runningContextMapRun ? (
+            <button
+              type="button"
+              className="btn ghost danger ws-cm-stop-scan"
+              disabled={scanStopping}
+              onClick={(e) => onStopScan(e.currentTarget)}
+            >{scanStopping ? 'Stopping...' : 'Stop'}</button>
+          ) : initialScanNotice === 'completed' ? (
+            <span className="ws-cm-initial-scan-check">{Ico.check(12)}</span>
+          ) : (
+            <span className="ws-cm-initial-scan-dots" aria-hidden="true">
+              <i/><i/><i/>
+            </span>
+          )}
+        </div>
+      ) : null}
+
+      <div className="ws-cm-section-title">Processor</div>
+      <div className="seg seg-inline ws-cm-seg">
+        <button type="button" aria-pressed={mode === 'global'} onClick={() => onModeChange('global')}>Use global defaults</button>
+        <button type="button" aria-pressed={mode === 'override'} onClick={() => onModeChange('override')}>Override</button>
+      </div>
+
+      {mode === 'override' ? (
+        <>
+          <label className="ws-cm-field">
+            <span>CLI profile</span>
+            <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
+              {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
+              {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </label>
+          {models.length ? (
+            <label className="ws-cm-field">
+              <span>Model</span>
+              <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+                {models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+              </select>
+            </label>
+          ) : null}
+          {efforts.length ? (
+            <div className="ws-cm-field">
+              <span>Effort</span>
+              <div className="seg seg-inline ws-cm-seg">
+                {efforts.map(lv => (
+                  <button
+                    key={lv}
+                    type="button"
+                    aria-pressed={effort === lv}
+                    onClick={() => onPatch({ cliEffort: lv })}
+                  >{lv}</button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </>
+      ) : (
+        <p className="ws-empty u-dim">Using global Context Map processor settings.</p>
+      )}
+
+      <label className="ws-cm-field">
+        <span>Scan interval override (minutes)</span>
+        <input
+          type="number"
+          min={1}
+          max={1440}
+          placeholder={globalContext.scanIntervalMinutes ? String(globalContext.scanIntervalMinutes) : '5'}
+          value={ctx.scanIntervalMinutes ?? ''}
+          onChange={(e) => onScanInterval(e.target.value)}
+        />
+      </label>
+
+      <div className="ws-cm-section-title">Active Map</div>
+      <div className="ws-cm-review-head">
+        <div className="ws-cm-review-counts">
+          <span>{activeCounts.entities || activeEntities.length} entities</span>
+          <span>{activeCounts.relationships || activeRelationships.length} relationships</span>
+        </div>
+        <div className="ws-cm-head-actions">
+          {!latestContextMapRun ? (
+            <button type="button" className="btn ghost" onClick={(e) => runScanFromContextMap(e.currentTarget)} disabled={!enabled || scanBusy}>
+              {Ico.search(12)} {scanBusy ? 'Scanning...' : 'Run initial scan'}
+            </button>
+          ) : null}
+          <button type="button" className="btn ghost" onClick={refreshGraphWithFilters} disabled={graphLoading}>
+            {Ico.reset(12)} {graphLoading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+      <div className="ws-cm-graph-controls">
+        <input
+          type="search"
+          value={graphQuery}
+          onChange={(e) => setGraphQuery(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') refreshGraphWithFilters(); }}
+          placeholder="Search entities"
+          disabled={!enabled}
+        />
+        <select value={graphType} onChange={(e) => setGraphType(e.target.value)} disabled={!enabled}>
+          <option value="">All types</option>
+          {graphTypeOptions.map(type => <option key={type} value={type}>{type}</option>)}
+        </select>
+        <select value={graphStatus} onChange={(e) => setGraphStatus(e.target.value)} disabled={!enabled}>
+          <option value="active">Active</option>
+          <option value="stale">Stale</option>
+          <option value="superseded">Superseded</option>
+          <option value="conflict">Conflict</option>
+          <option value="discarded">Discarded</option>
+          <option value="all">All statuses</option>
+        </select>
+        <select value={graphSensitivity} onChange={(e) => setGraphSensitivity(e.target.value)} disabled={!enabled}>
+          <option value="">All sensitivity</option>
+          <option value="normal">Normal</option>
+          <option value="work-sensitive">Work-sensitive</option>
+          <option value="personal-sensitive">Personal-sensitive</option>
+          <option value="secret-pointer">Secret pointer</option>
+        </select>
+        <button type="button" className="btn ghost" onClick={refreshGraphWithFilters} disabled={!enabled || graphLoading}>
+          {Ico.search(12)} Search
+        </button>
+        <button type="button" className="btn ghost" onClick={clearGraphFilters} disabled={!enabled || graphLoading || (!graphQuery && !graphType && graphStatus === 'active' && !graphSensitivity)}>
+          Clear
+        </button>
+      </div>
+      {!enabled ? (
+        <p className="ws-empty u-dim">Context Map is disabled for this workspace.</p>
+      ) : activeEntities.length === 0 ? (
+        <p className="ws-empty u-dim">No active Context Map entities yet.</p>
+      ) : (
+        <div className="ws-cm-graph">
+          <div className="ws-cm-entity-grid">
+            {activeEntities.map(entity => {
+              const isSelectedEntity = selectedEntityId === entity.entityId || (entityDetail && entityDetail.entityId === entity.entityId);
+              const isLoadingEntity = entityDetailLoading && selectedEntityId === entity.entityId;
+              return (
+                <div key={entity.entityId} className={'ws-cm-entity-card' + (isSelectedEntity ? ' is-selected' : '')}>
+                  <div className="ws-cm-entity-top">
+                    <div>
+                      <div className="ws-cm-entity-name">{entity.name}</div>
+                      <div className="ws-cm-entity-type">{entity.typeSlug} · {entity.status || 'active'} · {entity.sensitivity || 'normal'}</div>
+                    </div>
+                    <span className="ws-cm-entity-confidence">{Math.round(((entity.confidence || 0) * 100))}%</span>
+                  </div>
+                  {entitySummary(entity) ? (
+                    <p className="ws-cm-entity-summary">{entitySummary(entity)}</p>
+                  ) : null}
+                  {Array.isArray(entity.aliases) && entity.aliases.length ? (
+                    <div className="ws-cm-entity-chips">
+                      {entity.aliases.slice(0, 4).map(alias => <span key={alias}>{alias}</span>)}
+                    </div>
+                  ) : null}
+                  <div className="ws-cm-entity-foot">
+                    <span>{entity.factCount || 0} facts</span>
+                    <span>{entity.relationshipCount || 0} links</span>
+                    <span>{entity.evidenceCount || 0} evidence</span>
+                    <button
+                      type="button"
+                      className="ws-mem-review-btn ws-cm-details-btn"
+                      onClick={(e) => onSelectEntity(entity.entityId, e.currentTarget)}
+                      disabled={isLoadingEntity}
+                    >{isLoadingEntity ? 'Loading...' : 'Details'}</button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          {(entityDetailLoading || entityDetail) ? (
+            <div
+              className="ws-cm-detail-modal"
+              role="dialog"
+              aria-modal="true"
+              aria-label={entityDetail ? `Context Map entity details: ${entityDetail.name}` : 'Context Map entity details'}
+              onMouseDown={onCloseEntityDetail}
+            >
+              <div className="ws-cm-detail-panel" onMouseDown={(e) => e.stopPropagation()}>
+                {entityDetailLoading && !entityDetail ? (
+                  <div id="ws-context-map-entity-detail" className="ws-cm-detail" tabIndex="-1">
+                    <div className="ws-cm-detail-head">
+                      <div>
+                        <div className="ws-cm-detail-title">Loading entity details...</div>
+                        <div className="ws-cm-detail-meta"><span>Context Map</span></div>
+                      </div>
+                      <div className="ws-cm-detail-actions">
+                        <button type="button" className="btn ghost" onClick={onCloseEntityDetail}>{Ico.x(12)} Close</button>
+                      </div>
+                    </div>
+                  </div>
+                ) : entityDetail ? (
+                  <div id="ws-context-map-entity-detail" className="ws-cm-detail" tabIndex="-1">
+              <div className="ws-cm-detail-head">
+                <div>
+                  <div className="ws-cm-detail-title">{entityDetail.name}</div>
+                  <div className="ws-cm-detail-meta">
+                    <span>{entityDetail.typeSlug}</span>
+                    <span>{entityDetail.status}</span>
+                    <span>{entityDetail.sensitivity}</span>
+                  </div>
+                </div>
+                <div className="ws-cm-detail-actions">
+                  {!editingEntity ? (
+                    <button type="button" className="btn ghost" onClick={() => beginEntityEdit(entityDetail)}>{Ico.edit(12)} Edit</button>
+                  ) : null}
+                  <button type="button" className="btn ghost" onClick={onCloseEntityDetail}>{Ico.x(12)} Close</button>
+                </div>
+              </div>
+              {editingEntity && entityEditDraft ? (
+                <div className="ws-cm-entity-edit">
+                  <label>
+                    <span>Name</span>
+                    <input value={entityEditDraft.name} onChange={(e) => patchEntityEdit({ name: e.target.value })}/>
+                  </label>
+                  <label>
+                    <span>Type</span>
+                    <select value={entityEditDraft.typeSlug} onChange={(e) => patchEntityEdit({ typeSlug: e.target.value })}>
+                      {graphTypeOptions.map(type => <option key={type} value={type}>{type}</option>)}
+                    </select>
+                  </label>
+                  <label>
+                    <span>Status</span>
+                    <select value={entityEditDraft.status} onChange={(e) => patchEntityEdit({ status: e.target.value })}>
+                      <option value="active">Active</option>
+                      <option value="stale">Stale</option>
+                      <option value="superseded">Superseded</option>
+                      <option value="conflict">Conflict</option>
+                      <option value="discarded">Discarded</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Sensitivity</span>
+                    <select value={entityEditDraft.sensitivity} onChange={(e) => patchEntityEdit({ sensitivity: e.target.value })}>
+                      <option value="normal">Normal</option>
+                      <option value="work-sensitive">Work-sensitive</option>
+                      <option value="personal-sensitive">Personal-sensitive</option>
+                      <option value="secret-pointer">Secret pointer</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>Confidence</span>
+                    <input type="number" min={0} max={1} step={0.01} value={entityEditDraft.confidence} onChange={(e) => patchEntityEdit({ confidence: e.target.value })}/>
+                  </label>
+                  <label className="wide">
+                    <span>Summary</span>
+                    <textarea rows={3} value={entityEditDraft.summaryMarkdown} onChange={(e) => patchEntityEdit({ summaryMarkdown: e.target.value })}/>
+                  </label>
+                  <label className="wide">
+                    <span>Notes</span>
+                    <textarea rows={3} value={entityEditDraft.notesMarkdown} onChange={(e) => patchEntityEdit({ notesMarkdown: e.target.value })}/>
+                  </label>
+                  <div className="ws-cm-edit-actions">
+                    <button type="button" className="btn ghost" disabled={entityEditSaving} onClick={() => { setEditingEntity(false); setEntityEditDraft(null); }}>Cancel</button>
+                    <button type="button" className="btn primary" disabled={entityEditSaving || !entityEditDraft.name.trim()} onClick={(e) => saveEntityEdit(e.currentTarget)}>
+                      {entityEditSaving ? 'Saving...' : 'Save entity'}
+                    </button>
+                  </div>
+                </div>
+              ) : entityDetail.summaryMarkdown ? <p className="ws-cm-detail-summary">{entityDetail.summaryMarkdown}</p> : null}
+              {Array.isArray(entityDetail.aliases) && entityDetail.aliases.length ? (
+                <div className="ws-cm-entity-chips">
+                  {entityDetail.aliases.map(alias => <span key={alias}>{alias}</span>)}
+                </div>
+              ) : null}
+              <div className="ws-cm-detail-grid">
+                <div>
+                  <div className="ws-cm-detail-label">Facts</div>
+                  {Array.isArray(entityDetail.facts) && entityDetail.facts.length ? (
+                    <ul className="ws-cm-detail-list">
+                      {entityDetail.facts.map(fact => (
+                        <li key={fact.factId || fact.statementMarkdown}>
+                          <span>{fact.statementMarkdown}</span>
+                          <b>{Math.round(((fact.confidence || 0) * 100))}%</b>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="ws-empty u-dim">No facts.</p>}
+                </div>
+                <div>
+                  <div className="ws-cm-detail-label">Evidence</div>
+                  {Array.isArray(entityDetail.evidence) && entityDetail.evidence.length ? (
+                    <ul className="ws-cm-detail-list">
+                      {entityDetail.evidence.map(ev => (
+                        <li key={ev.evidenceId}>
+                          <span>{ev.sourceType}: {ev.sourceId}</span>
+                          {ev.excerpt ? <b>{ev.excerpt}</b> : null}
+                        </li>
+                      ))}
+                    </ul>
+                  ) : <p className="ws-empty u-dim">No direct evidence.</p>}
+                </div>
+              </div>
+              {Array.isArray(entityDetail.relationships) && entityDetail.relationships.length ? (
+                <div className="ws-cm-detail-block">
+                  <div className="ws-cm-detail-label">Relationships</div>
+                  <div className="ws-cm-relationships">
+                    {entityDetail.relationships.map(rel => (
+                      <div key={rel.relationshipId} className="ws-cm-relationship-row">
+                        <span>{rel.subjectName}</span>
+                        <b>{rel.predicate}</b>
+                        <span>{rel.objectName}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {Array.isArray(entityDetail.audit) && entityDetail.audit.length ? (
+                <div className="ws-cm-detail-block">
+                  <div className="ws-cm-detail-label">Audit</div>
+                  <ul className="ws-cm-detail-list">
+                    {entityDetail.audit.slice(0, 5).map(event => (
+                      <li key={event.eventId}>
+                        <span>{event.eventType}</span>
+                        <b>{event.createdAt}</b>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+          {activeRelationships.length ? (
+            <div className="ws-cm-relationships">
+              {activeRelationships.slice(0, 8).map(rel => (
+                <div key={rel.relationshipId} className="ws-cm-relationship-row">
+                  <span>{rel.subjectName}</span>
+                  <b>{rel.predicate}</b>
+                  <span>{rel.objectName}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {enabled && latestContextMapRun ? (
+        <details className="ws-cm-advanced">
+          <summary>Advanced</summary>
+          <div className="ws-cm-advanced-actions">
+            <button type="button" className="btn ghost" onClick={(e) => runScanFromContextMap(e.currentTarget)} disabled={scanBusy || candidateBusy}>
+              {Ico.search(12)} {scanBusy ? 'Scanning...' : 'Rescan now'}
+            </button>
+            <Tip
+              variant="explain"
+              rich={(
+                <WorkspaceSettingsHelpTooltip>
+                  Starts a full Context Map rescan for this workspace. Agent Cockpit reprocesses discovered workspace sources even if they have not changed, checks conversations for anything new, and updates the map and Needs Attention while the scan runs in the background.
+                </WorkspaceSettingsHelpTooltip>
+              )}
+            >
+              <button
+                type="button"
+                className="settings-help-btn ws-cm-rescan-help"
+                aria-label="Rescan now help"
+              >?</button>
+            </Tip>
+          </div>
+        </details>
+      ) : null}
+
+      <div className="ws-cm-section-title">Needs Attention</div>
+      <div className="ws-cm-review-head">
+        <div className="ws-cm-review-counts">
+          <span>{pendingCount} need attention</span>
+          <span>{discardedCount} dismissed</span>
+        </div>
+        <div className="ws-cm-review-tools">
+          <button
+            type="button"
+            className="btn primary"
+            onClick={(e) => onApplyAllCandidates(e.currentTarget)}
+            disabled={acceptAllDisabled}
+          >{acceptingAllCandidates ? 'Accepting...' : 'Accept All'}</button>
+          <div className="seg seg-inline ws-cm-seg ws-cm-review-filter">
+            <button type="button" aria-pressed={currentReviewStatus === 'pending'} onClick={() => onReviewStatusChange('pending')} disabled={reviewLoading || candidateActionBusy}>
+              Needs Attention
+            </button>
+            <button type="button" aria-pressed={currentReviewStatus === 'discarded'} onClick={() => onReviewStatusChange('discarded')} disabled={reviewLoading || candidateActionBusy}>
+              Dismissed
+            </button>
+          </div>
+          <button type="button" className="btn ghost" onClick={() => onRefreshReview(currentReviewStatus)} disabled={reviewLoading || candidateActionBusy}>
+            {Ico.reset(12)} {reviewLoading ? 'Refreshing...' : 'Refresh'}
+          </button>
+        </div>
+      </div>
+      {!enabled ? (
+        <p className="ws-empty u-dim">Context Map is disabled for this workspace.</p>
+      ) : candidates.length === 0 ? (
+        <p className="ws-empty u-dim">{currentReviewStatus === 'discarded' ? 'No dismissed Context Map items.' : 'No Context Map items need attention.'}</p>
+      ) : (
+        <div className="ws-cm-candidate-groups">
+          {candidateGroups.map(group => (
+            <section key={group.key} className="ws-cm-candidate-group">
+              <div className="ws-cm-candidate-group-head">
+                <div>
+                  <span>{group.label}</span>
+                  {group.meta ? <b>{group.meta}</b> : null}
+                </div>
+                <em>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</em>
+              </div>
+              <div className="ws-cm-candidates">
+                {group.items.map(candidate => {
+                  const sourceParts = candidateSourceParts(candidate);
+                  return (
+                    <div key={candidate.candidateId} className={'ws-cm-candidate is-' + (candidate.status || 'pending')}>
+                      <div className="ws-cm-candidate-top">
+                        <div className="ws-cm-candidate-main">
+                          <div className="ws-cm-candidate-title">{candidateTitle(candidate)}</div>
+                          <div className="ws-cm-candidate-meta">
+                            <span>{candidate.candidateType}</span>
+                            <span>{Math.round(((candidate.confidence || 0) * 100))}%</span>
+                            <span>{statusLabel(candidate.status)}</span>
+                          </div>
+                        </div>
+                        <div className="ws-cm-candidate-actions">
+                          {candidate.status === 'active' ? (
+                            <button type="button" className="btn ghost" disabled>{Ico.check(12)} Applied</button>
+                          ) : candidate.status === 'discarded' ? (
+                            <button
+                              type="button"
+                              className="btn ghost"
+                              disabled={candidateActionBusy}
+                              onClick={() => onReopenCandidate(candidate.candidateId)}
+                            >{Ico.reset(12)} Restore</button>
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                className="btn ghost"
+                                disabled={candidateActionBusy}
+                                onClick={() => editingCandidateId === candidate.candidateId ? cancelCandidateEdit() : beginCandidateEdit(candidate)}
+                              >{editingCandidateId === candidate.candidateId ? Ico.x(12) : Ico.edit(12)} {editingCandidateId === candidate.candidateId ? 'Cancel' : 'Edit'}</button>
+                              <button
+                                type="button"
+                                className="btn ghost"
+                                disabled={candidateActionBusy || editingCandidateId === candidate.candidateId}
+                                onClick={(e) => onApplyCandidate(candidate.candidateId, e.currentTarget)}
+                              >{Ico.check(12)} Apply</button>
+                              <button
+                                type="button"
+                                className="btn ghost danger"
+                                disabled={candidateActionBusy}
+                                onClick={(e) => onDiscardCandidate(candidate.candidateId, e.currentTarget)}
+                              >{Ico.x(12)} Dismiss</button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      {editingCandidateId === candidate.candidateId ? (
+                        <div className="ws-cm-candidate-edit">
+                          <label>
+                            <span>Payload JSON</span>
+                            <textarea value={candidateEditPayload} onChange={(e) => setCandidateEditPayload(e.target.value)}/>
+                          </label>
+                          <label>
+                            <span>Confidence</span>
+                            <input
+                              type="number"
+                              min="0"
+                              max="1"
+                              step="0.01"
+                              value={candidateEditConfidence}
+                              onChange={(e) => setCandidateEditConfidence(e.target.value)}
+                            />
+                          </label>
+                          <div className="ws-cm-candidate-edit-actions">
+                            <button
+                              type="button"
+                              className="btn ghost"
+                              disabled={candidateActionBusy}
+                              onClick={(e) => saveCandidateEdit(candidate, e.currentTarget)}
+                            >{Ico.check(12)} Save edit</button>
+                            <button type="button" className="btn ghost" disabled={candidateActionBusy} onClick={cancelCandidateEdit}>Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <pre className="ws-cm-candidate-payload">{candidateSummary(candidate)}</pre>
+                      )}
+                      <div className="ws-cm-source-ref">
+                        {sourceParts.label}{sourceParts.meta ? ` · ${sourceParts.meta}` : ''}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+      )}
+
+      <div className="ws-actions">
+        <button
+          className="btn ghost danger"
+          disabled={scanBusy || candidateBusy}
+          onClick={(e) => onClearMap(e.currentTarget)}
+        >{Ico.trash(12)} Clear Context Map</button>
+        <button className="btn primary" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving...' : 'Save Context Map'}</button>
+      </div>
     </div>
   );
 }

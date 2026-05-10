@@ -277,7 +277,8 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
    * server when Claude Code is the configured Memory CLI.
    */
   async runOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { model, effort, timeoutMs = 60000, workingDir, allowTools, mcpServers, cliProfile } = options;
+    const { model, effort, timeoutMs = 60000, abortSignal, workingDir, allowTools, mcpServers, cliProfile } = options;
+    if (abortSignal?.aborted) throw new Error('claude --print stopped');
     const runtime = resolveClaudeCliRuntime(cliProfile);
     const args = ['--print', '-p', prompt];
     // Digestion / Dreaming need to read every file under the workspace
@@ -302,7 +303,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       const child = execFile(
         runtime.command,
         args,
-        { timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined, env: runtime.env },
+        { timeout: timeoutMs, signal: abortSignal, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined, env: runtime.env },
         (err, stdout, stderr) => {
           if (err) {
             // Filter the stdin warning — it's not the real error.
@@ -311,7 +312,9 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
             // (it contains the entire prompt and is useless in error output).
             const execErr = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string; signal?: string };
             let msg: string;
-            if (execErr.killed) {
+            if (abortSignal?.aborted || execErr.name === 'AbortError') {
+              msg = 'Process stopped by caller';
+            } else if (execErr.killed) {
               msg = `Process killed (timeout after ${timeoutMs / 1000}s)`;
             } else if (filtered) {
               msg = filtered;
