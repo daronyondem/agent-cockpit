@@ -10,18 +10,20 @@
 | 2. Data Models & File Structure | [spec-data-models.md](spec-data-models.md) | On-disk layout, JSON schemas, workspace hashing |
 | 3. API Endpoints | [spec-api-endpoints.md](spec-api-endpoints.md) | REST + WebSocket API surface |
 | 4. Backend Services | [spec-backend-services.md](spec-backend-services.md) | ChatService, adapter system, KB pipeline, update service |
-| 5. Server Initialization & Security | [spec-server-security.md](spec-server-security.md) | Config, startup order, auth, CSRF, CSP |
-| 6. Frontend Behavior | [spec-frontend.md](spec-frontend.md) | SPA architecture, streaming, KB browser, settings |
-| 7. Mobile PWA Client | [spec-mobile-pwa.md](spec-mobile-pwa.md) | Installable mobile web client architecture, implemented slice, deferred work |
-| 8. Export, Limitations & Deployment | [spec-deployment.md](spec-deployment.md) | Markdown export, known limitations, deployment |
-| 9. Testing & CI/CD | [spec-testing.md](spec-testing.md) | Test suite, test files, CI workflows |
+| 5. Context Map Feature | [spec-context-map.md](spec-context-map.md) | Workspace graph feature: source scanning, extraction, synthesis, active map, Needs Attention, MCP retrieval |
+| 6. Server Initialization & Security | [spec-server-security.md](spec-server-security.md) | Config, startup order, auth, CSRF, CSP |
+| 7. Frontend Behavior | [spec-frontend.md](spec-frontend.md) | SPA architecture, streaming, KB browser, settings |
+| 8. Mobile PWA Client | [spec-mobile-pwa.md](spec-mobile-pwa.md) | Installable mobile web client architecture, implemented slice, deferred work |
+| 9. Export, Limitations & Deployment | [spec-deployment.md](spec-deployment.md) | Markdown export, known limitations, deployment |
+| 10. Testing & CI/CD | [spec-testing.md](spec-testing.md) | Test suite, test files, CI workflows |
 
 ### Design Documents
 
-In-flight or pending design proposals that complement (but have not yet been folded into) the spec proper:
+Design and planning documents that preserve product intent, implementation plans, or historical rationale alongside the implemented specification:
 
 | Document | Status | Description |
 |----------|--------|-------------|
+| [design-context-map.md](design-context-map.md) | Proposed | Context Map full-scope design: workspace entity/relationship graph, evidence model, background processor with synthesis/ranking, auto-apply plus needs-attention workflow, read-only MCP retrieval, and global-default/workspace-override settings |
 | [design-kb-ingestion-hybrid.md](design-kb-ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |
 | [design-kb-vnext-implementation-plan.md](design-kb-vnext-implementation-plan.md) | Proposed | Phased Knowledge Base vNext plan: document structure, chunked digestion, gleaning, glossary expansion, graph retrieval, synthesis history, and pipeline visualization |
 

@@ -310,6 +310,17 @@ export interface WorkspaceIndex {
     /** Embedding dimensions (must match the model). Default 768. */
     dimensions?: number;
   };
+  /**
+   * Whether per-workspace Context Map is enabled. When false/undefined,
+   * no Context Map processing, review queue, MCP exposure, or UI graph
+   * state is active for this workspace. Default false.
+   */
+  contextMapEnabled?: boolean;
+  /**
+   * Per-workspace Context Map overrides. When absent or
+   * `processorMode:'global'`, global Settings.contextMap defaults apply.
+   */
+  contextMap?: ContextMapWorkspaceSettings;
   conversations: ConversationEntry[];
 }
 
@@ -337,6 +348,8 @@ export interface Conversation {
   kb?: ConversationKbStatus;
   /** Pending Memory Review snapshot for composer notifications. */
   memoryReview?: ConversationMemoryReviewStatus;
+  /** Pending Context Map review snapshot for composer notifications. */
+  contextMap?: ConversationContextMapStatus;
 }
 
 /** KB status block on conversation responses (avoids extra round-trip for the KB status icon). */
@@ -369,6 +382,30 @@ export interface ConversationMemoryReviewStatus {
   lastRunCreatedAt?: string;
   lastRunUpdatedAt?: string;
   lastRunSource?: MemoryReviewRunSource;
+}
+
+export type ConversationContextMapRunStatus = 'running' | 'completed' | 'failed' | 'stopped';
+export type ConversationContextMapRunSource = 'initial_scan' | 'scheduled' | 'session_reset' | 'archive' | 'manual_rebuild';
+
+export interface ConversationContextMapStatus {
+  enabled: boolean;
+  pending: boolean;
+  pendingCandidates: number;
+  staleCandidates: number;
+  conflictCandidates: number;
+  failedCandidates: number;
+  runningRuns: number;
+  failedRuns: number;
+  latestRunId?: string;
+  latestRunStatus?: ConversationContextMapRunStatus;
+  latestRunCreatedAt?: string;
+  latestRunUpdatedAt?: string;
+  latestRunSource?: ConversationContextMapRunSource;
+  lastRunId?: string;
+  lastRunStatus?: ConversationContextMapRunStatus;
+  lastRunCreatedAt?: string;
+  lastRunUpdatedAt?: string;
+  lastRunSource?: ConversationContextMapRunSource;
 }
 
 export interface ConversationListItem {
@@ -555,6 +592,41 @@ export interface Settings {
      */
     autoDigest?: boolean;
   };
+  /**
+   * Globally-configured Context Map processor defaults. Workspaces opt in
+   * independently through WorkspaceIndex.contextMapEnabled and may either
+   * use these defaults or provide a workspace-level override.
+   */
+  contextMap?: ContextMapGlobalSettings;
+}
+
+export interface ContextMapGlobalSettings {
+  cliProfileId?: string;
+  /** @deprecated Use cliProfileId. */
+  cliBackend?: string;
+  cliModel?: string;
+  cliEffort?: EffortLevel;
+  /** Background scan interval in minutes. Default 5. */
+  scanIntervalMinutes?: number;
+  /** Max workspace scans started by the scheduler at once. Default 1. */
+  cliConcurrency?: number;
+  /** Max extraction CLI calls running concurrently across all active Context Map scans. Default 3. */
+  extractionConcurrency?: number;
+  /** Max synthesis/final-arbiter CLI calls running concurrently across all active Context Map scans. Default 3. */
+  synthesisConcurrency?: number;
+}
+
+export type ContextMapProcessorMode = 'global' | 'override';
+
+export interface ContextMapWorkspaceSettings {
+  /** Use global processor defaults unless explicitly set to override. */
+  processorMode?: ContextMapProcessorMode;
+  cliProfileId?: string;
+  /** @deprecated Use cliProfileId. */
+  cliBackend?: string;
+  cliModel?: string;
+  cliEffort?: EffortLevel;
+  scanIntervalMinutes?: number;
 }
 
 // ── Stream Events ───────────────────────────────────────────────────────────
@@ -742,6 +814,12 @@ export interface MemoryReviewUpdateEvent {
   review: ConversationMemoryReviewStatus;
 }
 
+export interface ContextMapUpdateEvent {
+  type: 'context_map_update';
+  updatedAt: string;
+  contextMap: ConversationContextMapStatus;
+}
+
 export type StreamEvent =
   | TextEvent
   | ThinkingEvent
@@ -759,6 +837,7 @@ export type StreamEvent =
   | BackendRuntimeEvent
   | MemoryUpdateEvent
   | MemoryReviewUpdateEvent
+  | ContextMapUpdateEvent
   | KbStateUpdateEvent;
 
 export type StreamErrorSource = 'backend' | 'transport' | 'abort' | 'server';

@@ -642,7 +642,7 @@ export class KiroAdapter extends BaseBackendAdapter {
    * post-tool final answer.
    */
   private _acpOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
-    const { timeoutMs = 60000, workingDir, model, mcpServers } = options;
+    const { timeoutMs = 60000, abortSignal, workingDir, model, mcpServers } = options;
     const cwd = workingDir || this.workingDir || os.homedir();
     const mcpServersForAcp: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
 
@@ -662,8 +662,12 @@ export class KiroAdapter extends BaseBackendAdapter {
     let settled = false;
 
     return new Promise<string>((resolve, reject) => {
+      const onAbort = () => {
+        settle(() => reject(new Error('kiro-cli acp runOneShot stopped')));
+      };
       const cleanup = () => {
         if (timer) { clearTimeout(timer); timer = null; }
+        abortSignal?.removeEventListener('abort', onAbort);
         if (!proc.killed) proc.kill('SIGTERM');
       };
       const settle = (fn: () => void) => {
@@ -672,6 +676,12 @@ export class KiroAdapter extends BaseBackendAdapter {
         cleanup();
         fn();
       };
+
+      if (abortSignal?.aborted) {
+        settle(() => reject(new Error('kiro-cli acp runOneShot stopped')));
+        return;
+      }
+      abortSignal?.addEventListener('abort', onAbort, { once: true });
 
       timer = setTimeout(() => {
         settle(() => reject(new Error(`kiro-cli acp runOneShot timed out after ${timeoutMs}ms`)));

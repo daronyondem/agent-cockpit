@@ -142,6 +142,7 @@ chatService.initialize().then(async () => {
   cliUpdateService.start(() => chatService.getSettings());
   chatResult.kbDreamScheduler.start();
   chatResult.memoryReviewScheduler.start();
+  chatResult.contextMapScheduler.start();
 
   // Load last-persisted Claude plan usage snapshot, then fire-and-forget
   // the first refresh. Further refreshes happen opportunistically after

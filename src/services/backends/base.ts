@@ -25,6 +25,8 @@ export interface RunOneShotOptions {
   serviceTier?: ServiceTier;
   /** Hard timeout in ms (default: 60s). */
   timeoutMs?: number;
+  /** Optional cancellation signal for caller-owned one-shot work. */
+  abortSignal?: AbortSignal;
   /** Working directory for the spawned CLI. */
   workingDir?: string | null;
   /**

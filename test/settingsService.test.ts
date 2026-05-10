@@ -36,6 +36,12 @@ describe('settings', () => {
       }),
     ]);
     expect(settings.systemPrompt).toBe('');
+    expect(settings.contextMap).toEqual({
+      scanIntervalMinutes: 5,
+      cliConcurrency: 1,
+      extractionConcurrency: 3,
+      synthesisConcurrency: 3,
+    });
     expect((settings as any).customInstructions).toBeUndefined();
   });
 
@@ -201,7 +207,7 @@ describe('settings', () => {
     expect(profile.env).toBeUndefined();
   });
 
-  test('saving Memory and KB CLI profile selections keeps legacy backend fields aligned', async () => {
+  test('saving Memory, KB, and Context Map CLI profile selections keeps legacy backend fields aligned', async () => {
     const settings = await service.getSettings();
     const profile = {
       id: 'profile-codex-kb',
@@ -225,6 +231,18 @@ describe('settings', () => {
         dreamingCliProfileId: profile.id,
         dreamingCliBackend: 'claude-code',
       },
+      contextMap: {
+        cliProfileId: profile.id,
+        cliBackend: 'claude-code',
+        scanIntervalMinutes: 0,
+        cliConcurrency: 99,
+        extractionConcurrency: 0,
+        synthesisConcurrency: 99,
+        sources: {
+          conversations: true,
+          git: 'yes',
+        },
+      },
     } as any);
 
     expect(saved.memory?.cliProfileId).toBe(profile.id);
@@ -232,5 +250,12 @@ describe('settings', () => {
     expect(saved.knowledgeBase?.ingestionCliBackend).toBe('codex');
     expect(saved.knowledgeBase?.digestionCliBackend).toBe('codex');
     expect(saved.knowledgeBase?.dreamingCliBackend).toBe('codex');
+    expect(saved.contextMap?.cliProfileId).toBe(profile.id);
+    expect(saved.contextMap?.cliBackend).toBe('codex');
+    expect(saved.contextMap?.scanIntervalMinutes).toBe(1);
+    expect(saved.contextMap?.cliConcurrency).toBe(10);
+    expect(saved.contextMap?.extractionConcurrency).toBe(1);
+    expect(saved.contextMap?.synthesisConcurrency).toBe(6);
+    expect((saved.contextMap as any)?.sources).toBeUndefined();
   });
 });
