@@ -332,7 +332,7 @@ describe('resetSession', () => {
     const result = await service.resetSession(conv.id);
     expect(result!.newSessionNumber).toBe(2);
     expect(result!.archivedSession).toBeDefined();
-    expect(result!.archivedSession.summary).toBe('Test summary for session');
+    expect(result!.archivedSession.summary).toBe('Session 1 (2 messages)');
     expect(result!.archivedSession.messageCount).toBe(2);
 
     const loaded = await service.getConversation(conv.id);
@@ -372,8 +372,21 @@ describe('resetSession', () => {
     const convEntry = index.conversations.find((c: any) => c.id === conv.id);
     expect(convEntry.sessions).toHaveLength(2);
     expect(convEntry.sessions[0].active).toBe(false);
-    expect(convEntry.sessions[0].summary).toBe('Test summary for session');
+    expect(convEntry.sessions[0].summary).toBe('Session 1 (1 messages)');
     expect(convEntry.sessions[1].active).toBe(true);
+  });
+
+  test('can update archived session summary asynchronously', async () => {
+    const conv = await service.createConversation();
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    await service.addMessage(conv.id, 'assistant', 'Hi', 'claude-code');
+    await service.resetSession(conv.id);
+
+    const summary = await service.generateAndStoreSessionSummary(conv.id, 1);
+
+    expect(summary).toBe('Test summary for session');
+    const sessions = await service.getSessionHistory(conv.id);
+    expect(sessions![0].summary).toBe('Test summary for session');
   });
 
   test('multiple resets create sequential sessions', async () => {
@@ -429,7 +442,7 @@ describe('getSessionHistory', () => {
     const sessions = await service.getSessionHistory(conv.id);
     expect(sessions).toHaveLength(2);
     expect(sessions![0].isCurrent).toBe(false);
-    expect(sessions![0].summary).toBe('Test summary');
+    expect(sessions![0].summary).toBe('Session 1 (1 messages)');
     expect(sessions![1].isCurrent).toBe(true);
     expect(sessions![1].number).toBe(2);
   });

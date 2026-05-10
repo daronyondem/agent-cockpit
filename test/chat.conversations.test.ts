@@ -8,6 +8,15 @@ let env: ChatRouterEnv;
 beforeEach(async () => { env = await createChatRouterEnv(); });
 afterEach(async () => { await destroyChatRouterEnv(env); });
 
+async function waitForCondition(predicate: () => boolean | Promise<boolean>, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (await predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error('Timed out waiting for condition.');
+}
+
 describe('POST /conversations', () => {
   test('creates a conversation with title and workingDir', async () => {
     const res = await env.request('POST', '/api/chat/conversations', {
@@ -326,6 +335,7 @@ describe('POST /conversations/:id/reset', () => {
   test('resets session and returns new session info', async () => {
     const conv = await env.chatService.createConversation('Reset Test');
     await env.chatService.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+    (env.mockBackend as any).generateSummary = async () => 'Async summary';
 
     const res = await env.request('POST', `/api/chat/conversations/${conv.id}/reset`);
     expect(res.status).toBe(200);
@@ -333,6 +343,28 @@ describe('POST /conversations/:id/reset', () => {
     expect(res.body.newSessionNumber).toBeGreaterThan(1);
     expect(res.body.archivedSession).toBeDefined();
     expect(res.body.archivedSession.number).toBe(1);
+    expect(res.body.archivedSession.summary).toBe('Session 1 (1 messages)');
+
+    await waitForCondition(async () => {
+      const sessions = await env.chatService.getSessionHistory(conv.id);
+      return sessions?.[0]?.summary === 'Async summary';
+    });
+    await waitForCondition(async () => {
+      const jobs = await env.sessionFinalizers.listJobs();
+      return jobs.some((job) => job.conversationId === conv.id
+        && job.sessionNumber === 1
+        && job.type === 'session_summary'
+        && job.status === 'completed');
+    });
+    const jobs = await env.sessionFinalizers.listJobs();
+    expect(jobs).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        conversationId: conv.id,
+        sessionNumber: 1,
+        type: 'session_summary',
+        status: 'completed',
+      }),
+    ]));
   });
 
   test('returns 404 for non-existent conversation', async () => {

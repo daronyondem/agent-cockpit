@@ -42,6 +42,7 @@ export interface ContextMapChatService {
   getContextMapDb(hash: string): ContextMapDatabase | null;
   listConversations(opts?: { archived?: boolean }): Promise<ConversationListItem[]>;
   getConversation(id: string): Promise<Conversation | null>;
+  getSessionMessages?(id: string, sessionNumber: number): Promise<Message[] | null>;
   getWorkspacePath?(hash: string): Promise<string | null>;
   getWorkspaceInstructions?(hash: string): Promise<string | null>;
 }
@@ -326,9 +327,46 @@ export class ContextMapService {
     }
   }
 
+  async processConversationSession(
+    hash: string,
+    conversationId: string,
+    sessionNumber: number,
+    opts: { source: Extract<ContextRunSource, 'session_reset' | 'archive'> },
+  ): Promise<ContextMapWorkspaceProcessResult> {
+    if (this.running.has(hash)) {
+      return emptyResult(hash, null, 'already-running');
+    }
+    const active: ActiveContextMapRun = { abortController: new AbortController() };
+    this.running.set(hash, active);
+    let shouldEmitUpdate = false;
+    try {
+      const result = await this.processWorkspaceInternal(hash, {
+        source: opts.source,
+        conversationScope: { conversationId, sessionNumber },
+      }, active);
+      shouldEmitUpdate = result.runId !== null;
+      return result;
+    } catch (err: unknown) {
+      shouldEmitUpdate = true;
+      throw err;
+    } finally {
+      this.running.delete(hash);
+      if (shouldEmitUpdate && this.emitUpdate) {
+        try {
+          await this.emitUpdate(hash);
+        } catch (err: unknown) {
+          console.warn(`[context-map] failed to emit update for ${hash}:`, (err as Error).message);
+        }
+      }
+    }
+  }
+
   private async processWorkspaceInternal(
     hash: string,
-    opts: { source?: ContextRunSource },
+    opts: {
+      source?: ContextRunSource;
+      conversationScope?: { conversationId: string; sessionNumber: number };
+    },
     active: ActiveContextMapRun,
   ): Promise<ContextMapWorkspaceProcessResult> {
     const totalStartedMs = monotonicNowMs();
@@ -345,26 +383,51 @@ export class ContextMapService {
     }
 
     const planningStartedMs = monotonicNowMs();
-    const refs = (await this.chatService.listConversations({ archived: false }))
-      .filter((conv) => conv.workspaceHash === hash && !conv.archived)
-      .sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime());
-
     const spans: ContextMapSpanWork[] = [];
     const cursorOnly: UpsertConversationCursorParams[] = [];
     let conversationsScanned = 0;
     let messagesProcessed = 0;
 
-    for (const ref of refs) {
-      const conversation = await this.chatService.getConversation(ref.id);
-      if (!conversation || conversation.workspaceHash !== hash) continue;
-      const work = buildConversationWork(db, conversation, this.now);
-      if (!work) continue;
-      conversationsScanned += 1;
-      messagesProcessed += work.messageCount;
-      if (work.span) {
-        spans.push(work.span);
-      } else {
-        cursorOnly.push(work.cursor);
+    if (opts.conversationScope) {
+      const conversation = await this.chatService.getConversation(opts.conversationScope.conversationId);
+      const messages = this.chatService.getSessionMessages
+        ? await this.chatService.getSessionMessages(opts.conversationScope.conversationId, opts.conversationScope.sessionNumber)
+        : null;
+      if (conversation && conversation.workspaceHash === hash && messages) {
+        const work = buildConversationSessionWork(db, {
+          conversationId: conversation.id,
+          sessionNumber: opts.conversationScope.sessionNumber,
+          title: conversation.title,
+          workingDir: conversation.workingDir,
+          messages,
+        }, this.now);
+        if (work) {
+          conversationsScanned += 1;
+          messagesProcessed += work.messageCount;
+          if (work.span) {
+            spans.push(work.span);
+          } else {
+            cursorOnly.push(work.cursor);
+          }
+        }
+      }
+    } else {
+      const refs = (await this.chatService.listConversations({ archived: false }))
+        .filter((conv) => conv.workspaceHash === hash && !conv.archived)
+        .sort((a, b) => new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime());
+
+      for (const ref of refs) {
+        const conversation = await this.chatService.getConversation(ref.id);
+        if (!conversation || conversation.workspaceHash !== hash) continue;
+        const work = buildConversationWork(db, conversation, this.now);
+        if (!work) continue;
+        conversationsScanned += 1;
+        messagesProcessed += work.messageCount;
+        if (work.span) {
+          spans.push(work.span);
+        } else {
+          cursorOnly.push(work.cursor);
+        }
       }
     }
     const planningMs = elapsedMs(planningStartedMs);
@@ -374,7 +437,7 @@ export class ContextMapService {
     const workspaceSourceBuild = shouldDiscoverWorkspaceSources(source)
       ? await buildWorkspaceSourcePackets(this.chatService, hash)
       : emptyWorkspaceSourceBuildResult();
-    const sourcePlanning = shouldDiscoverWorkspaceSources(source)
+    const sourcePlanning = !opts.conversationScope && shouldDiscoverWorkspaceSources(source)
       ? planWorkspaceSourcePackets(
         db,
         source,
@@ -1898,10 +1961,30 @@ function buildConversationWork(
   conversation: Conversation,
   now: () => Date,
 ): { span?: ContextMapSpanWork; cursor: UpsertConversationCursorParams; messageCount: number } | null {
+  return buildConversationSessionWork(db, {
+    conversationId: conversation.id,
+    sessionNumber: conversation.sessionNumber,
+    title: conversation.title,
+    workingDir: conversation.workingDir,
+    messages: conversation.messages,
+  }, now);
+}
+
+function buildConversationSessionWork(
+  db: ContextMapDatabase,
+  conversation: {
+    conversationId: string;
+    sessionNumber: number;
+    title: string;
+    workingDir: string;
+    messages: Message[];
+  },
+  now: () => Date,
+): { span?: ContextMapSpanWork; cursor: UpsertConversationCursorParams; messageCount: number } | null {
   const messages = conversation.messages.filter(isProcessableMessage);
   if (messages.length === 0) return null;
 
-  const cursor = db.getConversationCursor(conversation.id);
+  const cursor = db.getConversationCursor(conversation.conversationId);
   let startIndex = 0;
   if (cursor && cursor.sessionEpoch === conversation.sessionNumber) {
     const cursorIndex = messages.findIndex((message) => message.id === cursor.lastProcessedMessageId);
@@ -1922,14 +2005,14 @@ function buildConversationWork(
   const processedAt = now().toISOString();
   const sourceHash = hashMessages(range);
   const cursorParams: UpsertConversationCursorParams = {
-    conversationId: conversation.id,
+    conversationId: conversation.conversationId,
     sessionEpoch: conversation.sessionNumber,
     lastProcessedMessageId: last.id,
     lastProcessedAt: processedAt,
     lastProcessedSourceHash: hashMessage(last),
   };
 
-  if (db.hasSourceSpan(conversation.id, conversation.sessionNumber, first.id, last.id, sourceHash)) {
+  if (db.hasSourceSpan(conversation.conversationId, conversation.sessionNumber, first.id, last.id, sourceHash)) {
     return {
       cursor: cursorParams,
       messageCount: range.length,
@@ -1939,13 +2022,13 @@ function buildConversationWork(
   return {
     span: {
       spanId: stableId('cm-span', [
-        conversation.id,
+        conversation.conversationId,
         String(conversation.sessionNumber),
         first.id,
         last.id,
         sourceHash,
       ]),
-      conversationId: conversation.id,
+      conversationId: conversation.conversationId,
       sessionEpoch: conversation.sessionNumber,
       startMessageId: first.id,
       endMessageId: last.id,

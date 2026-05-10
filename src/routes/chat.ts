@@ -52,6 +52,7 @@ import type { ContextAuditEventRow, ContextCandidateStatus, ContextEntityFactRow
 import { checkOllamaHealth } from '../services/knowledgeBase/embeddings';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
+import { SessionFinalizerQueue, type SessionFinalizerJob } from '../services/sessionFinalizerQueue';
 import type { Request, Response, NextFunction, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, MemoryReviewUpdateEvent, ContextMapUpdateEvent, StreamJobRuntimeInfo, SendMessageResult, MemoryStatus, MemoryType, MemoryConsolidationAction, MemoryConsolidationDraft } from '../types';
 import type { WsFunctions } from '../ws';
 
@@ -1029,18 +1030,125 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     processor: contextMapService,
   });
 
-  async function runContextMapFinalPass(convId: string, source: 'session_reset' | 'archive'): Promise<void> {
-    const hash = chatService.getWorkspaceHashForConv(convId);
-    if (!hash) return;
-    if (!(await chatService.getWorkspaceContextMapEnabled(hash))) return;
-    try {
-      const result = await contextMapService.processWorkspace(hash, { source });
-      if (result.runId) {
-        console.log(`[context-map] ${source} final pass for conv=${convId} run=${result.runId} spans=${result.spansInserted}`);
+  async function runSessionFinalizerJob(job: SessionFinalizerJob): Promise<void> {
+    if (job.type === 'session_summary') {
+      const summary = await chatService.generateAndStoreSessionSummary(job.conversationId, job.sessionNumber, {
+        backendId: readStringPayload(job, 'backendId') || undefined,
+        cliProfileId: readStringPayload(job, 'cliProfileId') || undefined,
+      });
+      if (summary) {
+        console.log(`[session-finalizer] summary updated conv=${job.conversationId} session=${job.sessionNumber}`);
       }
-    } catch (err: unknown) {
-      console.warn(`[context-map] ${source} final pass failed for conv=${convId}:`, (err as Error).message);
+      return;
     }
+
+    if (job.type === 'memory_extraction') {
+      if (!(await chatService.getWorkspaceMemoryEnabled(job.workspaceHash))) return;
+      const runtime = await chatService.resolveCliProfileRuntime(
+        readStringPayload(job, 'cliProfileId') || undefined,
+        readStringPayload(job, 'backendId') || undefined,
+      );
+      const snapshot = await chatService.captureWorkspaceMemory(job.conversationId, runtime.backendId, runtime.profile);
+      if (snapshot) {
+        console.log(`[session-finalizer] captured ${snapshot.files.length} memory file(s) conv=${job.conversationId}`);
+      }
+      const messages = await chatService.getSessionMessages(job.conversationId, job.sessionNumber);
+      if (messages?.length) {
+        const savedCount = await memoryMcp.extractMemoryFromSession({
+          workspaceHash: job.workspaceHash,
+          conversationId: job.conversationId,
+          messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        });
+        if (savedCount > 0) {
+          console.log(`[session-finalizer] memory extraction saved ${savedCount} entry(ies) conv=${job.conversationId}`);
+        }
+      }
+      return;
+    }
+
+    const source = readStringPayload(job, 'source');
+    if (source !== 'session_reset' && source !== 'archive') {
+      throw new Error(`Unknown Context Map finalizer source: ${source || '(missing)'}`);
+    }
+    if (!(await chatService.getWorkspaceContextMapEnabled(job.workspaceHash))) return;
+    const result = await contextMapService.processConversationSession(
+      job.workspaceHash,
+      job.conversationId,
+      job.sessionNumber,
+      { source },
+    );
+    if (result.skippedReason === 'already-running') {
+      throw new Error('Context Map processor already running');
+    }
+    if (result.runId) {
+      console.log(`[context-map] ${source} final pass for conv=${job.conversationId} session=${job.sessionNumber} run=${result.runId} spans=${result.spansInserted}`);
+    }
+  }
+
+  const sessionFinalizers = new SessionFinalizerQueue({
+    workspacesDir: chatService.workspacesDir,
+    handleJob: runSessionFinalizerJob,
+  });
+  void sessionFinalizers.start().catch((err: unknown) => {
+    console.warn('[session-finalizer] startup scan failed:', (err as Error).message);
+  });
+
+  function readStringPayload(job: SessionFinalizerJob, key: string): string | null {
+    const value = job.payload?.[key];
+    return typeof value === 'string' && value ? value : null;
+  }
+
+  async function enqueueSessionSummaryFinalizer(
+    workspaceHash: string,
+    convId: string,
+    sessionNumber: number,
+    runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>> | null,
+  ): Promise<void> {
+    await sessionFinalizers.enqueue({
+      workspaceHash,
+      conversationId: convId,
+      sessionNumber,
+      type: 'session_summary',
+      payload: {
+        ...(runtime?.backendId ? { backendId: runtime.backendId } : {}),
+        ...(runtime?.cliProfileId ? { cliProfileId: runtime.cliProfileId } : {}),
+      },
+    });
+  }
+
+  async function enqueueMemoryFinalizer(
+    workspaceHash: string,
+    convId: string,
+    sessionNumber: number,
+    runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>> | null,
+  ): Promise<void> {
+    if (!(await chatService.getWorkspaceMemoryEnabled(workspaceHash))) return;
+    await sessionFinalizers.enqueue({
+      workspaceHash,
+      conversationId: convId,
+      sessionNumber,
+      type: 'memory_extraction',
+      payload: {
+        ...(runtime?.backendId ? { backendId: runtime.backendId } : {}),
+        ...(runtime?.cliProfileId ? { cliProfileId: runtime.cliProfileId } : {}),
+      },
+    });
+  }
+
+  async function enqueueContextMapFinalizer(
+    workspaceHash: string,
+    convId: string,
+    sessionNumber: number,
+    source: 'session_reset' | 'archive',
+  ): Promise<void> {
+    if (!(await chatService.getWorkspaceContextMapEnabled(workspaceHash))) return;
+    await sessionFinalizers.enqueue({
+      workspaceHash,
+      conversationId: convId,
+      sessionNumber,
+      type: 'context_map_conversation_final_pass',
+      payload: { source },
+    });
   }
 
   function fingerprintMemoryFiles(snapshot: { files: Array<{ filename: string; content: string }> }): Map<string, string> {
@@ -1530,9 +1638,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       if (wsFns) wsFns.clearBuffer(convId);
       memoryWatcher.unwatch(convId);
       memoryFingerprints.delete(convId);
-      await runContextMapFinalPass(convId, 'archive');
+      const preConv = await chatService.getConversation(convId);
       const ok = await chatService.archiveConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
+      if (preConv) {
+        await enqueueContextMapFinalizer(preConv.workspaceHash, convId, preConv.sessionNumber, 'archive');
+      }
       res.json({ ok: true });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
@@ -1704,59 +1815,15 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
       // Clear any stale event buffer so a subsequent WS connection
       // doesn't replay old-session events into the new session.
-      await runContextMapFinalPass(convId, 'session_reset');
       if (wsFns) wsFns.clearBuffer(convId);
       const result = await chatService.resetSession(convId);
       if (!result) return res.status(404).json({ error: 'Conversation not found' });
 
-      // Capture the ending backend's native memory into workspace storage
-      // so it can be injected into the next session (including when the
-      // user switches CLIs). Runs best-effort — failures never block reset.
-      // Gated on the per-workspace Memory toggle: when Memory is disabled,
-      // we do nothing, and the workspace memory store stays inert.
       const resetWsHash = chatService.getWorkspaceHashForConv(convId);
-      const memoryOnForReset = resetWsHash
-        ? await chatService.getWorkspaceMemoryEnabled(resetWsHash)
-        : false;
-      if (endingRuntime && memoryOnForReset) {
-        const endingBackend = endingRuntime.backendId;
-        console.log(`[memory] reset handler: attempting capture for conv=${convId} backend=${endingBackend}`);
-        try {
-          const snapshot = await chatService.captureWorkspaceMemory(convId, endingBackend, endingRuntime.profile);
-          if (snapshot) {
-            console.log(`[memory] captured ${snapshot.files.length} memory file(s) for conv=${convId} backend=${endingBackend}`);
-          } else {
-            console.log(`[memory] reset handler: no memory captured for conv=${convId} backend=${endingBackend}`);
-          }
-        } catch (err: unknown) {
-          console.error(`[memory] capture on reset failed for conv=${convId}:`, (err as Error).message);
-        }
-
-        // Also run post-session extraction for every backend: the Memory
-        // CLI scans the just-ended session transcript and writes any new
-        // memory notes into `files/notes/` via addMemoryNoteEntry. This
-        // runs for Claude Code too — its native `#` capture covers
-        // explicitly-saved memories but misses incidental durable facts
-        // (user role, deadlines, corrections) mentioned conversationally.
-        if (resetWsHash && preConv?.messages?.length) {
-          console.log(`[memory] reset handler: running post-session extraction for conv=${convId} backend=${endingBackend}`);
-          try {
-            const savedCount = await memoryMcp.extractMemoryFromSession({
-              workspaceHash: resetWsHash,
-              conversationId: convId,
-              messages: preConv.messages.map((m) => ({ role: m.role, content: m.content })),
-            });
-            if (savedCount > 0) {
-              console.log(`[memory] post-session extraction saved ${savedCount} entry(ies) for conv=${convId}`);
-            }
-          } catch (err: unknown) {
-            console.error(`[memory] post-session extraction failed for conv=${convId}:`, (err as Error).message);
-          }
-        }
-      } else if (!endingRuntime) {
-        console.log(`[memory] reset handler: no ending backend for conv=${convId}, skipping capture`);
-      } else {
-        console.log(`[memory] reset handler: memory disabled for conv=${convId}, skipping capture`);
+      if (resetWsHash) {
+        await enqueueSessionSummaryFinalizer(resetWsHash, convId, result.archivedSession.number, endingRuntime);
+        await enqueueMemoryFinalizer(resetWsHash, convId, result.archivedSession.number, endingRuntime);
+        await enqueueContextMapFinalizer(resetWsHash, convId, result.archivedSession.number, 'session_reset');
       }
 
       // Let the backend adapter clean up per-conversation state (e.g. ACP processes)
@@ -5654,6 +5721,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     kbDreamScheduler.stop();
     memoryReviewScheduler.stop();
     contextMapScheduler.stop();
+    sessionFinalizers.stop();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
     chatService.closeContextMapDatabases();
@@ -5666,5 +5734,5 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     wsFns = fns;
   }
 
-  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, contextMapMcp, kbDreamScheduler, memoryReviewScheduler, contextMapService, contextMapScheduler };
+  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, contextMapMcp, kbDreamScheduler, memoryReviewScheduler, contextMapService, contextMapScheduler, sessionFinalizers };
 }
