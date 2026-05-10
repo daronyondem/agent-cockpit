@@ -162,6 +162,15 @@
   background: linear-gradient(90deg, var(--accent), color-mix(in oklch, var(--accent), white 10%));
   border-radius: inherit;
 }
+.tt-bar.tt-bar-proj-on-track i{
+  background: linear-gradient(90deg, var(--status-done), color-mix(in oklch, var(--status-done), white 10%));
+}
+.tt-bar.tt-bar-proj-watch i{
+  background: linear-gradient(90deg, var(--status-awaiting), color-mix(in oklch, var(--status-awaiting), white 10%));
+}
+.tt-bar.tt-bar-proj-over i{
+  background: linear-gradient(90deg, var(--status-error), color-mix(in oklch, var(--status-error), white 10%));
+}
 
 /* model split */
 .tt-models{ display: flex; flex-direction: column; gap: 6px; }
