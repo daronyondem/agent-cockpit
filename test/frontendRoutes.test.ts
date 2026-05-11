@@ -58,6 +58,10 @@ describe('frontend routes', () => {
     expect(appSrc).toContain('viewport?.offsetTop');
     expect(appSrc).toContain('viewport?.offsetLeft');
     expect(appSrc).toContain('viewport?.width');
+    expect(appSrc).toContain('lastViewportMetrics');
+    expect(appSrc).toContain('Math.round(viewport?.offsetTop || 0)');
+    expect(appSrc).toContain('if (metrics !== lastViewportMetrics)');
+    expect(appSrc).toContain('if (root.scrollLeft !== 0) root.scrollLeft = 0');
     expect(appSrc).toContain('window.scrollTo(0, 0)');
     expect(appSrc).toContain("window.addEventListener('scroll', scheduleUpdate)");
     expect(appSrc).toContain("document.addEventListener('focusin', scheduleFocusUpdate)");
