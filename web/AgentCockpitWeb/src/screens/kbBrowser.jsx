@@ -3,6 +3,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { AgentApi } from '../api.js';
 import { Ico } from '../icons.jsx';
+import { Tip } from '../tooltip.jsx';
 import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
 import { buildAtlas } from '../synthesisAtlas.js';

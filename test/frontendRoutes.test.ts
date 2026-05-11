@@ -389,8 +389,10 @@ describe('frontend routes', () => {
     }
     expect(mainSrc).toContain("import './shell.jsx'");
     expect(mainSrc).not.toContain('await import(');
+    expect(shellSrc).toContain("import { Tip } from './tooltip.jsx'");
     expect(shellSrc).toContain("React.lazy(() => import('./screens/kbBrowser.jsx')");
     expect(shellSrc).toContain("React.lazy(() => import('./workspaceSettings.jsx')");
+    expect(fs.readFileSync(path.join(srcRoot, 'screens/kbBrowser.jsx'), 'utf8')).toContain("import { Tip } from '../tooltip.jsx'");
     expect(viteConfig).toContain('codeSplitting');
     expect(viteConfig).toContain('react-vendor');
     expect(viteConfig).toContain('markdown-vendor');

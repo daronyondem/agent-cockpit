@@ -16,6 +16,7 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
 import { CliUpdateStore } from './cliUpdateStore.js';
 import { DialogProvider, useDialog } from './dialog.jsx';
 import { ToastProvider, useToasts } from './toast.jsx';
+import { Tip } from './tooltip.jsx';
 import { FolderPicker } from './folderPicker.jsx';
 import { UpdateModal, RestartOverlay } from './updateModal.jsx';
 
