@@ -19,7 +19,6 @@ import type {
   ToolActivity,
   Usage,
   UsageLedger,
-  UsageLedgerDay,
   SessionEntry,
   SessionFile,
   SessionHistoryItem,
@@ -76,17 +75,13 @@ import { atomicWriteFile } from '../utils/atomicWrite';
 import { KeyedMutex } from '../utils/keyedMutex';
 import { logger } from '../utils/logger';
 import {
-  attachmentKindFromPath,
-  extensionForMimeType,
-  mimeTypeFromPath,
-  sanitizeArtifactFilename,
-  splitDataUrlBase64,
-} from './chat/attachments';
-import {
   MessageQueueStore,
   normalizeMessageQueue,
 } from './chat/messageQueueStore';
 import { WorkspaceInstructionStore } from './chat/workspaceInstructionStore';
+import { UsageLedgerStore, addToUsage, emptyUsage } from './chat/usageLedgerStore';
+import { ArtifactStore, type CreateConversationArtifactInput } from './chat/artifactStore';
+import { WorkspaceFeatureSettingsStore } from './chat/workspaceFeatureSettingsStore';
 
 const log = logger.child({ module: 'chat-service' });
 
@@ -110,57 +105,8 @@ const KB_ENTRY_SCHEMA_VERSION = 1;
 
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
 
-const CONTEXT_MAP_EFFORT_LEVELS = new Set<EffortLevel>([
-  'none',
-  'minimal',
-  'low',
-  'medium',
-  'high',
-  'xhigh',
-  'max',
-]);
-
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
-}
-
-function normalizeContextMapScanInterval(value: unknown): number | undefined {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
-  return Math.max(1, Math.min(1440, Math.round(value)));
-}
-
-function normalizeContextMapWorkspaceSettings(
-  value: unknown,
-  profiles: CliProfile[],
-): ContextMapWorkspaceSettings {
-  const raw = isPlainObject(value) ? value : {};
-  const processorMode = raw.processorMode === 'override' ? 'override' : 'global';
-  const settings: ContextMapWorkspaceSettings = { processorMode };
-
-  const scanIntervalMinutes = normalizeContextMapScanInterval(raw.scanIntervalMinutes);
-  if (scanIntervalMinutes !== undefined) settings.scanIntervalMinutes = scanIntervalMinutes;
-
-  if (processorMode !== 'override') return settings;
-
-  const cliProfileId = typeof raw.cliProfileId === 'string' ? raw.cliProfileId.trim() : '';
-  const selectedProfile = cliProfileId
-    ? profiles.find((profile) => profile.id === cliProfileId && !profile.disabled)
-    : undefined;
-  if (selectedProfile) {
-    settings.cliProfileId = selectedProfile.id;
-    settings.cliBackend = selectedProfile.vendor;
-  } else if (typeof raw.cliBackend === 'string' && isCliVendor(raw.cliBackend)) {
-    settings.cliBackend = raw.cliBackend;
-  }
-
-  const cliModel = typeof raw.cliModel === 'string' ? raw.cliModel.trim() : '';
-  if (cliModel) settings.cliModel = cliModel;
-
-  if (typeof raw.cliEffort === 'string' && CONTEXT_MAP_EFFORT_LEVELS.has(raw.cliEffort as EffortLevel)) {
-    settings.cliEffort = raw.cliEffort as EffortLevel;
-  }
-
-  return settings;
 }
 
 /**
@@ -360,6 +306,9 @@ export class ChatService {
   private _settingsService: SettingsService;
   private _messageQueueStore: MessageQueueStore;
   private _workspaceInstructionStore: WorkspaceInstructionStore;
+  private _usageLedgerStore: UsageLedgerStore;
+  private _artifactStore: ArtifactStore;
+  private _featureSettingsStore: WorkspaceFeatureSettingsStore;
   private _defaultWorkspace: string;
   private _backendRegistry: BackendRegistry | null;
   private _convWorkspaceMap: Map<string, string>;
@@ -382,19 +331,12 @@ export class ChatService {
    * corruption) nor lose each other's updates (stale reads).
    */
   private _indexLock = new KeyedMutex();
-  /**
-   * Serializes read-modify-write cycles on the shared `usage-ledger.json`
-   * file, which is written from every completed assistant stream across
-   * every conversation.
-   */
-  private _ledgerLock = new KeyedMutex();
-  private static readonly LEDGER_LOCK_KEY = '__usage_ledger__';
-
   constructor(appRoot: string, options: { defaultWorkspace?: string; backendRegistry?: BackendRegistry } = {}) {
     this.baseDir = path.join(appRoot, 'data', 'chat');
     this.workspacesDir = path.join(this.baseDir, 'workspaces');
     this.artifactsDir = path.join(this.baseDir, 'artifacts');
     this.usageLedgerFile = path.join(this.baseDir, 'usage-ledger.json');
+    this._usageLedgerStore = new UsageLedgerStore(this.usageLedgerFile);
     this._settingsService = new SettingsService(this.baseDir);
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
     this._backendRegistry = options.backendRegistry || null;
@@ -409,6 +351,17 @@ export class ChatService {
       indexLock: this._indexLock,
       readWorkspaceIndex: (hash) => this._readWorkspaceIndex(hash),
       writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
+    });
+    this._artifactStore = new ArtifactStore({
+      artifactsDir: this.artifactsDir,
+      hasConversation: (convId) => this._convWorkspaceMap.has(convId),
+    });
+    this._featureSettingsStore = new WorkspaceFeatureSettingsStore({
+      workspacesDir: this.workspacesDir,
+      indexLock: this._indexLock,
+      readWorkspaceIndex: (hash) => this._readWorkspaceIndex(hash),
+      writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
+      getSettings: () => this.getSettings(),
     });
 
     this._legacyConversationsDir = path.join(this.baseDir, 'conversations');
@@ -431,75 +384,9 @@ export class ChatService {
 
   async createConversationArtifact(
     convId: string,
-    input: {
-      sourcePath?: string;
-      dataBase64?: string;
-      filename?: string;
-      mimeType?: string;
-      title?: string;
-      sourceToolId?: string | null;
-    },
+    input: CreateConversationArtifactInput,
   ): Promise<ConversationArtifact | null> {
-    if (!this._convWorkspaceMap.has(convId)) return null;
-    const convDir = path.join(this.artifactsDir, convId);
-    await fsp.mkdir(convDir, { recursive: true });
-
-    let sourcePath = input.sourcePath ? path.resolve(input.sourcePath) : '';
-    let bytes: Buffer | null = null;
-    let size: number | undefined;
-    let mimeType = input.mimeType;
-
-    if (input.dataBase64) {
-      const parsed = splitDataUrlBase64(input.dataBase64, mimeType);
-      mimeType = parsed.mimeType || mimeType;
-      bytes = Buffer.from(parsed.dataBase64.replace(/\s+/g, ''), 'base64');
-      size = bytes.length;
-    } else if (sourcePath) {
-      const stat = await fsp.stat(sourcePath);
-      if (!stat.isFile()) {
-        throw new Error('Artifact source path is not a file');
-      }
-      size = stat.size;
-      mimeType = mimeType || mimeTypeFromPath(sourcePath);
-    } else {
-      throw new Error('Artifact sourcePath or dataBase64 is required');
-    }
-
-    const requestedName = input.filename
-      || (sourcePath ? path.basename(sourcePath) : '')
-      || `artifact${extensionForMimeType(mimeType)}`;
-    let safeName = sanitizeArtifactFilename(requestedName);
-    if (!path.extname(safeName)) {
-      safeName += extensionForMimeType(mimeType);
-    }
-
-    const ext = path.extname(safeName);
-    const stem = ext ? safeName.slice(0, -ext.length) : safeName;
-    let dest = path.join(convDir, safeName);
-    let counter = 1;
-    while (fs.existsSync(dest) && (!sourcePath || path.resolve(dest) !== sourcePath)) {
-      safeName = `${stem}-${counter}${ext}`;
-      dest = path.join(convDir, safeName);
-      counter += 1;
-    }
-
-    if (bytes) {
-      await fsp.writeFile(dest, bytes);
-    } else if (sourcePath && path.resolve(dest) !== sourcePath) {
-      await fsp.copyFile(sourcePath, dest);
-    }
-
-    const finalStat = await fsp.stat(dest);
-    const kind = attachmentKindFromPath(dest);
-    return {
-      filename: path.basename(dest),
-      path: dest,
-      kind,
-      size: finalStat.size || size,
-      mimeType: mimeType || mimeTypeFromPath(dest),
-      title: input.title,
-      sourceToolId: input.sourceToolId ?? null,
-    };
+    return this._artifactStore.createConversationArtifact(convId, input);
   }
 
   private async _migrateCliProfiles(): Promise<void> {
@@ -824,8 +711,8 @@ export class ChatService {
       currentSessionId: convEntry.currentSessionId,
       sessionNumber,
       messages,
-      usage: convEntry.usage || this._emptyUsage(),
-      sessionUsage: activeSession?.usage || this._emptyUsage(),
+      usage: convEntry.usage || emptyUsage(),
+      sessionUsage: activeSession?.usage || emptyUsage(),
       externalSessionId: activeSession?.externalSessionId || null,
       messageQueue: normalizedQueue.length ? normalizedQueue : undefined,
       archived: convEntry.archived,
@@ -2860,19 +2747,11 @@ export class ChatService {
 
   /** Per-workspace KB enable/disable (stored on the workspace index). */
   async getWorkspaceKbEnabled(hash: string): Promise<boolean> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return false;
-    return Boolean(index.kbEnabled);
+    return this._featureSettingsStore.getKbEnabled(hash);
   }
 
   async setWorkspaceKbEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
-      if (!index) return null;
-      index.kbEnabled = Boolean(enabled);
-      await this._writeWorkspaceIndex(hash, index);
-      return index.kbEnabled;
-    });
+    return this._featureSettingsStore.setKbEnabled(hash, enabled);
   }
 
   /**
@@ -2887,109 +2766,47 @@ export class ChatService {
    * tests that stub `getSettings` don't accidentally reset it.
    */
   async getWorkspaceKbAutoDigest(hash: string): Promise<boolean> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return false;
-    return Boolean(index.kbAutoDigest);
+    return this._featureSettingsStore.getKbAutoDigest(hash);
   }
 
   async setWorkspaceKbAutoDigest(hash: string, autoDigest: boolean): Promise<boolean | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
-      if (!index) return null;
-      index.kbAutoDigest = Boolean(autoDigest);
-      await this._writeWorkspaceIndex(hash, index);
-      return index.kbAutoDigest;
-    });
+    return this._featureSettingsStore.setKbAutoDigest(hash, autoDigest);
   }
 
   async getWorkspaceKbAutoDream(hash: string): Promise<KbAutoDreamConfig> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return { ...DEFAULT_KB_AUTO_DREAM_CONFIG };
-    return normalizeKbAutoDreamConfig(index.kbAutoDream);
+    return this._featureSettingsStore.getKbAutoDream(hash);
   }
 
   async setWorkspaceKbAutoDream(hash: string, autoDream: KbAutoDreamConfig): Promise<KbAutoDreamConfig | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
-      if (!index) return null;
-      index.kbAutoDream = normalizeKbAutoDreamConfig(autoDream);
-      await this._writeWorkspaceIndex(hash, index);
-      return index.kbAutoDream;
-    });
+    return this._featureSettingsStore.setKbAutoDream(hash, autoDream);
   }
 
   async listKbEnabledWorkspaceHashes(): Promise<string[]> {
-    let dirs: string[];
-    try {
-      dirs = await fsp.readdir(this.workspacesDir);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw err;
-    }
-
-    const hashes: string[] = [];
-    for (const hash of dirs) {
-      if (hash.startsWith('.')) continue;
-      const index = await this._readWorkspaceIndex(hash);
-      if (index?.kbEnabled) hashes.push(hash);
-    }
-    return hashes;
+    return this._featureSettingsStore.listKbEnabledWorkspaceHashes();
   }
 
   /** Per-workspace Context Map enable/disable (stored on the workspace index). */
   async getWorkspaceContextMapEnabled(hash: string): Promise<boolean> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return false;
-    return Boolean(index.contextMapEnabled);
+    return this._featureSettingsStore.getContextMapEnabled(hash);
   }
 
   async setWorkspaceContextMapEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
-      if (!index) return null;
-      index.contextMapEnabled = Boolean(enabled);
-      await this._writeWorkspaceIndex(hash, index);
-      return index.contextMapEnabled;
-    });
+    return this._featureSettingsStore.setContextMapEnabled(hash, enabled);
   }
 
   async getWorkspaceContextMapSettings(hash: string): Promise<ContextMapWorkspaceSettings | null> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
-    const settings = await this.getSettings();
-    return normalizeContextMapWorkspaceSettings(index.contextMap, settings.cliProfiles || []);
+    return this._featureSettingsStore.getContextMapSettings(hash);
   }
 
   async setWorkspaceContextMapSettings(
     hash: string,
     settings: unknown,
   ): Promise<ContextMapWorkspaceSettings | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
-      if (!index) return null;
-      const globalSettings = await this.getSettings();
-      index.contextMap = normalizeContextMapWorkspaceSettings(settings, globalSettings.cliProfiles || []);
-      await this._writeWorkspaceIndex(hash, index);
-      return index.contextMap;
-    });
+    return this._featureSettingsStore.setContextMapSettings(hash, settings);
   }
 
   async listContextMapEnabledWorkspaceHashes(): Promise<string[]> {
-    let dirs: string[];
-    try {
-      dirs = await fsp.readdir(this.workspacesDir);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw err;
-    }
-
-    const hashes: string[] = [];
-    for (const hash of dirs) {
-      if (hash.startsWith('.')) continue;
-      const index = await this._readWorkspaceIndex(hash);
-      if (index?.contextMapEnabled) hashes.push(hash);
-    }
-    return hashes;
+    return this._featureSettingsStore.listContextMapEnabledWorkspaceHashes();
   }
 
   async getContextMapStatus(hash: string): Promise<ConversationContextMapStatus> {
@@ -3463,25 +3280,6 @@ export class ChatService {
 
   // ── Usage Tracking ─────────────────────────────────────────────────────────
 
-  private _emptyUsage(): Usage {
-    return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
-  }
-
-  private _addToUsage(target: Usage, source: Usage): void {
-    target.inputTokens += source.inputTokens || 0;
-    target.outputTokens += source.outputTokens || 0;
-    target.cacheReadTokens += source.cacheReadTokens || 0;
-    target.cacheWriteTokens += source.cacheWriteTokens || 0;
-    target.costUsd += source.costUsd || 0;
-    // Kiro-specific: credits accumulate, contextUsagePercentage is a snapshot (overwrite)
-    if (source.credits !== undefined) {
-      target.credits = (target.credits || 0) + source.credits;
-    }
-    if (source.contextUsagePercentage !== undefined) {
-      target.contextUsagePercentage = source.contextUsagePercentage;
-    }
-  }
-
   async addUsage(convId: string, usage: Usage, backend?: string, model?: string, options?: { skipLedger?: boolean }): Promise<{ conversationUsage: Usage; sessionUsage: Usage } | null> {
     if (!usage) return null;
     const hash = this._convWorkspaceMap.get(convId);
@@ -3492,26 +3290,26 @@ export class ChatService {
       const { index, convEntry } = result;
 
       // Conversation-level totals
-      if (!convEntry.usage) convEntry.usage = this._emptyUsage();
-      this._addToUsage(convEntry.usage, usage);
+      if (!convEntry.usage) convEntry.usage = emptyUsage();
+      addToUsage(convEntry.usage, usage);
 
       // Per-backend on conversation
       const backendId = backend || convEntry.backend;
       if (!convEntry.usageByBackend) convEntry.usageByBackend = {};
-      if (!convEntry.usageByBackend[backendId]) convEntry.usageByBackend[backendId] = this._emptyUsage();
-      this._addToUsage(convEntry.usageByBackend[backendId], usage);
+      if (!convEntry.usageByBackend[backendId]) convEntry.usageByBackend[backendId] = emptyUsage();
+      addToUsage(convEntry.usageByBackend[backendId], usage);
 
       // Session-level totals + per-backend
-      let sessionUsage = this._emptyUsage();
+      let sessionUsage = emptyUsage();
       const activeSession = convEntry.sessions.find(s => s.active);
       if (activeSession) {
-        if (!activeSession.usage) activeSession.usage = this._emptyUsage();
-        this._addToUsage(activeSession.usage, usage);
+        if (!activeSession.usage) activeSession.usage = emptyUsage();
+        addToUsage(activeSession.usage, usage);
         sessionUsage = activeSession.usage;
 
         if (!activeSession.usageByBackend) activeSession.usageByBackend = {};
-        if (!activeSession.usageByBackend[backendId]) activeSession.usageByBackend[backendId] = this._emptyUsage();
-        this._addToUsage(activeSession.usageByBackend[backendId], usage);
+        if (!activeSession.usageByBackend[backendId]) activeSession.usageByBackend[backendId] = emptyUsage();
+        addToUsage(activeSession.usageByBackend[backendId], usage);
       }
 
       await this._writeWorkspaceIndex(hash, index);
@@ -3522,7 +3320,7 @@ export class ChatService {
     // Record to daily ledger (fire-and-forget, don't block the response)
     // Skip ledger for backends that don't provide token-based usage (e.g. Kiro)
     if (!options?.skipLedger) {
-      this._recordToLedger(mutated.backendId, model || 'unknown', usage).catch(err => {
+      this._usageLedgerStore.record(mutated.backendId, model || 'unknown', usage).catch(err => {
         log.error('Failed to write usage ledger', { error: err });
       });
     }
@@ -3534,65 +3332,15 @@ export class ChatService {
     const result = await this._getConvFromIndex(convId);
     if (!result) return null;
     const { convEntry } = result;
-    return convEntry.usage || this._emptyUsage();
-  }
-
-  // ── Usage Ledger ──────────────────────────────────────────────────────────
-
-  private async _readLedger(): Promise<UsageLedger> {
-    try {
-      const data = await fsp.readFile(this.usageLedgerFile, 'utf8');
-      return JSON.parse(data) as UsageLedger;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return { days: [] };
-      throw err;
-    }
-  }
-
-  private async _writeLedger(ledger: UsageLedger): Promise<void> {
-    await atomicWriteFile(this.usageLedgerFile, JSON.stringify(ledger, null, 2));
-  }
-
-  private async _recordToLedger(backendId: string, model: string, usage: Usage): Promise<void> {
-    await this._ledgerLock.run(ChatService.LEDGER_LOCK_KEY, async () => {
-      const ledger = await this._readLedger();
-      const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-
-      let dayEntry = ledger.days.find(d => d.date === today);
-      if (!dayEntry) {
-        dayEntry = { date: today, records: [] };
-        ledger.days.push(dayEntry);
-      }
-
-      // Migrate old format: if day has 'backends' but no 'records', convert
-      const legacy = dayEntry as UsageLedgerDay & { backends?: Record<string, Usage> };
-      if (legacy.backends && !legacy.records) {
-        legacy.records = [];
-        for (const [bid, u] of Object.entries(legacy.backends)) {
-          legacy.records.push({ backend: bid, model: 'unknown', usage: u });
-        }
-        delete legacy.backends;
-      }
-
-      let record = dayEntry.records.find(r => r.backend === backendId && r.model === model);
-      if (!record) {
-        record = { backend: backendId, model, usage: this._emptyUsage() };
-        dayEntry.records.push(record);
-      }
-      this._addToUsage(record.usage, usage);
-
-      await this._writeLedger(ledger);
-    });
+    return convEntry.usage || emptyUsage();
   }
 
   async getUsageStats(): Promise<UsageLedger> {
-    return this._readLedger();
+    return this._usageLedgerStore.read();
   }
 
   async clearUsageStats(): Promise<void> {
-    await this._ledgerLock.run(ChatService.LEDGER_LOCK_KEY, async () => {
-      await this._writeLedger({ days: [] });
-    });
+    await this._usageLedgerStore.clear();
   }
 
   // ── Settings ───────────────────────────────────────────────────────────────

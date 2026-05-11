@@ -1,40 +1,42 @@
-export type EffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
-export type ServiceTier = 'fast';
+import type {
+  AttachmentKind,
+  AttachmentMeta,
+  BackendMetadata,
+  BasicOkResponse,
+  ContentBlock,
+  Conversation,
+  ConversationArtifact,
+  ConversationInputResponse,
+  ConversationListItem,
+  CurrentUserResponse,
+  EffortLevel,
+  Message,
+  QueuedMessage,
+  SendMessageResponse,
+  ServiceTier,
+  SessionHistoryItem,
+  Settings,
+  ToolActivity,
+  Usage,
+} from '../../../src/contracts/responses';
 
-export type MessageRole = 'user' | 'assistant' | 'system';
-
-export type Usage = {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens: number;
-  cacheWriteTokens: number;
-  costUsd: number;
-  credits?: number;
-  contextUsagePercentage?: number;
-};
-
-export type ToolActivity = {
-  tool: string;
-  description: string;
-  id?: string;
-  duration?: number;
-  startTime: number;
-  isAgent?: boolean;
-  subagentType?: string;
-  parentAgentId?: string;
-  outcome?: string;
-  status?: string;
-  batchIndex?: number;
-};
-
-export type AttachmentKind = 'image' | 'pdf' | 'text' | 'code' | 'md' | 'folder' | 'file';
-
-export type AttachmentMeta = {
-  name: string;
-  path: string;
-  size?: number;
-  kind: AttachmentKind;
-  meta?: string;
+export type {
+  AttachmentKind,
+  AttachmentMeta,
+  BackendMetadata,
+  ContentBlock,
+  Conversation,
+  ConversationArtifact,
+  ConversationListItem,
+  EffortLevel,
+  Message,
+  QueuedMessage,
+  SendMessageResponse,
+  ServiceTier,
+  SessionHistoryItem,
+  Settings,
+  ToolActivity,
+  Usage,
 };
 
 export type PendingAttachment = {
@@ -50,102 +52,18 @@ export type PendingAttachment = {
   ocrError?: string;
 };
 
-export type QueuedMessage = {
-  content: string;
-  attachments?: AttachmentMeta[];
-};
-
-export type ContentBlock =
-  | { type: 'text'; content: string }
-  | { type: 'thinking'; content: string }
-  | { type: 'tool'; activity: ToolActivity }
-  | { type: 'artifact'; artifact: ConversationArtifact };
-
-export type ConversationArtifact = {
-  filename: string;
-  path: string;
-  kind: AttachmentKind;
-  size?: number;
-  mimeType?: string;
-  title?: string;
-  sourceToolId?: string | null;
-};
-
 export type StreamError = {
   message: string;
   source?: 'backend' | 'transport' | 'abort' | 'server';
 };
 
-export type Message = {
-  id: string;
-  role: MessageRole;
-  content: string;
-  backend: string;
-  timestamp: string;
-  thinking?: string;
-  toolActivity?: ToolActivity[];
-  contentBlocks?: ContentBlock[];
-  streamError?: StreamError;
-  turn?: 'progress' | 'final';
-};
-
-export type ConversationListItem = {
-  id: string;
-  title: string;
-  updatedAt: string;
-  backend: string;
-  cliProfileId?: string;
-  model?: string;
-  effort?: EffortLevel;
-  serviceTier?: ServiceTier;
-  workingDir: string;
-  workspaceHash: string;
-  workspaceKbEnabled: boolean;
-  messageCount: number;
-  lastMessage?: string;
-  usage?: Usage;
-  archived?: boolean;
-  unread?: boolean;
-};
-
-export type Conversation = {
-  id: string;
-  title: string;
-  backend: string;
-  cliProfileId?: string;
-  model?: string;
-  effort?: EffortLevel;
-  serviceTier?: ServiceTier;
-  workingDir: string;
-  workspaceHash: string;
-  currentSessionId: string;
-  sessionNumber: number;
-  messages: Message[];
-  usage?: Usage;
-  sessionUsage?: Usage;
-  externalSessionId?: string;
-  messageQueue?: QueuedMessage[];
-  archived?: boolean;
-};
-
-export type CurrentUser = {
-  displayName?: string | null;
-  email?: string | null;
-  provider?: 'local' | 'google' | 'github' | null;
-};
+export type CurrentUser = CurrentUserResponse;
 
 export type CliProfile = {
   id: string;
   name: string;
   vendor: string;
   disabled?: boolean;
-};
-
-export type BackendMetadata = {
-  id: string;
-  label: string;
-  icon?: string;
-  models?: ModelOption[];
 };
 
 export type ModelOption = {
@@ -155,28 +73,9 @@ export type ModelOption = {
   supportedEffortLevels?: EffortLevel[];
 };
 
-export type Settings = {
-  defaultBackend?: string;
-  cliProfiles?: CliProfile[];
-  defaultCliProfileId?: string;
-  defaultModel?: string;
-  defaultEffort?: EffortLevel;
-  defaultServiceTier?: ServiceTier;
-  workingDirectory?: string;
-};
+export type InputResponse = ConversationInputResponse;
 
-export type SendMessageResponse = {
-  userMessage: Message;
-  streamReady: boolean;
-};
-
-export type InputResponse = {
-  mode: 'stdin' | 'message';
-};
-
-export type BasicOKResponse = {
-  ok: boolean;
-};
+export type BasicOKResponse = BasicOkResponse;
 
 export type ResetSessionResponse = {
   conversation: Conversation;
@@ -189,16 +88,6 @@ export type ResetSessionResponse = {
     messageCount: number;
     summary?: string;
   };
-};
-
-export type SessionHistoryItem = {
-  number: number;
-  sessionId?: string;
-  startedAt: string;
-  endedAt?: string;
-  messageCount: number;
-  summary?: string;
-  isCurrent: boolean;
 };
 
 export type ExplorerEntry = {

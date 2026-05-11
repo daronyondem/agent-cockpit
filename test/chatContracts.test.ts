@@ -55,6 +55,9 @@ describe('chat API contracts', () => {
   test('settings payload must be an object', () => {
     expect(validateSettingsRequest({ theme: 'system' })).toEqual({ theme: 'system' });
     expect(() => validateSettingsRequest(null)).toThrow('settings must be an object');
+    expect(() => validateSettingsRequest({ theme: 'sepia' })).toThrow('theme must be light, dark, or system');
+    expect(() => validateSettingsRequest({ cliProfiles: {} })).toThrow('cliProfiles must be an array');
+    expect(() => validateSettingsRequest({ contextMap: [] })).toThrow('contextMap must be an object');
   });
 
   test('shared validation helpers cover object, array, and clamped integer payload fields', () => {
@@ -126,6 +129,7 @@ describe('chat API contracts', () => {
 
     for (const fn of [
       () => validateSendMessageRequest({ content: '' }),
+      () => validateSendMessageRequest({ content: 'hello', effort: 'extreme' }),
       () => validateConversationInputRequest({ text: 1 }),
       () => validateExplorerSaveFileRequest({ path: 'a.txt' }),
       () => validateAttachmentOcrRequest({ path: '' }),

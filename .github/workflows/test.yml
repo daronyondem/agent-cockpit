@@ -20,6 +20,8 @@ jobs:
       - run: npm run web:build
       - run: npm run web:budget
       - run: npm run mobile:typecheck
+      - run: npm run maintainability:check
+      - run: npm run spec:drift
       - run: npm run mobile:build
       - run: npm test
       - run: npm run adr:lint

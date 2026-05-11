@@ -1,5 +1,4 @@
 import crypto from 'crypto';
-import fs from 'fs/promises';
 import path from 'path';
 import type { RunOneShotOptions } from '../backends/base';
 import type { BackendRegistry } from '../backends/registry';
@@ -17,8 +16,6 @@ import type {
   ContextEntityRow,
   ContextMapDatabase,
   ContextRunSource,
-  ContextSensitivity,
-  ContextSourceCursorRow,
   ContextSourceCursorType,
   InsertCandidateParams,
   UpsertConversationCursorParams,
@@ -30,7 +27,6 @@ import {
   DEFAULT_CONTEXT_MAP_SYNTHESIS_CONCURRENCY,
   MAX_CONTEXT_MAP_PROCESSOR_CONCURRENCY,
 } from './defaults';
-import { applyContextMapCandidate, ContextMapApplyError, getContextMapApplyDependencies } from './apply';
 import { parseContextMapJsonOutput, repairContextMapJsonOutput } from './jsonRepair';
 import { logger } from '../../utils/logger';
 import {
@@ -50,6 +46,38 @@ import {
   type ContextMapSynthesisMetadata,
   type ContextMapSynthesisStageMetadata,
 } from './pipelineMetadata';
+import { autoApplyContextMapCandidates } from './autoApply';
+import {
+  buildWorkspaceSourcePackets,
+  emptyWorkspaceSourceBuildResult,
+  emptyWorkspaceSourcePlanning,
+  formatStaleSourceCursor,
+  planWorkspaceSourcePackets,
+  shouldDiscoverWorkspaceSources,
+  type ContextMapSourcePacket,
+} from './sourcePlanning';
+import {
+  CONTEXT_MAP_ALLOWED_RELATIONSHIP_PREDICATES,
+  CONTEXT_MAP_BUILT_IN_ENTITY_TYPES,
+  CONTEXT_MAP_ENTITY_TYPE_PROMPT,
+  CONTEXT_MAP_FACT_PAYLOAD_KEYS,
+  CONTEXT_MAP_RELATIONSHIP_PREDICATE_PROMPT,
+  CONTEXT_MAP_TYPE_ALIASES,
+  canonicalEntityName,
+  canonicalRelationshipName,
+  dedupeFacts,
+  hasRelationshipEvidence,
+  isAllowedRelationshipPredicate,
+  isSelfRelationshipPayload,
+  normalizeAliasArray,
+  normalizeCandidateFacts,
+  normalizeCandidateSensitivity,
+  normalizeFactArray,
+  normalizedCandidateText,
+  normalizeRelationshipPredicate,
+  normalizeSlug,
+  readPayloadString,
+} from './candidatePrimitives';
 
 const log = logger.child({ module: 'context-map-service' });
 
@@ -95,27 +123,6 @@ interface ContextMapSpanWork {
   messages: Message[];
 }
 
-interface ContextMapSourcePacket {
-  sourceType: ContextSourceCursorType;
-  sourceId: string;
-  title: string;
-  body: string;
-  locator: Record<string, unknown>;
-  sourceHash: string;
-}
-
-interface ContextMapWorkspaceSourceBuildResult {
-  packets: ContextMapSourcePacket[];
-  discoveredCursorKeys: Set<string>;
-}
-
-interface ContextMapSourcePlanningResult {
-  discoveredPackets: ContextMapSourcePacket[];
-  packetsForExtraction: ContextMapSourcePacket[];
-  skippedUnchanged: number;
-  missingCursors: ContextSourceCursorRow[];
-}
-
 interface PendingContextMapCandidate {
   candidateType: ContextCandidateType;
   confidence: number;
@@ -157,11 +164,6 @@ interface ContextMapExtractionJobResult {
   candidates: PendingContextMapCandidate[];
   repairs: ContextMapExtractionRepairEvent[];
   errorMessage?: string;
-}
-
-interface ContextMapAutoApplyResult {
-  applied: number;
-  failures: Array<{ candidateId: string; candidateType: ContextCandidateType; errorMessage: string }>;
 }
 
 interface KnownEntityTargets {
@@ -950,202 +952,20 @@ function elapsedMs(startedMs: number): number {
   return Math.max(0, monotonicNowMs() - startedMs);
 }
 
-const CONTEXT_MAP_AUTO_APPLY_MIN_CONFIDENCE_BY_TYPE: Partial<Record<ContextCandidateType, number>> = {
-  new_entity: 0.8,
-  entity_update: 0.9,
-  new_relationship: 0.8,
-  alias_addition: 0.94,
-  evidence_link: 0.96,
-  sensitivity_classification: 0.96,
-};
-const CONTEXT_MAP_AUTO_APPLY_TYPE_ORDER: Partial<Record<ContextCandidateType, number>> = {
-  new_entity: 10,
-  entity_update: 15,
-  alias_addition: 20,
-  sensitivity_classification: 20,
-  evidence_link: 25,
-  new_relationship: 30,
-};
-
-function autoApplyContextMapCandidates(
-  db: ContextMapDatabase,
-  candidateIds: string[],
-  now: string,
-): ContextMapAutoApplyResult {
-  const failures: ContextMapAutoApplyResult['failures'] = [];
-  let applied = 0;
-  const candidates = candidateIds
-    .map((candidateId) => db.getCandidate(candidateId))
-    .filter((candidate): candidate is NonNullable<typeof candidate> => Boolean(candidate))
-    .sort((a, b) => (
-      (CONTEXT_MAP_AUTO_APPLY_TYPE_ORDER[a.candidateType] ?? 100)
-      - (CONTEXT_MAP_AUTO_APPLY_TYPE_ORDER[b.candidateType] ?? 100)
-      || b.confidence - a.confidence
-      || a.candidateId.localeCompare(b.candidateId)
-    ));
-
-  for (const candidate of candidates) {
-    if (!shouldAutoApplyContextMapCandidate(candidate, db)) continue;
-    try {
-      const result = applyContextMapCandidate(db, candidate, now, { appliedBy: 'processor' });
-      if (result.candidate.status === 'active') applied += 1;
-    } catch (err: unknown) {
-      if (err instanceof ContextMapApplyError) {
-        failures.push({
-          candidateId: candidate.candidateId,
-          candidateType: candidate.candidateType,
-          errorMessage: err.message,
-        });
-        continue;
-      }
-      throw err;
-    }
-  }
-
-  return { applied, failures };
-}
-
-function shouldAutoApplyContextMapCandidate(
-  candidate: NonNullable<ReturnType<ContextMapDatabase['getCandidate']>>,
-  db: ContextMapDatabase,
-): boolean {
-  if (candidate.status !== 'pending') return false;
-  const minConfidence = CONTEXT_MAP_AUTO_APPLY_MIN_CONFIDENCE_BY_TYPE[candidate.candidateType];
-  if (minConfidence === undefined || candidate.confidence < minConfidence) return false;
-  const payload = candidate.payload || {};
-  if (!payload.sourceSpan || typeof payload.sourceSpan !== 'object') return false;
-
-  if (candidate.candidateType === 'new_entity') {
-    const sensitivity = normalizeCandidateSensitivity(readPayloadString(payload, ['sensitivity']));
-    return sensitivity !== 'secret-pointer'
-      && isAutoApplyEntityTypeKnown(db, payload)
-      && hasDurableEntityBody(payload);
-  }
-  if (candidate.candidateType === 'entity_update') {
-    return shouldAutoApplyAdditiveEntityUpdate(candidate, db);
-  }
-  if (candidate.candidateType === 'new_relationship') {
-    const predicate = normalizeRelationshipPredicate(readPayloadString(payload, ['predicate', 'relationship', 'label']));
-    return Boolean(
-      predicate
-      && predicate !== 'relates_to'
-      && hasRelationshipEvidence(payload)
-      && !isSelfRelationshipPayload(payload)
-      && hasNoAutoApplyRelationshipDependencies(candidate, db),
-    );
-  }
-  if (candidate.candidateType === 'sensitivity_classification') {
-    return shouldAutoApplySensitivityClassification(db, payload);
-  }
-  return true;
-}
-
-function shouldAutoApplySensitivityClassification(
-  db: ContextMapDatabase,
-  payload: Record<string, unknown>,
-): boolean {
-  const entity = resolveAutoApplyEntityUpdateTarget(db, payload);
-  if (!entity) return false;
-  const proposed = normalizeCandidateSensitivity(readPayloadString(payload, ['sensitivity', 'classification'])) as ContextSensitivity | '';
-  if (!proposed || proposed === entity.sensitivity) return false;
-  return sensitivityRank(proposed) > sensitivityRank(entity.sensitivity);
-}
-
-function sensitivityRank(sensitivity: ContextSensitivity): number {
-  if (sensitivity === 'secret-pointer') return 3;
-  if (sensitivity === 'work-sensitive' || sensitivity === 'personal-sensitive') return 2;
-  return 1;
-}
-
-function shouldAutoApplyAdditiveEntityUpdate(
-  candidate: NonNullable<ReturnType<ContextMapDatabase['getCandidate']>>,
-  db: ContextMapDatabase,
-): boolean {
-  const payload = candidate.payload || {};
-  const entity = resolveAutoApplyEntityUpdateTarget(db, payload);
-  if (!entity) return false;
-
-  if (readPayloadString(payload, ['newName', 'updatedName'])) return false;
-  if (readPayloadString(payload, ['newTypeSlug', 'updatedTypeSlug'])) return false;
-  if (readPayloadString(payload, ['status'])) return false;
-
-  const sensitivity = normalizeCandidateSensitivity(readPayloadString(payload, ['sensitivity', 'classification']));
-  if (sensitivity && sensitivity !== entity.sensitivity) return false;
-
-  const summary = readPayloadString(payload, ['summaryMarkdown', 'summary']);
-  if (summary && entity.summaryMarkdown && normalizedCandidateText(summary) !== normalizedCandidateText(entity.summaryMarkdown)) {
-    return false;
-  }
-  const notes = readPayloadString(payload, ['notesMarkdown', 'notes']);
-  if (notes && entity.notesMarkdown && normalizedCandidateText(notes) !== normalizedCandidateText(entity.notesMarkdown)) {
-    return false;
-  }
-
-  return Boolean(
-    normalizeCandidateFacts(payload).length > 0
-    || normalizeAliasArray(payload.aliases).length > 0
-    || (summary && !entity.summaryMarkdown)
-    || (notes && !entity.notesMarkdown)
-  );
-}
-
-function resolveAutoApplyEntityUpdateTarget(
-  db: ContextMapDatabase,
-  payload: Record<string, unknown>,
-): ContextEntityRow | null {
-  const entityId = readPayloadString(payload, ['entityId', 'targetEntityId']);
-  if (entityId) {
-    const entity = db.getEntity(entityId);
-    return entity && entity.status === 'active' ? entity : null;
-  }
-
-  const name = readPayloadString(payload, ['entityName', 'name', 'targetName']);
-  if (!name) return null;
-  const typeSlug = normalizeSlug(readPayloadString(payload, ['typeSlug', 'entityType', 'type']));
-  const matches = db.listEntities({ status: 'active', ...(typeSlug ? { typeSlug } : {}) })
-    .filter((entity) => normalizedCandidateText(entity.name) === normalizedCandidateText(name));
-  return matches.length === 1 ? matches[0] : null;
-}
-
-function hasNoAutoApplyRelationshipDependencies(
-  candidate: NonNullable<ReturnType<ContextMapDatabase['getCandidate']>>,
-  db: ContextMapDatabase,
-): boolean {
-  try {
-    return getContextMapApplyDependencies(db, candidate).length === 0;
-  } catch (err: unknown) {
-    if (err instanceof ContextMapApplyError) return false;
-    throw err;
-  }
-}
-
-function isAutoApplyEntityTypeKnown(db: ContextMapDatabase, payload: Record<string, unknown>): boolean {
-  const typeSlug = normalizeSlug(readPayloadString(payload, ['typeSlug', 'entityType', 'type'])) || 'concept';
-  const aliased = CONTEXT_MAP_TYPE_ALIASES.get(typeSlug) || typeSlug;
-  return CONTEXT_MAP_BUILT_IN_ENTITY_TYPES.has(aliased) || Boolean(db.getEntityType(aliased));
-}
-
-function hasDurableEntityBody(payload: Record<string, unknown>): boolean {
-  return Boolean(
-    readPayloadString(payload, ['summaryMarkdown', 'summary', 'notesMarkdown', 'notes', 'description'])
-    || normalizeCandidateFacts(payload).length > 0,
-  );
-}
-
 export interface ContextMapSchedulerOptions {
   chatService: ContextMapChatService & {
     listContextMapEnabledWorkspaceHashes(): Promise<string[]>;
   };
   processor: ContextMapService;
   now?: () => Date;
-  logger?: Pick<Console, 'warn'>;
+  logger?: Pick<typeof log, 'warn'>;
 }
 
 export class ContextMapScheduler {
   private readonly chatService: ContextMapSchedulerOptions['chatService'];
   private readonly processor: ContextMapService;
   private readonly now: () => Date;
-  private readonly logger: Pick<Console, 'warn'>;
+  private readonly logger: Pick<typeof log, 'warn'>;
   private readonly lastCheckedAt = new Map<string, number>();
   private interval: ReturnType<typeof setInterval> | null = null;
   private checking = false;
@@ -1154,7 +974,7 @@ export class ContextMapScheduler {
     this.chatService = opts.chatService;
     this.processor = opts.processor;
     this.now = opts.now ?? (() => new Date());
-    this.logger = opts.logger ?? console;
+    this.logger = opts.logger ?? log;
   }
 
   start(checkIntervalMs = 60_000): void {
@@ -1203,610 +1023,20 @@ export class ContextMapScheduler {
         try {
           await this.processor.processWorkspace(hash);
         } catch (err: unknown) {
-          this.logger.warn(`[context-map] scheduler check failed for ${hash}:`, (err as Error).message);
+          this.logger.warn('context-map scheduler workspace check failed', {
+            workspaceHash: hash,
+            errorMessage: (err as Error).message,
+          });
         } finally {
           this.lastCheckedAt.set(hash, this.now().getTime());
         }
       });
     } catch (err: unknown) {
-      this.logger.warn('[context-map] scheduler scan failed:', (err as Error).message);
+      this.logger.warn('context-map scheduler scan failed', { errorMessage: (err as Error).message });
     } finally {
       this.checking = false;
     }
   }
-}
-
-const CONTEXT_MAP_SOURCE_CHAR_LIMIT = 12_000;
-const CONTEXT_MAP_HIGH_SIGNAL_FILES = [
-  'AGENTS.md',
-  'CLAUDE.md',
-  'README.md',
-  'SPEC.md',
-  'OUTLINE.md',
-  'STYLE_GUIDE.md',
-  'TASKS.md',
-  'TODO.md',
-  path.join('docs', 'SPEC.md'),
-];
-const CONTEXT_MAP_HIGH_SIGNAL_FILE_KEYS = new Set(
-  CONTEXT_MAP_HIGH_SIGNAL_FILES.map((item) => item.split(path.sep).join('/').toLowerCase()),
-);
-const CONTEXT_MAP_MARKDOWN_SCAN_EXCLUDED_DIRS = new Set(['.git', 'node_modules']);
-const CONTEXT_MAP_MARKDOWN_SCAN_EXCLUDED_PREFIXES = ['data/chat'];
-const CONTEXT_MAP_MARKDOWN_SCAN_MAX_FILES = 120;
-const CONTEXT_MAP_CODE_SCAN_EXCLUDED_DIRS = new Set([
-  '.git',
-  '.hg',
-  '.svn',
-  '.next',
-  '.nuxt',
-  '.parcel-cache',
-  '.turbo',
-  '.venv',
-  '__pycache__',
-  'build',
-  'coverage',
-  'data',
-  'dist',
-  'node_modules',
-  'out',
-  'target',
-  'tmp',
-  'vendor',
-  'venv',
-]);
-const CONTEXT_MAP_CODE_SCAN_EXCLUDED_PREFIXES = ['data/chat'];
-const CONTEXT_MAP_CODE_SOURCE_EXTENSIONS = new Set([
-  '.c',
-  '.cc',
-  '.cpp',
-  '.cs',
-  '.go',
-  '.h',
-  '.hpp',
-  '.java',
-  '.js',
-  '.jsx',
-  '.kt',
-  '.mjs',
-  '.php',
-  '.py',
-  '.rb',
-  '.rs',
-  '.swift',
-  '.ts',
-  '.tsx',
-]);
-const CONTEXT_MAP_CODE_SOURCE_FILENAMES = new Set([
-  'cargo.toml',
-  'dockerfile',
-  'docker-compose.yml',
-  'ecosystem.config.js',
-  'go.mod',
-  'next.config.js',
-  'package.json',
-  'pom.xml',
-  'pyproject.toml',
-  'requirements.txt',
-  'settings.gradle',
-  'tsconfig.json',
-  'vite.config.js',
-  'vite.config.ts',
-]);
-const CONTEXT_MAP_CODE_SCAN_MAX_FILES = 36;
-const CONTEXT_MAP_CODE_PACKET_FILE_COUNT = 6;
-const CONTEXT_MAP_CODE_FILE_MAX_BYTES = 300_000;
-
-interface ContextMapCodeSourceFile {
-  rel: string;
-  abs: string;
-  size: number;
-  score: number;
-}
-
-async function buildWorkspaceSourcePackets(
-  chatService: ContextMapChatService,
-  hash: string,
-): Promise<ContextMapWorkspaceSourceBuildResult> {
-  const packets: ContextMapSourcePacket[] = [];
-  const discoveredCursorKeys = new Set<string>();
-  const workspacePath = chatService.getWorkspacePath ? await chatService.getWorkspacePath(hash) : null;
-
-  if (chatService.getWorkspaceInstructions) {
-    const instructions = (await chatService.getWorkspaceInstructions(hash))?.trim();
-    if (instructions) {
-      const packet = sourcePacket({
-        sourceType: 'workspace_instruction',
-        sourceId: 'workspace-instructions',
-        title: 'Workspace instructions',
-        body: instructions,
-        locator: { workspaceHash: hash },
-      });
-      packets.push(packet);
-      discoveredCursorKeys.add(sourcePacketCursorKey(packet));
-    }
-  }
-
-  if (workspacePath) {
-    for (const rel of CONTEXT_MAP_HIGH_SIGNAL_FILES) {
-      const packet = await readWorkspaceMarkdownSourcePacket(workspacePath, rel);
-      if (packet) {
-        packets.push(packet);
-        discoveredCursorKeys.add(sourcePacketCursorKey(packet));
-      }
-    }
-
-    const markdownFiles = await listWorkspaceMarkdownFiles(workspacePath);
-    for (const rel of markdownFiles.discovered) discoveredCursorKeys.add(sourceCursorKey('file', rel));
-    for (const rel of markdownFiles.selected) {
-      const packet = await readWorkspaceMarkdownSourcePacket(workspacePath, rel);
-      if (packet) {
-        packets.push(packet);
-        discoveredCursorKeys.add(sourcePacketCursorKey(packet));
-      } else {
-        discoveredCursorKeys.delete(sourceCursorKey('file', rel));
-      }
-    }
-
-    for (const packet of await buildWorkspaceCodeOutlineSourcePackets(workspacePath)) {
-      packets.push(packet);
-      discoveredCursorKeys.add(sourcePacketCursorKey(packet));
-    }
-  }
-
-  const seen = new Set<string>();
-  return {
-    packets: packets.filter((packet) => {
-      const key = `${packet.sourceType}:${packet.sourceId}:${packet.sourceHash}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    }),
-    discoveredCursorKeys,
-  };
-}
-
-function shouldDiscoverWorkspaceSources(source: ContextRunSource): boolean {
-  return source === 'initial_scan' || source === 'manual_rebuild' || source === 'scheduled';
-}
-
-function emptyWorkspaceSourcePlanning(): ContextMapSourcePlanningResult {
-  return {
-    discoveredPackets: [],
-    packetsForExtraction: [],
-    skippedUnchanged: 0,
-    missingCursors: [],
-  };
-}
-
-function emptyWorkspaceSourceBuildResult(): ContextMapWorkspaceSourceBuildResult {
-  return {
-    packets: [],
-    discoveredCursorKeys: new Set(),
-  };
-}
-
-function planWorkspaceSourcePackets(
-  db: ContextMapDatabase,
-  source: ContextRunSource,
-  discoveredPackets: ContextMapSourcePacket[],
-  discoveredCursorKeys: Set<string> = new Set(discoveredPackets.map(sourcePacketCursorKey)),
-): ContextMapSourcePlanningResult {
-  const missingCursors = db.listSourceCursors({ status: 'active' })
-    .filter((cursor) => !discoveredCursorKeys.has(sourceCursorKey(cursor.sourceType, cursor.sourceId)));
-
-  if (source !== 'scheduled') {
-    return {
-      discoveredPackets,
-      packetsForExtraction: discoveredPackets,
-      skippedUnchanged: 0,
-      missingCursors,
-    };
-  }
-
-  const packetsForExtraction = discoveredPackets.filter((packet) => {
-    const cursor = db.getSourceCursor(packet.sourceType, packet.sourceId);
-    return !cursor
-      || cursor.status === 'missing'
-      || cursor.lastProcessedSourceHash !== packet.sourceHash;
-  });
-
-  return {
-    discoveredPackets,
-    packetsForExtraction,
-    skippedUnchanged: discoveredPackets.length - packetsForExtraction.length,
-    missingCursors,
-  };
-}
-
-async function listWorkspaceMarkdownFiles(workspacePath: string): Promise<{ selected: string[]; discovered: string[] }> {
-  const root = path.resolve(workspacePath);
-  const rels: string[] = [];
-
-  async function visit(dir: string): Promise<void> {
-    let entries: import('fs').Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      const abs = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (shouldSkipMarkdownScanDirectory(abs, root)) continue;
-        await visit(abs);
-        continue;
-      }
-      if (!entry.isFile() || !isMarkdownSourceFile(entry.name)) continue;
-      const rel = path.relative(root, abs);
-      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
-      const normalizedRel = rel.split(path.sep).join('/');
-      if (CONTEXT_MAP_HIGH_SIGNAL_FILE_KEYS.has(normalizedRel.toLowerCase())) continue;
-      rels.push(normalizedRel);
-    }
-  }
-
-  await visit(root);
-  const discovered = rels
-    .sort((a, b) => markdownSourceFileScore(b) - markdownSourceFileScore(a) || a.localeCompare(b));
-  return {
-    selected: discovered.slice(0, CONTEXT_MAP_MARKDOWN_SCAN_MAX_FILES),
-    discovered,
-  };
-}
-
-function markdownSourceFileScore(rel: string): number {
-  const lower = rel.toLowerCase();
-  const base = path.basename(lower);
-  const depth = lower.split('/').length - 1;
-  let score = Math.max(0, 40 - (depth * 4));
-  if (CONTEXT_MAP_HIGH_SIGNAL_FILE_KEYS.has(lower)) score += 120;
-  if (['readme.md', 'agents.md', 'claude.md', 'spec.md', 'outline.md', 'tasks.md', 'todo.md'].includes(base)) score += 80;
-  if (lower.startsWith('docs/') || lower.startsWith('context/') || lower.startsWith('workflows/')) score += 35;
-  if (lower.startsWith('projects/') || lower.startsWith('plans/') || lower.startsWith('notes/')) score += 25;
-  if (lower.includes('/archive/') || lower.startsWith('archive/')) score -= 20;
-  return score;
-}
-
-function shouldSkipMarkdownScanDirectory(abs: string, root: string): boolean {
-  const rel = path.relative(root, abs).split(path.sep).join('/');
-  const segments = rel.split('/').filter(Boolean);
-  if (segments.some((segment) => CONTEXT_MAP_MARKDOWN_SCAN_EXCLUDED_DIRS.has(segment))) return true;
-  return CONTEXT_MAP_MARKDOWN_SCAN_EXCLUDED_PREFIXES.some((prefix) => rel === prefix || rel.startsWith(`${prefix}/`));
-}
-
-function isMarkdownSourceFile(name: string): boolean {
-  return name.toLowerCase().endsWith('.md');
-}
-
-async function buildWorkspaceCodeOutlineSourcePackets(workspacePath: string): Promise<ContextMapSourcePacket[]> {
-  const files = await listWorkspaceCodeSourceFiles(workspacePath);
-  if (files.length === 0) return [];
-
-  const packets: ContextMapSourcePacket[] = [];
-  for (let index = 0; index < files.length; index += CONTEXT_MAP_CODE_PACKET_FILE_COUNT) {
-    const chunk = files.slice(index, index + CONTEXT_MAP_CODE_PACKET_FILE_COUNT);
-    const body = await buildCodeOutlineBody(chunk);
-    if (!body.trim()) continue;
-    const packetNumber = Math.floor(index / CONTEXT_MAP_CODE_PACKET_FILE_COUNT) + 1;
-    packets.push(sourcePacket({
-      sourceType: 'code_outline',
-      sourceId: `code-outline/${packetNumber}`,
-      title: `Code outline ${packetNumber}`,
-      body,
-      locator: {
-        workspacePath,
-        paths: chunk.map((file) => file.rel),
-      },
-    }));
-  }
-  return packets;
-}
-
-async function listWorkspaceCodeSourceFiles(workspacePath: string): Promise<ContextMapCodeSourceFile[]> {
-  const root = path.resolve(workspacePath);
-  const files: ContextMapCodeSourceFile[] = [];
-
-  async function visit(dir: string): Promise<void> {
-    let entries: import('fs').Dirent[];
-    try {
-      entries = await fs.readdir(dir, { withFileTypes: true });
-    } catch {
-      return;
-    }
-
-    entries.sort((a, b) => a.name.localeCompare(b.name));
-    for (const entry of entries) {
-      const abs = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        if (shouldSkipCodeScanDirectory(abs, root)) continue;
-        await visit(abs);
-        continue;
-      }
-      if (!entry.isFile() || !isCodeSourceFileName(entry.name)) continue;
-      const rel = path.relative(root, abs).split(path.sep).join('/');
-      if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) continue;
-      if (shouldSkipCodeScanFile(rel)) continue;
-      let stat: import('fs').Stats;
-      try {
-        stat = await fs.stat(abs);
-      } catch {
-        continue;
-      }
-      if (!stat.isFile() || stat.size <= 0 || stat.size > CONTEXT_MAP_CODE_FILE_MAX_BYTES) continue;
-      const score = codeSourceFileScore(rel);
-      if (score <= 0) continue;
-      files.push({ rel, abs, size: stat.size, score });
-    }
-  }
-
-  await visit(root);
-  return files
-    .sort((a, b) => b.score - a.score || a.rel.localeCompare(b.rel))
-    .slice(0, CONTEXT_MAP_CODE_SCAN_MAX_FILES);
-}
-
-function shouldSkipCodeScanDirectory(abs: string, root: string): boolean {
-  const rel = path.relative(root, abs).split(path.sep).join('/');
-  const segments = rel.split('/').filter(Boolean);
-  if (segments.some((segment) => CONTEXT_MAP_CODE_SCAN_EXCLUDED_DIRS.has(segment))) return true;
-  return CONTEXT_MAP_CODE_SCAN_EXCLUDED_PREFIXES.some((prefix) => rel === prefix || rel.startsWith(`${prefix}/`));
-}
-
-function shouldSkipCodeScanFile(rel: string): boolean {
-  const lower = rel.toLowerCase();
-  const base = path.basename(lower);
-  if (base.endsWith('.min.js') || base.endsWith('.bundle.js')) return true;
-  if (base.endsWith('.d.ts') || base.endsWith('.map')) return true;
-  if (base.includes('lock')) return true;
-  return false;
-}
-
-function isCodeSourceFileName(name: string): boolean {
-  const lower = name.toLowerCase();
-  if (CONTEXT_MAP_CODE_SOURCE_FILENAMES.has(lower)) return true;
-  return CONTEXT_MAP_CODE_SOURCE_EXTENSIONS.has(path.extname(lower));
-}
-
-function codeSourceFileScore(rel: string): number {
-  const lower = rel.toLowerCase();
-  const base = path.basename(lower);
-  let score = 10;
-  if (CONTEXT_MAP_CODE_SOURCE_FILENAMES.has(base)) score += 80;
-  if (/^(server|app|main|index)\.(c|cc|cpp|cs|go|java|js|jsx|kt|mjs|php|py|rb|rs|swift|ts|tsx)$/.test(base)) score += 70;
-  if (/^src\/(server|app|main|index)\./.test(lower)) score += 60;
-  if (lower.startsWith('src/routes/') || lower.startsWith('src/api/')) score += 55;
-  if (lower.startsWith('src/services/') || lower.startsWith('src/lib/')) score += 50;
-  if (lower.startsWith('public/') || lower.startsWith('app/') || lower.startsWith('pages/')) score += 35;
-  if (lower.startsWith('mobile/')) score += 25;
-  if (lower.includes('/contextmap/') || lower.includes('/context-map/')) score += 30;
-  if (base.includes('service') || base.includes('manager') || base.includes('scheduler')) score += 24;
-  if (base.includes('route') || base.includes('api')) score += 20;
-  if (base.includes('db') || base.includes('store') || base.includes('repository')) score += 18;
-  if (base.includes('screen') || base.includes('settings') || base.includes('workspace')) score += 12;
-  if (lower.includes('/test/') || lower.includes('/tests/') || base.includes('.test.') || base.includes('.spec.')) score -= 35;
-  return score;
-}
-
-async function buildCodeOutlineBody(files: ContextMapCodeSourceFile[]): Promise<string> {
-  const sections: string[] = [
-    '# Workspace code outline',
-    '',
-    'Generated outline of selected implementation/configuration files. File paths are evidence only; do not create entities for ordinary files, directories, functions, imports, or local code symbols.',
-  ];
-  for (const file of files) {
-    const body = await fs.readFile(file.abs, 'utf8').catch(() => '');
-    if (!body.trim()) continue;
-    sections.push('', codeFileOutline(file, body));
-  }
-  return sections.join('\n');
-}
-
-function codeFileOutline(file: ContextMapCodeSourceFile, body: string): string {
-  const lower = file.rel.toLowerCase();
-  if (path.basename(lower) === 'package.json') return packageJsonOutline(file, body);
-  const lines = body.split(/\r?\n/);
-  const imports = uniqueLimited(lines.map(extractImportLine).filter(Boolean) as string[], 12);
-  const declarations = uniqueLimited(lines.map(extractDeclarationLine).filter(Boolean) as string[], 24);
-  const routes = uniqueLimited(lines.map(extractRouteLine).filter(Boolean) as string[], 24);
-  const configKeys = uniqueLimited(lines.map(extractConfigKeyLine).filter(Boolean) as string[], 16);
-
-  return [
-    `## ${file.rel}`,
-    `Language: ${codeLanguageForRel(file.rel)}`,
-    `Size: ${file.size} bytes`,
-    imports.length > 0 ? `Imports: ${imports.join('; ')}` : '',
-    declarations.length > 0 ? `Declarations: ${declarations.join('; ')}` : '',
-    routes.length > 0 ? `Routes/endpoints: ${routes.join('; ')}` : '',
-    configKeys.length > 0 ? `Config keys: ${configKeys.join('; ')}` : '',
-  ].filter(Boolean).join('\n');
-}
-
-function packageJsonOutline(file: ContextMapCodeSourceFile, body: string): string {
-  try {
-    const parsed = JSON.parse(body) as {
-      name?: unknown;
-      scripts?: unknown;
-      dependencies?: unknown;
-      devDependencies?: unknown;
-    };
-    const scripts = isRecord(parsed.scripts) ? Object.keys(parsed.scripts).sort().slice(0, 20) : [];
-    const deps = isRecord(parsed.dependencies) ? Object.keys(parsed.dependencies).sort().slice(0, 24) : [];
-    const devDeps = isRecord(parsed.devDependencies) ? Object.keys(parsed.devDependencies).sort().slice(0, 24) : [];
-    return [
-      `## ${file.rel}`,
-      'Language: package manifest',
-      typeof parsed.name === 'string' ? `Package name: ${parsed.name}` : '',
-      scripts.length > 0 ? `Scripts: ${scripts.join(', ')}` : '',
-      deps.length > 0 ? `Dependencies: ${deps.join(', ')}` : '',
-      devDeps.length > 0 ? `Dev dependencies: ${devDeps.join(', ')}` : '',
-    ].filter(Boolean).join('\n');
-  } catch {
-    return codeFileOutline({ ...file, rel: file.rel.replace(/package\.json$/i, 'package-json') }, body);
-  }
-}
-
-function codeLanguageForRel(rel: string): string {
-  const base = path.basename(rel).toLowerCase();
-  if (CONTEXT_MAP_CODE_SOURCE_FILENAMES.has(base)) return 'configuration';
-  const ext = path.extname(base).replace(/^\./, '');
-  return ext || 'source';
-}
-
-function extractImportLine(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith('//')) return null;
-  if (/^import\s/.test(trimmed)) return trimmed.slice(0, 180);
-  const requireMatch = trimmed.match(/require\(['"]([^'"]+)['"]\)/);
-  if (requireMatch) return `require ${requireMatch[1]}`;
-  return null;
-}
-
-function extractDeclarationLine(line: string): string | null {
-  const trimmed = line.trim();
-  if (!trimmed || trimmed.startsWith('//') || trimmed.startsWith('*')) return null;
-  const direct = trimmed.match(/^(?:export\s+)?(?:default\s+)?(?:async\s+)?(?:function|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)/);
-  if (direct) return direct[0].replace(/\s*\{?\s*$/, '');
-  const constant = trimmed.match(/^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=/);
-  if (constant && /^[A-Z]/.test(constant[1])) return constant[0].replace(/\s*=\s*$/, '');
-  return null;
-}
-
-function extractRouteLine(line: string): string | null {
-  const trimmed = line.trim();
-  const match = trimmed.match(/\b(?:router|app)\.(get|post|put|patch|delete)\(\s*['"`]([^'"`]+)['"`]/i);
-  if (!match) return null;
-  return `${match[1].toUpperCase()} ${match[2]}`;
-}
-
-function extractConfigKeyLine(line: string): string | null {
-  const trimmed = line.trim();
-  const match = trimmed.match(/^([A-Za-z_$][\w$-]{2,40})\s*[:=]\s*/);
-  if (!match) return null;
-  const key = match[1];
-  if (['const', 'let', 'var', 'return', 'if', 'for', 'while', 'switch'].includes(key)) return null;
-  return key;
-}
-
-function uniqueLimited(values: string[], limit: number): string[] {
-  const seen = new Set<string>();
-  const output: string[] = [];
-  for (const value of values) {
-    const normalized = value.trim().replace(/\s+/g, ' ');
-    if (!normalized || seen.has(normalized)) continue;
-    seen.add(normalized);
-    output.push(normalized);
-    if (output.length >= limit) break;
-  }
-  return output;
-}
-
-async function readWorkspaceMarkdownSourcePacket(
-  workspacePath: string,
-  rel: string,
-): Promise<ContextMapSourcePacket | null> {
-  const root = path.resolve(workspacePath);
-  const normalizedRel = rel.split(path.sep).join('/');
-  const abs = path.resolve(workspacePath, normalizedRel);
-  if (abs !== root && !abs.startsWith(root + path.sep)) return null;
-  let stat: import('fs').Stats;
-  try {
-    stat = await fs.stat(abs);
-  } catch {
-    return null;
-  }
-  if (!stat.isFile() || stat.size > 1_000_000) return null;
-  const body = await fs.readFile(abs, 'utf8').catch(() => '');
-  if (!body.trim()) return null;
-  if (await shouldSkipWorkspaceSourceFile(normalizedRel, body, workspacePath)) return null;
-  return sourcePacket({
-    sourceType: 'file',
-    sourceId: normalizedRel,
-    title: path.basename(normalizedRel),
-    body,
-    locator: { path: normalizedRel, workspacePath },
-  });
-}
-
-async function shouldSkipWorkspaceSourceFile(rel: string, body: string, workspacePath: string): Promise<boolean> {
-  const normalizedRel = rel.split(path.sep).join('/');
-  if (normalizedRel === 'CLAUDE.md' && isThinCompatibilityShim(body)) {
-    return fileExists(path.resolve(workspacePath, 'AGENTS.md'));
-  }
-  if (normalizedRel === 'SPEC.md' && isRootSpecRedirect(body)) {
-    return fileExists(path.resolve(workspacePath, 'docs', 'SPEC.md'));
-  }
-  return false;
-}
-
-function isThinCompatibilityShim(body: string): boolean {
-  const normalized = body.toLowerCase();
-  return body.length <= 2_000
-    && normalized.includes('agents.md')
-    && (
-      normalized.includes('canonical')
-      || normalized.includes('compatibility')
-      || normalized.includes('imports it')
-      || normalized.includes('defer')
-    );
-}
-
-function isRootSpecRedirect(body: string): boolean {
-  const normalized = body.toLowerCase();
-  return body.length <= 5_000
-    && normalized.includes('docs/spec.md')
-    && (
-      normalized.includes('full specification has been split')
-      || normalized.includes('start here')
-      || normalized.includes('wiki-style')
-    );
-}
-
-async function fileExists(abs: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(abs);
-    return stat.isFile();
-  } catch {
-    return false;
-  }
-}
-
-function sourcePacket(params: Omit<ContextMapSourcePacket, 'body' | 'sourceHash'> & { body: string }): ContextMapSourcePacket {
-  const body = truncateSource(params.body.trim());
-  return {
-    ...params,
-    body,
-    sourceHash: sha256(stableStringify({
-      sourceType: params.sourceType,
-      sourceId: params.sourceId,
-      title: params.title,
-      body,
-    })),
-  };
-}
-
-function sourcePacketCursorKey(packet: ContextMapSourcePacket): string {
-  return sourceCursorKey(packet.sourceType, packet.sourceId);
-}
-
-function sourceCursorKey(sourceType: ContextSourceCursorType, sourceId: string): string {
-  return `${sourceType}\u0000${sourceId}`;
-}
-
-function formatStaleSourceCursor(cursor: ContextSourceCursorRow): Record<string, unknown> {
-  return {
-    sourceType: cursor.sourceType,
-    sourceId: cursor.sourceId,
-    previousSourceHash: cursor.lastProcessedSourceHash,
-    lastProcessedAt: cursor.lastProcessedAt,
-  };
-}
-
-function truncateSource(value: string): string {
-  if (value.length <= CONTEXT_MAP_SOURCE_CHAR_LIMIT) return value;
-  return value.slice(0, CONTEXT_MAP_SOURCE_CHAR_LIMIT) + '\n\n[truncated]';
 }
 
 function buildConversationWork(
@@ -2040,105 +1270,6 @@ const CONTEXT_MAP_CANDIDATE_TYPES = new Set<ContextCandidateType>([
   'sensitivity_classification',
   'conflict_flag',
 ]);
-
-const CONTEXT_MAP_BUILT_IN_ENTITY_TYPES = new Set([
-  'person',
-  'organization',
-  'project',
-  'workflow',
-  'document',
-  'feature',
-  'concept',
-  'decision',
-  'tool',
-  'asset',
-]);
-
-const CONTEXT_MAP_TYPE_ALIASES = new Map<string, string>([
-  ['company', 'organization'],
-  ['team', 'organization'],
-  ['institution', 'organization'],
-  ['org', 'organization'],
-  ['product', 'project'],
-  ['repo', 'project'],
-  ['repository', 'project'],
-  ['feature_proposal', 'feature'],
-  ['capability', 'feature'],
-  ['product_capability', 'feature'],
-  ['subsystem', 'concept'],
-  ['component', 'concept'],
-  ['architecture', 'concept'],
-  ['implementation_behavior', 'concept'],
-  ['security_policy', 'concept'],
-  ['policy', 'concept'],
-  ['principle', 'concept'],
-  ['document_collection', 'document'],
-  ['specification', 'document'],
-  ['spec', 'document'],
-  ['adr', 'document'],
-  ['issue', 'document'],
-  ['github_issue', 'document'],
-  ['pull_request', 'document'],
-  ['github_pull_request', 'document'],
-  ['backend', 'tool'],
-  ['cli', 'tool'],
-]);
-
-const CONTEXT_MAP_PREDICATE_ALIASES = new Map<string, string>([
-  ['uses_decision', 'uses'],
-  ['uses decision', 'uses'],
-  ['supports_backend', 'supports'],
-  ['supports backend', 'supports'],
-  ['supported_backend', 'supports'],
-  ['is_specified_by', 'specified_by'],
-  ['is specified by', 'specified_by'],
-  ['specified by', 'specified_by'],
-  ['depends on', 'depends_on'],
-  ['depends_on', 'depends_on'],
-  ['relies_on', 'depends_on'],
-  ['relies on', 'depends_on'],
-  ['is_part_of', 'part_of'],
-  ['is part of', 'part_of'],
-  ['part of', 'part_of'],
-  ['spawns local processes through', 'runs_via'],
-  ['runs through', 'runs_via'],
-  ['runs_via', 'runs_via'],
-  ['driven_by', 'driven_by'],
-  ['driven by', 'driven_by'],
-]);
-
-const CONTEXT_MAP_ALLOWED_RELATIONSHIP_PREDICATES = new Set([
-  'blocks',
-  'captures',
-  'configures',
-  'contains',
-  'depends_on',
-  'documents',
-  'documented_by',
-  'driven_by',
-  'enables',
-  'governs',
-  'implements',
-  'implemented_by',
-  'managed_by',
-  'owns',
-  'part_of',
-  'produces',
-  'references',
-  'relates_to',
-  'replaces',
-  'requires',
-  'runs_via',
-  'specified_by',
-  'stores',
-  'stored_in',
-  'supports',
-  'supersedes',
-  'uses',
-]);
-
-const CONTEXT_MAP_ENTITY_TYPE_PROMPT = Array.from(CONTEXT_MAP_BUILT_IN_ENTITY_TYPES).join(', ');
-const CONTEXT_MAP_RELATIONSHIP_PREDICATE_PROMPT = Array.from(CONTEXT_MAP_ALLOWED_RELATIONSHIP_PREDICATES).join(', ');
 
 function buildContextMapExtractionPrompt(span: ContextMapSpanWork): string {
   const transcript = span.messages.map((message) => [
@@ -4007,31 +3138,6 @@ function mergeEntityAliases(target: Record<string, unknown>, source: Record<stri
   if (deduped.length > 0) target.aliases = deduped;
 }
 
-function normalizeAliasArray(value: unknown): string[] {
-  if (typeof value === 'string' && value.trim()) return [value.trim()];
-  if (!Array.isArray(value)) return [];
-  return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0).map((item) => item.trim());
-}
-
-function normalizeFactArray(value: unknown): string[] {
-  if (typeof value === 'string') return dedupeFacts([normalizeFactText(value)]);
-  if (!Array.isArray(value)) return [];
-  return dedupeFacts(value.flatMap((item) => {
-    const fact = normalizeFactText(item);
-    return fact ? [fact] : [];
-  }));
-}
-
-function normalizeFactText(value: unknown): string {
-  if (typeof value === 'string') return value.replace(/\s+/g, ' ').trim();
-  if (!isRecord(value)) return '';
-  for (const key of ['markdown', 'statementMarkdown', 'text', 'value', 'content', 'summaryMarkdown', 'description']) {
-    const item = value[key];
-    if (typeof item === 'string' && item.trim()) return item.replace(/\s+/g, ' ').trim();
-  }
-  return '';
-}
-
 function dedupeAliases(aliases: string[]): string[] {
   const seen = new Set<string>();
   const output: string[] = [];
@@ -4040,19 +3146,6 @@ function dedupeAliases(aliases: string[]): string[] {
     if (!key || seen.has(key)) continue;
     seen.add(key);
     output.push(alias);
-  }
-  return output;
-}
-
-function dedupeFacts(facts: string[]): string[] {
-  const seen = new Set<string>();
-  const output: string[] = [];
-  for (const fact of facts) {
-    const normalized = fact.replace(/\s+/g, ' ').trim();
-    const key = normalizedCandidateText(normalized);
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
-    output.push(normalized.length <= 1_000 ? normalized : `${normalized.slice(0, 997)}...`);
   }
   return output;
 }
@@ -4122,49 +3215,8 @@ function isSameRelationshipEndpoint(
     || canonicalRelationshipName(subject.name, projectNames) === canonicalRelationshipName(object.name, projectNames);
 }
 
-function isSelfRelationshipPayload(payload: Record<string, unknown>, projectNames: Set<string> = new Set()): boolean {
-  const subjectName = readPayloadString(payload, ['subjectName', 'subjectEntityName']);
-  const objectName = readPayloadString(payload, ['objectName', 'objectEntityName']);
-  if (!subjectName || !objectName) return false;
-  return normalizedCandidateText(subjectName) === normalizedCandidateText(objectName)
-    || canonicalRelationshipName(subjectName, projectNames) === canonicalRelationshipName(objectName, projectNames);
-}
-
 function entityCanonicalKey(typeSlug: string, name: string, projectNames: Set<string>): string {
   return `${typeSlug}:${canonicalEntityName(name, projectNames)}`;
-}
-
-function canonicalEntityName(name: string, projectNames: Set<string>): string {
-  let normalized = normalizedCandidateText(name).replace(/[_-]+/g, ' ').replace(/[^\p{L}\p{N}\s]/gu, '').replace(/\s+/g, ' ').trim();
-  for (const projectName of Array.from(projectNames).sort((a, b) => b.length - a.length)) {
-    const normalizedProject = normalizedCandidateText(projectName).replace(/[^\p{L}\p{N}\s]/gu, '').trim();
-    if (normalizedProject && normalized !== normalizedProject && normalized.startsWith(`${normalizedProject} `)) {
-      normalized = normalized.slice(normalizedProject.length).trim();
-      break;
-    }
-  }
-  normalized = normalized.replace(/^(project|workspace)\s+/, '').trim();
-  if ([
-    'spec',
-    'spec docs',
-    'spec document',
-    'spec documents',
-    'specification',
-    'specification docs',
-    'specification document',
-    'specification documents',
-    'project spec',
-    'project specification',
-    'project specification documents',
-  ].includes(normalized)) return 'specification';
-  if (['adr', 'adrs', 'architecture decision record', 'architecture decision records', 'adr collection'].includes(normalized)) {
-    return 'architecture decision records';
-  }
-  return normalized;
-}
-
-function canonicalRelationshipName(name: string, projectNames: Set<string>): string {
-  return canonicalEntityName(name, projectNames);
 }
 
 function assessRelationshipDraft(
@@ -4255,10 +3307,6 @@ function isCoreRelationshipPredicate(predicate: string): boolean {
 
 function isInterpretiveRelationshipPredicate(predicate: string): boolean {
   return new Set(['driven_by', 'enables', 'references', 'relates_to']).has(predicate);
-}
-
-function hasRelationshipEvidence(payload: Record<string, unknown>): boolean {
-  return Boolean(readPayloadString(payload, ['evidenceMarkdown', 'rationale', 'reason', 'summaryMarkdown']));
 }
 
 function convertRejectedRelationshipToFact(
@@ -4417,33 +3465,10 @@ function normalizeCandidatePayload(
   return normalized;
 }
 
-const CONTEXT_MAP_FACT_PAYLOAD_KEYS = [
-  'facts',
-  'factsMarkdown',
-  'factMarkdown',
-  'keyFacts',
-  'durableFacts',
-  'factStatements',
-];
-
 function normalizePayloadFacts(payload: Record<string, unknown>): void {
   const facts = normalizeCandidateFacts(payload);
   for (const key of CONTEXT_MAP_FACT_PAYLOAD_KEYS) delete payload[key];
   if (facts.length > 0) payload.facts = facts;
-}
-
-function normalizeCandidateFacts(payload: Record<string, unknown>): string[] {
-  return dedupeFacts(CONTEXT_MAP_FACT_PAYLOAD_KEYS.flatMap((key) => normalizeFactFieldValue(payload[key])));
-}
-
-function normalizeFactFieldValue(value: unknown): string[] {
-  if (typeof value === 'string') {
-    const lines = value.split(/\r?\n/)
-      .map((line) => line.replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '').trim())
-      .filter(Boolean);
-    return lines.length > 1 ? dedupeFacts(lines) : normalizeFactArray(value);
-  }
-  return normalizeFactArray(value);
 }
 
 function normalizePayloadStringArray(
@@ -4509,10 +3534,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
 
-function normalizedCandidateText(value: string): string {
-  return value.trim().toLowerCase().replace(/[`"']/g, '').replace(/\s+/g, ' ');
-}
-
 function normalizeTypeKey(
   normalized: Record<string, unknown>,
   payload: Record<string, unknown>,
@@ -4551,35 +3572,6 @@ function normalizeEntityTypeSlug(value: string, proposedEntityTypes: Set<string>
   return CONTEXT_MAP_BUILT_IN_ENTITY_TYPES.has(aliased) ? aliased : 'concept';
 }
 
-function normalizeRelationshipPredicate(value: string): string {
-  const trimmed = value.trim();
-  if (!trimmed) return '';
-  const textKey = trimmed.toLowerCase().replace(/[`"']/g, '').replace(/\s+/g, ' ');
-  const slugKey = normalizeSlug(trimmed);
-  return CONTEXT_MAP_PREDICATE_ALIASES.get(textKey)
-    || CONTEXT_MAP_PREDICATE_ALIASES.get(slugKey)
-    || slugKey;
-}
-
-function isAllowedRelationshipPredicate(value: string): boolean {
-  const predicate = normalizeRelationshipPredicate(value);
-  if (!predicate) return false;
-  if (predicate.includes('_unlike') || predicate.endsWith('_unlike')) return false;
-  if (predicate.startsWith('not_') || predicate.startsWith('does_not_')) return false;
-  if (predicate.includes('_versus_') || predicate === 'versus' || predicate === 'compared_to') return false;
-  return CONTEXT_MAP_ALLOWED_RELATIONSHIP_PREDICATES.has(predicate);
-}
-
-function normalizeCandidateSensitivity(value: string): string {
-  const slug = normalizeSlug(value);
-  if (!slug) return '';
-  if (slug === 'work_sensitive' || slug === 'confidential' || slug === 'private_work_data') return 'work-sensitive';
-  if (slug === 'personal_sensitive' || slug === 'private_personal_data' || slug === 'personal_data') return 'personal-sensitive';
-  if (slug === 'secret_pointer' || slug === 'secret_pointer_only' || slug === 'secret' || slug === 'credential') return 'secret-pointer';
-  if (slug === 'normal') return 'normal';
-  return '';
-}
-
 function correctPayloadSensitivityFromSource(
   candidateType: ContextCandidateType,
   payload: Record<string, unknown>,
@@ -4615,14 +3607,6 @@ function sensitivityFromSourceSpan(payload: Record<string, unknown>): 'work-sens
   return '';
 }
 
-function readPayloadString(payload: Record<string, unknown>, keys: string[]): string {
-  for (const key of keys) {
-    const value = payload[key];
-    if (typeof value === 'string' && value.trim()) return value.trim();
-  }
-  return '';
-}
-
 function isSourceFileName(name: string, packet: ContextMapSourcePacket): boolean {
   if (!name || packet.sourceType !== 'file') return false;
   const normalizedName = normalizeFileishName(name);
@@ -4649,10 +3633,6 @@ function normalizeFileishName(value: string): string {
 
 function normalizeEntityName(value: string): string {
   return value.trim().toLowerCase();
-}
-
-function normalizeSlug(value: string): string {
-  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
 }
 
 function escapeAttr(value: string): string {

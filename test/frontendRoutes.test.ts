@@ -67,22 +67,25 @@ describe('frontend routes', () => {
 
   test('mobile PWA keeps iOS viewport and modal sheet content reachable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const viewportHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useViewportHeightVar.ts'), 'utf8');
     const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
 
-    expect(appSrc).toContain("root.style.setProperty('--app-top'");
-    expect(appSrc).toContain("root.style.setProperty('--app-left'");
-    expect(appSrc).toContain("root.style.setProperty('--app-width'");
-    expect(appSrc).toContain('viewport?.offsetTop');
-    expect(appSrc).toContain('viewport?.offsetLeft');
-    expect(appSrc).toContain('viewport?.width');
-    expect(appSrc).toContain('lastViewportMetrics');
-    expect(appSrc).toContain('Math.round(viewport?.offsetTop || 0)');
-    expect(appSrc).toContain('if (metrics !== lastViewportMetrics)');
-    expect(appSrc).toContain('if (root.scrollLeft !== 0) root.scrollLeft = 0');
-    expect(appSrc).toContain('window.scrollTo(0, 0)');
-    expect(appSrc).toContain("window.addEventListener('scroll', scheduleUpdate)");
-    expect(appSrc).toContain("document.addEventListener('focusin', scheduleFocusUpdate)");
-    expect(appSrc).toContain("document.addEventListener('focusout', scheduleFocusUpdate)");
+    expect(appSrc).toContain("import { useViewportHeightVar } from './useViewportHeightVar'");
+    expect(appSrc).toContain('useViewportHeightVar();');
+    expect(viewportHookSrc).toContain("root.style.setProperty('--app-top'");
+    expect(viewportHookSrc).toContain("root.style.setProperty('--app-left'");
+    expect(viewportHookSrc).toContain("root.style.setProperty('--app-width'");
+    expect(viewportHookSrc).toContain('viewport?.offsetTop');
+    expect(viewportHookSrc).toContain('viewport?.offsetLeft');
+    expect(viewportHookSrc).toContain('viewport?.width');
+    expect(viewportHookSrc).toContain('lastViewportMetrics');
+    expect(viewportHookSrc).toContain('Math.round(viewport?.offsetTop || 0)');
+    expect(viewportHookSrc).toContain('if (metrics !== lastViewportMetrics)');
+    expect(viewportHookSrc).toContain('if (root.scrollLeft !== 0) root.scrollLeft = 0');
+    expect(viewportHookSrc).toContain('window.scrollTo(0, 0)');
+    expect(viewportHookSrc).toContain("window.addEventListener('scroll', scheduleUpdate)");
+    expect(viewportHookSrc).toContain("document.addEventListener('focusin', scheduleFocusUpdate)");
+    expect(viewportHookSrc).toContain("document.addEventListener('focusout', scheduleFocusUpdate)");
     expect(cssSrc).toMatch(/\.app-shell \{[\s\S]*top: var\(--app-top, 0px\);/);
     expect(cssSrc).toMatch(/\.app-shell \{[\s\S]*left: var\(--app-left, 0px\);/);
     expect(cssSrc).toMatch(/\.app-shell \{[\s\S]*width: var\(--app-width, 100vw\);/);

@@ -2,23 +2,48 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import { AgentAPIError, AgentCockpitAPI } from './api';
+import {
+  ALL_WORKSPACES,
+  completedAttachmentMetas,
+  conversationListItemFromConversation,
+  displayMessagePreview,
+  downloadBlob,
+  fileReferencesFromParsed,
+  formatBytes,
+  formatDate,
+  formatPercent,
+  joinExplorerPath,
+  lastTwoPathComponents,
+  isImageFileName,
+  makeConversationArtifactReference,
+  makeExplorerFileReference,
+  parentExplorerPath,
+  parseMessageFiles,
+  reconcileEffort,
+  updateSessionsAfterReset,
+  upsertMessage,
+  userLabel,
+  wireContent,
+  workspaceOptions,
+  type ExplorerUpload,
+  type FilePreviewState,
+  type FileReference,
+} from './appModel';
+import { useViewportHeightVar } from './useViewportHeightVar';
 import type {
   AttachmentMeta,
   BackendMetadata,
   ContentBlock,
   Conversation,
-  ConversationArtifact,
   ConversationListItem,
   CurrentUser,
   EffortLevel,
   ExplorerEntry,
   ExplorerPreviewResponse,
-  FilePreviewResponse,
   Message,
   PendingAttachment,
   PendingInteraction,
   QueuedMessage,
-  ResetSessionResponse,
   SessionHistoryItem,
   ServiceTier,
   Settings,
@@ -26,43 +51,11 @@ import type {
   Usage,
 } from './types';
 
-const effortOrder: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const LIST_AUTO_REFRESH_MS = 15_000;
 const STREAM_RECONNECT_BASE_MS = 1_000;
 const STREAM_RECONNECT_MAX_MS = 15_000;
-const ALL_WORKSPACES = 'all';
 
 type Screen = 'list' | 'chat';
-
-type ExplorerUpload = {
-  id: string;
-  fileName: string;
-  status: 'uploading' | 'done' | 'error';
-  progress?: number;
-  error?: string;
-  xhr?: XMLHttpRequest;
-};
-
-type FileReference = {
-  id: string;
-  title: string;
-  path: string;
-  downloadURL: string;
-  isImage?: boolean;
-  mimeType?: string;
-  fetchPreview?: () => Promise<FilePreviewResponse | ExplorerPreviewResponse>;
-};
-
-type FilePreviewState = {
-  title: string;
-  path: string;
-  downloadURL: string;
-  content?: string;
-  imageURL?: string;
-  mimeType?: string;
-  truncated?: boolean;
-  error?: string;
-};
 
 export default function App() {
   useViewportHeightVar();
@@ -1016,7 +1009,7 @@ export default function App() {
                 serviceTier: response.conversation.serviceTier,
                 updatedAt: new Date().toISOString(),
                 messageCount: 0,
-                lastMessage: undefined,
+                lastMessage: null,
                 archived: response.conversation.archived,
               }
             : item,
@@ -2305,318 +2298,4 @@ function ErrorBanner({ message }: { message: string }) {
 
 function ProgressBar({ progress }: { progress: number }) {
   return <div className="progress-track"><div className="progress-fill" style={{ width: `${Math.min(100, Math.max(0, progress))}%` }} /></div>;
-}
-
-function useViewportHeightVar() {
-  useEffect(() => {
-    const root = document.documentElement;
-    let rafID = 0;
-    let focusTimer: number | undefined;
-    let lastViewportMetrics = '';
-
-    const update = () => {
-      const viewport = window.visualViewport;
-      const height = Math.max(1, Math.round(viewport?.height || window.innerHeight));
-      const width = Math.max(1, Math.round(viewport?.width || window.innerWidth));
-      const top = Math.round(viewport?.offsetTop || 0);
-      const left = Math.round(viewport?.offsetLeft || 0);
-      const metrics = `${height}:${width}:${top}:${left}`;
-      if (metrics !== lastViewportMetrics) {
-        root.style.setProperty('--app-height', `${height}px`);
-        root.style.setProperty('--app-width', `${width}px`);
-        root.style.setProperty('--app-top', `${top}px`);
-        root.style.setProperty('--app-left', `${left}px`);
-        lastViewportMetrics = metrics;
-      }
-      if (root.scrollLeft !== 0) root.scrollLeft = 0;
-      if (root.scrollTop !== 0) root.scrollTop = 0;
-      if (document.body.scrollLeft !== 0) document.body.scrollLeft = 0;
-      if (document.body.scrollTop !== 0) document.body.scrollTop = 0;
-      if (window.scrollX !== 0 || window.scrollY !== 0) {
-        window.scrollTo(0, 0);
-      }
-    };
-
-    const scheduleUpdate = () => {
-      if (rafID) {
-        window.cancelAnimationFrame(rafID);
-      }
-      rafID = window.requestAnimationFrame(() => {
-        rafID = 0;
-        update();
-      });
-    };
-
-    const scheduleFocusUpdate = () => {
-      scheduleUpdate();
-      if (focusTimer !== undefined) {
-        window.clearTimeout(focusTimer);
-      }
-      focusTimer = window.setTimeout(scheduleUpdate, 120);
-    };
-
-    update();
-    window.addEventListener('scroll', scheduleUpdate);
-    window.addEventListener('resize', scheduleUpdate);
-    window.addEventListener('orientationchange', scheduleUpdate);
-    window.visualViewport?.addEventListener('resize', scheduleUpdate);
-    window.visualViewport?.addEventListener('scroll', scheduleUpdate);
-    document.addEventListener('focusin', scheduleFocusUpdate);
-    document.addEventListener('focusout', scheduleFocusUpdate);
-    return () => {
-      if (rafID) {
-        window.cancelAnimationFrame(rafID);
-      }
-      if (focusTimer !== undefined) {
-        window.clearTimeout(focusTimer);
-      }
-      window.removeEventListener('scroll', scheduleUpdate);
-      window.removeEventListener('resize', scheduleUpdate);
-      window.removeEventListener('orientationchange', scheduleUpdate);
-      window.visualViewport?.removeEventListener('resize', scheduleUpdate);
-      window.visualViewport?.removeEventListener('scroll', scheduleUpdate);
-      document.removeEventListener('focusin', scheduleFocusUpdate);
-      document.removeEventListener('focusout', scheduleFocusUpdate);
-    };
-  }, []);
-}
-
-function parseMessageFiles(content: string): { text: string; uploadedPaths: string[]; deliveredPaths: string[] } {
-  const deliveredPaths: string[] = [];
-  let text = content.replace(/<!--\s*FILE_DELIVERY:([\s\S]*?)-->/g, (_match, path: string) => {
-    const trimmed = path.trim();
-    if (trimmed) deliveredPaths.push(trimmed);
-    return '';
-  });
-  const uploadedPaths: string[] = [];
-  const uploadMatch = text.match(/\n*\[Uploaded files?:\s*([^\]]+)\]\s*$/i);
-  if (uploadMatch) {
-    uploadedPaths.push(...(uploadMatch[1] || '').split(',').map((path) => path.trim()).filter(Boolean));
-    text = text.slice(0, uploadMatch.index).trimEnd();
-  }
-  return { text: text.trim(), uploadedPaths, deliveredPaths };
-}
-
-function displayMessagePreview(content: string): string {
-  const parsed = parseMessageFiles(content);
-  if (parsed.text) {
-    return parsed.text;
-  }
-  if (parsed.uploadedPaths.length) {
-    const names = parsed.uploadedPaths.map(basenameFromPath).join(', ');
-    return `${parsed.uploadedPaths.length === 1 ? 'Attachment' : `${parsed.uploadedPaths.length} attachments`}: ${names}`;
-  }
-  if (parsed.deliveredPaths.length) {
-    const names = parsed.deliveredPaths.map(basenameFromPath).join(', ');
-    return `${parsed.deliveredPaths.length === 1 ? 'File' : `${parsed.deliveredPaths.length} files`}: ${names}`;
-  }
-  return content;
-}
-
-function fileReferencesFromParsed(
-  client: AgentCockpitAPI,
-  conversation: Conversation,
-  role: Message['role'],
-  parsed: { uploadedPaths: string[]; deliveredPaths: string[] },
-): FileReference[] {
-  const references: FileReference[] = [];
-  if (role === 'user') {
-    references.push(...parsed.uploadedPaths.map((path) => makeConversationUploadReference(client, conversation, path)));
-  }
-  references.push(...parsed.deliveredPaths.map((path) => makeWorkspaceFileReference(client, conversation.workspaceHash, path)));
-  return references;
-}
-
-function makeConversationUploadReference(client: AgentCockpitAPI, conversation: Conversation, path: string): FileReference {
-  const title = basenameFromPath(path);
-  return {
-    id: `conversation:${conversation.id}:${path}`,
-    title,
-    path,
-    downloadURL: client.conversationFileURL(conversation.id, title, 'download'),
-    isImage: isImageFileName(title),
-    fetchPreview: () => client.getConversationFilePreview(conversation.id, title),
-  };
-}
-
-function makeConversationArtifactReference(client: AgentCockpitAPI, conversation: Conversation, artifact: ConversationArtifact): FileReference {
-  const title = artifact.title || artifact.filename || basenameFromPath(artifact.path);
-  const filename = artifact.filename || basenameFromPath(artifact.path);
-  return {
-    id: `artifact:${conversation.id}:${filename}:${artifact.sourceToolId || ''}`,
-    title,
-    path: artifact.path || filename,
-    downloadURL: client.conversationFileURL(conversation.id, filename, 'download'),
-    isImage: artifact.kind === 'image' || isImageFileName(filename),
-    mimeType: artifact.mimeType,
-    fetchPreview: () => client.getConversationFilePreview(conversation.id, filename),
-  };
-}
-
-function makeWorkspaceFileReference(client: AgentCockpitAPI, workspaceHash: string, path: string): FileReference {
-  const title = basenameFromPath(path);
-  return {
-    id: `workspace:${workspaceHash}:${path}`,
-    title,
-    path,
-    downloadURL: client.workspaceFileURL(workspaceHash, path, 'download'),
-    isImage: isImageFileName(title),
-    fetchPreview: () => client.getWorkspaceFilePreview(workspaceHash, path),
-  };
-}
-
-function makeExplorerFileReference(client: AgentCockpitAPI, workspaceHash: string, path: string): FileReference {
-  const title = basenameFromPath(path);
-  return {
-    id: `explorer:${workspaceHash}:${path}`,
-    title,
-    path,
-    downloadURL: client.explorerFileURL(workspaceHash, path, 'download'),
-    isImage: isImageFileName(title),
-    fetchPreview: () => client.getExplorerPreview(workspaceHash, path),
-  };
-}
-
-function conversationListItemFromConversation(conversation: Conversation): ConversationListItem {
-  return {
-    id: conversation.id,
-    title: conversation.title,
-    updatedAt: new Date().toISOString(),
-    backend: conversation.backend,
-    cliProfileId: conversation.cliProfileId,
-    model: conversation.model,
-    effort: conversation.effort,
-    serviceTier: conversation.serviceTier,
-    workingDir: conversation.workingDir,
-    workspaceHash: conversation.workspaceHash,
-    workspaceKbEnabled: false,
-    messageCount: conversation.messages.length,
-    archived: conversation.archived,
-  };
-}
-
-function updateSessionsAfterReset(sessions: SessionHistoryItem[], response: ResetSessionResponse): SessionHistoryItem[] {
-  const archived = response.archivedSession;
-  const updated = sessions.map((session) => {
-    if (archived && session.number === archived.number) {
-      return {
-        ...session,
-        sessionId: archived.sessionId || session.sessionId,
-        startedAt: archived.startedAt,
-        endedAt: archived.endedAt,
-        messageCount: archived.messageCount,
-        summary: archived.summary,
-        isCurrent: false,
-      };
-    }
-    return { ...session, isCurrent: false };
-  });
-  if (!updated.some((session) => session.number === response.newSessionNumber)) {
-    updated.push({
-      number: response.newSessionNumber,
-      sessionId: response.conversation.currentSessionId,
-      startedAt: new Date().toISOString(),
-      endedAt: undefined,
-      messageCount: 0,
-      summary: undefined,
-      isCurrent: true,
-    });
-  }
-  return updated.map((session) => (
-    session.number === response.newSessionNumber
-      ? { ...session, isCurrent: true, messageCount: 0, summary: undefined, endedAt: undefined }
-      : session
-  ));
-}
-
-function wireContent(message: QueuedMessage): string {
-  const paths = (message.attachments || []).map((attachment) => attachment.path).filter(Boolean);
-  if (!paths.length) return message.content;
-  const tag = `[Uploaded files: ${paths.join(', ')}]`;
-  return message.content.trim() ? `${message.content}\n\n${tag}` : tag;
-}
-
-function completedAttachmentMetas(attachments: PendingAttachment[]): AttachmentMeta[] {
-  return attachments.map((attachment) => attachment.result).filter(Boolean) as AttachmentMeta[];
-}
-
-function upsertMessage(messages: Message[], message: Message): Message[] {
-  const index = messages.findIndex((item) => item.id === message.id);
-  if (index === -1) return [...messages, message];
-  const next = [...messages];
-  next[index] = message;
-  return next;
-}
-
-function userLabel(user: CurrentUser | null): string {
-  if (!user) return 'Not loaded';
-  return user.displayName || user.email || 'Local session';
-}
-
-function reconcileEffort(current: EffortLevel | undefined, supported: EffortLevel[]): EffortLevel | undefined {
-  if (!supported.length) return undefined;
-  if (current && supported.includes(current)) return current;
-  if (supported.includes('high')) return 'high';
-  return supported.slice().sort((a, b) => effortOrder.indexOf(a) - effortOrder.indexOf(b))[0];
-}
-
-function lastTwoPathComponents(path: string): string {
-  const parts = path.split('/').filter(Boolean);
-  if (parts.length < 2) return path || 'Default workspace';
-  return parts.slice(-2).join('/');
-}
-
-function workspaceOptions(conversations: ConversationListItem[]): Array<{ hash: string; label: string }> {
-  const byHash = new Map<string, string>();
-  for (const conversation of conversations) {
-    if (!byHash.has(conversation.workspaceHash)) {
-      byHash.set(conversation.workspaceHash, lastTwoPathComponents(conversation.workingDir));
-    }
-  }
-  return Array.from(byHash, ([hash, label]) => ({ hash, label })).sort((a, b) => a.label.localeCompare(b.label));
-}
-
-function formatDate(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
-
-function formatPercent(value: number): string {
-  return `${value < 10 ? value.toFixed(1) : Math.round(value).toString()}%`;
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function joinExplorerPath(parent: string, name: string): string {
-  return [parent, name].filter(Boolean).join('/');
-}
-
-function parentExplorerPath(path: string): string {
-  const parts = path.split('/').filter(Boolean);
-  parts.pop();
-  return parts.join('/');
-}
-
-function basenameFromPath(path: string): string {
-  return path.split('/').filter(Boolean).pop() || path || 'file';
-}
-
-function isImageFileName(fileName: string): boolean {
-  return /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i.test(fileName);
-}
-
-function downloadBlob(blob: Blob, fileName: string) {
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement('a');
-  anchor.href = url;
-  anchor.download = fileName;
-  document.body.append(anchor);
-  anchor.click();
-  anchor.remove();
-  URL.revokeObjectURL(url);
 }
