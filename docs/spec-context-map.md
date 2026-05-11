@@ -249,24 +249,28 @@ Workspace Settings is a full-screen settings surface with a Context Map tab.
 
 The Context Map tab includes:
 
-- Enable Context Map toggle.
-- Last scan status directly under the enablement area.
+- Internal left-rail sections for Overview, Processor, Active Map, Needs Attention, and Danger Zone.
+- Enable Context Map toggle in Overview.
+- Status badge and Last scan status in Overview.
+- Compact metrics row for entities, relationships, and needs-attention count when enabled.
+- Overview insight cards derived from the currently loaded graph/review snapshot: most connected entities, needs-review breakdown, isolated entities, and recent entity changes.
 - Ephemeral initial-scan progress near enablement. It can show `Initial scan started`, `Keep rolling`, and `Initial scan completed`; it can disappear after the panel is reopened.
-- Processor mode: global defaults or workspace override.
-- Optional workspace scan interval override, displayed in minutes.
-- Active Map browse/search/filter surface.
-- Entity detail popup.
+- Processor mode: global defaults or workspace override. Global mode shows read-only inherited processor values; Override reveals editable CLI/profile/model/effort fields.
+- Optional workspace scan interval override, displayed in minutes only while Override is selected.
+- Dirty processor changes reveal `Save Changes`; no persistent Context Map save button is shown when settings are unchanged.
+- Active Map browse/search/filter surface with a nearby-context relationship strip derived from the filtered graph snapshot, hidden behind a compact disabled empty state when Context Map is disabled.
+- Entity detail popup with a relationship-neighborhood row view that highlight the selected entity inside each one-hop relationship.
 - Entity edit controls.
-- Needs Attention review queue.
+- Needs Attention review queue, hidden behind a compact disabled empty state when Context Map is disabled.
 - Dismissed/history filter.
 - Accept All for currently pending suggestions other than dismissed items.
-- Candidate edit/apply/dismiss/reopen controls.
+- Candidate edit/apply/dismiss/reopen controls, with an impact preview that maps each candidate payload to the entity/type/evidence/relationship target it would change.
 - Relationship dependency confirmation when a relationship needs endpoint entity candidates from the same review batch.
-- Rescan Now control with a tooltip explaining that manual rescan reprocesses selected workspace sources regardless of cursors.
+- Rescan Now control in Danger Zone with a tooltip explaining that manual rescan reprocesses selected workspace sources regardless of cursors.
 - Stop control while any run is active.
-- Clear Context Map destructive action.
+- Clear Context Map destructive action in Danger Zone.
 
-When Rescan Now is clicked, the UI scrolls to the top of the Context Map tab so the running progress indicator is visible.
+The Context Map left rail and right content area scroll vertically as separate panes. When Run initial scan or Rescan Now is clicked, the UI switches back to Overview and scrolls the right content pane to the top so the running progress indicator is visible.
 
 ### Chat Surface
 
@@ -277,12 +281,12 @@ Conversations expose compact `contextMap` status when the workspace has Context 
 | User action | Immediate UI result | Backend result |
 |-------------|---------------------|----------------|
 | Enable Context Map | Toggle turns on, initial-scan strip appears, Last scan/running rows update as data arrives. | Workspace enablement is persisted and an async `initial_scan` starts. |
-| Open Active Map | Entity cards, relationship rows, filters, and detail buttons render from graph snapshot. | `GET /context-map/graph` reads active entities/relationships without modifying state. |
-| Click Details | Modal opens with loading state and then detail content. | `GET /context-map/entities/:entityId` reads aliases, facts, relationships, evidence, and audit rows with secret redaction. |
+| Open Active Map | Entity cards, nearby-context relationship strip, relationship rows, filters, and detail buttons render from graph snapshot. | `GET /context-map/graph` reads active entities/relationships without modifying state. |
+| Click Details | Modal opens with loading state, detail content and relationship-neighborhood rows. | `GET /context-map/entities/:entityId` reads aliases, facts, relationships, evidence, and audit rows with secret redaction. |
 | Edit entity | Detail modal/card refreshes after save. | Entity row updates, audit row is inserted, update frame is broadcast. |
-| Review Needs Attention | Pending or dismissed candidate groups show by source/run. | `GET /context-map/review` reads candidate rows, counts, and recent/referenced runs. |
+| Review Needs Attention | Pending or dismissed candidate groups show by source/run with candidate impact previews. | `GET /context-map/review` reads candidate rows, counts, and recent/referenced runs. |
 | Accept All | One confirmation, then non-dismissed pending items apply in dependency-aware order. | Entity/update/evidence candidates are applied before relationships; relationship dependencies can be applied transactionally. |
-| Rescan Now | Page scrolls to top and shows running progress. | Async `manual_rebuild` starts and reprocesses selected workspace sources regardless of cursors. |
+| Rescan Now | Right content pane returns to Overview and shows running progress. | Async `manual_rebuild` starts and reprocesses selected workspace sources regardless of cursors. |
 | Stop | Running row clears after refresh/update. | Active run aborts cooperatively and is marked `stopped`; interrupted work remains retryable. |
 | Clear Context Map | Graph/review/detail UI clears after confirmation. | Store rows are deleted except settings/enablement/system entity types; active scans block this action. |
 
@@ -686,11 +690,11 @@ Candidate apply semantics:
 
 ## Active Map and Review Behavior
 
-Active Map reads show active graph state and support query, type, status, sensitivity, and limit filters. Default entity status is `active`; `status=all` includes lifecycle states.
+Active Map reads show active graph state and support query, type, status, sensitivity, and limit filters. Default entity status is `active`; `status=all` includes lifecycle states. The Workspace Settings UI derives a nearby-context strip from the returned relationship rows so filtered/search results show a small set of connected paths without rendering the entire graph.
 
-Entity detail opens as a popup. It includes aliases, facts, relationships, evidence refs, and entity-target audit events. Users can edit name, type, status, sensitivity, summary, notes, and confidence.
+Entity detail opens as a popup. It includes aliases, facts, relationships, evidence refs, and entity-target audit events. Relationship rows render as a one-hop neighborhood and highlight the selected entity on the subject or object side. Users can edit name, type, status, sensitivity, summary, notes, and confidence.
 
-Needs Attention reads `context_candidates` with status filtering. The default status is `pending`. Dismissed items remain queryable in dismissed/history views and can be reopened. Dismissed candidates are not affected by Accept All.
+Needs Attention reads `context_candidates` with status filtering. The default status is `pending`. Dismissed items remain queryable in dismissed/history views and can be reopened. Dismissed candidates are not affected by Accept All. Candidate cards derive a compact impact preview from the payload so reviewers can see the proposed node/edge/evidence target before opening the editable JSON payload.
 
 Candidate application writes graph changes, links evidence, marks the candidate active, emits audit events, and sends `context_map_update` to connected clients. Candidate dismissal and reopen also emit audit events.
 
@@ -870,7 +874,7 @@ The Context Map feature is covered by focused backend, route, frontend-static, s
 | `test/contextMap.service.test.ts` | Processor planning, initial/scheduled/manual/reset/archive runs, conversation cursors, workspace source packets, recursive Markdown scanning, code outlines, source cursors, deterministic cleanup, synthesis, JSON repair, auto-apply, stop behavior, partial failures, scheduler timing, run metadata, and global extraction/synthesis concurrency. |
 | `test/contextMap.mcp.test.ts` | MCP token lifecycle, tool schema, disabled/missing-token failures, active graph search/detail/relationship/context-pack reads, and secret-pointer read/search redaction. |
 | `test/chat.contextMap.test.ts` | REST enablement/settings/graph/entity/review/scan/stop/clear/candidate routes, disabled/unknown/error behavior, dependency apply flow, workspace update emissions, MCP injection into chat sends, and final reset/archive processing passes. |
-| `test/frontendRoutes.test.ts` | Static guards for Global Settings, Workspace Settings, Active Map, details modal, Needs Attention, Accept All, source grouping, stop/rescan/clear controls, tooltips, source-toggle absence, and CSS hooks. |
+| `test/frontendRoutes.test.ts` | Static guards for Global Settings, Workspace Settings, Context Map overview insight cards, Active Map nearby context, relationship-neighborhood details modal, Needs Attention impact previews, Accept All, source grouping, stop/rescan/clear controls, tooltips, source-toggle absence, and CSS hooks. |
 | `test/settingsService.test.ts` | Global Context Map defaults, CLI profile normalization, concurrency/interval clamps, legacy backend/profile mirroring, and legacy `sources` stripping. |
 | `test/streamStore.test.ts` | `context_map_update` frame handling and browser `ac:context-map-update` dispatch. |
 | `test/chatService.workspace.test.ts` | Per-workspace enablement defaults/persistence, Memory/KB independence, enabled workspace listing, workspace override defaults, interval clamps, and legacy source-toggle ignoring. |

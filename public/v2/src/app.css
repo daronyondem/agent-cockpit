@@ -671,6 +671,241 @@ body{
   flex-wrap: wrap;
 }
 .ws-toggle{ margin-top: 2px; }
+.settings-form.ws-form-context-map{
+  max-width: none;
+  width: 100%;
+  height: 100%;
+  min-height: 100%;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+  font-family: var(--ui-font);
+}
+.ws-cm-layout{
+  flex: 1 1 auto;
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  min-width: 0;
+  height: 100%;
+  min-height: 100%;
+  width: 100%;
+  background: var(--bg);
+}
+.ws-cm-rail{
+  flex: 0 0 230px;
+  min-height: 0;
+  padding: 14px 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-right: 1px solid var(--border);
+  background: var(--bg-sunk);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ws-cm-nav{
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ws-cm-nav span{
+  font-size: 13px;
+  font-weight: 600;
+  color: inherit;
+}
+.ws-cm-nav small{
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.ws-cm-nav:hover{
+  color: var(--text);
+  background: var(--surface);
+}
+.ws-cm-nav.active{
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.ws-cm-content{
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--bg);
+}
+.ws-cm-panel{
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 760px;
+}
+.ws-cm-title-row{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+.ws-cm-title{
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ws-cm-status-badge{
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  padding: 3px 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--surface);
+}
+.ws-cm-status-badge.is-enabled{
+  color: var(--status-done);
+  border-color: color-mix(in srgb, var(--status-done) 50%, var(--border));
+}
+.ws-cm-status-badge.is-scanning{
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--accent-soft);
+}
+.ws-cm-status-badge.is-error{
+  color: var(--status-error);
+  border-color: color-mix(in srgb, var(--status-error) 55%, var(--border));
+}
+.ws-cm-metrics{
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.ws-cm-metrics div{
+  min-width: 0;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+}
+.ws-cm-metrics b{
+  display: block;
+  color: var(--text);
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.1;
+}
+.ws-cm-metrics span{
+  display: block;
+  margin-top: 3px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.ws-cm-insights{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.ws-cm-insight-card{
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  padding: 9px;
+}
+.ws-cm-insight-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.ws-cm-insight-head span{
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+.ws-cm-insight-head b{
+  color: var(--text-3);
+  font: 10.5px var(--mono-font);
+  font-weight: 600;
+  text-align: right;
+}
+.ws-cm-insight-card ul{
+  margin: 7px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ws-cm-insight-card li{
+  color: var(--text-2);
+  font-size: 11.5px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.ws-cm-readonly-list{
+  display: grid;
+  gap: 8px;
+}
+.ws-cm-readonly-list div{
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 0 0 8px;
+}
+.ws-cm-readonly-list span{
+  color: var(--text-3);
+  font-size: 12px;
+}
+.ws-cm-readonly-list b{
+  min-width: 0;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 650;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.ws-cm-save-row{
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 2px;
+}
+.ws-cm-section-summary{
+  font-size: 12.5px;
+}
+.ws-cm-danger-actions{
+  justify-content: flex-start;
+}
+.ws-cm-danger-block{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.ws-cm-section-title + .ws-cm-danger-block{
+  padding-top: 0;
+  border-top: 0;
+}
+.ws-cm-danger-title{
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+}
 .ws-cm-initial-scan{
   display: flex;
   align-items: center;
@@ -851,6 +1086,63 @@ body{
 .ws-cm-graph-controls select:focus{
   border-color: var(--accent);
   outline: none;
+}
+.ws-cm-nearby{
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  padding: 9px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.ws-cm-nearby-head{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.ws-cm-nearby-head span{
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
+}
+.ws-cm-nearby-head b{
+  min-width: 0;
+  color: var(--text-3);
+  font: 10.5px var(--mono-font);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-cm-nearby-paths{
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ws-cm-nearby-row{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 7px;
+  align-items: center;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+  font-size: 12px;
+}
+.ws-cm-nearby-row span{
+  min-width: 0;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-cm-nearby-row b{
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font: 10.5px var(--mono-font);
+  padding: 2px 5px;
 }
 .ws-cm-graph{
   display: flex;
@@ -1125,21 +1417,55 @@ body{
   color: var(--text-3);
   font: 10.5px var(--mono-font);
 }
-.ws-cm-advanced{
-  border-top: 1px solid var(--border);
-  padding-top: 8px;
-}
-.ws-cm-advanced summary{
-  cursor: pointer;
-  color: var(--text-2);
-  font: 11px var(--mono-font);
-}
-.ws-cm-advanced-actions{
+.ws-cm-neighborhood{
   display: flex;
-  align-items: center;
-  justify-content: flex-start;
+  flex-direction: column;
+  gap: 6px;
+}
+.ws-cm-neighborhood-row{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   gap: 8px;
-  margin-top: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+  padding: 7px 8px;
+}
+.ws-cm-neighborhood-node{
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--surface);
+  color: var(--text-2);
+  padding: 4px 6px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-cm-neighborhood-node.is-center{
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: var(--accent-soft);
+  color: var(--text);
+  font-weight: 650;
+}
+.ws-cm-neighborhood-edge{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  min-width: 82px;
+}
+.ws-cm-neighborhood-edge b{
+  color: var(--text);
+  font: 10.5px var(--mono-font);
+}
+.ws-cm-neighborhood-edge em{
+  color: var(--text-3);
+  font: 10px var(--mono-font);
+  font-style: normal;
+  white-space: nowrap;
 }
 .ws-cm-rescan-help{
   flex: 0 0 auto;
@@ -1222,6 +1548,45 @@ body{
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 6px;
+}
+.ws-cm-candidate-impact{
+  margin-top: 9px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+  padding: 8px;
+}
+.ws-cm-impact-node{
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--surface);
+  color: var(--text-2);
+  padding: 4px 6px;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ws-cm-impact-edge{
+  color: var(--text);
+  font: 10.5px var(--mono-font);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xs);
+  background: var(--bg);
+  padding: 3px 6px;
+  white-space: nowrap;
+}
+.ws-cm-candidate-impact em{
+  grid-column: 1 / -1;
+  color: var(--text-3);
+  font: 10.5px var(--mono-font);
+  font-style: normal;
+  overflow-wrap: anywhere;
 }
 .ws-cm-candidate-payload{
   margin: 9px 0 0;
@@ -1528,6 +1893,26 @@ body{
 .ws-mem-status.superseded{ color: var(--text-3); }
 .ws-mem-status.deleted{ color: var(--status-error); }
 @media (max-width: 640px){
+  .ws-cm-layout{ flex-direction: column; }
+  .ws-cm-rail{
+    flex: 0 0 auto;
+    width: 100%;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .ws-cm-nav{ flex: 0 0 190px; }
+  .ws-cm-nav.active{ box-shadow: inset 0 -3px 0 var(--accent); }
+  .ws-cm-content{
+    width: 100%;
+  }
+  .ws-cm-panel{ padding: 16px; }
+  .ws-cm-metrics,
+  .ws-cm-insights{ grid-template-columns: 1fr; }
+  .ws-cm-title-row{ flex-direction: column; }
   .ws-cm-entity-grid,
   .ws-cm-detail-grid,
   .ws-cm-entity-edit{ grid-template-columns: 1fr; }
@@ -1542,7 +1927,11 @@ body{
   .ws-cm-entity-foot .ws-cm-details-btn{ margin-left: auto; }
   .ws-cm-head-actions,
   .ws-cm-review-tools{ justify-content: flex-start; }
-  .ws-cm-relationship-row{ grid-template-columns: 1fr; }
+  .ws-cm-relationship-row,
+  .ws-cm-nearby-row,
+  .ws-cm-neighborhood-row,
+  .ws-cm-candidate-impact{ grid-template-columns: 1fr; }
+  .ws-cm-neighborhood-edge{ align-items: flex-start; }
   .ws-cm-candidate-actions{ justify-content: flex-start; }
   .ws-mem-controls{ grid-template-columns: 1fr; }
   .ws-mem-schedule-grid{ grid-template-columns: 1fr 1fr; }
