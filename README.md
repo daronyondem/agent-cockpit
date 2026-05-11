@@ -212,7 +212,7 @@ Use the tunnel-provided URL to reach your local Agent Cockpit from any device. F
 
 ## Mobile PWA
 
-The supported mobile client is served by the same backend at `/mobile/`. Open `https://<your-host>/mobile/` on the phone, sign in with the normal owner account, then use the browser's Add to Home Screen flow. Rebuild the mobile bundle with `npm run mobile:build`.
+The supported mobile client is served by the same backend at `/mobile/`. Open `https://<your-host>/mobile/` on the phone, sign in with the normal owner account, then use the browser's Add to Home Screen flow. The server rebuilds stale mobile assets into ignored `public/mobile-built/` during startup and self-update; `npm run mobile:build` remains the explicit local check.
 
 The PWA uses the same authenticated web session as the desktop UI. Xcode, Expo Go, TestFlight, App Store distribution, and native app pairing are not part of the supported mobile path.
 
@@ -245,12 +245,15 @@ agent-cockpit/
 │       ├── chatService.ts    # Conversation CRUD, messages, sessions, workspaces, KB/memory state
 │       ├── memoryWatcher.ts  # Watches CLI memory files for snapshot capture
 │       ├── settingsService.ts # User settings persistence
-│       └── updateService.ts  # Self-update: version checking, git pull, PM2 restart
+│       ├── updateService.ts  # Self-update: version checking, git pull, builds, PM2 restart
+│       ├── webBuildService.ts # V2 web asset build preflight
+│       └── mobileBuildService.ts # Mobile PWA asset build preflight
 ├── public/
-│   ├── v2/                   # Default UI (React 18 + Babel Standalone, no build step)
-│   │   ├── index.html
-│   │   └── src/              # JSX components, screens, primitives, styles
-│   └── mobile/               # Built mobile PWA assets served at /mobile/
+│   ├── v2/                   # Retired Browser-Babel placeholders for ADR path stability
+│   ├── v2-built/             # Ignored Vite output served at /v2/
+│   └── mobile-built/         # Ignored mobile PWA output served at /mobile/
+├── web/
+│   └── AgentCockpitWeb/      # Source for the Vite React V2 web UI
 ├── mobile/
 │   └── AgentCockpitPWA/      # Source for the Vite React mobile PWA
 ├── docs/                     # Wiki-style specification (see SPEC.md)
@@ -281,7 +284,7 @@ Tests use Jest and run with:
 npm test
 ```
 
-Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, CodexAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, self-update service, first-party auth and legacy OAuth flows, settings service, browser tab indicator, mobile PWA static serving, memory MCP and watcher, and the full Knowledge Base pipeline (ingestion, digestion, dreaming, embeddings, vector store, folders, multi-location, handlers).
+Tests cover ChatService CRUD/messaging/sessions, backend adapter system (registry, ClaudeCodeAdapter, KiroAdapter, CodexAdapter, tool utilities), chat route integration (streaming, reconnection, options passthrough), graceful shutdown (SIGINT/SIGTERM), session file-store persistence, draft state persistence, message queuing, self-update service, first-party auth and legacy OAuth flows, settings service, browser tab indicator, V2 bundle budget checks, mobile PWA static serving, memory MCP and watcher, and the full Knowledge Base pipeline (ingestion, digestion, dreaming, embeddings, vector store, folders, multi-location, handlers).
 
 CI runs tests automatically on every pull request against `main` via GitHub Actions. Version bumps are automated on merge to `main`.
 

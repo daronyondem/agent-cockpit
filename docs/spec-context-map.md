@@ -897,12 +897,12 @@ Core backend implementation:
 
 Frontend implementation:
 
-- `public/v2/src/workspaceSettings.jsx`
-- `public/v2/src/screens/settingsScreen.jsx`
-- `public/v2/src/api.js`
-- `public/v2/src/streamStore.js`
-- `public/v2/src/shell.jsx`
-- `public/v2/src/app.css`
+- `web/AgentCockpitWeb/src/workspaceSettings.jsx`
+- `web/AgentCockpitWeb/src/screens/settingsScreen.jsx`
+- `web/AgentCockpitWeb/src/api.js`
+- `web/AgentCockpitWeb/src/streamStore.js`
+- `web/AgentCockpitWeb/src/shell.jsx`
+- `web/AgentCockpitWeb/src/app.css`
 
 Diagnostics:
 

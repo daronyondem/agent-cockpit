@@ -21,6 +21,8 @@ import { KiroPlanUsageService } from './src/services/kiroPlanUsageService';
 import { CodexPlanUsageService } from './src/services/codexPlanUsageService';
 import { detectLibreOffice } from './src/services/knowledgeBase/libreOffice';
 import { detectPandoc } from './src/services/knowledgeBase/pandoc';
+import { WebBuildService } from './src/services/webBuildService';
+import { MobileBuildService } from './src/services/mobileBuildService';
 import type { Request, Response, NextFunction } from './src/types';
 
 const FileStore = FileStoreFactory(session);
@@ -97,18 +99,30 @@ backendRegistry.register(new CodexAdapter({
 }));
 
 const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
-const updateService = new UpdateService(__dirname);
 const cliUpdateService = new CliUpdateService(__dirname);
 const claudePlanUsageService = new ClaudePlanUsageService(__dirname);
 const kiroPlanUsageService = new KiroPlanUsageService(__dirname);
 const codexPlanUsageService = new CodexPlanUsageService(__dirname);
+const webBuildService = new WebBuildService(__dirname, { mode: config.WEB_BUILD_MODE });
+const mobileBuildService = new MobileBuildService(__dirname, { mode: config.WEB_BUILD_MODE });
+const updateService = new UpdateService(__dirname, { webBuildService, mobileBuildService });
 const chatResult = createChatRouter({ chatService, backendRegistry, updateService, cliUpdateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
 const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = chatResult;
 app.use('/api/chat', chatRouter);
 
-// V2 is the default UI. Keep the root redirect stable until the URL
-// promotion work moves the V2 app out of public/v2/.
+// V2 is the default UI. Express serves the built Vite output at /v2/.
 app.get('/', (_req: Request, res: Response): void => { res.redirect('/v2/'); });
+
+const v2BuildDir = webBuildService.getBuildDir();
+const mobileBuildDir = mobileBuildService.getBuildDir();
+app.use('/v2/src', (_req: Request, res: Response): void => {
+  res.status(404).send('Not found');
+});
+app.use('/v2', express.static(v2BuildDir));
+app.get('/v2/*', (_req: Request, res: Response): void => {
+  res.sendFile(path.join(v2BuildDir, 'index.html'));
+});
+app.use('/mobile', express.static(mobileBuildDir));
 
 app.use(express.static(path.join(__dirname, 'public')));
 
@@ -136,6 +150,28 @@ chatService.initialize().then(async () => {
       `Use pm2 to manage this server: npx pm2 restart <app-name>`
     );
     process.exit(1);
+  }
+
+  const webBuild = await webBuildService.ensureBuilt();
+  if (webBuild.skipped) {
+    console.log(`[web] V2 build preflight skipped (mode=${webBuild.mode})`);
+  } else if (webBuild.didBuild) {
+    console.log(`[web] V2 build completed at ${webBuild.marker?.builtAt || 'unknown time'}`);
+  } else if (webBuild.error) {
+    console.warn(`[web] V2 build failed; serving previous build: ${webBuild.error}`);
+  } else {
+    console.log('[web] V2 build is fresh');
+  }
+
+  const mobileBuild = await mobileBuildService.ensureBuilt();
+  if (mobileBuild.skipped) {
+    console.log(`[mobile] PWA build preflight skipped (mode=${mobileBuild.mode})`);
+  } else if (mobileBuild.didBuild) {
+    console.log(`[mobile] PWA build completed at ${mobileBuild.marker?.builtAt || 'unknown time'}`);
+  } else if (mobileBuild.error) {
+    console.warn(`[mobile] PWA build failed; serving previous build: ${mobileBuild.error}`);
+  } else {
+    console.log('[mobile] PWA build is fresh');
   }
 
   updateService.start();

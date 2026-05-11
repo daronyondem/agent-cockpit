@@ -63,6 +63,20 @@ npm install
 npm start              # Listens on PORT (default 3334)
 ```
 
+The main `/v2/` web UI is built with Vite from `web/AgentCockpitWeb/` into `public/v2-built/`. Normal development and production both use the same one-server architecture: Express serves backend routes and the built web UI. A separate Vite dev server is not required for the normal `agent-cockpit-dev` workflow. After editing V2 frontend source, restart the PM2-managed dev server; startup preflight detects missing or stale main V2 web assets, runs `npm run web:build`, writes `public/v2-built/.agent-cockpit-build.json`, then starts serving `/v2/`. The same startup preflight also detects missing or stale mobile PWA assets, runs `npm run mobile:build`, and writes `public/mobile-built/.agent-cockpit-build.json` before listen. Explicit local checks are available:
+
+```bash
+npm run web:typecheck
+npm run web:build
+npm run web:budget
+npm run mobile:typecheck
+npm run mobile:build
+```
+
+`WEB_BUILD_MODE=skip` disables both main V2 web and mobile startup preflights for tests or unusual deployments that provision assets out of band. If no previous build exists and the build fails, startup fails. If a previous build exists and a rebuild fails, the server logs the error and serves the previous build.
+
+Self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md) and [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md).
+
 **Remote access via ngrok:**
 ```bash
 ngrok http 3334
@@ -81,10 +95,10 @@ npm install
 npm run mobile:dev
 ```
 
-The Vite dev server listens on port `5174` and proxies `/api`, `/auth`, and `/logo-full-no-text.svg` to the PM2-managed Agent Cockpit backend at `http://localhost:3334`. For production/static serving:
+The mobile Vite dev server listens on port `5174` and proxies `/api`, `/auth`, and `/logo-full-no-text.svg` to the PM2-managed Agent Cockpit backend at `http://localhost:3334`. For production/static serving:
 
 ```bash
 npm run mobile:build
 ```
 
-The build writes to `public/mobile/`, including the generated shell, manifest, hashed JS/CSS, SVG icon, PNG manifest icons, and 180x180 `apple-touch-icon.png` for iOS home-screen installs. The existing Express static mount serves these files at `/mobile/` after normal authentication. A phone can open `https://<agent-cockpit-host>/mobile/` and use Add to Home Screen for an installable PWA. No Xcode, Expo Go, EAS, Apple signing, TestFlight, or App Store distribution is required for the supported mobile path.
+The build writes to ignored `public/mobile-built/`, including the generated shell, manifest, hashed JS/CSS, SVG icon, PNG manifest icons, 180x180 `apple-touch-icon.png` for iOS home-screen installs, and `.agent-cockpit-build.json` when produced by startup/self-update preflight. Express explicitly mounts that directory at `/mobile/` after normal authentication, before the general `public/` static mount. A phone can open `https://<agent-cockpit-host>/mobile/` and use Add to Home Screen for an installable PWA. No Xcode, Expo Go, EAS, Apple signing, TestFlight, or App Store distribution is required for the supported mobile path.

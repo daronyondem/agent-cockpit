@@ -13,7 +13,7 @@ See [ADR-0025](adr/0025-use-mobile-pwa-as-sole-mobile-client.md).
 - Provide an installable mobile web client without App Store, TestFlight, EAS, Expo Go, Apple signing, or native sideloading requirements.
 - Reuse the existing `/api/chat` REST and WebSocket contracts.
 - Keep the mobile app source in one browser-native React codebase under `mobile/AgentCockpitPWA`.
-- Serve built assets from the existing Express static surface under `/mobile/`.
+- Serve ignored built assets through the same authenticated Express server under `/mobile/`.
 
 ## Source Layout
 
@@ -21,25 +21,27 @@ See [ADR-0025](adr/0025-use-mobile-pwa-as-sole-mobile-client.md).
 
 - `package.json` — isolated Vite React package. Runtime dependencies include React, Vite, `marked`, and DOMPurify; assistant Markdown is rendered client-side and sanitized before insertion. Scripts:
   - `npm run dev` — Vite development server on port `5174`, with `/api`, `/auth`, and `/logo-full-no-text.svg` proxied to `http://localhost:3334`.
-  - `npm run build` — production build that writes to `../../public/mobile`.
+  - `npm run build` — production build that writes to `../../public/mobile-built`.
   - `npm run preview` — local Vite preview server.
   - `npm run typecheck` — `tsc --noEmit`.
 - Root `package.json` exposes wrappers for the same package:
   - `npm run mobile:dev` — runs the PWA Vite dev server.
-  - `npm run mobile:build` — builds the PWA into `public/mobile/`.
+  - `npm run mobile:build` — builds the PWA into ignored `public/mobile-built/`. Startup and self-update call the same production build through `MobileBuildService` when generated assets are missing or stale.
   - `npm run mobile:typecheck` — type-checks the PWA.
-- `vite.config.ts` — sets `base: "/mobile/"`, installs the React plugin, and emits the production bundle to `public/mobile/`.
+- `vite.config.ts` — sets `base: "/mobile/"`, installs the React plugin, and emits the production bundle to `public/mobile-built/`.
 - `index.html` — PWA HTML shell with viewport-safe mobile metadata, `theme-color`, `apple-mobile-web-app-capable`, manifest link, SVG/PNG favicon links, explicit `apple-touch-icon`, and root mount.
-- `public/manifest.webmanifest`, `public/icon.svg`, `public/icon-192.png`, `public/icon-512.png`, and `public/apple-touch-icon.png` — install metadata and icons copied into `public/mobile/` during build. iOS home-screen installs use the 180x180 PNG `apple-touch-icon`; the manifest also lists PNG icons because Safari is not reliable with SVG-only PWA icons.
+- `public/manifest.webmanifest`, `public/icon.svg`, `public/icon-192.png`, `public/icon-512.png`, and `public/apple-touch-icon.png` — tracked source install metadata and icons copied into `public/mobile-built/` during build. iOS home-screen installs use the 180x180 PNG `apple-touch-icon`; the manifest also lists PNG icons because Safari is not reliable with SVG-only PWA icons.
 - `src/main.tsx` — React entrypoint.
 - `src/App.tsx` — mobile UI shell and state machine. It renders conversation list, chat transcript, composer, queue stack/editor, run settings, conversation actions, sessions, workspace files, file preview/share, attachment tray, interaction cards, and stream controls.
 - `src/api.ts` — same-origin TypeScript API client for current-user, settings, backends, profile metadata, conversations, streams, queue, sessions, attachments/OCR, file delivery, workspace explorer, and WebSocket URLs. State-changing requests lazily fetch CSRF tokens and send `x-csrf-token`. Multipart uploads use `XMLHttpRequest` for progress and cancel.
 - `src/types.ts` — TypeScript mirrors for the PWA data models.
 - `src/styles.css` — mobile-first CSS for the PWA shell.
 
-**Served files:** `public/mobile/`
+**Served files:** `public/mobile-built/`
 
-`npm run build` writes `index.html`, `manifest.webmanifest`, SVG/PNG icon assets, and hashed CSS/JS assets here. These files are served by the existing `express.static(public)` mount after `requireAuth`, so unauthenticated visitors are redirected to the normal web login before the PWA shell is served.
+`npm run build` writes `index.html`, `manifest.webmanifest`, SVG/PNG icon assets, and hashed CSS/JS assets here. These files are served by the explicit `/mobile` `express.static(public/mobile-built)` mount after `requireAuth`, so unauthenticated visitors are redirected to the normal web login before the PWA shell is served. Generated output is ignored by git; tracked mobile install metadata remains in `mobile/AgentCockpitPWA/public/`.
+
+`public/mobile/` contains only a hidden ADR placeholder so historical decision records can keep validating affected paths. It is not a generated output directory and does not contain served PWA assets.
 
 ## Runtime Architecture
 
@@ -133,3 +135,5 @@ The generated app is served from:
 ```text
 /mobile/
 ```
+
+When `WEB_BUILD_MODE=auto`, `MobileBuildService` verifies `public/mobile-built/.agent-cockpit-build.json` at server startup and rebuilds from `mobile/AgentCockpitPWA/` when the source or lockfiles are stale. The self-update path also installs mobile dependencies and runs this build before restarting PM2.

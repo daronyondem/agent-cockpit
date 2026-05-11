@@ -1,4 +1,4 @@
-const projection = require('../public/v2/src/usageProjection.js');
+const projection = require('../web/AgentCockpitWeb/src/usageProjection.ts');
 
 describe('usage quota projection helpers', () => {
   const fiveHours = 5 * projection.HOUR_MS;

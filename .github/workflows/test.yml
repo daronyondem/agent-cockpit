@@ -14,5 +14,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npm --prefix mobile/AgentCockpitPWA ci
       - run: npm run typecheck
+      - run: npm run web:typecheck
+      - run: npm run web:build
+      - run: npm run web:budget
+      - run: npm run mobile:typecheck
+      - run: npm run mobile:build
       - run: npm test
+      - run: npm run adr:lint

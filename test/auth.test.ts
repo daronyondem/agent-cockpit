@@ -139,6 +139,7 @@ const baseConfig: AppConfig = {
   BASE_PATH: '/tmp',
   CODEX_APPROVAL_POLICY: 'on-request',
   CODEX_SANDBOX_MODE: 'workspace-write',
+  WEB_BUILD_MODE: 'skip',
 };
 
 function buildAuthApp(configOverrides: Partial<AppConfig> = {}): express.Express {

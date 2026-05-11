@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Agent Cockpit</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet" />
+<link href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500,600,700&display=swap" rel="stylesheet" />
+<link id="hljs-theme" rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" />
+<style>
+  html, body, #root { height: 100%; margin: 0; }
+  body { background: var(--bg); }
+  #root { display: block; }
+</style>
+</head>
+<body>
+<div id="root" data-direction="editorial" data-theme="light" data-density="default" data-radius="moderate"></div>
+
+<script>
+  (function(){
+    try {
+      var saved = localStorage.getItem('ac:v2:theme') || 'system';
+      var resolved = saved;
+      if (saved === 'system') {
+        resolved = (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      }
+      var root = document.getElementById('root');
+      if (root) root.setAttribute('data-theme', resolved);
+      var hljsLink = document.getElementById('hljs-theme');
+      if (hljsLink) {
+        var style = resolved === 'dark' ? 'github-dark' : 'github';
+        hljsLink.href = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/' + style + '.min.css';
+      }
+    } catch (e) {}
+  })();
+
+  (function(){
+    try {
+      var w = Number(localStorage.getItem('ac:v2:sb-width'));
+      if (Number.isFinite(w) && w >= 200 && w <= 600) {
+        document.documentElement.style.setProperty('--cockpit-sb-w', w + 'px');
+      }
+    } catch (e) {}
+  })();
+</script>
+<script type="module" src="/src/main.jsx"></script>
+</body>
+</html>

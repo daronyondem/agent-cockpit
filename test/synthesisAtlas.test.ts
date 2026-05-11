@@ -2,26 +2,17 @@
  * @jest-environment jsdom
  */
 
-import fs from 'fs';
-import path from 'path';
-
 function loadSynthesisAtlas() {
-  const src = fs.readFileSync(path.join(__dirname, '../public/v2/src/synthesisAtlas.js'), 'utf8');
-  new Function(src).call(window);
-  return (window as any).SynthesisAtlas._test;
+  jest.resetModules();
+  return require('../web/AgentCockpitWeb/src/synthesisAtlas.js')._test;
 }
 
 function buildAtlas() {
-  const src = fs.readFileSync(path.join(__dirname, '../public/v2/src/synthesisAtlas.js'), 'utf8');
-  new Function(src).call(window);
-  return (window as any).SynthesisAtlas.buildAtlas;
+  jest.resetModules();
+  return require('../web/AgentCockpitWeb/src/synthesisAtlas.js').buildAtlas;
 }
 
 describe('SynthesisAtlas helpers', () => {
-  beforeEach(() => {
-    delete (window as any).SynthesisAtlas;
-  });
-
   test('buildModel filters invalid connections and de-duplicates undirected pairs', () => {
     const helpers = loadSynthesisAtlas();
     const model = helpers.buildModel(
@@ -108,7 +99,6 @@ describe('SynthesisAtlas helpers', () => {
     ];
 
     const first = buildAtlas()(topics, connections);
-    delete (window as any).SynthesisAtlas;
     const second = buildAtlas()(topics, connections);
 
     expect(first.clusters.map((cluster: any) => ({

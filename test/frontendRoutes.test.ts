@@ -2,6 +2,7 @@ import express from 'express';
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
+import { execFileSync } from 'child_process';
 
 const ROOT = path.resolve(__dirname, '..');
 
@@ -38,6 +39,22 @@ async function withServer(app: express.Express, fn: (server: http.Server) => Pro
   } finally {
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
+}
+
+function ensureV2BuildForStaticRouteTest(): string {
+  const buildDir = path.join(ROOT, 'public', 'v2-built');
+  if (!fs.existsSync(path.join(buildDir, 'index.html'))) {
+    execFileSync('npm', ['run', 'web:build'], { cwd: ROOT, stdio: 'pipe' });
+  }
+  return buildDir;
+}
+
+function ensureMobileBuildForStaticRouteTest(): string {
+  const buildDir = path.join(ROOT, 'public', 'mobile-built');
+  if (!fs.existsSync(path.join(buildDir, 'index.html'))) {
+    execFileSync('npm', ['run', 'mobile:build'], { cwd: ROOT, stdio: 'pipe' });
+  }
+  return buildDir;
 }
 
 describe('frontend routes', () => {
@@ -99,23 +116,23 @@ describe('frontend routes', () => {
   });
 
   test('memory update notifications open the focused memory-update modal first', () => {
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8');
-    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/workspaceSettings.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(shellSrc).toContain('MemoryUpdateModal');
     expect(shellSrc).toContain('onOpenMemoryUpdate(conv.workspaceHash, wsLabel, entry.message.memoryUpdate || null)');
     expect(shellSrc).toContain('WorkspaceSettingsPage');
     expect(workspaceSettingsSrc).toContain('function MemoryUpdateModal');
-    expect(workspaceSettingsSrc).toContain('window.MemoryUpdateModal = MemoryUpdateModal');
+    expect(workspaceSettingsSrc).toContain('export function MemoryUpdateModal');
     expect(workspaceSettingsSrc).toContain('View all memory items');
     expect(cssSrc).toContain('.mu-panel');
   });
 
   test('workspace memory panel exposes search and lifecycle filters', () => {
-    const apiSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/api.js'), 'utf8');
-    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/workspaceSettings.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(apiSrc).toContain('searchMemory: (hash, opts) =>');
     expect(apiSrc).toContain('proposeMemoryConsolidation: (hash) =>');
@@ -151,12 +168,12 @@ describe('frontend routes', () => {
   });
 
   test('context map settings expose global and workspace controls', () => {
-    const apiSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/api.js'), 'utf8');
-    const settingsSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/settingsScreen.jsx'), 'utf8');
-    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/workspaceSettings.jsx'), 'utf8');
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8');
-    const streamStoreSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/streamStore.js'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const streamStoreSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(apiSrc).toContain('getContextMapSettings: (hash) =>');
     expect(apiSrc).toContain('getContextMapReview: (hash, status) =>');
@@ -185,7 +202,7 @@ describe('frontend routes', () => {
     expect(settingsSrc).not.toContain('CONTEXT_MAP_SOURCE_OPTIONS');
     expect(workspaceSettingsSrc).toContain("{ id: 'contextMap',   label: 'Context Map' }");
     expect(workspaceSettingsSrc).toContain('function WorkspaceSettingsPage');
-    expect(workspaceSettingsSrc).toContain('window.WorkspaceSettingsPage = WorkspaceSettingsPage');
+    expect(workspaceSettingsSrc).toContain('export function WorkspaceSettingsPage');
     expect(workspaceSettingsSrc).toContain('className="settings-shell workspace-settings-shell"');
     expect(workspaceSettingsSrc).toContain('className="settings-tabs"');
     expect(workspaceSettingsSrc).toContain('className="settings-form settings-form-wide ws-form"');
@@ -319,17 +336,16 @@ describe('frontend routes', () => {
   });
 
   test('Memory Review has a dedicated page and composer notification action', () => {
-    const indexSrc = fs.readFileSync(path.join(ROOT, 'public/v2/index.html'), 'utf8');
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8');
-    const reviewSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/memoryReview.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const reviewSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/memoryReview.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
-    expect(indexSrc).toContain('src/screens/memoryReview.jsx');
+    expect(shellSrc).toContain("./screens/memoryReview.jsx");
     expect(shellSrc).toContain('MemoryReviewPage');
     expect(shellSrc).toContain('ComposerMemoryReviewIcon');
     expect(shellSrc).toContain('onOpenMemoryReview(conv.workspaceHash');
     expect(shellSrc).not.toContain('Run now');
-    expect(reviewSrc).toContain('window.MemoryReviewPage = MemoryReviewPage');
+    expect(reviewSrc).toContain('export function MemoryReviewPage');
     expect(reviewSrc).toContain('MemoryReviewInlineProgress');
     expect(reviewSrc).toContain('MemoryReviewButtonProgress');
     expect(reviewSrc).toContain('buildMemoryReviewLineDiff');
@@ -358,8 +374,60 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.state-memory-review');
   });
 
+  test('V2 frontend uses module imports instead of app-local window globals', () => {
+    const srcRoot = path.join(ROOT, 'web/AgentCockpitWeb/src');
+    const mainSrc = fs.readFileSync(path.join(srcRoot, 'main.jsx'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(srcRoot, 'shell.jsx'), 'utf8');
+    const viteConfig = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/vite.config.ts'), 'utf8');
+    const files = fs.readdirSync(srcRoot, { recursive: true })
+      .filter((entry) => /\.(js|jsx|ts|tsx)$/.test(String(entry)))
+      .map((entry) => path.join(srcRoot, String(entry)));
+    const appGlobalAssignment = /window\.(React|ReactDOM|AgentApi|StreamStore|PlanUsageStore|KiroPlanUsageStore|CodexPlanUsageStore|CliUpdateStore|UsageProjection|SynthesisAtlas|getChipRenderer|Ico|Sidebar|KbBrowser|FilesBrowser|SettingsScreen|MemoryReviewPage|WorkspaceSettingsPage|MemoryUpdateModal|FolderPicker|SessionsModal|UpdateModal|RestartOverlay|Dialog|DialogProvider|useDialog|ToastProvider|useToasts|Tip|useTip|FileLinkUtils|TabIndicator|marked|DOMPurify|hljs)\s*=/;
+
+    for (const file of files) {
+      expect(fs.readFileSync(file, 'utf8')).not.toMatch(appGlobalAssignment);
+    }
+    expect(mainSrc).toContain("import './shell.jsx'");
+    expect(mainSrc).not.toContain('await import(');
+    expect(shellSrc).toContain("import { Tip } from './tooltip.jsx'");
+    expect(shellSrc).toContain("React.lazy(() => import('./screens/kbBrowser.jsx')");
+    expect(shellSrc).toContain("React.lazy(() => import('./workspaceSettings.jsx')");
+    expect(fs.readFileSync(path.join(srcRoot, 'screens/kbBrowser.jsx'), 'utf8')).toContain("import { Tip } from '../tooltip.jsx'");
+    expect(viteConfig).toContain('codeSplitting');
+    expect(viteConfig).toContain('react-vendor');
+    expect(viteConfig).toContain('markdown-vendor');
+  });
+
+  test('retired public/v2 tree keeps only ADR placeholder paths', () => {
+    const publicV2Files: string[] = [];
+    const visit = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const abs = path.join(dir, entry.name);
+        if (entry.isDirectory()) visit(abs);
+        else if (entry.isFile()) publicV2Files.push(path.relative(ROOT, abs).split(path.sep).join('/'));
+      }
+    };
+    visit(path.join(ROOT, 'public/v2'));
+
+    expect(publicV2Files.sort()).toEqual([
+      'public/v2/README.md',
+      'public/v2/index.html',
+      'public/v2/src/api.js',
+      'public/v2/src/app.css',
+      'public/v2/src/cliUpdateStore.js',
+      'public/v2/src/screens/kbBrowser.jsx',
+      'public/v2/src/screens/memoryReview.jsx',
+      'public/v2/src/screens/settingsScreen.jsx',
+      'public/v2/src/shell.jsx',
+      'public/v2/src/streamStore.js',
+      'public/v2/src/synthesisAtlas.js',
+      'public/v2/src/workspaceSettings.jsx',
+    ]);
+    expect(fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8')).toContain('Path retained for historical ADR affects validation');
+  });
+
   test('kb raw tab explains structure backfill and exposes bulk redigest controls', () => {
-    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/kbBrowser.jsx'), 'utf8');
+    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
 
     expect(kbBrowserSrc).toContain('function KbBackfillStructureTip');
     expect(kbBrowserSrc).toContain('Builds missing document-shape records');
@@ -370,8 +438,8 @@ describe('frontend routes', () => {
   });
 
   test('kb pipeline marks queued digest work as waiting', () => {
-    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/kbBrowser.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(kbBrowserSrc).toContain('const digestQueueWaiting = awaitingDigestCount > 0 && !digestProgress && digestingCount === 0');
     expect(kbBrowserSrc).toContain("digestQueueWaiting ? 'wait'");
@@ -382,7 +450,7 @@ describe('frontend routes', () => {
   });
 
   test('kb pipeline marks queued dream work as waiting', () => {
-    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/kbBrowser.jsx'), 'utf8');
+    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
 
     expect(kbBrowserSrc).toContain('const dreamQueueWaiting = needsSynthesisCount > 0 && !dreamActive');
     expect(kbBrowserSrc).toContain("dreamQueueWaiting ? 'wait'");
@@ -391,8 +459,8 @@ describe('frontend routes', () => {
   });
 
   test('kb entries and reflections use side readers instead of tab popups', () => {
-    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/kbBrowser.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(kbBrowserSrc).toContain('function KbEntryReader');
     expect(kbBrowserSrc).toContain('function KbReflectionReader');
@@ -405,7 +473,7 @@ describe('frontend routes', () => {
   });
 
   test('kb synthesis tab does not expose the removed atlas mode', () => {
-    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/kbBrowser.jsx'), 'utf8');
+    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
 
     expect(kbBrowserSrc).not.toContain('Atlas</button>');
     expect(kbBrowserSrc).not.toContain('kb-synth-view');
@@ -415,8 +483,8 @@ describe('frontend routes', () => {
   });
 
   test('kb settings uses an internal left-tab layout for settings sections', () => {
-    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/screens/kbBrowser.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(kbBrowserSrc).toContain("const [settingsSection, setSettingsSection] = React.useState('auto-dream')");
     expect(kbBrowserSrc).toContain('className="kb-settings-rail" role="tablist"');
@@ -430,10 +498,10 @@ describe('frontend routes', () => {
   });
 
   test('desktop sidebar uses a workspace filter instead of workspace grouping', () => {
-    const primitivesSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/primitives.jsx'), 'utf8');
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8');
-    const folderPickerSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/folderPicker.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/app.css'), 'utf8');
+    const primitivesSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/primitives.jsx'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const folderPickerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/folderPicker.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(primitivesSrc).toContain('const ALL_WORKSPACES');
     expect(primitivesSrc).toContain('All Workspaces');
@@ -443,19 +511,30 @@ describe('frontend routes', () => {
     expect(primitivesSrc).toContain('active conversation');
     expect(primitivesSrc).toContain('newConversationInitialPath');
     expect(primitivesSrc).toContain('onNewConversation(newConversationInitialPath)');
+    expect(primitivesSrc).toContain('className="sb-brand"');
     expect(shellSrc).toContain('folderPickerInitialPath');
     expect(shellSrc).toContain('initialPath={folderPickerInitialPath}');
     expect(folderPickerSrc).toContain("function FolderPicker({ open, initialPath = ''");
     expect(folderPickerSrc).toContain("load(initialPath || '')");
     expect(primitivesSrc).not.toContain('function groupByWorkspace');
     expect(cssSrc).toContain('.sb-workspace-filter');
+    expect(cssSrc).toContain('justify-content: center');
+    expect(cssSrc).toContain('.sb-brand');
     expect(cssSrc).toContain('.sb-row .workspace');
     expect(cssSrc).not.toContain('.sb-ws{');
   });
 
   test('static frontend surface serves V2 and leaves removed assets unavailable', async () => {
+    const v2BuildDir = ensureV2BuildForStaticRouteTest();
+    const mobileBuildDir = ensureMobileBuildForStaticRouteTest();
     const app = express();
     app.get('/', (_req, res) => { res.redirect('/v2/'); });
+    app.use('/v2/src', (_req, res) => { res.status(404).send('Not found'); });
+    app.use('/v2', express.static(v2BuildDir));
+    app.get('/v2/*', (_req, res) => {
+      res.sendFile(path.join(v2BuildDir, 'index.html'));
+    });
+    app.use('/mobile', express.static(mobileBuildDir));
     app.use(express.static(path.join(ROOT, 'public')));
 
     await withServer(app, async (server) => {
@@ -467,25 +546,18 @@ describe('frontend routes', () => {
       expect(v2.status).toBe(200);
       expect(v2.headers['content-type']).toMatch(/text\/html/);
       expect(v2.body).toContain('<div id="root"');
-      expect(v2.body).toContain('src/app.css?v=168');
-      expect(v2.body).toContain('src/api.js?v=137');
-      expect(v2.body).toContain('src/streamStore.js?v=121');
-      expect(v2.body).toContain('src/usageProjection.js?v=116');
-      expect(v2.body).toContain('src/cliUpdateStore.js?v=116');
-      expect(v2.body).toContain('src/synthesisAtlas.js?v=117');
-      expect(v2.body).toContain('src/screens/kbBrowser.jsx?v=142');
-      expect(v2.body).toContain('src/screens/settingsScreen.jsx?v=128');
-      expect(v2.body).toContain('src/screens/memoryReview.jsx?v=119');
-      expect(v2.body).toContain('src/workspaceSettings.jsx?v=152');
-      expect(v2.body).toContain('src/primitives.jsx?v=119');
-      expect(v2.body).toContain('src/folderPicker.jsx?v=117');
-      expect(v2.body).toContain('src/shell.jsx?v=131');
-      expect(v2.body.indexOf('src/usageProjection.js?v=116')).toBeLessThan(
-        v2.body.indexOf('src/chip-renderers.jsx?v=117'),
-      );
-      expect(v2.body.indexOf('src/synthesisAtlas.js?v=117')).toBeLessThan(
-        v2.body.indexOf('src/screens/kbBrowser.jsx?v=142'),
-      );
+      expect(v2.body).toContain('type="module"');
+      expect(v2.body).toMatch(/\/v2\/assets\/index-[A-Za-z0-9_-]+\.js/);
+      expect(v2.body).toMatch(/\/v2\/assets\/index-[A-Za-z0-9_-]+\.css/);
+
+      const v2AssetMatch = v2.body.match(/\/v2\/assets\/index-[A-Za-z0-9_-]+\.js/);
+      expect(v2AssetMatch).not.toBeNull();
+      const v2Asset = await makeRequest(server, v2AssetMatch![0]);
+      expect(v2Asset.status).toBe(200);
+      expect(v2Asset.headers['content-type']).toMatch(/javascript/);
+
+      const rawV2Source = await makeRequest(server, '/v2/src/shell.jsx');
+      expect(rawV2Source.status).toBe(404);
 
       const mobile = await makeRequest(server, '/mobile/');
       expect(mobile.status).toBe(200);
@@ -508,7 +580,15 @@ describe('frontend routes', () => {
       expect(appleTouchIcon.status).toBe(200);
       expect(appleTouchIcon.headers['content-type']).toMatch(/image\/png/);
 
-      for (const removedPath of ['/legacy/', '/index.html', '/styles.css', '/js/main.js', '/v2/deck.html']) {
+      const mobileAdrPlaceholder = await makeRequest(server, '/mobile/.adr-placeholder');
+      expect(mobileAdrPlaceholder.status).toBe(404);
+
+      const v2Fallback = await makeRequest(server, '/v2/deck.html');
+      expect(v2Fallback.status).toBe(200);
+      expect(v2Fallback.headers['content-type']).toMatch(/text\/html/);
+      expect(v2Fallback.body).toContain('<div id="root"');
+
+      for (const removedPath of ['/legacy/', '/index.html', '/styles.css', '/js/main.js']) {
         const res = await makeRequest(server, removedPath);
         expect(res.status).toBe(404);
       }

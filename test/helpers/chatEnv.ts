@@ -266,6 +266,13 @@ async function waitForActiveStreamsToDrain(activeStreams: Map<string, ActiveStre
   }
 }
 
+async function waitForStreamJobRegistryIdle(streamJobs: StreamJobRegistry): Promise<void> {
+  // Route handlers may send a response before their final durable-job cleanup
+  // write has completed. Reading through the registry serializes behind any
+  // in-flight mutation so tmpDir removal cannot race that late cleanup.
+  await streamJobs.listActive();
+}
+
 export async function destroyChatRouterEnv(env: ChatRouterEnv): Promise<void> {
   await waitForActiveStreamsToDrain(env.activeStreams);
   await env.sessionFinalizers.waitForIdle();
@@ -278,5 +285,6 @@ export async function destroyChatRouterEnv(env: ChatRouterEnv): Promise<void> {
     });
   });
   await new Promise((resolveImmediate) => setImmediate(resolveImmediate));
+  await waitForStreamJobRegistryIdle(env.streamJobs);
   await removeTmpDirWithRetry(env.tmpDir);
 }

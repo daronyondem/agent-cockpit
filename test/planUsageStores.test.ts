@@ -2,18 +2,8 @@
  * @jest-environment jsdom
  */
 
-import fs from 'fs';
-import path from 'path';
-
-function loadScript(relPath: string) {
-  const src = fs.readFileSync(path.join(__dirname, '..', relPath), 'utf8');
-  new Function(src).call(window);
-}
-
 describe('profile-aware plan usage stores', () => {
   beforeEach(() => {
-    delete (window as any).CodexPlanUsageStore;
-    delete (window as any).PlanUsageStore;
     (window as any).AgentApi = {
       getCodexPlanUsage: jest.fn(async (cliProfileId?: string | null) => ({
         profile: cliProfileId || 'default',
@@ -23,6 +13,16 @@ describe('profile-aware plan usage stores', () => {
       })),
     };
   });
+
+  function loadStore<T>(relPath: string, exportName: string): T {
+    const api = (window as any).AgentApi;
+    jest.resetModules();
+    jest.doMock('../web/AgentCockpitWeb/src/api.js', () => ({
+      AgentApi: api,
+      default: api,
+    }));
+    return require(relPath)[exportName];
+  }
 
   async function expectStoreIsProfileKeyed(
     store: any,
@@ -48,17 +48,17 @@ describe('profile-aware plan usage stores', () => {
   }
 
   test('Claude plan usage cache is keyed by CLI profile id', async () => {
-    loadScript('public/v2/src/planUsageStore.js');
+    const store = loadStore<any>('../web/AgentCockpitWeb/src/planUsageStore.js', 'PlanUsageStore');
     await expectStoreIsProfileKeyed(
-      (window as any).PlanUsageStore,
+      store,
       (window as any).AgentApi.getClaudePlanUsage,
     );
   });
 
   test('Codex plan usage cache is keyed by CLI profile id', async () => {
-    loadScript('public/v2/src/codexPlanUsageStore.js');
+    const store = loadStore<any>('../web/AgentCockpitWeb/src/codexPlanUsageStore.js', 'CodexPlanUsageStore');
     await expectStoreIsProfileKeyed(
-      (window as any).CodexPlanUsageStore,
+      store,
       (window as any).AgentApi.getCodexPlanUsage,
     );
   });
