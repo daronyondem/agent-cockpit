@@ -49,7 +49,7 @@ The integrated memory system snapshots every change to a CLI's memory file. Cros
 
 The KB is the longest-lived part of Agent Cockpit. While conversations come and go, the KB accumulates everything you want your AI to know about — in your files, on your disk, queryable by any vendor you point at it.
 
-Upload PDFs, Word documents, PowerPoints, images, spreadsheets, and text files into a per-workspace knowledge base. Agent Cockpit converts and analyzes each file, extracts structured entries, organizes them into topics, and discovers connections between ideas — surfaced as an interactive 3D knowledge graph that your AI agents can search and reason over during conversations.
+Upload PDFs, Word documents, PowerPoints, images, CSV/TSV files, Markdown, and text-like files into a per-workspace knowledge base. Agent Cockpit converts and analyzes each file, extracts structured entries, organizes them into synthesized topics, discovers connections between ideas, and surfaces topic/reflection readers that your AI agents can search and reason over during conversations.
 
 Use it for code documentation. Use it for board prep. Use it for personal reading notes. Use it for whatever you want to be able to ask an AI about later — and have the answer grounded in *your* sources.
 
@@ -83,7 +83,7 @@ Agent Cockpit runs on the same machine as your CLI tools. When you send a messag
 This means:
 - **The CLI and the web interface must run on the same machine.** Agent Cockpit spawns local processes, not remote API calls.
 - **Expose the server for remote access.** Use a tunnel like [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) to chat with your coding agents from any browser, anywhere, while they operate on your local files and environment.
-- **First-party owner auth protects access.** Create one local owner account per backend; exposed first-run setup can be guarded with `AUTH_SETUP_TOKEN`.
+- **First-party owner auth protects access.** Create one local owner account per Agent Cockpit server; exposed first-run setup can be guarded with `AUTH_SETUP_TOKEN`.
 
 ## Also included
 
@@ -107,7 +107,7 @@ Beyond the core, Agent Cockpit also ships with:
 - **Self-update** — check for updates and apply them from the UI with one click
 - **Pluggable backend system** — extensible adapter architecture for adding new CLI backends
 - **Graceful shutdown** — clean process cleanup on SIGTERM/SIGINT
-- **File-based storage** — conversations, sessions, settings, memory, and knowledge-base entries stored as JSON/Markdown on disk (no database)
+- **Local open storage** — conversations, sessions, settings, memory, and knowledge-base artifacts stay on disk as JSON/Markdown plus embedded SQLite/PGLite indexes where structured search requires them (no hosted database)
 
 ## Prerequisites
 
@@ -255,7 +255,11 @@ agent-cockpit/
     │   │   ├── index.json      # Conversations + session metadata
     │   │   ├── {convId}/       # Session files per conversation
     │   │   ├── memory/         # Per-workspace memory snapshots + notes
-    │   │   └── knowledge/      # Per-workspace KB raw/converted/entries/synthesis
+    │   │   ├── knowledge/      # Per-workspace KB raw/converted/entries/synthesis
+    │   │   ├── context-map/    # Per-workspace graph state and candidates
+    │   │   └── session-finalizers.json # Durable reset/archive background jobs
+    │   ├── stream-jobs.json    # Durable active-stream supervision registry
+    │   ├── usage-ledger.json   # Daily backend/model usage totals
     │   ├── artifacts/          # Per-conversation uploaded files
     │   └── settings.json       # User settings
     └── sessions/               # Express session files
