@@ -173,6 +173,7 @@ npm start
 | `CODEX_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing the Codex `app-server` process |
 | `CODEX_APPROVAL_POLICY` | No | `on-request` | Codex approval policy for interactive threads (`untrusted`, `on-failure`, `on-request`, `never`) |
 | `CODEX_SANDBOX_MODE` | No | `workspace-write` | Codex sandbox mode for interactive threads (`read-only`, `workspace-write`, `danger-full-access`). Use `CODEX_APPROVAL_POLICY=never` with `CODEX_SANDBOX_MODE=danger-full-access` to run Codex with full elevated permissions. |
+| `LOG_LEVEL` | No | `info` | Server log threshold: `error`, `warn`, `info`, or `debug`. Structured logger metadata redacts secret-like keys before writing to stdout/stderr. |
 
 ## Authentication Setup
 
@@ -223,13 +224,16 @@ agent-cockpit/
 ├── server.ts                 # Express server entry point (TypeScript, run via tsx)
 ├── src/
 │   ├── ws.ts                 # WebSocket server (streaming, reconnection, state recovery)
+│   ├── contracts/            # Shared API request/response contracts and validators
 │   ├── types/index.ts        # Shared type definitions
 │   ├── config/index.ts       # Environment configuration
 │   ├── middleware/
 │   │   ├── auth.ts           # First-party owner auth, legacy OAuth, login routes
 │   │   ├── csrf.ts           # CSRF token generation and validation
 │   │   └── security.ts       # Helmet CSP configuration
-│   ├── routes/chat.ts        # All chat API routes
+│   ├── routes/chat.ts        # Chat API composition root
+│   ├── routes/chat/          # Focused chat route modules and shared route utilities
+│   ├── utils/logger.ts       # Structured logger with level filtering and metadata redaction
 │   └── services/
 │       ├── localAuthStore.ts # First-party auth state, passkeys, recovery codes
 │       ├── backends/
@@ -243,6 +247,7 @@ agent-cockpit/
 │       ├── memoryMcp/        # Memory MCP server (notes from CLI tools)
 │       ├── kbSearchMcp/      # Knowledge-base search MCP server
 │       ├── chatService.ts    # Conversation CRUD, messages, sessions, workspaces, KB/memory state
+│       ├── chat/             # Focused ChatService helper modules
 │       ├── memoryWatcher.ts  # Watches CLI memory files for snapshot capture
 │       ├── settingsService.ts # User settings persistence
 │       ├── updateService.ts  # Self-update: version checking, git pull, builds, PM2 restart

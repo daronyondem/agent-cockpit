@@ -20,6 +20,18 @@ agent-cockpit/
 │   ├── spec-deployment.md             # Markdown export, known limitations, deployment
 │   └── spec-testing.md                # Test suite, test files, CI workflows
 ├── src/
+│   ├── contracts/
+│   │   ├── chat.ts                    # Chat API request/response contracts and runtime validators
+│   │   ├── conversations.ts           # Browser-safe conversation mutation contracts
+│   │   ├── streams.ts                 # Browser-safe message/input mutation contracts
+│   │   ├── explorer.ts                # Workspace file explorer mutation contracts
+│   │   ├── uploads.ts                 # Attachment/OCR mutation contracts
+│   │   ├── memory.ts                  # Workspace memory enablement/review mutation contracts
+│   │   ├── contextMap.ts              # Context Map settings/candidate mutation contracts
+│   │   ├── knowledgeBase.ts           # KB enablement/folder/glossary/embedding mutation contracts
+│   │   ├── settings.ts                # Global settings mutation contract helpers
+│   │   ├── serviceTier.ts             # Browser-safe service-tier input normalization
+│   │   └── validation.ts              # Shared object/string/boolean/number/array validation helpers
 │   ├── types/
 │   │   └── index.ts                    # Shared type definitions (models, events, adapters)
 │   ├── config/index.ts                 # Loads env vars with defaults
@@ -28,7 +40,12 @@ agent-cockpit/
 │   │   ├── csrf.ts                     # CSRF token generation and validation
 │   │   └── security.ts                 # Helmet CSP configuration
 │   ├── routes/
-│   │   └── chat.ts                     # All chat API routes
+│   │   ├── chat.ts                     # Chat API composition root and stream orchestration
+│   │   └── chat/                       # Focused chat route modules: status, CLI profile, conversation, stream, goal, upload, filesystem, instructions, explorer, memory, Context Map, KB, shared helpers
+│   ├── utils/
+│   │   ├── atomicWrite.ts              # Atomic JSON/file write helper
+│   │   ├── keyedMutex.ts               # FIFO per-key async mutex
+│   │   └── logger.ts                   # Structured logger with level filtering, redaction, and cycle-safe metadata serialization
 │   └── services/
 │       ├── backends/
 │       │   ├── base.ts                 # BaseBackendAdapter interface
@@ -55,6 +72,10 @@ agent-cockpit/
 │       │       └── passthrough.ts      # Text (md/txt/json/...) + hybrid image passthrough (per-image AI description, SVG bypass)
 │       ├── cliProfiles.ts              # CLI profile helpers: server-configured profile IDs/defaults and runtime resolver
 │       ├── cliUpdateService.ts         # In-memory local CLI version checks and supported CLI update commands
+│       ├── chat/
+│       │   ├── attachments.ts          # Attachment/artifact metadata helpers used by ChatService
+│       │   ├── messageQueueStore.ts    # Private ChatService queue store + legacy queue normalization
+│       │   └── workspaceInstructionStore.ts # Private ChatService workspace instruction compatibility/pointer store
 │       ├── chatService.ts              # Conversation CRUD, messages, sessions
 │       ├── settingsService.ts          # Settings I/O: read, write, legacy migration
 │       └── updateService.ts            # Self-update: version checking, git pull, PM2 restart
@@ -62,10 +83,17 @@ agent-cockpit/
 │   ├── favicon.svg
 │   ├── logo-*.svg                      # Brand assets used by login, sidebar, and assistant avatars
 │   ├── icons/*.svg                     # Source/reference icon assets
-│   └── v2/
-│       ├── index.html                  # V2 app entry
-│       └── src/                        # V2 React/Babel prototype sources and styles
+│   ├── v2/                             # Retired Browser-Babel placeholders kept for ADR path stability
+│   ├── v2-built/                       # Ignored generated Vite output served at `/v2/`
+│   └── mobile-built/                   # Ignored generated mobile PWA output served at `/mobile/`
+├── web/
+│   └── AgentCockpitWeb/
+│       ├── index.html                  # Vite V2 app entry
+│       └── src/
 │           ├── api.js                  # CSRF-aware REST/WebSocket client helpers
+│           ├── chat/attachments.jsx    # Composer attachment tray/chip subtree
+│           ├── chat/messageParsing.ts  # Pure chat-message marker parsing helpers
+│           ├── chat/queue.jsx          # Queued-message stack/editor subtree
 │           ├── cliUpdateStore.js       # Web-only cached CLI update status/action store
 │           ├── streamStore.js          # Per-conversation streaming, queue, draft, and WebSocket state
 │           ├── shell.jsx               # Root app shell, sidebar wiring, chat surface
@@ -762,7 +790,8 @@ interface AttachmentMeta {
 ```
 
 `kind` is inferred from the file's extension via `attachmentFromPath()` in
-`chatService.ts` (mirrored on the client by `StreamStore.attachmentKindFromPath`).
+`src/services/chat/attachments.ts` (re-exported by `chatService.ts` for
+legacy imports and mirrored on the client by `StreamStore.attachmentKindFromPath`).
 Legacy entries migrated from the pre-typed `[Uploaded files: …]` tag carry
 only `name`, `path`, and `kind` — `size` and `meta` are unavailable for those.
 
@@ -803,9 +832,13 @@ interface QueuedMessage {
 When the queue drains, the client composes the outgoing wire content by
 appending `[Uploaded files: <abs paths>]` back onto `content` — Claude still
 reads files from disk; the typed attachments are a UI concern only.
+Queue PUT validation requires every attachment to include at least string
+`name` and non-empty string `path`; `kind`, `size`, and `meta` are tolerated
+metadata but are not required at that boundary.
 
-**Legacy migration:** `ChatService.normalizeMessageQueue()` runs on every
-read of `messageQueue` and handles three cases:
+**Legacy migration:** `MessageQueueStore` runs `normalizeMessageQueue()` on
+every read of `messageQueue` behind the `ChatService` facade and handles three
+cases:
 - `string` entries → parsed via `parseUploadedFilesTag()` so any trailing
   `[Uploaded files: …]` tag becomes typed `AttachmentMeta[]` (with
   `kind` inferred from extension; `size`/`meta` are absent).
@@ -1571,7 +1604,7 @@ interface BackendRuntimeEvent {
 | Folder segment max | 128 chars | db.ts | Per-segment length limit |
 | Slug max | 80 chars | digest.ts | Entry slug max length |
 | Tag max | 40 chars | digest.ts | Tag max length |
-| Upload size limit | 1 GB | chat.ts (multer) | Per-file upload cap |
+| Upload size limit | 1 GB | kbRoutes.ts (multer) | Per-file KB raw upload cap |
 | God node entry threshold | max(avg × 3, 10) | db.ts | Entries to flag as god node |
 | God node connection threshold | max(avg × 3, 3) | db.ts | Connections to flag as god node |
 

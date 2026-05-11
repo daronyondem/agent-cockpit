@@ -5,7 +5,6 @@ import type {
   Conversation,
   ConversationListItem,
   CurrentUser,
-  EffortLevel,
   ExplorerPreviewResponse,
   ExplorerTreeResponse,
   FilePreviewResponse,
@@ -14,9 +13,16 @@ import type {
   ResetSessionResponse,
   SendMessageResponse,
   SessionHistoryItem,
-  ServiceTier,
   Settings,
 } from './types';
+import type { CreateConversationRequest } from '../../../src/contracts/conversations';
+import type {
+  ExplorerCreateFileRequest,
+  ExplorerMkdirRequest,
+  ExplorerRenameRequest,
+  ExplorerSaveFileRequest,
+} from '../../../src/contracts/explorer';
+import type { ConversationInputRequest, SendMessageRequest } from '../../../src/contracts/streams';
 
 type RequestOptions = {
   query?: Record<string, string | undefined>;
@@ -92,15 +98,7 @@ export class AgentCockpitAPI {
     return this.request<Conversation>('GET', `/api/chat/conversations/${encodeURIComponent(id)}`, { csrf: true });
   }
 
-  async createConversation(input: {
-    title?: string;
-    workingDir?: string;
-    backend?: string;
-    cliProfileId?: string;
-    model?: string;
-    effort?: EffortLevel;
-    serviceTier?: ServiceTier | 'default';
-  }): Promise<Conversation> {
+  async createConversation(input: CreateConversationRequest): Promise<Conversation> {
     return this.request<Conversation>('POST', '/api/chat/conversations', {
       csrf: true,
       body: stripUndefined(input),
@@ -134,14 +132,7 @@ export class AgentCockpitAPI {
 
   async sendMessage(
     conversationID: string,
-    input: {
-      content: string;
-      backend?: string;
-      cliProfileId?: string;
-      model?: string;
-      effort?: EffortLevel;
-      serviceTier?: ServiceTier | 'default';
-    },
+    input: SendMessageRequest,
   ): Promise<SendMessageResponse> {
     return this.request<SendMessageResponse>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/message`, {
       csrf: true,
@@ -150,9 +141,10 @@ export class AgentCockpitAPI {
   }
 
   async sendInput(conversationID: string, text: string, streamActive: boolean): Promise<InputResponse> {
+    const body: ConversationInputRequest = { text, streamActive };
     return this.request<InputResponse>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/input`, {
       csrf: true,
-      body: { text, streamActive },
+      body,
     });
   }
 
@@ -288,32 +280,36 @@ export class AgentCockpitAPI {
   }
 
   async createExplorerFolder(workspaceHash: string, parent: string, name: string): Promise<BasicOKResponse & { path?: string; name?: string }> {
+    const body: ExplorerMkdirRequest = { parent, name };
     return this.request<BasicOKResponse & { path?: string; name?: string }>(
       'POST',
       `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/mkdir`,
-      { csrf: true, body: { parent, name } },
+      { csrf: true, body },
     );
   }
 
   async createExplorerFile(workspaceHash: string, parent: string, name: string, content = ''): Promise<BasicOKResponse & { path?: string; name?: string }> {
+    const body: ExplorerCreateFileRequest = { parent, name, content };
     return this.request<BasicOKResponse & { path?: string; name?: string }>(
       'POST',
       `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/file`,
-      { csrf: true, body: { parent, name, content } },
+      { csrf: true, body },
     );
   }
 
   async saveExplorerFile(workspaceHash: string, path: string, content: string): Promise<BasicOKResponse> {
+    const body: ExplorerSaveFileRequest = { path, content };
     return this.request<BasicOKResponse>('PUT', `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/file`, {
       csrf: true,
-      body: { path, content },
+      body,
     });
   }
 
   async renameExplorerEntry(workspaceHash: string, from: string, to: string, overwrite = false): Promise<BasicOKResponse> {
+    const body: ExplorerRenameRequest = { from, to, overwrite };
     return this.request<BasicOKResponse>('PATCH', `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/rename`, {
       csrf: true,
-      body: { from, to, overwrite },
+      body,
     });
   }
 
@@ -441,7 +437,7 @@ function defaultAPIBase(): string {
   return new URL('./', window.location.href.replace(/\/mobile\/.*/, '/')).toString();
 }
 
-function stripUndefined<T extends Record<string, unknown>>(value: T): Partial<T> {
+function stripUndefined<T extends object>(value: T): Partial<T> {
   return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as Partial<T>;
 }
 

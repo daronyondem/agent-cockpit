@@ -15,6 +15,8 @@ import { AgentApi } from './api.js';
 import { PlanUsageStore } from './planUsageStore.js';
 import { KiroPlanUsageStore } from './kiroPlanUsageStore.js';
 import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
+  /** @typedef {import('../../../src/contracts/streams').ConversationInputRequest} ConversationInputRequest */
+  /** @typedef {import('../../../src/contracts/streams').SendMessageRequest} SendMessageRequest */
   /** @typedef {{
    *   type: 'planApproval', planContent: string,
    * } | {
@@ -1269,6 +1271,7 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
     diagSnap(convId, 'send-post-optimistic');
 
     try {
+      /** @type {SendMessageRequest} */
       const body = { content };
       if (sendCliProfileId) body.cliProfileId = sendCliProfileId;
       if (sendBackend) body.backend = sendBackend;
@@ -1651,9 +1654,11 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
           if (request.method === 'DELETE') {
             await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/queue', { method: 'DELETE' });
           } else {
+            /** @type {{ queue: QueuedMessage[] }} */
+            const body = { queue: request.queue };
             await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/queue', {
               method: 'PUT',
-              body: { queue: request.queue },
+              body,
             });
           }
         } catch (err) {
@@ -2112,9 +2117,11 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
     let mode;
     try {
       const streamActive = s.streaming || s.sending;
+      /** @type {ConversationInputRequest} */
+      const body = { text, streamActive };
       const res = await AgentApi.fetch(
         'conversations/' + encodeURIComponent(convId) + '/input',
-        { method: 'POST', body: { text, streamActive } }
+        { method: 'POST', body }
       );
       const data = await res.json();
       mode = data && data.mode;

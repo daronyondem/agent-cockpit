@@ -1,4 +1,13 @@
 /* Agent Cockpit v2 — minimal API client shared across React screens. */
+/**
+ * @typedef {import('../../../src/contracts/conversations').CreateConversationRequest} CreateConversationRequest
+ * @typedef {import('../../../src/contracts/conversations').RenameConversationRequest} RenameConversationRequest
+ * @typedef {import('../../../src/contracts/conversations').SetUnreadRequest} SetUnreadRequest
+ * @typedef {import('../../../src/contracts/contextMap').ContextMapSettingsRequest} ContextMapSettingsRequest
+ * @typedef {import('../../../src/contracts/knowledgeBase').KbFolderCreateRequest} KbFolderCreateRequest
+ * @typedef {import('../../../src/contracts/knowledgeBase').KbFolderRenameRequest} KbFolderRenameRequest
+ * @typedef {import('../../../src/contracts/memory').MemoryEnabledRequest} MemoryEnabledRequest
+ */
   const API_BASE = new URL('./api/', window.location.href.replace(/\/v2\/.*/, '/'));
 
   function apiUrl(path){
@@ -160,6 +169,7 @@
     return res.json();
   }
 
+  /** @param {CreateConversationRequest} body */
   async function createConversation(body){
     const res = await chatFetch('conversations', { method: 'POST', body: body || {} });
     return res.json();
@@ -171,17 +181,21 @@
   }
 
   async function markConversationUnread(id, unread){
+    /** @type {SetUnreadRequest} */
+    const body = { unread: !!unread };
     const res = await chatFetch('conversations/' + encodeURIComponent(id) + '/unread', {
       method: 'PATCH',
-      body: { unread: !!unread },
+      body,
     });
     return res.json().catch(() => ({}));
   }
 
   async function renameConversation(id, title){
+    /** @type {RenameConversationRequest} */
+    const body = { title };
     const res = await chatFetch('conversations/' + encodeURIComponent(id), {
       method: 'PUT',
-      body: { title },
+      body,
     });
     return res.json();
   }
@@ -528,12 +542,16 @@
     }),
     /* Folder CRUD. Backend rejects names containing slashes; folderPath is the
        full nested path (e.g. "docs/specs"). createFolder is idempotent. */
-    createFolder: (hash, folderPath) => kbFetch(hash, 'folders', {
-      method: 'POST', body: { folderPath },
-    }).then(r => r.json()),
-    renameFolder: (hash, fromPath, toPath) => kbFetch(hash, 'folders', {
-      method: 'PUT', body: { fromPath, toPath },
-    }).then(r => r.json()),
+    createFolder: (hash, folderPath) => {
+      /** @type {KbFolderCreateRequest} */
+      const body = { folderPath };
+      return kbFetch(hash, 'folders', { method: 'POST', body }).then(r => r.json());
+    },
+    renameFolder: (hash, fromPath, toPath) => {
+      /** @type {KbFolderRenameRequest} */
+      const body = { fromPath, toPath };
+      return kbFetch(hash, 'folders', { method: 'PUT', body }).then(r => r.json());
+    },
     /* `cascade` must be true when the folder (or any descendant) is non-empty;
        backend returns 409 otherwise. */
     deleteFolder: (hash, folderPath, cascade) => {
@@ -663,10 +681,14 @@
       'workspaces/' + encodeURIComponent(hash) + '/memory/reviews/' + encodeURIComponent(runId) + '/drafts/' + encodeURIComponent(draftId) + '/regenerate',
       { method: 'POST', body: {} },
     ).then(r => r.json()),
-    setMemoryEnabled: (hash, enabled) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/memory/enabled',
-      { method: 'PUT', body: { enabled: !!enabled } },
-    ).then(r => r.json()),
+    setMemoryEnabled: (hash, enabled) => {
+      /** @type {MemoryEnabledRequest} */
+      const body = { enabled: !!enabled };
+      return chatFetch(
+        'workspaces/' + encodeURIComponent(hash) + '/memory/enabled',
+        { method: 'PUT', body },
+      ).then(r => r.json());
+    },
     deleteMemoryEntry: (hash, relPath) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/memory/entries/' + encodeURIComponent(relPath),
       { method: 'DELETE' },
@@ -708,10 +730,14 @@
       'workspaces/' + encodeURIComponent(hash) + '/context-map/enabled',
       { method: 'PUT', body: { enabled: !!enabled } },
     ).then(r => r.json()),
-    setContextMapSettings: (hash, settings) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/settings',
-      { method: 'PUT', body: { settings: settings || {} } },
-    ).then(r => r.json()),
+    setContextMapSettings: (hash, settings) => {
+      /** @type {ContextMapSettingsRequest} */
+      const body = { settings: settings || {} };
+      return chatFetch(
+        'workspaces/' + encodeURIComponent(hash) + '/context-map/settings',
+        { method: 'PUT', body },
+      ).then(r => r.json());
+    },
     runContextMapScan: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/context-map/scan',
       { method: 'POST', body: {} },

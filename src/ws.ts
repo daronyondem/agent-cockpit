@@ -3,6 +3,7 @@ import { WebSocketServer, WebSocket } from 'ws';
 import cookie from 'cookie';
 import type { Store } from 'express-session';
 import type { ActiveStreamEntry, WsServerFrame, WsClientFrame } from './types';
+import { logger } from './utils/logger';
 
 interface AttachWebSocketOpts {
   sessionStore: Store;
@@ -31,6 +32,7 @@ export interface WsFunctions {
 
 const BUFFER_CLEANUP_MS = 60_000;
 const MAX_BUFFER_SIZE = 5000;
+const wsLog = logger.child({ subsystem: 'ws' });
 
 interface ConvBuffer {
   events: WsServerFrame[];
@@ -170,7 +172,10 @@ export function attachWebSocket(
     const buf = convBuffers.get(convId);
     if (!buf || buf.events.length === 0) return;
 
-    console.log(`[ws] Replaying ${buf.events.length} buffered events for conv=${convId}`);
+    wsLog.info('replaying buffered events', {
+      convId: convId.slice(0, 8),
+      bufferedEvents: buf.events.length,
+    });
     ws.send(JSON.stringify({ type: 'replay_start', bufferedEvents: buf.events.length }));
     for (const event of buf.events) {
       ws.send(JSON.stringify(event));
@@ -202,7 +207,7 @@ export function attachWebSocket(
         try {
           const originHost = new URL(origin).host;
           if (originHost !== host) {
-            console.warn(`[ws] Origin mismatch: origin=${origin} host=${host}`);
+            wsLog.warn('origin mismatch', { origin, host });
             socket.write('HTTP/1.1 403 Forbidden\r\n\r\n');
             socket.destroy();
             return;
@@ -276,15 +281,22 @@ export function attachWebSocket(
       if (buf.cleanupTimer) { clearTimeout(buf.cleanupTimer); buf.cleanupTimer = null; }
     }
 
-    const eventTypes = buf ? buf.events.map(e => 'type' in e ? e.type : '?').join(',') : '';
-    console.log(`[diag][ws] handleConnection conv=${convId.slice(0,8)} existingOpen=${existingOpenCount} bufEvents=${buf?.events.length ?? 0} hadCleanup=${hadCleanup} activeStreamHas=${activeStreams.has(convId)} types=[${eventTypes}]`);
+    const eventTypes = buf ? buf.events.map(e => 'type' in e ? e.type : '?') : [];
+    wsLog.debug('handleConnection', {
+      convId: convId.slice(0, 8),
+      existingOpenCount,
+      bufferedEvents: buf?.events.length ?? 0,
+      hadCleanup,
+      activeStream: activeStreams.has(convId),
+      eventTypes,
+    });
 
     // If there's a buffer with events, this is a reconnection — replay immediately
     if (buf && buf.events.length > 0) {
-      console.log(`[ws] Reconnection detected for conv=${convId}`);
+      wsLog.info('reconnection detected', { convId: convId.slice(0, 8) });
       replayBuffer(ws, convId);
     } else {
-      console.log(`[ws] Connected for conv=${convId}`);
+      wsLog.info('connected', { convId: convId.slice(0, 8) });
     }
 
     ws.on('pong', () => {
@@ -298,17 +310,17 @@ export function attachWebSocket(
 
         if (frame.type === 'input') {
           if (entry && entry.sendInput) {
-            console.log(`[ws] Sending stdin input for conv=${convId}: ${frame.text.substring(0, 100)}`);
+            wsLog.debug('sending stdin input', { convId: convId.slice(0, 8), textLength: frame.text.length });
             entry.sendInput(frame.text);
           }
         } else if (frame.type === 'abort') {
           if (abortStream) {
             void Promise.resolve(abortStream(convId)).catch((err: unknown) => {
-              console.error(`[ws] Abort failed for conv=${convId}:`, (err as Error).message);
+              wsLog.error('abort failed', { convId: convId.slice(0, 8), error: (err as Error).message });
             });
           } else {
             if (entry) {
-              console.log(`[ws] Aborting stream for conv=${convId}`);
+              wsLog.info('aborting stream', { convId: convId.slice(0, 8) });
               entry.abort();
               activeStreams.delete(convId);
             }
@@ -324,16 +336,22 @@ export function attachWebSocket(
           }
         }
       } catch (err) {
-        console.warn(`[ws] Failed to parse client frame for conv=${convId}:`, err);
+        wsLog.warn('failed to parse client frame', { convId: convId.slice(0, 8), error: (err as Error).message || String(err) });
       }
     });
 
     ws.on('close', (code, reason) => {
       const wasActive = removeActiveSocket(convId, ws);
       if (!wasActive) return;
-      console.log(`[diag][ws] ws-close conv=${convId.slice(0,8)} code=${code} reason="${reason?.toString() || ''}" wasActive=${wasActive} activeStreamHas=${activeStreams.has(convId)}`);
+      wsLog.debug('socket closed', {
+        convId: convId.slice(0, 8),
+        code,
+        reason: reason?.toString() || '',
+        wasActive,
+        activeStream: activeStreams.has(convId),
+      });
       if (!shuttingDown) {
-        console.log(`[ws] Disconnected for conv=${convId}`);
+        wsLog.info('disconnected', { convId: convId.slice(0, 8) });
       }
       if (activeStreams.has(convId) && !isConnected(convId)) {
         startStreamGracePeriod(convId);
@@ -341,7 +359,7 @@ export function attachWebSocket(
     });
 
     ws.on('error', (err) => {
-      console.error(`[ws] Error for conv=${convId}:`, err.message);
+      wsLog.error('socket error', { convId: convId.slice(0, 8), error: err.message });
     });
   }
 
@@ -373,7 +391,13 @@ export function attachWebSocket(
     const sockets = getOpenSockets(convId);
     const wsOpen = sockets.length > 0;
     if (frame.type !== 'text' && frame.type !== 'thinking') {
-      console.log(`[diag][ws] send conv=${convId.slice(0,8)} type=${frame.type} wsOpen=${wsOpen} replayable=${replayable} bufLen=${buf?.events.length ?? 0}`);
+      wsLog.debug('send frame', {
+        convId: convId.slice(0, 8),
+        type: frame.type,
+        wsOpen,
+        replayable,
+        bufferLength: buf?.events.length ?? 0,
+      });
     }
     if (wsOpen) {
       const payload = JSON.stringify(frame);
@@ -409,8 +433,12 @@ export function attachWebSocket(
   function clearBuffer(convId: string) {
     const buf = convBuffers.get(convId);
     if (buf) {
-      const types = buf.events.map(e => 'type' in e ? e.type : '?').join(',');
-      console.log(`[diag][ws] clearBuffer conv=${convId.slice(0,8)} bufLen=${buf.events.length} types=[${types}]`);
+      const eventTypes = buf.events.map(e => 'type' in e ? e.type : '?');
+      wsLog.debug('clear buffer', {
+        convId: convId.slice(0, 8),
+        bufferedEvents: buf.events.length,
+        eventTypes,
+      });
     }
     deleteBuffer(convId);
   }
@@ -419,7 +447,11 @@ export function attachWebSocket(
   function startStreamGracePeriod(convId: string): void {
     const entry = activeStreams.get(convId);
     const wsOpen = isConnected(convId);
-    console.log(`[diag][ws] markDisconnected conv=${convId.slice(0,8)} hasEntry=${!!entry} wsOpen=${wsOpen}`);
+    wsLog.debug('mark disconnected', {
+      convId: convId.slice(0, 8),
+      hasEntry: !!entry,
+      wsOpen,
+    });
     if (!entry) return;
     getOrCreateBuffer(convId);
   }
@@ -428,7 +460,10 @@ export function attachWebSocket(
     shuttingDown = true;
     clearInterval(pingInterval);
     for (const [convId, sockets] of activeWebSockets) {
-      console.log(`[ws-shutdown] Closing WS for conv=${convId}`);
+      wsLog.info('closing sockets for shutdown', {
+        convId: convId.slice(0, 8),
+        socketCount: sockets.size,
+      });
       for (const ws of sockets) {
         ws.close(1001, 'Server shutting down');
       }
