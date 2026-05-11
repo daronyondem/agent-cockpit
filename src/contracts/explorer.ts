@@ -1,5 +1,31 @@
 import { asRecord, optionalBoolean, optionalString, requiredNonEmptyString, requiredString } from './validation';
 
+export interface ExplorerEntry {
+  name: string;
+  type: 'file' | 'dir';
+  size?: number;
+  mtime?: number;
+  modifiedAt?: string;
+}
+
+export interface ExplorerTreeResponse {
+  path: string;
+  parent?: string | null;
+  entries: ExplorerEntry[];
+}
+
+export interface ExplorerPreviewResponse {
+  path: string;
+  filename?: string;
+  content?: string;
+  imageURL?: string;
+  mimeType?: string;
+  truncated?: boolean;
+  downloadURL?: string;
+}
+
+export interface FilePreviewResponse extends ExplorerPreviewResponse {}
+
 export interface ExplorerMkdirRequest {
   parent: string;
   name: string;

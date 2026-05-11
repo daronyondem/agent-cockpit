@@ -1,9 +1,10 @@
+import type { Conversation, ConversationListItem, Message, SessionHistoryItem } from './responses';
 import { parseServiceTierInput, type ContractServiceTier, type ServiceTierInput } from './serviceTier';
 import { asRecord, optionalBoolean, optionalString, optionalStringEnum, requiredNonEmptyString } from './validation';
 
 export type ContractEffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-const EFFORT_LEVELS: readonly ContractEffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const CONTRACT_EFFORT_LEVELS: readonly ContractEffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 
 export interface CreateConversationRequest {
   title?: string;
@@ -27,6 +28,24 @@ export interface SetUnreadRequest {
   unread: boolean;
 }
 
+export interface ConversationListResponse {
+  conversations: ConversationListItem[];
+}
+
+export interface ConversationResponse extends Conversation {}
+
+export interface ConversationSessionsResponse {
+  sessions: SessionHistoryItem[];
+}
+
+export interface ConversationSessionMessagesResponse {
+  messages: Message[];
+}
+
+export interface ConversationDeleteResponse {
+  ok: true;
+}
+
 export function validateCreateConversationRequest(body: unknown): ValidatedCreateConversationRequest {
   const record = asRecord(body);
   return {
@@ -35,7 +54,7 @@ export function validateCreateConversationRequest(body: unknown): ValidatedCreat
     backend: optionalString(record, 'backend'),
     cliProfileId: optionalString(record, 'cliProfileId'),
     model: optionalString(record, 'model'),
-    effort: optionalStringEnum(record, 'effort', EFFORT_LEVELS),
+    effort: optionalStringEnum(record, 'effort', CONTRACT_EFFORT_LEVELS),
     serviceTier: parseServiceTierInput(record.serviceTier),
   };
 }
