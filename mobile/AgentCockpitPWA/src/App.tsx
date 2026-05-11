@@ -2312,17 +2312,26 @@ function useViewportHeightVar() {
     const root = document.documentElement;
     let rafID = 0;
     let focusTimer: number | undefined;
+    let lastViewportMetrics = '';
 
     const update = () => {
       const viewport = window.visualViewport;
-      root.style.setProperty('--app-height', `${viewport?.height || window.innerHeight}px`);
-      root.style.setProperty('--app-width', `${viewport?.width || window.innerWidth}px`);
-      root.style.setProperty('--app-top', `${viewport?.offsetTop || 0}px`);
-      root.style.setProperty('--app-left', `${viewport?.offsetLeft || 0}px`);
-      root.scrollLeft = 0;
-      root.scrollTop = 0;
-      document.body.scrollLeft = 0;
-      document.body.scrollTop = 0;
+      const height = Math.max(1, Math.round(viewport?.height || window.innerHeight));
+      const width = Math.max(1, Math.round(viewport?.width || window.innerWidth));
+      const top = Math.round(viewport?.offsetTop || 0);
+      const left = Math.round(viewport?.offsetLeft || 0);
+      const metrics = `${height}:${width}:${top}:${left}`;
+      if (metrics !== lastViewportMetrics) {
+        root.style.setProperty('--app-height', `${height}px`);
+        root.style.setProperty('--app-width', `${width}px`);
+        root.style.setProperty('--app-top', `${top}px`);
+        root.style.setProperty('--app-left', `${left}px`);
+        lastViewportMetrics = metrics;
+      }
+      if (root.scrollLeft !== 0) root.scrollLeft = 0;
+      if (root.scrollTop !== 0) root.scrollTop = 0;
+      if (document.body.scrollLeft !== 0) document.body.scrollLeft = 0;
+      if (document.body.scrollTop !== 0) document.body.scrollTop = 0;
       if (window.scrollX !== 0 || window.scrollY !== 0) {
         window.scrollTo(0, 0);
       }

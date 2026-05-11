@@ -268,6 +268,7 @@ async function waitForActiveStreamsToDrain(activeStreams: Map<string, ActiveStre
 
 export async function destroyChatRouterEnv(env: ChatRouterEnv): Promise<void> {
   await waitForActiveStreamsToDrain(env.activeStreams);
+  await env.sessionFinalizers.waitForIdle();
   env.wsShutdown();
   await env.chatShutdown();
   await new Promise<void>((resolve, reject) => {
