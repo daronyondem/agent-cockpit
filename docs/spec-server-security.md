@@ -1,10 +1,10 @@
-# 5. Server Initialization & Security
+# 6. Server Initialization & Security
 
 [← Back to index](SPEC.md)
 
 ---
 
-## 5.1 Configuration
+## 6.1 Configuration
 
 **File:** `src/config/index.ts`
 
@@ -24,11 +24,14 @@
 | `AUTH_ENABLE_LEGACY_OAUTH` | No | `false` | Transitional flag that registers the old Google/GitHub OAuth routes when set to `true`. Third-party auth is disabled by default. |
 | `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
+| `CODEX_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing an idle Codex `app-server` process |
+| `CODEX_APPROVAL_POLICY` | No | `on-request` | Codex approval policy for interactive threads. Valid values: `untrusted`, `on-failure`, `on-request`, `never`. Invalid values are ignored with a startup warning and the default is used. |
+| `CODEX_SANDBOX_MODE` | No | `workspace-write` | Codex sandbox mode for interactive threads. Valid values: `read-only`, `workspace-write`, `danger-full-access`. Invalid values are ignored with a startup warning and the default is used. |
 | `BASE_PATH` | No | `''` | URL base path prefix (for reverse proxy deployments) |
 
 `src/config/index.ts` loads `.env` through `dotenv`. Outside tests, `.env` values override already-present process environment values so PM2-managed local deployments can pin runtime config from the repo's `.env`. When `NODE_ENV === 'test'`, dotenv does **not** override explicit process env values; subprocess tests such as graceful shutdown can pass an isolated `PORT` without being clobbered by a developer `.env` that points at a running PM2 app.
 
-## 5.2 Server Initialization Order
+## 6.2 Server Initialization Order
 
 **File:** `server.ts`
 
@@ -45,16 +48,19 @@
 9a. Mount current-user endpoint at `GET /api/me`
 10. Create BackendRegistry, register ClaudeCodeAdapter, KiroAdapter, and CodexAdapter
 11. Initialize ChatService
-12. Initialize UpdateService and CliUpdateService
+12. Initialize UpdateService, CliUpdateService, Claude/Kiro/Codex plan usage services, and the chat router dependencies
 13. Mount chat router at `/api/chat`
-14. Serve static files from `public/`
-15. Call `chatService.initialize()` (migration + lookup map)
-16. Reconcile leftover durable stream jobs via `chatResult.reconcileInterruptedJobs()` before the server accepts traffic. This converts unrecoverable accepted/preparing/running jobs from a prior process into one persisted assistant `streamError` when the user message exists, or removes the job when no user message was saved.
-17. Start UpdateService (version polling)
-18. Start CliUpdateService (local CLI update polling)
-19. Listen on configured PORT
-20. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is the stream supervisor's process-local runtime attachment map while this process owns a backend iterator; `data/chat/stream-jobs.json` is the durable supervision layer used for accepted/preparing visibility, backend runtime identifiers (`externalSessionId`, `activeTurnId`, `processId`), and restart reconciliation. Runtime identifiers are diagnostic/current-turn metadata only; startup reconciliation still does not reattach or retry unless a backend explicitly advertises active-turn resume support. WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
-21. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
+14. Mount root redirect `/` -> `/v2/`
+15. Serve static files from `public/`
+16. Call `chatService.initialize()` (migration + lookup map)
+17. Reconcile leftover durable stream jobs via `chatResult.reconcileInterruptedJobs()` before the server accepts traffic. This converts unrecoverable accepted/preparing/running jobs from a prior process into one persisted assistant `streamError` when the user message exists, or removes the job when no user message was saved.
+18. Check that the configured port is free; exit with a PM2-oriented fatal message when it is already in use
+19. Start UpdateService (version polling), CliUpdateService (local CLI update polling), KB Auto-Dream scheduler, Memory Review scheduler, and Context Map scheduler
+20. Initialize account plan usage caches and fire best-effort startup refreshes for Claude Code, Kiro, and Codex
+21. Detect LibreOffice and Pandoc in the background for KB ingestion status endpoints
+22. Listen on configured PORT
+23. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is the stream supervisor's process-local runtime attachment map while this process owns a backend iterator; `data/chat/stream-jobs.json` is the durable supervision layer used for accepted/preparing visibility, backend runtime identifiers (`externalSessionId`, `activeTurnId`, `processId`), and restart reconciliation. Runtime identifiers are diagnostic/current-turn metadata only; startup reconciliation still does not reattach or retry unless a backend explicitly advertises active-turn resume support. WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
+24. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
 
 ### Graceful Shutdown
 
@@ -67,11 +73,11 @@ Signal handlers for `SIGTERM`/`SIGINT`:
 
 On the next process start, normal durable job reconciliation converts those finalizing shutdown jobs into one persisted assistant `streamError` when the accepted user message exists.
 
-## 5.3 Authentication
+## 6.3 Authentication
 
 **File:** `src/middleware/auth.ts`
 
-**Default model:** Agent Cockpit uses one first-party local owner account per backend. The owner state is stored in `AUTH_DATA_DIR/owner.json` with mode `0600` after writes. Passwords are stored as `scrypt` hashes with a random per-password salt; plaintext passwords are never stored. The owner session still uses Passport's session helpers so the rest of the app continues to rely on `req.isAuthenticated()` and the existing `connect.sid` cookie.
+**Default model:** Agent Cockpit uses one first-party local owner account per server instance. The owner state is stored in `AUTH_DATA_DIR/owner.json` with mode `0600` after writes. Passwords are stored as `scrypt` hashes with a random per-password salt; plaintext passwords are never stored. The owner session still uses Passport's session helpers so the rest of the app continues to rely on `req.isAuthenticated()` and the existing `connect.sid` cookie.
 
 **First-run setup:** If no owner exists, `/auth/login` redirects to `/auth/setup`. Localhost setup is allowed without a token because it requires server-console/local network access. Non-localhost setup requires `AUTH_SETUP_TOKEN` in the submitted form body; without it, setup returns 403. This prevents an exposed empty backend from being claimed by a remote visitor.
 
@@ -134,7 +140,7 @@ See [ADR-0023](adr/0023-use-first-party-owner-authentication.md) for the first-p
 
 Re-entrancy is guarded by a `reAuthInFlightRef` — overlapping 401s on concurrent requests don't stack dialogs or popups.
 
-## 5.4 CSRF Protection
+## 6.4 CSRF Protection
 
 **File:** `src/middleware/csrf.ts`
 
@@ -145,7 +151,7 @@ Re-entrancy is guarded by a `reAuthInFlightRef` — overlapping 401s on concurre
 
 CLI profile remote-auth endpoints that spawn local CLI processes are CSRF-protected (`POST /api/chat/cli-profiles/:id/test`, `POST /api/chat/cli-profiles/:id/auth/start`, and auth-job cancel). They only accept saved Codex/Claude Code account profiles, run with that profile's command/env/config directory, and redact common bearer/access/refresh/API-key patterns from stdout/stderr before exposing job events to the browser. Kiro remote auth is intentionally blocked while Kiro lacks a safe dedicated config-home override.
 
-## 5.5 Security Headers
+## 6.5 Security Headers
 
 **File:** `src/middleware/security.ts`
 
@@ -168,7 +174,7 @@ form-action: 'self'
 
 Cross-Origin Embedder Policy: disabled.
 
-## 5.6 Path Traversal & Root-Delete Guards
+## 6.6 Path Traversal & Root-Delete Guards
 
 Several routes accept user-supplied relative paths that resolve inside a workspace working directory. All of them use the same shape of guard:
 

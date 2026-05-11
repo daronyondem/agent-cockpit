@@ -1,4 +1,4 @@
-# 8. Export, Limitations & Deployment
+# 9. Export, Limitations & Deployment
 
 [← Back to index](SPEC.md)
 
@@ -50,7 +50,7 @@
 1. **Input validation** — no validation library, minimal file upload name sanitization, no request body type/length validation
 2. **Linting & formatting** — no ESLint or Prettier
 3. **Conversation pagination** — `listConversations()` loads all into memory
-4. **File upload MIME validation** — Multer accepts any file type
+4. **Conversation attachment MIME validation** — Multer accepts any file type for chat attachments; Knowledge Base ingestion has separate format handlers and pre-flight guards
 5. **Structured logging** — uses `console.log`/`console.error`
 6. **Multi-user support** — settings are global, not per-user
 

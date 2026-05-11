@@ -16,6 +16,7 @@
 | 8. Mobile PWA Client | [spec-mobile-pwa.md](spec-mobile-pwa.md) | Installable mobile web client architecture, implemented slice, deferred work |
 | 9. Export, Limitations & Deployment | [spec-deployment.md](spec-deployment.md) | Markdown export, known limitations, deployment |
 | 10. Testing & CI/CD | [spec-testing.md](spec-testing.md) | Test suite, test files, CI workflows |
+| 11. Documentation Coverage & Feature Flows | [spec-coverage.md](spec-coverage.md) | Documentation inventory, source-to-doc traceability matrix, and cross-feature diagrams |
 
 ### Design Documents
 
@@ -46,11 +47,11 @@ See [docs/adr/README.md](adr/README.md) for the index and [ADR-0001](adr/0001-re
 
 ## 1. Overview
 
-**Agent Cockpit** is a web-based chat interface for interacting with the Claude Code CLI. It runs on the same machine as the CLI tools. The server spawns local `claude` CLI processes, streams responses back to the browser via WebSocket, and stores conversations in workspace-scoped JSON files on disk.
+**Agent Cockpit** is a web-based chat interface for interacting with local CLI-based AI agents such as Claude Code, Kiro, and OpenAI Codex. It runs on the same machine as the CLI tools. The server spawns or connects to local CLI processes, streams responses back to the browser via WebSocket, and stores conversations in workspace-scoped files on disk.
 
 ### Core Use Case
 
-Install on a machine with Claude Code CLI. Expose via a tunnel (e.g., ngrok). Access from any device and interact with your local CLI remotely through the browser.
+Install on a machine with one or more supported CLI backends. Expose via a tunnel (for example Cloudflare Tunnel or ngrok). Access from any device and interact with your local CLI remotely through the browser.
 
 ### Key Principles
 
