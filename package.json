@@ -1,6 +1,6 @@
 {
   "name": "agent-cockpit",
-  "version": "0.2.110",
+  "version": "0.2.111",
   "private": true,
   "engines": {
     "node": ">=22"
