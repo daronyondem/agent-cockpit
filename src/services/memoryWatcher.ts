@@ -1,5 +1,6 @@
 import fs from 'fs';
 import type { FSWatcher } from 'fs';
+import { logger } from '../utils/logger';
 
 /**
  * Real-time filesystem watcher for CLI memory directories.
@@ -46,6 +47,8 @@ interface WatchEntry {
   debounceTimer: ReturnType<typeof setTimeout> | null;
 }
 
+const memoryWatcherLog = logger.child({ subsystem: 'memoryWatcher' });
+
 export class MemoryWatcher {
   private readonly entries = new Map<string, WatchEntry>();
   private readonly debounceMs: number;
@@ -82,7 +85,7 @@ export class MemoryWatcher {
     try {
       watcher = fs.watch(memDir, { persistent: false });
     } catch (err: unknown) {
-      console.error(`[memoryWatcher] failed to watch ${memDir}:`, (err as Error).message);
+      memoryWatcherLog.error('failed to watch memory directory', { memDir, error: err });
       return false;
     }
 
@@ -105,11 +108,11 @@ export class MemoryWatcher {
     });
 
     watcher.on('error', (err: Error) => {
-      console.error(`[memoryWatcher] watch error for ${memDir}:`, err.message);
+      memoryWatcherLog.error('watch error', { memDir, error: err });
       this.unwatch(key);
     });
 
-    console.log(`[memoryWatcher] watching ${memDir} (key=${key})`);
+    memoryWatcherLog.info('watching memory directory', { memDir, key });
     return true;
   }
 
@@ -127,7 +130,7 @@ export class MemoryWatcher {
       // ignore — watcher may already be closed
     }
     this.entries.delete(key);
-    console.log(`[memoryWatcher] stopped watching ${entry.memDir} (key=${key})`);
+    memoryWatcherLog.info('stopped watching memory directory', { memDir: entry.memDir, key });
   }
 
   /** Stop all active watchers.  Called during server shutdown. */
@@ -169,7 +172,7 @@ export class MemoryWatcher {
       Promise.resolve()
         .then(() => current.onChange())
         .catch((err: Error) => {
-          console.error(`[memoryWatcher] onChange error for key=${key}:`, err.message);
+          memoryWatcherLog.error('change handler failed', { key, error: err });
         });
     }, this.debounceMs);
   }

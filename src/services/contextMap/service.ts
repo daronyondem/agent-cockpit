@@ -31,6 +31,27 @@ import {
   MAX_CONTEXT_MAP_PROCESSOR_CONCURRENCY,
 } from './defaults';
 import { applyContextMapCandidate, ContextMapApplyError, getContextMapApplyDependencies } from './apply';
+import { parseContextMapJsonOutput, repairContextMapJsonOutput } from './jsonRepair';
+import { logger } from '../../utils/logger';
+import {
+  buildContextMapRunTimings,
+  buildExtractionFailureMessage,
+  buildExtractionTimingSummary,
+  countDraftsByType,
+  draftTypeCount,
+  emptySynthesisMetadata,
+  summarizeExtractionRepairs,
+  truncateErrorMessage,
+  type ContextMapExtractionFailure,
+  type ContextMapExtractionRepairEvent,
+  type ContextMapExtractionTimingSummary,
+  type ContextMapExtractionUnitTiming,
+  type ContextMapRunTimings,
+  type ContextMapSynthesisMetadata,
+  type ContextMapSynthesisStageMetadata,
+} from './pipelineMetadata';
+
+const log = logger.child({ module: 'context-map-service' });
 
 export interface ContextMapChatService {
   getSettings(): Promise<Settings>;
@@ -107,87 +128,10 @@ interface ContextMapCandidateDraft extends PendingContextMapCandidate {
     | { kind: 'source'; sourceType: ContextMapSourcePacket['sourceType']; sourceId: string; sourceHash: string };
 }
 
-interface ContextMapExtractionFailure {
-  sourceType: 'conversation_message' | ContextMapSourcePacket['sourceType'];
-  sourceId: string;
-  errorMessage: string;
-}
-
-interface ContextMapExtractionRepairEvent {
-  sourceType: ContextMapExtractionFailure['sourceType'];
-  sourceId: string;
-  succeeded: boolean;
-  errorMessage?: string;
-}
-
 interface ContextMapSuccessfulSourceCursor {
   sourceType: ContextSourceCursorType;
   sourceId: string;
   sourceHash: string;
-}
-
-interface ContextMapExtractionUnitTiming {
-  sourceType: ContextMapExtractionFailure['sourceType'];
-  sourceId: string;
-  durationMs: number;
-  status: 'succeeded' | 'failed';
-  candidates: number;
-  repaired?: boolean;
-}
-
-interface ContextMapExtractionTimingSummary {
-  total: number;
-  succeeded: number;
-  failed: number;
-  slowest: ContextMapExtractionUnitTiming[];
-}
-
-interface ContextMapRunTimings {
-  totalMs: number;
-  planningMs: number;
-  sourceDiscoveryMs: number;
-  extractionMs: number;
-  synthesisMs: number;
-  persistenceMs: number;
-  autoApplyMs: number;
-  extractionUnits: ContextMapExtractionTimingSummary;
-  synthesisStages: ContextMapSynthesisStageMetadata[];
-}
-
-interface ContextMapSynthesisStageMetadata {
-  stage: 'single' | 'chunk' | 'final';
-  chunkId?: string;
-  durationMs?: number;
-  inputCandidates: number;
-  outputCandidates: number;
-  inputCandidateTypes?: Record<string, number>;
-  outputCandidateTypes?: Record<string, number>;
-  droppedCandidates: number;
-  targetCandidates?: number;
-  hardMaxCandidates?: number;
-  openQuestions: string[];
-  fallback?: boolean;
-  errorMessage?: string;
-  repairAttempted?: boolean;
-  repairSucceeded?: boolean;
-  repairErrorMessage?: string;
-}
-
-interface ContextMapSynthesisMetadata {
-  attempted: boolean;
-  inputCandidates: number;
-  outputCandidates: number;
-  inputCandidateTypes?: Record<string, number>;
-  outputCandidateTypes?: Record<string, number>;
-  droppedCandidates: number;
-  openQuestions: string[];
-  stages?: ContextMapSynthesisStageMetadata[];
-  targetCandidates?: number;
-  hardMaxCandidates?: number;
-  fallback?: boolean;
-  errorMessage?: string;
-  fallbackBound?: number;
-  recoveredRelationshipCandidates?: number;
 }
 
 interface ContextMapExtractionResult {
@@ -292,7 +236,7 @@ export class ContextMapService {
       try {
         await this.emitUpdate(hash);
       } catch (err: unknown) {
-        console.warn(`[context-map] failed to emit stop update for ${hash}:`, (err as Error).message);
+        log.warn('Failed to emit stop update', { workspaceHash: hash, error: err });
       }
     }
     return true;
@@ -321,7 +265,7 @@ export class ContextMapService {
         try {
           await this.emitUpdate(hash);
         } catch (err: unknown) {
-          console.warn(`[context-map] failed to emit update for ${hash}:`, (err as Error).message);
+          log.warn('Failed to emit update', { workspaceHash: hash, error: err });
         }
       }
     }
@@ -355,7 +299,7 @@ export class ContextMapService {
         try {
           await this.emitUpdate(hash);
         } catch (err: unknown) {
-          console.warn(`[context-map] failed to emit update for ${hash}:`, (err as Error).message);
+          log.warn('Failed to emit update', { workspaceHash: hash, error: err });
         }
       }
     }
@@ -489,7 +433,7 @@ export class ContextMapService {
       try {
         await this.emitUpdate(hash);
       } catch (err: unknown) {
-        console.warn(`[context-map] failed to emit running update for ${hash}:`, (err as Error).message);
+        log.warn('Failed to emit running update', { workspaceHash: hash, error: err });
       }
     }
 
@@ -524,7 +468,7 @@ export class ContextMapService {
         extractionRepairs: summarizeExtractionRepairs(extraction.repairs),
         candidateSynthesis: extraction.synthesis,
         timings: buildContextMapRunTimings({
-          totalStartedMs,
+          totalMs: elapsedMs(totalStartedMs),
           planningMs,
           sourceDiscoveryMs,
           extractionMs: extraction.timings.extractionMs,
@@ -602,7 +546,7 @@ export class ContextMapService {
         candidatesNeedingAttention: insertedCandidatesNeedingAttention,
         autoApplyFailures: autoApply.failures.slice(0, 20),
         timings: buildContextMapRunTimings({
-          totalStartedMs,
+          totalMs: elapsedMs(totalStartedMs),
           planningMs,
           sourceDiscoveryMs,
           extractionMs: extraction.timings.extractionMs,
@@ -1004,97 +948,6 @@ function monotonicNowMs(): number {
 
 function elapsedMs(startedMs: number): number {
   return Math.max(0, monotonicNowMs() - startedMs);
-}
-
-function buildExtractionTimingSummary(units: ContextMapExtractionUnitTiming[]): ContextMapExtractionTimingSummary {
-  return {
-    total: units.length,
-    succeeded: units.filter((unit) => unit.status === 'succeeded').length,
-    failed: units.filter((unit) => unit.status === 'failed').length,
-    slowest: units
-      .slice()
-      .sort((a, b) => b.durationMs - a.durationMs || a.sourceId.localeCompare(b.sourceId))
-      .slice(0, 20),
-  };
-}
-
-function buildContextMapRunTimings(opts: {
-  totalStartedMs: number;
-  planningMs: number;
-  sourceDiscoveryMs: number;
-  extractionMs: number;
-  synthesisMs: number;
-  persistenceMs: number;
-  autoApplyMs: number;
-  extractionUnits: ContextMapExtractionTimingSummary;
-  synthesisStages: ContextMapSynthesisStageMetadata[];
-}): ContextMapRunTimings {
-  return {
-    totalMs: elapsedMs(opts.totalStartedMs),
-    planningMs: opts.planningMs,
-    sourceDiscoveryMs: opts.sourceDiscoveryMs,
-    extractionMs: opts.extractionMs,
-    synthesisMs: opts.synthesisMs,
-    persistenceMs: opts.persistenceMs,
-    autoApplyMs: opts.autoApplyMs,
-    extractionUnits: opts.extractionUnits,
-    synthesisStages: opts.synthesisStages,
-  };
-}
-
-function emptySynthesisMetadata(inputCandidates: number): ContextMapSynthesisMetadata {
-  return {
-    attempted: false,
-    inputCandidates,
-    outputCandidates: inputCandidates,
-    droppedCandidates: 0,
-    openQuestions: [],
-  };
-}
-
-function countDraftsByType(drafts: ContextMapCandidateDraft[]): Record<string, number> {
-  return drafts.reduce<Record<string, number>>((acc, draft) => {
-    acc[draft.candidateType] = (acc[draft.candidateType] || 0) + 1;
-    return acc;
-  }, {});
-}
-
-function draftTypeCount(drafts: ContextMapCandidateDraft[], type: ContextCandidateType): number {
-  return drafts.filter((draft) => draft.candidateType === type).length;
-}
-
-function summarizeExtractionRepairs(repairs: ContextMapExtractionRepairEvent[]): Record<string, unknown> | undefined {
-  if (repairs.length === 0) return undefined;
-  return {
-    attempted: repairs.length,
-    succeeded: repairs.filter((repair) => repair.succeeded).length,
-    failed: repairs.filter((repair) => !repair.succeeded).length,
-    failures: repairs
-      .filter((repair) => !repair.succeeded)
-      .slice(0, 10)
-      .map((repair) => ({
-        sourceType: repair.sourceType,
-        sourceId: repair.sourceId,
-        errorMessage: repair.errorMessage,
-      })),
-  };
-}
-
-function buildExtractionFailureMessage(failures: ContextMapExtractionFailure[]): string {
-  const count = failures.length;
-  const label = count === 1 ? 'unit' : 'units';
-  const details = failures.slice(0, 3).map((failure) => (
-    `${failure.sourceType}:${failure.sourceId} (${truncateErrorMessage(failure.errorMessage)})`
-  )).join('; ');
-  const suffix = count > 3 ? `; plus ${count - 3} more` : '';
-  return details
-    ? `${count} Context Map extraction ${label} failed: ${details}${suffix}`
-    : `${count} Context Map extraction ${label} failed.`;
-}
-
-function truncateErrorMessage(message: string): string {
-  const normalized = message.replace(/\s+/g, ' ').trim();
-  return normalized.length <= 220 ? normalized : `${normalized.slice(0, 217)}...`;
 }
 
 const CONTEXT_MAP_AUTO_APPLY_MIN_CONFIDENCE_BY_TYPE: Partial<Record<ContextCandidateType, number>> = {
@@ -2173,8 +2026,6 @@ const CONTEXT_MAP_SYNTHESIS_FINAL_MAX_CANDIDATES = 45;
 const CONTEXT_MAP_SYNTHESIS_FALLBACK_MAX_CANDIDATES = 40;
 const CONTEXT_MAP_SYNTHESIS_MAX_RELATIONSHIP_CANDIDATES = 12;
 const CONTEXT_MAP_SYNTHESIS_RECOVERED_RELATIONSHIP_CANDIDATES = 12;
-const CONTEXT_MAP_SYNTHESIS_REPAIR_TIMEOUT_MS = 90_000;
-const CONTEXT_MAP_SYNTHESIS_REPAIR_OUTPUT_CHAR_LIMIT = 16_000;
 
 const CONTEXT_MAP_CANDIDATE_TYPES = new Set<ContextCandidateType>([
   'new_entity',
@@ -2558,8 +2409,12 @@ async function runContextMapSynthesisPass(opts: {
           rawOutput,
           errorMessage: (parseErr as Error).message,
           schema: 'synthesis',
-          adapter: opts.adapter,
-          processor: opts.processor,
+          runOneShot: (prompt, options, signal) => runContextMapSynthesisOneShot(opts.adapter, prompt, options, signal),
+          processor: {
+            model: opts.processor.model,
+            effort: opts.processor.effort,
+            cliProfile: opts.processor.runtime.profile,
+          },
           abortSignal: opts.abortSignal,
           workspacePath: opts.workspacePath,
         });
@@ -2662,8 +2517,12 @@ async function runContextMapArbiterPass(opts: {
           rawOutput,
           errorMessage: (parseErr as Error).message,
           schema: 'arbiter',
-          adapter: opts.adapter,
-          processor: opts.processor,
+          runOneShot: (prompt, options, signal) => runContextMapSynthesisOneShot(opts.adapter, prompt, options, signal),
+          processor: {
+            model: opts.processor.model,
+            effort: opts.processor.effort,
+            cliProfile: opts.processor.runtime.profile,
+          },
           abortSignal: opts.abortSignal,
           workspacePath: opts.workspacePath,
         });
@@ -2724,64 +2583,6 @@ async function runContextMapArbiterPass(opts: {
       },
     };
   }
-}
-
-async function repairContextMapJsonOutput(opts: {
-  rawOutput: string;
-  errorMessage: string;
-  schema: 'extraction' | 'synthesis' | 'arbiter';
-  adapter: ContextMapProcessorAdapter;
-  processor: ResolvedContextMapProcessor;
-  abortSignal: AbortSignal;
-  workspacePath: string | undefined;
-}): Promise<string> {
-  const runOneShot = opts.schema === 'extraction'
-    ? runContextMapExtractionOneShot
-    : runContextMapSynthesisOneShot;
-  const repairedOutput = await runOneShot(opts.adapter, buildContextMapJsonRepairPrompt({
-      rawOutput: opts.rawOutput,
-      errorMessage: opts.errorMessage,
-      schema: opts.schema,
-    }), {
-    model: opts.processor.model,
-    effort: opts.processor.effort,
-    timeoutMs: CONTEXT_MAP_SYNTHESIS_REPAIR_TIMEOUT_MS,
-    abortSignal: opts.abortSignal,
-    workingDir: opts.workspacePath,
-    allowTools: false,
-    cliProfile: opts.processor.runtime.profile,
-  } satisfies RunOneShotOptions, opts.abortSignal);
-  throwIfContextMapStopped(opts.abortSignal);
-  return repairedOutput;
-}
-
-function buildContextMapJsonRepairPrompt(opts: {
-  rawOutput: string;
-  errorMessage: string;
-  schema: 'extraction' | 'synthesis' | 'arbiter';
-}): string {
-  const expectedShape = opts.schema === 'extraction'
-    ? '{"candidates":[{"type":"new_entity","confidence":0.85,"payload":{"typeSlug":"workflow","name":"Example workflow","summaryMarkdown":"Short durable summary."}}]}'
-    : opts.schema === 'synthesis'
-      ? '{"candidates":[{"sourceRefs":["candidate-1"],"type":"new_entity","confidence":0.88,"payload":{"typeSlug":"project","name":"Example","summaryMarkdown":"Short durable summary."}}],"dropped":[],"openQuestions":[]}'
-      : '{"keepRefs":["candidate-1"],"dropRefs":[],"mergeGroups":[],"typeCorrections":[],"relationshipToFactRefs":[],"openQuestions":[]}';
-  return [
-    'You are the Context Map JSON repair processor.',
-    '',
-    'Repair malformed JSON from a prior Context Map synthesis response.',
-    'Output a single valid JSON object only. Do not include markdown or prose.',
-    'Preserve the prior response semantics as much as possible. Do not invent new candidates, refs, facts, entities, evidence, or secrets.',
-    'If a malformed item cannot be repaired confidently, omit only that item.',
-    '',
-    'Expected JSON shape:',
-    expectedShape,
-    '',
-    'Parser error:',
-    opts.errorMessage,
-    '',
-    'Malformed output:',
-    compactPromptBlock(opts.rawOutput, CONTEXT_MAP_SYNTHESIS_REPAIR_OUTPUT_CHAR_LIMIT),
-  ].join('\n');
 }
 
 function buildSynthesisChunks(drafts: ContextMapCandidateDraft[]): Array<{ chunkId: string; drafts: ContextMapCandidateDraft[] }> {
@@ -3463,8 +3264,12 @@ async function parseContextMapCandidatesWithRepair(
         rawOutput,
         errorMessage: (parseErr as Error).message,
         schema: 'extraction',
-        adapter: opts.adapter,
-        processor: opts.processor,
+        runOneShot: (prompt, options, signal) => runContextMapExtractionOneShot(opts.adapter, prompt, options, signal),
+        processor: {
+          model: opts.processor.model,
+          effort: opts.processor.effort,
+          cliProfile: opts.processor.runtime.profile,
+        },
         abortSignal: opts.abortSignal,
         workspacePath: opts.workspacePath,
       });
@@ -4848,146 +4653,6 @@ function normalizeEntityName(value: string): string {
 
 function normalizeSlug(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
-}
-
-function extractJsonObject(raw: string): string | null {
-  const fenceMatch = raw.match(/```(?:json)?\s*\n?([\s\S]*?)```/i);
-  if (fenceMatch) {
-    const inner = fenceMatch[1].trim();
-    if (inner.startsWith('{')) return inner;
-  }
-  return scanBalancedObject(raw);
-}
-
-function parseContextMapJsonOutput(rawOutput: string, noJsonMessage: string, invalidJsonPrefix: string): unknown {
-  const json = extractJsonObject(rawOutput);
-  if (!json) throw new Error(noJsonMessage);
-  try {
-    return JSON.parse(json) as unknown;
-  } catch (err: unknown) {
-    const repaired = insertMissingCommasBetweenArrayValues(json);
-    if (repaired !== json) {
-      try {
-        return JSON.parse(repaired) as unknown;
-      } catch {
-        // Preserve the original parser error so diagnostics point at the model output.
-      }
-    }
-    throw new Error(`${invalidJsonPrefix}: ${(err as Error).message}`);
-  }
-}
-
-function insertMissingCommasBetweenArrayValues(json: string): string {
-  let output = '';
-  let inString = false;
-  let escaped = false;
-  const stack: string[] = [];
-
-  for (let i = 0; i < json.length; i += 1) {
-    const ch = json[i];
-    output += ch;
-
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === '\\') {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-        if (stack[stack.length - 1] === '[') {
-          const inserted = appendMissingArrayComma(json, i);
-          if (inserted) {
-            output += inserted.whitespace;
-            output += ',';
-            i = inserted.resumeAt;
-          }
-        }
-      }
-      continue;
-    }
-
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === '{' || ch === '[') {
-      stack.push(ch);
-    } else if (ch === '}') {
-      if (stack[stack.length - 1] === '{') stack.pop();
-      if (stack[stack.length - 1] === '[') {
-        const inserted = appendMissingArrayComma(json, i);
-        if (inserted) {
-          output += inserted.whitespace;
-          output += ',';
-          i = inserted.resumeAt;
-        }
-      }
-    } else if (ch === ']') {
-      if (stack[stack.length - 1] === '[') stack.pop();
-      if (stack[stack.length - 1] === '[') {
-        const inserted = appendMissingArrayComma(json, i);
-        if (inserted) {
-          output += inserted.whitespace;
-          output += ',';
-          i = inserted.resumeAt;
-        }
-      }
-    }
-  }
-
-  return output;
-}
-
-function appendMissingArrayComma(json: string, valueEndIndex: number): { whitespace: string; resumeAt: number } | null {
-  let next = valueEndIndex + 1;
-  while (next < json.length && /\s/.test(json[next])) next += 1;
-  const nextCh = json[next];
-  if (!jsonValueCanStart(nextCh)) return null;
-  return {
-    whitespace: json.slice(valueEndIndex + 1, next),
-    resumeAt: next - 1,
-  };
-}
-
-function jsonValueCanStart(ch: string | undefined): boolean {
-  return ch === '{'
-    || ch === '['
-    || ch === '"'
-    || ch === '-'
-    || ch === 't'
-    || ch === 'f'
-    || ch === 'n'
-    || (typeof ch === 'string' && ch >= '0' && ch <= '9');
-}
-
-function scanBalancedObject(raw: string): string | null {
-  let depth = 0;
-  let start = -1;
-  let inString = false;
-  let escaped = false;
-  for (let i = 0; i < raw.length; i += 1) {
-    const ch = raw[i];
-    if (inString) {
-      if (escaped) {
-        escaped = false;
-      } else if (ch === '\\') {
-        escaped = true;
-      } else if (ch === '"') {
-        inString = false;
-      }
-      continue;
-    }
-    if (ch === '"') {
-      inString = true;
-    } else if (ch === '{') {
-      if (depth === 0) start = i;
-      depth += 1;
-    } else if (ch === '}') {
-      depth -= 1;
-      if (depth === 0 && start !== -1) {
-        return raw.slice(start, i + 1);
-      }
-    }
-  }
-  return null;
 }
 
 function escapeAttr(value: string): string {

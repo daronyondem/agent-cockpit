@@ -51,7 +51,7 @@
 2. **Linting & formatting** — no ESLint or Prettier
 3. **Conversation pagination** — `listConversations()` loads all into memory
 4. **Conversation attachment MIME validation** — Multer accepts any file type for chat attachments; Knowledge Base ingestion has separate format handlers and pre-flight guards
-5. **Structured logging** — uses `console.log`/`console.error`
+5. **Structured logging coverage** — `src/utils/logger.ts` exists and the WebSocket server uses it for the first operational slice, but many older backend modules still write directly to `console`
 6. **Multi-user support** — settings are global, not per-user
 
 ## Deployment
@@ -62,6 +62,8 @@ cp .env.example .env   # Fill in values
 npm install
 npm start              # Listens on PORT (default 3334)
 ```
+
+`LOG_LEVEL` controls the structured logger threshold for modules that have migrated to `src/utils/logger.ts`. Supported values are `error`, `warn`, `info`, and `debug`; invalid or missing values fall back to `info`. Metadata keys that look like credentials or session material are redacted before log lines are written.
 
 The main `/v2/` web UI is built with Vite from `web/AgentCockpitWeb/` into `public/v2-built/`. Normal development and production both use the same one-server architecture: Express serves backend routes and the built web UI. A separate Vite dev server is not required for the normal `agent-cockpit-dev` workflow. After editing V2 frontend source, restart the PM2-managed dev server; startup preflight detects missing or stale main V2 web assets, runs `npm run web:build`, writes `public/v2-built/.agent-cockpit-build.json`, then starts serving `/v2/`. The same startup preflight also detects missing or stale mobile PWA assets, runs `npm run mobile:build`, and writes `public/mobile-built/.agent-cockpit-build.json` before listen. Explicit local checks are available:
 

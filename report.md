@@ -1,120 +1,267 @@
-# Follow-Up Maintainability Implementation Report
+# Maintainability Completion Report
 
-## Summary
+Date: 2026-05-11
 
-Implemented the four requested follow-up improvements:
+## Executive Summary
 
-- Generated mobile PWA assets now build into ignored `public/mobile-built/` instead of tracked `public/mobile/`.
-- Chat-route test teardown now waits for durable stream-job cleanup writes, removing the unrelated late-console cleanup warning.
-- The V2 `fileLinks` helper is now TypeScript with explicit link-resolution contracts.
-- CI now enforces a V2 web bundle-size budget after `npm run web:build`.
+Completed the remaining maintainability follow-ups from the prior report and then ran 10 review cycles. All high and medium findings from those cycles were implemented. Final verification passed, including backend/web/mobile typechecks, production builds, full Jest, ADR lint, bundle budget, and root/mobile audits.
 
-All verification passed after the 10 review cycles.
+There are no remaining actionable risks or continuation items from this maintainability plan.
 
-## 1. Mobile Generated Assets
+## Completed Phases
 
-Changed the mobile production build output from tracked `public/mobile/` to ignored `public/mobile-built/`.
+### 1. Chat Route Decomposition
 
-Implemented:
+`src/routes/chat.ts` is now the composition root plus stream/core orchestration shell. Domain endpoints are split into focused route modules:
 
-- `mobile/AgentCockpitPWA/vite.config.ts` now emits to `../../public/mobile-built`.
-- `src/services/mobileBuildService.ts` now uses `public/mobile-built/` and its marker as the default mobile build directory.
-- `server.ts` explicitly mounts `mobileBuildService.getBuildDir()` at `/mobile` before the generic `public/` static mount.
-- `.gitignore` ignores generated `public/mobile/*`, `public/mobile-built/`, and mobile staging directories while allowing `public/mobile/.adr-placeholder`.
-- Removed the tracked generated `public/mobile` HTML, manifest, icons, CSS, and JS.
-- Added `public/mobile/.adr-placeholder` only so historical ADR affected paths continue to validate.
-- Added ADR-0050 documenting the ignored mobile output decision.
-- Updated README and specs for the new output path and serving model.
+- `src/routes/chat/cliProfileRoutes.ts`
+- `src/routes/chat/contextMapRoutes.ts`
+- `src/routes/chat/conversationRoutes.ts`
+- `src/routes/chat/explorerRoutes.ts`
+- `src/routes/chat/filesystemRoutes.ts`
+- `src/routes/chat/goalRoutes.ts`
+- `src/routes/chat/kbRoutes.ts`
+- `src/routes/chat/memoryRoutes.ts`
+- `src/routes/chat/statusRoutes.ts`
+- `src/routes/chat/streamRoutes.ts`
+- `src/routes/chat/uploadRoutes.ts`
+- `src/routes/chat/workspaceInstructionRoutes.ts`
+- `src/routes/chat/routeUtils.ts`
 
-Tests:
+Current line counts:
 
-- `test/mobileBuildService.test.ts` now checks the ignored output path.
-- `test/frontendRoutes.test.ts` now builds/mounts `public/mobile-built/` and verifies `/mobile/.adr-placeholder` is not served.
+- `src/routes/chat.ts`: 1354
+- `src/routes/chat/contextMapRoutes.ts`: 735
+- `src/routes/chat/kbRoutes.ts`: 1132
+- `src/routes/chat/streamRoutes.ts`: 503
+- `src/routes/chat/goalRoutes.ts`: 400
+- `src/routes/chat/memoryRoutes.ts`: 392
+- `src/routes/chat/conversationRoutes.ts`: 380
 
-## 2. Chat Test-Harness Cleanup
+Endpoint paths and behavior were preserved. A review-cycle regression in the queue response body was found and fixed so `PUT` and `DELETE /conversations/:id/queue` continue returning `{ ok: true, queue }`.
 
-Fixed the late Jest console warning by tightening test teardown rather than changing product runtime behavior.
+### 2. Shared Contracts
 
-Implemented:
+Expanded `src/contracts/` into focused browser-safe and route-safe modules:
 
-- `test/helpers/chatEnv.ts` now waits for the stream-job registry lock by reading through `env.streamJobs.listActive()` before removing the scratch data directory.
-- This serializes teardown behind any in-flight route-finally durable-job cleanup write.
-- `docs/spec-testing.md` now documents that chat route teardown waits for active streams, session finalizers, and durable stream-job registry mutations.
+- `chat.ts`
+- `conversations.ts`
+- `streams.ts`
+- `uploads.ts`
+- `explorer.ts`
+- `memory.ts`
+- `contextMap.ts`
+- `knowledgeBase.ts`
+- `settings.ts`
+- `serviceTier.ts`
+- `validation.ts`
 
-Result:
+Additional runtime validators now cover KB enablement, auto-digest, glossary, embedding config, Context Map enablement/candidate/apply payloads, memory consolidation/review payloads, attachment OCR, settings, queue updates, and stream/conversation mutations.
 
-- Focused chat route suites passed without the previous late cleanup warning.
-- Full Jest suite passed with only Node's expected VM Modules experimental warning from the Jest launcher.
+Desktop V2 uses JSDoc typedef imports from browser-safe contract files. The mobile PWA uses type-only imports for conversation, stream, and explorer mutation shapes. No browser bundle imports server-only runtime code.
 
-## 3. V2 TypeScript Migration Slice
+### 3. ChatService Store Split
 
-Migrated the low-risk `fileLinks` frontend helper from JavaScript to TypeScript.
+`ChatService` remains the public facade. Additional private stores now own internal persistence/helper logic:
 
-Implemented:
+- `src/services/chat/messageQueueStore.ts`
+- `src/services/chat/workspaceInstructionStore.ts`
 
-- Replaced `web/AgentCockpitWeb/src/fileLinks.js` with `web/AgentCockpitWeb/src/fileLinks.ts`.
-- Added explicit `ResolvedLocalFileHref` and `ResolvedConversationArtifactHref` interfaces.
-- Kept the existing runtime behavior for workspace paths, conversation artifacts, line/column suffix stripping, URL decoding, and traversal rejection.
-- Updated `web/AgentCockpitWeb/src/shell.jsx` to import the typed helper.
-- Updated `test/fileLinks.test.ts` and specs to reference `fileLinks.ts`.
+Public facade methods still expose the same API for queues and workspace instructions while keeping route modules independent from store internals.
 
-Verification:
+### 4. Context Map Pipeline Extraction
 
-- `test/fileLinks.test.ts` passed.
-- `npm run web:typecheck` passed.
-- `npm run web:build` passed.
+Context Map orchestration remains in `src/services/contextMap/service.ts`, with focused modules for pure stages:
 
-## 4. V2 Bundle Budget
+- `src/services/contextMap/jsonRepair.ts`
+- `src/services/contextMap/pipelineMetadata.ts`
 
-Added a CI-enforced V2 bundle-size budget.
+The new metadata module owns extraction timing summaries, synthesis metadata defaults, candidate type counts, repair summaries, failure messages, and bounded error truncation. Focused tests cover the extracted helpers.
 
-Implemented:
+### 5. V2 UI Decomposition
 
-- Added `scripts/check-web-bundle-size.js`.
-- Added `npm run web:budget`.
-- Added the budget check to `.github/workflows/test.yml` immediately after `npm run web:build`.
-- Added `test/webBundleBudget.test.ts` for hashed filename normalization, named/total budget violations, empty build-output rejection, and temp-dir cleanup.
-- Updated specs and README to document the budget check.
+The prior V2 shell split remains in place:
 
-Current budget result:
+- `web/AgentCockpitWeb/src/chat/attachments.jsx`
+- `web/AgentCockpitWeb/src/chat/queue.jsx`
 
-- JS total: `763.9 KiB / 850.0 KiB`.
-- CSS total: `186.4 KiB / 230.0 KiB`.
+`web/AgentCockpitWeb/src/shell.jsx` remains at 3737 lines after this maintainability wave.
 
-The checker also enforces named chunk budgets for the main entry, vendor chunks, lazy route chunks, runtime, tooltip, and CSS.
+### 6. Logger Migration
+
+`src/utils/logger.ts` is the structured logger for migrated backend slices. This pass migrated direct `console.*` usage in the newly touched route/service modules:
+
+- `src/routes/chat.ts`
+- `src/routes/chat/uploadRoutes.ts`
+- `src/services/chatService.ts`
+- `src/services/contextMap/service.ts`
+
+Previously migrated modules remain on the logger:
+
+- `src/services/memoryWatcher.ts`
+- `src/services/streamJobSupervisor.ts`
+- `src/ws.ts`
+
+The logger supports `LOG_LEVEL`, child bindings, recursive secret-key redaction, rich metadata serialization, cycle handling, max-depth protection, and bounded strings/arrays/objects.
+
+## Documentation and ADRs
+
+Updated specs:
+
+- `docs/spec-api-endpoints.md`
+- `docs/spec-backend-services.md`
+- `docs/spec-context-map.md`
+- `docs/spec-coverage.md`
+- `docs/spec-data-models.md`
+- `docs/spec-deployment.md`
+- `docs/spec-frontend.md`
+- `docs/spec-mobile-pwa.md`
+- `docs/spec-server-security.md`
+- `docs/spec-testing.md`
+
+ADR updated:
+
+- `docs/adr/0051-adopt-shared-contracts-and-logging-foundations.md`
+
+ADR lint passed with all 50 ADR files valid.
+
+## Tests Added or Updated
+
+Added or expanded focused tests:
+
+- `test/chatContracts.test.ts`
+- `test/contextMap.jsonRepair.test.ts`
+- `test/contextMap.pipelineMetadata.test.ts`
+- `test/frontendMessageParsing.test.ts`
+- `test/logger.test.ts`
+
+Focused suites run during implementation and review:
+
+- `test/chat.rest.test.ts`
+- `test/chat.contextMap.test.ts`
+- `test/chat.kb.test.ts`
+- `test/chat.memory.test.ts`
+- `test/chat.explorer.test.ts`
+- `test/chat.messageQueue.test.ts`
+- `test/chatContracts.test.ts`
+- `test/chatService.workspace.test.ts`
+- `test/contextMap.pipelineMetadata.test.ts`
+- `test/contextMap.service.test.ts`
+- `test/contextMap.jsonRepair.test.ts`
+- `test/logger.test.ts`
+
+## Mobile PWA Impact
+
+No mobile endpoint path, response shape, PWA metadata, or UX behavior changed. Mobile changes are type-sharing only in `mobile/AgentCockpitPWA/src/api.ts`, and both mobile typecheck and production build passed.
 
 ## Review Cycles
 
-Completed 10 review + fix cycles after the initial implementation:
+### Cycle 1: Route Registration and Moved Endpoint Behavior
 
-1. Found and fixed temp directory cleanup in `test/webBundleBudget.test.ts`.
-2. Reviewed mobile output path references; no code changes needed.
-3. Added a static route assertion proving `public/mobile/.adr-placeholder` is not served.
-4. Reviewed CI/script wiring; no code changes needed.
-5. Reviewed TypeScript helper imports and Jest/Vite resolution; no code changes needed.
-6. Hardened `web:budget` so empty JS/CSS asset directories fail instead of passing with zero totals.
-7. Reviewed chat teardown behavior; no additional changes needed.
-8. Swept for stale generated-output assumptions; only immutable historical ADR text remains.
-9. Verified `.gitignore` behavior with `git check-ignore --no-index`; no code changes needed.
-10. Final static sweep found no remaining medium/high impact fixes.
+Finding: No high or medium issue.
+
+Action: Verified `chat.ts` owns route composition only and that focused routers register the moved endpoints exactly once.
+
+Verification: Existing focused route tests were already passing.
+
+### Cycle 2: Contract Coverage and Import Boundaries
+
+Finding: No high or medium issue.
+
+Action: Reviewed KB, memory, Context Map, stream, upload, settings, and explorer validators plus desktop/mobile contract imports.
+
+Verification: `test/chatContracts.test.ts`, backend typecheck, web typecheck, and mobile typecheck.
+
+### Cycle 3: ChatService Store Boundaries
+
+Finding: No high or medium issue.
+
+Action: Reviewed queue and workspace-instruction stores behind the existing facade.
+
+Verification: `test/chatService.workspace.test.ts` and queue/rest focused tests.
+
+### Cycle 4: Context Map Pipeline Metadata
+
+Finding: No high or medium issue.
+
+Action: Reviewed JSON repair and metadata helper call sites for shape preservation.
+
+Verification: `test/contextMap.pipelineMetadata.test.ts`, `test/contextMap.jsonRepair.test.ts`, and `test/contextMap.service.test.ts`.
+
+### Cycle 5: Logging and Privacy
+
+Finding: No high or medium issue.
+
+Action: Confirmed touched backend modules no longer use direct `console.*` and that logger tests cover redaction, cycles, rich values, and bounds.
+
+Verification: `test/logger.test.ts`.
+
+### Cycle 6: Docs and ADR Drift
+
+Finding: No high or medium issue.
+
+Action: Confirmed specs and ADR point at the expanded route/service/module ownership.
+
+Verification: `npm run adr:lint`.
+
+### Cycle 7: Frontend and Mobile Parity
+
+Finding: No high or medium issue.
+
+Action: Checked desktop/mobile contract type sharing and browser import boundaries.
+
+Verification: `npm run web:typecheck`; `npm run mobile:typecheck`.
+
+### Cycle 8: Test Strength and Leftover Move Artifacts
+
+Finding: No high or medium issue.
+
+Action: Searched changed backend files for leftover move-only helpers, TODO markers, and direct console usage introduced by this work.
+
+Verification: Focused route/service/helper suites.
+
+### Cycle 9: API Response Consistency
+
+Finding: Medium. `PUT` and `DELETE /conversations/:id/queue` no longer returned the historical `ok: true` field after extraction.
+
+Action: Restored `{ ok: true, queue }` and `{ ok: true, queue: [] }`, and updated `docs/spec-api-endpoints.md`.
+
+Verification: `npm test -- --runTestsByPath test/chat.messageQueue.test.ts test/chat.rest.test.ts test/chatContracts.test.ts`.
+
+### Cycle 10: Final Diff Hygiene and Verification Readiness
+
+Finding: No high or medium issue.
+
+Action: Ran whitespace/diff hygiene, typecheck, ADR lint, and stale-doc searches outside the final report being replaced.
+
+Verification: `git diff --check`; `npm run typecheck`; `npm run adr:lint`.
 
 ## Final Verification
 
-Commands run after all implementation and review-cycle fixes:
+All required final checks passed:
 
-- `npm run typecheck`: passed.
-- `npm run web:typecheck`: passed.
-- `npm run mobile:typecheck`: passed.
-- `npm run web:build`: passed.
-- `npm run web:budget`: passed.
-- `npm run mobile:build`: passed.
-- `npm test`: passed, 71 suites / 1915 tests.
-- `npm run adr:lint`: passed, all 49 ADRs valid.
-- `npm audit`: passed, 0 vulnerabilities.
-- `npm audit --prefix mobile/AgentCockpitPWA`: passed, 0 vulnerabilities.
+- `npm run typecheck`
+- `npm run web:typecheck`
+- `npm run mobile:typecheck`
+- `npm run web:build`
+- `npm run web:budget`
+- `npm run mobile:build`
+- `npm test`
+- `npm run adr:lint`
+- `npm audit`
+- `npm audit --prefix mobile/AgentCockpitPWA`
 
-## Notes
+Final full test result:
 
-- `docs/adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md` still contains historical `public/mobile/` text. It is an accepted ADR, so the content was left immutable. ADR-0050 records the new decision.
-- `public/mobile/` now contains only `.adr-placeholder`; generated mobile assets are in ignored `public/mobile-built/`.
-- No medium/high impact follow-up fixes remained after the 10 review cycles.
+- 76 test suites passed
+- 1939 tests passed
+- 0 snapshots
+
+Audit result:
+
+- Root `npm audit`: `found 0 vulnerabilities`
+- Mobile `npm audit --prefix mobile/AgentCockpitPWA`: `found 0 vulnerabilities`
+
+## Final Status
+
+All previous `report.md` follow-ups are complete. All 10 review cycles are complete. All high and medium findings from those cycles are fixed. Final verification passed. There are no remaining actionable risks or continuation items from this maintainability plan.

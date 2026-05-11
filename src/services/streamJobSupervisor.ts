@@ -7,6 +7,7 @@ import type {
   StreamJobTerminalInfo,
   StreamErrorSource,
 } from '../types';
+import { logger } from '../utils/logger';
 
 type AcceptedTurnInput = Omit<DurableStreamJob, 'id' | 'state' | 'createdAt' | 'updatedAt'> & {
   id?: string;
@@ -23,6 +24,8 @@ export interface RuntimeCleanupResult {
   abortedRuntime: boolean;
   deletedJobs: number;
 }
+
+const streamJobLog = logger.child({ subsystem: 'streamJobSupervisor' });
 
 /**
  * Runtime owner for active CLI turn bookkeeping.
@@ -147,7 +150,7 @@ export class StreamJobSupervisor {
       try {
         entry.abort();
       } catch (err: unknown) {
-        console.warn(`[streamJobSupervisor] Stream abort threw for conv=${conversationId}:`, (err as Error).message);
+        streamJobLog.warn('stream abort threw during conversation cleanup', { conversationId, error: err });
       }
       this.detachRuntime(conversationId, entry);
       if (entry.jobId) {
@@ -177,11 +180,11 @@ export class StreamJobSupervisor {
 
   abortAndDetachAllRuntime(): void {
     for (const [conversationId, entry] of this.activeStreams) {
-      console.log(`[shutdown] Aborting active stream for conv=${conversationId}`);
+      streamJobLog.info('aborting active stream for shutdown', { conversationId });
       try {
         entry.abort();
       } catch (err: unknown) {
-        console.warn(`[shutdown] Stream abort threw for conv=${conversationId}:`, (err as Error).message);
+        streamJobLog.warn('stream abort threw during shutdown', { conversationId, error: err });
       }
       entry.jobId = undefined;
     }

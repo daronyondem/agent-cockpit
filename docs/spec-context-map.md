@@ -533,6 +533,8 @@ Malformed extraction JSON is handled in this order:
 3. If still invalid, send one repair prompt through the same Context Map processor using the extraction JSON shape and no tools.
 4. If repair fails, mark that extraction unit failed and leave it retryable.
 
+The local extraction/synthesis JSON extraction, deterministic repair, and bounded JSON repair prompt runner helpers live in `src/services/contextMap/jsonRepair.ts`. The service imports that module instead of carrying parser repair logic inline, so the deterministic repair path and the retry prompt boundary are unit-testable separately from processor orchestration. The service still supplies the extraction or synthesis limiter callback so repair calls remain counted under the correct process-wide concurrency cap.
+
 Extraction failures are isolated per unit. If one source packet fails but others succeed, successful units still commit. Failed source packets do not advance `source_cursors`.
 
 ### Deterministic Cleanup
@@ -612,7 +614,7 @@ The final arbiter sees compact summaries, not unbounded full candidate payloads.
 
 The final synthesis target is 34 or fewer candidates with a hard cap of 45. The service can recover up to 12 strict relationship candidates from original extraction when both endpoints survived synthesis.
 
-Malformed synthesis output is handled with deterministic local repair first, then one bounded JSON repair prompt. Invalid chunk synthesis falls back to ranked bounded subsets for that chunk. Invalid final arbiter output falls back to a ranked reduced set capped at 40 candidates before final cleanup. Synthesis failure must not flood Needs Attention.
+Malformed synthesis output is handled with deterministic local repair first, then one bounded JSON repair prompt from `jsonRepair.ts`. Invalid chunk synthesis falls back to ranked bounded subsets for that chunk. Invalid final arbiter output falls back to a ranked reduced set capped at 40 candidates before final cleanup. Synthesis failure must not flood Needs Attention.
 
 ### Concurrency
 
@@ -872,6 +874,7 @@ The Context Map feature is covered by focused backend, route, frontend-static, s
 |-----------|---------------|
 | `test/contextMap.db.test.ts` | SQLite schema bootstrap, seeded type catalog, entity/type/fact/relationship/evidence/run/cursor/candidate/audit CRUD, candidate status updates, source cursor missing-state recovery, clear-all reset. |
 | `test/contextMap.service.test.ts` | Processor planning, initial/scheduled/manual/reset/archive runs, conversation cursors, workspace source packets, recursive Markdown scanning, code outlines, source cursors, deterministic cleanup, synthesis, JSON repair, auto-apply, stop behavior, partial failures, scheduler timing, run metadata, and global extraction/synthesis concurrency. |
+| `test/contextMap.pipelineMetadata.test.ts` | Pure pipeline metadata helpers for extraction timing summaries, run timing composition, empty synthesis metadata, draft type counts, repair summaries, failure messages, and bounded error truncation. |
 | `test/contextMap.mcp.test.ts` | MCP token lifecycle, tool schema, disabled/missing-token failures, active graph search/detail/relationship/context-pack reads, and secret-pointer read/search redaction. |
 | `test/chat.contextMap.test.ts` | REST enablement/settings/graph/entity/review/scan/stop/clear/candidate routes, disabled/unknown/error behavior, dependency apply flow, workspace update emissions, MCP injection into chat sends, and final reset/archive processing passes. |
 | `test/frontendRoutes.test.ts` | Static guards for Global Settings, Workspace Settings, Context Map overview insight cards, Active Map nearby context, relationship-neighborhood details modal, Needs Attention impact previews, Accept All, source grouping, stop/rescan/clear controls, tooltips, source-toggle absence, and CSS hooks. |
@@ -888,10 +891,13 @@ Core backend implementation:
 - `src/services/contextMap/db.ts`
 - `src/services/contextMap/service.ts`
 - `src/services/contextMap/apply.ts`
+- `src/services/contextMap/jsonRepair.ts`
+- `src/services/contextMap/pipelineMetadata.ts`
 - `src/services/contextMap/mcp.ts`
 - `src/services/contextMap/defaults.ts`
 - `src/services/contextMap/stub.cjs`
 - `src/routes/chat.ts`
+- `src/routes/chat/contextMapRoutes.ts`
 - `src/services/chatService.ts`
 - `src/services/settingsService.ts`
 
@@ -912,6 +918,8 @@ Primary tests:
 
 - `test/contextMap.db.test.ts`
 - `test/contextMap.service.test.ts`
+- `test/contextMap.jsonRepair.test.ts`
+- `test/contextMap.pipelineMetadata.test.ts`
 - `test/contextMap.mcp.test.ts`
 - `test/chat.contextMap.test.ts`
 - `test/frontendRoutes.test.ts`

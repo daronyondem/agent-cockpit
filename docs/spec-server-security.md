@@ -29,8 +29,11 @@
 | `CODEX_SANDBOX_MODE` | No | `workspace-write` | Codex sandbox mode for interactive threads. Valid values: `read-only`, `workspace-write`, `danger-full-access`. Invalid values are ignored with a startup warning and the default is used. |
 | `BASE_PATH` | No | `''` | URL base path prefix (for reverse proxy deployments) |
 | `WEB_BUILD_MODE` | No | `auto` outside tests, `skip` when `NODE_ENV === 'test'` | Controls main V2 web and mobile PWA build startup preflight. `auto` checks and rebuilds missing/stale `public/v2-built/` and `public/mobile-built/` assets before listen; `skip` bypasses both preflights for tests or special deployments. |
+| `LOG_LEVEL` | No | `info` | Structured logger threshold for migrated modules. Valid values are `error`, `warn`, `info`, and `debug`; invalid values fall back to `info`. |
 
 `src/config/index.ts` loads `.env` through `dotenv`. Outside tests, `.env` values override already-present process environment values so PM2-managed local deployments can pin runtime config from the repo's `.env`. When `NODE_ENV === 'test'`, dotenv does **not** override explicit process env values; subprocess tests such as graceful shutdown can pass an isolated `PORT` without being clobbered by a developer `.env` that points at a running PM2 app.
+
+Server logging is migrating to `src/utils/logger.ts`. The logger writes one structured line per event, applies `LOG_LEVEL` filtering, redacts metadata keys that look like credentials, cookies, session ids, tokens, or passwords before emitting, and serializes cyclic/rich metadata safely (`Error`, `Date`, `Map`, `Set`, `bigint`, functions, symbols, bounded arrays/objects/strings). WebSocket diagnostics, `MemoryWatcher`, `StreamJobSupervisor`, chat stream orchestration, upload OCR failures, `ChatService` maintenance paths, and Context Map processor update-emission failures use this path for migrated slices and avoid logging stdin message content; debug logs record only lengths and operational identifiers.
 
 ## 6.2 Server Initialization Order
 

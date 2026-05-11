@@ -5,7 +5,6 @@ import crypto from 'crypto';
 import type { BackendRegistry } from './backends/registry';
 import { SettingsService } from './settingsService';
 import {
-  SUPPORTED_CLI_VENDORS,
   cliProfileIdForBackend,
   type CliProfileRuntime,
   ensureServerConfiguredCliProfiles,
@@ -51,18 +50,12 @@ import type {
   KbCounters,
   KbRawStatus,
   KbAutoDreamConfig,
-  AttachmentMeta,
-  AttachmentKind,
   ConversationArtifact,
   QueuedMessage,
   CliProfile,
   StreamErrorSource,
-  CliVendor,
   WorkspaceInstructionCompatibilityStatus,
   WorkspaceInstructionPointerResult,
-  WorkspaceInstructionSourceId,
-  WorkspaceInstructionSourceStatus,
-  WorkspaceInstructionVendorStatus,
   ContextMapWorkspaceSettings,
 } from '../types';
 import {
@@ -81,6 +74,24 @@ import { KbVectorStore } from './knowledgeBase/vectorStore';
 import { resolveConfig, type EmbeddingConfig } from './knowledgeBase/embeddings';
 import { atomicWriteFile } from '../utils/atomicWrite';
 import { KeyedMutex } from '../utils/keyedMutex';
+import { logger } from '../utils/logger';
+import {
+  attachmentKindFromPath,
+  extensionForMimeType,
+  mimeTypeFromPath,
+  sanitizeArtifactFilename,
+  splitDataUrlBase64,
+} from './chat/attachments';
+import {
+  MessageQueueStore,
+  normalizeMessageQueue,
+} from './chat/messageQueueStore';
+import { WorkspaceInstructionStore } from './chat/workspaceInstructionStore';
+
+const log = logger.child({ module: 'chat-service' });
+
+export { attachmentFromPath } from './chat/attachments';
+export { normalizeMessageQueue, parseUploadedFilesTag } from './chat/messageQueueStore';
 
 /**
  * Schema version of the `state.json` envelope itself. Bumped only when
@@ -99,30 +110,6 @@ const KB_ENTRY_SCHEMA_VERSION = 1;
 
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
 
-const INSTRUCTION_SOURCE_ORDER: WorkspaceInstructionSourceId[] = ['agents', 'claude', 'kiro'];
-
-const INSTRUCTION_SOURCE_META: Record<WorkspaceInstructionSourceId, {
-  vendor: CliVendor;
-  label: string;
-  expectedPath: string;
-}> = {
-  agents: { vendor: 'codex', label: 'AGENTS.md', expectedPath: 'AGENTS.md' },
-  claude: { vendor: 'claude-code', label: 'CLAUDE.md', expectedPath: 'CLAUDE.md' },
-  kiro: { vendor: 'kiro', label: 'Kiro steering', expectedPath: '.kiro/steering/agents-md.md' },
-};
-
-const INSTRUCTION_VENDOR_LABELS: Record<CliVendor, string> = {
-  'claude-code': 'Claude Code',
-  kiro: 'Kiro',
-  codex: 'Codex',
-};
-
-const VENDOR_INSTRUCTION_SOURCE: Record<CliVendor, WorkspaceInstructionSourceId> = {
-  codex: 'agents',
-  'claude-code': 'claude',
-  kiro: 'kiro',
-};
-
 const CONTEXT_MAP_EFFORT_LEVELS = new Set<EffortLevel>([
   'none',
   'minimal',
@@ -132,100 +119,6 @@ const CONTEXT_MAP_EFFORT_LEVELS = new Set<EffortLevel>([
   'xhigh',
   'max',
 ]);
-
-/* ── Attachment metadata helpers ─────────────────────────────────────────────
- * Shared between upload-response enrichment and queue migration. Both paths
- * start from an absolute server path and must produce the same AttachmentMeta
- * so that a queued message enqueued today looks identical to one reloaded
- * from a pre-attachment-schema workspace index. */
-
-const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.bmp', '.avif']);
-const CODE_EXTS = new Set([
-  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
-  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.kts', '.scala', '.swift',
-  '.c', '.cc', '.cpp', '.cxx', '.h', '.hpp', '.hh',
-  '.cs', '.fs', '.php', '.pl', '.lua', '.sh', '.bash', '.zsh', '.fish',
-  '.sql', '.html', '.css', '.scss', '.less', '.vue', '.svelte',
-  '.json', '.jsonc', '.yaml', '.yml', '.toml', '.xml', '.ini', '.env',
-]);
-const TEXT_EXTS = new Set(['.txt', '.log', '.csv', '.tsv', '.rtf']);
-
-const MIME_BY_EXT: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.svg': 'image/svg+xml',
-  '.bmp': 'image/bmp',
-  '.avif': 'image/avif',
-  '.pdf': 'application/pdf',
-  '.md': 'text/markdown',
-  '.markdown': 'text/markdown',
-  '.txt': 'text/plain',
-  '.log': 'text/plain',
-  '.csv': 'text/csv',
-  '.tsv': 'text/tab-separated-values',
-  '.json': 'application/json',
-  '.html': 'text/html',
-  '.htm': 'text/html',
-  '.css': 'text/css',
-  '.js': 'application/javascript',
-  '.mjs': 'application/javascript',
-  '.cjs': 'application/javascript',
-  '.ts': 'application/typescript',
-  '.tsx': 'application/typescript',
-  '.jsx': 'application/javascript',
-  '.py': 'text/x-python',
-  '.sh': 'application/x-sh',
-};
-
-function attachmentKindFromPath(p: string): AttachmentKind {
-  const ext = path.extname(p).toLowerCase();
-  if (!ext) return 'file';
-  if (IMAGE_EXTS.has(ext)) return 'image';
-  if (ext === '.pdf') return 'pdf';
-  if (ext === '.md' || ext === '.markdown') return 'md';
-  if (CODE_EXTS.has(ext)) return 'code';
-  if (TEXT_EXTS.has(ext)) return 'text';
-  return 'file';
-}
-
-function formatAttachmentSize(bytes: number | undefined): string | undefined {
-  if (bytes == null || !Number.isFinite(bytes) || bytes < 0) return undefined;
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-}
-
-function mimeTypeFromPath(p: string): string {
-  return MIME_BY_EXT[path.extname(p).toLowerCase()] || 'application/octet-stream';
-}
-
-function extensionForMimeType(mimeType: string | undefined): string {
-  const normalized = (mimeType || '').split(';')[0].trim().toLowerCase();
-  if (normalized === 'image/png') return '.png';
-  if (normalized === 'image/jpeg' || normalized === 'image/jpg') return '.jpg';
-  if (normalized === 'image/gif') return '.gif';
-  if (normalized === 'image/webp') return '.webp';
-  if (normalized === 'image/svg+xml') return '.svg';
-  if (normalized === 'image/bmp') return '.bmp';
-  if (normalized === 'image/avif') return '.avif';
-  if (normalized === 'application/pdf') return '.pdf';
-  if (normalized === 'text/markdown') return '.md';
-  if (normalized === 'text/plain') return '.txt';
-  if (normalized === 'application/json') return '.json';
-  return '';
-}
-
-function sanitizeArtifactFilename(name: string): string {
-  const safe = (name || '').replace(/[\/\\]/g, '_').replace(/[\u0000-\u001f]/g, '').trim();
-  if (!safe || safe === '.' || safe === '..') {
-    return `artifact-${new Date().toISOString().replace(/[:.]/g, '-')}`;
-  }
-  return safe;
-}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -268,93 +161,6 @@ function normalizeContextMapWorkspaceSettings(
   }
 
   return settings;
-}
-
-function splitDataUrlBase64(value: string, fallbackMimeType?: string): { dataBase64: string; mimeType?: string } {
-  const match = value.match(/^data:([^;,]+)?;base64,(.*)$/s);
-  if (!match) return { dataBase64: value, mimeType: fallbackMimeType };
-  return { dataBase64: match[2], mimeType: match[1] || fallbackMimeType };
-}
-
-/**
- * Build AttachmentMeta from an absolute path. When `size` is known (e.g. from
- * multer's `file.size`), pass it in; otherwise this function does NOT stat the
- * file — callers should stat async if they care about size (queue migration
- * best-effort stats inline with a fallback to undefined).
- */
-export function attachmentFromPath(abs: string, size?: number): AttachmentMeta {
-  const name = path.basename(abs);
-  const kind = attachmentKindFromPath(abs);
-  return {
-    name,
-    path: abs,
-    size,
-    kind,
-    meta: formatAttachmentSize(size),
-  };
-}
-
-/**
- * Parse a legacy `[Uploaded files: <path1>, <path2>, …]` tag out of a message
- * content string. Returns the clean content + inferred attachments, or null
- * when no tag is present. Used to migrate string[] queue entries into the
- * new QueuedMessage shape on first read.
- *
- * The tag is matched greedily on the last occurrence so a user-authored
- * message that happens to contain the literal "[Uploaded files:" earlier in
- * its text survives. The regex is intentionally strict — anything else in
- * the string passes through untouched.
- */
-export function parseUploadedFilesTag(content: string): { content: string; attachments: AttachmentMeta[] } | null {
-  if (!content) return null;
-  const match = content.match(/\n*\[Uploaded files: ([^\]]+)\]\s*$/);
-  if (!match) return null;
-  const paths = match[1].split(',').map(s => s.trim()).filter(Boolean);
-  if (!paths.length) return null;
-  return {
-    content: content.slice(0, match.index).replace(/\s+$/, ''),
-    attachments: paths.map(p => attachmentFromPath(p)),
-  };
-}
-
-/**
- * Normalize any shape that may appear under `messageQueue` on disk into the
- * canonical `QueuedMessage[]`. Handles three cases:
- *   1. Legacy `string[]`  — each element is parsed for `[Uploaded files: …]`
- *      and split into `{content, attachments}` or `{content}` when absent.
- *   2. Current `QueuedMessage[]` — passed through, with defensive filtering
- *      of unknown fields so a hand-edited index can't smuggle state in.
- *   3. Anything else — coerced to `[]`.
- */
-export function normalizeMessageQueue(raw: unknown): QueuedMessage[] {
-  if (!Array.isArray(raw)) return [];
-  const out: QueuedMessage[] = [];
-  for (const entry of raw) {
-    if (typeof entry === 'string') {
-      const parsed = parseUploadedFilesTag(entry);
-      if (parsed) {
-        out.push({ content: parsed.content, attachments: parsed.attachments });
-      } else {
-        out.push({ content: entry });
-      }
-    } else if (entry && typeof entry === 'object' && typeof (entry as QueuedMessage).content === 'string') {
-      const q = entry as QueuedMessage;
-      const clean: QueuedMessage = { content: q.content };
-      if (Array.isArray(q.attachments) && q.attachments.length) {
-        clean.attachments = q.attachments
-          .filter(a => a && typeof a === 'object' && typeof a.path === 'string' && typeof a.name === 'string')
-          .map(a => ({
-            name: a.name,
-            path: a.path,
-            size: typeof a.size === 'number' ? a.size : undefined,
-            kind: (typeof a.kind === 'string' ? a.kind : attachmentKindFromPath(a.path)) as AttachmentKind,
-            meta: typeof a.meta === 'string' ? a.meta : formatAttachmentSize(typeof a.size === 'number' ? a.size : undefined),
-          }));
-      }
-      out.push(clean);
-    }
-  }
-  return out;
 }
 
 /**
@@ -546,130 +352,14 @@ interface EditMessageResult {
   message: Message;
 }
 
-function relPath(absPath: string, workspacePath: string): string {
-  return path.relative(workspacePath, absPath).split(path.sep).join('/');
-}
-
-function sortInstructionPaths(paths: string[]): string[] {
-  return [...paths].sort((a, b) => a.localeCompare(b));
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fsp.stat(filePath);
-    return stat.isFile();
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-    throw err;
-  }
-}
-
-async function listKiroSteeringFiles(workspacePath: string): Promise<string[]> {
-  const steeringDir = path.join(workspacePath, '.kiro', 'steering');
-  const out: string[] = [];
-
-  async function walk(dir: string): Promise<void> {
-    let entries: fs.Dirent[];
-    try {
-      entries = await fsp.readdir(dir, { withFileTypes: true });
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw err;
-    }
-
-    for (const entry of entries) {
-      const abs = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await walk(abs);
-      } else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) {
-        out.push(relPath(abs, workspacePath));
-      }
-    }
-  }
-
-  await walk(steeringDir);
-  return sortInstructionPaths(out);
-}
-
-function instructionFingerprint(
-  sources: WorkspaceInstructionSourceStatus[],
-  missingVendors: WorkspaceInstructionVendorStatus[],
-): string {
-  const payload = {
-    sources: sources
-      .filter(source => source.present)
-      .map(source => ({ id: source.id, paths: source.paths })),
-    missingVendors: missingVendors.map(item => item.vendor),
-  };
-  return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 16);
-}
-
-function formatInstructionLinkList(paths: string[]): string {
-  return paths.map(p => `- [${p}](${p})`).join('\n');
-}
-
-function agentsPointerContent(sources: WorkspaceInstructionSourceStatus[]): string {
-  const existingPaths = sources
-    .filter(source => source.present && source.id !== 'agents')
-    .flatMap(source => source.paths);
-  const lines = [
-    '# Agent Instructions',
-    '',
-    existingPaths.length
-      ? 'Read and follow the existing project instruction file(s):'
-      : 'This workspace uses Agent Cockpit project instructions.',
-    '',
-  ];
-  if (existingPaths.length) {
-    lines.push(formatInstructionLinkList(existingPaths), '');
-  }
-  lines.push(
-    'This file lets CLI coding agents that read AGENTS.md reuse the existing project instructions.',
-    '',
-  );
-  return lines.join('\n');
-}
-
-function claudePointerContent(): string {
-  return [
-    '# Claude Code Instructions',
-    '',
-    '@AGENTS.md',
-    '',
-    'This file is intentionally thin. `AGENTS.md` is the canonical cross-agent instruction file for this workspace; Claude Code imports it here for compatibility with Claude Code project-memory lookup.',
-    '',
-  ].join('\n');
-}
-
-function kiroPointerContent(): string {
-  return [
-    '---',
-    'inclusion: always',
-    '---',
-    '',
-    '#[[file:AGENTS.md]]',
-    '',
-  ].join('\n');
-}
-
-async function writePointerFile(workspacePath: string, relativePath: string, content: string): Promise<boolean> {
-  const abs = path.join(workspacePath, relativePath);
-  await fsp.mkdir(path.dirname(abs), { recursive: true });
-  try {
-    await fsp.writeFile(abs, content, { encoding: 'utf8', flag: 'wx' });
-    return true;
-  } catch (err: unknown) {
-    if ((err as NodeJS.ErrnoException).code === 'EEXIST') return false;
-    throw err;
-  }
-}
-
 export class ChatService {
   baseDir: string;
   workspacesDir: string;
   artifactsDir: string;
   usageLedgerFile: string;
   private _settingsService: SettingsService;
+  private _messageQueueStore: MessageQueueStore;
+  private _workspaceInstructionStore: WorkspaceInstructionStore;
   private _defaultWorkspace: string;
   private _backendRegistry: BackendRegistry | null;
   private _convWorkspaceMap: Map<string, string>;
@@ -709,6 +399,17 @@ export class ChatService {
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
     this._backendRegistry = options.backendRegistry || null;
     this._convWorkspaceMap = new Map();
+    this._messageQueueStore = new MessageQueueStore({
+      convWorkspaceMap: this._convWorkspaceMap,
+      indexLock: this._indexLock,
+      getConvFromIndex: (convId) => this._getConvFromIndex(convId),
+      writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
+    });
+    this._workspaceInstructionStore = new WorkspaceInstructionStore({
+      indexLock: this._indexLock,
+      readWorkspaceIndex: (hash) => this._readWorkspaceIndex(hash),
+      writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
+    });
 
     this._legacyConversationsDir = path.join(this.baseDir, 'conversations');
     this._legacyArchivesDir = path.join(this.baseDir, 'archives');
@@ -878,7 +579,7 @@ export class ChatService {
         // A corrupt index.json must not take the server down on startup.
         // Log and skip — the affected workspace becomes invisible until the
         // file is repaired, but every other workspace stays usable.
-        console.error(`[chat] Skipping workspace ${hash} — could not read index.json: ${(err as Error).message}`);
+        log.error('Skipping workspace because index.json could not be read', { workspaceHash: hash, error: err });
         continue;
       }
       if (!index || !index.conversations) continue;
@@ -1578,48 +1279,16 @@ export class ChatService {
 
   // ── Message Queue Persistence ──────────────────────────────────────────────
 
-  /**
-   * Return the normalized queue for a conversation. Also migrates a legacy
-   * `string[]` queue on disk to the new `QueuedMessage[]` shape in place
-   * (the migrated shape is persisted back only when the caller subsequently
-   * writes the index — normalization never writes on its own to avoid
-   * surprising mutations from what should be a read).
-   */
   async getQueue(convId: string): Promise<QueuedMessage[]> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return [];
-    const normalized = normalizeMessageQueue(result.convEntry.messageQueue);
-    // Mirror the normalized shape back onto the in-memory entry so subsequent
-    // writes persist the upgraded shape without requiring a dedicated migration
-    // step. Safe: _getConvFromIndex always returns the live index object.
-    if (normalized.length) {
-      result.convEntry.messageQueue = normalized;
-    } else if (result.convEntry.messageQueue) {
-      delete result.convEntry.messageQueue;
-    }
-    return normalized;
+    return this._messageQueueStore.getQueue(convId);
   }
 
   async setQueue(convId: string, queue: QueuedMessage[]): Promise<boolean> {
-    const hash = this._convWorkspaceMap.get(convId);
-    if (!hash) return false;
-    return this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(convId);
-      if (!result) return false;
-      const { index, convEntry } = result;
-      const normalized = normalizeMessageQueue(queue);
-      if (normalized.length === 0) {
-        delete convEntry.messageQueue;
-      } else {
-        convEntry.messageQueue = normalized;
-      }
-      await this._writeWorkspaceIndex(hash, index);
-      return true;
-    });
+    return this._messageQueueStore.setQueue(convId, queue);
   }
 
   async clearQueue(convId: string): Promise<boolean> {
-    return this.setQueue(convId, []);
+    return this._messageQueueStore.clearQueue(convId);
   }
 
   // ── Session Management ─────────────────────────────────────────────────────
@@ -1874,147 +1543,26 @@ export class ChatService {
   // ── Workspace Instructions ──────────────────────────────────────────────────
 
   async getWorkspaceInstructions(hash: string): Promise<string | null> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
-    return index.instructions || '';
+    return this._workspaceInstructionStore.getInstructions(hash);
   }
 
   async setWorkspaceInstructions(hash: string, instructions: string): Promise<string | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
-      if (!index) return null;
-      index.instructions = instructions || '';
-      await this._writeWorkspaceIndex(hash, index);
-      return index.instructions;
-    });
+    return this._workspaceInstructionStore.setInstructions(hash, instructions);
   }
 
   async getWorkspaceInstructionCompatibility(hash: string): Promise<WorkspaceInstructionCompatibilityStatus | null> {
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
-    return this._detectWorkspaceInstructionCompatibility(hash, index);
+    return this._workspaceInstructionStore.getCompatibility(hash);
   }
 
   async createWorkspaceInstructionPointers(hash: string): Promise<{
     status: WorkspaceInstructionCompatibilityStatus;
     created: WorkspaceInstructionPointerResult[];
   } | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
-      if (!index) return null;
-
-      const status = await this._detectWorkspaceInstructionCompatibility(hash, index);
-      const created: WorkspaceInstructionPointerResult[] = [];
-      if (!status.canCreatePointers) {
-        return { status, created };
-      }
-
-      const missing = new Set(status.missingVendors.map(item => item.vendor));
-      const workspacePath = index.workspacePath;
-
-      if (missing.has('codex')) {
-        const source = INSTRUCTION_SOURCE_META.agents;
-        if (await writePointerFile(workspacePath, source.expectedPath, agentsPointerContent(status.sources))) {
-          created.push({ vendor: source.vendor, label: source.label, path: source.expectedPath });
-        }
-      }
-
-      if (missing.has('claude-code')) {
-        const source = INSTRUCTION_SOURCE_META.claude;
-        if (await writePointerFile(workspacePath, source.expectedPath, claudePointerContent())) {
-          created.push({ vendor: source.vendor, label: source.label, path: source.expectedPath });
-        }
-      }
-
-      if (missing.has('kiro')) {
-        const source = INSTRUCTION_SOURCE_META.kiro;
-        if (await writePointerFile(workspacePath, source.expectedPath, kiroPointerContent())) {
-          created.push({ vendor: source.vendor, label: source.label, path: source.expectedPath });
-        }
-      }
-
-      if (index.instructionCompatibilityDismissedFingerprint) {
-        delete index.instructionCompatibilityDismissedFingerprint;
-        await this._writeWorkspaceIndex(hash, index);
-      }
-
-      const nextStatus = await this._detectWorkspaceInstructionCompatibility(hash, index);
-      return { status: nextStatus, created };
-    });
+    return this._workspaceInstructionStore.createPointers(hash);
   }
 
   async dismissWorkspaceInstructionCompatibility(hash: string): Promise<WorkspaceInstructionCompatibilityStatus | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
-      if (!index) return null;
-      const status = await this._detectWorkspaceInstructionCompatibility(hash, index);
-      index.instructionCompatibilityDismissedFingerprint = status.fingerprint;
-      await this._writeWorkspaceIndex(hash, index);
-      return this._detectWorkspaceInstructionCompatibility(hash, index);
-    });
-  }
-
-  private async _detectWorkspaceInstructionCompatibility(
-    hash: string,
-    index: WorkspaceIndex,
-  ): Promise<WorkspaceInstructionCompatibilityStatus> {
-    const workspacePath = index.workspacePath;
-    const agentsPresent = await fileExists(path.join(workspacePath, 'AGENTS.md'));
-    const claudePresent = await fileExists(path.join(workspacePath, 'CLAUDE.md'));
-    const kiroPaths = await listKiroSteeringFiles(workspacePath);
-
-    const sources: WorkspaceInstructionSourceStatus[] = INSTRUCTION_SOURCE_ORDER.map(id => {
-      const meta = INSTRUCTION_SOURCE_META[id];
-      const paths = id === 'agents'
-        ? (agentsPresent ? ['AGENTS.md'] : [])
-        : id === 'claude'
-          ? (claudePresent ? ['CLAUDE.md'] : [])
-          : kiroPaths;
-      return {
-        id,
-        vendor: meta.vendor,
-        label: meta.label,
-        expectedPath: meta.expectedPath,
-        present: paths.length > 0,
-        paths,
-      };
-    });
-
-    const bySource = new Map(sources.map(source => [source.id, source]));
-    const vendors: WorkspaceInstructionVendorStatus[] = SUPPORTED_CLI_VENDORS.map(vendor => {
-      const sourceId = VENDOR_INSTRUCTION_SOURCE[vendor];
-      const source = bySource.get(sourceId)!;
-      return {
-        vendor,
-        label: INSTRUCTION_VENDOR_LABELS[vendor],
-        sourceId,
-        expectedPath: source.expectedPath,
-        covered: source.present,
-      };
-    });
-    const missingVendors = vendors.filter(item => !item.covered);
-    const hasAnyInstructions = sources.some(source => source.present);
-    const compatible = !hasAnyInstructions || missingVendors.length === 0;
-    const fingerprint = instructionFingerprint(sources, missingVendors);
-    const dismissed = index.instructionCompatibilityDismissedFingerprint === fingerprint;
-    const primarySource = sources.find(source => source.id === 'agents' && source.present)
-      || sources.find(source => source.present)
-      || null;
-
-    return {
-      workspaceHash: hash,
-      workspacePath,
-      sources,
-      vendors,
-      missingVendors,
-      hasAnyInstructions,
-      compatible,
-      canCreatePointers: hasAnyInstructions && missingVendors.length > 0,
-      fingerprint,
-      dismissed,
-      shouldNotify: hasAnyInstructions && missingVendors.length > 0 && !dismissed,
-      primarySourceId: primarySource ? primarySource.id : null,
-    };
+    return this._workspaceInstructionStore.dismissCompatibility(hash);
   }
 
   getWorkspaceHashForConv(convId: string): string | null {
@@ -2226,10 +1774,10 @@ export class ChatService {
       try {
         await fsp.rename(from, to);
       } catch (err: unknown) {
-        console.warn(`[memory] legacy migration: could not move ${from} → ${to}:`, (err as Error).message);
+        log.warn('Legacy memory migration could not move file', { from, to, error: err });
       }
     }
-    console.log(`[memory] migrated ${loose.length} legacy file(s) into ${claudeDir}`);
+    log.info('Migrated legacy memory files', { count: loose.length, destination: claudeDir });
   }
 
   /**
@@ -2254,7 +1802,7 @@ export class ChatService {
       try {
         content = await fsp.readFile(full, 'utf8');
       } catch (err: unknown) {
-        console.warn(`[memory] could not read note ${full}:`, (err as Error).message);
+        log.warn('Could not read memory note', { path: full, error: err });
         continue;
       }
       const parsed = parseMemoryFrontmatter(content);
@@ -3026,39 +2574,39 @@ export class ChatService {
   ): Promise<MemorySnapshot | null> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) {
-      console.log(`[memory] captureWorkspaceMemory: no workspace hash for conv=${convId}`);
+      log.info('Skipping memory capture because conversation has no workspace hash', { convId });
       return null;
     }
     const index = await this._readWorkspaceIndex(hash);
     if (!index) {
-      console.log(`[memory] captureWorkspaceMemory: no workspace index for conv=${convId} hash=${hash}`);
+      log.info('Skipping memory capture because workspace index is missing', { convId, workspaceHash: hash });
       return null;
     }
 
     const adapter = this._backendRegistry?.get(backendId);
     if (!adapter) {
-      console.log(`[memory] captureWorkspaceMemory: no adapter for backend=${backendId}`);
+      log.info('Skipping memory capture because backend adapter is missing', { backendId });
       return null;
     }
 
-    console.log(`[memory] extracting for conv=${convId} backend=${backendId} workspacePath=${index.workspacePath}`);
+    log.info('Extracting workspace memory', { convId, backendId, workspacePath: index.workspacePath });
     let snapshot: MemorySnapshot | null = null;
     try {
       snapshot = await adapter.extractMemory(index.workspacePath, { cliProfile });
     } catch (err: unknown) {
-      console.error(`[memory] extractMemory threw for backend=${backendId} workspacePath=${index.workspacePath}:`, (err as Error).message);
+      log.error('Memory extraction failed', { backendId, workspacePath: index.workspacePath, error: err });
       return null;
     }
 
     if (!snapshot) {
-      console.log(`[memory] extractMemory returned null for backend=${backendId} workspacePath=${index.workspacePath}`);
+      log.info('Memory extraction returned no snapshot', { backendId, workspacePath: index.workspacePath });
       return null;
     }
 
     try {
       await this.saveWorkspaceMemory(hash, snapshot);
     } catch (err: unknown) {
-      console.error(`[memory] saveWorkspaceMemory failed for conv=${convId}:`, (err as Error).message);
+      log.error('Saving workspace memory failed', { convId, workspaceHash: hash, error: err });
       return null;
     }
 
@@ -3107,7 +2655,7 @@ export class ChatService {
     try {
       await fsp.mkdir(filesDir, { recursive: true });
     } catch (err: unknown) {
-      console.warn(`[memory] getWorkspaceMemoryPointer: could not create ${filesDir}:`, (err as Error).message);
+      log.warn('Could not create workspace memory pointer directory', { path: filesDir, error: err });
     }
     const absPath = path.resolve(filesDir);
     return [
@@ -3207,10 +2755,7 @@ export class ChatService {
       try {
         db.close();
       } catch (err: unknown) {
-        console.warn(
-          `[kb] closeKbDatabases: failed to close ${hash}:`,
-          (err as Error).message,
-        );
+        log.warn('Failed to close KB database', { workspaceHash: hash, error: err });
       }
     }
     this._kbDbs.clear();
@@ -3239,10 +2784,7 @@ export class ChatService {
       try {
         await store.close();
       } catch (err: unknown) {
-        console.warn(
-          `[kb] closeKbVectorStores: failed to close ${hash}:`,
-          (err as Error).message,
-        );
+        log.warn('Failed to close KB vector store', { workspaceHash: hash, error: err });
       }
     }
     this._kbVectorStores.clear();
@@ -3516,10 +3058,7 @@ export class ChatService {
       try {
         db.close();
       } catch (err: unknown) {
-        console.warn(
-          `[context-map] closeContextMapDatabases: failed to close ${hash}:`,
-          (err as Error).message,
-        );
+        log.warn('Failed to close Context Map database', { workspaceHash: hash, error: err });
       }
     }
     this._contextMapDbs.clear();
@@ -3684,7 +3223,7 @@ export class ChatService {
     try {
       await fsp.mkdir(entriesDir, { recursive: true });
     } catch (err: unknown) {
-      console.warn(`[kb] getWorkspaceKbPointer: could not create ${entriesDir}:`, (err as Error).message);
+      log.warn('Could not create workspace KB pointer directory', { path: entriesDir, error: err });
     }
     const absKbDir = path.resolve(kbDir);
     return [
@@ -3756,7 +3295,7 @@ export class ChatService {
         }
         workspaceGroups.get(hash)!.convs.push(conv);
       } catch (err: unknown) {
-        console.error(`[migration] Failed to read conversation ${convId}:`, (err as Error).message);
+        log.error('Failed to read legacy conversation during migration', { convId, error: err });
       }
     }
 
@@ -3904,7 +3443,7 @@ export class ChatService {
     }
 
     await this._renameLegacyDirs();
-    console.log(`[migration] Migrated ${files.length} conversation(s) to workspace format`);
+    log.info('Migrated legacy conversations to workspace format', { count: files.length });
   }
 
   private async _renameLegacyDirs(): Promise<void> {
@@ -3917,7 +3456,7 @@ export class ChatService {
           await fsp.rename(oldName, backupName);
         }
       } catch (err: unknown) {
-        console.error(`[migration] Failed to rename ${oldName}:`, (err as Error).message);
+        log.error('Failed to rename legacy directory during migration', { path: oldName, backupPath: backupName, error: err });
       }
     }
   }
@@ -3984,7 +3523,7 @@ export class ChatService {
     // Skip ledger for backends that don't provide token-based usage (e.g. Kiro)
     if (!options?.skipLedger) {
       this._recordToLedger(mutated.backendId, model || 'unknown', usage).catch(err => {
-        console.error('[usage] Failed to write ledger:', (err as Error).message);
+        log.error('Failed to write usage ledger', { error: err });
       });
     }
 
