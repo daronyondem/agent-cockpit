@@ -97,6 +97,158 @@ function nextContextMapInitialScanNotice(runs, previous){
   return null;
 }
 
+function contextMapPayloadLabel(value){
+  if (Array.isArray(value)) {
+    return value.map(contextMapPayloadLabel).filter(Boolean).join(', ');
+  }
+  if (value && typeof value === 'object') {
+    const objectValue = value.name || value.title || value.id || value.entityId || value.relationshipId || value.targetId || '';
+    return objectValue == null ? '' : String(objectValue);
+  }
+  return value == null ? '' : String(value);
+}
+
+function contextMapFirstPayloadValue(payload, keys){
+  for (const key of keys) {
+    const label = contextMapPayloadLabel(payload && payload[key]);
+    if (label) return label;
+  }
+  return '';
+}
+
+function contextMapCompactLabel(value, fallback){
+  const text = contextMapPayloadLabel(value) || fallback || 'Unknown';
+  return text.length > 54 ? text.slice(0, 51) + '...' : text;
+}
+
+function contextMapPayloadChangeList(payload){
+  const fields = [];
+  [
+    ['newName', 'name'],
+    ['updatedName', 'name'],
+    ['newTypeSlug', 'type'],
+    ['updatedTypeSlug', 'type'],
+    ['status', 'status'],
+    ['sensitivity', 'sensitivity'],
+    ['summaryMarkdown', 'summary'],
+    ['notesMarkdown', 'notes'],
+  ].forEach(([key, label]) => {
+    if (payload && payload[key] != null && String(payload[key]).trim()) fields.push(label);
+  });
+  if (payload && Array.isArray(payload.aliases) && payload.aliases.length) fields.push('aliases');
+  if (payload && Array.isArray(payload.facts) && payload.facts.length) fields.push('facts');
+  return fields.length ? fields.join(', ') : 'fields';
+}
+
+function contextMapCandidateImpactPreview(candidate){
+  const payload = (candidate && candidate.payload) || {};
+  const type = (candidate && candidate.candidateType) || 'candidate';
+  const entityName = contextMapFirstPayloadValue(payload, ['entityName', 'name', 'targetName', 'subjectName', 'objectName', 'entityId', 'targetEntityId']);
+  const subjectName = contextMapFirstPayloadValue(payload, ['subjectName', 'subjectEntityName', 'sourceName', 'fromName', 'subjectEntityId']);
+  const objectName = contextMapFirstPayloadValue(payload, ['objectName', 'objectEntityName', 'targetName', 'toName', 'objectEntityId']);
+  const predicate = contextMapFirstPayloadValue(payload, ['predicate', 'relationship', 'relationshipType', 'label']);
+  const relationship = contextMapFirstPayloadValue(payload, ['relationshipId', 'targetRelationshipId']);
+  const targetKind = contextMapFirstPayloadValue(payload, ['targetKind', 'kind']);
+  const targetId = contextMapFirstPayloadValue(payload, ['targetId', 'targetEntityId', 'entityId', 'factId', 'relationshipId', 'candidateId']);
+  const sourceName = contextMapFirstPayloadValue(payload, ['sourceEntityName', 'sourceName', 'fromName', 'sourceEntityId']);
+  const targetName = contextMapFirstPayloadValue(payload, ['targetEntityName', 'targetName', 'toName', 'targetEntityId']);
+
+  if (type === 'new_relationship') {
+    return {
+      left: contextMapCompactLabel(subjectName, 'Subject'),
+      edge: contextMapCompactLabel(predicate, 'relates_to'),
+      right: contextMapCompactLabel(objectName, 'Object'),
+      note: contextMapFirstPayloadValue(payload, ['evidenceMarkdown']) ? 'Evidence included' : '',
+    };
+  }
+  if (type === 'relationship_update') {
+    return {
+      left: contextMapCompactLabel(relationship || subjectName, 'Relationship'),
+      edge: 'updates edge',
+      right: contextMapCompactLabel(predicate || objectName, 'relationship fields'),
+      note: contextMapPayloadChangeList(payload),
+    };
+  }
+  if (type === 'relationship_removal') {
+    return {
+      left: contextMapCompactLabel(relationship || subjectName, 'Relationship'),
+      edge: 'supersedes',
+      right: contextMapCompactLabel(objectName || predicate, 'existing edge'),
+      note: 'Relationship history is retained',
+    };
+  }
+  if (type === 'new_entity') {
+    return {
+      left: contextMapCompactLabel(contextMapFirstPayloadValue(payload, ['typeSlug', 'entityType', 'type']), 'entity'),
+      edge: 'creates',
+      right: contextMapCompactLabel(entityName, 'Entity'),
+      note: contextMapFirstPayloadValue(payload, ['sensitivity']) || '',
+    };
+  }
+  if (type === 'entity_update') {
+    return {
+      left: contextMapCompactLabel(entityName, 'Entity'),
+      edge: 'updates',
+      right: contextMapPayloadChangeList(payload),
+      note: '',
+    };
+  }
+  if (type === 'entity_merge') {
+    return {
+      left: contextMapCompactLabel(sourceName || contextMapFirstPayloadValue(payload, ['sourceEntityIds', 'sourceNames']), 'Source entities'),
+      edge: 'merge into',
+      right: contextMapCompactLabel(targetName || entityName, 'Target entity'),
+      note: '',
+    };
+  }
+  if (type === 'alias_addition') {
+    return {
+      left: contextMapCompactLabel(entityName, 'Entity'),
+      edge: 'adds alias',
+      right: contextMapCompactLabel(contextMapFirstPayloadValue(payload, ['alias', 'newAlias']), 'Alias'),
+      note: '',
+    };
+  }
+  if (type === 'sensitivity_classification') {
+    return {
+      left: contextMapCompactLabel(entityName, 'Entity'),
+      edge: 'classifies as',
+      right: contextMapCompactLabel(contextMapFirstPayloadValue(payload, ['sensitivity', 'classification']), 'sensitivity'),
+      note: '',
+    };
+  }
+  if (type === 'new_entity_type') {
+    return {
+      left: 'Type catalog',
+      edge: 'adds',
+      right: contextMapCompactLabel(contextMapFirstPayloadValue(payload, ['typeSlug', 'slug', 'type']), 'entity type'),
+      note: '',
+    };
+  }
+  if (type === 'evidence_link') {
+    return {
+      left: contextMapCompactLabel(targetKind, 'Target'),
+      edge: 'links evidence',
+      right: contextMapCompactLabel(targetId, 'Evidence target'),
+      note: contextMapFirstPayloadValue(payload, ['sourceId', 'evidenceMarkdown']) || '',
+    };
+  }
+  if (type === 'conflict_flag') {
+    return {
+      left: contextMapCompactLabel(targetKind, 'Target'),
+      edge: 'flags',
+      right: contextMapCompactLabel(targetId || entityName, 'Conflict'),
+      note: contextMapFirstPayloadValue(payload, ['reason', 'summaryMarkdown']) || '',
+    };
+  }
+  return {
+    left: contextMapCompactLabel(type, 'Candidate'),
+    edge: 'proposes',
+    right: contextMapCompactLabel(entityName || predicate || targetId, 'Graph change'),
+    note: '',
+  };
+}
+
 function WorkspaceSettingsPage({ hash, label, initialTab, onOpenMemoryReview, onClose }){
   const [tab, setTab] = React.useState(() => WS_SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'instructions');
   const [loading, setLoading] = React.useState(true);
@@ -112,6 +264,7 @@ function WorkspaceSettingsPage({ hash, label, initialTab, onOpenMemoryReview, on
   const [kbEnabled, setKbEnabled] = React.useState(false);
   const [contextMapEnabled, setContextMapEnabled] = React.useState(false);
   const [contextMapSettings, setContextMapSettings] = React.useState({ processorMode: 'global' });
+  const [contextMapSettingsDirty, setContextMapSettingsDirty] = React.useState(false);
   const [contextMapReview, setContextMapReview] = React.useState({ candidates: [], counts: {}, runs: [] });
   const [contextMapReviewStatus, setContextMapReviewStatus] = React.useState('pending');
   const [contextMapInitialScanNotice, setContextMapInitialScanNotice] = React.useState(null);
@@ -160,6 +313,7 @@ function WorkspaceSettingsPage({ hash, label, initialTab, onOpenMemoryReview, on
       setKbEnabled(!!kbRes.enabled);
       setContextMapEnabled(!!contextMapRes.enabled);
       setContextMapSettings(contextMapRes.settings || { processorMode: 'global' });
+      setContextMapSettingsDirty(false);
       setContextMapReview(contextMapReviewRes || { candidates: [], counts: {}, runs: [] });
       setContextMapReviewStatus('pending');
       setContextMapInitialScanNotice(prev => nextContextMapInitialScanNotice(contextMapRunsFromReview(contextMapReviewRes), prev));
@@ -805,6 +959,7 @@ function WorkspaceSettingsPage({ hash, label, initialTab, onOpenMemoryReview, on
 
   function patchContextMapSettings(patch){
     setContextMapSettings(prev => ({ ...(prev || { processorMode: 'global' }), ...patch }));
+    setContextMapSettingsDirty(true);
   }
 
   async function saveContextMapSettings(anchor){
@@ -813,6 +968,7 @@ function WorkspaceSettingsPage({ hash, label, initialTab, onOpenMemoryReview, on
     try {
       const res = await AgentApi.workspace.setContextMapSettings(hash, contextMapSettings || { processorMode: 'global' });
       setContextMapSettings(res.settings || contextMapSettings || { processorMode: 'global' });
+      setContextMapSettingsDirty(false);
       toast.success('Context Map settings saved');
     } catch (err) {
       await dialog.alert({
@@ -1020,6 +1176,7 @@ function WorkspaceSettingsPage({ hash, label, initialTab, onOpenMemoryReview, on
             onApplyAllCandidates={applyAllContextMapCandidates}
             onDiscardCandidate={discardContextMapCandidate}
             onReopenCandidate={reopenContextMapCandidate}
+            settingsDirty={contextMapSettingsDirty}
             saving={saving}
           />
         ) : null}
@@ -1791,23 +1948,28 @@ function ContextMapTab({
   onApplyAllCandidates,
   onDiscardCandidate,
   onReopenCandidate,
+  settingsDirty,
   saving,
 }){
   const contextMapTopRef = React.useRef(null);
+  const contextMapContentRef = React.useRef(null);
   const ctx = settings || { processorMode: 'global' };
   const globalContext = (globalSettings && globalSettings.contextMap) || {};
   const profiles = activeWorkspaceCliProfiles(globalSettings);
   const fallbackBackend = globalContext.cliBackend || (globalSettings && globalSettings.defaultBackend) || (backends[0] && backends[0].id) || '';
-  const selectedProfile = workspaceProfileForSetting(profiles, ctx.cliProfileId, ctx.cliBackend, fallbackBackend);
   const mode = ctx.processorMode === 'override' ? 'override' : 'global';
+  const globalProfile = workspaceProfileForSetting(profiles, globalContext.cliProfileId, globalContext.cliBackend, fallbackBackend);
+  const selectedProfile = mode === 'override'
+    ? workspaceProfileForSetting(profiles, ctx.cliProfileId, ctx.cliBackend, fallbackBackend)
+    : globalProfile;
   React.useEffect(() => {
     if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
   }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
 
   const models = selectedProfile ? workspaceModelsForProfile(backends, profileBackends, selectedProfile) : [];
-  const modelId = ctx.cliModel || workspaceDefaultModelId(models) || '';
+  const modelId = (mode === 'override' ? ctx.cliModel : globalContext.cliModel) || workspaceDefaultModelId(models) || '';
   const efforts = selectedProfile ? workspaceEffortLevelsForProfile(backends, profileBackends, selectedProfile, modelId) : [];
-  const effort = ctx.cliEffort || workspaceDefaultEffort(efforts) || '';
+  const effort = (mode === 'override' ? ctx.cliEffort : globalContext.cliEffort) || workspaceDefaultEffort(efforts) || '';
   const candidates = Array.isArray(review && review.candidates) ? review.candidates : [];
   const pendingCount = (review && review.counts && review.counts.pending) || 0;
   const discardedCount = (review && review.counts && review.counts.discarded) || 0;
@@ -1829,6 +1991,7 @@ function ContextMapTab({
   const [editingEntity, setEditingEntity] = React.useState(false);
   const [entityEditDraft, setEntityEditDraft] = React.useState(null);
   const [entityEditSaving, setEntityEditSaving] = React.useState(false);
+  const [contextMapSection, setContextMapSection] = React.useState('overview');
 
   React.useEffect(() => {
     setEditingEntity(false);
@@ -1845,14 +2008,20 @@ function ContextMapTab({
   }, [entityDetail && entityDetail.entityId, entityDetailLoading, onCloseEntityDetail]);
 
   function scrollContextMapTopIntoView(){
+    const contentNode = contextMapContentRef.current;
     const node = contextMapTopRef.current;
-    if (!node) return;
+    if (!contentNode && !node) return;
     window.requestAnimationFrame(() => {
-      node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (contentNode && typeof contentNode.scrollTo === 'function') {
+        contentNode.scrollTo({ top: 0, behavior: 'smooth' });
+      } else if (node) {
+        node.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
     });
   }
 
   async function runScanFromContextMap(anchor){
+    setContextMapSection('overview');
     scrollContextMapTopIntoView();
     try {
       await onRunScan(anchor);
@@ -1955,6 +2124,7 @@ function ContextMapTab({
         cliBackend: undefined,
         cliModel: undefined,
         cliEffort: undefined,
+        scanIntervalMinutes: undefined,
       });
     } else {
       if (selectedProfile) {
@@ -2105,6 +2275,16 @@ function ContextMapTab({
     return entity.summaryMarkdown || entity.notesMarkdown || (Array.isArray(entity.facts) && entity.facts[0]) || '';
   }
 
+  function entityMatchesGraphText(entity, text){
+    if (!text) return false;
+    const fields = [
+      entity && entity.name,
+      entity && entity.typeSlug,
+      ...(Array.isArray(entity && entity.aliases) ? entity.aliases : []),
+    ];
+    return fields.some(value => String(value || '').toLowerCase().includes(text));
+  }
+
   const graphTypeOptions = Array.from(new Set([
     'person',
     'organization',
@@ -2133,49 +2313,190 @@ function ContextMapTab({
   const acceptingAllCandidates = candidateBusy === '__all__';
   const candidateActionBusy = !!candidateBusy;
   const acceptAllDisabled = !enabled || reviewLoading || candidateActionBusy || !!editingCandidateId || pendingCount <= 0;
+  const activeEntityCount = activeCounts.entities || activeEntities.length;
+  const activeRelationshipCount = activeCounts.relationships || activeRelationships.length;
+  const reviewCounts = (review && review.counts) || {};
+  const topConnectedEntities = activeEntities
+    .slice()
+    .filter(entity => (entity.relationshipCount || 0) > 0)
+    .sort((a, b) => (b.relationshipCount || 0) - (a.relationshipCount || 0))
+    .slice(0, 3);
+  const isolatedEntities = activeEntities.filter(entity => (entity.relationshipCount || 0) <= 0);
+  const recentEntities = activeEntities
+    .slice()
+    .filter(entity => entity.updatedAt && !Number.isNaN(new Date(entity.updatedAt).getTime()))
+    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+    .slice(0, 3);
+  const needsReviewItems = [
+    pendingCount ? `${pendingCount} pending` : '',
+    reviewCounts.conflict ? `${reviewCounts.conflict} conflicts` : '',
+    reviewCounts.failed ? `${reviewCounts.failed} failed` : '',
+    reviewCounts.stale ? `${reviewCounts.stale} stale` : '',
+  ].filter(Boolean);
+  const overviewInsights = enabled ? [
+    {
+      title: 'Most connected',
+      value: topConnectedEntities.length ? `${topConnectedEntities[0].relationshipCount || 0} links` : '0 links',
+      items: topConnectedEntities.length
+        ? topConnectedEntities.map(entity => `${entity.name} - ${entity.relationshipCount || 0} links`)
+        : ['No relationship hubs in this slice.'],
+    },
+    {
+      title: 'Needs review',
+      value: String(pendingCount),
+      items: needsReviewItems.length ? needsReviewItems : ['Review queue clear.'],
+    },
+    {
+      title: 'Isolated',
+      value: String(isolatedEntities.length),
+      items: isolatedEntities.length
+        ? isolatedEntities.slice(0, 3).map(entity => entity.name)
+        : ['Every entity shown has at least one link.'],
+    },
+    {
+      title: 'Recent changes',
+      value: recentEntities.length ? formatMemoryUpdateTime(recentEntities[0].updatedAt) : 'None',
+      items: recentEntities.length
+        ? recentEntities.map(entity => `${entity.name} - ${formatMemoryUpdateTime(entity.updatedAt)}`)
+        : ['No updated entities in this slice.'],
+    },
+  ] : [];
+  const graphQueryText = graphQuery.trim().toLowerCase();
+  const graphFocusEntity = (graphQueryText ? activeEntities.find(entity => entityMatchesGraphText(entity, graphQueryText)) : null)
+    || topConnectedEntities[0]
+    || activeEntities[0]
+    || null;
+  const focusedRelationshipRows = graphFocusEntity
+    ? activeRelationships.filter(rel => rel.subjectEntityId === graphFocusEntity.entityId || rel.objectEntityId === graphFocusEntity.entityId)
+    : [];
+  const nearbyRelationshipRows = (focusedRelationshipRows.length ? focusedRelationshipRows : activeRelationships).slice(0, 4);
+  const nearbyContextLabel = graphFocusEntity ? graphFocusEntity.name : 'Filtered slice';
+  const globalScanInterval = Number.isFinite(globalContext.scanIntervalMinutes) ? globalContext.scanIntervalMinutes : 5;
+  const statusText = !enabled
+    ? 'Disabled'
+    : runningContextMapRun
+      ? 'Scanning'
+      : latestContextMapRun && latestContextMapRun.status === 'failed'
+        ? 'Error'
+        : 'Enabled';
+  const statusClass = statusText.toLowerCase();
+  const globalProcessorProfile = globalProfile ? globalProfile.name : (fallbackBackend || 'Default profile');
+  const contextMapSections = [
+    { id: 'overview', label: 'Overview', desc: statusText },
+    { id: 'processor', label: 'Processor', desc: settingsDirty ? 'Unsaved changes' : mode === 'override' ? 'Workspace override' : 'Global defaults' },
+    { id: 'active', label: 'Active Map', desc: enabled ? `${activeEntityCount} entities` : 'Disabled' },
+    { id: 'attention', label: 'Needs Attention', desc: enabled ? `${pendingCount} pending` : 'Disabled' },
+    { id: 'danger', label: 'Danger Zone', desc: 'Rescan or clear' },
+  ];
 
   return (
     <div ref={contextMapTopRef} className="settings-form settings-form-wide ws-form ws-form-context-map">
-      <p className="ws-desc u-dim">
-        Context Map keeps workspace entities, relationships, and evidence in a separate self-maintained map.
-      </p>
-      <label className="toggle ws-toggle">
-        <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)}/>
-        <span className="tgl"/>
-        <span>Enable Context Map for this workspace</span>
-      </label>
-      <div className="ws-cm-run-status">
-        {latestContextMapRun ? (
-          <>
-            <span>Last scan</span>
-            <b>{runSourceLabel(latestContextMapRun.source)}</b>
-            <span>{formatMemoryUpdateTime(latestContextMapRun.startedAt)}</span>
-            <span className="u-dim">{statusLabel(latestContextMapRun.status)}</span>
-          </>
-        ) : (
-          <span className="u-dim">Last scan: None yet</span>
-        )}
-      </div>
-      {scanNotice ? (
-        <div className={'ws-cm-initial-scan is-' + scanNotice}>
-          <span>{scanNoticeLabel()}{scanNoticeSource ? ` · ${scanNoticeSource}` : ''}</span>
-          {runningContextMapRun ? (
+      <div className="ws-cm-layout">
+        <nav className="ws-cm-rail" role="tablist" aria-label="Context Map settings sections">
+          {contextMapSections.map(section => (
             <button
+              key={section.id}
               type="button"
-              className="btn ghost danger ws-cm-stop-scan"
-              disabled={scanStopping}
-              onClick={(e) => onStopScan(e.currentTarget)}
-            >{scanStopping ? 'Stopping...' : 'Stop'}</button>
-          ) : initialScanNotice === 'completed' ? (
-            <span className="ws-cm-initial-scan-check">{Ico.check(12)}</span>
-          ) : (
-            <span className="ws-cm-initial-scan-dots" aria-hidden="true">
-              <i/><i/><i/>
-            </span>
-          )}
-        </div>
-      ) : null}
+              id={`ws-cm-tab-${section.id}`}
+              className={`ws-cm-nav ${contextMapSection === section.id ? 'active' : ''}`}
+              role="tab"
+              aria-selected={contextMapSection === section.id}
+              aria-controls={`ws-cm-panel-${section.id}`}
+              onClick={() => setContextMapSection(section.id)}
+            >
+              <span>{section.label}</span>
+              <small>{section.desc}</small>
+            </button>
+          ))}
+        </nav>
 
+        <div ref={contextMapContentRef} className="ws-cm-content">
+          {contextMapSection === 'overview' ? (
+            <section
+              id="ws-cm-panel-overview"
+              className="ws-cm-panel"
+              role="tabpanel"
+              aria-labelledby="ws-cm-tab-overview"
+            >
+              <div className="ws-cm-title-row">
+                <div>
+                  <h3 className="ws-cm-title">Context Map</h3>
+                  <p className="ws-desc u-dim">
+                    Context Map keeps workspace entities, relationships, and evidence in a separate self-maintained map.
+                  </p>
+                </div>
+                <span className={`ws-cm-status-badge is-${statusClass}`}>{statusText}</span>
+              </div>
+              <label className="toggle ws-toggle">
+                <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)}/>
+                <span className="tgl"/>
+                <span>Enable Context Map for this workspace</span>
+              </label>
+              <div className="ws-cm-run-status">
+                {latestContextMapRun ? (
+                  <>
+                    <span>Last scan</span>
+                    <b>{runSourceLabel(latestContextMapRun.source)}</b>
+                    <span>{formatMemoryUpdateTime(latestContextMapRun.startedAt)}</span>
+                    <span className="u-dim">{statusLabel(latestContextMapRun.status)}</span>
+                  </>
+                ) : (
+                  <span className="u-dim">Last scan: None yet</span>
+                )}
+              </div>
+              {enabled ? (
+                <>
+                  <div className="ws-cm-metrics">
+                    <div><b>{activeEntityCount}</b><span>Entities</span></div>
+                    <div><b>{activeRelationshipCount}</b><span>Relationships</span></div>
+                    <div><b>{pendingCount}</b><span>Needs Attention</span></div>
+                  </div>
+                  <div className="ws-cm-insights">
+                    {overviewInsights.map(insight => (
+                      <div key={insight.title} className="ws-cm-insight-card">
+                        <div className="ws-cm-insight-head">
+                          <span>{insight.title}</span>
+                          <b>{insight.value}</b>
+                        </div>
+                        <ul>
+                          {insight.items.map(item => <li key={item}>{item}</li>)}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p className="ws-empty u-dim">Enable Context Map to scan this workspace and maintain its active graph.</p>
+              )}
+              {scanNotice ? (
+                <div className={'ws-cm-initial-scan is-' + scanNotice}>
+                  <span>{scanNoticeLabel()}{scanNoticeSource ? ` · ${scanNoticeSource}` : ''}</span>
+                  {runningContextMapRun ? (
+                    <button
+                      type="button"
+                      className="btn ghost danger ws-cm-stop-scan"
+                      disabled={scanStopping}
+                      onClick={(e) => onStopScan(e.currentTarget)}
+                    >{scanStopping ? 'Stopping...' : 'Stop'}</button>
+                  ) : initialScanNotice === 'completed' ? (
+                    <span className="ws-cm-initial-scan-check">{Ico.check(12)}</span>
+                  ) : (
+                    <span className="ws-cm-initial-scan-dots" aria-hidden="true">
+                      <i/><i/><i/>
+                    </span>
+                  )}
+                </div>
+              ) : null}
+            </section>
+          ) : null}
+
+          {contextMapSection === 'processor' ? (
+            <section
+              id="ws-cm-panel-processor"
+              className="ws-cm-panel"
+              role="tabpanel"
+              aria-labelledby="ws-cm-tab-processor"
+            >
       <div className="ws-cm-section-title">Processor</div>
       <div className="seg seg-inline ws-cm-seg">
         <button type="button" aria-pressed={mode === 'global'} onClick={() => onModeChange('global')}>Use global defaults</button>
@@ -2216,27 +2537,51 @@ function ContextMapTab({
           ) : null}
         </>
       ) : (
-        <p className="ws-empty u-dim">Using global Context Map processor settings.</p>
+        <div className="ws-cm-readonly-list">
+          <div><span>CLI profile</span><b>{globalProcessorProfile}</b></div>
+          <div><span>Model</span><b>{globalContext.cliModel || modelId || 'Default model'}</b></div>
+          <div><span>Effort</span><b>{globalContext.cliEffort || effort || 'Default effort'}</b></div>
+          <div><span>Scan interval</span><b>{globalScanInterval} minutes</b></div>
+        </div>
       )}
 
-      <label className="ws-cm-field">
-        <span>Scan interval override (minutes)</span>
-        <input
-          type="number"
-          min={1}
-          max={1440}
-          placeholder={globalContext.scanIntervalMinutes ? String(globalContext.scanIntervalMinutes) : '5'}
-          value={ctx.scanIntervalMinutes ?? ''}
-          onChange={(e) => onScanInterval(e.target.value)}
-        />
-      </label>
+      {mode === 'override' ? (
+        <label className="ws-cm-field">
+          <span>Scan interval override (minutes)</span>
+          <input
+            type="number"
+            min={1}
+            max={1440}
+            placeholder={String(globalScanInterval)}
+            value={ctx.scanIntervalMinutes ?? ''}
+            onChange={(e) => onScanInterval(e.target.value)}
+          />
+        </label>
+      ) : null}
 
-      <div className="ws-cm-section-title">Active Map</div>
-      <div className="ws-cm-review-head">
-        <div className="ws-cm-review-counts">
-          <span>{activeCounts.entities || activeEntities.length} entities</span>
-          <span>{activeCounts.relationships || activeRelationships.length} relationships</span>
+      {settingsDirty ? (
+        <div className="ws-cm-save-row">
+          <span className="u-dim">Unsaved Context Map settings changes.</span>
+          <button type="button" className="btn primary" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>
+            {saving ? 'Saving...' : 'Save Changes'}
+          </button>
         </div>
+      ) : null}
+            </section>
+          ) : null}
+
+          {contextMapSection === 'active' ? (
+            <section
+              id="ws-cm-panel-active"
+              className="ws-cm-panel"
+              role="tabpanel"
+              aria-labelledby="ws-cm-tab-active"
+            >
+      <div className="ws-cm-section-title">Active Map</div>
+      {enabled ? (
+        <>
+      <div className="ws-cm-review-head">
+        <div className="ws-cm-section-summary u-dim">Browse the active entity and relationship graph.</div>
         <div className="ws-cm-head-actions">
           {!latestContextMapRun ? (
             <button type="button" className="btn ghost" onClick={(e) => runScanFromContextMap(e.currentTarget)} disabled={!enabled || scanBusy}>
@@ -2283,8 +2628,29 @@ function ContextMapTab({
           Clear
         </button>
       </div>
+      <div className="ws-cm-nearby">
+        <div className="ws-cm-nearby-head">
+          <span>Nearby context</span>
+          <b>{nearbyContextLabel}</b>
+        </div>
+        {nearbyRelationshipRows.length ? (
+          <div className="ws-cm-nearby-paths">
+            {nearbyRelationshipRows.map(rel => (
+              <div key={rel.relationshipId} className="ws-cm-nearby-row">
+                <span>{rel.subjectName}</span>
+                <b>{rel.predicate}</b>
+                <span>{rel.objectName}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="ws-empty u-dim">No relationships in this slice.</p>
+        )}
+      </div>
+        </>
+      ) : null}
       {!enabled ? (
-        <p className="ws-empty u-dim">Context Map is disabled for this workspace.</p>
+        <p className="ws-empty u-dim">Enable Context Map to scan this workspace and view entities and relationships.</p>
       ) : activeEntities.length === 0 ? (
         <p className="ws-empty u-dim">No active Context Map entities yet.</p>
       ) : (
@@ -2450,15 +2816,22 @@ function ContextMapTab({
               </div>
               {Array.isArray(entityDetail.relationships) && entityDetail.relationships.length ? (
                 <div className="ws-cm-detail-block">
-                  <div className="ws-cm-detail-label">Relationships</div>
-                  <div className="ws-cm-relationships">
-                    {entityDetail.relationships.map(rel => (
-                      <div key={rel.relationshipId} className="ws-cm-relationship-row">
-                        <span>{rel.subjectName}</span>
-                        <b>{rel.predicate}</b>
-                        <span>{rel.objectName}</span>
-                      </div>
-                    ))}
+                  <div className="ws-cm-detail-label">Relationship Neighborhood</div>
+                  <div className="ws-cm-neighborhood">
+                    {entityDetail.relationships.slice(0, 10).map((rel, index) => {
+                      const subjectIsEntity = rel.subjectEntityId === entityDetail.entityId || rel.subjectName === entityDetail.name;
+                      const objectIsEntity = rel.objectEntityId === entityDetail.entityId || rel.objectName === entityDetail.name;
+                      return (
+                        <div key={rel.relationshipId || index} className={'ws-cm-neighborhood-row is-' + (rel.status || 'active')}>
+                          <span className={'ws-cm-neighborhood-node' + (subjectIsEntity ? ' is-center' : '')}>{rel.subjectName}</span>
+                          <span className="ws-cm-neighborhood-edge">
+                            <b>{rel.predicate}</b>
+                            <em>{statusLabel(rel.status || 'active')} - {Math.round(((rel.confidence || 0) * 100))}%</em>
+                          </span>
+                          <span className={'ws-cm-neighborhood-node' + (objectIsEntity ? ' is-center' : '')}>{rel.objectName}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               ) : null}
@@ -2494,36 +2867,22 @@ function ContextMapTab({
         </div>
       )}
 
-      {enabled && latestContextMapRun ? (
-        <details className="ws-cm-advanced">
-          <summary>Advanced</summary>
-          <div className="ws-cm-advanced-actions">
-            <button type="button" className="btn ghost" onClick={(e) => runScanFromContextMap(e.currentTarget)} disabled={scanBusy || candidateBusy}>
-              {Ico.search(12)} {scanBusy ? 'Scanning...' : 'Rescan now'}
-            </button>
-            <Tip
-              variant="explain"
-              rich={(
-                <WorkspaceSettingsHelpTooltip>
-                  Starts a full Context Map rescan for this workspace. Agent Cockpit reprocesses discovered workspace sources even if they have not changed, checks conversations for anything new, and updates the map and Needs Attention while the scan runs in the background.
-                </WorkspaceSettingsHelpTooltip>
-              )}
-            >
-              <button
-                type="button"
-                className="settings-help-btn ws-cm-rescan-help"
-                aria-label="Rescan now help"
-              >?</button>
-            </Tip>
-          </div>
-        </details>
-      ) : null}
+            </section>
+          ) : null}
 
+          {contextMapSection === 'attention' ? (
+            <section
+              id="ws-cm-panel-attention"
+              className="ws-cm-panel"
+              role="tabpanel"
+              aria-labelledby="ws-cm-tab-attention"
+            >
       <div className="ws-cm-section-title">Needs Attention</div>
+      {enabled ? (
+        <>
       <div className="ws-cm-review-head">
-        <div className="ws-cm-review-counts">
-          <span>{pendingCount} need attention</span>
-          <span>{discardedCount} dismissed</span>
+        <div className="ws-cm-section-summary u-dim">
+          {currentReviewStatus === 'discarded' ? `${discardedCount} dismissed` : `${pendingCount} need attention`}
         </div>
         <div className="ws-cm-review-tools">
           <button
@@ -2545,8 +2904,10 @@ function ContextMapTab({
           </button>
         </div>
       </div>
+        </>
+      ) : null}
       {!enabled ? (
-        <p className="ws-empty u-dim">Context Map is disabled for this workspace.</p>
+        <p className="ws-empty u-dim">Enable Context Map to review proposed entities, relationships, and evidence.</p>
       ) : candidates.length === 0 ? (
         <p className="ws-empty u-dim">{currentReviewStatus === 'discarded' ? 'No dismissed Context Map items.' : 'No Context Map items need attention.'}</p>
       ) : (
@@ -2563,6 +2924,7 @@ function ContextMapTab({
               <div className="ws-cm-candidates">
                 {group.items.map(candidate => {
                   const sourceParts = candidateSourceParts(candidate);
+                  const impact = contextMapCandidateImpactPreview(candidate);
                   return (
                     <div key={candidate.candidateId} className={'ws-cm-candidate is-' + (candidate.status || 'pending')}>
                       <div className="ws-cm-candidate-top">
@@ -2608,6 +2970,14 @@ function ContextMapTab({
                           )}
                         </div>
                       </div>
+                      {impact ? (
+                        <div className="ws-cm-candidate-impact">
+                          <span className="ws-cm-impact-node">{impact.left}</span>
+                          <span className="ws-cm-impact-edge">{impact.edge}</span>
+                          <span className="ws-cm-impact-node">{impact.right}</span>
+                          {impact.note ? <em>{impact.note}</em> : null}
+                        </div>
+                      ) : null}
                       {editingCandidateId === candidate.candidateId ? (
                         <div className="ws-cm-candidate-edit">
                           <label>
@@ -2650,13 +3020,60 @@ function ContextMapTab({
         </div>
       )}
 
-      <div className="ws-actions">
-        <button
-          className="btn ghost danger"
-          disabled={scanBusy || candidateBusy}
-          onClick={(e) => onClearMap(e.currentTarget)}
-        >{Ico.trash(12)} Clear Context Map</button>
-        <button className="btn primary" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving...' : 'Save Context Map'}</button>
+            </section>
+          ) : null}
+
+          {contextMapSection === 'danger' ? (
+            <section
+              id="ws-cm-panel-danger"
+              className="ws-cm-panel"
+              role="tabpanel"
+              aria-labelledby="ws-cm-tab-danger"
+            >
+              <div className="ws-cm-section-title">Danger Zone</div>
+              {enabled && latestContextMapRun ? (
+                <div className="ws-cm-danger-block">
+                  <div className="ws-cm-danger-title">Rescan workspace</div>
+                  <p className="ws-desc u-dim">
+                    Start a full Context Map rescan for this workspace. Existing graph data stays in place while the background scan updates the map and Needs Attention.
+                  </p>
+                  <div className="ws-actions ws-cm-danger-actions">
+                    <button type="button" className="btn ghost" onClick={(e) => runScanFromContextMap(e.currentTarget)} disabled={scanBusy || candidateBusy}>
+                      {Ico.search(12)} {scanBusy ? 'Scanning...' : 'Rescan now'}
+                    </button>
+                    <Tip
+                      variant="explain"
+                      rich={(
+                        <WorkspaceSettingsHelpTooltip>
+                          Starts a full Context Map rescan for this workspace. Agent Cockpit reprocesses discovered workspace sources even if they have not changed, checks conversations for anything new, and updates the map and Needs Attention while the scan runs in the background.
+                        </WorkspaceSettingsHelpTooltip>
+                      )}
+                    >
+                      <button
+                        type="button"
+                        className="settings-help-btn ws-cm-rescan-help"
+                        aria-label="Rescan now help"
+                      >?</button>
+                    </Tip>
+                  </div>
+                </div>
+              ) : null}
+              <div className="ws-cm-danger-block">
+                <div className="ws-cm-danger-title">Clear stored map</div>
+                <p className="ws-empty u-dim">
+                  Clear all Context Map graph data, candidate review items, evidence, run history, cursors, and audit rows for this workspace. Workspace enablement and processor settings stay in place.
+                </p>
+                <div className="ws-actions ws-cm-danger-actions">
+                  <button
+                    className="btn ghost danger"
+                    disabled={scanBusy || candidateBusy}
+                    onClick={(e) => onClearMap(e.currentTarget)}
+                  >{Ico.trash(12)} Clear Context Map</button>
+                </div>
+              </div>
+            </section>
+          ) : null}
+        </div>
       </div>
     </div>
   );
