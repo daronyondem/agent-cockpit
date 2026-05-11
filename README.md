@@ -43,7 +43,7 @@ Use Claude Code, OpenAI Codex, and Kiro from a single browser-based UI. Switch b
 Every conversation, session, memory snapshot, and knowledge-base entry is stored locally as open JSON or Markdown. No vendor cloud, no proprietary database, no lock-in. If you stop using Agent Cockpit tomorrow, your data is still right there in plain files.
 
 ### 3. Context is portable across vendors
-The integrated memory system snapshots every change to a CLI's memory file. Cross-CLI instruction compatibility keeps `CLAUDE.md`, `AGENTS.md`, and Kiro steering files in sync. The knowledge base feeds context to whichever vendor you ask next. Switching backends doesn't reset your context — your accumulated knowledge follows you.
+The integrated memory system snapshots every change to a CLI's memory file. Cross-CLI instruction compatibility keeps `CLAUDE.md`, `AGENTS.md`, and Kiro steering files in sync. The knowledge base and the workspace Context Map feed structured context to whichever vendor you ask next. Switching backends doesn't reset your context — your accumulated knowledge follows you.
 
 ## The Knowledge Base
 
@@ -52,6 +52,14 @@ The KB is the longest-lived part of Agent Cockpit. While conversations come and 
 Upload PDFs, Word documents, PowerPoints, images, CSV/TSV files, Markdown, and text-like files into a per-workspace knowledge base. Agent Cockpit converts and analyzes each file, extracts structured entries, organizes them into synthesized topics, discovers connections between ideas, and surfaces topic/reflection readers that your AI agents can search and reason over during conversations.
 
 Use it for code documentation. Use it for board prep. Use it for personal reading notes. Use it for whatever you want to be able to ask an AI about later — and have the answer grounded in *your* sources.
+
+## The Context Map
+
+The Context Map is the workspace-level graph that tracks the important entities in a workspace — people, projects, services, documents, decisions — the relationships between them, and the evidence that supports each conclusion. It runs asynchronously in the background, scans high-signal workspace files and conversation history, and surfaces a governed graph you can review and curate from workspace settings.
+
+When the active CLI needs to ground a turn, it can read the graph through read-only MCP tools: matching entities, related entities, and a compact context pack of pointers, summaries, and evidence — instead of dumping every memory or KB document into the prompt.
+
+Context Map is separate from Memory and the Knowledge Base, enabled per workspace, and disabled by default. See [docs/spec-context-map.md](docs/spec-context-map.md) for the full feature specification.
 
 ## Supported Backends
 
@@ -100,7 +108,7 @@ Beyond the core, Agent Cockpit also ships with:
 - **Plan mode and interactive questions** — approve plans and answer questions from the CLI directly in the browser, with the approval UI preserved across reconnects
 - **CLI file delivery** — files emitted by the CLI appear inline as cards with a download button and an in-browser viewer
 - **Browser tab status indicator** — favicon dot shows when a task is still running so you can flip away and check back
-- **Per-CLI context tooltip** — hover the context chip to see what the active backend reports (tokens vs. credits/percentage)
+- **Per-CLI context tooltip** — hover the context chip to see what the active backend reports (tokens vs. credits/percentage), including a projected end-of-cycle usage status when the backend exposes a renewing quota window
 - **Dark and light themes** — system-aware theme with manual override
 - **First-party authentication** — local owner setup, password login, passkeys, recovery codes, and optional legacy OAuth compatibility
 - **Mobile PWA** — installable mobile web client served from `/mobile/` by the same authenticated backend
