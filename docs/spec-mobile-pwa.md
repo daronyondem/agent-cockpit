@@ -50,6 +50,8 @@ The PWA runs in the phone browser or as an installed home-screen web app. It doe
 3. Once loaded, the PWA calls same-origin `/api/me`, `/api/chat/settings`, `/api/chat/backends`, `/api/chat/active-streams`, and `/api/chat/conversations`.
 4. REST calls use `credentials: "same-origin"`, the browser's `connect.sid` cookie, and CSRF tokens from `GET /api/csrf-token`.
 5. Streaming uses `ws(s)://<same-origin>/api/chat/conversations/:id/ws` and sends `{ "type": "reconnect" }` on open.
+   - Chat-view stream socket transport failures are treated as transient while the conversation is still active. The PWA does not surface a WebSocket transport error banner for an in-flight stream. Instead it polls `GET /api/chat/active-streams`, reconnects with the normal replay contract when the conversation is still active, and refreshes the conversation if the stream already completed while the browser was suspended.
+   - `visibilitychange`, browser `focus`, and `online` events trigger the same active-stream check and replay reconnect for the open chat so iOS Safari background/sleep socket loss can recover without a manual refresh.
 6. While the conversation list is visible, the PWA opens passive WebSocket monitors for conversations returned by `/api/chat/active-streams`. Those sockets use the same reconnect contract as chat views, ignore text deltas, react to `assistant_message`, `title_updated`, terminal `error`, `done`, and interaction-needed `tool_activity` frames, and refresh the list when a stream reaches a terminal state. The list also refreshes on focus/visibility return and every 15 seconds as a fallback for suspended browsers, missed sockets, and activity started from another client. The multi-client WebSocket transport decision is recorded in [ADR-0028](adr/0028-allow-multiple-websocket-clients-per-conversation.md).
 
 For reverse-proxy base paths, the API base is derived from the current URL by replacing `/mobile/...` with `/`, matching the desktop V2 client's base-path behavior.
@@ -59,7 +61,7 @@ For reverse-proxy base paths, the API base is derived from the current URL by re
 The PWA currently covers:
 
 - Same-origin authenticated load via the existing web auth session.
-- App-like viewport locking: the document body does not scroll horizontally or vertically, the root/app shell are fixed to the viewport, the shell height tracks the visual viewport, accidental `scrollLeft` is reset during viewport updates, and only intended panes (conversation list, transcript, modals, queues, attachment trays) scroll inside their own bounds. The viewport meta includes `interactive-widget=resizes-content`, and the React shell maintains a `--app-height` CSS variable from `window.visualViewport.height` so the top bar and composer stay anchored as the mobile keyboard appears. Desktop max-width framing is limited to fine-pointer/hover devices so touch browsers with unusual viewport reporting still get the full-width mobile shell.
+- App-like viewport locking: the document body does not scroll horizontally or vertically, the root/app shell are fixed to the visual viewport, accidental document scroll is reset during viewport/focus/scroll updates, and only intended panes (conversation list, transcript, modals, queues, attachment trays) scroll inside their own bounds. The viewport meta includes `interactive-widget=resizes-content`, and the React shell maintains `--app-height` / `--app-width` from `window.visualViewport.height` / `window.visualViewport.width` plus `--app-top` / `--app-left` from `window.visualViewport.offsetTop` / `window.visualViewport.offsetLeft` so the top bar, composer, modal sheets, and list screen stay inside the visible iOS viewport even if Safari reports a horizontally panned visual viewport. The conversation-list toolbar constrains the workspace selector to its own row and clamps controls/cards to the shell width so child content cannot create a horizontal scroll range. Text inputs and textareas use 16 px text or larger to avoid iOS Safari focus zoom. Desktop max-width framing is limited to fine-pointer/hover devices so touch browsers with unusual viewport reporting still get the full-width mobile shell.
 - Current-user display via `GET /api/me`.
 - Settings/default loading via `GET /api/chat/settings`.
 - Backend metadata loading via `GET /api/chat/backends`.
@@ -77,7 +79,7 @@ The PWA currently covers:
 - Full-conversation markdown download.
 - Send message via `POST /api/chat/conversations/:id/message`.
 - Stop stream via `POST /api/chat/conversations/:id/abort`.
-- WebSocket replay and live streaming for text, assistant messages, title updates, usage, errors, done, and replay start.
+- WebSocket replay and live streaming for text, assistant messages, title updates, usage, errors, done, and replay start, with automatic active-stream polling/reconnect on mobile browser resume, network return, and transient socket errors.
 - Assistant message text, assistant content-block text, thinking blocks, and live streaming text render through `marked` with GitHub Flavored Markdown and hard line breaks enabled, then pass through DOMPurify before insertion. User-authored message text remains plain text after uploaded-file marker stripping, preserving line breaks and avoiding accidental interpretation of user text as HTML/Markdown.
 - Plan approval and clarifying-question cards from `tool_activity` meta-events, answered through `POST /api/chat/conversations/:id/input`.
 - Browser Notification API prompts and hidden-tab notifications for stream done/error and interaction-needed events when permission is granted. This is not remote push.
@@ -94,7 +96,7 @@ The PWA currently covers:
 - Text previews, image previews, file downloads, and Web Share API / fallback download for delivered files.
 - Session list, preview, and markdown download.
 - Workspace tree browsing, text preview/edit/save, copy, image/binary open, file/folder creation, rename/move, delete, upload progress/cancel, and conflict overwrite retry.
-- CLI profile/backend/model/effort/Codex speed selection. Profile/backend switching is locked once the active session has messages; model, effort, and Codex speed remain selectable. Codex speed offers Default/Fast, sends `serviceTier` on conversation create/send, and clears stale Fast selection when the chosen runtime is not Codex.
+- CLI profile/backend/model/effort/Codex speed selection. The Run Settings sheet keeps its option groups in an internal scroll region with safe-area bottom padding so long model/profile lists remain reachable on mobile Safari. Profile/backend switching is locked once the active session has messages; model, effort, and Codex speed remain selectable. Codex speed offers Default/Fast, sends `serviceTier` on conversation create/send, and clears stale Fast selection when the chosen runtime is not Codex.
 - Mobile-first installable shell with manifest, app icon, standalone display mode, and iOS home-screen metadata.
 
 ## Deferred Slices

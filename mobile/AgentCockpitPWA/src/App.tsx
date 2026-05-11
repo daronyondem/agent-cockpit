@@ -28,6 +28,8 @@ import type {
 
 const effortOrder: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
 const LIST_AUTO_REFRESH_MS = 15_000;
+const STREAM_RECONNECT_BASE_MS = 1_000;
+const STREAM_RECONNECT_MAX_MS = 15_000;
 const ALL_WORKSPACES = 'all';
 
 type Screen = 'list' | 'chat';
@@ -68,6 +70,11 @@ export default function App() {
   const clientRef = useRef(new AgentCockpitAPI());
   const socketRef = useRef<WebSocket | null>(null);
   const listStreamSocketsRef = useRef<Map<string, WebSocket>>(new Map());
+  const streamReconnectTimerRef = useRef<number | null>(null);
+  const streamReconnectAttemptsRef = useRef(0);
+  const activeConversationRef = useRef<Conversation | null>(null);
+  const isStreamingRef = useRef(false);
+  const resumeStreamConnectionRef = useRef<(conversationID: string, force?: boolean) => Promise<void> | void>(() => undefined);
   const attachInputRef = useRef<HTMLInputElement | null>(null);
   const explorerUploadInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -145,8 +152,41 @@ export default function App() {
   useEffect(() => {
     void loadDashboard();
     return () => {
-      socketRef.current?.close();
+      clearStreamReconnectTimer();
+      closeStreamSocket();
       closeListStreamSockets();
+    };
+  }, []);
+
+  useEffect(() => {
+    activeConversationRef.current = activeConversation;
+  }, [activeConversation]);
+
+  useEffect(() => {
+    isStreamingRef.current = isStreaming;
+  }, [isStreaming]);
+
+  useEffect(() => {
+    resumeStreamConnectionRef.current = resumeStreamConnection;
+  });
+
+  useEffect(() => {
+    const resumeVisibleStream = () => {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
+      const conversationID = activeConversationRef.current?.id;
+      if (conversationID && isStreamingRef.current) {
+        void resumeStreamConnectionRef.current(conversationID, true);
+      }
+    };
+    window.addEventListener('focus', resumeVisibleStream);
+    window.addEventListener('online', resumeVisibleStream);
+    document.addEventListener('visibilitychange', resumeVisibleStream);
+    return () => {
+      window.removeEventListener('focus', resumeVisibleStream);
+      window.removeEventListener('online', resumeVisibleStream);
+      document.removeEventListener('visibilitychange', resumeVisibleStream);
     };
   }, []);
 
@@ -263,7 +303,7 @@ export default function App() {
     try {
       setLoading(true);
       setErrorMessage(null);
-      socketRef.current?.close();
+      closeStreamSocket();
       closeListStreamSockets();
       const [conversation, streamIDs] = await Promise.all([
         clientRef.current.getConversation(id),
@@ -272,12 +312,14 @@ export default function App() {
       const streamActive = streamIDs.has(id);
       setActiveStreamIDs(streamIDs);
       setActiveConversation(conversation);
+      activeConversationRef.current = conversation;
       setDraft('');
       setStreamText('');
       setPendingInteraction(null);
       setPendingAttachments([]);
       hydrateSelectionFromConversation(conversation);
       setIsStreaming(streamActive);
+      isStreamingRef.current = streamActive;
       setScreen('chat');
       if (streamActive) {
         startStream(id);
@@ -313,6 +355,7 @@ export default function App() {
       setNewTitle('');
       setNewWorkingDir('');
       setActiveConversation(conversation);
+      activeConversationRef.current = conversation;
       setConversations((items) => [conversationListItemFromConversation(conversation), ...items]);
       setScreen('chat');
     } catch (error) {
@@ -389,13 +432,25 @@ export default function App() {
     }
   }
 
+  function closeStreamSocket() {
+    const socket = socketRef.current;
+    socketRef.current = null;
+    socket?.close();
+  }
+
   function startStream(conversationID: string) {
-    socketRef.current?.close();
+    closeStreamSocket();
     setIsStreaming(true);
+    isStreamingRef.current = true;
     setActiveStreamIDs((current) => new Set(current).add(conversationID));
     const socket = new WebSocket(clientRef.current.websocketURL(conversationID));
     socketRef.current = socket;
-    socket.onopen = () => socket.send(JSON.stringify({ type: 'reconnect' }));
+    socket.onopen = () => {
+      clearStreamReconnectTimer();
+      streamReconnectAttemptsRef.current = 0;
+      setErrorMessage((current) => (current === 'Stream connection failed.' ? null : current));
+      socket.send(JSON.stringify({ type: 'reconnect' }));
+    };
     socket.onmessage = (event) => {
       try {
         handleStreamEvent(conversationID, JSON.parse(event.data) as StreamEvent);
@@ -403,12 +458,71 @@ export default function App() {
         setErrorMessage('The stream returned an invalid event.');
       }
     };
-    socket.onerror = () => setErrorMessage('Stream connection failed.');
+    socket.onerror = () => {
+      if (socketRef.current === socket) {
+        socketRef.current = null;
+        socket.close();
+      }
+      scheduleStreamReconnect(conversationID);
+    };
     socket.onclose = () => {
       if (socketRef.current === socket) {
         socketRef.current = null;
+        scheduleStreamReconnect(conversationID);
       }
     };
+  }
+
+  function clearStreamReconnectTimer() {
+    if (streamReconnectTimerRef.current !== null) {
+      window.clearTimeout(streamReconnectTimerRef.current);
+      streamReconnectTimerRef.current = null;
+    }
+  }
+
+  function scheduleStreamReconnect(conversationID: string) {
+    if (!isStreamingRef.current || activeConversationRef.current?.id !== conversationID || streamReconnectTimerRef.current !== null) {
+      return;
+    }
+    const attempts = streamReconnectAttemptsRef.current;
+    const delay = Math.min(STREAM_RECONNECT_BASE_MS * Math.pow(2, attempts), STREAM_RECONNECT_MAX_MS);
+    streamReconnectTimerRef.current = window.setTimeout(() => {
+      streamReconnectTimerRef.current = null;
+      streamReconnectAttemptsRef.current = attempts + 1;
+      void resumeStreamConnectionRef.current(conversationID);
+    }, delay);
+  }
+
+  async function resumeStreamConnection(conversationID: string, force = false) {
+    if (!isStreamingRef.current || activeConversationRef.current?.id !== conversationID) {
+      return;
+    }
+    const currentSocket = socketRef.current;
+    if (!force && currentSocket && (currentSocket.readyState === WebSocket.OPEN || currentSocket.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
+    try {
+      const streamIDs = await clientRef.current.getActiveStreams();
+      setActiveStreamIDs(streamIDs);
+      if (streamIDs.has(conversationID)) {
+        clearStreamReconnectTimer();
+        if (force && socketRef.current) {
+          const staleSocket = socketRef.current;
+          socketRef.current = null;
+          staleSocket.close();
+        }
+        startStream(conversationID);
+        return;
+      }
+      clearStreamReconnectTimer();
+      streamReconnectAttemptsRef.current = 0;
+      setIsStreaming(false);
+      isStreamingRef.current = false;
+      closeStreamSocket();
+      await refreshAfterStream(conversationID);
+    } catch {
+      scheduleStreamReconnect(conversationID);
+    }
   }
 
   function syncListStreamSockets(streamIDs: Set<string>) {
@@ -566,14 +680,16 @@ export default function App() {
   }
 
   function markStreamFinished(conversationID: string) {
+    clearStreamReconnectTimer();
+    streamReconnectAttemptsRef.current = 0;
     setIsStreaming(false);
+    isStreamingRef.current = false;
     setActiveStreamIDs((current) => {
       const next = new Set(current);
       next.delete(conversationID);
       return next;
     });
-    socketRef.current?.close();
-    socketRef.current = null;
+    closeStreamSocket();
   }
 
   async function refreshAfterStream(conversationID: string) {
@@ -583,7 +699,13 @@ export default function App() {
         clientRef.current.getActiveStreams(),
         clientRef.current.listConversations(listArchived),
       ]);
-      setActiveConversation((current) => (current?.id === conversationID ? conversation : current));
+      setActiveConversation((current) => {
+        if (current?.id !== conversationID) {
+          return current;
+        }
+        activeConversationRef.current = conversation;
+        return conversation;
+      });
       setActiveStreamIDs(streamIDs);
       setConversations(loadedConversations);
       if (conversation.messageQueue?.length && !pendingInteraction) {
@@ -617,8 +739,10 @@ export default function App() {
       return;
     }
     try {
-      socketRef.current?.close();
+      clearStreamReconnectTimer();
+      closeStreamSocket();
       setIsStreaming(false);
+      isStreamingRef.current = false;
       setPendingInteraction(null);
       await clientRef.current.abortConversation(conversation.id);
       const reloaded = await clientRef.current.getConversation(conversation.id);
@@ -843,6 +967,7 @@ export default function App() {
       }
       setActionsVisible(false);
       setActiveConversation(null);
+      activeConversationRef.current = null;
       setScreen('list');
       await loadDashboard(listArchived);
     } catch (error) {
@@ -859,6 +984,7 @@ export default function App() {
       await clientRef.current.deleteConversation(conversation.id);
       setActionsVisible(false);
       setActiveConversation(null);
+      activeConversationRef.current = null;
       setScreen('list');
       await loadDashboard(listArchived);
     } catch (error) {
@@ -1283,7 +1409,8 @@ export default function App() {
           selectedServiceTier={serviceTierEnabled ? selectedServiceTier : undefined}
           client={clientRef.current}
           onBack={() => {
-            socketRef.current?.close();
+            clearStreamReconnectTimer();
+            closeStreamSocket();
             setScreen('list');
             void refreshConversationList();
           }}
@@ -1924,36 +2051,38 @@ function RunSettingsModal(props: {
 }) {
   return (
     <Modal title="Run Settings" onClose={props.onClose}>
-      {props.locked ? <p className="meta">Profile and backend are locked after a session has messages.</p> : null}
-      <strong>Profile</strong>
-      <div className="choice-grid">
-        {props.profiles.map((profile) => <Choice key={profile.id} label={profile.name} selected={props.selectedCliProfileId === profile.id} disabled={props.locked} onClick={() => props.onProfile(profile.id)} />)}
+      <div className="modal-scroll run-settings-scroll">
+        {props.locked ? <p className="meta">Profile and backend are locked after a session has messages.</p> : null}
+        <strong>Profile</strong>
+        <div className="choice-grid">
+          {props.profiles.map((profile) => <Choice key={profile.id} label={profile.name} selected={props.selectedCliProfileId === profile.id} disabled={props.locked} onClick={() => props.onProfile(profile.id)} />)}
+        </div>
+        <strong>Backend</strong>
+        <div className="choice-grid">
+          {props.backends.map((backend) => <Choice key={backend.id} label={backend.label || backend.id} selected={!props.selectedCliProfileId && props.selectedBackend === backend.id} disabled={props.locked} onClick={() => props.onBackend(backend.id)} />)}
+        </div>
+        <strong>Model</strong>
+        <div className="choice-grid">
+          {(props.selectedBackendMetadata?.models || []).map((model) => <Choice key={model.id} label={model.label || model.id} selected={props.selectedModel === model.id} onClick={() => props.onModel(model.id)} />)}
+        </div>
+        {props.supportedEfforts.length ? (
+          <>
+            <strong>Effort</strong>
+            <div className="choice-grid">
+              {props.supportedEfforts.map((effort) => <Choice key={effort} label={effort} selected={props.selectedEffort === effort} onClick={() => props.onEffort(effort)} />)}
+            </div>
+          </>
+        ) : null}
+        {props.serviceTierEnabled ? (
+          <>
+            <strong>Speed</strong>
+            <div className="choice-grid">
+              <Choice label="Default" selected={!props.selectedServiceTier || props.selectedServiceTier === 'default'} onClick={() => props.onServiceTier('default')} />
+              <Choice label="Fast" selected={props.selectedServiceTier === 'fast'} onClick={() => props.onServiceTier('fast')} />
+            </div>
+          </>
+        ) : null}
       </div>
-      <strong>Backend</strong>
-      <div className="choice-grid">
-        {props.backends.map((backend) => <Choice key={backend.id} label={backend.label || backend.id} selected={!props.selectedCliProfileId && props.selectedBackend === backend.id} disabled={props.locked} onClick={() => props.onBackend(backend.id)} />)}
-      </div>
-      <strong>Model</strong>
-      <div className="choice-grid">
-        {(props.selectedBackendMetadata?.models || []).map((model) => <Choice key={model.id} label={model.label || model.id} selected={props.selectedModel === model.id} onClick={() => props.onModel(model.id)} />)}
-      </div>
-      {props.supportedEfforts.length ? (
-        <>
-          <strong>Effort</strong>
-          <div className="choice-grid">
-            {props.supportedEfforts.map((effort) => <Choice key={effort} label={effort} selected={props.selectedEffort === effort} onClick={() => props.onEffort(effort)} />)}
-          </div>
-        </>
-      ) : null}
-      {props.serviceTierEnabled ? (
-        <>
-          <strong>Speed</strong>
-          <div className="choice-grid">
-            <Choice label="Default" selected={!props.selectedServiceTier || props.selectedServiceTier === 'default'} onClick={() => props.onServiceTier('default')} />
-            <Choice label="Fast" selected={props.selectedServiceTier === 'fast'} onClick={() => props.onServiceTier('fast')} />
-          </div>
-        </>
-      ) : null}
     </Modal>
   );
 }
@@ -2181,24 +2310,64 @@ function ProgressBar({ progress }: { progress: number }) {
 function useViewportHeightVar() {
   useEffect(() => {
     const root = document.documentElement;
+    let rafID = 0;
+    let focusTimer: number | undefined;
+
     const update = () => {
-      root.style.setProperty('--app-height', `${window.visualViewport?.height || window.innerHeight}px`);
+      const viewport = window.visualViewport;
+      root.style.setProperty('--app-height', `${viewport?.height || window.innerHeight}px`);
+      root.style.setProperty('--app-width', `${viewport?.width || window.innerWidth}px`);
+      root.style.setProperty('--app-top', `${viewport?.offsetTop || 0}px`);
+      root.style.setProperty('--app-left', `${viewport?.offsetLeft || 0}px`);
       root.scrollLeft = 0;
+      root.scrollTop = 0;
       document.body.scrollLeft = 0;
-      if (window.scrollX !== 0) {
-        window.scrollTo(0, window.scrollY);
+      document.body.scrollTop = 0;
+      if (window.scrollX !== 0 || window.scrollY !== 0) {
+        window.scrollTo(0, 0);
       }
     };
+
+    const scheduleUpdate = () => {
+      if (rafID) {
+        window.cancelAnimationFrame(rafID);
+      }
+      rafID = window.requestAnimationFrame(() => {
+        rafID = 0;
+        update();
+      });
+    };
+
+    const scheduleFocusUpdate = () => {
+      scheduleUpdate();
+      if (focusTimer !== undefined) {
+        window.clearTimeout(focusTimer);
+      }
+      focusTimer = window.setTimeout(scheduleUpdate, 120);
+    };
+
     update();
-    window.addEventListener('resize', update);
-    window.addEventListener('orientationchange', update);
-    window.visualViewport?.addEventListener('resize', update);
-    window.visualViewport?.addEventListener('scroll', update);
+    window.addEventListener('scroll', scheduleUpdate);
+    window.addEventListener('resize', scheduleUpdate);
+    window.addEventListener('orientationchange', scheduleUpdate);
+    window.visualViewport?.addEventListener('resize', scheduleUpdate);
+    window.visualViewport?.addEventListener('scroll', scheduleUpdate);
+    document.addEventListener('focusin', scheduleFocusUpdate);
+    document.addEventListener('focusout', scheduleFocusUpdate);
     return () => {
-      window.removeEventListener('resize', update);
-      window.removeEventListener('orientationchange', update);
-      window.visualViewport?.removeEventListener('resize', update);
-      window.visualViewport?.removeEventListener('scroll', update);
+      if (rafID) {
+        window.cancelAnimationFrame(rafID);
+      }
+      if (focusTimer !== undefined) {
+        window.clearTimeout(focusTimer);
+      }
+      window.removeEventListener('scroll', scheduleUpdate);
+      window.removeEventListener('resize', scheduleUpdate);
+      window.removeEventListener('orientationchange', scheduleUpdate);
+      window.visualViewport?.removeEventListener('resize', scheduleUpdate);
+      window.visualViewport?.removeEventListener('scroll', scheduleUpdate);
+      document.removeEventListener('focusin', scheduleFocusUpdate);
+      document.removeEventListener('focusout', scheduleFocusUpdate);
     };
   }, []);
 }

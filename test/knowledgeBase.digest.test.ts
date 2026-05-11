@@ -1253,9 +1253,17 @@ Body.`;
 
   test('GET /kb returns digestProgress mid-session and null after drain', async () => {
     const rawA = await seedRaw('alpha', 'a.md');
+    let releaseDigest!: () => void;
+    const digestHeld = new Promise<void>((resolve) => {
+      releaseDigest = resolve;
+    });
+    let signalDigestStarted!: () => void;
+    const digestStarted = new Promise<void>((resolve) => {
+      signalDigestStarted = resolve;
+    });
     backend.runOneShotImpl = async () => {
-      // Long enough that we can read the snapshot mid-flight.
-      await new Promise((r) => setTimeout(r, 50));
+      signalDigestStarted();
+      await digestHeld;
       return `---
 title: A
 slug: a
@@ -1267,10 +1275,14 @@ Body.`;
     const runPromise = digestion.enqueueDigest(hash, rawA);
     // Snapshot while the digest is in flight — enqueue already persisted
     // the session row, so GET /kb should surface it.
-    await new Promise((r) => setTimeout(r, 10));
+    await digestStarted;
     const midSnapshot = await chatService.getKbStateSnapshot(hash);
-    expect(midSnapshot?.digestProgress).not.toBeNull();
-    expect(midSnapshot?.digestProgress?.total).toBe(1);
+    try {
+      expect(midSnapshot?.digestProgress).not.toBeNull();
+      expect(midSnapshot?.digestProgress?.total).toBe(1);
+    } finally {
+      releaseDigest();
+    }
 
     await runPromise;
     const afterSnapshot = await chatService.getKbStateSnapshot(hash);

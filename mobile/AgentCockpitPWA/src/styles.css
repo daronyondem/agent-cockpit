@@ -58,12 +58,13 @@ button {
 
 .app-shell {
   height: var(--app-height, 100dvh);
-  inset: 0;
-  max-width: 100vw;
+  left: var(--app-left, 0px);
+  max-width: var(--app-width, 100vw);
   overflow: hidden;
   overflow-x: clip;
   position: fixed;
-  width: 100%;
+  top: var(--app-top, 0px);
+  width: var(--app-width, 100vw);
 }
 
 .screen {
@@ -104,11 +105,21 @@ button {
   width: 100%;
 }
 
+.topbar > div {
+  min-width: 0;
+}
+
 .topbar h1, .chat-topbar h1, .modal h2 {
   color: var(--text);
   font-size: 20px;
   line-height: 1.15;
   margin: 0;
+}
+
+.topbar h1, .topbar p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .topbar p, .chat-topbar p, .modal-header p {
@@ -138,11 +149,17 @@ button {
   padding: 12px;
 }
 
+.toolbar > * {
+  max-width: 100%;
+}
+
 .filter-select {
   align-items: center;
   display: flex;
+  flex: 1 1 100%;
   gap: 6px;
   min-width: 0;
+  width: 100%;
 }
 
 .filter-select span {
@@ -156,11 +173,14 @@ button {
   border: 1px solid var(--border);
   border-radius: 7px;
   color: var(--accent-dark);
+  flex: 1 1 auto;
   font-size: 13px;
   font-weight: 700;
   min-height: 38px;
-  max-width: min(52vw, 260px);
+  min-width: 0;
+  max-width: 100%;
   padding: 8px 28px 8px 10px;
+  width: 100%;
 }
 
 .conversation-list {
@@ -190,12 +210,20 @@ button {
   width: 100%;
 }
 
+.conversation-card > * {
+  max-width: 100%;
+}
+
 .row {
   align-items: center;
   display: flex;
   gap: 8px;
   justify-content: space-between;
   min-width: 0;
+}
+
+.row strong {
+  overflow-wrap: anywhere;
 }
 
 .row > * {
@@ -206,6 +234,7 @@ button {
   color: var(--accent-dark);
   font-size: 13px;
   font-weight: 700;
+  overflow-wrap: anywhere;
 }
 
 .last-message {
@@ -214,6 +243,7 @@ button {
   font-size: 13px;
   line-height: 18px;
   overflow: hidden;
+  overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
 }
@@ -444,7 +474,9 @@ button {
   justify-content: center;
   max-width: 100%;
   min-height: 38px;
+  overflow: hidden;
   padding: 8px 11px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
@@ -603,7 +635,7 @@ textarea, input {
   border: 1px solid var(--border);
   border-radius: 7px;
   color: var(--text);
-  font-size: 15px;
+  font-size: 16px;
   min-height: 42px;
   min-width: 0;
   padding: 10px 11px;
@@ -624,10 +656,14 @@ textarea {
   align-items: end;
   background: rgba(27, 28, 29, .28);
   display: flex;
-  inset: 0;
+  height: var(--app-height, 100dvh);
   justify-content: center;
+  left: var(--app-left, 0px);
+  max-width: var(--app-width, 100vw);
   padding-top: env(safe-area-inset-top);
   position: fixed;
+  top: var(--app-top, 0px);
+  width: var(--app-width, 100vw);
   z-index: 20;
 }
 
@@ -666,6 +702,10 @@ textarea {
   overflow-y: auto;
   overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
+}
+
+.run-settings-scroll {
+  padding-bottom: calc(16px + env(safe-area-inset-bottom));
 }
 
 .stack {
@@ -720,8 +760,8 @@ textarea {
 
 .editor {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
-  line-height: 17px;
+  font-size: 16px;
+  line-height: 21px;
   min-height: 260px;
 }
 
@@ -822,8 +862,10 @@ pre, code {
 
 @media (min-width: 760px) and (hover: hover) and (pointer: fine) {
   .app-shell {
-    margin: 0 auto;
+    left: 50%;
     max-width: 860px;
+    transform: translateX(-50%);
+    width: min(var(--app-width, 100vw), 860px);
   }
 
   .chat-screen {
