@@ -58,6 +58,21 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+# Maintainability Boundaries
+
+Follow ADR-0051 for shared contracts, logging, and ownership boundaries.
+
+- Keep public facades stable. `ChatService` and `ContextMapService` should remain orchestration/facade entrypoints; new persistence, parsing, normalization, scoring, source-planning, or policy logic should live in focused modules under the owning domain directory.
+- For ChatService work, prefer focused modules under `src/services/chat/` for artifacts, usage ledgers, workspace feature settings, message queues, workspace instructions, and similar private stores. Preserve existing storage formats and migrations unless the task explicitly changes them.
+- For Context Map work, keep `src/services/contextMap/service.ts` as the coordinator. Put source discovery/planning in `sourcePlanning.ts`, candidate primitives in `candidatePrimitives.ts`, safe auto-apply policy in `autoApply.ts`, JSON extraction/repair in `jsonRepair.ts`, and run/synthesis metadata in `pipelineMetadata.ts`.
+- Put shared request/response shapes and runtime validators in `src/contracts/` whenever routes, clients, tests, or specs need the same boundary. Contract files imported by web or mobile must stay browser-safe and must not import server-only modules.
+- Web and mobile clients should import shared types only from browser-safe contracts. Do not reach into backend services, route modules, filesystem helpers, or server-only types from frontend code.
+- Keep large UI entrypoints as composition layers. Move pure projection, parsing, state-provider, viewport, and formatting behavior into focused modules or hooks with direct tests.
+- Prefer behavior-oriented frontend tests for parsing, projection, state updates, and user-visible outcomes. Use source-string/static tests only for route registration, build guards, or import-boundary checks where runtime coverage is impractical.
+- Use `src/utils/logger.ts` for backend logging in touched code. Do not add new backend `console.*` calls unless the file is an intentional CLI/test/build script or already documented as an allowed exception.
+- When adding or changing an ownership boundary, update the relevant spec docs and add focused tests for the new module instead of only testing through the largest facade.
+- Before opening a PR, run `npm run maintainability:check` and `npm run spec:drift` in addition to the existing required verification commands.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.
@@ -86,6 +101,7 @@ Always use pm2:
   3. Update existing tests if behavior changed.
   4. Evaluate mobile PWA impact. For every feature or behavior change, explicitly consider whether `mobile/AgentCockpitPWA`, `public/mobile`, mobile UX, PWA metadata, tests, or specs need updates.
   5. Update the spec docs to reflect all changes (endpoints, methods, UI behavior, test file list).
+  6. Evaluate whether `AGENTS.md` needs updates. If the change introduces or changes a recurring architecture convention, ownership boundary, verification command, or agent workflow, update `AGENTS.md` in the same PR.
 
 # Specification Documents
 
