@@ -4,14 +4,11 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-// Frontend test for public/v2/src/streamStore.js (PR 4c scope):
+// Frontend test for web/AgentCockpitWeb/src/streamStore.js (PR 4c scope):
 // - plan-mode exit and user-question tool_activity frames produce a
 //   pendingInteraction on the ConvState and flip uiState to 'awaiting'
 // - respond() delegates to POST /input and falls back to /message when
 //   the server signals mode:'message'
-
-import * as fs from 'fs';
-import * as path from 'path';
 
 let fakeWSInstance: FakeWS | null = null;
 
@@ -58,8 +55,11 @@ function makeResponse(body: unknown) {
 }
 
 function loadStore() {
-  const src = fs.readFileSync(path.join(__dirname, '../public/v2/src/streamStore.js'), 'utf8');
-  new Function(src).call(window);
+  const api = (global as any).AgentApi;
+  jest.resetModules();
+  jest.doMock('../web/AgentCockpitWeb/src/api.js', () => ({ AgentApi: api, default: api }));
+  const mod = require('../web/AgentCockpitWeb/src/streamStore.js');
+  (window as any).StreamStore = mod.StreamStore;
 }
 
 beforeEach(() => {

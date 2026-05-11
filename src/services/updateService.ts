@@ -2,9 +2,26 @@ import { execFile, spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import type { UpdateStatus, UpdateResult, UpdateStep } from '../types';
+import { WebBuildService, type WebBuildStatus } from './webBuildService';
+import { MobileBuildService, type MobileBuildStatus } from './mobileBuildService';
+
+interface UpdateServiceOptions {
+  webBuildService?: UpdateWebBuildService;
+  mobileBuildService?: UpdateMobileBuildService;
+}
+
+interface UpdateWebBuildService {
+  ensureBuilt(opts?: { force?: boolean }): Promise<WebBuildStatus>;
+}
+
+interface UpdateMobileBuildService {
+  ensureBuilt(opts?: { force?: boolean }): Promise<MobileBuildStatus>;
+}
 
 export class UpdateService {
   private _appRoot: string;
+  private _webBuildService: UpdateWebBuildService;
+  private _mobileBuildService: UpdateMobileBuildService;
   private _localVersion: string;
   private _latestRemoteVersion: string | null = null;
   private _checkInterval: ReturnType<typeof setInterval> | null = null;
@@ -12,8 +29,10 @@ export class UpdateService {
   private _lastError: string | null = null;
   private _updateInProgress = false;
 
-  constructor(appRoot: string) {
+  constructor(appRoot: string, opts: UpdateServiceOptions = {}) {
     this._appRoot = appRoot;
+    this._webBuildService = opts.webBuildService || new WebBuildService(appRoot, { mode: 'auto' });
+    this._mobileBuildService = opts.mobileBuildService || new MobileBuildService(appRoot, { mode: 'auto' });
     this._localVersion = require(path.join(appRoot, 'package.json')).version;
   }
 
@@ -101,6 +120,42 @@ export class UpdateService {
       } catch (err: unknown) {
         steps.push({ name: 'npm install', success: false, output: (err as Error).message });
         return { success: false, steps, error: 'Failed to install dependencies: ' + (err as Error).message };
+      }
+
+      try {
+        const out = await this._exec('npm', ['--prefix', 'mobile/AgentCockpitPWA', 'install'], 120000);
+        steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA install', success: true, output: out.trim() });
+      } catch (err: unknown) {
+        steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA install', success: false, output: (err as Error).message });
+        return { success: false, steps, error: 'Failed to install mobile dependencies: ' + (err as Error).message };
+      }
+
+      try {
+        const webBuild = await this._webBuildService.ensureBuilt({ force: true });
+        if (webBuild.error) {
+          steps.push({ name: 'npm run web:build', success: false, output: webBuild.error });
+          return { success: false, steps, error: 'Failed to build V2 web app: ' + webBuild.error };
+        }
+        const output = webBuild.output?.trim()
+          || (webBuild.didBuild ? `Build completed at ${webBuild.marker?.builtAt || 'unknown time'}` : 'V2 web build is fresh');
+        steps.push({ name: 'npm run web:build', success: true, output });
+      } catch (err: unknown) {
+        steps.push({ name: 'npm run web:build', success: false, output: (err as Error).message });
+        return { success: false, steps, error: 'Failed to build V2 web app: ' + (err as Error).message };
+      }
+
+      try {
+        const mobileBuild = await this._mobileBuildService.ensureBuilt({ force: true });
+        if (mobileBuild.error) {
+          steps.push({ name: 'npm run mobile:build', success: false, output: mobileBuild.error });
+          return { success: false, steps, error: 'Failed to build mobile PWA: ' + mobileBuild.error };
+        }
+        const output = mobileBuild.output?.trim()
+          || (mobileBuild.didBuild ? `Build completed at ${mobileBuild.marker?.builtAt || 'unknown time'}` : 'Mobile PWA build is fresh');
+        steps.push({ name: 'npm run mobile:build', success: true, output });
+      } catch (err: unknown) {
+        steps.push({ name: 'npm run mobile:build', success: false, output: (err as Error).message });
+        return { success: false, steps, error: 'Failed to build mobile PWA: ' + (err as Error).message };
       }
 
       // Verify the interpreter from ecosystem config exists after npm install

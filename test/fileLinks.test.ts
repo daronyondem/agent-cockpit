@@ -3,7 +3,7 @@
 const {
   resolveConversationArtifactHref,
   resolveLocalFileHref,
-} = require('../public/v2/src/fileLinks.js');
+} = require('../web/AgentCockpitWeb/src/fileLinks.ts');
 
 describe('FileLinkUtils.resolveLocalFileHref', () => {
   const workspace = '/Users/daronyondem/github/agent-cockpit';
@@ -25,8 +25,8 @@ describe('FileLinkUtils.resolveLocalFileHref', () => {
   });
 
   test('accepts file URLs under the workspace', () => {
-    expect(resolveLocalFileHref('file:///Users/daronyondem/github/agent-cockpit/public/v2/src/shell.jsx:12', workspace)).toEqual({
-      filePath: '/Users/daronyondem/github/agent-cockpit/public/v2/src/shell.jsx',
+    expect(resolveLocalFileHref('file:///Users/daronyondem/github/agent-cockpit/web/AgentCockpitWeb/src/shell.jsx:12', workspace)).toEqual({
+      filePath: '/Users/daronyondem/github/agent-cockpit/web/AgentCockpitWeb/src/shell.jsx',
       line: 12,
       column: null,
     });

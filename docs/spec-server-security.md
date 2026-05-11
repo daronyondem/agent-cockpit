@@ -28,6 +28,7 @@
 | `CODEX_APPROVAL_POLICY` | No | `on-request` | Codex approval policy for interactive threads. Valid values: `untrusted`, `on-failure`, `on-request`, `never`. Invalid values are ignored with a startup warning and the default is used. |
 | `CODEX_SANDBOX_MODE` | No | `workspace-write` | Codex sandbox mode for interactive threads. Valid values: `read-only`, `workspace-write`, `danger-full-access`. Invalid values are ignored with a startup warning and the default is used. |
 | `BASE_PATH` | No | `''` | URL base path prefix (for reverse proxy deployments) |
+| `WEB_BUILD_MODE` | No | `auto` outside tests, `skip` when `NODE_ENV === 'test'` | Controls main V2 web and mobile PWA build startup preflight. `auto` checks and rebuilds missing/stale `public/v2-built/` and `public/mobile-built/` assets before listen; `skip` bypasses both preflights for tests or special deployments. |
 
 `src/config/index.ts` loads `.env` through `dotenv`. Outside tests, `.env` values override already-present process environment values so PM2-managed local deployments can pin runtime config from the repo's `.env`. When `NODE_ENV === 'test'`, dotenv does **not** override explicit process env values; subprocess tests such as graceful shutdown can pass an isolated `PORT` without being clobbered by a developer `.env` that points at a running PM2 app.
 
@@ -48,19 +49,22 @@
 9a. Mount current-user endpoint at `GET /api/me`
 10. Create BackendRegistry, register ClaudeCodeAdapter, KiroAdapter, and CodexAdapter
 11. Initialize ChatService
-12. Initialize UpdateService, CliUpdateService, Claude/Kiro/Codex plan usage services, and the chat router dependencies
+12. Initialize UpdateService, CliUpdateService, Claude/Kiro/Codex plan usage services, `WebBuildService`, `MobileBuildService`, and the chat router dependencies
 13. Mount chat router at `/api/chat`
 14. Mount root redirect `/` -> `/v2/`
-15. Serve static files from `public/`
-16. Call `chatService.initialize()` (migration + lookup map)
-17. Reconcile leftover durable stream jobs via `chatResult.reconcileInterruptedJobs()` before the server accepts traffic. This converts unrecoverable accepted/preparing/running jobs from a prior process into one persisted assistant `streamError` when the user message exists, or removes the job when no user message was saved.
-18. Check that the configured port is free; exit with a PM2-oriented fatal message when it is already in use
-19. Start UpdateService (version polling), CliUpdateService (local CLI update polling), KB Auto-Dream scheduler, Memory Review scheduler, and Context Map scheduler
-20. Initialize account plan usage caches and fire best-effort startup refreshes for Claude Code, Kiro, and Codex
-21. Detect LibreOffice and Pandoc in the background for KB ingestion status endpoints
-22. Listen on configured PORT
-23. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is the stream supervisor's process-local runtime attachment map while this process owns a backend iterator; `data/chat/stream-jobs.json` is the durable supervision layer used for accepted/preparing visibility, backend runtime identifiers (`externalSessionId`, `activeTurnId`, `processId`), and restart reconciliation. Runtime identifiers are diagnostic/current-turn metadata only; startup reconciliation still does not reattach or retry unless a backend explicitly advertises active-turn resume support. WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
-24. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
+15. Mount `/v2/src` as an explicit 404 guard so raw V2 source files are not served
+16. Mount `/v2` from `public/v2-built/` and `GET /v2/*` as a built-index fallback for future client routes
+17. Mount `/mobile` from `public/mobile-built/`, then serve remaining static files from `public/` (including shared images)
+18. Call `chatService.initialize()` (migration + lookup map)
+19. Reconcile leftover durable stream jobs via `chatResult.reconcileInterruptedJobs()` before the server accepts traffic. This converts unrecoverable accepted/preparing/running jobs from a prior process into one persisted assistant `streamError` when the user message exists, or removes the job when no user message was saved.
+20. Check that the configured port is free; exit with a PM2-oriented fatal message when it is already in use
+21. Run `webBuildService.ensureBuilt()` and `mobileBuildService.ensureBuilt()` before binding. In `auto` mode these build missing/stale `public/v2-built/` and `public/mobile-built/` assets and write `.agent-cockpit-build.json` markers; if a build fails with no previous `index.html`, startup fails loudly. If a previous build exists and rebuild fails, startup logs the stale-build warning and keeps serving the previous build for that asset tree.
+22. Start UpdateService (version polling), CliUpdateService (local CLI update polling), KB Auto-Dream scheduler, Memory Review scheduler, and Context Map scheduler
+23. Initialize account plan usage caches and fire best-effort startup refreshes for Claude Code, Kiro, and Codex
+24. Detect LibreOffice and Pandoc in the background for KB ingestion status endpoints
+25. Listen on configured PORT
+26. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is the stream supervisor's process-local runtime attachment map while this process owns a backend iterator; `data/chat/stream-jobs.json` is the durable supervision layer used for accepted/preparing visibility, backend runtime identifiers (`externalSessionId`, `activeTurnId`, `processId`), and restart reconciliation. Runtime identifiers are diagnostic/current-turn metadata only; startup reconciliation still does not reattach or retry unless a backend explicitly advertises active-turn resume support. WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
+27. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
 
 ### Graceful Shutdown
 
@@ -129,7 +133,7 @@ On the next process start, normal durable job reconciliation converts those fina
 
 See [ADR-0023](adr/0023-use-first-party-owner-authentication.md) for the first-party owner auth decision.
 
-**V2 frontend silent re-auth:** When `AgentApi.chatFetch` sees a 401, it invokes the handler registered via `AgentApi.setSessionExpiredHandler`. The shell wires this (see `public/v2/src/shell.jsx`) to a popup flow:
+**V2 frontend silent re-auth:** When `AgentApi.chatFetch` sees a 401, it invokes the handler registered via `AgentApi.setSessionExpiredHandler`. The shell wires this (see `web/AgentCockpitWeb/src/shell.jsx`) to a popup flow:
 
 1. `dialog.confirm` with "Sign in" / "Cancel" — if the user declines, nothing happens.
 2. On confirm, `window.open('/auth/login?popup=1', 'ac-reauth', ...)`. If the popup is blocked, fall back to a full-page redirect to `/auth/login` (the draft still survives via the localStorage mirror).
@@ -158,19 +162,19 @@ CLI profile remote-auth endpoints that spawn local CLI processes are CSRF-protec
 Helmet with CSP directives:
 ```
 default-src: 'self'
-script-src: 'self', 'unsafe-inline', https://cdnjs.cloudflare.com, https://unpkg.com
+script-src: 'self', 'unsafe-inline'
 script-src-attr: 'unsafe-inline'
 style-src: 'self', 'unsafe-inline', https://cdnjs.cloudflare.com, https://fonts.googleapis.com, https://api.fontshare.com
 font-src: 'self', data:, https://fonts.gstatic.com, https://api.fontshare.com, https://cdn.fontshare.com
 img-src: 'self', data:, blob:
-connect-src: 'self', https://unpkg.com
+connect-src: 'self'
 object-src: 'none'
 base-uri: 'self'
 frame-ancestors: 'none'
 form-action: 'self'
 ```
 
-`unpkg.com` (script/connect) and `cdnjs.cloudflare.com` (script/style) are allowlisted for the current `/v2/` runtime because React, ReactDOM, Babel Standalone, marked, DOMPurify, and highlight.js still load from CDNs until the production build step lands. `fonts.googleapis.com` / `api.fontshare.com` (style) and `fonts.gstatic.com` / `api.fontshare.com` / `cdn.fontshare.com` (font) are allowlisted for JetBrains Mono, Instrument Serif, and General Sans. The former `esm.sh` allowlist was removed with the V1-only 3D graph.
+The V2 runtime bundles React, ReactDOM, marked, DOMPurify, and highlight.js through Vite, so no third-party script or connect source is required for the main web app. `cdnjs.cloudflare.com` remains in `style-src` for the current highlight.js theme stylesheet, and `fonts.googleapis.com` / `api.fontshare.com` (style) plus `fonts.gstatic.com` / `api.fontshare.com` / `cdn.fontshare.com` (font) are allowlisted for JetBrains Mono, Instrument Serif, and General Sans.
 
 Cross-Origin Embedder Policy: disabled.
 

@@ -6,6 +6,12 @@ TASK.md
 .DS_Store
 .claude/
 coverage/
+public/v2-built/
+public/.v2-built-*/
+public/mobile/*
+!public/mobile/.adr-placeholder
+public/mobile-built/
+public/.mobile-built-*/
 *.xcuserstate
 xcuserdata/
 ios/AgentCockpit/.build/

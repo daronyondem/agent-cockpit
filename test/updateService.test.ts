@@ -41,6 +41,33 @@ import { UpdateService } from '../src/services/updateService';
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
+function makeWebBuildStatus(overrides: Record<string, unknown> = {}) {
+  return {
+    mode: 'auto',
+    buildDir: path.join(__dirname, '..', 'public', 'v2-built'),
+    markerPath: path.join(__dirname, '..', 'public', 'v2-built', '.agent-cockpit-build.json'),
+    fresh: true,
+    skipped: false,
+    didBuild: true,
+    previousBuildAvailable: true,
+    marker: {
+      sourceHash: 'source',
+      packageJsonHash: 'package-json',
+      packageLockHash: 'package-lock',
+      gitSha: 'abc123',
+      builtAt: '2026-05-11T00:00:00.000Z',
+    },
+    expected: {
+      sourceHash: 'source',
+      packageJsonHash: 'package-json',
+      packageLockHash: 'package-lock',
+      gitSha: 'abc123',
+    },
+    output: 'web build output',
+    ...overrides,
+  };
+}
+
 function mockExecFile(responses: Array<{ stdout?: string; stderr?: string; error?: string }>) {
   let callIndex = 0;
   mockExecFileFn.mockImplementation((_cmd: string, _args: string[], _opts: any, cb: Function) => {
@@ -61,6 +88,8 @@ function mockExecFile(responses: Array<{ stdout?: string; stderr?: string; error
 
 describe('UpdateService', () => {
   let service: UpdateService;
+  let mockWebBuildEnsureBuilt: jest.Mock;
+  let mockMobileBuildEnsureBuilt: jest.Mock;
   const appRoot = path.join(__dirname, '..');
 
   const interpreterPath = path.join(appRoot, 'node_modules', '.bin', 'tsx');
@@ -72,7 +101,16 @@ describe('UpdateService', () => {
     if (!ecosystemExists) {
       fs.writeFileSync(ecosystemPath, `module.exports = { apps: [{ script: 'server.ts', interpreter: './node_modules/.bin/tsx' }] };`);
     }
-    service = new UpdateService(appRoot);
+    mockWebBuildEnsureBuilt = jest.fn().mockResolvedValue(makeWebBuildStatus());
+    mockMobileBuildEnsureBuilt = jest.fn().mockResolvedValue(makeWebBuildStatus({
+      buildDir: path.join(__dirname, '..', 'public', 'mobile'),
+      markerPath: path.join(__dirname, '..', 'public', 'mobile', '.agent-cockpit-build.json'),
+      output: 'mobile build output',
+    }));
+    service = new UpdateService(appRoot, {
+      webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+      mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+    });
     mockExecFileFn.mockReset();
     mockSpawnFn.mockClear();
     mockWriteFileSync.mockClear();
@@ -259,7 +297,10 @@ describe('UpdateService', () => {
         hasActiveStreams: () => false,
       });
       expect(result.success).toBe(true);
-      expect(result.steps).toHaveLength(5);
+      expect(result.steps).toHaveLength(8);
+      expect(result.steps[3].name).toBe('npm --prefix mobile/AgentCockpitPWA install');
+      expect(result.steps[4].name).toBe('npm run web:build');
+      expect(result.steps[5].name).toBe('npm run mobile:build');
       expect(mockSpawnFn).toHaveBeenCalled();
     });
 
@@ -275,15 +316,98 @@ describe('UpdateService', () => {
         hasActiveStreams: () => false,
       });
       expect(result.success).toBe(true);
-      expect(result.steps).toHaveLength(5);
+      expect(result.steps).toHaveLength(8);
       expect(result.steps[0].name).toBe('git checkout main');
       expect(result.steps[1].name).toBe('git pull origin main');
       expect(result.steps[2].name).toBe('npm install');
-      expect(result.steps[3].name).toBe('verify interpreter');
-      expect(result.steps[4].name).toBe('pm2 restart');
+      expect(result.steps[3].name).toBe('npm --prefix mobile/AgentCockpitPWA install');
+      expect(result.steps[4].name).toBe('npm run web:build');
+      expect(result.steps[5].name).toBe('npm run mobile:build');
+      expect(result.steps[6].name).toBe('verify interpreter');
+      expect(result.steps[7].name).toBe('pm2 restart');
       result.steps.forEach(s => expect(s.success).toBe(true));
+      expect(mockWebBuildEnsureBuilt).toHaveBeenCalledWith({ force: true });
+      expect(mockMobileBuildEnsureBuilt).toHaveBeenCalledWith({ force: true });
       expect(mockWriteFileSync).toHaveBeenCalled();
       expect(mockSpawnFn).toHaveBeenCalledWith('sh', expect.arrayContaining(['-c']), expect.objectContaining({ stdio: 'ignore' }));
+    });
+
+    test('fails when the V2 web build fails and does not restart', async () => {
+      mockWebBuildEnsureBuilt.mockResolvedValueOnce(makeWebBuildStatus({
+        didBuild: false,
+        fresh: false,
+        error: 'vite build failed',
+      }));
+      mockExecFile([
+        { stdout: '' },                   // git status
+        { stdout: 'ok' },                 // git checkout
+        { stdout: 'ok' },                 // git pull
+        { stdout: 'ok' },                 // npm install
+      ]);
+
+      const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Failed to build V2 web app/);
+      expect(result.steps).toHaveLength(5);
+      expect(result.steps[4]).toEqual({
+        name: 'npm run web:build',
+        success: false,
+        output: 'vite build failed',
+      });
+      expect(mockSpawnFn).not.toHaveBeenCalled();
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
+    });
+
+    test('fails when mobile dependency install fails and does not restart', async () => {
+      mockExecFile([
+        { stdout: '' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { error: 'mobile install failed' },
+      ]);
+
+      const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Failed to install mobile dependencies/);
+      expect(result.steps).toHaveLength(4);
+      expect(result.steps[3]).toEqual({
+        name: 'npm --prefix mobile/AgentCockpitPWA install',
+        success: false,
+        output: 'mobile install failed',
+      });
+      expect(mockWebBuildEnsureBuilt).not.toHaveBeenCalled();
+      expect(mockMobileBuildEnsureBuilt).not.toHaveBeenCalled();
+      expect(mockSpawnFn).not.toHaveBeenCalled();
+    });
+
+    test('fails when the mobile PWA build fails and does not restart', async () => {
+      mockMobileBuildEnsureBuilt.mockResolvedValueOnce(makeWebBuildStatus({
+        didBuild: false,
+        fresh: false,
+        error: 'mobile build failed',
+      }));
+      mockExecFile([
+        { stdout: '' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+        { stdout: 'ok' },
+      ]);
+
+      const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+      expect(result.success).toBe(false);
+      expect(result.error).toMatch(/Failed to build mobile PWA/);
+      expect(result.steps).toHaveLength(6);
+      expect(result.steps[5]).toEqual({
+        name: 'npm run mobile:build',
+        success: false,
+        output: 'mobile build failed',
+      });
+      expect(mockSpawnFn).not.toHaveBeenCalled();
+      expect(mockWriteFileSync).not.toHaveBeenCalled();
     });
 
     test('stops at first failed step and reports error', async () => {
@@ -350,6 +474,7 @@ describe('UpdateService', () => {
         { stdout: 'ok' },                        // git checkout
         { stdout: 'ok' },                        // git pull
         { stdout: 'ok' },                        // npm install
+        { stdout: 'ok' },                        // mobile npm install
         { stdout: '/usr/local/bin/node\n' },     // which node
       ]);
 
@@ -369,6 +494,7 @@ describe('UpdateService', () => {
         { stdout: 'ok' },                        // git checkout
         { stdout: 'ok' },                        // git pull
         { stdout: 'ok' },                        // npm install
+        { stdout: 'ok' },                        // mobile npm install
         { error: 'not found' },                  // which nonexistent-cmd
       ]);
 

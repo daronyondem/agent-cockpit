@@ -1,0 +1,2 @@
+This directory is intentionally kept only so historical ADR affected paths keep
+validating after generated mobile PWA assets moved to ignored public/mobile-built/.

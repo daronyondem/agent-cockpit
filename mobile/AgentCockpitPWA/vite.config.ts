@@ -5,7 +5,7 @@ export default defineConfig({
   base: '/mobile/',
   plugins: [react()],
   build: {
-    outDir: '../../public/mobile',
+    outDir: '../../public/mobile-built',
     emptyOutDir: true,
   },
   server: {

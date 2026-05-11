@@ -1681,6 +1681,7 @@ export interface SendMessageResult {
 
 export type CodexApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never';
 export type CodexSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+export type WebBuildMode = 'auto' | 'skip';
 
 export interface AppConfig {
   PORT: number;
@@ -1699,6 +1700,7 @@ export interface AppConfig {
   BASE_PATH: string;
   CODEX_APPROVAL_POLICY: CodexApprovalPolicy;
   CODEX_SANDBOX_MODE: CodexSandboxMode;
+  WEB_BUILD_MODE: WebBuildMode;
 }
 
 // ── Express Extensions ───────────────────────────────────────────────────────
