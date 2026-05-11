@@ -48,6 +48,52 @@ describe('frontend routes', () => {
     expect(serverSrc).not.toContain("res.redirect('/index.html')");
   });
 
+  test('mobile PWA keeps iOS viewport and modal sheet content reachable', () => {
+    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+
+    expect(appSrc).toContain("root.style.setProperty('--app-top'");
+    expect(appSrc).toContain("root.style.setProperty('--app-left'");
+    expect(appSrc).toContain("root.style.setProperty('--app-width'");
+    expect(appSrc).toContain('viewport?.offsetTop');
+    expect(appSrc).toContain('viewport?.offsetLeft');
+    expect(appSrc).toContain('viewport?.width');
+    expect(appSrc).toContain('window.scrollTo(0, 0)');
+    expect(appSrc).toContain("window.addEventListener('scroll', scheduleUpdate)");
+    expect(appSrc).toContain("document.addEventListener('focusin', scheduleFocusUpdate)");
+    expect(appSrc).toContain("document.addEventListener('focusout', scheduleFocusUpdate)");
+    expect(cssSrc).toMatch(/\.app-shell \{[\s\S]*top: var\(--app-top, 0px\);/);
+    expect(cssSrc).toMatch(/\.app-shell \{[\s\S]*left: var\(--app-left, 0px\);/);
+    expect(cssSrc).toMatch(/\.app-shell \{[\s\S]*width: var\(--app-width, 100vw\);/);
+    expect(cssSrc).toMatch(/\.modal-backdrop \{[\s\S]*top: var\(--app-top, 0px\);/);
+    expect(cssSrc).toMatch(/\.modal-backdrop \{[\s\S]*left: var\(--app-left, 0px\);/);
+    expect(cssSrc).toMatch(/textarea, input \{[\s\S]*font-size: 16px;/);
+    expect(cssSrc).toMatch(/\.editor \{[\s\S]*font-size: 16px;/);
+    expect(appSrc).toContain('className="modal-scroll run-settings-scroll"');
+    expect(cssSrc).toMatch(/\.run-settings-scroll \{[\s\S]*padding-bottom: calc\(16px \+ env\(safe-area-inset-bottom\)\);/);
+    expect(cssSrc).toMatch(/\.filter-select \{[\s\S]*flex: 1 1 100%;/);
+    expect(cssSrc).toMatch(/\.filter-select select \{[\s\S]*max-width: 100%;/);
+  });
+
+  test('mobile PWA treats stream socket loss as reconnectable', () => {
+    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+
+    expect(appSrc).toContain('const STREAM_RECONNECT_BASE_MS');
+    expect(appSrc).toContain('const STREAM_RECONNECT_MAX_MS');
+    expect(appSrc).toContain('streamReconnectTimerRef');
+    expect(appSrc).toContain('resumeStreamConnectionRef');
+    expect(appSrc).toContain('function scheduleStreamReconnect');
+    expect(appSrc).toContain('async function resumeStreamConnection');
+    expect(appSrc).toContain("window.addEventListener('online', resumeVisibleStream)");
+    expect(appSrc).toContain("document.addEventListener('visibilitychange', resumeVisibleStream)");
+    expect(appSrc).toContain('void resumeStreamConnectionRef.current(conversationID, true)');
+    expect(appSrc).toContain('void resumeStreamConnectionRef.current(conversationID)');
+    expect(appSrc).toContain('socket.onerror = () =>');
+    expect(appSrc).toContain('scheduleStreamReconnect(conversationID)');
+    expect(appSrc).toContain('clientRef.current.getActiveStreams()');
+    expect(appSrc).not.toContain("socket.onerror = () => setErrorMessage('Stream connection failed.')");
+  });
+
   test('memory update notifications open the focused memory-update modal first', () => {
     const shellSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/shell.jsx'), 'utf8');
     const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'public/v2/src/workspaceSettings.jsx'), 'utf8');
