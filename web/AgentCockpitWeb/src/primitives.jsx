@@ -377,8 +377,10 @@ export function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null,
   return (
     <aside className="sb">
       <div className="sb-top">
-        <span className="sb-logo"><img src="/logo-full-no-text.svg" alt="Agent Cockpit"/></span>
-        <span className="sb-wordmark">Agent Cockpit</span>
+        <span className="sb-brand">
+          <span className="sb-logo"><img src="/logo-full-no-text.svg" alt="Agent Cockpit"/></span>
+          <span className="sb-wordmark">Agent Cockpit</span>
+        </span>
       </div>
 
       <button

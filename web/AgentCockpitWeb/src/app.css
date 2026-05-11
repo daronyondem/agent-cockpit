@@ -207,10 +207,15 @@ body{
 .sb-resizer.dragging{ transition: none; }
 .sb-top{
   padding: calc(14px * var(--density)) 14px 10px;
-  display: flex; align-items: center; gap: 10px;
+  display: flex; align-items: center; justify-content: center;
+}
+.sb-brand{
+  display: inline-flex; align-items: center; gap: 10px;
+  min-width: 0;
 }
 .sb-logo{
   width: 90px; height: 35px;
+  flex: 0 0 auto;
   display: inline-flex; align-items: center; justify-content: center;
   color: var(--accent);
 }
@@ -218,6 +223,7 @@ body{
 .sb-wordmark{
   font-weight: 600; letter-spacing: -.01em;
   font-size: 14.5px;
+  white-space: nowrap;
 }
 .sb-wordmark em{
   font-style: normal; color: var(--text-3); font-weight: 500;

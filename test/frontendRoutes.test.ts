@@ -511,12 +511,15 @@ describe('frontend routes', () => {
     expect(primitivesSrc).toContain('active conversation');
     expect(primitivesSrc).toContain('newConversationInitialPath');
     expect(primitivesSrc).toContain('onNewConversation(newConversationInitialPath)');
+    expect(primitivesSrc).toContain('className="sb-brand"');
     expect(shellSrc).toContain('folderPickerInitialPath');
     expect(shellSrc).toContain('initialPath={folderPickerInitialPath}');
     expect(folderPickerSrc).toContain("function FolderPicker({ open, initialPath = ''");
     expect(folderPickerSrc).toContain("load(initialPath || '')");
     expect(primitivesSrc).not.toContain('function groupByWorkspace');
     expect(cssSrc).toContain('.sb-workspace-filter');
+    expect(cssSrc).toContain('justify-content: center');
+    expect(cssSrc).toContain('.sb-brand');
     expect(cssSrc).toContain('.sb-row .workspace');
     expect(cssSrc).not.toContain('.sb-ws{');
   });
