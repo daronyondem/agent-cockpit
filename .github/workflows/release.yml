@@ -1,0 +1,100 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Semver version to publish, without or with a leading v.
+        required: true
+        type: string
+      source_ref:
+        description: Branch, tag, or commit to package.
+        required: true
+        default: main
+        type: string
+      prerelease:
+        description: Mark the GitHub Release as a prerelease.
+        required: true
+        default: false
+        type: boolean
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Normalize release inputs
+        id: release
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          VERSION="${VERSION#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+([-.+][0-9A-Za-z.-]+)?$ ]]; then
+            echo "Invalid version: ${{ inputs.version }}" >&2
+            exit 1
+          fi
+          COMMIT="$(git rev-parse HEAD)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "commit=$COMMIT" >> "$GITHUB_OUTPUT"
+
+      - name: Set package version
+        shell: bash
+        run: |
+          CURRENT="$(node -p "require('./package.json').version")"
+          VERSION="${{ steps.release.outputs.version }}"
+          if [ "$CURRENT" != "$VERSION" ]; then
+            npm version "$VERSION" --no-git-tag-version
+          fi
+
+      - run: npm ci
+      - run: npm --prefix mobile/AgentCockpitPWA ci
+      - run: npm run typecheck
+      - run: npm run web:typecheck
+      - run: npm run web:build
+      - run: npm run web:budget
+      - run: npm run mobile:typecheck
+      - run: npm run maintainability:check
+      - run: npm run spec:drift
+      - run: npm run mobile:build
+      - run: npm test
+      - run: npm run adr:lint
+
+      - name: Package release
+        run: |
+          npm run release:package -- \
+            --version "${{ steps.release.outputs.version }}" \
+            --source-ref "${{ inputs.source_ref }}" \
+            --commit "${{ steps.release.outputs.commit }}" \
+            --out-dir dist/release
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          VERSION="${{ steps.release.outputs.version }}"
+          PRERELEASE_ARGS=()
+          if [ "${{ inputs.prerelease }}" = "true" ]; then
+            PRERELEASE_ARGS=(--prerelease)
+          fi
+
+          gh release create "v$VERSION" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "${{ steps.release.outputs.commit }}" \
+            --title "Agent Cockpit v$VERSION" \
+            --notes "Agent Cockpit production release v$VERSION." \
+            "${PRERELEASE_ARGS[@]}" \
+            "dist/release/agent-cockpit-v$VERSION.tar.gz" \
+            "dist/release/release-manifest.json" \
+            "dist/release/SHA256SUMS" \
+            "dist/release/install-macos.sh"

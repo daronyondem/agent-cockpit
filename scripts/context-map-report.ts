@@ -97,9 +97,9 @@ function printUsage(): void {
   npm run context-map:report -- --db data/chat/workspaces/<hash>/context-map/state.db
 
 Options:
-  --workspace, -w <value>  Workspace hash or workspace path to resolve under data/chat/workspaces.
+  --workspace, -w <value>  Workspace hash or workspace path to resolve under the chat workspaces data dir.
   --db <path>             Direct path to context-map/state.db.
-  --data-dir <path>       Workspace data root. Defaults to data/chat/workspaces.
+  --data-dir <path>       Workspace data root. Defaults to <data-root>/chat/workspaces.
   --json                  Print machine-readable JSON.
 `);
 }
@@ -108,7 +108,8 @@ function resolveDbPath(): string {
   if (values.db) return path.resolve(String(values.db));
   const workspace = values.workspace ? String(values.workspace) : '';
   if (!workspace) throw new Error('Provide --workspace or --db.');
-  const dataDir = path.resolve(String(values['data-dir'] || path.join(process.cwd(), 'data', 'chat', 'workspaces')));
+  const defaultDataRoot = path.resolve(process.env.AGENT_COCKPIT_DATA_DIR || path.join(process.cwd(), 'data'));
+  const dataDir = path.resolve(String(values['data-dir'] || path.join(defaultDataRoot, 'chat', 'workspaces')));
   const direct = path.join(dataDir, workspace, 'context-map', 'state.db');
   if (fs.existsSync(direct)) return direct;
   const workspacePath = path.resolve(workspace);

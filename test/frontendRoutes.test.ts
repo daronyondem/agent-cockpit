@@ -99,6 +99,26 @@ describe('frontend routes', () => {
     expect(cssSrc).toMatch(/\.filter-select select \{[\s\S]*max-width: 100%;/);
   });
 
+  test('welcome flow calls install doctor and completion APIs', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+
+    expect(apiSrc).toContain("chatFetch('install/doctor')");
+    expect(apiSrc).toContain("chatFetch('install/welcome-complete', { method: 'POST'");
+    expect(apiSrc).toContain('getInstallDoctor');
+    expect(apiSrc).toContain('completeWelcome');
+    expect(shellSrc).toContain("new URLSearchParams(window.location.search).get('welcome') === '1'");
+    expect(shellSrc).toContain('function WelcomeScreen');
+    expect(shellSrc).toContain('AgentApi.getInstallDoctor()');
+    expect(shellSrc).toContain('AgentApi.completeWelcome()');
+    expect(shellSrc).toContain("onOpenSettings('security')");
+    expect(shellSrc).toContain("onOpenSettings('cli')");
+    expect(shellSrc).toContain('/mobile/');
+    expect(cssSrc).toContain('.main-welcome');
+    expect(cssSrc).toContain('.welcome-grid');
+  });
+
   test('mobile PWA treats stream socket loss as reconnectable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
 

@@ -8,7 +8,7 @@
 
 **File:** `src/services/chatService.ts`
 
-**Constructor:** `new ChatService(appRoot, options)` — sets `baseDir` to `<appRoot>/data/chat`, creates `workspaces/` and `artifacts/` dirs synchronously at startup, initializes in-memory `Map<convId, workspaceHash>` for fast lookup.
+**Constructor:** `new ChatService(appRoot, options)` — sets `baseDir` to `<options.dataRoot || appRoot/data>/chat`, creates `workspaces/` and `artifacts/` dirs synchronously at startup, initializes in-memory `Map<convId, workspaceHash>` for fast lookup. `server.ts` passes `config.AGENT_COCKPIT_DATA_DIR`, so production installs can keep chat data outside replaceable app code while existing callers without `dataRoot` preserve the legacy `<appRoot>/data/chat` layout.
 
 `ChatService` remains the public facade for conversation, workspace, memory, KB, Context Map, settings, queue, usage, artifact, and workspace-instruction operations. Pure attachment helpers stay in `src/services/chat/attachments.ts` and are re-exported where legacy imports still expect them from `chatService.ts`; generated artifact persistence lives in `src/services/chat/artifactStore.ts` behind `createConversationArtifact`; message-queue persistence and legacy queue normalization live in `src/services/chat/messageQueueStore.ts` behind the same public `getQueue`/`setQueue`/`clearQueue` methods; usage-ledger persistence/aggregation lives in `src/services/chat/usageLedgerStore.ts` behind `addUsage`, `getUsageStats`, and `clearUsageStats`; workspace KB and Context Map enablement/settings flags live in `src/services/chat/workspaceFeatureSettingsStore.ts`; workspace-instruction compatibility detection and pointer-file creation live in `src/services/chat/workspaceInstructionStore.ts` behind the existing instruction facade methods. This keeps helper/store behavior testable without changing the service API.
 
@@ -94,7 +94,7 @@ All methods are `async` except `getWorkspaceContext()`. `getWorkspaceMemoryPoint
 
 **File:** `src/services/localAuthStore.ts`
 
-`LocalAuthStore` owns the first-party single-owner auth state for the backend. It stores `owner.json` under `AUTH_DATA_DIR` (default `data/auth`) and writes it through `atomicWriteFile`, then chmods the file to `0600`. The directory is created with mode `0700`.
+`LocalAuthStore` owns the first-party single-owner auth state for the backend. It stores `owner.json` under `AUTH_DATA_DIR` (default `<AGENT_COCKPIT_DATA_DIR>/auth`) and writes it through `atomicWriteFile`, then chmods the file to `0600`. The directory is created with mode `0700`.
 
 State shape:
 
@@ -915,31 +915,168 @@ Before injecting, the adapter reads the selected runtime's `config.toml` (`~/.co
 
 **File:** `src/services/updateService.ts`
 
+`UpdateService` routes update checks and update execution by the install channel
+reported by `InstallStateService`. Dev installs (`channel: "dev",
+source: "git-main"`) compare local `package.json` against
+`origin/main:package.json`, pull `main`, install dependencies, rebuild generated
+assets, verify PM2 configuration, and restart. Production installs
+(`channel: "production", source: "github-release"`) check the external
+GitHub Release manifest, download and verify the release tarball, stage the new
+release under the Mac install root, run dependency/build preflight work there,
+switch the `current` symlink, then restart through PM2 with a health-check
+rollback script. [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md)
+records the channel decision.
+
 - `start()` — runs `_checkRemoteVersion()` immediately, then polls every 15 minutes (unref'd interval)
 - `stop()` — clears polling interval
-- `getStatus()` — returns cached `{ localVersion, remoteVersion, updateAvailable, lastCheckAt, lastError, updateInProgress }`
-- `checkNow()` — immediate version check, returns status
-- `triggerUpdate({ hasActiveStreams })` — full update sequence with guards:
+- `getStatus()` — returns cached `{ localVersion, remoteVersion, updateAvailable, lastCheckAt, lastError, updateInProgress, installChannel, installSource, installStateSource }`
+- `checkNow()` — immediate channel-aware version check, returns status
+- `triggerUpdate({ hasActiveStreams })` — full update sequence with shared guards:
   1. Concurrent guard (`_updateInProgress` flag)
   2. Active/pending turn guard (refuses if CLI streams are active or a message send is accepted but still preparing)
-  3. Dirty tree guard (`git status --porcelain`, ignoring `data/`, `.env`, `ecosystem.config.js`, `.DS_Store`, `.claude/`, `coverage/`, `plans/`)
-  4. `git checkout main` (30s timeout)
-  5. `git pull origin main` (60s timeout)
-  6. `npm install` (120s timeout)
-  7. `npm --prefix mobile/AgentCockpitPWA install` (120s timeout) so the mobile app's separate lockfile is installed before its production build.
-  8. Force V2 web build via `WebBuildService.ensureBuilt({ force:true })`, reported as an `npm run web:build` update step. A build failure returns a failed update result and does not restart, even when a previous V2 build exists.
-  9. Force mobile PWA build via `MobileBuildService.ensureBuilt({ force:true })`, reported as an `npm run mobile:build` update step. A build failure returns a failed update result and does not restart, even when a previous mobile build exists.
-  10. Verify interpreter — reads `ecosystem.config.js` fresh from disk (via `fs.readFileSync`, not `require`, to avoid stale cache), checks the configured interpreter exists. Path-based interpreters (starting with `.` or `/`) are checked on disk; bare commands (e.g. `npx`, `node`) are resolved via `which` on PATH
-  11. Delegates to `_launchRestartScript()` (shared with `restart()` below)
+
+Dev-channel sequence:
+
+1. Dirty tree guard (`git status --porcelain`, ignoring `data/`, `.env`, `ecosystem.config.js`, `.DS_Store`, `.claude/`, `coverage/`, `plans/`)
+2. `git checkout main` (30s timeout)
+3. `git pull origin main` (60s timeout)
+4. `npm install` (120s timeout)
+5. `npm --prefix mobile/AgentCockpitPWA install` (120s timeout) so the mobile app's separate lockfile is installed before its production build.
+6. Force V2 web build via `WebBuildService.ensureBuilt({ force:true })`, reported as an `npm run web:build` update step. A build failure returns a failed update result and does not restart, even when a previous V2 build exists.
+7. Force mobile PWA build via `MobileBuildService.ensureBuilt({ force:true })`, reported as an `npm run mobile:build` update step. A build failure returns a failed update result and does not restart, even when a previous mobile build exists.
+8. Verify interpreter — reads `ecosystem.config.js` fresh from disk (via `fs.readFileSync`, not `require`, to avoid stale cache), checks the configured interpreter exists. Path-based interpreters (starting with `.` or `/`) are checked on disk; bare commands (e.g. `npx`, `node`) are resolved via `which` on PATH
+9. Delegates to `_launchRestartScript()` (shared with `restart()` below)
+
+Production-channel sequence:
+
+1. Require stored `installDir` and `appDir`; resolve the current symlink target as
+   the rollback target.
+2. Download `release-manifest.json` and `SHA256SUMS` from
+   `https://github.com/<repo>/releases/latest/download/`.
+3. Verify the manifest checksum against `SHA256SUMS`.
+4. Parse the manifest, find the artifact with `role: "app-tarball"`, download it,
+   verify its `SHA256SUMS` entry, and verify its manifest `sha256`.
+5. Refuse when the manifest version is not newer than the running package
+   version.
+6. Extract the tarball into a staging directory under `<installDir>/releases`,
+   require `server.ts`, then atomically rename it to the manifest `packageRoot`.
+7. Run root `npm ci` and mobile `npm --prefix mobile/AgentCockpitPWA ci` inside
+   the extracted release.
+8. Run V2 and mobile build preflight services for the extracted release. Fresh
+   markers skip builds; missing/stale markers or missing assets run the
+   corresponding build. Any build error fails the update before the symlink
+   changes.
+9. Confirm `public/v2-built/index.html` and `public/mobile-built/index.html`
+   exist.
+10. Copy `.env` and `ecosystem.config.js` from the previous current release into
+    the new release.
+11. Switch `<installDir>/current` to the new release. The path must either be
+    absent or a symlink; a non-symlink current path is refused.
+12. Update `install.json` through `InstallStateService.writeState()` when the
+    service is available.
+13. Launch `_launchRestartScript({ appRoot: current, healthUrl, currentLink,
+    rollbackTarget })`. The health URL is derived from the new release `.env`
+    `PORT` value and defaults to `3334`.
+
 - `restart({ hasActiveStreams })` — plain server restart (no git pull / npm install / interpreter verification). Applies the same concurrent + active/pending turn guards as `triggerUpdate()`, then calls `_launchRestartScript()`. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. The guard delegates to the stream supervisor's in-flight check and still treats accepted/preparing sends as active even though they now have durable stream jobs; planned/manual restarts should be blocked before work is interrupted.
-- `_launchRestartScript()` (private) — writes `data/restart.sh` (sets PATH to `node_modules/.bin`, sleeps 2s, `pm2 delete` + `pm2 start` against `ecosystem.config.js`), then launches it via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. Output logged to `data/update-restart.log`. Shared by `triggerUpdate()` and `restart()`.
+- `_launchRestartScript()` (private) — writes `<dataRoot>/restart.sh` (sets PATH to `node_modules/.bin`, sleeps 2s, `pm2 delete` + `pm2 start` against `ecosystem.config.js`), then launches it via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. Output logged to `<dataRoot>/update-restart.log`. Shared by `triggerUpdate()` and `restart()`. Production callers also pass a health URL plus `currentLink`/`rollbackTarget`; the script probes the health URL for up to 20 seconds and, on failure, relinks `current` to the rollback target and restarts PM2 again. `dataRoot` defaults to `<appRoot>/data`; `server.ts` passes `config.AGENT_COCKPIT_DATA_DIR`.
 
 Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
 
-- `_checkRemoteVersion()` — `git fetch origin main` + `git show origin/main:package.json`
+- `_checkRemoteVersion()` — production downloads and parses the latest release
+  manifest version; dev runs `git fetch origin main` + `git show
+  origin/main:package.json`.
 - `_isNewer(remote, local)` — three-part numeric semver comparison
 
-## 4.3.1 WebBuildService
+## 4.3.1 InstallStateService
+
+**File:** `src/services/installStateService.ts`
+
+`InstallStateService` owns `<AGENT_COCKPIT_DATA_DIR>/install.json`, the local
+manifest that records whether this install is production (`github-release`) or
+dev (`git-main`). It provides stable status data to the update service,
+`/api/chat/install/status`, `/api/chat/install/doctor`, and the welcome flow.
+The macOS installer writes production/dev metadata, and the welcome flow marks
+`welcomeCompletedAt` through this service.
+
+Constructor: `new InstallStateService({ appRoot, dataRoot, repo?, branch?, version? })`.
+`repo` defaults to `daronyondem/agent-cockpit`, `branch` defaults to `main`, and
+`version` defaults to `package.json` under `appRoot`.
+
+Public surface:
+
+- `getManifestPath()` — returns `<dataRoot>/install.json`.
+- `getStatus()` — synchronously reads and normalizes the manifest for route and
+  update-status callers. Missing manifests return inferred dev/main status with
+  `stateSource: "inferred"`. Corrupt manifests return the same inferred dev/main
+  status with `stateSource: "corrupt"` and `stateError`. Manifests without
+  `schemaVersion: 1` normalize to the v1 response and report
+  `stateSource: "legacy"`.
+- `writeState(partial)` — writes a normalized schema-version-1 manifest through
+  `atomicWriteFile`.
+- `markWelcomeCompleted(at?)` — sets `welcomeCompletedAt` to the supplied ISO
+  timestamp or the current time.
+
+Status shape:
+
+```ts
+{
+  schemaVersion: 1,
+  channel: 'production' | 'dev',
+  source: 'github-release' | 'git-main' | 'unknown',
+  repo: string,
+  version: string | null,
+  branch: string | null,
+  installDir: string | null,
+  appDir: string | null,
+  dataDir: string,
+  installedAt: string | null,
+  welcomeCompletedAt: string | null,
+  stateSource: 'stored' | 'inferred' | 'legacy' | 'corrupt',
+  stateError: string | null,
+}
+```
+
+## 4.3.2 InstallDoctorService
+
+**File:** `src/services/installDoctorService.ts`
+
+`InstallDoctorService` is the shared diagnostic layer for installer follow-up,
+the V2 welcome flow, and future Settings health panels. It is constructed in
+`server.ts` with `{ appRoot, dataRoot, installStateService, updateService }`.
+Tests can inject a command runner and optional-tool detectors so doctor coverage
+does not execute real local CLIs.
+
+`getStatus()` returns:
+
+```ts
+{
+  generatedAt: string,
+  overallStatus: 'ok' | 'warning' | 'error',
+  install: InstallStatus,
+  checks: Array<{
+    id: string,
+    label: string,
+    status: 'ok' | 'warning' | 'error',
+    required: boolean,
+    summary: string,
+    detail?: string,
+    remediation?: string,
+  }>,
+}
+```
+
+Required checks currently cover Node.js 22+, npm, local PM2 through
+`npx --no-install pm2 --version`, writable `<AGENT_COCKPIT_DATA_DIR>`, and the
+desktop V2 build shell at `public/v2-built/index.html`. Optional/warning checks
+cover app-directory writability for future updates, the mobile PWA build shell,
+Claude Code CLI, Codex CLI, Kiro CLI, Pandoc, LibreOffice, cloudflared, and
+install/update channel metadata. A corrupt install manifest downgrades the
+update-channel check to warning while still returning inferred install metadata.
+`overallStatus` is `error` when any required check errors, `warning` when any
+check warns/errors but required checks are usable, and `ok` otherwise.
+
+## 4.3.3 WebBuildService
 
 **File:** `src/services/webBuildService.ts`
 
@@ -966,7 +1103,7 @@ Modes and failure policy:
 - Build failure with no previous `index.html` throws so startup can fail loudly.
 - Build failure with an existing `index.html` returns a non-fresh status with `error`, allowing startup to serve the previous build while surfacing the stale-build warning. `UpdateService` treats that same error status as a failed update and refuses to restart.
 
-## 4.3.2 MobileBuildService
+## 4.3.4 MobileBuildService
 
 **File:** `src/services/mobileBuildService.ts`
 
@@ -978,7 +1115,7 @@ npm --prefix mobile/AgentCockpitPWA run build -- --outDir <stagingDir>
 
 It is constructed in `server.ts` with the same `WEB_BUILD_MODE` as the main V2 web build service. Startup calls `mobileBuildService.ensureBuilt()` before binding the port; self-update calls `mobileBuildService.ensureBuilt({ force:true })` after mobile dependency installation and after the main V2 web build. The status/failure semantics are identical to `WebBuildService`: a missing-build failure aborts startup, a stale-build failure with prior assets keeps serving the previous build at startup, and any self-update build error prevents PM2 restart.
 
-## 4.3.3 CliUpdateService
+## 4.3.5 CliUpdateService
 
 **File:** `src/services/cliUpdateService.ts`
 
@@ -1031,14 +1168,14 @@ Fetches and caches the Claude Code account-wide plan usage snapshot (5-hour sess
 - `STALE_AFTER_MS = 15 * 60 * 1000` — client-visible stale threshold (slightly above the refresh floor)
 - `EXPIRY_BUFFER_MS = 5 * 60 * 1000` — token is treated as expired when `Date.now() + buffer >= expiresAt`
 
-**Constructor:** `new ClaudePlanUsageService(appRoot: string)` — stores the default cache at `<appRoot>/data/claude-plan-usage.json` and profile-specific caches under `<appRoot>/data/claude-plan-usage/<encodeURIComponent(profile.id)>.json`.
+**Constructor:** `new ClaudePlanUsageService(appRoot: string, options?: { dataRoot?: string })` — stores the default cache at `<options.dataRoot || appRoot/data>/claude-plan-usage.json` and profile-specific caches under `<options.dataRoot || appRoot/data>/claude-plan-usage/<encodeURIComponent(profile.id)>.json`.
 
 **Methods:**
 - `init()` — loads the default persisted snapshot and any profile snapshots off disk on server startup. Silently ignores `ENOENT`; logs any other read/parse failure and keeps the in-memory snapshot as its initial empty shape.
 - `getCached(profile?: CliProfile)` — returns `{ fetchedAt, planTier, subscriptionType, rateLimits, lastError, stale }`. Does not trigger a refresh. Without a profile, or with the plain `server-configured-claude-code` profile that has no custom command/config/env, reads the default cache. With an account/custom profile, reads that profile's isolated cache. `stale` is computed as `now - fetchedAt > STALE_AFTER_MS` (or `true` when `fetchedAt` is null). This is the exact shape returned by `GET /api/chat/plan-usage`.
 - `maybeRefresh(reason: string, profile?: CliProfile)` — triggers a refresh for the default cache or selected profile cache if all of: no in-flight refresh for that cache key, and at least `REFRESH_MIN_INTERVAL_MS` have passed since the last attempt for that key. Returns the shared in-flight promise when a fetch is already running, or an immediately-resolved promise when the throttle is active. The `reason` string is logged alongside success/failure (`server-start`, `turn-done`).
 - `_refresh(reason)` / `_refreshProfile(reason, profile)` (private) — reads credentials, short-circuits with `lastError: 'token-expired'` if the token is within the 5-minute buffer (and resets the relevant last-attempt timestamp to `0` so the throttle does not gate the next trigger — no API call was made, so this is not a real attempt), otherwise calls `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer <token>` + `anthropic-beta: oauth-2025-04-20` and a 10-second abort signal. On success stores `{ fetchedAt: now, planTier: creds.rateLimitTier, subscriptionType: creds.subscriptionType, rateLimits: <body>, lastError: null }` into the selected cache. On non-2xx or network failure preserves the prior `fetchedAt`/`planTier`/`subscriptionType`/`rateLimits` values and only overwrites `lastError` with the failure message — the UI can still render the last-known snapshot.
-- `_persist()` / `_persistSnapshot(file, snapshot)` (private) — writes the default snapshot to `data/claude-plan-usage.json` or profile snapshots to `data/claude-plan-usage/<encoded-profile-id>.json` via `atomicWriteFile`. Failures are logged and swallowed.
+- `_persist()` / `_persistSnapshot(file, snapshot)` (private) — writes the default snapshot to `<dataRoot>/claude-plan-usage.json` or profile snapshots to `<dataRoot>/claude-plan-usage/<encoded-profile-id>.json` via `atomicWriteFile`. Failures are logged and swallowed.
 
 **Credential resolution (`readStoredCredentials`):** The OAuth tokens Claude Code writes have two storage backends, tried in order:
 1. Profile with `configDir` — reads `<configDir>/.credentials.json` only. There is intentionally no Keychain fallback for account profiles because the default Keychain service is not profile-isolated.
@@ -1057,7 +1194,7 @@ Parsed shape (`parseCredsBlob`):
 Missing `accessToken` throws `credentials missing claudeAiOauth.accessToken`, surfaced as `lastError`.
 
 **Integration points:**
-- `server.ts` — instantiated with `__dirname`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `claudePlanUsageService` dependency.
+- `server.ts` — instantiated with `__dirname` plus `config.AGENT_COCKPIT_DATA_DIR`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `claudePlanUsageService` dependency.
 - `src/routes/chat/statusRoutes.ts`:
   - `GET /plan-usage` route returns `getCached()` verbatim. `GET /plan-usage?cliProfileId=<id>` resolves the profile, rejects missing/disabled/non-Claude profiles with `400`, and returns `getCached(profile)` without triggering a refresh.
 - `src/routes/chat.ts` stream orchestration:
@@ -1087,14 +1224,14 @@ Fetches and caches the Kiro (Amazon Q Developer) account-wide plan usage snapsho
 - `STALE_AFTER_MS = 15 * 60 * 1000` — client-visible stale threshold (slightly above the refresh floor)
 - `EXPIRY_BUFFER_MS = 30 * 1000` — AWS IdC tokens rotate every ~8 min, so the buffer here is much tighter than Claude's 5 min; if <30s remain the service skips and waits for the CLI to refresh on its next real invocation
 
-**Constructor:** `new KiroPlanUsageService(appRoot: string, options?: { dbPath?: string })` — stores the on-disk cache at `<appRoot>/data/kiro-plan-usage.json`; `options.dbPath` is test-only (defaults to the platform-specific kiro-cli data file — see below).
+**Constructor:** `new KiroPlanUsageService(appRoot: string, options?: { dbPath?: string; dataRoot?: string })` — stores the on-disk cache at `<options.dataRoot || appRoot/data>/kiro-plan-usage.json`; `options.dbPath` is test-only (defaults to the platform-specific kiro-cli data file — see below).
 
 **Methods:**
 - `init()` — loads the persisted snapshot off disk on server startup. Silently ignores `ENOENT`; logs any other read/parse failure and keeps the in-memory snapshot as its initial empty shape.
 - `getCached()` — returns `{ fetchedAt, usage, lastError, stale }`. Does not trigger a refresh. `stale` is computed as `now - fetchedAt > STALE_AFTER_MS` (or `true` when `fetchedAt` is null). This is the exact shape returned by `GET /api/chat/kiro-plan-usage`.
 - `maybeRefresh(reason: string)` — triggers a refresh if all of: no in-flight refresh, and at least `REFRESH_MIN_INTERVAL_MS` have passed since the last attempt. Returns the shared in-flight promise when a fetch is already running, or an immediately-resolved promise when the throttle is active. The `reason` string is logged alongside success/failure (`server-start`, `turn-done`).
 - `_refresh(reason)` (private) — opens the kiro-cli SQLite DB read-only via `readKiroAuth(dbPath)`, short-circuits with `lastError: 'token-expired'` if the access token is within the 30-second expiry buffer (and resets `_lastAttemptAt = 0` so the throttle does not gate the next trigger — no API call was made, so this is not a real attempt), otherwise `POST`s `https://q.us-east-1.amazonaws.com/?profileArn=<enc>&origin=KIRO_CLI` with headers `Content-Type: application/x-amz-json-1.0`, `X-Amz-Target: AmazonCodeWhispererService.GetUsageLimits`, `Authorization: Bearer <accessToken>`, `X-Amzn-Codewhisperer-Optout: false`, `Accept: */*` and body `{"profileArn":"<arn>","origin":"KIRO_CLI"}`, with a 10-second abort signal. On success stores `{ fetchedAt: now, usage: normalizeUsage(body), lastError: null }`. On non-2xx or network failure preserves the prior `fetchedAt` / `usage` values and only overwrites `lastError` — the UI still renders the last-known snapshot.
-- `_persist()` (private) — `mkdir -p data/` then writes the snapshot to `data/kiro-plan-usage.json`. Failures are logged and swallowed.
+- `_persist()` (private) — `mkdir -p <dataRoot>/` then writes the snapshot to `<dataRoot>/kiro-plan-usage.json`. Failures are logged and swallowed.
 
 **SQLite credential resolution (`readKiroAuth`):** opens the kiro-cli data file with `better-sqlite3` using `{ readonly: true, fileMustExist: true }`, then reads two rows with prepared statements and closes the DB in a `finally`:
 - `SELECT value FROM auth_kv WHERE key = 'kirocli:odic:token'` — JSON blob with `{ access_token, expires_at }` (`expires_at` is ISO-8601, parsed to epoch ms; treated as non-expiring when absent or unparseable).
@@ -1105,7 +1242,7 @@ Fetches and caches the Kiro (Amazon Q Developer) account-wide plan usage snapsho
 **Response normalization (`normalizeUsage`):** pulls `subscriptionInfo`, `overageConfiguration.overageStatus`, `nextDateReset`, and `usageBreakdownList[0]` from the raw body, coercing every field through `strOrNull` / `numOrNull` so missing or non-primitive values become `null` rather than crashing the renderer. `bonuses` passes through as an opaque array (`unknown[]`) — the frontend surfaces the count rather than the contents. See [spec-api-endpoints.md § 3.15](spec-api-endpoints.md#315-kiro-plan-usage) for the full `KiroUsageData` shape.
 
 **Integration points:**
-- `server.ts` — instantiated with `__dirname`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `kiroPlanUsageService` dependency.
+- `server.ts` — instantiated with `__dirname` plus `config.AGENT_COCKPIT_DATA_DIR`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `kiroPlanUsageService` dependency.
 - `src/routes/chat/statusRoutes.ts`:
   - `GET /kiro-plan-usage` route returns `getCached()` verbatim.
 - `src/routes/chat.ts` stream orchestration:
@@ -1135,14 +1272,14 @@ Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Pl
 - `REFRESH_TIMEOUT_MS = 15_000` — hard ceiling on the spawned `codex app-server`. The two RPCs are sub-second in practice; a stuck process gets `SIGKILL`'d at this point.
 - `PROCESS_KILL_GRACE_MS = 1_000` — after the fetch finishes the service first sends `SIGTERM` and gives the process this long to exit cleanly before `SIGKILL`. The fallback timer is `.unref()`'d so it never holds the event loop open.
 
-**Constructor:** `new CodexPlanUsageService(appRoot: string)` — stores the default on-disk cache at `<appRoot>/data/codex-plan-usage.json` and profile-specific cache files under `<appRoot>/data/codex-plan-usage/<encodeURIComponent(profile.id)>.json`.
+**Constructor:** `new CodexPlanUsageService(appRoot: string, options?: { dataRoot?: string })` — stores the default on-disk cache at `<options.dataRoot || appRoot/data>/codex-plan-usage.json` and profile-specific cache files under `<options.dataRoot || appRoot/data>/codex-plan-usage/<encodeURIComponent(profile.id)>.json`.
 
 **Methods:**
 - `init()` — loads the default persisted snapshot and every profile snapshot off disk on server startup. Silently ignores `ENOENT`; logs any other read/parse failure and keeps the in-memory snapshot as its initial empty shape.
 - `getCached(profile?: CliProfile)` — returns `{ fetchedAt, account, rateLimits, lastError, stale }`. Does not trigger a refresh. Without a profile, or with the plain `server-configured-codex` profile that has no custom command/config/env, reads the default server-configured cache. Account/custom Codex profiles read their isolated cache. `stale` is computed as `now - fetchedAt > STALE_AFTER_MS` (or `true` when `fetchedAt` is null). This is the exact shape returned by `GET /api/chat/codex-plan-usage`.
 - `maybeRefresh(reason: string, profile?: CliProfile)` — triggers a refresh for the default runtime or selected profile if all of: no in-flight refresh for that cache key, and at least `REFRESH_MIN_INTERVAL_MS` have passed since the last attempt for that key. Returns the shared in-flight promise when a fetch is already running, or an immediately-resolved promise when the throttle is active. The `reason` string is logged alongside success/failure (`server-start`, `turn-done`).
 - `_refresh(reason, profile?)` (private) — calls `fetchFromAppServer(profile)` (see below). On success stores `{ fetchedAt: now, account, rateLimits, lastError: null }` into the default snapshot or that profile's snapshot. On failure preserves the prior `account` / `rateLimits` values and only overwrites `lastError` — the UI still renders the last-known snapshot.
-- `_persist(profile?)` (private) — writes the default snapshot to `data/codex-plan-usage.json` or a profile snapshot to `data/codex-plan-usage/<encoded-profile-id>.json` via `atomicWriteFile`. Failures are logged and swallowed.
+- `_persist(profile?)` (private) — writes the default snapshot to `<dataRoot>/codex-plan-usage.json` or a profile snapshot to `<dataRoot>/codex-plan-usage/<encoded-profile-id>.json` via `atomicWriteFile`. Failures are logged and swallowed.
 
 **App-server interaction (`fetchFromAppServer`):**
 1. Resolve the Codex CLI runtime. Without a profile the command is `codex` and the env inherits `process.env`. With a profile, `profile.command || 'codex'` is used, `profile.env` is merged into the child env, and `profile.configDir` sets `CODEX_HOME`.
@@ -1169,7 +1306,7 @@ Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Pl
 **Window semantics:** Codex's API returns two windows per limit: `primary` (5-hour, `windowDurationMins: 300`) and `secondary` (weekly, `windowDurationMins: 10080`). The frontend uses `windowDurationMins` to label each bar — it does **not** assume the slot order, so a future Codex API change that swaps slots won't mislabel the bars.
 
 **Integration points:**
-- `server.ts` — instantiated with `__dirname`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `codexPlanUsageService` dependency.
+- `server.ts` — instantiated with `__dirname` plus `config.AGENT_COCKPIT_DATA_DIR`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `codexPlanUsageService` dependency.
 - `src/routes/chat/statusRoutes.ts`:
   - `GET /codex-plan-usage` route returns `getCached()` verbatim. `GET /codex-plan-usage?cliProfileId=<id>` resolves the profile, rejects missing/disabled/non-Codex profiles with `400`, and returns `getCached(profile)` without triggering a refresh.
 - `src/routes/chat.ts` stream orchestration:

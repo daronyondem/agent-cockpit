@@ -237,6 +237,21 @@
     return res.json();
   }
 
+  async function getInstallStatus(){
+    const res = await chatFetch('install/status');
+    return res.json();
+  }
+
+  async function getInstallDoctor(){
+    const res = await chatFetch('install/doctor');
+    return res.json();
+  }
+
+  async function completeWelcome(){
+    const res = await chatFetch('install/welcome-complete', { method: 'POST', body: {} });
+    return res.json();
+  }
+
   async function checkVersion(){
     const res = await chatFetch('check-version', { method: 'POST' });
     return res.json();
@@ -992,6 +1007,9 @@ export const AgentApi = {
     abortConversation,
     getVersion,
     getUpdateStatus,
+    getInstallStatus,
+    getInstallDoctor,
+    completeWelcome,
     checkVersion,
     triggerUpdate,
     getCliUpdates,

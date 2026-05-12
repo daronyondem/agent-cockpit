@@ -112,7 +112,7 @@ Beyond the core, Agent Cockpit also ships with:
 - **Dark and light themes** — system-aware theme with manual override
 - **First-party authentication** — local owner setup, password login, passkeys, recovery codes, and optional legacy OAuth compatibility
 - **Mobile PWA** — installable mobile web client served from `/mobile/` by the same authenticated backend
-- **Self-update** — check for updates and apply them from the UI with one click
+- **Self-update** — check for updates and apply them from the UI with one click; production installs update from GitHub Releases, dev installs update from `main`
 - **Pluggable backend system** — extensible adapter architecture for adding new CLI backends
 - **Graceful shutdown** — clean process cleanup on SIGTERM/SIGINT
 - **Local open storage** — conversations, sessions, settings, memory, and knowledge-base artifacts stay on disk as JSON/Markdown plus embedded SQLite/PGLite indexes where structured search requires them (no hosted database)
@@ -127,7 +127,25 @@ Beyond the core, Agent Cockpit also ships with:
 - (Optional) [LibreOffice](https://www.libreoffice.org/) and/or [Pandoc](https://pandoc.org/) on `PATH` to expand Knowledge Base ingestion to Office and other document formats
 - (Optional) [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) or a similar tunnel for remote access — see [ONBOARDING.md](ONBOARDING.md) for a step-by-step self-hosting guide with PM2 and Cloudflare Tunnel
 
-## Quick Start
+## Mac Install
+
+The recommended production path on macOS is the release installer. It downloads
+the latest GitHub Release, verifies checksums, installs dependencies, writes
+local runtime config, starts Agent Cockpit through local PM2, and opens first-run
+owner setup in the browser.
+
+```bash
+curl -fsSL https://github.com/daronyondem/agent-cockpit/releases/latest/download/install-macos.sh -o /tmp/install-agent-cockpit.sh
+bash /tmp/install-agent-cockpit.sh --channel production
+```
+
+Production installs update from GitHub Releases. Dev installs track `main`:
+
+```bash
+bash /tmp/install-agent-cockpit.sh --channel dev
+```
+
+## Developer Quick Start
 
 1. Clone the repository and install dependencies:
 
@@ -157,6 +175,7 @@ npm start
 |----------|----------|---------|-------------|
 | `PORT` | No | `3334` | Server listen port |
 | `SESSION_SECRET` | Yes | — | Secret for signing session cookies |
+| `AGENT_COCKPIT_DATA_DIR` | No | `data` | Mutable data root for chat data, sessions, auth state, plan usage, install manifest, and update restart artifacts. The macOS production installer sets this outside the replaceable app release directory. |
 | `AUTH_DATA_DIR` | No | `data/auth` | First-party owner auth state directory |
 | `AUTH_SETUP_TOKEN` | Recommended for remote setup | — | Token required to create the first owner account from a non-localhost request |
 | `AUTH_ENABLE_LEGACY_OAUTH` | No | `false` | Set to `true` to register legacy Google/GitHub OAuth routes |
@@ -250,7 +269,7 @@ agent-cockpit/
 │       ├── chat/             # Focused ChatService helper modules
 │       ├── memoryWatcher.ts  # Watches CLI memory files for snapshot capture
 │       ├── settingsService.ts # User settings persistence
-│       ├── updateService.ts  # Self-update: version checking, git pull, builds, PM2 restart
+│       ├── updateService.ts  # Self-update: dev git/main path and production GitHub Release path
 │       ├── webBuildService.ts # V2 web asset build preflight
 │       └── mobileBuildService.ts # Mobile PWA asset build preflight
 ├── public/

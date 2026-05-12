@@ -298,6 +298,12 @@ interface EditMessageResult {
   message: Message;
 }
 
+interface ChatServiceOptions {
+  defaultWorkspace?: string;
+  backendRegistry?: BackendRegistry;
+  dataRoot?: string;
+}
+
 export class ChatService {
   baseDir: string;
   workspacesDir: string;
@@ -331,8 +337,9 @@ export class ChatService {
    * corruption) nor lose each other's updates (stale reads).
    */
   private _indexLock = new KeyedMutex();
-  constructor(appRoot: string, options: { defaultWorkspace?: string; backendRegistry?: BackendRegistry } = {}) {
-    this.baseDir = path.join(appRoot, 'data', 'chat');
+  constructor(appRoot: string, options: ChatServiceOptions = {}) {
+    const dataRoot = options.dataRoot || path.join(appRoot, 'data');
+    this.baseDir = path.join(dataRoot, 'chat');
     this.workspacesDir = path.join(this.baseDir, 'workspaces');
     this.artifactsDir = path.join(this.baseDir, 'artifacts');
     this.usageLedgerFile = path.join(this.baseDir, 'usage-ledger.json');

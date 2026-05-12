@@ -27,6 +27,4 @@ jobs:
           VERSION=$(node -p "require('./package.json').version")
           git add package.json package-lock.json
           git commit -m "chore: bump version to $VERSION"
-          git tag -f "v$VERSION"
           git push origin main
-          git push origin "v$VERSION" --force

@@ -22,7 +22,7 @@ Install the following before you begin:
 | **Node.js 22+** | [nodejs.org](https://nodejs.org/) or `brew install node` | `node -v` |
 | **Claude Code CLI** | `npm install -g @anthropic-ai/claude-code` | `claude --version` |
 | **cloudflared** | `brew install cloudflared` | `cloudflared --version` |
-| **PM2** | `npm install -g pm2` | `pm2 --version` |
+| **PM2** | Installed as a project dependency | `npx pm2 --version` after Agent Cockpit dependencies are installed |
 
 You will also need a Cloudflare account with a domain managed by Cloudflare DNS.
 
@@ -35,7 +35,32 @@ claude
 
 ---
 
-## 1. Clone and Install
+## 1. Recommended Mac Production Install
+
+On macOS, the release installer is the easiest production path. It downloads the
+latest GitHub Release, verifies checksums, installs dependencies, writes `.env`,
+creates `ecosystem.config.js`, writes the install manifest under the data
+directory, starts Agent Cockpit with local PM2, and opens first-run setup.
+
+```bash
+curl -fsSL https://github.com/daronyondem/agent-cockpit/releases/latest/download/install-macos.sh -o /tmp/install-agent-cockpit.sh
+bash /tmp/install-agent-cockpit.sh --channel production
+```
+
+Production installs update from GitHub Releases. Dev installs track `main`:
+
+```bash
+bash /tmp/install-agent-cockpit.sh --channel dev
+```
+
+After owner setup, the authenticated welcome flow shows install/doctor checks
+for Node, npm, PM2, writable data paths, built web/mobile assets, backend CLIs,
+and optional document/tunnel tools. If you use the installer, skip the manual
+clone/environment/PM2 sections below unless you are customizing the deployment.
+
+---
+
+## 2. Manual Clone and Install
 
 ```bash
 git clone https://github.com/daronyondem/agent-cockpit.git
@@ -45,7 +70,7 @@ npm install
 
 ---
 
-## 2. Configure Environment
+## 3. Configure Environment
 
 ```bash
 cp .env.example .env
@@ -57,6 +82,7 @@ Edit `.env`:
 PORT=3334
 SESSION_SECRET=<generate-a-long-random-string>
 AUTH_SETUP_TOKEN=<generate-a-long-random-string>
+AGENT_COCKPIT_DATA_DIR=./data
 DEFAULT_WORKSPACE=~/projects
 BASE_PATH=
 ```
@@ -66,13 +92,14 @@ Notes:
 - `SESSION_SECRET` should be a long random string. Generate one with `openssl rand -base64 32`.
 - `AUTH_SETUP_TOKEN` is required only for first-run setup from a non-localhost URL, such as your Cloudflare Tunnel domain. It prevents someone else from claiming an exposed empty backend.
 - Localhost setup, for example `http://localhost:3334/auth/setup`, does not require `AUTH_SETUP_TOKEN`.
+- `AGENT_COCKPIT_DATA_DIR` controls mutable chat/session/auth/install/update data. The macOS production installer places this outside the replaceable app release directory.
 - `DEFAULT_WORKSPACE` is the default directory the CLI backend will operate in.
 - `BASE_PATH` can be left empty unless you are running behind a reverse proxy at a subpath.
 - Google/GitHub OAuth is not required. It is legacy-only and disabled unless `AUTH_ENABLE_LEGACY_OAUTH=true`.
 
 ---
 
-## 3. Create a PM2 App Definition
+## 4. Create a PM2 App Definition
 
 Create `ecosystem.config.js` in the repo root. This file is gitignored because it can contain local paths and secrets.
 
@@ -87,6 +114,7 @@ module.exports = {
       PORT: 3334,
       SESSION_SECRET: '<same value as .env>',
       AUTH_SETUP_TOKEN: '<same value as .env>',
+      AGENT_COCKPIT_DATA_DIR: './data',
       DEFAULT_WORKSPACE: '/Users/you/projects',
       BASE_PATH: '',
     },
@@ -96,9 +124,9 @@ module.exports = {
 
 ---
 
-## 4. Set Up the Cloudflare Tunnel
+## 5. Set Up the Cloudflare Tunnel
 
-### 4.1 Log in to Cloudflare
+### 5.1 Log in to Cloudflare
 
 ```bash
 cloudflared login
@@ -106,7 +134,7 @@ cloudflared login
 
 This opens a browser window. Select the domain you want to use and authorize `cloudflared`.
 
-### 4.2 Create a tunnel
+### 5.2 Create a tunnel
 
 ```bash
 cloudflared tunnel create my-tunnel
@@ -114,7 +142,7 @@ cloudflared tunnel create my-tunnel
 
 Note the Tunnel ID. It is a UUID like `8307e28b-b493-4646-931e-42e9ba37f2d7`.
 
-### 4.3 Route DNS
+### 5.3 Route DNS
 
 ```bash
 cloudflared tunnel route dns my-tunnel chat.yourdomain.com
@@ -122,7 +150,7 @@ cloudflared tunnel route dns my-tunnel chat.yourdomain.com
 
 This creates a CNAME record in Cloudflare DNS.
 
-### 4.4 Configure the tunnel
+### 5.4 Configure the tunnel
 
 Create or edit `~/.cloudflared/config.yml`:
 
@@ -138,7 +166,7 @@ ingress:
 
 Replace `<YOUR_TUNNEL_ID>` and `<you>` with your actual values.
 
-### 4.5 Test the tunnel
+### 5.5 Test the tunnel
 
 ```bash
 cloudflared tunnel run my-tunnel
@@ -148,15 +176,15 @@ Open `https://chat.yourdomain.com`. You should see Agent Cockpit. Press `Ctrl+C`
 
 ---
 
-## 5. Start Everything with PM2
+## 6. Start Everything with PM2
 
-### 5.1 Start Agent Cockpit
+### 6.1 Start Agent Cockpit
 
 ```bash
 npx pm2 start ecosystem.config.js
 ```
 
-### 5.2 Start the Cloudflare tunnel
+### 6.2 Start the Cloudflare tunnel
 
 ```bash
 npx pm2 start "$(command -v cloudflared)" --name cf-tunnel --interpreter none -- tunnel run my-tunnel
@@ -164,7 +192,7 @@ npx pm2 start "$(command -v cloudflared)" --name cf-tunnel --interpreter none --
 
 If `command -v cloudflared` prints nothing, use the absolute path from your install, commonly `/opt/homebrew/bin/cloudflared` on Apple Silicon Macs.
 
-### 5.3 Verify both are running
+### 6.3 Verify both are running
 
 ```bash
 npx pm2 list
@@ -172,13 +200,13 @@ npx pm2 list
 
 You should see both `agent-cockpit` and `cf-tunnel` with status `online`.
 
-### 5.4 Save the process list
+### 6.4 Save the process list
 
 ```bash
 npx pm2 save
 ```
 
-### 5.5 Enable startup on boot
+### 6.5 Enable startup on boot
 
 ```bash
 npx pm2 startup
@@ -188,7 +216,7 @@ PM2 will print a `sudo` command. Copy and run it. This creates a system service 
 
 ---
 
-## 6. Create the Owner Account
+## 7. Create the Owner Account
 
 Open either URL:
 
@@ -207,7 +235,7 @@ After setup, Agent Cockpit signs you in and creates `data/auth/owner.json`. Pass
 
 ---
 
-## 7. Secure the Owner Account
+## 8. Secure the Owner Account
 
 Generate recovery codes immediately after first setup:
 
@@ -236,7 +264,7 @@ This requires local filesystem/server access. It is intentionally not exposed ov
 
 ---
 
-## 8. Recommended Claude Code CLI Settings
+## 9. Recommended Claude Code CLI Settings
 
 Agent Cockpit spawns Claude Code CLI processes on your behalf. Since there is no interactive terminal to approve actions, add these settings to `~/.claude/settings.json`:
 
@@ -265,7 +293,7 @@ Optionally, to remove Claude attribution from git commits and pull requests:
 
 ---
 
-## 9. Verify Everything
+## 10. Verify Everything
 
 Open `https://chat.yourdomain.com` in your browser and confirm:
 
@@ -281,7 +309,7 @@ Open `https://chat.yourdomain.com` in your browser and confirm:
 
 ---
 
-## 10. Mobile PWA
+## 11. Mobile PWA
 
 The supported mobile client is the PWA served by the same backend:
 

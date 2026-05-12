@@ -53,6 +53,10 @@ export interface ClaudePlanUsageResponse extends ClaudePlanUsageSnapshot {
   stale: boolean;
 }
 
+interface ClaudePlanUsageServiceOptions {
+  dataRoot?: string;
+}
+
 interface StoredCreds {
   accessToken: string;
   expiresAt: number | null;
@@ -70,9 +74,10 @@ export class ClaudePlanUsageService {
   private _profileLastAttemptAt = new Map<string, number>();
   private _profileInFlight = new Map<string, Promise<void>>();
 
-  constructor(appRoot: string) {
-    this._cacheFile = path.join(appRoot, 'data', 'claude-plan-usage.json');
-    this._profileCacheDir = path.join(appRoot, 'data', 'claude-plan-usage');
+  constructor(appRoot: string, options: ClaudePlanUsageServiceOptions = {}) {
+    const dataRoot = options.dataRoot || path.join(appRoot, 'data');
+    this._cacheFile = path.join(dataRoot, 'claude-plan-usage.json');
+    this._profileCacheDir = path.join(dataRoot, 'claude-plan-usage');
     this._snapshot = {
       fetchedAt: null,
       planTier: null,

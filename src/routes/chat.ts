@@ -9,6 +9,8 @@ import type { CliUpdateService } from '../services/cliUpdateService';
 import type { ClaudePlanUsageService } from '../services/claudePlanUsageService';
 import type { KiroPlanUsageService } from '../services/kiroPlanUsageService';
 import type { CodexPlanUsageService } from '../services/codexPlanUsageService';
+import type { InstallStateService } from '../services/installStateService';
+import type { InstallDoctorService } from '../services/installDoctorService';
 import { CliProfileAuthService } from '../services/cliProfileAuthService';
 import { MemoryWatcher } from '../services/memoryWatcher';
 import { createMemoryMcpServer, type MemoryMcpServer } from '../services/memoryMcp';
@@ -537,13 +539,15 @@ interface ChatRouterDeps {
   chatService: ChatService;
   backendRegistry: BackendRegistry;
   updateService: UpdateService;
+  installStateService?: InstallStateService | null;
+  installDoctorService?: InstallDoctorService | null;
   cliUpdateService?: CliUpdateService | null;
   claudePlanUsageService: ClaudePlanUsageService;
   kiroPlanUsageService: KiroPlanUsageService;
   codexPlanUsageService: CodexPlanUsageService;
 }
 
-export function createChatRouter({ chatService, backendRegistry, updateService, cliUpdateService = null, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService }: ChatRouterDeps) {
+export function createChatRouter({ chatService, backendRegistry, updateService, installStateService = null, installDoctorService = null, cliUpdateService = null, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService }: ChatRouterDeps) {
   const router = express.Router();
 
   const streamSupervisor = new StreamJobSupervisor(chatService.baseDir);
@@ -1051,6 +1055,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     chatService,
     backendRegistry,
     updateService,
+    installStateService,
+    installDoctorService,
     cliUpdateService,
     claudePlanUsageService,
     kiroPlanUsageService,

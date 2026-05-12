@@ -52,6 +52,8 @@ export interface CreateChatRouterEnvOpts {
   gracePeriodMs?: number;
   bufferCleanupMs?: number;
   updateService?: any;
+  installStateService?: any;
+  installDoctorService?: any;
   cliUpdateService?: any;
 }
 
@@ -92,6 +94,24 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     chatService,
     backendRegistry,
     updateService: opts.updateService ?? null as any,
+    installStateService: opts.installStateService ?? {
+      getStatus: () => ({
+        schemaVersion: 1,
+        channel: 'dev',
+        source: 'git-main',
+        repo: 'daronyondem/agent-cockpit',
+        version: null,
+        branch: 'main',
+        installDir: tmpDir,
+        appDir: tmpDir,
+        dataDir: path.join(tmpDir, 'data'),
+        installedAt: null,
+        welcomeCompletedAt: null,
+        stateSource: 'inferred',
+        stateError: null,
+      }),
+    },
+    installDoctorService: opts.installDoctorService ?? null,
     cliUpdateService: opts.cliUpdateService ?? null,
     claudePlanUsageService: mockPlanUsage,
     kiroPlanUsageService: mockKiroPlanUsage,

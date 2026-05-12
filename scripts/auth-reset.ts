@@ -25,13 +25,13 @@ Options:
   --display-name <name>              Update the owner display name.
   --password <password>              Reset the owner password. Minimum 12 characters.
   --disable-passkey-required         Turn off passkey-required policy.
-  --revoke-sessions                  Delete session files under data/sessions.
+  --revoke-sessions                  Delete session files under the configured data root.
   --regenerate-recovery-codes        Replace recovery codes and print the new set.
 `);
 }
 
 async function clearSessions(): Promise<void> {
-  const sessionDir = path.join(process.cwd(), 'data', 'sessions');
+  const sessionDir = path.join(config.AGENT_COCKPIT_DATA_DIR, 'sessions');
   await fsp.rm(sessionDir, { recursive: true, force: true });
   await fsp.mkdir(sessionDir, { recursive: true });
 }
