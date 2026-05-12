@@ -86,8 +86,9 @@ export class KiroPlanUsageService {
   private _lastAttemptAt = 0;
   private _inFlight: Promise<void> | null = null;
 
-  constructor(appRoot: string, options: { dbPath?: string } = {}) {
-    this._cacheFile = path.join(appRoot, 'data', 'kiro-plan-usage.json');
+  constructor(appRoot: string, options: { dbPath?: string; dataRoot?: string } = {}) {
+    const dataRoot = options.dataRoot || path.join(appRoot, 'data');
+    this._cacheFile = path.join(dataRoot, 'kiro-plan-usage.json');
     this._dbPath = options.dbPath || defaultKiroDbPath();
     this._snapshot = { fetchedAt: null, usage: null, lastError: null };
   }

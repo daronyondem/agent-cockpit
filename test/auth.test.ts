@@ -132,6 +132,7 @@ const baseConfig: AppConfig = {
   GOOGLE_CLIENT_SECRET: 'test-google-secret',
   GOOGLE_CALLBACK_URL: 'http://localhost:3000/auth/google/callback',
   ALLOWED_EMAIL: 'test@example.com',
+  AGENT_COCKPIT_DATA_DIR: '',
   AUTH_DATA_DIR: '',
   AUTH_SETUP_TOKEN: 'setup-token',
   AUTH_ENABLE_LEGACY_OAUTH: false,
@@ -270,7 +271,7 @@ describe('setupAuth — /auth/setup', () => {
     await withServer(app, async (server) => {
       const res = await setupOwner(server);
       expect(res.status).toBe(302);
-      expect(res.headers.location).toBe('/');
+      expect(res.headers.location).toBe('/v2/?welcome=1');
       expect(String(res.headers['set-cookie'] || '')).toContain('connect.sid');
     });
   });
@@ -306,7 +307,7 @@ describe('setupAuth — /auth/setup', () => {
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
       });
       expect(res.status).toBe(302);
-      expect(res.headers.location).toBe('/');
+      expect(res.headers.location).toBe('/v2/?welcome=1');
     });
   });
 });

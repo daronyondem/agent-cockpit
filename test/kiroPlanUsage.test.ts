@@ -124,6 +124,13 @@ describe('KiroPlanUsageService', () => {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
+  test('stores cache files under a custom data root', () => {
+    const dataRoot = path.join(tmpDir, 'external-data');
+    const custom = new KiroPlanUsageService(tmpDir, { dbPath, dataRoot });
+
+    expect((custom as any)._cacheFile).toBe(path.join(dataRoot, 'kiro-plan-usage.json'));
+  });
+
   // ── init ──────────────────────────────────────────────────────────────
 
   describe('init', () => {

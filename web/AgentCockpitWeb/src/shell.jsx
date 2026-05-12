@@ -125,6 +125,10 @@ function App(){
   const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label, initialTab } | null
   const [memoryUpdateView, setMemoryUpdateView] = React.useState(null); // { hash, label, update } | null
   const [memoryReviewView, setMemoryReviewView] = React.useState(null); // { hash, label, runId } | null
+  const [welcomeOpen, setWelcomeOpen] = React.useState(() => {
+    try { return new URLSearchParams(window.location.search).get('welcome') === '1'; }
+    catch { return false; }
+  });
   const [sbOpen, setSbOpen] = React.useState(false); // mobile-only sidebar overlay; ignored on desktop
   const [user, setUser] = React.useState(null); // { displayName, email, provider } | null
   const convStates = useConvStates();
@@ -247,6 +251,7 @@ function App(){
   const onRenamed = React.useCallback(() => {}, []);
 
   const onSelectConv = React.useCallback((id) => {
+    setWelcomeOpen(false);
     setKbView(null);
     setFilesView(null);
     setSettingsView(null);
@@ -271,6 +276,7 @@ function App(){
   }, []);
 
   const onOpenKb = React.useCallback((hash, label) => {
+    setWelcomeOpen(false);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
     setMemoryReviewView(null);
@@ -281,6 +287,7 @@ function App(){
   }, []);
 
   const onOpenFiles = React.useCallback((hash, label) => {
+    setWelcomeOpen(false);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
     setMemoryReviewView(null);
@@ -291,6 +298,7 @@ function App(){
   }, []);
 
   const onOpenSettings = React.useCallback((initialTab) => {
+    setWelcomeOpen(false);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
     setMemoryReviewView(null);
@@ -301,6 +309,7 @@ function App(){
   }, []);
 
   const onNewConversation = React.useCallback((initialPath) => {
+    setWelcomeOpen(false);
     setSbOpen(false);
     setViewingArchive(false);
     setFolderPickerInitialPath(initialPath || '');
@@ -311,6 +320,7 @@ function App(){
     setViewingArchive(v => {
       const next = !v;
       if (next) {
+        setWelcomeOpen(false);
         setActiveConvId(null);
         setKbView(null);
         setFilesView(null);
@@ -357,6 +367,7 @@ function App(){
   }, []);
 
   const onOpenWorkspaceSettings = React.useCallback((hash, label, initialTab) => {
+    setWelcomeOpen(false);
     setKbView(null);
     setFilesView(null);
     setSettingsView(null);
@@ -367,6 +378,7 @@ function App(){
   }, []);
 
   const onOpenMemoryUpdate = React.useCallback((hash, label, update) => {
+    setWelcomeOpen(false);
     setWorkspaceSettings(null);
     setMemoryReviewView(null);
     setMemoryUpdateView({ hash, label, update: update || null });
@@ -374,6 +386,7 @@ function App(){
   }, []);
 
   const onOpenMemoryReview = React.useCallback((hash, label, runId) => {
+    setWelcomeOpen(false);
     setWorkspaceSettings(null);
     setMemoryUpdateView(null);
     setMemoryReviewView({ hash, label, runId: runId || null });
@@ -436,6 +449,15 @@ function App(){
     }
   }, [creatingConv, dialog]);
 
+  const onWelcomeDone = React.useCallback(() => {
+    setWelcomeOpen(false);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.delete('welcome');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    } catch {}
+  }, []);
+
   return (
     <div className={"cockpit" + (sbOpen ? " sb-open" : "")}>
       <Sidebar
@@ -468,7 +490,13 @@ function App(){
           <line x1="3" y1="18" x2="21" y2="18"/>
         </svg>
       </button>
-      {workspaceSettings ? (
+      {welcomeOpen ? (
+        <WelcomeScreen
+          onDone={onWelcomeDone}
+          onOpenSettings={onOpenSettings}
+          onNewConversation={onNewConversation}
+        />
+      ) : workspaceSettings ? (
         <section className="main main-settings">
           <React.Suspense fallback={<ScreenLoading label="Loading workspace settings..."/>}>
             <WorkspaceSettingsPage
@@ -569,6 +597,177 @@ function EmptyMain(){
         </div>
       </div>
     </section>
+  );
+}
+
+function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
+  const [loading, setLoading] = React.useState(true);
+  const [install, setInstall] = React.useState(null);
+  const [doctor, setDoctor] = React.useState(null);
+  const [authStatus, setAuthStatus] = React.useState(null);
+  const [error, setError] = React.useState(null);
+  const [finishing, setFinishing] = React.useState(false);
+
+  const load = React.useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [installStatus, doctorStatus, auth] = await Promise.all([
+        AgentApi.getInstallStatus(),
+        AgentApi.getInstallDoctor(),
+        AgentApi.auth.status(),
+      ]);
+      setInstall(installStatus);
+      setDoctor(doctorStatus);
+      setAuthStatus(auth);
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  React.useEffect(() => { load(); }, [load]);
+
+  const finish = React.useCallback(async () => {
+    setFinishing(true);
+    setError(null);
+    try {
+      await AgentApi.completeWelcome();
+      onDone();
+    } catch (err) {
+      setError(err.message || String(err));
+    } finally {
+      setFinishing(false);
+    }
+  }, [onDone]);
+
+  const checks = doctor && Array.isArray(doctor.checks) ? doctor.checks : [];
+  const requiredChecks = checks.filter(item => item.required);
+  const cliChecks = checks.filter(item => ['claude-cli', 'codex-cli', 'kiro-cli'].includes(item.id));
+  const optionalChecks = checks.filter(item => ['pandoc', 'libreoffice', 'cloudflared', 'mobile-build'].includes(item.id));
+  const installLine = install
+    ? `${install.channel || 'dev'} channel · ${install.source || 'unknown'} · ${install.version || 'unversioned'}`
+    : 'Install status unavailable';
+
+  return (
+    <section className="main main-welcome">
+      <div className="welcome-shell">
+        <div className="welcome-head">
+          <div>
+            <div className="welcome-kicker">Welcome</div>
+            <h1>Agent Cockpit</h1>
+            <p>{installLine}</p>
+          </div>
+          <button className="btn ghost" type="button" onClick={onDone}>Skip</button>
+        </div>
+
+        {error ? (
+          <div className="welcome-error">
+            <span>{Ico.alert(16)}</span>
+            <span>{error}</span>
+            <button className="btn" type="button" onClick={load}>Retry</button>
+          </div>
+        ) : null}
+
+        {loading ? (
+          <ScreenLoading label="Checking install..."/>
+        ) : (
+          <div className="welcome-grid">
+            <WelcomePanel title="Owner Account" tone={authStatus && !authStatus.setupRequired ? 'ok' : 'warning'}>
+              <WelcomeLine
+                label="Owner"
+                status={authStatus && !authStatus.setupRequired ? 'ok' : 'warning'}
+                summary={authStatus && !authStatus.setupRequired ? 'Configured' : 'Setup required'}
+              />
+              <WelcomeLine
+                label="Recovery codes"
+                status={authStatus?.recovery?.configured ? 'ok' : 'warning'}
+                summary={authStatus?.recovery?.configured ? `${authStatus.recovery.remaining} remaining` : 'Not generated yet'}
+              />
+              <WelcomeLine
+                label="Passkeys"
+                status={authStatus?.passkeys?.registered ? 'ok' : 'warning'}
+                summary={authStatus?.passkeys?.registered ? `${authStatus.passkeys.registered} registered` : 'Optional'}
+              />
+              <div className="welcome-actions">
+                <button className="btn" type="button" onClick={() => onOpenSettings('security')}>{Ico.key(14)} Security</button>
+              </div>
+            </WelcomePanel>
+
+            <WelcomePanel title="Required Checks" tone={doctor?.overallStatus || 'warning'}>
+              {requiredChecks.map(item => <WelcomeDoctorLine key={item.id} item={item}/>)}
+            </WelcomePanel>
+
+            <WelcomePanel title="CLI Backends" tone={cliChecks.some(item => item.status === 'ok') ? 'ok' : 'warning'}>
+              {cliChecks.map(item => <WelcomeDoctorLine key={item.id} item={item}/>)}
+              <div className="welcome-actions">
+                <button className="btn" type="button" onClick={() => onOpenSettings('cli')}>{Ico.terminal(14)} CLI Profiles</button>
+              </div>
+            </WelcomePanel>
+
+            <WelcomePanel title="Workspace" tone="ok">
+              <WelcomeLine label="Default" status="ok" summary="Choose a folder when you start a conversation."/>
+              <div className="welcome-actions">
+                <button className="btn" type="button" onClick={() => onNewConversation('')}>{Ico.folder(14)} Pick Workspace</button>
+              </div>
+            </WelcomePanel>
+
+            <WelcomePanel title="Optional Tools" tone={optionalChecks.some(item => item.status === 'warning') ? 'warning' : 'ok'}>
+              {optionalChecks.map(item => <WelcomeDoctorLine key={item.id} item={item}/>)}
+            </WelcomePanel>
+
+            <WelcomePanel title="Mobile PWA" tone="ok">
+              <WelcomeLine label="URL" status="ok" summary="/mobile/"/>
+              <p className="welcome-note">Open the mobile path from the same authenticated server and add it to the home screen.</p>
+            </WelcomePanel>
+          </div>
+        )}
+
+        <div className="welcome-foot">
+          <button className="btn" type="button" onClick={load} disabled={loading}>Refresh</button>
+          <button className="btn primary" type="button" onClick={finish} disabled={finishing || loading}>
+            {finishing ? 'Finishing...' : 'Finish Setup'}
+          </button>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function WelcomePanel({ title, tone, children }){
+  return (
+    <section className={"welcome-panel tone-" + (tone || 'ok')}>
+      <div className="welcome-panel-head">
+        <span>{tone === 'error' ? Ico.alert(14) : tone === 'warning' ? Ico.info(14) : Ico.ok(14)}</span>
+        <h2>{title}</h2>
+      </div>
+      <div className="welcome-panel-body">{children}</div>
+    </section>
+  );
+}
+
+function WelcomeDoctorLine({ item }){
+  return (
+    <WelcomeLine
+      label={item.label}
+      status={item.status}
+      summary={item.summary}
+      detail={item.status === 'ok' ? item.detail : (item.remediation || item.detail)}
+    />
+  );
+}
+
+function WelcomeLine({ label, status, summary, detail }){
+  const icon = status === 'error' ? Ico.alert(14) : status === 'warning' ? Ico.info(14) : Ico.check(14);
+  return (
+    <div className={"welcome-line status-" + (status || 'ok')}>
+      <span className="welcome-line-icon">{icon}</span>
+      <div>
+        <div className="welcome-line-top"><span>{label}</span><b>{summary}</b></div>
+        {detail ? <div className="welcome-line-detail">{detail}</div> : null}
+      </div>
+    </div>
   );
 }
 

@@ -1649,6 +1649,129 @@ describe('GET /api/chat/version', () => {
   });
 });
 
+// ── GET /api/chat/install/status ───────────────────────────────────────────
+
+describe('GET /api/chat/install/status', () => {
+  test('returns install manifest status from the install state service', async () => {
+    await destroyChatRouterEnv(env);
+    env = await createChatRouterEnv({
+      installStateService: {
+        getStatus: () => ({
+          schemaVersion: 1,
+          channel: 'production',
+          source: 'github-release',
+          repo: 'daronyondem/agent-cockpit',
+          version: '1.0.0',
+          branch: null,
+          installDir: '/tmp/Agent Cockpit',
+          appDir: '/tmp/Agent Cockpit/current',
+          dataDir: '/tmp/Agent Cockpit/data',
+          installedAt: '2026-05-11T00:00:00.000Z',
+          welcomeCompletedAt: null,
+          stateSource: 'stored',
+          stateError: null,
+        }),
+      },
+    });
+
+    const res = await env.request('GET', '/api/chat/install/status');
+
+    expect(res.status).toBe(200);
+    expect(res.body.channel).toBe('production');
+    expect(res.body.source).toBe('github-release');
+    expect(res.body.stateSource).toBe('stored');
+    expect(res.body.dataDir).toBe('/tmp/Agent Cockpit/data');
+  });
+});
+
+// ── Install doctor and welcome completion ──────────────────────────────────
+
+describe('install doctor and welcome completion routes', () => {
+  test('returns install doctor status', async () => {
+    await destroyChatRouterEnv(env);
+    env = await createChatRouterEnv({
+      installDoctorService: {
+        getStatus: async () => ({
+          generatedAt: '2026-05-12T00:00:00.000Z',
+          overallStatus: 'ok',
+          install: {
+            schemaVersion: 1,
+            channel: 'dev',
+            source: 'git-main',
+            repo: 'daronyondem/agent-cockpit',
+            version: '1.0.0',
+            branch: 'main',
+            installDir: '/tmp',
+            appDir: '/tmp',
+            dataDir: '/tmp/data',
+            installedAt: null,
+            welcomeCompletedAt: null,
+            stateSource: 'inferred',
+            stateError: null,
+          },
+          checks: [
+            { id: 'node', label: 'Node.js', status: 'ok', required: true, summary: 'Node.js is running.' },
+          ],
+        }),
+      },
+    });
+
+    const res = await env.request('GET', '/api/chat/install/doctor');
+
+    expect(res.status).toBe(200);
+    expect(res.body.overallStatus).toBe('ok');
+    expect(res.body.checks).toEqual([
+      expect.objectContaining({ id: 'node', status: 'ok', required: true }),
+    ]);
+  });
+
+  test('marks welcome completed through install state service', async () => {
+    await destroyChatRouterEnv(env);
+    const markWelcomeCompleted = jest.fn(async () => ({
+      schemaVersion: 1,
+      channel: 'production',
+      source: 'github-release',
+      repo: 'daronyondem/agent-cockpit',
+      version: '1.0.0',
+      branch: null,
+      installDir: '/tmp/Agent Cockpit',
+      appDir: '/tmp/Agent Cockpit/current',
+      dataDir: '/tmp/Agent Cockpit/data',
+      installedAt: '2026-05-11T00:00:00.000Z',
+      welcomeCompletedAt: '2026-05-12T00:00:00.000Z',
+      stateSource: 'stored',
+      stateError: null,
+    }));
+    env = await createChatRouterEnv({
+      installStateService: {
+        getStatus: () => ({
+          schemaVersion: 1,
+          channel: 'production',
+          source: 'github-release',
+          repo: 'daronyondem/agent-cockpit',
+          version: '1.0.0',
+          branch: null,
+          installDir: '/tmp/Agent Cockpit',
+          appDir: '/tmp/Agent Cockpit/current',
+          dataDir: '/tmp/Agent Cockpit/data',
+          installedAt: '2026-05-11T00:00:00.000Z',
+          welcomeCompletedAt: null,
+          stateSource: 'stored',
+          stateError: null,
+        }),
+        markWelcomeCompleted,
+      },
+    });
+
+    const res = await env.request('POST', '/api/chat/install/welcome-complete', {});
+
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.install.welcomeCompletedAt).toBe('2026-05-12T00:00:00.000Z');
+    expect(markWelcomeCompleted).toHaveBeenCalledTimes(1);
+  });
+});
+
 // ── Usage event forwarding ───────────────────────────────────────────────────
 
 describe('Usage event forwarding', () => {

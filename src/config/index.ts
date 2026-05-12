@@ -7,6 +7,7 @@ dotenv.config({ override: process.env.NODE_ENV !== 'test' });
 const CODEX_APPROVAL_POLICIES: CodexApprovalPolicy[] = ['untrusted', 'on-failure', 'on-request', 'never'];
 const CODEX_SANDBOX_MODES: CodexSandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
 const WEB_BUILD_MODES: WebBuildMode[] = ['auto', 'skip'];
+const AGENT_COCKPIT_DATA_DIR = path.resolve(process.env.AGENT_COCKPIT_DATA_DIR || path.join(process.cwd(), 'data'));
 
 function parseEnum<T extends string>(value: string | undefined, allowed: readonly T[], fallback: T, envName: string): T {
   if (!value) return fallback;
@@ -25,7 +26,8 @@ const config: AppConfig = {
   GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET,
   GITHUB_CALLBACK_URL: process.env.GITHUB_CALLBACK_URL,
   ALLOWED_EMAIL: process.env.ALLOWED_EMAIL || '',
-  AUTH_DATA_DIR: process.env.AUTH_DATA_DIR || path.join(process.cwd(), 'data', 'auth'),
+  AGENT_COCKPIT_DATA_DIR,
+  AUTH_DATA_DIR: process.env.AUTH_DATA_DIR || path.join(AGENT_COCKPIT_DATA_DIR, 'auth'),
   AUTH_SETUP_TOKEN: process.env.AUTH_SETUP_TOKEN || '',
   AUTH_ENABLE_LEGACY_OAUTH: process.env.AUTH_ENABLE_LEGACY_OAUTH === 'true',
   DEFAULT_WORKSPACE: process.env.DEFAULT_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`,

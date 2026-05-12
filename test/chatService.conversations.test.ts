@@ -67,6 +67,31 @@ describe('createConversation', () => {
     expect(fs.existsSync(sessionPath)).toBe(true);
   });
 
+  test('can persist chat data under a custom data root', async () => {
+    const appRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-app-'));
+    const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-data-'));
+    try {
+      const customService = new ChatService(appRoot, {
+        defaultWorkspace: DEFAULT_WORKSPACE,
+        dataRoot,
+      });
+      await customService.initialize();
+
+      const conv = await customService.createConversation('Custom Data Root', '/tmp/work');
+      const hash = workspaceHash('/tmp/work');
+      const indexPath = path.join(dataRoot, 'chat', 'workspaces', hash, 'index.json');
+      const sessionPath = path.join(dataRoot, 'chat', 'workspaces', hash, conv.id, 'session-1.json');
+
+      expect(customService.baseDir).toBe(path.join(dataRoot, 'chat'));
+      expect(fs.existsSync(indexPath)).toBe(true);
+      expect(fs.existsSync(sessionPath)).toBe(true);
+      expect(fs.existsSync(path.join(appRoot, 'data', 'chat', 'workspaces', hash, 'index.json'))).toBe(false);
+    } finally {
+      fs.rmSync(appRoot, { recursive: true, force: true });
+      fs.rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+
   test('two conversations with same workingDir share workspace', async () => {
     const c1 = await service.createConversation('First', '/tmp/shared');
     const c2 = await service.createConversation('Second', '/tmp/shared');

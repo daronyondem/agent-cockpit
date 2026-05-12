@@ -19,7 +19,8 @@
 | `GITHUB_CLIENT_SECRET` | No | — | Legacy GitHub OAuth client secret. Used only when `AUTH_ENABLE_LEGACY_OAUTH=true`. |
 | `GITHUB_CALLBACK_URL` | No | — | Legacy GitHub OAuth callback URL. Used only when `AUTH_ENABLE_LEGACY_OAUTH=true`. |
 | `ALLOWED_EMAIL` | No | — | Legacy OAuth comma-separated allowed-email list. Used only when legacy OAuth routes are enabled. |
-| `AUTH_DATA_DIR` | No | `data/auth` under the process working directory | Directory for first-party local auth state. The owner account is stored in `owner.json`. |
+| `AGENT_COCKPIT_DATA_DIR` | No | `data` under the process working directory | Root directory for mutable runtime data. Chat storage, Express sessions, plan-usage caches, update restart artifacts, and default auth state live under this root. Production Mac installs set this outside the replaceable app code directory. |
+| `AUTH_DATA_DIR` | No | `<AGENT_COCKPIT_DATA_DIR>/auth` | Directory for first-party local auth state. The owner account is stored in `owner.json`. Overrides only auth storage when set. |
 | `AUTH_SETUP_TOKEN` | Recommended for exposed first-run setup | `''` | Secret token required to create the first owner account from a non-localhost request. Localhost setup is allowed without the token for server-console access. |
 | `AUTH_ENABLE_LEGACY_OAUTH` | No | `false` | Transitional flag that registers the old Google/GitHub OAuth routes when set to `true`. Third-party auth is disabled by default. |
 | `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
@@ -33,6 +34,15 @@
 
 `src/config/index.ts` loads `.env` through `dotenv`. Outside tests, `.env` values override already-present process environment values so PM2-managed local deployments can pin runtime config from the repo's `.env`. When `NODE_ENV === 'test'`, dotenv does **not** override explicit process env values; subprocess tests such as graceful shutdown can pass an isolated `PORT` without being clobbered by a developer `.env` that points at a running PM2 app.
 
+[ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md) keeps this
+PM2-managed server startup path as the first supported macOS production install
+model. `scripts/install-macos.sh` generates the required runtime secrets and
+PM2 ecosystem configuration, writes install-channel metadata, then launches the
+same server initialization flow documented below. First-run owner creation
+begins at `/auth/setup`; successful owner creation redirects to
+`/v2/?welcome=1` so the authenticated welcome flow can show install diagnostics
+and mark setup complete.
+
 Server logging is migrating to `src/utils/logger.ts`. The logger writes one structured line per event, applies `LOG_LEVEL` filtering, redacts metadata keys that look like credentials, cookies, session ids, tokens, or passwords before emitting, and serializes cyclic/rich metadata safely (`Error`, `Date`, `Map`, `Set`, `bigint`, functions, symbols, bounded arrays/objects/strings). WebSocket diagnostics, `MemoryWatcher`, `StreamJobSupervisor`, chat stream orchestration, upload OCR failures, `ChatService` maintenance paths, and Context Map processor update-emission failures use this path for migrated slices and avoid logging stdin message content; debug logs record only lengths and operational identifiers.
 
 ## 6.2 Server Initialization Order
@@ -41,7 +51,7 @@ Server logging is migrating to `src/utils/logger.ts`. The logger writes one stru
 
 1. Create Express app, set `trust proxy: 1`
 2. Apply Helmet security headers via `applySecurity(app)`
-3. Configure express-session with FileStore (`data/sessions/`, 24h TTL, `retries: 0`). `cookie.maxAge` is 24h and `rolling: true` is set — every request re-issues the cookie with a fresh 24h expiry, so active users never hit the wall mid-workflow while idle users still expire after 24h of no activity.
+3. Configure express-session with FileStore (`<AGENT_COCKPIT_DATA_DIR>/sessions/`, 24h TTL, `retries: 0`). `cookie.maxAge` is 24h and `rolling: true` is set — every request re-issues the cookie with a fresh 24h expiry, so active users never hit the wall mid-workflow while idle users still expire after 24h of no activity.
 4. Passport 0.7 polyfill — adds `session.regenerate`/`session.save` stubs if missing
 4a. Mount the public logo route `GET /logo-full-no-text.svg` (serves `public/logo-full-no-text.svg`) — placed before `setupAuth` / `requireAuth` so the unauthenticated login page can load the Agent Cockpit brand mark
 5. Setup Passport with `setupAuth(app, config)`
@@ -52,7 +62,7 @@ Server logging is migrating to `src/utils/logger.ts`. The logger writes one stru
 9a. Mount current-user endpoint at `GET /api/me`
 10. Create BackendRegistry, register ClaudeCodeAdapter, KiroAdapter, and CodexAdapter
 11. Initialize ChatService
-12. Initialize UpdateService, CliUpdateService, Claude/Kiro/Codex plan usage services, `WebBuildService`, `MobileBuildService`, and the chat router dependencies
+12. Initialize InstallStateService, UpdateService, InstallDoctorService, CliUpdateService, Claude/Kiro/Codex plan usage services, `WebBuildService`, `MobileBuildService`, and the chat router dependencies
 13. Mount chat router at `/api/chat`
 14. Mount root redirect `/` -> `/v2/`
 15. Mount `/v2/src` as an explicit 404 guard so raw V2 source files are not served
@@ -66,7 +76,7 @@ Server logging is migrating to `src/utils/logger.ts`. The logger writes one stru
 23. Initialize account plan usage caches and fire best-effort startup refreshes for Claude Code, Kiro, and Codex
 24. Detect LibreOffice and Pandoc in the background for KB ingestion status endpoints
 25. Listen on configured PORT
-26. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is the stream supervisor's process-local runtime attachment map while this process owns a backend iterator; `data/chat/stream-jobs.json` is the durable supervision layer used for accepted/preparing visibility, backend runtime identifiers (`externalSessionId`, `activeTurnId`, `processId`), and restart reconciliation. Runtime identifiers are diagnostic/current-turn metadata only; startup reconciliation still does not reattach or retry unless a backend explicitly advertises active-turn resume support. WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
+26. Attach WebSocket server via `attachWebSocket(server, { sessionStore, sessionSecret, activeStreams, abortStream })` — returns `WsFunctions` object with `send`, `isConnected`, `isStreamAlive`, `clearBuffer`, `shutdown`. `activeStreams` is the stream supervisor's process-local runtime attachment map while this process owns a backend iterator; `<AGENT_COCKPIT_DATA_DIR>/chat/stream-jobs.json` is the durable supervision layer used for accepted/preparing visibility, backend runtime identifiers (`externalSessionId`, `activeTurnId`, `processId`), and restart reconciliation. Runtime identifiers are diagnostic/current-turn metadata only; startup reconciliation still does not reattach or retry unless a backend explicitly advertises active-turn resume support. WebSocket connection state is transport-only and does not cancel an accepted stream. Transport-independent cancellation goes through CSRF-protected `POST /api/chat/conversations/:id/abort`; legacy WebSocket abort frames delegate to the same router-owned abort function.
 27. Wire WebSocket functions into the chat router via `setWsFunctions(wsFns)`
 
 ### Graceful Shutdown
@@ -92,7 +102,7 @@ On the next process start, normal durable job reconciliation converts those fina
 
 **Passkeys:** WebAuthn ceremonies use `@simplewebauthn/server`. Registration is started from an authenticated web session with `POST /api/auth/passkeys/register/options`, verified by `POST /api/auth/passkeys/register/verify`, and stored as public credential material only: credential id, public key, counter, transports, created timestamp, and optional last-used timestamp. Login starts with public `POST /api/auth/passkeys/login/options`; verify uses the stored challenge in the anonymous session, validates the assertion against the backend origin/RP ID, updates the credential counter and `lastUsedAt`, and then creates the normal Passport session. The `/auth/login` page exposes password and passkey login; `?popup=1` is preserved through passkey login and finishes at `/auth/popup-done`.
 
-**Local reset command:** `npm run auth:reset -- ...` runs `scripts/auth-reset.ts` with local filesystem access. It can reset the owner password, update email/display name, disable passkey-required mode, delete `data/sessions`, and regenerate recovery codes. This is intentionally not exposed as an HTTP endpoint.
+**Local reset command:** `npm run auth:reset -- ...` runs `scripts/auth-reset.ts` with local filesystem access. It can reset the owner password, update email/display name, disable passkey-required mode, delete `<AGENT_COCKPIT_DATA_DIR>/sessions`, and regenerate recovery codes. This is intentionally not exposed as an HTTP endpoint.
 
 **Mobile PWA auth:** The supported mobile client is the PWA served from `/mobile/`. It uses the same browser-owned `connect.sid` session and CSRF token flow as the desktop V2 UI. There is no separate native-client pairing bridge, one-time callback, paired-device registry, or device-revocation route in the active auth surface.
 
@@ -108,7 +118,7 @@ On the next process start, normal durable job reconciliation converts those fina
 |-------|--------|-------------|
 | `/api/auth/status` | GET | Public capability probe. Returns `{ setupRequired, providers: { password: true, passkey, legacyOAuth }, passkeys: { registered }, policy, recovery }`. `passkey` is false only before first-run owner setup; `policy` is `{ passkeyRequired }`; `recovery` is `{ configured, total, remaining, createdAt }`. |
 | `/auth/setup` | GET | First-run setup page for the single local owner. Redirects to `/auth/login` after the owner exists. Remote requests see a setup-token field; localhost setup does not require the token. |
-| `/auth/setup` | POST | Creates the local owner. Form/JSON body `{ email, displayName, password, setupToken? }`. Passwords must be at least 12 characters. Localhost requests can omit `setupToken`; remote requests must match `AUTH_SETUP_TOKEN`. On success, logs in the owner and redirects to `/`. |
+| `/auth/setup` | POST | Creates the local owner. Form/JSON body `{ email, displayName, password, setupToken? }`. Passwords must be at least 12 characters. Localhost requests can omit `setupToken`; remote requests must match `AUTH_SETUP_TOKEN`. On success, logs in the owner and redirects to `/v2/?welcome=1`. |
 | `/auth/login` | GET | First-party login page. If no owner exists, redirects to `/auth/setup`. Accepts `?popup=1`; that mode is carried as a hidden field on the password form so successful login can finish popup re-auth. |
 | `/auth/login/password` | POST | Password login for the local owner. Form/JSON body `{ email, password, popup? }`. Valid credentials create the normal session and redirect to `/`; with `popup=1`, it redirects to `/auth/popup-done`. Invalid credentials return 401 with the login page and an error. If `policy.passkeyRequired` is true, password login returns 403 and the owner must use passkey login or recovery. |
 | `/api/auth/passkeys` | GET | Authenticated. Lists passkeys as `{ passkeys: [{ id, name, transports?, createdAt, lastUsedAt? }] }`; credential ids, public keys, and counters are not returned. |

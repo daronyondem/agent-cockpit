@@ -784,17 +784,21 @@ export function setupAuth(app: Express, config: AppConfig): void {
     next();
   };
 
-  const finishAuth = (req: Request, res: Response): void => {
+  const finishAuthRedirect = (req: Request, res: Response, redirectTo = '/'): void => {
     const sess = req.session as unknown as { reAuthPopup?: boolean } | undefined;
     if (sess && sess.reAuthPopup) {
       delete sess.reAuthPopup;
       res.redirect('/auth/popup-done');
       return;
     }
-    res.redirect('/');
+    res.redirect(redirectTo);
   };
 
-  const loginAndFinish = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { popup?: boolean } = {}): void => {
+  const finishAuth = (req: Request, res: Response): void => {
+    finishAuthRedirect(req, res);
+  };
+
+  const loginAndFinish = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { popup?: boolean; redirectTo?: string } = {}): void => {
     req.login(user, (loginErr) => {
       if (loginErr) {
         next(loginErr);
@@ -803,7 +807,7 @@ export function setupAuth(app: Express, config: AppConfig): void {
       if (mode.popup && req.session) {
         req.session.reAuthPopup = true;
       }
-      finishAuth(req, res);
+      finishAuthRedirect(req, res, mode.redirectTo || '/');
     });
   };
 
@@ -887,7 +891,7 @@ export function setupAuth(app: Express, config: AppConfig): void {
         displayName: stringField(body.displayName),
         password: stringField(body.password),
       });
-      loginAndFinish(req, res, next, localUserFromOwner(owner));
+      loginAndFinish(req, res, next, localUserFromOwner(owner), { redirectTo: '/v2/?welcome=1' });
     } catch (err) {
       if (err instanceof LocalAuthError) {
         res.status(400).send(renderSetupPage(req, err.message));

@@ -114,6 +114,14 @@ describe('CodexPlanUsageService', () => {
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
+  test('stores cache files under a custom data root', () => {
+    const dataRoot = path.join(tmpDir, 'external-data');
+    const custom = new CodexPlanUsageService(tmpDir, { dataRoot });
+
+    expect((custom as any)._cacheFile).toBe(path.join(dataRoot, 'codex-plan-usage.json'));
+    expect((custom as any)._profileCacheDir).toBe(path.join(dataRoot, 'codex-plan-usage'));
+  });
+
   // ── init ─────────────────────────────────────────────────────────────────
 
   describe('init', () => {

@@ -251,6 +251,9 @@ export interface UpdateStatus {
   lastCheckedAt: string | null;
   lastError: string | null;
   inProgress: boolean;
+  installChannel: 'production' | 'dev';
+  installSource: 'github-release' | 'git-main' | 'unknown';
+  installStateSource: 'stored' | 'inferred' | 'legacy' | 'corrupt';
 }
 
 export interface CliUpdateStatus {

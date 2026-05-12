@@ -1,5 +1,7 @@
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
+import crypto from 'crypto';
 
 // ── Mock child_process.execFile ─────────────────────────────────────────────
 
@@ -30,12 +32,13 @@ jest.spyOn(fs, 'readFileSync').mockImplementation((...args: Parameters<typeof fs
 });
 
 const originalWriteFileSync = fs.writeFileSync.bind(fs);
-const mockWriteFileSync = jest.spyOn(fs, 'writeFileSync').mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+function mockWriteFileSyncNoop(...args: Parameters<typeof fs.writeFileSync>) {
   // Allow writing the temp ecosystem config for CI, mock everything else
   if (String(args[0]).endsWith('ecosystem.config.js')) {
     return originalWriteFileSync(...args);
   }
-});
+}
+const mockWriteFileSync = jest.spyOn(fs, 'writeFileSync').mockImplementation(mockWriteFileSyncNoop);
 
 import { UpdateService } from '../src/services/updateService';
 
@@ -84,6 +87,71 @@ function mockExecFile(responses: Array<{ stdout?: string; stderr?: string; error
   });
 }
 
+function writeJson(filePath: string, value: unknown) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  originalWriteFileSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function writeText(filePath: string, value: string) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  originalWriteFileSync(filePath, value);
+}
+
+function makeProductionInstall(rootPrefix = 'agent-cockpit-install-') {
+  const installDir = fs.mkdtempSync(path.join(os.tmpdir(), rootPrefix));
+  const releasesDir = path.join(installDir, 'releases');
+  const previousDir = path.join(releasesDir, 'agent-cockpit-v1.0.0');
+  const currentLink = path.join(installDir, 'current');
+  const dataDir = path.join(installDir, 'data');
+
+  writeJson(path.join(previousDir, 'package.json'), { version: '1.0.0' });
+  writeText(path.join(previousDir, '.env'), 'PORT=4444\n');
+  writeText(path.join(previousDir, 'ecosystem.config.js'), "module.exports = { apps: [{ name: 'agent-cockpit' }] };\n");
+  fs.mkdirSync(dataDir, { recursive: true });
+  fs.symlinkSync(previousDir, currentLink);
+
+  const status = {
+    schemaVersion: 1 as const,
+    channel: 'production' as const,
+    source: 'github-release' as const,
+    repo: 'daronyondem/agent-cockpit',
+    version: '1.0.0',
+    branch: null,
+    installDir,
+    appDir: currentLink,
+    dataDir,
+    installedAt: '2026-05-11T00:00:00.000Z',
+    welcomeCompletedAt: null,
+    stateSource: 'stored' as const,
+    stateError: null,
+  };
+
+  return { installDir, releasesDir, previousDir, currentLink, dataDir, status };
+}
+
+function makeReleaseFixture(version = '1.1.0') {
+  const tarballName = `agent-cockpit-v${version}.tar.gz`;
+  const tarballBytes = Buffer.from(`release tarball ${version}`);
+  const tarballSha = crypto.createHash('sha256').update(tarballBytes).digest('hex');
+  const manifest = {
+    schemaVersion: 1,
+    version,
+    packageRoot: `agent-cockpit-v${version}`,
+    artifacts: [
+      {
+        name: tarballName,
+        role: 'app-tarball',
+        size: tarballBytes.length,
+        sha256: tarballSha,
+      },
+    ],
+  };
+  const manifestRaw = JSON.stringify(manifest);
+  const manifestSha = crypto.createHash('sha256').update(manifestRaw).digest('hex');
+  const checksumsRaw = `${manifestSha}  release-manifest.json\n${tarballSha}  ${tarballName}\n`;
+  return { manifest, manifestRaw, manifestSha, tarballName, tarballBytes, tarballSha, checksumsRaw };
+}
+
 // ── Tests ───────────────────────────────────────────────────────────────────
 
 describe('UpdateService', () => {
@@ -114,6 +182,7 @@ describe('UpdateService', () => {
     mockExecFileFn.mockReset();
     mockSpawnFn.mockClear();
     mockWriteFileSync.mockClear();
+    mockWriteFileSync.mockImplementation(mockWriteFileSyncNoop);
     mockExistsSyncOverrides = {};
     mockReadFileSyncOverrides = {};
     // Default: interpreter exists
@@ -183,6 +252,36 @@ describe('UpdateService', () => {
       expect(status.updateAvailable).toBe(true);
       expect(status.remoteVersion).toBe('99.0.0');
     });
+
+    test('includes install channel metadata when available', () => {
+      service = new UpdateService(appRoot, {
+        webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+        mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+        installStateService: {
+          getStatus: () => ({
+            schemaVersion: 1,
+            channel: 'production',
+            source: 'github-release',
+            repo: 'daronyondem/agent-cockpit',
+            version: '1.0.0',
+            branch: null,
+            installDir: appRoot,
+            appDir: appRoot,
+            dataDir: path.join(appRoot, 'data'),
+            installedAt: null,
+            welcomeCompletedAt: null,
+            stateSource: 'stored',
+            stateError: null,
+          }),
+        },
+      });
+
+      const status = service.getStatus();
+
+      expect(status.installChannel).toBe('production');
+      expect(status.installSource).toBe('github-release');
+      expect(status.installStateSource).toBe('stored');
+    });
   });
 
   // ── start / stop ──────────────────────────────────────────────────────
@@ -225,6 +324,38 @@ describe('UpdateService', () => {
       await (service as any)._checkRemoteVersion();
       expect((service as any)._lastError).toBe('fatal: could not fetch');
       expect((service as any)._latestRemoteVersion).toBeNull();
+    });
+
+    test('uses the GitHub Release manifest for production installs', async () => {
+      const install = makeProductionInstall('agent-cockpit-version-check-');
+      const release = makeReleaseFixture('1.2.0');
+      try {
+        service = new UpdateService(install.currentLink, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+          },
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          expect(cmd).toBe('curl');
+          expect(args).toEqual([
+            '-fsSL',
+            'https://github.com/daronyondem/agent-cockpit/releases/latest/download/release-manifest.json',
+          ]);
+          cb(null, release.manifestRaw, '');
+        });
+
+        const status = await service.checkNow();
+
+        expect(status.remoteVersion).toBe('1.2.0');
+        expect(status.installChannel).toBe('production');
+        expect(mockExecFileFn).toHaveBeenCalledTimes(1);
+        expect(mockExecFileFn.mock.calls[0][0]).toBe('curl');
+      } finally {
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
     });
   });
 
@@ -541,6 +672,149 @@ describe('UpdateService', () => {
       expect(shellCmd).toContain('restart.sh');
       expect(shellCmd).toContain('update-restart.log');
     });
+
+    test('applies a production GitHub Release update and writes rollback restart script', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const install = makeProductionInstall('agent-cockpit-prod-update-');
+      const release = makeReleaseFixture('1.1.0');
+      const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
+      try {
+        service = new UpdateService(install.currentLink, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+            writeState,
+          },
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'curl' && args[1].endsWith('/release-manifest.json')) {
+            cb(null, release.manifestRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith('/SHA256SUMS')) {
+            cb(null, release.checksumsRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith(`/${release.tarballName}`)) {
+            cb(null, release.tarballBytes, Buffer.alloc(0));
+            return;
+          }
+          if (cmd === 'tar') {
+            const extractDir = String(args[args.indexOf('-C') + 1]);
+            const packageDir = path.join(extractDir, release.manifest.packageRoot);
+            writeText(path.join(packageDir, 'server.ts'), 'console.log("server");\n');
+            writeJson(path.join(packageDir, 'package.json'), { version: '1.1.0' });
+            writeText(path.join(packageDir, 'public/v2-built/index.html'), '<!doctype html>\n');
+            writeText(path.join(packageDir, 'public/mobile-built/index.html'), '<!doctype html>\n');
+            cb(null, 'extracted\n', '');
+            return;
+          }
+          if (cmd === 'git' && args[0] === 'rev-parse') {
+            cb(null, 'abc123\n', '');
+            return;
+          }
+          if (cmd === 'npm') {
+            const outDirIndex = args.indexOf('--outDir');
+            if (outDirIndex >= 0) {
+              writeText(path.join(String(args[outDirIndex + 1]), 'index.html'), '<!doctype html>\n');
+              cb(null, 'built\n', '');
+              return;
+            }
+            cb(null, 'ok\n', '');
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+        expect(result.success).toBe(true);
+        expect(result.steps.map(step => step.name)).toEqual([
+          'download release manifest',
+          'download release tarball',
+          'extract release',
+          'npm ci',
+          'npm --prefix mobile/AgentCockpitPWA ci',
+          'npm run web:build',
+          'npm run mobile:build',
+          'verify release assets',
+          'copy runtime config',
+          'switch current release',
+          'write install manifest',
+          'pm2 restart',
+        ]);
+        expect(writeState).toHaveBeenCalledWith(expect.objectContaining({
+          channel: 'production',
+          source: 'github-release',
+          version: '1.1.0',
+          appDir: install.currentLink,
+          dataDir: install.dataDir,
+        }));
+        expect(fs.realpathSync(install.currentLink)).toBe(fs.realpathSync(path.join(install.releasesDir, 'agent-cockpit-v1.1.0')));
+        expect(originalExistsSync(path.join(fs.realpathSync(install.currentLink), '.env'))).toBe(true);
+        expect(originalExistsSync(path.join(fs.realpathSync(install.currentLink), 'ecosystem.config.js'))).toBe(true);
+        expect(mockWebBuildEnsureBuilt).not.toHaveBeenCalled();
+        expect(mockMobileBuildEnsureBuilt).not.toHaveBeenCalled();
+
+        const restartPath = path.join(install.dataDir, 'restart.sh');
+        const restartScript = originalReadFileSync(restartPath, 'utf8');
+        expect(restartScript).toContain('http://127.0.0.1:4444/api/chat/version');
+        expect(restartScript).toContain(`ln -s "${fs.realpathSync(install.previousDir)}" "${install.currentLink}"`);
+        expect(restartScript).toContain('curl -fsS');
+        expect(mockSpawnFn).toHaveBeenCalledWith('sh', expect.arrayContaining(['-c']), expect.objectContaining({
+          cwd: install.currentLink,
+          stdio: 'ignore',
+        }));
+      } finally {
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('rejects a production release with a checksum mismatch without switching current', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const install = makeProductionInstall('agent-cockpit-prod-bad-sha-');
+      const release = makeReleaseFixture('1.1.0');
+      const badChecksums = `${release.manifestSha}  release-manifest.json\n${'0'.repeat(64)}  ${release.tarballName}\n`;
+      const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
+      try {
+        service = new UpdateService(install.currentLink, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+            writeState,
+          },
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'curl' && args[1].endsWith('/release-manifest.json')) {
+            cb(null, release.manifestRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith('/SHA256SUMS')) {
+            cb(null, badChecksums, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith(`/${release.tarballName}`)) {
+            cb(null, release.tarballBytes, Buffer.alloc(0));
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/Checksum mismatch/);
+        expect(fs.realpathSync(install.currentLink)).toBe(fs.realpathSync(install.previousDir));
+        expect(writeState).not.toHaveBeenCalled();
+        expect(mockSpawnFn).not.toHaveBeenCalled();
+      } finally {
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
   });
 
   // ── restart (plain server restart, no git pull / npm install) ────────────
@@ -588,6 +862,33 @@ describe('UpdateService', () => {
       const shellCmd = (spawnArgs[1] as string[])[1];
       expect(shellCmd).toContain('nohup');
       expect(shellCmd).toContain('restart.sh');
+    });
+
+    test('writes restart artifacts under a custom data root', async () => {
+      const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'update-data-'));
+      try {
+        service = new UpdateService(appRoot, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot,
+        });
+
+        const result = await service.restart({ hasActiveStreams: () => false });
+        expect(result.success).toBe(true);
+
+        const writeCall = mockWriteFileSync.mock.calls.find(
+          (c) => String(c[0]).includes('restart.sh'),
+        );
+        expect(writeCall).toBeDefined();
+        expect(String(writeCall![0])).toBe(path.join(dataRoot, 'restart.sh'));
+
+        const spawnArgs = mockSpawnFn.mock.calls[0] as unknown[];
+        const shellCmd = (spawnArgs[1] as string[])[1];
+        expect(shellCmd).toContain(path.join(dataRoot, 'restart.sh'));
+        expect(shellCmd).toContain(path.join(dataRoot, 'update-restart.log'));
+      } finally {
+        fs.rmSync(dataRoot, { recursive: true, force: true });
+      }
     });
 
     test('does not run git or npm commands', async () => {

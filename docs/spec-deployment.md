@@ -63,6 +63,162 @@ npm install
 npm start              # Listens on PORT (default 3334)
 ```
 
+### Installation and Release Channels
+
+[ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md) defines the
+supported packaging direction. The first production install target is a macOS
+server-agent install: Agent Cockpit runs locally under PM2 and opens the browser
+for first-run setup. Windows installers, Electron/Tauri wrappers, Homebrew
+formulae, code signing, notarization, automatic Cloudflare tunnel provisioning,
+multi-user hosting, and hosted SaaS are outside the first release scope.
+
+Agent Cockpit has two release/update channels:
+
+- **Production** uses GitHub Releases as the public source of truth. The accepted
+  release workflow packages a selected source ref, publishes checksums, includes
+  prebuilt `public/v2-built/` and `public/mobile-built/` assets, and lets the
+  installer/updater verify artifacts before running them.
+- **Dev** tracks `main`. Dev installs keep the current git pull, dependency
+  install, web/mobile build, and PM2 restart behavior.
+
+Runtime self-update is channel-aware. Production installs read
+`install.json`, check the latest GitHub Release manifest, verify release
+checksums, stage the next release under the Mac install root, switch the
+`current` symlink, and restart through PM2 with health-check rollback. Dev
+installs keep the git/main update behavior described below.
+
+## Production Release Packaging
+
+Production releases are created by `.github/workflows/release.yml`, a manual
+`workflow_dispatch` workflow with inputs:
+
+- `version`: required semantic version, with or without a leading `v`
+- `source_ref`: branch, tag, or commit to package, defaulting to `main`
+- `prerelease`: boolean flag passed through to the GitHub Release
+
+The workflow checks out `source_ref`, normalizes the version, records the
+checked-out commit, and runs `npm version <version> --no-git-tag-version` only
+when the checked-out package version differs from the requested release version.
+It then runs the release gate in this order:
+
+```bash
+npm ci
+npm --prefix mobile/AgentCockpitPWA ci
+npm run typecheck
+npm run web:typecheck
+npm run web:build
+npm run web:budget
+npm run mobile:typecheck
+npm run maintainability:check
+npm run spec:drift
+npm run mobile:build
+npm test
+npm run adr:lint
+npm run release:package -- --version <version> --source-ref <source_ref> --commit <commit> --out-dir dist/release
+```
+
+The final step creates GitHub Release `v<version>` with title
+`Agent Cockpit v<version>` and uploads:
+
+- `agent-cockpit-v<version>.tar.gz`
+- `release-manifest.json`
+- `SHA256SUMS`
+- `install-macos.sh`
+
+`npm run release:package` executes `scripts/package-release.js`. The script
+requires `public/v2-built/index.html` and `public/mobile-built/index.html`, so a
+production artifact cannot be created without prebuilt desktop V2 and mobile PWA
+shells. It packages the runtime source tree under a versioned top-level
+directory named `agent-cockpit-v<version>` and includes root lock/config/docs
+files plus `docs/`, `mobile/`, `public/`, `scripts/`, `src/`, and `web/`.
+
+The package script excludes mutable or local-only state from the artifact:
+`node_modules/`, `data/`, `.env`, `ecosystem.config.js`, `coverage/`, `plans/`,
+`plan.md`, release `dist/` output, PM2/local logs, and generated build staging
+directories such as `public/.v2-built-*` and `public/.mobile-built-*`.
+
+`release-manifest.json` is an external installer/updater manifest with
+`schemaVersion: 1`, `channel: "production"`, `source: "github-release"`,
+`version`, `sourceRef`, `sourceCommit`, `packageRoot`, required build paths,
+the tarball and macOS installer artifact names/sizes/SHA256 hashes, and per-file
+paths, sizes, and SHA256 hashes for the packaged tree. `SHA256SUMS` contains
+checksums for the tarball, release manifest, and external `install-macos.sh`
+asset. The manifest is not embedded in the tarball, so its tarball hash can be
+verified before extraction.
+
+The automatic `.github/workflows/version-bump.yml` workflow remains a dev/main
+version bookkeeping workflow. It bumps the patch version on pushes to `main`,
+commits the package files, and pushes `main`; it does not create or force-push
+`v*` tags. GitHub Releases are the only production release signal.
+
+## macOS Installer
+
+The first supported installer is `scripts/install-macos.sh`. It is included in
+the release tarball and uploaded as a separate GitHub Release asset so a Mac user
+can run one script without cloning the repository. Defaults:
+
+```bash
+scripts/install-macos.sh --channel production
+scripts/install-macos.sh --channel dev
+```
+
+Supported options are `--channel production|dev`, `--version <version>`,
+`--repo <owner/name>`, `--install-dir <path>`, `--dev-dir <path>`,
+`--port <port>`, `--install-node`, and `--skip-open`. The default install root
+is `~/Library/Application Support/Agent Cockpit`; production releases are
+extracted under `releases/agent-cockpit-v<version>`, and `current` is a symlink
+to the active release. Mutable runtime data lives under `<install-root>/data`.
+
+The installer exits unless `uname -s` is `Darwin`, the CPU is `arm64` or
+`x86_64`, Node.js 22+ and npm are available, and `curl`, `tar`, and `shasum` are
+available. If Node 22+ is missing it prints Homebrew/nodejs.org guidance; it only
+runs `brew install node` when the user explicitly supplies `--install-node`.
+
+Production installs download `release-manifest.json`, `SHA256SUMS`, and the
+manifest-designated `app-tarball` from
+`https://github.com/<repo>/releases/latest/download/` by default, or from
+`/releases/download/v<version>/` when `--version` is supplied. The script
+verifies SHA256 for both the manifest and tarball before extraction. After
+extraction it runs root `npm ci`, runs
+`npm --prefix mobile/AgentCockpitPWA ci`, verifies that
+`public/v2-built/index.html` and `public/mobile-built/index.html` exist, and
+runs the corresponding build command only if an expected prebuilt shell is
+missing.
+
+Dev installs clone `https://github.com/<repo>.git` into `--dev-dir` when missing
+or update an existing checkout with `fetch origin main`, `checkout main`, and
+`pull --ff-only origin main`. They run the same dependency install path and force
+both web/mobile builds so the dev checkout is immediately runnable.
+
+Both channels generate `.env`, `ecosystem.config.js`, and
+`<AGENT_COCKPIT_DATA_DIR>/install.json`. Generated runtime config sets `PORT`,
+secure random `SESSION_SECRET`, secure random `AUTH_SETUP_TOKEN`,
+`AGENT_COCKPIT_DATA_DIR`, `WEB_BUILD_MODE=auto`, and
+`AUTH_ENABLE_LEGACY_OAUTH=false`. The PM2 ecosystem file uses the local
+`./node_modules/.bin/tsx` interpreter, `cwd` set to the selected app directory,
+and app name `agent-cockpit`. The install manifest records production as
+`channel: "production", source: "github-release"` and dev as
+`channel: "dev", source: "git-main", branch: "main"`.
+
+The installer starts the app with local PM2 through:
+
+```bash
+npx pm2 startOrRestart ecosystem.config.js --update-env
+npx pm2 save
+```
+
+It does not require global PM2. After startup it prints the first-run setup token
+and opens `http://localhost:<port>/auth/setup` unless `--skip-open` is set.
+Successful owner creation redirects to `/v2/?welcome=1`, where the authenticated
+welcome flow reads install/doctor status, links to Security and CLI Settings,
+offers workspace selection, and calls `POST /api/chat/install/welcome-complete`
+to persist `welcomeCompletedAt`.
+
+`AGENT_COCKPIT_DATA_DIR` controls the mutable data root. When unset, runtime
+state stays under `<repo>/data` for compatibility with existing development
+installs. The Mac production installer sets this outside the replaceable app
+directory, under `~/Library/Application Support/Agent Cockpit/data` by default.
+
 `LOG_LEVEL` controls the structured logger threshold for modules that have migrated to `src/utils/logger.ts`. Supported values are `error`, `warn`, `info`, and `debug`; invalid or missing values fall back to `info`. Metadata keys that look like credentials or session material are redacted before log lines are written.
 
 The main `/v2/` web UI is built with Vite from `web/AgentCockpitWeb/` into `public/v2-built/`. Normal development and production both use the same one-server architecture: Express serves backend routes and the built web UI. A separate Vite dev server is not required for the normal `agent-cockpit-dev` workflow. After editing V2 frontend source, restart the PM2-managed dev server; startup preflight detects missing or stale main V2 web assets, runs `npm run web:build`, writes `public/v2-built/.agent-cockpit-build.json`, then starts serving `/v2/`. The same startup preflight also detects missing or stale mobile PWA assets, runs `npm run mobile:build`, and writes `public/mobile-built/.agent-cockpit-build.json` before listen. Explicit local checks are available:
@@ -77,7 +233,7 @@ npm run mobile:build
 
 `WEB_BUILD_MODE=skip` disables both main V2 web and mobile startup preflights for tests or unusual deployments that provision assets out of band. If no previous build exists and the build fails, startup fails. If a previous build exists and a rebuild fails, the server logs the error and serves the previous build.
 
-Self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md) and [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md).
+Dev self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. Production self-update runs root/mobile `npm ci` inside the extracted release, then runs the V2/mobile build preflight there only when markers or assets require it. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md), [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md), and [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md).
 
 **Remote access via ngrok:**
 ```bash
@@ -89,7 +245,7 @@ For a fresh exposed backend, set `AUTH_SETUP_TOKEN` before first-run setup so a 
 ```bash
 npm run auth:reset -- --password "new long password" --disable-passkey-required --revoke-sessions --regenerate-recovery-codes
 ```
-The reset command requires local filesystem access. It can reset the owner password, disable passkey-required mode, delete session files under `data/sessions`, and print replacement recovery codes.
+The reset command requires local filesystem access. It can reset the owner password, disable passkey-required mode, delete session files under `<AGENT_COCKPIT_DATA_DIR>/sessions`, and print replacement recovery codes.
 
 **Mobile PWA development, build, and install:**
 ```bash

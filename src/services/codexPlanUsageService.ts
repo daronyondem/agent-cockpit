@@ -57,6 +57,10 @@ export interface CodexPlanUsageResponse extends CodexPlanUsageSnapshot {
   stale: boolean;
 }
 
+interface CodexPlanUsageServiceOptions {
+  dataRoot?: string;
+}
+
 export class CodexPlanUsageService {
   private _cacheFile: string;
   private _profileCacheDir: string;
@@ -67,9 +71,10 @@ export class CodexPlanUsageService {
   private _profileLastAttemptAt = new Map<string, number>();
   private _profileInFlight = new Map<string, Promise<void>>();
 
-  constructor(appRoot: string) {
-    this._cacheFile = path.join(appRoot, 'data', 'codex-plan-usage.json');
-    this._profileCacheDir = path.join(appRoot, 'data', 'codex-plan-usage');
+  constructor(appRoot: string, options: CodexPlanUsageServiceOptions = {}) {
+    const dataRoot = options.dataRoot || path.join(appRoot, 'data');
+    this._cacheFile = path.join(dataRoot, 'codex-plan-usage.json');
+    this._profileCacheDir = path.join(dataRoot, 'codex-plan-usage');
     this._snapshot = {
       fetchedAt: null,
       account: null,

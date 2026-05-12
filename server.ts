@@ -19,6 +19,8 @@ import { CliUpdateService } from './src/services/cliUpdateService';
 import { ClaudePlanUsageService } from './src/services/claudePlanUsageService';
 import { KiroPlanUsageService } from './src/services/kiroPlanUsageService';
 import { CodexPlanUsageService } from './src/services/codexPlanUsageService';
+import { InstallStateService } from './src/services/installStateService';
+import { InstallDoctorService } from './src/services/installDoctorService';
 import { detectLibreOffice } from './src/services/knowledgeBase/libreOffice';
 import { detectPandoc } from './src/services/knowledgeBase/pandoc';
 import { WebBuildService } from './src/services/webBuildService';
@@ -34,7 +36,7 @@ app.set('trust proxy', 1);
 applySecurity(app);
 
 const sessionStore = new FileStore({
-  path: path.join(__dirname, 'data', 'sessions'),
+  path: path.join(config.AGENT_COCKPIT_DATA_DIR, 'sessions'),
   ttl: 24 * 60 * 60,
   retries: 0,
 });
@@ -98,15 +100,34 @@ backendRegistry.register(new CodexAdapter({
   sandbox: config.CODEX_SANDBOX_MODE,
 }));
 
-const chatService = new ChatService(__dirname, { defaultWorkspace: config.DEFAULT_WORKSPACE, backendRegistry });
+const chatService = new ChatService(__dirname, {
+  defaultWorkspace: config.DEFAULT_WORKSPACE,
+  backendRegistry,
+  dataRoot: config.AGENT_COCKPIT_DATA_DIR,
+});
 const cliUpdateService = new CliUpdateService(__dirname);
-const claudePlanUsageService = new ClaudePlanUsageService(__dirname);
-const kiroPlanUsageService = new KiroPlanUsageService(__dirname);
-const codexPlanUsageService = new CodexPlanUsageService(__dirname);
+const claudePlanUsageService = new ClaudePlanUsageService(__dirname, { dataRoot: config.AGENT_COCKPIT_DATA_DIR });
+const kiroPlanUsageService = new KiroPlanUsageService(__dirname, { dataRoot: config.AGENT_COCKPIT_DATA_DIR });
+const codexPlanUsageService = new CodexPlanUsageService(__dirname, { dataRoot: config.AGENT_COCKPIT_DATA_DIR });
 const webBuildService = new WebBuildService(__dirname, { mode: config.WEB_BUILD_MODE });
 const mobileBuildService = new MobileBuildService(__dirname, { mode: config.WEB_BUILD_MODE });
-const updateService = new UpdateService(__dirname, { webBuildService, mobileBuildService });
-const chatResult = createChatRouter({ chatService, backendRegistry, updateService, cliUpdateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
+const installStateService = new InstallStateService({
+  appRoot: __dirname,
+  dataRoot: config.AGENT_COCKPIT_DATA_DIR,
+});
+const updateService = new UpdateService(__dirname, {
+  webBuildService,
+  mobileBuildService,
+  dataRoot: config.AGENT_COCKPIT_DATA_DIR,
+  installStateService,
+});
+const installDoctorService = new InstallDoctorService({
+  appRoot: __dirname,
+  dataRoot: config.AGENT_COCKPIT_DATA_DIR,
+  installStateService,
+  updateService,
+});
+const chatResult = createChatRouter({ chatService, backendRegistry, updateService, installStateService, installDoctorService, cliUpdateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
 const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = chatResult;
 app.use('/api/chat', chatRouter);
 

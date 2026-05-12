@@ -1719,6 +1719,7 @@ export interface AppConfig {
   GITHUB_CLIENT_SECRET?: string;
   GITHUB_CALLBACK_URL?: string;
   ALLOWED_EMAIL: string;
+  AGENT_COCKPIT_DATA_DIR: string;
   AUTH_DATA_DIR: string;
   AUTH_SETUP_TOKEN: string;
   AUTH_ENABLE_LEGACY_OAUTH: boolean;
@@ -1753,6 +1754,45 @@ declare module 'express-session' {
 
 // ── Update Service ───────────────────────────────────────────────────────────
 
+export type InstallChannel = 'production' | 'dev';
+export type InstallSource = 'github-release' | 'git-main' | 'unknown';
+export type InstallStateSource = 'stored' | 'inferred' | 'legacy' | 'corrupt';
+
+export interface InstallStatus {
+  schemaVersion: 1;
+  channel: InstallChannel;
+  source: InstallSource;
+  repo: string;
+  version: string | null;
+  branch: string | null;
+  installDir: string | null;
+  appDir: string | null;
+  dataDir: string;
+  installedAt: string | null;
+  welcomeCompletedAt: string | null;
+  stateSource: InstallStateSource;
+  stateError: string | null;
+}
+
+export type InstallDoctorCheckStatus = 'ok' | 'warning' | 'error';
+
+export interface InstallDoctorCheck {
+  id: string;
+  label: string;
+  status: InstallDoctorCheckStatus;
+  required: boolean;
+  summary: string;
+  detail?: string;
+  remediation?: string;
+}
+
+export interface InstallDoctorStatus {
+  generatedAt: string;
+  overallStatus: InstallDoctorCheckStatus;
+  install: InstallStatus;
+  checks: InstallDoctorCheck[];
+}
+
 export interface UpdateStatus {
   localVersion: string;
   remoteVersion: string | null;
@@ -1760,6 +1800,9 @@ export interface UpdateStatus {
   lastCheckAt: string | null;
   lastError: string | null;
   updateInProgress: boolean;
+  installChannel: InstallChannel;
+  installSource: InstallSource;
+  installStateSource: InstallStateSource;
 }
 
 export interface UpdateStep {

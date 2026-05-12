@@ -7,6 +7,8 @@ import type { CliUpdateService } from '../../services/cliUpdateService';
 import type { CodexPlanUsageService } from '../../services/codexPlanUsageService';
 import { detectLibreOffice } from '../../services/knowledgeBase/libreOffice';
 import { detectPandoc } from '../../services/knowledgeBase/pandoc';
+import type { InstallStateService } from '../../services/installStateService';
+import type { InstallDoctorService } from '../../services/installDoctorService';
 import type { KiroPlanUsageService } from '../../services/kiroPlanUsageService';
 import type { UpdateService } from '../../services/updateService';
 import type { Request, Response } from '../../types';
@@ -18,6 +20,8 @@ export interface ChatStatusRoutesOptions {
   chatService: ChatService;
   backendRegistry: BackendRegistry;
   updateService: UpdateService | null;
+  installStateService: InstallStateService | null;
+  installDoctorService: InstallDoctorService | null;
   cliUpdateService: CliUpdateService | null;
   claudePlanUsageService: ClaudePlanUsageService;
   kiroPlanUsageService: KiroPlanUsageService;
@@ -30,6 +34,8 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
     chatService,
     backendRegistry,
     updateService,
+    installStateService,
+    installDoctorService,
     cliUpdateService,
     claudePlanUsageService,
     kiroPlanUsageService,
@@ -55,6 +61,30 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
   router.get('/update-status', (_req: Request, res: Response) => {
     if (!updateService) return res.json({ updateAvailable: false });
     res.json(updateService.getStatus());
+  });
+
+  router.get('/install/status', (_req: Request, res: Response) => {
+    if (!installStateService) return res.json({ channel: 'dev', source: 'git-main', stateSource: 'inferred' });
+    res.json(installStateService.getStatus());
+  });
+
+  router.get('/install/doctor', async (_req: Request, res: Response) => {
+    if (!installDoctorService) return res.status(501).json({ error: 'Install doctor service not available' });
+    try {
+      res.json(await installDoctorService.getStatus());
+    } catch (err: unknown) {
+      sendError(res, 500, err);
+    }
+  });
+
+  router.post('/install/welcome-complete', csrfGuard, async (_req: Request, res: Response) => {
+    if (!installStateService) return res.status(501).json({ error: 'Install state service not available' });
+    try {
+      const install = await installStateService.markWelcomeCompleted();
+      res.json({ ok: true, install });
+    } catch (err: unknown) {
+      sendError(res, 500, err);
+    }
   });
 
   router.post('/check-version', csrfGuard, async (_req: Request, res: Response) => {
