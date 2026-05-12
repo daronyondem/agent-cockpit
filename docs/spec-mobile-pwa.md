@@ -43,6 +43,17 @@ See [ADR-0025](adr/0025-use-mobile-pwa-as-sole-mobile-client.md).
 
 `npm run build` writes `index.html`, `manifest.webmanifest`, SVG/PNG icon assets, and hashed CSS/JS assets here. These files are served by the explicit `/mobile` `express.static(public/mobile-built)` mount after `requireAuth`, so unauthenticated visitors are redirected to the normal web login before the PWA shell is served. Generated output is ignored by git; tracked mobile install metadata remains in `mobile/AgentCockpitPWA/public/`.
 
+Production GitHub Release artifacts include `public/mobile-built/index.html` and
+the generated mobile asset tree. `scripts/package-release.js` refuses to create
+a release tarball when the mobile build shell is missing, the manual release
+workflow runs `npm run mobile:typecheck` and `npm run mobile:build`, and the
+macOS installer verifies the packaged mobile shell before startup. Production
+updates run `npm --prefix mobile/AgentCockpitPWA ci` inside the extracted
+release and then run `MobileBuildService` for that release when build markers or
+assets are missing or stale before switching the `current` symlink. Dev updates
+continue to force `npm --prefix mobile/AgentCockpitPWA install` plus
+`npm run mobile:build` before PM2 restart.
+
 `public/mobile/` contains only a hidden ADR placeholder so historical decision records can keep validating affected paths. It is not a generated output directory and does not contain served PWA assets.
 
 ## Runtime Architecture
@@ -139,4 +150,4 @@ The generated app is served from:
 /mobile/
 ```
 
-When `WEB_BUILD_MODE=auto`, `MobileBuildService` verifies `public/mobile-built/.agent-cockpit-build.json` at server startup and rebuilds from `mobile/AgentCockpitPWA/` when the source or lockfiles are stale. The self-update path also installs mobile dependencies and runs this build before restarting PM2.
+When `WEB_BUILD_MODE=auto`, `MobileBuildService` verifies `public/mobile-built/.agent-cockpit-build.json` at server startup and rebuilds from `mobile/AgentCockpitPWA/` when the source or lockfiles are stale. Dev self-update installs mobile dependencies and forces this build before restarting PM2; production self-update installs mobile dependencies in the staged release and runs the same build preflight only when the packaged mobile marker/assets are missing or stale.
