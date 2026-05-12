@@ -5,6 +5,7 @@ import type {
   Conversation,
   ConversationListItem,
   CurrentUser,
+  DirectoryBrowseResponse,
   ExplorerPreviewResponse,
   ExplorerTreeResponse,
   FilePreviewResponse,
@@ -242,6 +243,27 @@ export class AgentCockpitAPI {
       body: { path },
     });
     return response.markdown || '';
+  }
+
+  async browseDirectory(path?: string, showHidden = false): Promise<DirectoryBrowseResponse> {
+    return this.request<DirectoryBrowseResponse>('GET', '/api/chat/browse', {
+      query: { path, showHidden: showHidden ? 'true' : undefined },
+      csrf: true,
+    });
+  }
+
+  async createDirectory(parentPath: string, name: string): Promise<{ created: string }> {
+    return this.request<{ created: string }>('POST', '/api/chat/mkdir', {
+      csrf: true,
+      body: { parentPath, name },
+    });
+  }
+
+  async deleteDirectory(dirPath: string): Promise<{ deleted: string; parent: string }> {
+    return this.request<{ deleted: string; parent: string }>('POST', '/api/chat/rmdir', {
+      csrf: true,
+      body: { dirPath },
+    });
   }
 
   conversationFileURL(conversationID: string, filename: string, mode?: 'view' | 'download'): string {

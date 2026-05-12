@@ -236,14 +236,17 @@ export function lastTwoPathComponents(path: string): string {
   return parts.slice(-2).join('/');
 }
 
-export function workspaceOptions(conversations: ConversationListItem[]): Array<{ hash: string; label: string }> {
-  const byHash = new Map<string, string>();
+export function workspaceOptions(conversations: ConversationListItem[]): Array<{ hash: string; label: string; fullPath: string }> {
+  const byHash = new Map<string, { label: string; fullPath: string }>();
   for (const conversation of conversations) {
     if (!byHash.has(conversation.workspaceHash)) {
-      byHash.set(conversation.workspaceHash, lastTwoPathComponents(conversation.workingDir));
+      byHash.set(conversation.workspaceHash, {
+        label: lastTwoPathComponents(conversation.workingDir),
+        fullPath: conversation.workingDir,
+      });
     }
   }
-  return Array.from(byHash, ([hash, label]) => ({ hash, label })).sort((a, b) => a.label.localeCompare(b.label));
+  return Array.from(byHash, ([hash, workspace]) => ({ hash, ...workspace })).sort((a, b) => a.label.localeCompare(b.label));
 }
 
 export function formatDate(value: string): string {
