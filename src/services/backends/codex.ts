@@ -5,6 +5,7 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { BaseBackendAdapter, type BackendCallOptions, type RunOneShotOptions } from './base';
 import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUtils';
+import { logger } from '../../utils/logger';
 import type {
   BackendMetadata,
   ModelOption,
@@ -38,6 +39,7 @@ const CODEX_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh']
 const CODEX_APP_SERVER_ARGS = ['app-server', '--enable', 'goals'];
 const CODEX_CLIENT_CAPABILITIES = { experimentalApi: true };
 const CODEX_FAST_SERVICE_TIER_ARGS = ['-c', 'service_tier="fast"', '-c', 'features.fast_mode=true'];
+const codexLog = logger.child({ module: 'codex-backend' });
 
 // Used as the polite-shutdown deadline before SIGKILL during process kill.
 const PROCESS_KILL_GRACE_MS = 1_000;
@@ -552,7 +554,7 @@ export function lookupParentAgentId(
   params: Record<string, unknown>,
   subagentByThreadId: Map<string, string>,
 ): string | undefined {
-  const tid = (params as { threadId?: string }).threadId;
+  const tid = extractCodexThreadId(params);
   if (!tid) return undefined;
   return subagentByThreadId.get(tid);
 }
@@ -561,8 +563,55 @@ export function eventIsFromChildThread(
   params: Record<string, unknown>,
   subagentByThreadId: Map<string, string>,
 ): boolean {
-  const tid = (params as { threadId?: string }).threadId;
+  const tid = extractCodexThreadId(params);
   return !!tid && subagentByThreadId.has(tid);
+}
+
+export function extractCodexThreadId(params: Record<string, unknown> | undefined | null): string | null {
+  const threadId = params && (params as { threadId?: unknown }).threadId;
+  return typeof threadId === 'string' && threadId.length > 0 ? threadId : null;
+}
+
+export function extractCodexTurnId(params: Record<string, unknown> | undefined | null): string | null {
+  if (!params) return null;
+  const turnId = (params as { turnId?: unknown }).turnId;
+  if (typeof turnId === 'string' && turnId.length > 0) return turnId;
+  const turn = (params as { turn?: unknown }).turn;
+  if (turn && typeof turn === 'object') {
+    const nested = (turn as { id?: unknown }).id;
+    if (typeof nested === 'string' && nested.length > 0) return nested;
+  }
+  return null;
+}
+
+export function eventBelongsToActiveParentTurn(
+  params: Record<string, unknown>,
+  parentThreadId: string | null,
+  activeTurnId: string | null,
+): boolean {
+  return !!parentThreadId
+    && !!activeTurnId
+    && extractCodexThreadId(params) === parentThreadId
+    && extractCodexTurnId(params) === activeTurnId;
+}
+
+export function eventBelongsToActiveChildWork(
+  params: Record<string, unknown>,
+  activeTurnId: string | null,
+  subagentByThreadId: Map<string, string>,
+): boolean {
+  const threadId = extractCodexThreadId(params);
+  return !!activeTurnId && !!threadId && subagentByThreadId.has(threadId);
+}
+
+export function eventBelongsToActiveStreamWork(
+  params: Record<string, unknown>,
+  parentThreadId: string | null,
+  activeTurnId: string | null,
+  subagentByThreadId: Map<string, string>,
+): boolean {
+  return eventBelongsToActiveParentTurn(params, parentThreadId, activeTurnId)
+    || eventBelongsToActiveChildWork(params, activeTurnId, subagentByThreadId);
 }
 
 // Multi-agent turns emit one `turn/completed` per thread (each child has its
@@ -573,9 +622,13 @@ export function eventIsFromChildThread(
 export function isParentTurnCompleted(
   params: Record<string, unknown>,
   parentThreadId: string | null,
+  activeTurnId?: string | null,
 ): boolean {
-  const completedTid = (params as { threadId?: string }).threadId;
+  const completedTid = extractCodexThreadId(params);
   if (!completedTid || !parentThreadId) return true;
+  if (activeTurnId != null) {
+    return completedTid === parentThreadId && extractCodexTurnId(params) === activeTurnId;
+  }
   return completedTid === parentThreadId;
 }
 
@@ -690,6 +743,13 @@ interface ThreadGoalClearResult {
   cleared: boolean;
 }
 
+interface ThreadReadResult {
+  thread?: {
+    status?: { type?: string };
+    turns?: Array<{ id?: string; status?: string }>;
+  };
+}
+
 // `item/tool/requestUserInput` (server-to-client request, EXPERIMENTAL,
 // API v2 only). The server pauses the turn while waiting for our response.
 interface ToolRequestUserInputOption {
@@ -721,6 +781,7 @@ interface ToolRequestUserInputResponse {
 interface PendingUserInput {
   reqId: number;
   itemId: string;
+  turnId: string;
   questions: ToolRequestUserInputQuestion[];
 }
 
@@ -920,6 +981,12 @@ class CodexAppServerClient {
     this.proc.stdin!.write(JSON.stringify(msg) + '\n');
   }
 
+  respondError(id: number, code: number, message: string): void {
+    if (this.closed) return;
+    const msg = { jsonrpc: '2.0', id, error: { code, message } };
+    this.proc.stdin!.write(JSON.stringify(msg) + '\n');
+  }
+
   stopNotifications(): void {
     this.stopRequested = true;
     if (this.notificationResolve) {
@@ -945,9 +1012,13 @@ class CodexAppServerClient {
     this.stopRequested = false;
   }
 
-  drainNotifications(): number {
-    const count = this.notificationQueue.length;
+  drainNotifications(onDrain?: (notification: JsonRpcNotification) => void): number {
+    const drained = this.notificationQueue;
     this.notificationQueue = [];
+    for (const notification of drained) {
+      onDrain?.(notification);
+    }
+    const count = drained.length;
     return count;
   }
 
@@ -1513,7 +1584,9 @@ export class CodexAdapter extends BaseBackendAdapter {
         const result = await client.request('thread/resume', resumeParams) as ThreadResumeResult;
         threadId = result.thread.id;
         entry.threadId = threadId;
-        const drained = client.drainNotifications();
+        const drained = client.drainNotifications((notification) => {
+          this._respondToStaleServerRequest(client, notification, 'Stale Codex request ignored after thread resume');
+        });
         console.log(`[codex] Resumed thread ${threadId} for conv=${convId} (drained ${drained} notifications)`);
         return { threadId };
       } catch (err) {
@@ -1566,6 +1639,90 @@ export class CodexAdapter extends BaseBackendAdapter {
     };
   }
 
+  private _respondToStaleServerRequest(
+    client: CodexAppServerClient,
+    notification: JsonRpcNotification,
+    reason: string,
+  ): boolean {
+    if (notification.id == null) return false;
+    const reqId = notification.id;
+    switch (notification.method) {
+      case 'item/commandExecution/requestApproval':
+      case 'item/fileChange/requestApproval':
+        client.respond(reqId, { decision: 'cancel' });
+        return true;
+      case 'item/permissions/requestApproval':
+      case 'item/tool/requestUserInput':
+        client.respondError(reqId, -32000, reason);
+        return true;
+      case 'applyPatchApproval':
+      case 'execCommandApproval':
+        client.respond(reqId, { decision: 'abort' });
+        return true;
+      default:
+        client.respondError(reqId, -32601, 'Not supported by client');
+        return true;
+    }
+  }
+
+  private _drainQueuedNotificationsBeforeRun(
+    client: CodexAppServerClient,
+    convId: string,
+    phase: 'chat' | 'goal',
+  ): void {
+    const requestMethods = new Map<string, number>();
+    const drained = client.drainNotifications((notification) => {
+      if (notification.id != null) {
+        requestMethods.set(notification.method, (requestMethods.get(notification.method) || 0) + 1);
+        this._respondToStaleServerRequest(client, notification, 'Stale Codex request ignored before starting a new turn');
+      }
+    });
+    if (drained > 0) {
+      codexLog.warn('drained queued Codex notifications before starting turn', {
+        conversationId: convId,
+        phase,
+        drained,
+        serverRequests: Object.fromEntries(requestMethods.entries()),
+      });
+    }
+  }
+
+  private async _interruptActiveOrphanTurnIfAny(
+    client: CodexAppServerClient,
+    convId: string,
+    threadId: string,
+    phase: 'chat' | 'goal',
+  ): Promise<void> {
+    try {
+      const result = await client.request('thread/read', { threadId, includeTurns: true }) as ThreadReadResult;
+      const turns = result.thread?.turns || [];
+      const activeTurn = [...turns].reverse().find((turn) => (
+        typeof turn.id === 'string' && turn.status === 'inProgress'
+      ));
+      if (!activeTurn?.id) return;
+      codexLog.warn('interrupting orphaned Codex turn before starting new turn', {
+        conversationId: convId,
+        threadId,
+        turnId: activeTurn.id,
+      });
+      await client.request('turn/interrupt', { threadId, turnId: activeTurn.id }).catch((err: Error) => {
+        codexLog.warn('failed to interrupt orphaned Codex turn', {
+          conversationId: convId,
+          threadId,
+          turnId: activeTurn.id,
+          errorMessage: err.message,
+        });
+      });
+      this._drainQueuedNotificationsBeforeRun(client, convId, phase);
+    } catch (err) {
+      codexLog.warn('failed to inspect Codex thread for orphaned active turn', {
+        conversationId: convId,
+        threadId,
+        errorMessage: (err as Error).message,
+      });
+    }
+  }
+
   private async *_createGoalStream(
     goalPatch: { objective?: string; status?: Extract<CodexThreadGoalStatus, 'active'> },
     options: SendMessageOptions,
@@ -1614,6 +1771,11 @@ export class CodexAdapter extends BaseBackendAdapter {
       processId: entry.proc.pid ?? null,
     };
 
+    if (!ctx.externalSessionId) {
+      this._drainQueuedNotificationsBeforeRun(client, convId, 'goal');
+      await this._interruptActiveOrphanTurnIfAny(client, convId, threadId, 'goal');
+    }
+
     try {
       const setParams: Record<string, unknown> = {
         threadId,
@@ -1630,6 +1792,20 @@ export class CodexAdapter extends BaseBackendAdapter {
       let turnStarted = false;
       let turnEnded = false;
       const noTurnTimeoutMs = 5_000;
+      let emittedRuntimeTurnId: string | null = null;
+      const emitRuntimeTurnId = (turnId: string): StreamEvent | null => {
+        if (emittedRuntimeTurnId === turnId) return null;
+        if (state.turnId && state.turnId !== turnId) return null;
+        state.turnId = turnId;
+        turnStarted = true;
+        emittedRuntimeTurnId = turnId;
+        return {
+          type: 'backend_runtime',
+          externalSessionId: threadId,
+          activeTurnId: turnId,
+          processId: entry.proc.pid ?? null,
+        };
+      };
 
       while (true) {
         const next = !turnStarted
@@ -1667,11 +1843,19 @@ export class CodexAdapter extends BaseBackendAdapter {
 
           if (method === 'item/commandExecution/requestApproval'
               || method === 'item/fileChange/requestApproval') {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, state.turnId, state.subagentByThreadId)) {
+              this._respondToStaleServerRequest(client, notification, 'Stale Codex goal approval request ignored');
+              continue;
+            }
             client.respond(reqId, { decision: 'acceptForSession' });
             continue;
           }
 
           if (method === 'item/permissions/requestApproval') {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, state.turnId, state.subagentByThreadId)) {
+              this._respondToStaleServerRequest(client, notification, 'Stale Codex goal permissions request ignored');
+              continue;
+            }
             client.respond(reqId, {
               permissions: { network: undefined, fileSystem: undefined },
               scope: 'session',
@@ -1685,9 +1869,13 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           if (method === 'item/tool/requestUserInput') {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, state.turnId, state.subagentByThreadId)) {
+              this._respondToStaleServerRequest(client, notification, 'Stale Codex goal user-input request ignored');
+              continue;
+            }
             const p = params as unknown as ToolRequestUserInputParams;
             const questions = Array.isArray(p.questions) ? p.questions : [];
-            state.pendingUserInput = { reqId, itemId: p.itemId, questions };
+            state.pendingUserInput = { reqId, itemId: p.itemId, turnId: p.turnId, questions };
             const first = questions[0];
             yield {
               type: 'tool_activity',
@@ -1709,28 +1897,28 @@ export class CodexAdapter extends BaseBackendAdapter {
 
         switch (method) {
           case 'thread/goal/updated': {
+            if (extractCodexThreadId(params) !== threadId) break;
             const goal = (params as { goal?: CodexThreadGoal }).goal;
             if (goal) yield { type: 'goal_updated', goal };
+            const turnId = extractCodexTurnId(params);
+            if (turnId) {
+              const event = emitRuntimeTurnId(turnId);
+              if (event) yield event;
+            }
             break;
           }
 
           case 'thread/goal/cleared': {
+            if (extractCodexThreadId(params) !== threadId) break;
             yield { type: 'goal_cleared', threadId: (params as { threadId?: string }).threadId || threadId };
             break;
           }
 
           case 'turn/started': {
-            const turnId = (params as { turnId?: string; turn?: { id?: string } }).turnId
-              || (params as { turn?: { id?: string } }).turn?.id;
-            if (turnId) {
-              turnStarted = true;
-              state.turnId = turnId;
-              yield {
-                type: 'backend_runtime',
-                externalSessionId: threadId,
-                activeTurnId: turnId,
-                processId: entry.proc.pid ?? null,
-              };
+            const turnId = extractCodexTurnId(params);
+            if (turnId && turnId === state.turnId && extractCodexThreadId(params) === state.threadId) {
+              const event = emitRuntimeTurnId(turnId);
+              if (event) yield event;
             }
             break;
           }
@@ -1738,14 +1926,20 @@ export class CodexAdapter extends BaseBackendAdapter {
           case 'serverRequest/resolved': {
             const p = params as { requestId?: number };
             const pending = state.pendingUserInput;
-            if (pending && typeof p.requestId === 'number' && p.requestId === pending.reqId) {
+            if (
+              pending
+              && pending.turnId === state.turnId
+              && typeof p.requestId === 'number'
+              && p.requestId === pending.reqId
+              && extractCodexThreadId(params) === state.threadId
+            ) {
               state.pendingUserInput = null;
             }
             break;
           }
 
           case 'item/agentMessage/delta': {
-            if (eventIsFromChildThread(params, state.subagentByThreadId)) break;
+            if (!eventBelongsToActiveParentTurn(params, state.threadId, state.turnId)) break;
             const delta = (params as { delta?: string }).delta;
             if (typeof delta === 'string' && delta.length > 0) {
               yield { type: 'text', content: delta, streaming: true };
@@ -1755,7 +1949,7 @@ export class CodexAdapter extends BaseBackendAdapter {
 
           case 'item/reasoning/textDelta':
           case 'item/reasoning/summaryTextDelta': {
-            if (eventIsFromChildThread(params, state.subagentByThreadId)) break;
+            if (!eventBelongsToActiveParentTurn(params, state.threadId, state.turnId)) break;
             const delta = (params as { delta?: string }).delta;
             if (typeof delta === 'string' && delta.length > 0) {
               yield { type: 'thinking', content: delta, streaming: true };
@@ -1764,6 +1958,7 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           case 'item/started': {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, state.turnId, state.subagentByThreadId)) break;
             const item = (params as { item?: CodexThreadItem }).item;
             if (!item) break;
             const detail = extractCodexToolDetails(item);
@@ -1780,6 +1975,7 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           case 'item/completed': {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, state.turnId, state.subagentByThreadId)) break;
             const item = (params as { item?: CodexThreadItem }).item;
             if (!item) break;
             recordSpawnAgentReceivers(item, state.subagentByThreadId);
@@ -1804,6 +2000,7 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           case 'thread/tokenUsage/updated': {
+            if (!eventBelongsToActiveParentTurn(params, state.threadId, state.turnId)) break;
             const tokenUsage = (params as { tokenUsage?: {
               total: { totalTokens: number; inputTokens: number; cachedInputTokens: number; outputTokens: number };
               last: { totalTokens: number; inputTokens: number; cachedInputTokens: number; outputTokens: number };
@@ -1822,13 +2019,14 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           case 'turn/completed': {
-            if (!isParentTurnCompleted(params, state.threadId)) break;
+            if (!isParentTurnCompleted(params, state.threadId, state.turnId)) break;
             turnEnded = true;
             client.stopNotifications();
             break;
           }
 
           case 'error': {
+            if (!eventBelongsToActiveParentTurn(params, state.threadId, state.turnId)) break;
             const errParam = (params as {
               error?: { message?: string };
               willRetry?: boolean;
@@ -1916,6 +2114,11 @@ export class CodexAdapter extends BaseBackendAdapter {
         processId: entry.proc.pid ?? null,
       };
 
+      if (!resolved.externalSessionId) {
+        this._drainQueuedNotificationsBeforeRun(client, convId, 'chat');
+        await this._interruptActiveOrphanTurnIfAny(client, convId, threadId, 'chat');
+      }
+
       // ── Build turn input ─────────────────────────────────────────────
       const userInput = [{ type: 'text', text: message, text_elements: [] }];
       const modelCatalog = this._modelsFor(cliProfile);
@@ -1925,11 +2128,8 @@ export class CodexAdapter extends BaseBackendAdapter {
       console.log(`[codex] turn/start thread=${threadId} promptLen=${message.length}`);
 
       let turnEnded = false;
-      let turnError: Error | null = null;
       let emittedRuntimeTurnId: string | null = null;
       let responseTurnId: string | null = null;
-      let resolveRuntimeEvent: (() => void) | null = null;
-      const pendingRuntimeEvents: StreamEvent[] = [];
       const emitRuntimeTurnId = (turnId: string): StreamEvent | null => {
         if (emittedRuntimeTurnId === turnId) return null;
         state.turnId = turnId;
@@ -1941,52 +2141,26 @@ export class CodexAdapter extends BaseBackendAdapter {
           processId: entry.proc.pid ?? null,
         };
       };
-      const enqueueRuntimeTurnId = (turnId: string): void => {
-        const event = emitRuntimeTurnId(turnId);
-        if (!event) return;
-        pendingRuntimeEvents.push(event);
-        resolveRuntimeEvent?.();
-        resolveRuntimeEvent = null;
-      };
-      const waitForRuntimeEvent = async (): Promise<StreamEvent> => {
-        const event = pendingRuntimeEvents.shift();
-        if (event) return event;
-        await new Promise<void>((resolve) => {
-          resolveRuntimeEvent = resolve;
-        });
-        return pendingRuntimeEvents.shift()!;
-      };
 
-      const turnStartPromise = client.request('turn/start', turnParams)
-        .then((resp) => {
-          const turnResp = resp as TurnStartResult;
-          responseTurnId = turnResp.turn.id;
-          enqueueRuntimeTurnId(responseTurnId);
-          // Acceptance — turn/completed notification will arrive separately
-        })
-        .catch((err: Error) => {
-          turnError = err;
-          turnEnded = true;
-          client.stopNotifications();
-        });
+      try {
+        const turnResp = await client.request('turn/start', turnParams) as TurnStartResult;
+        responseTurnId = turnResp.turn.id;
+        const runtimeEvent = emitRuntimeTurnId(responseTurnId);
+        if (runtimeEvent) yield runtimeEvent;
+        // Acceptance — turn/completed notification will arrive separately.
+      } catch (err) {
+        yield { type: 'error', error: `Codex turn failed: ${(err as Error).message}` };
+        yield { type: 'done' };
+        return;
+      }
 
       // ── Stream notifications ─────────────────────────────────────────
       const toolByItemId: Map<string, string> = new Map();
       const notificationIterator = client.notifications()[Symbol.asyncIterator]();
       let nextNotification = notificationIterator.next();
-      let nextRuntimeEvent = waitForRuntimeEvent();
 
       while (true) {
-        const next = await Promise.race([
-          nextNotification.then((result) => ({ type: 'notification' as const, result })),
-          nextRuntimeEvent.then((event) => ({ type: 'runtime_event' as const, event })),
-        ]);
-
-        if (next.type === 'runtime_event') {
-          yield next.event;
-          nextRuntimeEvent = waitForRuntimeEvent();
-          continue;
-        }
+        const next = await nextNotification.then((result) => ({ type: 'notification' as const, result }));
 
         if (next.result.done) break;
         const notification = next.result.value;
@@ -2011,11 +2185,19 @@ export class CodexAdapter extends BaseBackendAdapter {
 
           if (method === 'item/commandExecution/requestApproval'
               || method === 'item/fileChange/requestApproval') {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, responseTurnId, state.subagentByThreadId)) {
+              this._respondToStaleServerRequest(client, notification, 'Stale Codex approval request ignored');
+              continue;
+            }
             client.respond(reqId, { decision: 'acceptForSession' });
             continue;
           }
 
           if (method === 'item/permissions/requestApproval') {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, responseTurnId, state.subagentByThreadId)) {
+              this._respondToStaleServerRequest(client, notification, 'Stale Codex permissions request ignored');
+              continue;
+            }
             client.respond(reqId, {
               permissions: { network: undefined, fileSystem: undefined },
               scope: 'session',
@@ -2034,9 +2216,13 @@ export class CodexAdapter extends BaseBackendAdapter {
           // response is sent via `sendInput()` from the outer closure when
           // the user answers; see the sendInput branch on pendingUserInput.
           if (method === 'item/tool/requestUserInput') {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, responseTurnId, state.subagentByThreadId)) {
+              this._respondToStaleServerRequest(client, notification, 'Stale Codex user-input request ignored');
+              continue;
+            }
             const p = params as unknown as ToolRequestUserInputParams;
             const questions = Array.isArray(p.questions) ? p.questions : [];
-            state.pendingUserInput = { reqId, itemId: p.itemId, questions };
+            state.pendingUserInput = { reqId, itemId: p.itemId, turnId: p.turnId, questions };
             const first = questions[0];
             yield {
               type: 'tool_activity',
@@ -2064,9 +2250,8 @@ export class CodexAdapter extends BaseBackendAdapter {
         // ── Notifications ───────────────────────────────────────────
         switch (method) {
           case 'turn/started': {
-            const turnId = (params as { turnId?: string; turn?: { id?: string } }).turnId
-              || (params as { turn?: { id?: string } }).turn?.id;
-            if (turnId) {
+            const turnId = extractCodexTurnId(params);
+            if (turnId && turnId === responseTurnId && extractCodexThreadId(params) === state.threadId) {
               const event = emitRuntimeTurnId(turnId);
               if (event) yield event;
             }
@@ -2081,7 +2266,13 @@ export class CodexAdapter extends BaseBackendAdapter {
             // doesn't try to respond to a dead request.
             const p = params as { requestId?: number };
             const pending = state.pendingUserInput;
-            if (pending && typeof p.requestId === 'number' && p.requestId === pending.reqId) {
+            if (
+              pending
+              && pending.turnId === responseTurnId
+              && typeof p.requestId === 'number'
+              && p.requestId === pending.reqId
+              && extractCodexThreadId(params) === state.threadId
+            ) {
               state.pendingUserInput = null;
             }
             break;
@@ -2093,7 +2284,7 @@ export class CodexAdapter extends BaseBackendAdapter {
             // bubbles up via `agentsStates[childTid].message` on the closing
             // wait/closeAgent collabAgentToolCall — surfaced as the Agent
             // card's outcome rather than streamed inline.
-            if (eventIsFromChildThread(params, state.subagentByThreadId)) break;
+            if (!eventBelongsToActiveParentTurn(params, state.threadId, responseTurnId)) break;
             const delta = (params as { delta?: string }).delta;
             if (typeof delta === 'string' && delta.length > 0) {
               yield { type: 'text', content: delta, streaming: true };
@@ -2105,7 +2296,7 @@ export class CodexAdapter extends BaseBackendAdapter {
           case 'item/reasoning/summaryTextDelta': {
             // Drop child-thread reasoning for the same reason — UI has no
             // place to render per-child thinking under an Agent card today.
-            if (eventIsFromChildThread(params, state.subagentByThreadId)) break;
+            if (!eventBelongsToActiveParentTurn(params, state.threadId, responseTurnId)) break;
             const delta = (params as { delta?: string }).delta;
             if (typeof delta === 'string' && delta.length > 0) {
               yield { type: 'thinking', content: delta, streaming: true };
@@ -2114,6 +2305,7 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           case 'item/started': {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, responseTurnId, state.subagentByThreadId)) break;
             const item = (params as { item?: CodexThreadItem }).item;
             if (!item) break;
             const detail = extractCodexToolDetails(item);
@@ -2130,6 +2322,7 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           case 'item/completed': {
+            if (!eventBelongsToActiveStreamWork(params, state.threadId, responseTurnId, state.subagentByThreadId)) break;
             const item = (params as { item?: CodexThreadItem }).item;
             if (!item) break;
             // Record any newly-spawned child threadIds against the top-level
@@ -2163,6 +2356,7 @@ export class CodexAdapter extends BaseBackendAdapter {
           }
 
           case 'thread/tokenUsage/updated': {
+            if (!eventBelongsToActiveParentTurn(params, state.threadId, responseTurnId)) break;
             const tokenUsage = (params as { tokenUsage?: {
               total: { totalTokens: number; inputTokens: number; cachedInputTokens: number; outputTokens: number };
               last: { totalTokens: number; inputTokens: number; cachedInputTokens: number; outputTokens: number };
@@ -2191,13 +2385,14 @@ export class CodexAdapter extends BaseBackendAdapter {
             // `turn/completed` is terminal — closing on the first child's
             // would cut off the parent's final summary, which arrives after
             // the children finish.
-            if (!isParentTurnCompleted(params, state.threadId)) break;
+            if (!isParentTurnCompleted(params, state.threadId, responseTurnId)) break;
             turnEnded = true;
             client.stopNotifications();
             break;
           }
 
           case 'error': {
+            if (!eventBelongsToActiveParentTurn(params, state.threadId, responseTurnId)) break;
             const errParam = (params as {
               error?: { message?: string };
               willRetry?: boolean;
@@ -2222,20 +2417,6 @@ export class CodexAdapter extends BaseBackendAdapter {
           default:
             break;
         }
-      }
-
-      if (turnError) {
-        const err = turnError as Error;
-        yield { type: 'error', error: `Codex turn failed: ${err.message}` };
-      }
-
-      await turnStartPromise;
-      while (pendingRuntimeEvents.length > 0) {
-        yield pendingRuntimeEvents.shift()!;
-      }
-      if (responseTurnId) {
-        const event = emitRuntimeTurnId(responseTurnId);
-        if (event) yield event;
       }
 
       if (!turnEnded) {
