@@ -1276,6 +1276,8 @@ describe('Workspace context injection', () => {
     // Memory content MUST NOT be dumped into the system prompt anymore.
     expect(env.mockBackend._lastOptions!.systemPrompt).not.toContain('Workspace Memory');
     expect(env.mockBackend._lastOptions!.systemPrompt).not.toContain('User Preferences');
+    expect(env.mockBackend._lastOptions!.systemPrompt).toContain('do not create or edit local memory files');
+    expect(env.mockBackend._lastOptions!.systemPrompt).toContain('Memory note was not saved');
   });
 
   test('does not inject memory pointer when memory is disabled', async () => {
@@ -1296,7 +1298,7 @@ describe('Workspace context injection', () => {
     expect(env.mockBackend._lastMessage).not.toContain('Workspace memory is available');
   });
 
-  test('does not inject memory pointer on subsequent messages', async () => {
+  test('injects only memory write rule on subsequent memory-enabled messages', async () => {
     const conv = await env.chatService.createConversation('Test', '/tmp/inject-mem-resume');
     const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
     await env.chatService.setWorkspaceMemoryEnabled(hash, true);
@@ -1315,8 +1317,12 @@ describe('Workspace context injection', () => {
 
     // On resumed sessions the pointer is NOT re-prepended — the CLI
     // still sees it via its own conversation history from the first
-    // new-session message.
-    expect(env.mockBackend._lastMessage).toBe('Second msg');
+    // new-session message. A short write-rule reminder is repeated so
+    // stale CLI sessions do not fall back to native memory files after
+    // `memory_note` failures.
+    expect(env.mockBackend._lastMessage).toContain('Second msg');
+    expect(env.mockBackend._lastMessage).toContain('Persistent memory write rule');
+    expect(env.mockBackend._lastMessage).toContain('do not create or edit local memory files');
     expect(env.mockBackend._lastMessage).not.toContain('Workspace memory is available');
     expect(env.mockBackend._lastMessage).not.toContain('Workspace discussion history');
   });

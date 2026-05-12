@@ -405,6 +405,8 @@ describe('Codex goal endpoints', () => {
     const codexBackend = new CodexGoalMockBackend();
     env.backendRegistry.register(codexBackend);
     const conv = await env.chatService.createConversation('Goal Test', '/tmp/goal-test', 'codex');
+    const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;
+    await env.chatService.setWorkspaceMemoryEnabled(hash, true);
 
     const ws = await env.connectWs(conv.id);
     const eventsPromise = env.readWsEvents(ws);
@@ -418,6 +420,8 @@ describe('Codex goal endpoints', () => {
     expect(res.body.streamReady).toBe(true);
     expect(codexBackend.lastGoalObjective).toBe('Ship the dashboard');
     expect(codexBackend.lastGoalOptions?.isNewSession).toBe(true);
+    expect(codexBackend.lastGoalOptions?.systemPrompt).toContain('do not create or edit local memory files');
+    expect(codexBackend.lastGoalOptions?.systemPrompt).toContain('Memory note was not saved');
     expect(events.find(e => e.type === 'goal_updated')?.goal.objective).toBe('Ship the dashboard');
     expect(events.find(e => e.type === 'text')?.content).toBe('goal output');
 

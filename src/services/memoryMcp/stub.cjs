@@ -189,9 +189,13 @@ async function handleToolCall(id, params) {
         },
       });
     } else {
+      const serverMessage = data && (data.message || data.error);
+      const prefix = toolName === 'memory_search' ? 'Memory search failed' : 'Memory note was not saved';
+      const detail = serverMessage || 'unknown error';
       const errText =
-        (toolName === 'memory_search' ? 'Memory search failed' : 'Memory note failed') +
-        ' (HTTP ' + status + '): ' + (data && data.error ? data.error : 'unknown error');
+        typeof detail === 'string' && detail.startsWith(prefix)
+          ? detail
+          : prefix + ' (HTTP ' + status + '): ' + detail;
       log(errText);
       send({
         jsonrpc: '2.0',
@@ -209,7 +213,7 @@ async function handleToolCall(id, params) {
       id,
       result: {
         isError: true,
-        content: [{ type: 'text', text: (toolName === 'memory_search' ? 'Memory search failed: ' : 'Memory note failed: ') + err.message }],
+        content: [{ type: 'text', text: (toolName === 'memory_search' ? 'Memory search failed: ' : 'Memory note was not saved: ') + err.message }],
       },
     });
   }
