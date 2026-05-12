@@ -37,6 +37,7 @@ import { createFilesystemRouter } from './chat/filesystemRoutes';
 import { createGoalRouter } from './chat/goalRoutes';
 import { createKbRouter } from './chat/kbRoutes';
 import { createMemoryRouter } from './chat/memoryRoutes';
+import { buildMemoryMcpAddendum } from './chat/memoryPrompt';
 import { createStreamRouter } from './chat/streamRoutes';
 import { createUploadRouter } from './chat/uploadRoutes';
 import { createWorkspaceInstructionRouter } from './chat/workspaceInstructionRoutes';
@@ -1236,18 +1237,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         const kbPointer = await chatService.getWorkspaceKbPointer(wsHash);
         if (kbPointer) contextPointers.push(kbPointer);
       }
-      const memoryMcpAddendum = needsMemoryMcp
-        ? [
-            '# Persistent memory',
-            'You have access to `memory_search` and `memory_note` MCP tools (from the `agent-cockpit-memory` server). Use `memory_search` when prior preferences, feedback, project context, or references may affect the answer. Call `memory_note` whenever you learn something worth remembering across sessions:',
-            '- **user** — the user\'s role, expertise, preferences, or responsibilities',
-            '- **feedback** — a correction or confirmation the user has given you (include the reason if known)',
-            '- **project** — ongoing work context, goals, deadlines, constraints, or stakeholders',
-            '- **reference** — pointers to external systems (Linear, Slack, Grafana, etc.)',
-            '',
-            'Each call should capture ONE fact in natural language — do not batch unrelated facts. Pass the category in `type` when you know it. Keep notes terse. Do not call `memory_note` for ephemeral task state or things already visible in the current code.',
-          ].join('\n')
-        : '';
+      const memoryMcpAddendum = needsMemoryMcp ? buildMemoryMcpAddendum() : '';
       const kbMcpAddendum = needsKbMcp
         ? (() => {
             const kbPath = path.resolve(chatService.getKbKnowledgeDir(wsHash!));
@@ -1308,7 +1298,19 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
     let mcpServers: import('../types').McpServerConfig[] | undefined;
     if (needsMemoryMcp && wsHash) {
-      const issued = memoryMcp.issueMemoryMcpSession(convId, wsHash);
+      let activeChatRuntime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>> | undefined;
+      try {
+        const conv = await chatService.getConversation(convId);
+        if (conv) {
+          activeChatRuntime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
+        }
+      } catch (err: unknown) {
+        log.warn('Unable to attach active chat profile to memory MCP session', {
+          conversationId: convId,
+          error: err,
+        });
+      }
+      const issued = memoryMcp.issueMemoryMcpSession(convId, wsHash, { activeChatRuntime });
       mcpServers = issued.mcpServers;
       log.debug('Issued memory MCP token', { conversationId: convId, backend: 'codex' });
     }

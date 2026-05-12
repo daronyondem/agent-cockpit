@@ -526,6 +526,7 @@ export interface Settings {
     cliBackend?: string;
     cliModel?: string;
     cliEffort?: EffortLevel;
+    lastProcessorStatus?: MemoryProcessorStatusSnapshot;
   };
   /**
    * Globally-configured Knowledge Base CLIs. Three separate roles:
@@ -603,6 +604,26 @@ export interface Settings {
    * use these defaults or provide a workspace-level override.
    */
   contextMap?: ContextMapGlobalSettings;
+}
+
+export type MemoryProcessorStatus =
+  | 'last_succeeded'
+  | 'authentication_failed'
+  | 'unavailable'
+  | 'runtime_failed'
+  | 'bad_output';
+
+export interface MemoryProcessorStatusSnapshot {
+  status: MemoryProcessorStatus;
+  updatedAt: string;
+  backendId?: string;
+  profileId?: string;
+  profileName?: string;
+  chatBackendId?: string;
+  chatProfileId?: string;
+  chatProfileName?: string;
+  differsFromChatProfile?: boolean;
+  error?: string;
 }
 
 export interface ContextMapGlobalSettings {

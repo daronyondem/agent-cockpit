@@ -7043,6 +7043,49 @@ body{
   border-radius: var(--r-sm);
 }
 
+.memory-processor-status{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.memory-processor-status-main{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.memory-processor-status-main > div{
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.memory-processor-status-main b{
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.memory-processor-error{
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--status-error), transparent 70%);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklch, var(--status-error), transparent 94%);
+  color: var(--status-error);
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.memory-processor-meta{
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
 .settings-status-row{
   display: flex; flex-wrap: wrap; gap: 8px;
 }

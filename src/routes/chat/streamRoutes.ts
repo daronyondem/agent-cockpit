@@ -23,6 +23,7 @@ import type {
   StreamJobState,
 } from '../../types';
 import { logger } from '../../utils/logger';
+import { buildMemoryMcpAddendum, buildMemoryMcpResumeReminder } from './memoryPrompt';
 import { isCliProfileResolutionError, param } from './routeUtils';
 
 const log = logger.child({ module: 'stream-routes' });
@@ -296,6 +297,8 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       if (prefixes.length > 0) {
         cliMessage = prefixes.join('\n\n') + '\n\n' + cliMessage;
       }
+    } else if (needsMemoryMcp) {
+      cliMessage = buildMemoryMcpResumeReminder() + '\n\n' + cliMessage;
     }
 
     let systemPrompt = '';
@@ -308,18 +311,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       // Claude Code too: its native `#` flow covers explicit saves, but
       // `memory_note` captures incidental durable facts mentioned
       // conversationally.
-      const memoryMcpAddendum = needsMemoryMcp
-        ? [
-            '# Persistent memory',
-            'You have access to `memory_search` and `memory_note` MCP tools (from the `agent-cockpit-memory` server). Use `memory_search` when prior preferences, feedback, project context, or references may affect the answer. Call `memory_note` whenever you learn something worth remembering across sessions:',
-            '- **user** — the user\'s role, expertise, preferences, or responsibilities',
-            '- **feedback** — a correction or confirmation the user has given you (include the reason if known)',
-            '- **project** — ongoing work context, goals, deadlines, constraints, or stakeholders',
-            '- **reference** — pointers to external systems (Linear, Slack, Grafana, etc.)',
-            '',
-            'Each call should capture ONE fact in natural language — do not batch unrelated facts. Pass the category in `type` when you know it. Keep notes terse. Do not call `memory_note` for ephemeral task state or things already visible in the current code.',
-          ].join('\n')
-        : '';
+      const memoryMcpAddendum = needsMemoryMcp ? buildMemoryMcpAddendum() : '';
       const kbMcpAddendum = needsKbMcp
         ? (() => {
             const kbPath = path.resolve(chatService.getKbKnowledgeDir(wsHashForSend!));
@@ -392,7 +384,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     // bearer tokens revoked on session reset or conversation delete.
     let mcpServers: McpServerConfig[] | undefined;
     if (needsMemoryMcp && wsHashForSend) {
-      const issued = memoryMcp.issueMemoryMcpSession(convId, wsHashForSend);
+      const issued = memoryMcp.issueMemoryMcpSession(convId, wsHashForSend, { activeChatRuntime: runtime });
       mcpServers = issued.mcpServers;
       log.debug('Issued memory MCP token', { conversationId: convId, backend: backendId });
     }

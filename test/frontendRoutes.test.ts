@@ -134,6 +134,7 @@ describe('frontend routes', () => {
 
   test('workspace memory panel exposes search and lifecycle filters', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
     const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
     const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
@@ -146,6 +147,10 @@ describe('frontend routes', () => {
     expect(apiSrc).toContain('startMemoryReview: (hash) =>');
     expect(apiSrc).toContain('restoreMemoryEntry: (hash, relPath) =>');
     expect(apiSrc).toContain("'/memory/search' + qs");
+    expect(settingsSrc).toContain('Memory processor');
+    expect(settingsSrc).toContain('memoryProcessorStatusLabel');
+    expect(settingsSrc).toContain('Authentication failed');
+    expect(settingsSrc).toContain('Used only to process and dedupe Memory notes');
     expect(workspaceSettingsSrc).toContain("placeholder=\"Search memory\"");
     expect(workspaceSettingsSrc).toContain('Start new review');
     expect(workspaceSettingsSrc).toContain('Review running...');
@@ -168,6 +173,7 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.ws-mem-review-last');
     expect(cssSrc).toContain('.ws-mem-review-progress');
     expect(cssSrc).toContain('.ws-mem-status');
+    expect(cssSrc).toContain('.memory-processor-status');
   });
 
   test('context map settings expose global and workspace controls', () => {

@@ -41,11 +41,14 @@ const TEST_RESUME_CAPABILITIES: BackendMetadata['resumeCapabilities'] = {
 class StubMemoryCli extends BaseBackendAdapter {
   _oneShotResponses: string[] = [];
   _oneShotCalls: Array<{ prompt: string; options?: RunOneShotOptions }> = [];
+  constructor(private readonly _id = 'stub-memory-cli', private readonly _label = 'Stub') {
+    super();
+  }
 
   get metadata(): BackendMetadata {
     return {
-      id: 'stub-memory-cli',
-      label: 'Stub',
+      id: this._id,
+      label: this._label,
       icon: null,
       capabilities: {
         thinking: false, planMode: false, agents: false,
@@ -142,6 +145,8 @@ describe('memoryMcp.issueMemoryMcpSession', () => {
     expect(stubSource).toContain("name: 'memory_search'");
     expect(stubSource).toContain("status: {");
     expect(stubSource).toContain("enum: ['active', 'all']");
+    expect(stubSource).toContain('data.message || data.error');
+    expect(stubSource).toContain('Memory note was not saved');
   });
 
   test('reissuing a session for the same conversation+workspace returns the same token', () => {
@@ -475,6 +480,88 @@ User stated they prefer TypeScript.
     expect(res.body.filename).toBeTruthy();
     // The filename slug has underscores converted to hyphens.
     expect(res.body.filename).toContain('user-likes-typescript');
+    const settings = await service.getSettings();
+    expect(settings.memory?.lastProcessorStatus).toMatchObject({
+      status: 'last_succeeded',
+      backendId: 'stub-memory-cli',
+    });
+  });
+
+  test('classifies Memory processor auth failures with memory and chat profile context', async () => {
+    const codexStub = new StubMemoryCli('codex', 'Codex');
+    registry.register(codexStub);
+    const now = new Date().toISOString();
+    await service.saveSettings({
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
+      defaultBackend: 'codex',
+      defaultCliProfileId: 'chat-codex-profile',
+      cliProfiles: [
+        {
+          id: 'chat-codex-profile',
+          name: 'Chat Codex',
+          vendor: 'codex',
+          authMode: 'account',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'memory-codex-profile',
+          name: 'Memory Codex',
+          vendor: 'codex',
+          authMode: 'account',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      memory: { cliProfileId: 'memory-codex-profile', cliBackend: 'codex' },
+    });
+    const settings = await service.getSettings();
+    const activeProfile = settings.cliProfiles?.find((profile) => profile.id === 'chat-codex-profile');
+    const hash = workspaceHash('/tmp/mem-post-auth-profile');
+    await service.createConversation('conv-post-auth-profile', '/tmp/mem-post-auth-profile');
+    await service.setWorkspaceMemoryEnabled(hash, true);
+    const session = memoryMcp.issueMemoryMcpSession('conv-post-auth-profile', hash, {
+      activeChatRuntime: {
+        backendId: 'codex',
+        cliProfileId: 'chat-codex-profile',
+        profile: activeProfile,
+      },
+    });
+    codexStub.runOneShot = async () => {
+      throw new Error('codex exec failed: refresh token was revoked at /Users/daron/.codex/auth.json');
+    };
+
+    await startHttpServer(memoryMcp.router);
+    const res = await makeRequest('POST', '/mcp/memory/notes', { content: 'remember this' }, {
+      'x-memory-token': session.token,
+    });
+    expect(res.status).toBe(502);
+    expect(res.body.code).toBe('memory_processor_auth_failed');
+    expect(res.body.message).toContain('Chat Codex');
+    expect(res.body.message).toContain('Memory Codex');
+    expect(res.body.message).toContain('failed authentication');
+    expect(res.body.message).not.toContain('/Users/daron/.codex/auth.json');
+    expect(res.body.memoryProcessor).toMatchObject({
+      status: 'authentication_failed',
+      profileId: 'memory-codex-profile',
+      profileName: 'Memory Codex',
+      chatProfileId: 'chat-codex-profile',
+      chatProfileName: 'Chat Codex',
+      differsFromChatProfile: true,
+    });
+    expect(res.body.memoryProcessor.error).toContain('[redacted credential path]');
+
+    const savedSettings = await service.getSettings();
+    expect(savedSettings.memory?.lastProcessorStatus).toMatchObject({
+      status: 'authentication_failed',
+      profileId: 'memory-codex-profile',
+      profileName: 'Memory Codex',
+      chatProfileId: 'chat-codex-profile',
+      chatProfileName: 'Chat Codex',
+      differsFromChatProfile: true,
+    });
   });
 
   test('returns 200 with skipped field when CLI says SKIP', async () => {
@@ -1056,6 +1143,7 @@ Keep the body.
     });
     expect(res.status).toBe(502);
     expect(res.body.error).toMatch(/empty output/i);
+    expect(res.body.code).toBe('memory_processor_bad_output');
   });
 
   test('passes type hint and tags to the Memory CLI prompt', async () => {
@@ -1448,7 +1536,8 @@ describe('POST /mcp/memory/notes — edge cases', () => {
       'x-memory-token': session.token,
     });
     expect(res.status).toBe(502);
-    expect(res.body.error).toMatch(/Memory CLI failed/);
+    expect(res.body.error).toMatch(/Memory note was not saved/);
+    expect(res.body.code).toBe('memory_processor_runtime_failed');
     expect(res.body.error).toContain('CLI process crashed');
 
     // Restore.

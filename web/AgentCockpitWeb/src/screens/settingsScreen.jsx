@@ -176,6 +176,28 @@ function defaultEffortFor(levels){
   return levels.includes('high') ? 'high' : levels[0];
 }
 
+function memoryProcessorStatusLabel(status){
+  switch (status) {
+    case 'last_succeeded': return 'Last succeeded';
+    case 'authentication_failed': return 'Authentication failed';
+    case 'unavailable': return 'Unavailable';
+    case 'bad_output': return 'Bad output';
+    case 'runtime_failed': return 'Runtime failed';
+    default: return 'No status yet';
+  }
+}
+
+function memoryProcessorStatusClass(status){
+  return status === 'last_succeeded' ? 'ok' : status ? 'err' : '';
+}
+
+function memoryProcessorStatusMatches(status, selectedProfile, fallbackBackend){
+  if (!status) return false;
+  if (status.profileId) return !!(selectedProfile && selectedProfile.id === status.profileId);
+  if (status.backendId) return status.backendId === ((selectedProfile && selectedProfile.vendor) || fallbackBackend);
+  return true;
+}
+
 function SettingsHelpTooltip({ children }){
   return (
     <div className="tt-section settings-help-tooltip">
@@ -1070,6 +1092,12 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
     ? effortLevelsForProfile(backends, profileBackends, selectedProfile, modelId)
     : effortLevelsForModel(backends, fallbackBackend, modelId);
   const effort = mem.cliEffort || defaultEffortFor(efforts) || '';
+  const processorStatus = mem.lastProcessorStatus || null;
+  const statusMatches = memoryProcessorStatusMatches(processorStatus, selectedProfile, fallbackBackend);
+  const visibleStatus = statusMatches ? processorStatus : null;
+  const processorName = selectedProfile
+    ? selectedProfile.name
+    : (mem.cliBackend || settings.defaultBackend || fallbackBackend || 'Default profile');
 
   function patchMem(next){
     onPatch(prev => ({ memory: { ...(prev.memory || {}), ...next } }));
@@ -1100,6 +1128,28 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
         CLI profile used by the workspace memory helper when formatting and deduping captured notes.
         Falls back to the default profile when unset.
       </p>
+      <div className="memory-processor-status">
+        <div className="memory-processor-status-main">
+          <div>
+            <span className="u-dim">Memory processor</span>
+            <b>{processorName}</b>
+          </div>
+          <span className={`settings-status-pill ${memoryProcessorStatusClass(visibleStatus && visibleStatus.status)}`}>
+            {memoryProcessorStatusLabel(visibleStatus && visibleStatus.status)}
+          </span>
+        </div>
+        {visibleStatus && visibleStatus.error ? (
+          <div className="memory-processor-error">{visibleStatus.error}</div>
+        ) : null}
+        {visibleStatus && visibleStatus.status !== 'last_succeeded' && visibleStatus.chatProfileName && visibleStatus.differsFromChatProfile ? (
+          <div className="memory-processor-meta u-dim">
+            Last failure happened while chat used {visibleStatus.chatProfileName}.
+          </div>
+        ) : null}
+        <div className="memory-processor-meta u-dim">
+          Used only to process and dedupe Memory notes. This can be different from the chat profile.
+        </div>
+      </div>
       <Field label="Memory CLI profile">
         <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
           {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}

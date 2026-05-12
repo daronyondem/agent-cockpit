@@ -39,10 +39,14 @@ import express from 'express';
 import crypto from 'crypto';
 import path from 'path';
 import type {
+  CliProfile,
   Request,
   Response,
+  Settings,
   Message,
   MemoryFile,
+  MemoryProcessorStatus,
+  MemoryProcessorStatusSnapshot,
   MemoryRedaction,
   MemoryStatus,
   MemoryConsolidationAction,
@@ -64,6 +68,7 @@ import type {
 import type { ChatService } from '../chatService';
 import type { BackendRegistry } from '../backends/registry';
 import { parseFrontmatter } from '../backends/claudeCode';
+import { logger } from '../../utils/logger';
 
 // ── Session registry ────────────────────────────────────────────────────────
 
@@ -72,6 +77,21 @@ interface MemoryMcpSession {
   conversationId: string;
   workspaceHash: string;
   createdAt: number;
+  activeChatProfile?: MemoryProfileContext;
+}
+
+interface MemoryProfileContext {
+  backendId?: string;
+  profileId?: string;
+  profileName?: string;
+}
+
+interface MemoryMcpSessionOptions {
+  activeChatRuntime?: {
+    backendId: string;
+    cliProfileId?: string;
+    profile?: CliProfile;
+  };
 }
 
 /** Absolute path to the stdio stub launched by non-Claude CLIs as an MCP server. */
@@ -459,6 +479,8 @@ const DEFAULT_MEMORY_SEARCH_LIMIT = 5;
 const MAX_MEMORY_SEARCH_LIMIT = 20;
 const MAX_MEMORY_SEARCH_CONTENT_CHARS = 4000;
 const MEMORY_CONSOLIDATION_CLI_TIMEOUT_MS = 10 * 60_000;
+const PROCESSOR_ERROR_MESSAGE_MAX = 500;
+const log = logger.child({ service: 'memoryMcp' });
 
 function addRedaction(redaction: MemoryRedaction[], kind: string, reason: string): void {
   if (!redaction.some((item) => item.kind === kind && item.reason === reason)) {
@@ -571,6 +593,148 @@ function redactMemoryContent(input: string): RedactionResult {
   }
 
   return { content, redaction };
+}
+
+function sanitizeProfileLabel(value: string | undefined | null, fallback: string): string {
+  const text = String(value || fallback || 'Unknown profile')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return text ? text.slice(0, 120) : 'Unknown profile';
+}
+
+function profileContextFromRuntime(runtime: {
+  backendId?: string;
+  cliProfileId?: string;
+  profile?: CliProfile;
+} | undefined | null): MemoryProfileContext | undefined {
+  if (!runtime) return undefined;
+  const backendId = runtime.profile?.vendor || runtime.backendId;
+  const profileId = runtime.profile?.id || runtime.cliProfileId;
+  const profileName = runtime.profile?.name || profileId || backendId;
+  return {
+    ...(backendId ? { backendId } : {}),
+    ...(profileId ? { profileId } : {}),
+    ...(profileName ? { profileName: sanitizeProfileLabel(profileName, backendId || 'Unknown profile') } : {}),
+  };
+}
+
+function configuredMemoryProfileContext(settings: Settings): MemoryProfileContext {
+  const memory = settings.memory || {};
+  const profile = memory.cliProfileId
+    ? settings.cliProfiles?.find((candidate) => candidate.id === memory.cliProfileId)
+    : undefined;
+  const backendId = profile?.vendor || memory.cliBackend || settings.defaultBackend || 'claude-code';
+  const profileId = profile?.id || memory.cliProfileId;
+  const profileName = profile?.name || profileId || backendId;
+  return {
+    backendId,
+    ...(profileId ? { profileId } : {}),
+    profileName: sanitizeProfileLabel(profileName, backendId),
+  };
+}
+
+function profileContextsDiffer(memoryProfile: MemoryProfileContext, chatProfile?: MemoryProfileContext): boolean {
+  if (!chatProfile) return false;
+  if (memoryProfile.profileId && chatProfile.profileId) {
+    return memoryProfile.profileId !== chatProfile.profileId;
+  }
+  if (memoryProfile.backendId && chatProfile.backendId && memoryProfile.backendId !== chatProfile.backendId) {
+    return true;
+  }
+  const memoryLabel = memoryProfile.profileName || memoryProfile.profileId || memoryProfile.backendId || '';
+  const chatLabel = chatProfile.profileName || chatProfile.profileId || chatProfile.backendId || '';
+  return !!memoryLabel && !!chatLabel && memoryLabel !== chatLabel;
+}
+
+function sanitizeProcessorErrorMessage(value: string): string {
+  const compact = String(value || 'Unknown processor error')
+    .replace(/(?:[A-Za-z]:)?(?:~|\/)[^\s'"`]*(?:\.codex|\.claude|credential|credentials|auth|token)[^\s'"`]*/gi, '[redacted credential path]')
+    .replace(/\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b/g, '[REDACTED]')
+    .replace(/\bgh[pousr]_[A-Za-z0-9_]{20,}\b/g, '[REDACTED]')
+    .replace(/\bxox[a-z]-[A-Za-z0-9-]{10,}\b/gi, '[REDACTED]')
+    .replace(/\b(?:access|refresh)[_-]?token(["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]+=*/gi, (_match, sep) => `token${sep}[REDACTED]`)
+    .replace(/\s+/g, ' ')
+    .trim();
+  return (compact || 'Unknown processor error').slice(0, PROCESSOR_ERROR_MESSAGE_MAX);
+}
+
+function classifyProcessorRunFailure(message: string): MemoryProcessorStatus {
+  const lower = message.toLowerCase();
+  if (/\b(auth|authenticate|authentication|authenticated|unauthorized|unauthorised|credential|login|logged in|refresh token|access token|revoked|expired|oauth|401|403)\b/.test(lower)) {
+    return 'authentication_failed';
+  }
+  if (/\b(not installed|enoent|not found|not registered|disabled|unavailable|unsupported)\b/.test(lower)) {
+    return 'unavailable';
+  }
+  return 'runtime_failed';
+}
+
+function processorFailureCode(status: MemoryProcessorStatus): string {
+  if (status === 'authentication_failed') return 'memory_processor_auth_failed';
+  if (status === 'unavailable') return 'memory_processor_unavailable';
+  if (status === 'bad_output') return 'memory_processor_bad_output';
+  return 'memory_processor_runtime_failed';
+}
+
+function processorStatusLabel(status: MemoryProcessorStatus): string {
+  if (status === 'authentication_failed') return 'Authentication failed';
+  if (status === 'unavailable') return 'Unavailable';
+  if (status === 'bad_output') return 'Bad output';
+  if (status === 'last_succeeded') return 'Last succeeded';
+  return 'Runtime failed';
+}
+
+function buildProcessorStatusSnapshot(args: {
+  status: MemoryProcessorStatus;
+  memoryProfile: MemoryProfileContext;
+  activeChatProfile?: MemoryProfileContext;
+  error?: string;
+}): MemoryProcessorStatusSnapshot {
+  const differs = profileContextsDiffer(args.memoryProfile, args.activeChatProfile);
+  return {
+    status: args.status,
+    updatedAt: new Date().toISOString(),
+    ...(args.memoryProfile.backendId ? { backendId: args.memoryProfile.backendId } : {}),
+    ...(args.memoryProfile.profileId ? { profileId: args.memoryProfile.profileId } : {}),
+    ...(args.memoryProfile.profileName ? { profileName: args.memoryProfile.profileName } : {}),
+    ...(args.activeChatProfile?.backendId ? { chatBackendId: args.activeChatProfile.backendId } : {}),
+    ...(args.activeChatProfile?.profileId ? { chatProfileId: args.activeChatProfile.profileId } : {}),
+    ...(args.activeChatProfile?.profileName ? { chatProfileName: args.activeChatProfile.profileName } : {}),
+    ...(args.activeChatProfile ? { differsFromChatProfile: differs } : {}),
+    ...(args.error ? { error: args.error } : {}),
+  };
+}
+
+function buildProcessorFailureMessage(args: {
+  status: MemoryProcessorStatus;
+  memoryProfile: MemoryProfileContext;
+  activeChatProfile?: MemoryProfileContext;
+  detail: string;
+}): string {
+  const memoryLabel = sanitizeProfileLabel(
+    args.memoryProfile.profileName || args.memoryProfile.profileId || args.memoryProfile.backendId,
+    'Memory processor',
+  );
+  const chatLabel = args.activeChatProfile
+    ? sanitizeProfileLabel(
+      args.activeChatProfile.profileName || args.activeChatProfile.profileId || args.activeChatProfile.backendId,
+      'active chat profile',
+    )
+    : null;
+  const profilePrefix = chatLabel && profileContextsDiffer(args.memoryProfile, args.activeChatProfile)
+    ? `The chat is running with ${chatLabel}, but Memory is configured to process notes with ${memoryLabel}. `
+    : `Memory is configured to process notes with ${memoryLabel}. `;
+
+  if (args.status === 'authentication_failed') {
+    return `Memory note was not saved. ${profilePrefix}The ${memoryLabel} profile failed authentication: ${args.detail}. Re-authenticate that profile or change the Memory profile in Settings.`;
+  }
+  if (args.status === 'unavailable') {
+    return `Memory note was not saved. ${profilePrefix}The Memory processor is unavailable: ${args.detail}. Check the Memory profile in Settings.`;
+  }
+  if (args.status === 'bad_output') {
+    return `Memory note was not saved. ${profilePrefix}The Memory processor returned unusable output: ${args.detail}.`;
+  }
+  return `Memory note was not saved. ${profilePrefix}The Memory processor failed while processing the note: ${args.detail}.`;
 }
 
 function stripJsonFences(value: string): string {
@@ -967,6 +1131,63 @@ export function createMemoryMcpServer({
     });
   }
 
+  async function recordMemoryProcessorStatus(status: MemoryProcessorStatusSnapshot): Promise<void> {
+    try {
+      const latestSettings = await chatService.getSettings();
+      await chatService.saveSettings({
+        ...latestSettings,
+        memory: {
+          ...(latestSettings.memory || {}),
+          lastProcessorStatus: status,
+        },
+      });
+    } catch (err: unknown) {
+      log.warn('Failed to persist Memory processor status', { error: err });
+    }
+  }
+
+  async function recordMemoryProcessorSuccess(
+    memoryProfile: MemoryProfileContext,
+    activeChatProfile?: MemoryProfileContext,
+  ): Promise<void> {
+    await recordMemoryProcessorStatus(buildProcessorStatusSnapshot({
+      status: 'last_succeeded',
+      memoryProfile,
+      activeChatProfile,
+    }));
+  }
+
+  async function sendMemoryProcessorFailure(
+    res: Response,
+    httpStatus: number,
+    status: MemoryProcessorStatus,
+    detail: string,
+    memoryProfile: MemoryProfileContext,
+    activeChatProfile?: MemoryProfileContext,
+  ): Promise<Response> {
+    const redactedDetail = sanitizeProcessorErrorMessage(detail);
+    const snapshot = buildProcessorStatusSnapshot({
+      status,
+      memoryProfile,
+      activeChatProfile,
+      error: redactedDetail,
+    });
+    await recordMemoryProcessorStatus(snapshot);
+    const message = buildProcessorFailureMessage({
+      status,
+      memoryProfile,
+      activeChatProfile,
+      detail: redactedDetail,
+    });
+    return res.status(httpStatus).json({
+      error: message,
+      message,
+      code: processorFailureCode(status),
+      statusLabel: processorStatusLabel(status),
+      memoryProcessor: snapshot,
+    });
+  }
+
   function reviewItemId(prefix: 'action' | 'draft'): string {
     return `memreview_${prefix}_${crypto.randomBytes(8).toString('hex')}`;
   }
@@ -1053,7 +1274,11 @@ export function createMemoryMcpServer({
    * and crash the ACP process with "ACP process closed".
    * See https://agentclientprotocol.com/protocol/session-setup
    */
-  function issueMemoryMcpSession(conversationId: string, workspaceHash: string): {
+  function issueMemoryMcpSession(
+    conversationId: string,
+    workspaceHash: string,
+    options: MemoryMcpSessionOptions = {},
+  ): {
     token: string;
     mcpServers: Array<{
       name: string;
@@ -1066,10 +1291,14 @@ export function createMemoryMcpServer({
     // live.  We only mint a fresh token when none exists, or when the
     // cached session points at a different workspace (e.g. if the
     // conversation's workspace changed out from under us).
+    const activeChatProfile = profileContextFromRuntime(options.activeChatRuntime);
     const cachedToken = byConversation.get(conversationId);
     const cached = cachedToken ? sessions.get(cachedToken) : undefined;
     let token: string;
     if (cached && cached.workspaceHash === workspaceHash) {
+      if (activeChatProfile) {
+        cached.activeChatProfile = activeChatProfile;
+      }
       token = cached.token;
     } else {
       if (cachedToken) {
@@ -1082,6 +1311,7 @@ export function createMemoryMcpServer({
         conversationId,
         workspaceHash,
         createdAt: Date.now(),
+        activeChatProfile,
       });
       byConversation.set(conversationId, token);
     }
@@ -1236,14 +1466,35 @@ export function createMemoryMcpServer({
 
       // Resolve the configured Memory CLI.
       const settings = await chatService.getSettings();
-      const memoryRuntime = await chatService.resolveCliProfileRuntime(
-        settings.memory?.cliProfileId,
-        settings.memory?.cliBackend || settings.defaultBackend || 'claude-code',
-      );
+      const activeChatProfile = session.activeChatProfile;
+      let memoryRuntime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
+      try {
+        memoryRuntime = await chatService.resolveCliProfileRuntime(
+          settings.memory?.cliProfileId,
+          settings.memory?.cliBackend || settings.defaultBackend || 'claude-code',
+        );
+      } catch (err: unknown) {
+        return await sendMemoryProcessorFailure(
+          res,
+          500,
+          'unavailable',
+          (err as Error).message,
+          configuredMemoryProfileContext(settings),
+          activeChatProfile,
+        );
+      }
+      const memoryProfile = profileContextFromRuntime(memoryRuntime) || configuredMemoryProfileContext(settings);
       const cliId = memoryRuntime.backendId;
       const adapter = backendRegistry.get(cliId);
       if (!adapter) {
-        return res.status(500).json({ error: `Memory CLI not registered: ${cliId}` });
+        return await sendMemoryProcessorFailure(
+          res,
+          500,
+          'unavailable',
+          `Memory CLI not registered: ${cliId}`,
+          memoryProfile,
+          activeChatProfile,
+        );
       }
 
       const inputRedaction = redactMemoryContent(content.trim());
@@ -1264,20 +1515,42 @@ export function createMemoryMcpServer({
           cliProfile: memoryRuntime.profile,
         });
       } catch (err: unknown) {
-        console.error(`[memoryMcp] Memory CLI (${cliId}) failed:`, (err as Error).message);
-        return res.status(502).json({ error: `Memory CLI failed: ${(err as Error).message}` });
+        const detail = (err as Error).message;
+        log.warn('Memory processor CLI failed', { backendId: cliId, error: detail });
+        return await sendMemoryProcessorFailure(
+          res,
+          502,
+          classifyProcessorRunFailure(detail),
+          detail,
+          memoryProfile,
+          activeChatProfile,
+        );
       }
 
       const cleaned = (rawOutput || '').trim();
       if (!cleaned) {
-        return res.status(502).json({ error: 'Memory CLI returned empty output' });
+        return await sendMemoryProcessorFailure(
+          res,
+          502,
+          'bad_output',
+          'Memory CLI returned empty output',
+          memoryProfile,
+          activeChatProfile,
+        );
       }
 
       let parsedOutcome: ParsedMemoryCliOutcome | null;
       try {
         parsedOutcome = parseMemoryCliOutcome(cleaned);
       } catch (err: unknown) {
-        return res.status(502).json({ error: `Memory CLI returned invalid governed output: ${(err as Error).message}` });
+        return await sendMemoryProcessorFailure(
+          res,
+          502,
+          'bad_output',
+          `Memory CLI returned invalid governed output: ${(err as Error).message}`,
+          memoryProfile,
+          activeChatProfile,
+        );
       }
       if (parsedOutcome) {
         if (parsedOutcome.action === 'skipped_duplicate' || parsedOutcome.action === 'skipped_ephemeral') {
@@ -1291,6 +1564,7 @@ export function createMemoryMcpServer({
             ...(duplicateOf ? { duplicateOf } : {}),
           };
           await emitFreshMemoryUpdate(hash, [], session.conversationId, [outcome]);
+          await recordMemoryProcessorSuccess(memoryProfile, activeChatProfile);
           return res.json({
             ok: true,
             skipped: duplicateOf || true,
@@ -1350,6 +1624,7 @@ export function createMemoryMcpServer({
           ...(redaction.length ? { redaction } : {}),
         };
         await emitFreshMemoryUpdate(hash, [relPath], session.conversationId, [outcome]);
+        await recordMemoryProcessorSuccess(memoryProfile, activeChatProfile);
 
         return res.json({ ok: true, filename: relPath, outcome });
       }
@@ -1357,7 +1632,7 @@ export function createMemoryMcpServer({
       // Handle legacy SKIP response.
       const skipMatch = cleaned.match(/^SKIP:\s*(\S+)/i);
       if (skipMatch) {
-        console.log(`[memoryMcp] Memory CLI skipped note as duplicate of ${skipMatch[1]}`);
+        log.info('Memory processor skipped duplicate note', { duplicateOf: skipMatch[1] });
         const skipped = resolveExistingFilename(skipMatch[1], existingFiles) || skipMatch[1];
         const outcome: MemoryWriteOutcome = {
           action: 'skipped_duplicate',
@@ -1366,6 +1641,7 @@ export function createMemoryMcpServer({
           duplicateOf: skipped,
         };
         await emitFreshMemoryUpdate(hash, [], session.conversationId, [outcome]);
+        await recordMemoryProcessorSuccess(memoryProfile, activeChatProfile);
         return res.json({ ok: true, skipped, outcome });
       }
 
@@ -1373,7 +1649,7 @@ export function createMemoryMcpServer({
       const entryRedaction = redactMemoryContent(cleaned);
       const redaction = mergeRedactions(inputRedaction.redaction, entryRedaction.redaction);
       if (!entryRedaction.content.startsWith('---')) {
-        console.warn('[memoryMcp] Memory CLI output missing frontmatter; saving as-is');
+        log.warn('Memory processor output missing frontmatter; saving legacy note as-is');
       }
       const parsed = parseFrontmatter(entryRedaction.content);
       const filenameHint = nameFromFrontmatter(entryRedaction.content) || parsed.name || typeHint || 'note';
@@ -1401,10 +1677,11 @@ export function createMemoryMcpServer({
 
       // Fire a workspace-scoped WebSocket update so any open memory panel refreshes.
       await emitFreshMemoryUpdate(hash, [relPath], session.conversationId, [outcome]);
+      await recordMemoryProcessorSuccess(memoryProfile, activeChatProfile);
 
       return res.json({ ok: true, filename: relPath, outcome });
     } catch (err: unknown) {
-      console.error('[memoryMcp] Note handler failed:', err);
+      log.error('Note handler failed', { error: err });
       return res.status(500).json({ error: (err as Error).message });
     }
   });
