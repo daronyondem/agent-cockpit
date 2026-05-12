@@ -365,11 +365,11 @@ describe('UpdateService', () => {
     test('triggers a version check and returns status', async () => {
       mockExecFile([
         { stdout: '' },
-        { stdout: JSON.stringify({ version: '0.3.0' }) },
+        { stdout: JSON.stringify({ version: '99.0.0' }) },
       ]);
 
       const status = await service.checkNow();
-      expect(status.remoteVersion).toBe('0.3.0');
+      expect(status.remoteVersion).toBe('99.0.0');
       expect(status.lastCheckAt).not.toBeNull();
       expect(status.updateAvailable).toBe(true);
     });
