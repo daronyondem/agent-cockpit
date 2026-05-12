@@ -103,6 +103,11 @@ export interface Message {
    * — the renderer treats absent as `final` for back-compat.
    */
   turn?: 'progress' | 'final';
+  /**
+   * User-controlled marker for messages that should appear in the pinned
+   * navigation strip and retain their emphasis when the conversation reloads.
+   */
+  pinned?: boolean;
 }
 
 // ── Sessions ─────────────────────────────────────────────────────────────────

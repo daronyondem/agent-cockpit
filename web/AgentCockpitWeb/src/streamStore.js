@@ -2152,6 +2152,41 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
     update(convId, cur => ({ ...cur, conv: { ...cur.conv, ...patch } }));
   }
 
+  function patchMessagePinned(convId, messageId, pinned){
+    update(convId, cur => {
+      const patchList = (messages) => (messages || []).map(m => {
+        if (!m || m.id !== messageId) return m;
+        const next = { ...m };
+        if (pinned) next.pinned = true;
+        else delete next.pinned;
+        return next;
+      });
+      const nextMessages = patchList(cur.messages);
+      const nextConv = cur.conv && Array.isArray(cur.conv.messages)
+        ? { ...cur.conv, messages: patchList(cur.conv.messages) }
+        : cur.conv;
+      return { ...cur, messages: nextMessages, conv: nextConv };
+    });
+  }
+
+  async function setMessagePinned(convId, messageId, pinned){
+    const cur = states.get(convId);
+    const previous = cur && Array.isArray(cur.messages)
+      ? cur.messages.find(m => m && m.id === messageId)
+      : null;
+    const previousPinned = !!(previous && previous.pinned);
+    patchMessagePinned(convId, messageId, pinned);
+    try {
+      const data = await AgentApi.setMessagePinned(convId, messageId, pinned);
+      const savedPinned = data && data.message ? !!data.message.pinned : !!pinned;
+      patchMessagePinned(convId, messageId, savedPinned);
+      return data;
+    } catch (err) {
+      patchMessagePinned(convId, messageId, previousPinned);
+      throw err;
+    }
+  }
+
   /* Active conv tracking — the shell pushes this on route change so the
      `done` handler knows whether a completing stream belongs to the
      currently-viewed conv (and should NOT mark unread). */
@@ -2310,6 +2345,7 @@ export const StreamStore = {
     reset,
     archive,
     patchConv,
+    setMessagePinned,
     closeWs,
     subscribe,
     subscribeGlobal,

@@ -12,6 +12,7 @@ import { validateQueueUpdateRequest } from '../../contracts/chat';
 import {
   validateCreateConversationRequest,
   validateRenameConversationRequest,
+  validateSetMessagePinnedRequest,
   validateSetUnreadRequest,
 } from '../../contracts/conversations';
 import { isContractValidationError } from '../../contracts/validation';
@@ -251,6 +252,21 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       const ok = await chatService.setConversationUnread(param(req, 'id'), unread);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true, unread });
+    } catch (err: unknown) {
+      if (isContractValidationError(err)) {
+        return res.status(400).json({ error: err.message });
+      }
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // ── Pin / unpin an active-session message ────────────────────────────────
+  router.patch('/conversations/:id/messages/:messageId/pin', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { pinned } = validateSetMessagePinnedRequest(req.body);
+      const result = await chatService.setMessagePinned(param(req, 'id'), param(req, 'messageId'), pinned);
+      if (!result) return res.status(404).json({ error: 'Conversation or message not found' });
+      res.json({ ok: true, pinned, message: result.message });
     } catch (err: unknown) {
       if (isContractValidationError(err)) {
         return res.status(400).json({ error: err.message });

@@ -57,6 +57,27 @@ const STREAM_RECONNECT_MAX_MS = 15_000;
 
 type Screen = 'list' | 'chat';
 
+function messageWithPinned(message: Message, pinned: boolean): Message {
+  const next: Message = { ...message };
+  if (pinned) next.pinned = true;
+  else delete next.pinned;
+  return next;
+}
+
+function patchConversationMessage(
+  conversation: Conversation,
+  messageID: string,
+  pinned: boolean,
+  replacement?: Message,
+): Conversation {
+  return {
+    ...conversation,
+    messages: conversation.messages.map((message) =>
+      message.id === messageID ? (replacement || messageWithPinned(message, pinned)) : message,
+    ),
+  };
+}
+
 export default function App() {
   useViewportHeightVar();
 
@@ -1039,6 +1060,38 @@ export default function App() {
     }
   }
 
+  async function toggleMessagePin(messageID: string, pinned: boolean) {
+    const conversation = activeConversationRef.current;
+    if (!conversation) {
+      return;
+    }
+    const previous = conversation.messages.find((message) => message.id === messageID);
+    const previousPinned = !!previous?.pinned;
+    setActiveConversation((current) => {
+      if (!current || current.id !== conversation.id) return current;
+      const next = patchConversationMessage(current, messageID, pinned);
+      activeConversationRef.current = next;
+      return next;
+    });
+    try {
+      const response = await clientRef.current.setMessagePinned(conversation.id, messageID, pinned);
+      setActiveConversation((current) => {
+        if (!current || current.id !== conversation.id) return current;
+        const next = patchConversationMessage(current, messageID, !!response.message.pinned, response.message);
+        activeConversationRef.current = next;
+        return next;
+      });
+    } catch (error) {
+      setActiveConversation((current) => {
+        if (!current || current.id !== conversation.id) return current;
+        const next = patchConversationMessage(current, messageID, previousPinned);
+        activeConversationRef.current = next;
+        return next;
+      });
+      handleError(error);
+    }
+  }
+
   async function openSessions() {
     const conversation = activeConversation;
     if (!conversation) {
@@ -1417,6 +1470,7 @@ export default function App() {
           onEditQueued={openQueueEditor}
           onMoveQueued={(index, direction) => void moveQueuedMessage(index, direction)}
           onClearQueue={() => void clearQueue()}
+          onTogglePin={(messageID, pinned) => void toggleMessagePin(messageID, pinned)}
           onOpenFile={(reference) => void openFileReference(reference)}
           onShareFile={(reference) => void shareFileReference(reference)}
           onOpenActions={() => {
@@ -1661,6 +1715,7 @@ function ChatScreen(props: {
   onEditQueued: (index: number) => void;
   onMoveQueued: (index: number, direction: -1 | 1) => void;
   onClearQueue: () => void;
+  onTogglePin: (messageID: string, pinned: boolean) => void;
   onOpenFile: (reference: FileReference) => void;
   onShareFile: (reference: FileReference) => void;
   onOpenActions: () => void;
@@ -1668,7 +1723,15 @@ function ChatScreen(props: {
 }) {
   const conversation = props.conversation;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+  const pinFocusTimerRef = useRef<number | null>(null);
+  const [pinStripIndex, setPinStripIndex] = useState(0);
+  const [focusedPinID, setFocusedPinID] = useState<string | null>(null);
   const lastMessage = conversation?.messages[conversation.messages.length - 1];
+  const pinnedMessages = useMemo(
+    () => (conversation?.messages || []).filter((message) => !!message.pinned),
+    [conversation?.messages],
+  );
   const scrollKey = [
     conversation?.id || '',
     conversation?.messages.length || 0,
@@ -1684,6 +1747,35 @@ function ChatScreen(props: {
     }
     transcript.scrollTop = transcript.scrollHeight;
   }, [scrollKey]);
+  useEffect(() => {
+    setPinStripIndex(0);
+    setFocusedPinID(null);
+    if (pinFocusTimerRef.current !== null) {
+      window.clearTimeout(pinFocusTimerRef.current);
+      pinFocusTimerRef.current = null;
+    }
+  }, [conversation?.id]);
+  useEffect(() => {
+    setPinStripIndex((index) => Math.min(index, Math.max(pinnedMessages.length - 1, 0)));
+  }, [pinnedMessages.length]);
+  useEffect(() => () => {
+    if (pinFocusTimerRef.current !== null) window.clearTimeout(pinFocusTimerRef.current);
+  }, []);
+  function setMessageRef(id: string, node: HTMLDivElement | null) {
+    if (node) messageRefs.current.set(id, node);
+    else messageRefs.current.delete(id);
+  }
+  function jumpToPinnedMessage(message: Message, index: number) {
+    setPinStripIndex(index);
+    const node = messageRefs.current.get(message.id);
+    if (node) node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    setFocusedPinID(message.id);
+    if (pinFocusTimerRef.current !== null) window.clearTimeout(pinFocusTimerRef.current);
+    pinFocusTimerRef.current = window.setTimeout(() => {
+      setFocusedPinID(null);
+      pinFocusTimerRef.current = null;
+    }, 1600);
+  }
   if (!conversation) {
     return <section className="screen center">No conversation selected.</section>;
   }
@@ -1704,6 +1796,7 @@ function ChatScreen(props: {
         <Button label="More" onClick={props.onOpenActions} />
       </header>
       {props.errorMessage ? <ErrorBanner message={props.errorMessage} /> : null}
+      <MobilePinStrip messages={pinnedMessages} currentIndex={pinStripIndex} onSelect={jumpToPinnedMessage} />
       <div className="transcript" ref={transcriptRef}>
         {conversation.messages.map((message) => (
           <MessageBubble
@@ -1711,6 +1804,9 @@ function ChatScreen(props: {
             message={message}
             conversation={conversation}
             client={props.client}
+            focused={focusedPinID === message.id}
+            messageRef={(node) => setMessageRef(message.id, node)}
+            onTogglePin={(pinned) => props.onTogglePin(message.id, pinned)}
             onOpenFile={props.onOpenFile}
             onShareFile={props.onShareFile}
           />
@@ -1763,31 +1859,110 @@ function ChatScreen(props: {
   );
 }
 
+function MobilePinStrip(props: {
+  messages: Message[];
+  currentIndex: number;
+  onSelect: (message: Message, index: number) => void;
+}) {
+  if (!props.messages.length) {
+    return null;
+  }
+  const currentIndex = Math.min(Math.max(props.currentIndex, 0), props.messages.length - 1);
+  const current = props.messages[currentIndex];
+  const previousIndex = (currentIndex - 1 + props.messages.length) % props.messages.length;
+  const nextIndex = (currentIndex + 1) % props.messages.length;
+  const select = (index: number) => {
+    const message = props.messages[index];
+    if (message) props.onSelect(message, index);
+  };
+  return (
+    <div className="pin-strip" aria-label="Pinned messages">
+      <button className="pin-strip-label" onClick={() => select(currentIndex)}>
+        <span className="pin-strip-arrow">↑</span>
+        <span>PINNED</span>
+        <span className="pin-strip-count">{props.messages.length}</span>
+      </button>
+      <button className="pin-strip-item" onClick={() => select(currentIndex)}>
+        <span className="pin-strip-source">{current.role === 'user' ? 'You' : 'Assistant'}</span>
+        <span>{displayMessagePreview(current.content).replace(/\s+/g, ' ').trim() || 'Pinned message'}</span>
+      </button>
+      <div className="pin-strip-nav">
+        <button onClick={() => select(previousIndex)} aria-label="Previous pinned message">⌃</button>
+        <span className="pin-strip-dots" aria-hidden="true">
+          {props.messages.map((message, index) => (
+            <i key={message.id} className={index === currentIndex ? 'active' : ''} />
+          ))}
+        </span>
+        <button onClick={() => select(nextIndex)} aria-label="Next pinned message">⌄</button>
+      </div>
+    </div>
+  );
+}
+
+function PinnedBadge() {
+  return (
+    <span className="message-pin-tag">
+      <span className="message-pin-arrow">↑</span>
+      <span>PINNED</span>
+    </span>
+  );
+}
+
 function MessageBubble(props: {
   message: Message;
   conversation: Conversation;
   client: AgentCockpitAPI;
+  focused?: boolean;
+  messageRef?: (node: HTMLDivElement | null) => void;
+  onTogglePin?: (pinned: boolean) => void;
   onOpenFile: (reference: FileReference) => void;
   onShareFile: (reference: FileReference) => void;
 }) {
   const isUser = props.message.role === 'user';
+  const isPinned = !!props.message.pinned;
+  const [copied, setCopied] = useState<'text' | 'md' | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  function copy(mode: 'text' | 'md') {
+    const text = mode === 'md' ? props.message.content : (contentRef.current?.textContent || props.message.content);
+    if (!text) return;
+    const write = navigator.clipboard?.writeText(text);
+    if (!write) return;
+    void write.then(() => {
+      setCopied(mode);
+      window.setTimeout(() => setCopied(null), 1400);
+    }).catch(() => undefined);
+  }
   return (
-    <div className={`message ${isUser ? 'user' : 'assistant'}`}>
-      <strong>{isUser ? 'You' : 'Assistant'}</strong>
-      {props.message.contentBlocks?.length ? props.message.contentBlocks.map((block, index) => (
-        <ContentBlockView
-          key={`${props.message.id}-${index}`}
-          block={block}
-          message={props.message}
-          conversation={props.conversation}
-          client={props.client}
-          onOpenFile={props.onOpenFile}
-          onShareFile={props.onShareFile}
-        />
-      )) : (
-        <MessageTextWithFiles {...props} content={props.message.content} />
-      )}
-      {props.message.streamError ? <p className="error-text">{props.message.streamError.message}</p> : null}
+    <div ref={props.messageRef} className={`message ${isUser ? 'user' : 'assistant'}${isPinned ? ' pinned' : ''}${props.focused ? ' focused' : ''}`}>
+      <div className="message-heading">
+        <strong>{isUser ? 'You' : 'Assistant'}</strong>
+        {isPinned ? <PinnedBadge /> : null}
+      </div>
+      <div className="message-actions" aria-label="Message actions">
+        <button onClick={() => copy('text')}>{copied === 'text' ? 'Copied' : 'Copy'}</button>
+        <button onClick={() => copy('md')}>{copied === 'md' ? 'Copied MD' : 'Copy MD'}</button>
+        {props.onTogglePin ? (
+          <button className={isPinned ? 'active' : ''} onClick={() => props.onTogglePin?.(!isPinned)}>
+            {isPinned ? 'Unpin' : 'Pin'}
+          </button>
+        ) : null}
+      </div>
+      <div className="message-body" ref={contentRef}>
+        {props.message.contentBlocks?.length ? props.message.contentBlocks.map((block, index) => (
+          <ContentBlockView
+            key={`${props.message.id}-${index}`}
+            block={block}
+            message={props.message}
+            conversation={props.conversation}
+            client={props.client}
+            onOpenFile={props.onOpenFile}
+            onShareFile={props.onShareFile}
+          />
+        )) : (
+          <MessageTextWithFiles {...props} content={props.message.content} />
+        )}
+        {props.message.streamError ? <p className="error-text">{props.message.streamError.message}</p> : null}
+      </div>
     </div>
   );
 }

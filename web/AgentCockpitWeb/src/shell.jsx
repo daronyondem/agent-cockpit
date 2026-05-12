@@ -666,6 +666,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const streaming = state ? state.streaming : false;
   const streamingMsgId = state ? state.streamingMsgId : null;
   const profileLocked = messages.length > 0;
+  const lastMessage = messages[messages.length - 1] || null;
   const hiddenStreamErrorMessageIdsSet = React.useMemo(
     () => hiddenStreamErrorMessageIds(messages, activeStreamError, activeStreamErrorSource),
     [messages, activeStreamError, activeStreamErrorSource]
@@ -676,6 +677,62 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
       : messages,
     [messages, hiddenStreamErrorMessageIdsSet]
   );
+  const pinnedMessages = React.useMemo(
+    () => feedMessages.filter(m => m && m.pinned && (m.role === 'user' || m.role === 'assistant' || m.role === 'system')),
+    [feedMessages]
+  );
+  const messageRefs = React.useRef(new Map());
+  const pinFocusTimerRef = React.useRef(null);
+  const [pinStripIndex, setPinStripIndex] = React.useState(0);
+  const [focusedPinId, setFocusedPinId] = React.useState(null);
+  const setMessageRef = React.useCallback((id, node) => {
+    if (!id) return;
+    if (node) messageRefs.current.set(id, node);
+    else messageRefs.current.delete(id);
+  }, []);
+
+  React.useEffect(() => {
+    setPinStripIndex(0);
+    setFocusedPinId(null);
+    if (pinFocusTimerRef.current) {
+      clearTimeout(pinFocusTimerRef.current);
+      pinFocusTimerRef.current = null;
+    }
+  }, [convId]);
+
+  React.useEffect(() => () => {
+    if (pinFocusTimerRef.current) clearTimeout(pinFocusTimerRef.current);
+  }, []);
+
+  React.useEffect(() => {
+    setPinStripIndex(index => Math.min(index, Math.max(pinnedMessages.length - 1, 0)));
+  }, [pinnedMessages.length]);
+
+  const jumpToPinnedMessage = React.useCallback((messageId, index) => {
+    if (typeof index === 'number') setPinStripIndex(index);
+    const node = messageRefs.current.get(messageId);
+    if (node && typeof node.scrollIntoView === 'function') {
+      node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+    setFocusedPinId(messageId);
+    if (pinFocusTimerRef.current) clearTimeout(pinFocusTimerRef.current);
+    pinFocusTimerRef.current = setTimeout(() => {
+      setFocusedPinId(null);
+      pinFocusTimerRef.current = null;
+    }, 1600);
+  }, []);
+
+  const toggleMessagePin = React.useCallback(async (message) => {
+    if (!message || !message.id || message.id === streamingMsgId) return;
+    try {
+      await StreamStore.setMessagePinned(convId, message.id, !message.pinned);
+    } catch (err) {
+      toast.error({
+        title: 'Pin update failed',
+        message: (err && err.message) || 'The message pin could not be saved.',
+      });
+    }
+  }, [convId, streamingMsgId, toast]);
 
   /* Elapsed = time since the preceding user message in the feed. Walks
      backward from each assistant message; caps at 1 h to match V1
@@ -700,10 +757,18 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
 
   // Auto-scroll the feed to the bottom on new content within the active conv
   const resettingDep = !!(state && state.resetting);
+  const feedScrollKey = [
+    convId,
+    messages.length,
+    lastMessage && lastMessage.id,
+    lastMessage && (lastMessage.content || '').length,
+    streaming ? 'streaming' : 'idle',
+    resettingDep ? 'resetting' : 'ready',
+  ].join(':');
   React.useEffect(() => {
     const el = feedRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, streaming, convId, resettingDep]);
+  }, [feedScrollKey]);
 
   function onKeyDown(e){
     if (e.key !== 'Enter' || e.shiftKey || e.altKey) return;
@@ -1138,6 +1203,11 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
       </div>
 
       <div className="feed" ref={feedRef}>
+        <PinStrip
+          messages={pinnedMessages}
+          currentIndex={pinStripIndex}
+          onSelect={jumpToPinnedMessage}
+        />
         <div className="feed-inner">
           {messages.length === 0 && !streaming && (
             <div className="u-dim" style={{padding:"24px 12px",fontSize:13}}>
@@ -1166,6 +1236,9 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                     message={entry.message}
                     isStreaming={streaming && streamingMsgId === entry.message.id}
                     elapsedMs={elapsedByMsgId.get(entry.message.id)}
+                    onPinToggle={toggleMessagePin}
+                    messageRef={(node) => setMessageRef(entry.message.id, node)}
+                    pinFocused={focusedPinId === entry.message.id}
                   />
                 );
               }
@@ -1177,6 +1250,9 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                     isStreaming={streaming && streamingMsgId === entry.message.id}
                     attachedProgress={entry.progressRun}
                     elapsedMs={elapsedByMsgId.get(entry.message.id)}
+                    onPinToggle={toggleMessagePin}
+                    messageRef={(node) => setMessageRef(entry.message.id, node)}
+                    pinFocused={focusedPinId === entry.message.id}
                   />
                 );
               }
@@ -1526,11 +1602,84 @@ function UserMessageBody({ content }){
   );
 }
 
-function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs }){
+function PinStrip({ messages, currentIndex, onSelect }){
+  if (!messages.length) return null;
+  const safeIndex = Math.min(Math.max(currentIndex || 0, 0), messages.length - 1);
+  const active = messages[safeIndex];
+  const go = (index) => {
+    const next = messages[index];
+    if (!next) return;
+    onSelect(next.id, index);
+  };
+  const prevIndex = (safeIndex - 1 + messages.length) % messages.length;
+  const nextIndex = (safeIndex + 1) % messages.length;
+  return (
+    <div className="pin-strip" aria-label="Pinned messages">
+      <button
+        type="button"
+        className="pin-strip-label"
+        onClick={() => go(safeIndex)}
+        title="Jump to pinned message"
+      >
+        <span className="pin-strip-icon">{Ico.pin(13)}</span>
+        <span>PINNED</span>
+        <span className="pin-strip-count">{messages.length}</span>
+      </button>
+      <button
+        type="button"
+        className="pin-strip-item"
+        onClick={() => go(safeIndex)}
+        title="Jump to pinned message"
+      >
+        <span className="pin-strip-src">{pinMessageSource(active)}</span>
+        <span>{pinMessagePreview(active)}</span>
+      </button>
+      <div className="pin-strip-nav" aria-label="Pinned message navigation">
+        <button type="button" onClick={() => go(prevIndex)} aria-label="Previous pinned message" title="Previous pinned message">
+          {Ico.chevU(13)}
+        </button>
+        <span className="pin-strip-dots" aria-hidden="true">
+          {messages.map((message, index) => (
+            <i key={message.id} className={index === safeIndex ? 'active' : ''}/>
+          ))}
+        </span>
+        <button type="button" onClick={() => go(nextIndex)} aria-label="Next pinned message" title="Next pinned message">
+          {Ico.chevD(13)}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function pinMessageSource(message){
+  if (!message) return 'Message';
+  if (message.role === 'user') return 'You';
+  if (message.role === 'system') return 'System';
+  return message.backend || 'Assistant';
+}
+
+function pinMessagePreview(message){
+  const raw = (message && message.content) || '';
+  const delivered = extractFileDeliveries(raw).cleaned;
+  const uploaded = extractUploadedFiles(delivered).cleaned;
+  return uploaded.replace(/\s+/g, ' ').trim() || 'Pinned message';
+}
+
+function PinnedTag(){
+  return (
+    <span className="msg-pin-tag" title="Pinned message">
+      <span className="msg-pin-tag-icon">{Ico.up(9)}</span>
+      <span>PINNED</span>
+    </span>
+  );
+}
+
+function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs, onPinToggle, messageRef, pinFocused }){
   const isUser = message.role === 'user';
   const contentRef = React.useRef(null);
   const [copied, setCopied] = React.useState(null);
   const hasContent = !!(message.content && message.content.trim());
+  const isPinned = !!message.pinned;
 
   function copy(mode){
     let text = '';
@@ -1547,10 +1696,17 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs }){
     }).catch(() => {});
   }
 
-  const showActions = hasContent && !isStreaming;
+  const showActions = !isStreaming && !!message.id && (hasContent || !!(message.contentBlocks && message.contentBlocks.length) || !!message.streamError);
+  const rootClass = [
+    'msg',
+    isUser ? 'msg-user' : 'msg-agent',
+    message.streamError ? 'msg-stream-error' : '',
+    isPinned ? 'msg-pinned' : '',
+    pinFocused ? 'msg-pin-focus' : '',
+  ].filter(Boolean).join(' ');
 
   return (
-    <div className={`msg ${isUser ? 'msg-user' : 'msg-agent'} ${message.streamError ? 'msg-stream-error' : ''}`}>
+    <div ref={messageRef} className={rootClass}>
       {isUser ? (
         <span className="avatar">DY</span>
       ) : (
@@ -1558,8 +1714,11 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs }){
       )}
       <div className="body">
         {isUser ? (
-          <div ref={contentRef}>
-            <UserMessageBody content={message.content || ''}/>
+          <div>
+            {isPinned ? <div className="msg-pin-row"><PinnedTag/></div> : null}
+            <div ref={contentRef}>
+              <UserMessageBody content={message.content || ''}/>
+            </div>
           </div>
         ) : (
           <>
@@ -1567,6 +1726,7 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs }){
               <span className="who">{message.backend || 'assistant'}</span>
               <span>·</span>
               <span>{isStreaming ? 'streaming…' : msgTime(message.timestamp)}</span>
+              {isPinned ? <PinnedTag/> : null}
               {elapsedMs != null && !isStreaming ? (
                 <span className="msg-elapsed" title="Time since the previous user message">{formatMsgElapsed(elapsedMs)}</span>
               ) : null}
@@ -1579,25 +1739,40 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs }){
             </div>
           </>
         )}
-        {showActions && !isUser ? (
-          <div className="msg-actions">
-            <button type="button" className="msg-action" onClick={() => copy('msg')}>
-              {copied === 'msg' ? 'Copied!' : 'Copy'}
-            </button>
-            <button type="button" className="msg-action" onClick={() => copy('md')} title="Copy raw markdown">
-              {copied === 'md' ? 'Copied!' : 'Copy MD'}
-            </button>
-          </div>
-        ) : null}
       </div>
-      {showActions && isUser ? (
-        <div className="msg-actions">
-          <button type="button" className="msg-action" onClick={() => copy('msg')}>
-            {copied === 'msg' ? 'Copied!' : 'Copy'}
-          </button>
-          <button type="button" className="msg-action" onClick={() => copy('md')} title="Copy raw markdown">
-            {copied === 'md' ? 'Copied!' : 'Copy MD'}
-          </button>
+      {showActions ? (
+        <div className="msg-actions" role="toolbar" aria-label="Message actions">
+          <Tip content={copied === 'msg' ? 'Copied' : 'Copy'} delay={120}>
+            <button
+              type="button"
+              className="msg-action"
+              onClick={() => copy('msg')}
+              aria-label={copied === 'msg' ? 'Copied message' : 'Copy message'}
+            >
+              {Ico.copy(14)}
+            </button>
+          </Tip>
+          <Tip content={copied === 'md' ? 'Copied Markdown' : 'Copy Markdown'} delay={120}>
+            <button
+              type="button"
+              className="msg-action"
+              onClick={() => copy('md')}
+              aria-label={copied === 'md' ? 'Copied markdown' : 'Copy raw markdown'}
+            >
+              {Ico.markdown(16)}
+            </button>
+          </Tip>
+          <Tip content={isPinned ? 'Unpin' : 'Pin'} delay={120}>
+            <button
+              type="button"
+              className={`msg-action msg-action-pin ${isPinned ? 'pinned' : ''}`}
+              onClick={() => onPinToggle && onPinToggle(message)}
+              aria-label={isPinned ? 'Unpin message' : 'Pin message'}
+              aria-pressed={isPinned}
+            >
+              {Ico.pin(14)}
+            </button>
+          </Tip>
         </div>
       ) : null}
     </div>

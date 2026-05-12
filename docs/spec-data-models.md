@@ -596,7 +596,11 @@ Detection is filesystem-based and read-only: `AGENTS.md` covers Codex/vendor-neu
     source?: 'backend'|'transport'|'abort'|'server'
                                 // Error source. Terminal backend/server failures are
                                 // persisted; non-terminal warning frames are not.
-  }
+  },
+  pinned?: boolean              // User-controlled pin marker. `true` marks the
+                                //   active-session message for the pinned strip
+                                //   and inline pinned styling. Omitted/absent is
+                                //   equivalent to unpinned.
 }
 ```
 

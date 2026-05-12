@@ -88,6 +88,7 @@ export interface Message {
   contentBlocks?: ContentBlock[];
   streamError?: StreamError;
   turn?: 'progress' | 'final';
+  pinned?: boolean;
 }
 
 export interface ConversationListItem {

@@ -2548,16 +2548,141 @@ body{
 /* feed */
 .feed{
   overflow: auto; min-height: 0;
-  padding: 28px 0 8px;
+  padding: 0 0 8px;
   background: var(--bg);
 }
 .feed-inner{
-  max-width: 760px; margin: 0 auto; padding: 0 28px;
+  max-width: 760px; margin: 0 auto; padding: 28px 28px 0;
 }
 .feed.wide .feed-inner{ max-width: 880px; }
 
+/* pinned message strip */
+.pin-strip{
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 8px 28px;
+  background: color-mix(in oklch, var(--surface), transparent 8%);
+  border-bottom: 1px solid var(--border);
+  box-shadow: 0 1px 0 rgba(255,255,255,.5) inset;
+  backdrop-filter: blur(8px);
+}
+.pin-strip button{
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+}
+.pin-strip-label{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: var(--text-2);
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.pin-strip-icon{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  transform: rotate(35deg);
+}
+.pin-strip-count{
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--surface);
+  background: var(--text);
+  font-size: 10px;
+}
+.pin-strip-item{
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text);
+  font-size: 12.5px;
+}
+.pin-strip-src{
+  margin-right: 8px;
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+}
+.pin-strip-nav{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pin-strip-nav button{
+  width: 22px;
+  height: 22px;
+  border-radius: var(--r-sm, 6px);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+}
+.pin-strip-nav button:hover{
+  color: var(--text);
+  background: var(--surface-2);
+}
+.pin-strip-dots{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 90px;
+  overflow: hidden;
+}
+.pin-strip-dots i{
+  width: 4px;
+  height: 4px;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--text-4);
+}
+.pin-strip-dots i.active{ background: var(--text); }
+
 /* messages */
-.msg{ margin: 24px 0; }
+.msg{
+  position: relative;
+  margin: 24px 0;
+  scroll-margin-block: 96px;
+}
+.msg-pinned{
+  border-radius: var(--r-md);
+  background: linear-gradient(90deg, color-mix(in oklch, var(--accent), transparent 94%) 0%, transparent 60%);
+}
+.msg-pinned::before{
+  content: "";
+  position: absolute;
+  left: -10px;
+  top: 14px;
+  bottom: 14px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.msg-pin-focus .body{
+  outline: 2px solid color-mix(in oklch, var(--accent), transparent 55%);
+  outline-offset: 3px;
+}
 .msg-user{
   display: grid;
   grid-template-columns: auto 1fr;
@@ -2626,36 +2751,89 @@ body{
   border: 1px solid var(--border);
   border-radius: var(--r-sm, 6px);
 }
+.msg-pin-row{ margin-bottom: 7px; }
+.msg-pin-tag{
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 18px;
+  padding: 0 6px 0 2px;
+  border: 1px solid color-mix(in oklch, var(--accent), transparent 70%);
+  border-radius: 4px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-family: var(--mono-font);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+}
+.msg-pin-tag-icon{
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  background: var(--accent);
+  color: #fff;
+}
 
-/* Per-message action row (Copy / Copy MD). Hover-reveal on pointer
-   devices; always visible on touch. Mirrors V1 `.chat-msg-actions`. */
+/* Raised per-message action toolbar. Hover-reveal on pointer devices;
+   static on touch so copy/pin remains reachable. */
 .msg-actions{
-  display: flex; gap: 6px;
-  margin-top: 6px;
+  position: absolute;
+  top: -10px;
+  right: 0;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  margin: 0;
+  padding: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-2);
   opacity: 0;
+  pointer-events: none;
   transition: opacity var(--dur-1, .15s) var(--easing, ease-out);
 }
 .msg:hover .msg-actions,
-.msg:focus-within .msg-actions{ opacity: 1; }
+.msg:focus-within .msg-actions{
+  opacity: 1;
+  pointer-events: auto;
+}
 @media (hover: none){
-  .msg-actions{ opacity: 1; }
+  .msg-actions{
+    position: static;
+    grid-column: 2;
+    justify-self: start;
+    margin-top: 6px;
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 .msg-action{
-  font: inherit;
-  font-size: 11.5px;
+  appearance: none;
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   color: var(--text-3);
   background: transparent;
-  border: 1px solid var(--border);
+  border: 0;
   border-radius: var(--r-sm, 6px);
-  padding: 2px 8px;
+  padding: 0;
   cursor: pointer;
-  transition: color var(--dur-1, .15s), border-color var(--dur-1, .15s), background var(--dur-1, .15s);
+  transition: color var(--dur-1, .15s), background var(--dur-1, .15s);
 }
 .msg-action:hover{
   color: var(--text);
-  border-color: var(--border-strong);
   background: var(--surface-2);
 }
+.msg-action.pinned{ color: var(--accent); }
 
 .msg-memory{
   display: grid;

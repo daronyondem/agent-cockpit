@@ -212,6 +212,44 @@ describe('PATCH /conversations/:id/unread', () => {
   });
 });
 
+// ── PATCH /conversations/:id/messages/:messageId/pin ───────────────────────
+
+describe('PATCH /conversations/:id/messages/:messageId/pin', () => {
+  test('pins and unpins a message', async () => {
+    const conv = await env.chatService.createConversation('Pins');
+    const msg = await env.chatService.addMessage(conv.id, 'assistant', 'Important answer', 'claude-code');
+
+    const pinned = await env.request('PATCH', `/api/chat/conversations/${conv.id}/messages/${msg!.id}/pin`, { pinned: true });
+    expect(pinned.status).toBe(200);
+    expect(pinned.body.ok).toBe(true);
+    expect(pinned.body.pinned).toBe(true);
+    expect(pinned.body.message.pinned).toBe(true);
+
+    const getPinned = await env.request('GET', `/api/chat/conversations/${conv.id}`);
+    expect(getPinned.body.messages[0].pinned).toBe(true);
+
+    const unpinned = await env.request('PATCH', `/api/chat/conversations/${conv.id}/messages/${msg!.id}/pin`, { pinned: false });
+    expect(unpinned.status).toBe(200);
+    expect(unpinned.body.pinned).toBe(false);
+    expect(unpinned.body.message.pinned).toBeUndefined();
+  });
+
+  test('validates payload and missing targets', async () => {
+    const conv = await env.chatService.createConversation('Pins');
+    const msg = await env.chatService.addMessage(conv.id, 'user', 'Pin me', 'claude-code');
+
+    const invalid = await env.request('PATCH', `/api/chat/conversations/${conv.id}/messages/${msg!.id}/pin`, {});
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.error).toBe('pinned must be a boolean');
+
+    const missingMessage = await env.request('PATCH', `/api/chat/conversations/${conv.id}/messages/nope/pin`, { pinned: true });
+    expect(missingMessage.status).toBe(404);
+
+    const missingConversation = await env.request('PATCH', `/api/chat/conversations/nope/messages/${msg!.id}/pin`, { pinned: true });
+    expect(missingConversation.status).toBe(404);
+  });
+});
+
 // ── GET /conversations?archived=true ──────��─────────────────────────────────
 
 describe('GET /conversations?archived=true', () => {

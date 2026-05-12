@@ -8,7 +8,7 @@ import {
   validateContextMapCandidateUpdateRequest,
   validateContextMapEnabledRequest,
 } from '../src/contracts/contextMap';
-import { validateCreateConversationRequest, validateSetUnreadRequest } from '../src/contracts/conversations';
+import { validateCreateConversationRequest, validateSetMessagePinnedRequest, validateSetUnreadRequest } from '../src/contracts/conversations';
 import { validateExplorerSaveFileRequest } from '../src/contracts/explorer';
 import {
   validateKbAutoDigestRequest,
@@ -93,6 +93,8 @@ describe('chat API contracts', () => {
     });
     expect(validateSetUnreadRequest({ unread: true })).toEqual({ unread: true });
     expect(validateSetUnreadRequest({})).toEqual({ unread: false });
+    expect(validateSetMessagePinnedRequest({ pinned: true })).toEqual({ pinned: true });
+    expect(() => validateSetMessagePinnedRequest({})).toThrow('pinned must be a boolean');
     expect(validateSendMessageRequest({ content: 'hello', serviceTier: 'fast' })).toMatchObject({
       content: 'hello',
       serviceTier: 'fast',

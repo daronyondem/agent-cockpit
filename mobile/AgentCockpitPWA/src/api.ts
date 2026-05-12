@@ -9,13 +9,14 @@ import type {
   ExplorerTreeResponse,
   FilePreviewResponse,
   InputResponse,
+  Message,
   QueuedMessage,
   ResetSessionResponse,
   SendMessageResponse,
   SessionHistoryItem,
   Settings,
 } from './types';
-import type { CreateConversationRequest } from '../../../src/contracts/conversations';
+import type { CreateConversationRequest, SetMessagePinnedRequest } from '../../../src/contracts/conversations';
 import type {
   ExplorerCreateFileRequest,
   ExplorerMkdirRequest,
@@ -110,6 +111,15 @@ export class AgentCockpitAPI {
       csrf: true,
       body: { title },
     });
+  }
+
+  async setMessagePinned(id: string, messageID: string, pinned: boolean): Promise<{ ok: true; pinned: boolean; message: Message }> {
+    const body: SetMessagePinnedRequest = { pinned };
+    return this.request<{ ok: true; pinned: boolean; message: Message }>(
+      'PATCH',
+      `/api/chat/conversations/${encodeURIComponent(id)}/messages/${encodeURIComponent(messageID)}/pin`,
+      { csrf: true, body },
+    );
   }
 
   async archiveConversation(id: string): Promise<BasicOKResponse> {
