@@ -9,6 +9,9 @@ import {
   extractCodexToolDetails,
   lookupParentAgentId,
   eventIsFromChildThread,
+  eventBelongsToActiveParentTurn,
+  extractCodexThreadId,
+  extractCodexTurnId,
   recordSpawnAgentReceivers,
   isParentTurnCompleted,
   deriveCodexUsage,
@@ -20,6 +23,66 @@ import {
   codexImageArtifactEvent,
   findCodexGeneratedImagePath,
 } from '../src/services/backends/codex';
+
+type MockCodexEmit = (message: Record<string, unknown>) => void;
+type MockCodexWriteHandler = (req: any, emit: MockCodexEmit) => void;
+
+function installCodexAppServerMock(
+  onWrite: MockCodexWriteHandler,
+  writes: any[] = [],
+  pid = 7272,
+): void {
+  jest.doMock('child_process', () => {
+    const { EventEmitter } = require('events');
+    return {
+      spawn: () => {
+        const proc = new EventEmitter();
+        proc.pid = pid;
+        proc.stdout = new EventEmitter();
+        proc.stderr = new EventEmitter();
+        proc.killed = false;
+        proc.exitCode = null;
+        proc.kill = () => {
+          proc.killed = true;
+          proc.exitCode = 0;
+          setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+        };
+        const emit: MockCodexEmit = (message) => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', ...message }) + '\n'));
+        };
+        proc.stdin = {
+          write: (line: string) => {
+            const req = JSON.parse(line);
+            writes.push(req);
+            onWrite(req, emit);
+            return true;
+          },
+          end: () => {},
+        };
+        return proc;
+      },
+      execFile: () => ({ stdin: { end: () => {} } }),
+    };
+  });
+}
+
+function codexUsage(totalTokens: number, outputTokens = 1) {
+  return {
+    total: {
+      totalTokens,
+      inputTokens: totalTokens,
+      cachedInputTokens: 0,
+      outputTokens,
+    },
+    last: {
+      totalTokens,
+      inputTokens: totalTokens,
+      cachedInputTokens: 0,
+      outputTokens,
+    },
+    modelContextWindow: 1000,
+  };
+}
 
 // ── CodexAdapter metadata ───────────────────────────────────────────────────
 
@@ -310,6 +373,308 @@ describe('CodexAdapter', () => {
     abort();
   });
 
+  test('sendMessage ignores stale previous-turn events before accepting current-turn events', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+    const writes: any[] = [];
+
+    jest.isolateModules(() => {
+      installCodexAppServerMock((req, emit) => {
+        if (req.method === 'initialize') {
+          setImmediate(() => emit({ id: req.id, result: {} }));
+        } else if (req.method === 'thread/start') {
+          setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-1' } } }));
+        } else if (req.method === 'turn/start') {
+          setImmediate(() => {
+            emit({ id: req.id, result: { turn: { id: 'turn-current' } } });
+            emit({
+              method: 'item/agentMessage/delta',
+              params: { threadId: 'thread-1', turnId: 'turn-old', itemId: 'msg-old', delta: 'stale text' },
+            });
+            emit({
+              method: 'thread/tokenUsage/updated',
+              params: { threadId: 'thread-1', turnId: 'turn-old', tokenUsage: codexUsage(10, 10) },
+            });
+            emit({
+              id: 90,
+              method: 'item/commandExecution/requestApproval',
+              params: { threadId: 'thread-1', turnId: 'turn-old', itemId: 'cmd-old' },
+            });
+            emit({
+              id: 91,
+              method: 'item/tool/requestUserInput',
+              params: {
+                threadId: 'thread-1',
+                turnId: 'turn-old',
+                itemId: 'ask-old',
+                questions: [{ id: 'q-old', header: 'Old question', question: 'Old?' }],
+              },
+            });
+            emit({
+              id: 93,
+              method: 'item/permissions/requestApproval',
+              params: { threadId: 'thread-1', turnId: 'turn-old', itemId: 'perm-old' },
+            });
+            emit({
+              method: 'item/started',
+              params: {
+                threadId: 'thread-1',
+                turnId: 'turn-old',
+                item: { type: 'commandExecution', id: 'cmd-old', command: 'old command' },
+              },
+            });
+            emit({
+              method: 'turn/completed',
+              params: { threadId: 'thread-1', turn: { id: 'turn-old' } },
+            });
+            emit({
+              id: 92,
+              method: 'item/commandExecution/requestApproval',
+              params: { threadId: 'thread-1', turnId: 'turn-current', itemId: 'cmd-current' },
+            });
+            emit({
+              method: 'item/agentMessage/delta',
+              params: { threadId: 'thread-1', turnId: 'turn-current', itemId: 'msg-current', delta: 'current text' },
+            });
+            emit({
+              method: 'item/started',
+              params: {
+                threadId: 'thread-1',
+                turnId: 'turn-current',
+                item: { type: 'commandExecution', id: 'cmd-current', command: 'npm test' },
+              },
+            });
+            emit({
+              method: 'item/completed',
+              params: {
+                threadId: 'thread-1',
+                turnId: 'turn-current',
+                item: { type: 'commandExecution', id: 'cmd-current', command: 'npm test', exitCode: 0 },
+              },
+            });
+            emit({
+              method: 'thread/tokenUsage/updated',
+              params: { threadId: 'thread-1', turnId: 'turn-current', tokenUsage: codexUsage(25, 2) },
+            });
+            emit({
+              method: 'turn/completed',
+              params: { threadId: 'thread-1', turn: { id: 'turn-current' } },
+            });
+          });
+        }
+      }, writes);
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-session-stale-turn',
+        conversationId: 'test-conv-stale-turn',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(events.filter((event) => event.type === 'text').map((event) => event.content)).toEqual(['current text']);
+    expect(events.some((event) => event.type === 'tool_activity' && event.id === 'cmd-old')).toBe(false);
+    expect(events.some((event) => event.type === 'tool_activity' && event.id === 'ask-old')).toBe(false);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'tool_activity', id: 'cmd-current', tool: 'Bash' }),
+      expect.objectContaining({ type: 'tool_outcomes' }),
+      expect.objectContaining({ type: 'usage', usage: expect.objectContaining({ outputTokens: 2 }) }),
+      { type: 'done' },
+    ]));
+    expect(events.filter((event) => event.type === 'usage')).toHaveLength(1);
+    expect(writes.find((entry) => entry.id === 90)).toMatchObject({ result: { decision: 'cancel' } });
+    expect(writes.find((entry) => entry.id === 91)).toMatchObject({
+      error: expect.objectContaining({ message: expect.stringContaining('Stale Codex user-input request ignored') }),
+    });
+    expect(writes.find((entry) => entry.id === 93)).toMatchObject({
+      error: expect.objectContaining({ message: expect.stringContaining('Stale Codex permissions request ignored') }),
+    });
+    expect(writes.find((entry) => entry.id === 92)).toMatchObject({ result: { decision: 'acceptForSession' } });
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
+  test('setGoalObjective ignores stale prior goal output before the owned goal turn', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+
+    jest.isolateModules(() => {
+      installCodexAppServerMock((req, emit) => {
+        if (req.method === 'initialize') {
+          setImmediate(() => emit({ id: req.id, result: {} }));
+        } else if (req.method === 'thread/start') {
+          setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-goal' } } }));
+        } else if (req.method === 'thread/goal/set') {
+          const goal = {
+            threadId: 'thread-goal',
+            objective: 'ship the goal',
+            status: 'active',
+            tokenBudget: null,
+            tokensUsed: 0,
+            timeUsedSeconds: 0,
+            createdAt: 1,
+            updatedAt: 1,
+          };
+          setImmediate(() => {
+            emit({ id: req.id, result: { goal } });
+            emit({
+              method: 'item/agentMessage/delta',
+              params: { threadId: 'thread-goal', turnId: 'turn-old-goal', itemId: 'msg-old-goal', delta: 'old goal text' },
+            });
+            emit({
+              method: 'thread/tokenUsage/updated',
+              params: { threadId: 'thread-goal', turnId: 'turn-old-goal', tokenUsage: codexUsage(12, 12) },
+            });
+            emit({
+              method: 'turn/completed',
+              params: { threadId: 'thread-goal', turn: { id: 'turn-old-goal' } },
+            });
+            emit({
+              method: 'thread/goal/updated',
+              params: { threadId: 'thread-goal', turnId: 'turn-goal', goal },
+            });
+            emit({
+              method: 'item/agentMessage/delta',
+              params: { threadId: 'thread-goal', turnId: 'turn-goal', itemId: 'msg-goal', delta: 'current goal text' },
+            });
+            emit({
+              method: 'thread/tokenUsage/updated',
+              params: { threadId: 'thread-goal', turnId: 'turn-goal', tokenUsage: codexUsage(30, 3) },
+            });
+            emit({
+              method: 'turn/completed',
+              params: { threadId: 'thread-goal', turn: { id: 'turn-goal' } },
+            });
+          });
+        }
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.setGoalObjective('ship the goal', {
+        sessionId: 'test-session-goal-stale',
+        conversationId: 'test-conv-goal-stale',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(events.filter((event) => event.type === 'text').map((event) => event.content)).toEqual(['current goal text']);
+    expect(events.filter((event) => event.type === 'usage')).toHaveLength(1);
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'backend_runtime', externalSessionId: 'thread-goal', activeTurnId: 'turn-goal', processId: 7272 },
+      expect.objectContaining({ type: 'usage', usage: expect.objectContaining({ outputTokens: 3 }) }),
+      { type: 'done' },
+    ]));
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
+  test('sendMessage keeps current child-thread tool attribution while dropping stale child events', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+
+    jest.isolateModules(() => {
+      installCodexAppServerMock((req, emit) => {
+        if (req.method === 'initialize') {
+          setImmediate(() => emit({ id: req.id, result: {} }));
+        } else if (req.method === 'thread/start') {
+          setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-1' } } }));
+        } else if (req.method === 'turn/start') {
+          setImmediate(() => {
+            emit({ id: req.id, result: { turn: { id: 'turn-current' } } });
+            emit({
+              method: 'item/started',
+              params: {
+                threadId: 'child-old',
+                turnId: 'turn-old-child',
+                item: { type: 'commandExecution', id: 'cmd-old-child', command: 'old child command' },
+              },
+            });
+            emit({
+              method: 'item/completed',
+              params: {
+                threadId: 'thread-1',
+                turnId: 'turn-current',
+                item: {
+                  type: 'collabAgentToolCall',
+                  id: 'spawn-1',
+                  tool: 'spawnAgent',
+                  senderThreadId: 'thread-1',
+                  receiverThreadIds: ['child-current'],
+                },
+              },
+            });
+            emit({
+              method: 'item/started',
+              params: {
+                threadId: 'child-current',
+                turnId: 'turn-child-current',
+                item: { type: 'commandExecution', id: 'cmd-child-current', command: 'child command' },
+              },
+            });
+            emit({
+              method: 'item/agentMessage/delta',
+              params: { threadId: 'child-current', turnId: 'turn-child-current', itemId: 'msg-child', delta: 'hidden child text' },
+            });
+            emit({
+              method: 'turn/completed',
+              params: { threadId: 'thread-1', turn: { id: 'turn-current' } },
+            });
+          });
+        }
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-session-child-current',
+        conversationId: 'test-conv-child-current',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(events.some((event) => event.type === 'tool_activity' && event.id === 'cmd-old-child')).toBe(false);
+    expect(events.some((event) => event.type === 'text' && event.content === 'hidden child text')).toBe(false);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'tool_activity',
+        id: 'cmd-child-current',
+        parentAgentId: 'spawn-1',
+      }),
+      { type: 'done' },
+    ]));
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
   test('sendMessage emits backend runtime turn id from the turn/start response', async () => {
     let streamRef!: AsyncGenerator<any>;
     let adapterRef!: { shutdown: () => void };
@@ -360,7 +725,7 @@ describe('CodexAdapter', () => {
                     proc.stdout.emit('data', Buffer.from(JSON.stringify({
                       jsonrpc: '2.0',
                       method: 'turn/completed',
-                      params: { threadId: 'thread-1' },
+                      params: { threadId: 'thread-1', turn: { id: 'turn-1' } },
                     }) + '\n'));
                   });
                 }
@@ -471,6 +836,7 @@ describe('CodexAdapter', () => {
                       method: 'thread/goal/updated',
                       params: {
                         threadId: 'thread-goal',
+                        turnId: 'turn-goal',
                         goal: {
                           threadId: 'thread-goal',
                           objective: 'ship the goal',
@@ -491,12 +857,12 @@ describe('CodexAdapter', () => {
                     proc.stdout.emit('data', Buffer.from(JSON.stringify({
                       jsonrpc: '2.0',
                       method: 'item/agentMessage/delta',
-                      params: { threadId: 'thread-goal', delta: 'working' },
+                      params: { threadId: 'thread-goal', turnId: 'turn-goal', delta: 'working' },
                     }) + '\n'));
                     proc.stdout.emit('data', Buffer.from(JSON.stringify({
                       jsonrpc: '2.0',
                       method: 'turn/completed',
-                      params: { threadId: 'thread-goal' },
+                      params: { threadId: 'thread-goal', turn: { id: 'turn-goal' } },
                     }) + '\n'));
                   });
                 }
@@ -586,7 +952,7 @@ describe('CodexAdapter', () => {
                     const completed = JSON.stringify({
                       jsonrpc: '2.0',
                       method: 'turn/completed',
-                      params: { threadId: 'thread-1' },
+                      params: { threadId: 'thread-1', turn: { id: 'turn-1' } },
                     });
                     proc.stdout.emit('data', Buffer.from(`${response}\n${completed}\n`));
                   });
@@ -674,7 +1040,7 @@ describe('CodexAdapter', () => {
                     proc.stdout.emit('data', Buffer.from(JSON.stringify({
                       jsonrpc: '2.0',
                       method: 'turn/completed',
-                      params: { threadId: 'thread-1' },
+                      params: { threadId: 'thread-1', turn: { id: 'turn-1' } },
                     }) + '\n'));
                   };
                 }
@@ -1119,6 +1485,44 @@ describe('lookupParentAgentId', () => {
   });
 });
 
+describe('Codex turn ownership helpers', () => {
+  test('extractCodexThreadId reads params.threadId defensively', () => {
+    expect(extractCodexThreadId({ threadId: 'thread-1' })).toBe('thread-1');
+    expect(extractCodexThreadId({ threadId: '' })).toBeNull();
+    expect(extractCodexThreadId({})).toBeNull();
+  });
+
+  test('extractCodexTurnId reads params.turnId and params.turn.id', () => {
+    expect(extractCodexTurnId({ turnId: 'turn-1' })).toBe('turn-1');
+    expect(extractCodexTurnId({ turn: { id: 'turn-2' } })).toBe('turn-2');
+    expect(extractCodexTurnId({ turn: { id: '' } })).toBeNull();
+    expect(extractCodexTurnId({})).toBeNull();
+  });
+
+  test('eventBelongsToActiveParentTurn requires matching thread and turn', () => {
+    expect(eventBelongsToActiveParentTurn(
+      { threadId: 'thread-1', turnId: 'turn-1' },
+      'thread-1',
+      'turn-1',
+    )).toBe(true);
+    expect(eventBelongsToActiveParentTurn(
+      { threadId: 'thread-1', turnId: 'turn-old' },
+      'thread-1',
+      'turn-1',
+    )).toBe(false);
+    expect(eventBelongsToActiveParentTurn(
+      { threadId: 'thread-2', turnId: 'turn-1' },
+      'thread-1',
+      'turn-1',
+    )).toBe(false);
+    expect(eventBelongsToActiveParentTurn(
+      { threadId: 'thread-1' },
+      'thread-1',
+      'turn-1',
+    )).toBe(false);
+  });
+});
+
 describe('isParentTurnCompleted', () => {
   test('returns true when threadId matches parent', () => {
     expect(isParentTurnCompleted({ threadId: 'parent' }, 'parent')).toBe(true);
@@ -1134,6 +1538,24 @@ describe('isParentTurnCompleted', () => {
 
   test('returns true (legacy) when parentThreadId is null', () => {
     expect(isParentTurnCompleted({ threadId: 'anything' }, null)).toBe(true);
+  });
+
+  test('requires the active turn id when provided', () => {
+    expect(isParentTurnCompleted(
+      { threadId: 'parent', turn: { id: 'turn-1' } },
+      'parent',
+      'turn-1',
+    )).toBe(true);
+    expect(isParentTurnCompleted(
+      { threadId: 'parent', turn: { id: 'turn-old' } },
+      'parent',
+      'turn-1',
+    )).toBe(false);
+    expect(isParentTurnCompleted(
+      { threadId: 'parent' },
+      'parent',
+      'turn-1',
+    )).toBe(false);
   });
 });
 
