@@ -1121,6 +1121,37 @@ export class ChatService {
     return { conversation: conversation!, message: msg };
   }
 
+  async setMessagePinned(convId: string, messageId: string, pinned: boolean): Promise<EditMessageResult | null> {
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return null;
+    const msg = await this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return null;
+      const { convEntry } = result;
+
+      const activeSession = convEntry.sessions.find(s => s.active);
+      const sessionNumber = activeSession ? activeSession.number : 1;
+
+      const sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
+      if (!sessionFile) return null;
+
+      const msg = sessionFile.messages.find(m => m.id === messageId);
+      if (!msg) return null;
+
+      if (pinned) {
+        msg.pinned = true;
+      } else {
+        delete msg.pinned;
+      }
+      await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
+      return msg;
+    });
+    if (!msg) return null;
+
+    const conversation = await this.getConversation(convId);
+    return { conversation: conversation!, message: msg };
+  }
+
   async generateAndUpdateTitle(convId: string, userMessage: string): Promise<string | null> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return null;

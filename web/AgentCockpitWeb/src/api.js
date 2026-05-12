@@ -2,6 +2,7 @@
 /**
  * @typedef {import('../../../src/contracts/conversations').CreateConversationRequest} CreateConversationRequest
  * @typedef {import('../../../src/contracts/conversations').RenameConversationRequest} RenameConversationRequest
+ * @typedef {import('../../../src/contracts/conversations').SetMessagePinnedRequest} SetMessagePinnedRequest
  * @typedef {import('../../../src/contracts/conversations').SetUnreadRequest} SetUnreadRequest
  * @typedef {import('../../../src/contracts/contextMap').ContextMapSettingsRequest} ContextMapSettingsRequest
  * @typedef {import('../../../src/contracts/knowledgeBase').KbFolderCreateRequest} KbFolderCreateRequest
@@ -188,6 +189,16 @@
       body,
     });
     return res.json().catch(() => ({}));
+  }
+
+  async function setMessagePinned(id, messageId, pinned){
+    /** @type {SetMessagePinnedRequest} */
+    const body = { pinned: !!pinned };
+    const res = await chatFetch(
+      'conversations/' + encodeURIComponent(id) + '/messages/' + encodeURIComponent(messageId) + '/pin',
+      { method: 'PATCH', body }
+    );
+    return res.json();
   }
 
   async function renameConversation(id, title){
@@ -975,6 +986,7 @@ export const AgentApi = {
     createConversation,
     restoreConversation,
     markConversationUnread,
+    setMessagePinned,
     renameConversation,
     deleteConversation,
     abortConversation,

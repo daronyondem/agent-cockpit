@@ -1,6 +1,6 @@
 import type { Conversation, ConversationListItem, Message, SessionHistoryItem } from './responses';
 import { parseServiceTierInput, type ContractServiceTier, type ServiceTierInput } from './serviceTier';
-import { asRecord, optionalBoolean, optionalString, optionalStringEnum, requiredNonEmptyString } from './validation';
+import { asRecord, optionalBoolean, optionalString, optionalStringEnum, requiredBoolean, requiredNonEmptyString } from './validation';
 
 export type ContractEffortLevel = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
@@ -26,6 +26,10 @@ export interface RenameConversationRequest {
 
 export interface SetUnreadRequest {
   unread: boolean;
+}
+
+export interface SetMessagePinnedRequest {
+  pinned: boolean;
 }
 
 export interface ConversationListResponse {
@@ -68,4 +72,9 @@ export function validateSetUnreadRequest(body: unknown): SetUnreadRequest {
   const record = asRecord(body);
   const unread = optionalBoolean(record, 'unread', 'unread must be a boolean');
   return { unread: unread === true };
+}
+
+export function validateSetMessagePinnedRequest(body: unknown): SetMessagePinnedRequest {
+  const record = asRecord(body);
+  return { pinned: requiredBoolean(record, 'pinned', 'pinned must be a boolean') };
 }

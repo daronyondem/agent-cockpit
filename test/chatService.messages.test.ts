@@ -235,6 +235,34 @@ describe('updateMessageContent', () => {
   });
 });
 
+describe('setMessagePinned', () => {
+  test('sets and clears pinned on an active-session message', async () => {
+    const conv = await service.createConversation();
+    const msg = await service.addMessage(conv.id, 'assistant', 'Keep this', 'claude-code');
+
+    const pinned = await service.setMessagePinned(conv.id, msg!.id, true);
+    expect(pinned!.message.pinned).toBe(true);
+    expect(pinned!.conversation.messages[0].pinned).toBe(true);
+
+    const service2 = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
+    await service2.initialize();
+    const persisted = await service2.getConversation(conv.id);
+    expect(persisted!.messages[0].pinned).toBe(true);
+
+    const unpinned = await service2.setMessagePinned(conv.id, msg!.id, false);
+    expect(unpinned!.message.pinned).toBeUndefined();
+    expect('pinned' in unpinned!.conversation.messages[0]).toBe(false);
+  });
+
+  test('returns null for unknown conversation or message', async () => {
+    const conv = await service.createConversation();
+    await service.addMessage(conv.id, 'user', 'Hello', 'claude-code');
+
+    expect(await service.setMessagePinned('nope', 'mid', true)).toBeNull();
+    expect(await service.setMessagePinned(conv.id, 'nope', true)).toBeNull();
+  });
+});
+
 // ── Title Generation ────────────────────────────────────────────────────────
 
 describe('generateAndUpdateTitle', () => {
