@@ -385,3 +385,9 @@ Agent Cockpit supports Claude Code, Kiro, and OpenAI Codex as its first three ba
 ## Specification
 
 See [docs/SPEC.md](docs/SPEC.md) for a complete technical specification covering every API endpoint, data model, frontend behavior, security mechanism, and implementation detail. The root `SPEC.md` is a thin redirect — all content lives under `docs/`.
+
+## License
+
+Copyright 2026 Daron Yondem.
+
+Agent Cockpit is licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE).
