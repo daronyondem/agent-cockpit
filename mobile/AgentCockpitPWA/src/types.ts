@@ -124,6 +124,12 @@ export type FilePreviewResponse = {
   truncated?: boolean;
 };
 
+export type DirectoryBrowseResponse = {
+  currentPath: string;
+  parent?: string | null;
+  dirs: string[];
+};
+
 export type PendingInteraction =
   | { kind: 'plan'; prompt: string }
   | { kind: 'question'; prompt: string; options: Array<{ label: string; description?: string }> };

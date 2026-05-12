@@ -11,9 +11,13 @@ export default defineConfig({
   server: {
     port: 5174,
     proxy: {
-      '/api': 'http://localhost:3334',
+      '/api': {
+        target: 'http://localhost:3334',
+        ws: true,
+      },
       '/auth': 'http://localhost:3334',
       '/logo-full-no-text.svg': 'http://localhost:3334',
+      '/logo-small.svg': 'http://localhost:3334',
     },
   },
 });

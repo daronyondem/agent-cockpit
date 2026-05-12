@@ -37,6 +37,7 @@ import type {
   Conversation,
   ConversationListItem,
   CurrentUser,
+  DirectoryBrowseResponse,
   EffortLevel,
   ExplorerEntry,
   ExplorerPreviewResponse,
@@ -56,6 +57,7 @@ const STREAM_RECONNECT_BASE_MS = 1_000;
 const STREAM_RECONNECT_MAX_MS = 15_000;
 
 type Screen = 'list' | 'chat';
+type SessionViewerState = { session: SessionHistoryItem; messages: Message[] };
 
 function messageWithPinned(message: Message, pinned: boolean): Message {
   const next: Message = { ...message };
@@ -125,8 +127,7 @@ export default function App() {
 
   const [sessionsVisible, setSessionsVisible] = useState(false);
   const [sessions, setSessions] = useState<SessionHistoryItem[]>([]);
-  const [sessionPreviewTitle, setSessionPreviewTitle] = useState('');
-  const [sessionPreviewMessages, setSessionPreviewMessages] = useState<Message[]>([]);
+  const [sessionViewer, setSessionViewer] = useState<SessionViewerState | null>(null);
 
   const [filesVisible, setFilesVisible] = useState(false);
   const [explorerPath, setExplorerPath] = useState('');
@@ -357,7 +358,7 @@ export default function App() {
     try {
       const conversation = await clientRef.current.createConversation({
         title: newTitle.trim() || undefined,
-        workingDir: newWorkingDir.trim() || settings?.workingDirectory,
+        workingDir: newWorkingDir.trim() || undefined,
         backend: selectedBackend,
         cliProfileId: selectedCliProfileId,
         model: selectedModel,
@@ -1044,8 +1045,7 @@ export default function App() {
           ? updateSessionsAfterReset(current, response)
           : current
       ));
-      setSessionPreviewTitle('');
-      setSessionPreviewMessages([]);
+      setSessionViewer(null);
       await refreshConversationList();
     } catch (error) {
       handleError(error);
@@ -1100,27 +1100,28 @@ export default function App() {
     try {
       const loaded = await clientRef.current.getSessions(conversation.id);
       setSessions(loaded);
-      setSessionPreviewTitle('');
-      setSessionPreviewMessages([]);
+      setSessionViewer(null);
       setSessionsVisible(true);
     } catch (error) {
       handleError(error);
     }
   }
 
-  async function previewSession(session: SessionHistoryItem) {
+  async function viewSession(session: SessionHistoryItem) {
     const conversation = activeConversation;
     if (!conversation) {
       return;
     }
     try {
-      setSessionPreviewTitle(`Session ${session.number}`);
+      let messages: Message[];
       if (session.isCurrent) {
-        setSessionPreviewMessages(conversation.messages);
+        messages = conversation.messages;
       } else {
         const response = await clientRef.current.getSessionMessages(conversation.id, session.number);
-        setSessionPreviewMessages(response.messages || []);
+        messages = response.messages || [];
       }
+      setSessionViewer({ session, messages });
+      setSessionsVisible(false);
     } catch (error) {
       handleError(error);
     }
@@ -1140,7 +1141,7 @@ export default function App() {
     try {
       const tree = await clientRef.current.getExplorerTree(conversation.workspaceHash, path);
       setExplorerPath(tree.path || '');
-      setExplorerParent(tree.parent || null);
+      setExplorerParent(tree.parent ?? null);
       setExplorerEntries(tree.entries || []);
       setExplorerPreview(null);
       setExplorerEditContent('');
@@ -1377,17 +1378,6 @@ export default function App() {
     setSelectedServiceTier(profile?.vendor === 'codex' ? (selectedServiceTier || settings?.defaultServiceTier) : undefined);
   }
 
-  function chooseBackend(backendID: string) {
-    if (profileSelectionLocked) {
-      return;
-    }
-    setSelectedCliProfileId(undefined);
-    setSelectedBackend(backendID);
-    setSelectedModel(undefined);
-    setSelectedEffort(undefined);
-    setSelectedServiceTier(backendID === 'codex' ? (selectedServiceTier || settings?.defaultServiceTier) : undefined);
-  }
-
   function handleError(error: unknown) {
     const message = error instanceof Error ? error.message : 'Something went wrong.';
     setErrorMessage(message);
@@ -1429,14 +1419,15 @@ export default function App() {
           onToggleArchived={() => void loadDashboard(!listArchived)}
           onWorkspaceFilter={setWorkspaceFilter}
           onOpenConversation={(id) => void openConversation(id)}
-          onNewConversation={() => {
-            setNewWorkingDir(settings?.workingDirectory || '');
+          onNewConversation={(initialPath) => {
+            setNewWorkingDir(initialPath ?? settings?.workingDirectory ?? '');
             setNewConversationVisible(true);
           }}
         />
       ) : (
         <ChatScreen
           conversation={activeConversation}
+          backends={backends}
           draft={draft}
           setDraft={setDraft}
           streamText={streamText}
@@ -1457,6 +1448,8 @@ export default function App() {
           onBack={() => {
             clearStreamReconnectTimer();
             closeStreamSocket();
+            setSessionsVisible(false);
+            setSessionViewer(null);
             setScreen('list');
             void refreshConversationList();
           }}
@@ -1485,6 +1478,7 @@ export default function App() {
 
       {newConversationVisible ? (
         <NewConversationModal
+          client={clientRef.current}
           title={newTitle}
           workingDir={newWorkingDir}
           loading={loading}
@@ -1515,9 +1509,7 @@ export default function App() {
       {settingsVisible ? (
         <RunSettingsModal
           profiles={availableProfiles}
-          backends={backends}
           selectedCliProfileId={selectedCliProfileId}
-          selectedBackend={selectedBackend}
           selectedBackendMetadata={selectedBackendMetadata}
           selectedModel={selectedModel}
           selectedEffort={selectedEffort}
@@ -1527,7 +1519,6 @@ export default function App() {
           locked={profileSelectionLocked}
           onClose={() => setSettingsVisible(false)}
           onProfile={chooseProfile}
-          onBackend={chooseBackend}
           onModel={setSelectedModel}
           onEffort={setSelectedEffort}
           onServiceTier={setSelectedServiceTier}
@@ -1536,16 +1527,28 @@ export default function App() {
 
       {sessionsVisible ? (
         <SessionsModal
-          client={clientRef.current}
           conversation={activeConversation}
           sessions={sessions}
-          previewTitle={sessionPreviewTitle}
-          previewMessages={sessionPreviewMessages}
           onClose={() => setSessionsVisible(false)}
-          onPreview={(session) => void previewSession(session)}
+          onView={(session) => void viewSession(session)}
           onShare={(session) => {
             if (activeConversation) window.open(clientRef.current.sessionMarkdownURL(activeConversation.id, session.number), '_blank');
           }}
+        />
+      ) : null}
+
+      {sessionViewer && activeConversation ? (
+        <ReadOnlySessionScreen
+          client={clientRef.current}
+          backends={backends}
+          conversation={activeConversation}
+          session={sessionViewer.session}
+          messages={sessionViewer.messages}
+          onBack={() => {
+            setSessionViewer(null);
+            setSessionsVisible(true);
+          }}
+          onShare={() => window.open(clientRef.current.sessionMarkdownURL(activeConversation.id, sessionViewer.session.number), '_blank')}
           onOpenFile={(reference) => void openFileReference(reference)}
           onShareFile={(reference) => void shareFileReference(reference)}
         />
@@ -1562,7 +1565,7 @@ export default function App() {
           uploadInputRef={explorerUploadInputRef}
           onEditContent={setExplorerEditContent}
           onClose={() => setFilesVisible(false)}
-          onParent={() => void loadExplorer(explorerParent || '')}
+          onParent={() => void loadExplorer(explorerParent ?? '')}
           onRefresh={() => void loadExplorer(explorerPath)}
           onEntry={(entry) => void openExplorerEntry(entry)}
           onNewFolder={() => void createExplorerFolder()}
@@ -1629,25 +1632,52 @@ function ConversationListScreen(props: {
   onToggleArchived: () => void;
   onWorkspaceFilter: (workspaceHash: string) => void;
   onOpenConversation: (id: string) => void;
-  onNewConversation: () => void;
+  onNewConversation: (initialPath?: string) => void;
 }) {
   const workspaces = useMemo(() => workspaceOptions(props.conversations), [props.conversations]);
   const visibleConversations = props.workspaceFilter === ALL_WORKSPACES
     ? props.conversations
     : props.conversations.filter((conversation) => conversation.workspaceHash === props.workspaceFilter);
+  const selectedWorkspace = props.workspaceFilter === ALL_WORKSPACES
+    ? null
+    : workspaces.find((workspace) => workspace.hash === props.workspaceFilter) || null;
+  const selectedWorkspaceLabel = selectedWorkspace?.label || 'All conversations';
+  const activeConversationCount = props.archived ? 0 : props.conversations.length;
 
   return (
-    <section className="screen">
-      <header className="topbar">
+    <section className="screen list-screen">
+      <header className="topbar app-header">
         <div>
-          <h1>{props.archived ? 'Archived' : 'Agent Cockpit'}</h1>
-          <p>{userLabel(props.currentUser)}</p>
+          <h1>
+            <span className="brand-mark" aria-hidden="true">
+              <img src="/logo-full-no-text.svg" alt="" />
+            </span>
+            Agent Cockpit
+          </h1>
+          <p>{userLabel(props.currentUser)} · {workspaces.length} workspace{workspaces.length === 1 ? '' : 's'}</p>
         </div>
+        <button className="icon-btn" type="button" aria-label="New chat" onClick={() => props.onNewConversation(selectedWorkspace?.fullPath)}>
+          <PlusIcon />
+        </button>
         {props.loading ? <div className="mini-spinner" /> : null}
       </header>
-      <nav className="toolbar">
-        <Button label="New" variant="primary" onClick={props.onNewConversation} />
-        <Button label={props.archived ? 'Active' : 'Archived'} onClick={props.onToggleArchived} />
+      <nav className="toolbar list-toolbar">
+        <div className="segment-control" aria-label="Conversation status">
+          <button type="button" aria-pressed={!props.archived} onClick={() => { if (props.archived) props.onToggleArchived(); }}>
+            <span className="status-dot running" aria-hidden="true" />
+            Active
+            <span className="segment-count">{activeConversationCount}</span>
+          </button>
+          <button type="button" aria-pressed={props.archived} onClick={() => { if (!props.archived) props.onToggleArchived(); }}>
+            Archive
+          </button>
+        </div>
+        <button className="toolbar-icon" type="button" aria-label="Refresh" onClick={props.onRefresh}>
+          <ResetIcon />
+        </button>
+        {'Notification' in window && Notification.permission === 'default' ? (
+          <button className="btn toolbar-btn" type="button" onClick={() => void Notification.requestPermission()}>Enable Alerts</button>
+        ) : null}
         {workspaces.length > 1 ? (
           <label className="filter-select">
             <span>Workspace</span>
@@ -1657,25 +1687,35 @@ function ConversationListScreen(props: {
                 <option key={workspace.hash} value={workspace.hash}>{workspace.label}</option>
               ))}
             </select>
+            <span className="workspace-value" aria-hidden="true"><span className="workspace-dot" />{selectedWorkspaceLabel}</span>
+            <ChevronDownIcon />
           </label>
-        ) : null}
-        <Button label="Refresh" onClick={props.onRefresh} />
-        {'Notification' in window && Notification.permission === 'default' ? (
-          <Button label="Enable Alerts" onClick={() => void Notification.requestPermission()} />
         ) : null}
       </nav>
       {props.errorMessage ? <ErrorBanner message={props.errorMessage} /> : null}
       <div className="conversation-list">
         {visibleConversations.length ? visibleConversations.map((conversation) => (
-          <button key={conversation.id} className="conversation-card" onClick={() => props.onOpenConversation(conversation.id)}>
-            <span className="row">
-              <strong>{conversation.title || 'Untitled'}</strong>
-              {props.activeStreamIDs.has(conversation.id) ? <span className="badge">Running</span> : null}
+          <button
+            key={conversation.id}
+            className={`conversation-card ${props.activeStreamIDs.has(conversation.id) ? 'streaming' : ''}`}
+            onClick={() => props.onOpenConversation(conversation.id)}
+          >
+            <span className="conversation-kicker">
+              <span className="status-dot" aria-hidden="true" />
+              <span className="workspace">{lastTwoPathComponents(conversation.workingDir)}</span>
             </span>
-            <span className="workspace">{lastTwoPathComponents(conversation.workingDir)}</span>
-            {conversation.lastMessage ? <span className="last-message">{displayMessagePreview(conversation.lastMessage)}</span> : null}
-            <span className="row meta">
-              <span>{conversation.messageCount} messages</span>
+            <strong className="conversation-title">{conversation.title || 'Untitled'}</strong>
+            {props.activeStreamIDs.has(conversation.id) ? (
+              <span className="live-strip"><span className="live-ring" aria-hidden="true" />running · stream active</span>
+            ) : conversation.lastMessage ? (
+              <span className="last-message">{displayMessagePreview(conversation.lastMessage)}</span>
+            ) : (
+              <span className="last-message empty-preview">Untitled · first message will name this conversation.</span>
+            )}
+            <span className="conversation-meta">
+              {props.activeStreamIDs.has(conversation.id) ? <span className="meta-live">live</span> : null}
+              <span>{conversation.messageCount} msgs</span>
+              <span className="meta-spacer" />
               <span>{formatDate(conversation.updatedAt)}</span>
             </span>
           </button>
@@ -1687,6 +1727,7 @@ function ConversationListScreen(props: {
 
 function ChatScreen(props: {
   conversation: Conversation | null;
+  backends: BackendMetadata[];
   draft: string;
   setDraft: (value: string) => void;
   streamText: string;
@@ -1786,17 +1827,22 @@ function ChatScreen(props: {
 
   return (
     <section className="screen chat-screen">
-      <header className="chat-topbar">
-        <Button label="Back" onClick={props.onBack} />
+      <header className={`chat-topbar ${props.isStreaming ? 'has-stop' : ''}`}>
+        <button className="nav-button back" type="button" onClick={props.onBack}>
+          <BackChevronIcon />
+          Back
+        </button>
         <div className="chat-title">
           <h1>{conversation.title || 'Untitled'}</h1>
           <p>{lastTwoPathComponents(conversation.workingDir)}</p>
         </div>
-        {props.isStreaming ? <Button label="Stop" variant="danger" onClick={props.onStop} /> : null}
-        <Button label="More" onClick={props.onOpenActions} />
+        {props.isStreaming ? <button className="nav-button danger" type="button" onClick={props.onStop}>Stop</button> : null}
+        <button className="nav-icon-button more" type="button" aria-label="More" onClick={props.onOpenActions}>
+          <MoreIcon />
+        </button>
       </header>
       {props.errorMessage ? <ErrorBanner message={props.errorMessage} /> : null}
-      <MobilePinStrip messages={pinnedMessages} currentIndex={pinStripIndex} onSelect={jumpToPinnedMessage} />
+      <MobilePinStrip messages={pinnedMessages} backends={props.backends} currentIndex={pinStripIndex} onSelect={jumpToPinnedMessage} />
       <div className="transcript" ref={transcriptRef}>
         {conversation.messages.map((message) => (
           <MessageBubble
@@ -1804,6 +1850,7 @@ function ChatScreen(props: {
             message={message}
             conversation={conversation}
             client={props.client}
+            backends={props.backends}
             focused={focusedPinID === message.id}
             messageRef={(node) => setMessageRef(message.id, node)}
             onTogglePin={(pinned) => props.onTogglePin(message.id, pinned)}
@@ -1813,7 +1860,9 @@ function ChatScreen(props: {
         ))}
         {props.isStreaming && props.streamText ? (
           <div className="message assistant">
-            <strong>Assistant</strong>
+            <div className="message-heading">
+              <AssistantIdentity backend={conversation.backend} backends={props.backends} />
+            </div>
             <MarkdownContent content={props.streamText} />
             <span className="meta">Streaming...</span>
           </div>
@@ -1839,21 +1888,28 @@ function ChatScreen(props: {
         />
       ) : null}
       <AttachmentTray attachments={props.pendingAttachments} onRemove={props.onRemoveAttachment} onOcr={props.onOcrAttachment} />
-      <button className="selection-bar" onClick={props.onOpenSettings}>
-        {(props.selectedProfile || props.selectedBackend || 'Backend')
-          + ' / ' + (props.selectedModel || 'Model')
-          + (props.selectedEffort ? ` / ${props.selectedEffort}` : '')
-          + (props.selectedServiceTier === 'fast' ? ' / Fast' : '')}
-      </button>
       <footer className="composer">
-        <Button label="Attach" onClick={props.onAttach} />
-        <textarea
-          value={props.draft}
-          onChange={(event) => props.setDraft(event.target.value)}
-          placeholder={props.isStreaming ? 'Message will be queued while the stream runs.' : 'Message Agent Cockpit'}
-          rows={2}
-        />
-        <Button label={props.isStreaming ? 'Queue' : 'Send'} variant="primary" disabled={sendDisabled} onClick={props.onSend} />
+        <button className="selection-bar composer-profile" type="button" onClick={props.onOpenSettings}>
+          <b>{props.selectedProfile || props.selectedBackend || 'Profile'}</b>
+          <span>/</span>
+          <span>{props.selectedModel || 'Model'}</span>
+          {props.selectedEffort ? <span>/ {props.selectedEffort}</span> : null}
+          {props.selectedServiceTier === 'fast' ? <span>/ Fast</span> : null}
+        </button>
+        <div className="composer-box">
+          <button className="composer-icon" type="button" aria-label="Attach" onClick={props.onAttach}>
+            <PaperclipIcon />
+          </button>
+          <textarea
+            value={props.draft}
+            onChange={(event) => props.setDraft(event.target.value)}
+            placeholder={props.isStreaming ? 'Message will be queued while the stream runs.' : 'Message Agent Cockpit'}
+            rows={1}
+          />
+          <button className={`composer-icon send ${sendDisabled ? 'idle' : ''}`} type="button" aria-label={props.isStreaming ? 'Queue' : 'Send'} disabled={sendDisabled} onClick={props.onSend}>
+            <SendIcon />
+          </button>
+        </div>
       </footer>
     </section>
   );
@@ -1861,6 +1917,7 @@ function ChatScreen(props: {
 
 function MobilePinStrip(props: {
   messages: Message[];
+  backends: BackendMetadata[];
   currentIndex: number;
   onSelect: (message: Message, index: number) => void;
 }) {
@@ -1883,7 +1940,7 @@ function MobilePinStrip(props: {
         <span className="pin-strip-count">{props.messages.length}</span>
       </button>
       <button className="pin-strip-item" onClick={() => select(currentIndex)}>
-        <span className="pin-strip-source">{current.role === 'user' ? 'You' : 'Assistant'}</span>
+        <span className="pin-strip-source">{current.role === 'user' ? 'You' : cliDisplayName(props.backends, current.backend)}</span>
         <span>{displayMessagePreview(current.content).replace(/\s+/g, ' ').trim() || 'Pinned message'}</span>
       </button>
       <div className="pin-strip-nav">
@@ -1899,12 +1956,260 @@ function MobilePinStrip(props: {
   );
 }
 
-function PinnedBadge() {
+function cliDisplayName(backends: BackendMetadata[], backend?: string | null): string {
+  if (!backend) {
+    return 'Agent Cockpit';
+  }
+  return backends.find((item) => item.id === backend)?.label || backend;
+}
+
+function AssistantIdentity(props: { backend?: string | null; backends: BackendMetadata[] }) {
+  const icon = props.backend ? props.backends.find((item) => item.id === props.backend)?.icon : null;
+  const label = cliDisplayName(props.backends, props.backend);
   return (
-    <span className="message-pin-tag">
-      <span className="message-pin-arrow">↑</span>
-      <span>PINNED</span>
-    </span>
+    <>
+      {icon ? (
+        <span className="assistant-avatar backend-avatar" aria-hidden="true" dangerouslySetInnerHTML={{ __html: icon }} />
+      ) : (
+        <span className="assistant-avatar cockpit-avatar" aria-hidden="true">
+          <img src="/logo-small.svg" alt="" />
+        </span>
+      )}
+      <strong>{label}</strong>
+    </>
+  );
+}
+
+function CopyIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="9" y="9" width="13" height="13" rx="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function MarkdownIcon() {
+  return (
+    <svg className="md-glyph" width="18" height="12" viewBox="0 0 24 14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="1" y="1" width="22" height="12" rx="2" />
+      <path d="M5 10V4l2.5 4L10 4v6" />
+      <path d="M14 4v6M14 10l2.5-2.5M14 10l-2.5-2.5" strokeWidth="1.6" />
+    </svg>
+  );
+}
+
+function PinIcon(props: { filled?: boolean }) {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill={props.filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={props.filled ? '1.4' : '1.8'} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 17v5M9 11V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v6l3 4H6l3-4z" />
+    </svg>
+  );
+}
+
+function EyeIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7z" />
+      <circle cx="12" cy="12" r="3" />
+    </svg>
+  );
+}
+
+function ShareIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+      <path d="M16 6l-4-4-4 4" />
+      <path d="M12 2v13" />
+    </svg>
+  );
+}
+
+function BackChevronIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M15 6l-6 6 6 6" />
+    </svg>
+  );
+}
+
+function LockIcon() {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <rect x="3" y="11" width="18" height="11" rx="2" />
+      <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+  );
+}
+
+function MoreIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" aria-hidden="true">
+      <circle cx="5" cy="12" r="1" />
+      <circle cx="12" cy="12" r="1" />
+      <circle cx="19" cy="12" r="1" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M12 5v14M5 12h14" />
+    </svg>
+  );
+}
+
+function XIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  );
+}
+
+function ChevronRightIcon() {
+  return (
+    <svg className="chev" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M9 6l6 6-6 6" />
+    </svg>
+  );
+}
+
+function ChevronDownIcon() {
+  return (
+    <svg className="workspace-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+function EditIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+    </svg>
+  );
+}
+
+function ExternalIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M14 3h7v7" />
+      <path d="M10 14L21 3" />
+      <path d="M21 14v5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5" />
+    </svg>
+  );
+}
+
+function SessionsIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="6" rx="2" />
+      <rect x="3" y="14" width="18" height="6" rx="2" />
+    </svg>
+  );
+}
+
+function FileIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+      <path d="M13 2v7h7" />
+    </svg>
+  );
+}
+
+function ResetIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 12a9 9 0 1 1-3-6.7" />
+      <path d="M21 4v5h-5" />
+    </svg>
+  );
+}
+
+function ArchiveIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 8v13H3V8" />
+      <rect x="1" y="3" width="22" height="5" />
+      <path d="M10 12h4" />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 6h18" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6M14 11v6" />
+    </svg>
+  );
+}
+
+function ParentIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
+  );
+}
+
+function FolderPlusIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" />
+      <path d="M12 11v6M9 14h6" />
+    </svg>
+  );
+}
+
+function FilePlusIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" />
+      <path d="M13 2v7h7" />
+      <path d="M12 12v6M9 15h6" />
+    </svg>
+  );
+}
+
+function UploadIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="M17 8l-5-5-5 5" />
+      <path d="M12 3v12" />
+    </svg>
+  );
+}
+
+function PaperclipIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M21.4 11.6 12 21a6 6 0 0 1-8.5-8.5l10-10a4 4 0 0 1 5.7 5.7L9.6 17.8a2 2 0 1 1-2.8-2.8l8.8-8.8" />
+    </svg>
+  );
+}
+
+function SendIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M22 2 11 13" />
+      <path d="m22 2-7 20-4-9-9-4 20-7z" />
+    </svg>
   );
 }
 
@@ -1912,9 +2217,11 @@ function MessageBubble(props: {
   message: Message;
   conversation: Conversation;
   client: AgentCockpitAPI;
+  backends: BackendMetadata[];
   focused?: boolean;
   messageRef?: (node: HTMLDivElement | null) => void;
   onTogglePin?: (pinned: boolean) => void;
+  showPinAction?: boolean;
   onOpenFile: (reference: FileReference) => void;
   onShareFile: (reference: FileReference) => void;
 }) {
@@ -1935,18 +2242,29 @@ function MessageBubble(props: {
   return (
     <div ref={props.messageRef} className={`message ${isUser ? 'user' : 'assistant'}${isPinned ? ' pinned' : ''}${props.focused ? ' focused' : ''}`}>
       <div className="message-heading">
-        <strong>{isUser ? 'You' : 'Assistant'}</strong>
-        {isPinned ? <PinnedBadge /> : null}
-      </div>
-      <div className="message-actions" aria-label="Message actions">
-        <button onClick={() => copy('text')}>{copied === 'text' ? 'Copied' : 'Copy'}</button>
-        <button onClick={() => copy('md')}>{copied === 'md' ? 'Copied MD' : 'Copy MD'}</button>
-        {props.onTogglePin ? (
-          <button className={isPinned ? 'active' : ''} onClick={() => props.onTogglePin?.(!isPinned)}>
-            {isPinned ? 'Unpin' : 'Pin'}
+        <span className="message-author">
+          {isUser ? <strong>You</strong> : <AssistantIdentity backend={props.message.backend} backends={props.backends} />}
+        </span>
+        <div className="message-actions" role="group" aria-label="Message actions">
+          <button title="Copy" aria-label={copied === 'text' ? 'Copied' : 'Copy'} className={copied === 'text' ? 'copied' : ''} onClick={() => copy('text')}>
+            <CopyIcon />
           </button>
-        ) : null}
+          <button title="Copy as Markdown" aria-label={copied === 'md' ? 'Copied Markdown' : 'Copy as Markdown'} className={copied === 'md' ? 'copied' : ''} onClick={() => copy('md')}>
+            <MarkdownIcon />
+          </button>
+          {props.onTogglePin || props.showPinAction ? (
+            <button title={isPinned ? 'Pinned' : 'Pin'} aria-label={isPinned ? 'Unpin' : 'Pin'} className={isPinned ? 'pinned' : ''} onClick={() => props.onTogglePin?.(!isPinned)}>
+              <PinIcon filled={isPinned} />
+            </button>
+          ) : null}
+        </div>
       </div>
+      {isPinned ? (
+        <div className="message-pin-strip">
+          <PinIcon filled />
+          pinned
+        </div>
+      ) : null}
       <div className="message-body" ref={contentRef}>
         {props.message.contentBlocks?.length ? props.message.contentBlocks.map((block, index) => (
           <ContentBlockView
@@ -2138,16 +2456,30 @@ function UsageBar({ usage }: { usage?: Usage }) {
     return null;
   }
   const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
+  const context = usage.contextUsagePercentage ?? 0;
   return (
     <div className="usage-bar">
-      <span>{tokens.toLocaleString()} tokens</span>
-      <span>${usage.costUsd.toFixed(4)}</span>
-      {usage.contextUsagePercentage !== undefined ? <span>{formatPercent(usage.contextUsagePercentage)} context</span> : null}
+      <div>
+        <span className="usage-label">Tokens</span>
+        <span className="usage-value">{tokens.toLocaleString()}</span>
+        <span className="usage-track"><i style={{ width: `${Math.min(100, Math.max(4, context))}%` }} /></span>
+      </div>
+      <div>
+        <span className="usage-label">Cost</span>
+        <span className="usage-value">${usage.costUsd.toFixed(4)}</span>
+        <span className="usage-track"><i style={{ width: `${usage.costUsd > 0 ? 18 : 4}%` }} /></span>
+      </div>
+      <div>
+        <span className="usage-label">Context</span>
+        <span className="usage-value">{usage.contextUsagePercentage !== undefined ? formatPercent(usage.contextUsagePercentage) : 'n/a'}</span>
+        <span className="usage-track"><i style={{ width: `${Math.min(100, Math.max(4, context))}%` }} /></span>
+      </div>
     </div>
   );
 }
 
 function NewConversationModal(props: {
+  client: AgentCockpitAPI;
   title: string;
   workingDir: string;
   loading: boolean;
@@ -2156,15 +2488,243 @@ function NewConversationModal(props: {
   onCancel: () => void;
   onCreate: () => void;
 }) {
+  const [pickerVisible, setPickerVisible] = useState(false);
   return (
     <Modal title="New Conversation" onClose={props.onCancel}>
       <label>Title<input value={props.title} onChange={(event) => props.onTitleChange(event.target.value)} /></label>
-      <label>Working directory<input value={props.workingDir} onChange={(event) => props.onWorkingDirChange(event.target.value)} /></label>
-      <div className="modal-actions">
-        <Button label="Cancel" onClick={props.onCancel} />
-        <Button label="Create" variant="primary" disabled={props.loading} onClick={props.onCreate} />
+      <label>
+        Working directory
+        <div className="directory-picker">
+          <button
+            className={`directory-display ${props.workingDir ? '' : 'empty'}`}
+            type="button"
+            disabled={props.loading}
+            onClick={() => setPickerVisible(true)}
+          >
+            {props.workingDir || 'Use default workspace'}
+          </button>
+          <div className="directory-actions">
+            <Button label="Browse" disabled={props.loading} onClick={() => setPickerVisible(true)} />
+            {props.workingDir ? <Button label="Default" disabled={props.loading} onClick={() => props.onWorkingDirChange('')} /> : null}
+          </div>
+        </div>
+      </label>
+      <div className="modal-actions sheet-actions">
+        <button className="sheet-action" type="button" onClick={props.onCancel}>
+          <XIcon />
+          Cancel
+        </button>
+        <button className="sheet-action primary" type="button" disabled={props.loading} onClick={props.onCreate}>
+          <PlusIcon />
+          Create
+        </button>
       </div>
+      {pickerVisible ? (
+        <FolderPickerModal
+          client={props.client}
+          initialPath={props.workingDir}
+          busy={props.loading}
+          onClose={() => setPickerVisible(false)}
+          onSelect={(path) => {
+            props.onWorkingDirChange(path);
+            setPickerVisible(false);
+          }}
+          onUseDefault={() => {
+            props.onWorkingDirChange('');
+            setPickerVisible(false);
+          }}
+        />
+      ) : null}
     </Modal>
+  );
+}
+
+function FolderPickerModal(props: {
+  client: AgentCockpitAPI;
+  initialPath: string;
+  busy: boolean;
+  onClose: () => void;
+  onSelect: (path: string) => void;
+  onUseDefault: () => void;
+}) {
+  const [data, setData] = useState<DirectoryBrowseResponse | null>(null);
+  const [showHidden, setShowHidden] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [newFolderName, setNewFolderName] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const newFolderInputRef = useRef<HTMLInputElement | null>(null);
+
+  async function loadDirectory(path?: string | null, hidden = showHidden) {
+    setLoading(true);
+    setError(null);
+    try {
+      const next = await props.client.browseDirectory(path || undefined, hidden);
+      setData(next);
+      setConfirmDelete(false);
+      setNewFolderName(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Folder could not be opened.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadDirectory(props.initialPath || undefined);
+  }, []);
+
+  useEffect(() => {
+    if (newFolderName !== null) {
+      newFolderInputRef.current?.focus();
+    }
+  }, [newFolderName]);
+
+  async function toggleHidden(checked: boolean) {
+    setShowHidden(checked);
+    await loadDirectory(data?.currentPath || props.initialPath || undefined, checked);
+  }
+
+  async function createFolder() {
+    const name = (newFolderName || '').trim();
+    if (!data || !name) {
+      return;
+    }
+    try {
+      const result = await props.client.createDirectory(data.currentPath, name);
+      await loadDirectory(result.created || data.currentPath);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Folder could not be created.');
+    }
+  }
+
+  async function deleteFolder() {
+    if (!data?.parent) {
+      return;
+    }
+    try {
+      const result = await props.client.deleteDirectory(data.currentPath);
+      await loadDirectory(result.parent || data.parent);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Folder could not be deleted.');
+      setConfirmDelete(false);
+    }
+  }
+
+  const currentName = data ? data.currentPath.split('/').filter(Boolean).pop() || data.currentPath : '';
+
+  return (
+    <div className="modal-backdrop folder-picker-backdrop" role="dialog" aria-modal="true">
+      <section className="modal folder-picker-modal">
+        <header className="modal-header">
+          <div>
+            <h2>Select Working Directory</h2>
+            <p>{error || data?.currentPath || 'Loading...'}</p>
+          </div>
+          <Button label="Close" onClick={props.onClose} />
+        </header>
+        <div className="folder-picker-toolbar">
+          <label className="folder-toggle">
+            <input
+              type="checkbox"
+              checked={showHidden}
+              disabled={loading || props.busy}
+              onChange={(event) => void toggleHidden(event.currentTarget.checked)}
+            />
+            Show hidden
+          </label>
+          <button className="ftb" type="button" disabled={!data || loading || props.busy} onClick={() => setNewFolderName('')}>
+            <FolderPlusIcon />
+            New folder
+          </button>
+          {data?.parent ? (
+            <button className="ftb danger" type="button" disabled={loading || props.busy} onClick={() => setConfirmDelete(true)}>
+              <TrashIcon />
+              Delete
+            </button>
+          ) : null}
+        </div>
+        {newFolderName !== null ? (
+          <div className="folder-new-row">
+            <input
+              ref={newFolderInputRef}
+              value={newFolderName}
+              placeholder="Folder name"
+              disabled={props.busy}
+              onChange={(event) => setNewFolderName(event.currentTarget.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void createFolder();
+                }
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  setNewFolderName(null);
+                }
+              }}
+            />
+            <button className="sheet-action primary" type="button" disabled={!newFolderName.trim() || props.busy} onClick={() => void createFolder()}>
+              <PlusIcon />
+              Create
+            </button>
+            <button className="sheet-action" type="button" disabled={props.busy} onClick={() => setNewFolderName(null)}>
+              <XIcon />
+              Cancel
+            </button>
+          </div>
+        ) : null}
+        <div className="modal-scroll folder-list">
+          {confirmDelete && data ? (
+            <section className="folder-confirm">
+              <strong>Delete {currentName}?</strong>
+              <div className="button-row">
+                <button className="sheet-action danger" type="button" disabled={props.busy} onClick={() => void deleteFolder()}>
+                  <TrashIcon />
+                  Delete
+                </button>
+                <button className="sheet-action" type="button" disabled={props.busy} onClick={() => setConfirmDelete(false)}>
+                  <XIcon />
+                  Cancel
+                </button>
+              </div>
+            </section>
+          ) : loading ? (
+            <p className="empty">Loading...</p>
+          ) : data ? (
+            <>
+              {data.parent ? (
+                <button className="folder-row parent-folder" type="button" onClick={() => void loadDirectory(data.parent)} disabled={props.busy}>
+                  ↑ Parent directory
+                </button>
+              ) : null}
+              {data.dirs.length ? data.dirs.map((name) => {
+                const fullPath = `${data.currentPath}${data.currentPath.endsWith('/') ? '' : '/'}${name}`;
+                return (
+                  <button key={name} className="folder-row" type="button" onClick={() => void loadDirectory(fullPath)} disabled={props.busy} title={fullPath}>
+                    <span className="folder-glyph" aria-hidden="true" />
+                    <span>{name}</span>
+                  </button>
+                );
+              }) : <p className="empty">No subdirectories</p>}
+            </>
+          ) : null}
+        </div>
+        <div className="modal-actions sheet-actions">
+          <button className="sheet-action" type="button" disabled={props.busy || loading} onClick={props.onUseDefault}>
+            <ResetIcon />
+            Use Default
+          </button>
+          <button className="sheet-action" type="button" disabled={props.busy} onClick={props.onClose}>
+            <XIcon />
+            Cancel
+          </button>
+          <button className="sheet-action primary" type="button" disabled={!data || props.busy || loading} onClick={() => data && props.onSelect(data.currentPath)}>
+            <CheckIcon />
+            {props.busy ? 'Creating...' : 'Select'}
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -2183,16 +2743,44 @@ function ActionsModal(props: {
   onReset: () => void;
 }) {
   return (
-    <Modal title="Conversation" onClose={props.onClose}>
+    <Modal title="Conversation" className="actions-modal" onClose={props.onClose}>
       <label>Title<input value={props.renameTitle} onChange={(event) => props.setRenameTitle(event.target.value)} /></label>
-      <Button label="Rename" variant="primary" disabled={!props.renameTitle.trim()} onClick={props.onRename} />
-      <div className="stack">
-        <Button label="Share Markdown" onClick={props.onShare} />
-        <Button label="Sessions" onClick={props.onSessions} />
-        <Button label="Files" onClick={props.onFiles} />
-        <Button label="Reset Session" disabled={props.isStreaming} onClick={props.onReset} />
-        <Button label={props.conversation?.archived ? 'Restore' : 'Archive'} disabled={props.isStreaming} onClick={props.onArchiveRestore} />
-        <Button label="Delete" variant="danger" disabled={props.isStreaming} onClick={props.onDelete} />
+      <button className="action primary" type="button" disabled={!props.renameTitle.trim()} onClick={props.onRename}>
+        <span className="ic"><EditIcon /></span>
+        <span>Rename</span>
+        <ChevronRightIcon />
+      </button>
+      <div className="actions">
+        <button className="action" type="button" onClick={props.onShare}>
+          <span className="ic"><ExternalIcon /></span>
+          <span>Share Markdown</span>
+          <ChevronRightIcon />
+        </button>
+        <button className="action" type="button" onClick={props.onSessions}>
+          <span className="ic"><SessionsIcon /></span>
+          <span>Sessions</span>
+          <ChevronRightIcon />
+        </button>
+        <button className="action" type="button" onClick={props.onFiles}>
+          <span className="ic"><FileIcon /></span>
+          <span>Files</span>
+          <ChevronRightIcon />
+        </button>
+        <button className="action" type="button" disabled={props.isStreaming} onClick={props.onReset}>
+          <span className="ic"><ResetIcon /></span>
+          <span>Reset Session</span>
+          <ChevronRightIcon />
+        </button>
+        <button className="action" type="button" disabled={props.isStreaming} onClick={props.onArchiveRestore}>
+          <span className="ic"><ArchiveIcon /></span>
+          <span>{props.conversation?.archived ? 'Restore' : 'Archive'}</span>
+          <ChevronRightIcon />
+        </button>
+        <button className="action danger" type="button" disabled={props.isStreaming} onClick={props.onDelete}>
+          <span className="ic"><TrashIcon /></span>
+          <span>Delete</span>
+          <ChevronRightIcon />
+        </button>
       </div>
     </Modal>
   );
@@ -2200,9 +2788,7 @@ function ActionsModal(props: {
 
 function RunSettingsModal(props: {
   profiles: Array<{ id: string; name: string }>;
-  backends: BackendMetadata[];
   selectedCliProfileId?: string;
-  selectedBackend?: string;
   selectedBackendMetadata?: BackendMetadata;
   selectedModel?: string;
   selectedEffort?: EffortLevel;
@@ -2212,22 +2798,17 @@ function RunSettingsModal(props: {
   locked: boolean;
   onClose: () => void;
   onProfile: (id: string) => void;
-  onBackend: (id: string) => void;
   onModel: (id: string | undefined) => void;
   onEffort: (effort: EffortLevel | undefined) => void;
   onServiceTier: (serviceTier: ServiceTier | 'default' | undefined) => void;
 }) {
   return (
-    <Modal title="Run Settings" onClose={props.onClose}>
+    <Modal title="Run Settings" className="settings-modal" onClose={props.onClose}>
       <div className="modal-scroll run-settings-scroll">
-        {props.locked ? <p className="meta">Profile and backend are locked after a session has messages.</p> : null}
+        {props.locked ? <p className="meta">Profile is locked after a session has messages.</p> : null}
         <strong>Profile</strong>
         <div className="choice-grid">
           {props.profiles.map((profile) => <Choice key={profile.id} label={profile.name} selected={props.selectedCliProfileId === profile.id} disabled={props.locked} onClick={() => props.onProfile(profile.id)} />)}
-        </div>
-        <strong>Backend</strong>
-        <div className="choice-grid">
-          {props.backends.map((backend) => <Choice key={backend.id} label={backend.label || backend.id} selected={!props.selectedCliProfileId && props.selectedBackend === backend.id} disabled={props.locked} onClick={() => props.onBackend(backend.id)} />)}
         </div>
         <strong>Model</strong>
         <div className="choice-grid">
@@ -2256,41 +2837,239 @@ function RunSettingsModal(props: {
 }
 
 function SessionsModal(props: {
-  client: AgentCockpitAPI;
   conversation: Conversation | null;
   sessions: SessionHistoryItem[];
-  previewTitle: string;
-  previewMessages: Message[];
   onClose: () => void;
-  onPreview: (session: SessionHistoryItem) => void;
+  onView: (session: SessionHistoryItem) => void;
   onShare: (session: SessionHistoryItem) => void;
+}) {
+  const totalMessages = props.sessions.reduce((total, session) => total + session.messageCount, 0);
+  return (
+    <Modal
+      title="Sessions"
+      subtitle={`${props.sessions.length} session${props.sessions.length === 1 ? '' : 's'} · ${totalMessages} messages`}
+      className="sessions-modal"
+      onClose={props.onClose}
+      full
+    >
+      <div className="modal-scroll sessions-list">
+        {props.sessions.map((session) => (
+          <article key={session.number} className={`session-card ${session.isCurrent ? 'active' : ''}`}>
+            <div className="session-card-top">
+              <span className="session-index">Session {session.number.toString().padStart(2, '0')}{session.isCurrent ? ' · current' : ''}</span>
+              <span className="session-when">{formatSessionDateTime(session.startedAt)}</span>
+            </div>
+            <h3>{sessionTitle(session)}</h3>
+            <p>{sessionSummary(session)}</p>
+            <div className="session-card-foot">
+              <span className={`session-stat ${session.isCurrent ? 'live' : ''}`}>● {session.isCurrent ? 'live' : 'finalized'}</span>
+              <span className="session-stat">{session.messageCount} msg{session.messageCount === 1 ? '' : 's'}</span>
+            </div>
+            <div className="session-card-actions">
+              <button className="session-action view" type="button" onClick={() => props.onView(session)}>
+                <EyeIcon />
+                View
+              </button>
+              <button className="session-action share" type="button" onClick={() => props.onShare(session)}>
+                <ShareIcon />
+                Share
+              </button>
+            </div>
+          </article>
+        ))}
+        {!props.sessions.length ? <p className="empty">No sessions.</p> : null}
+      </div>
+    </Modal>
+  );
+}
+
+function ReadOnlySessionScreen(props: {
+  client: AgentCockpitAPI;
+  backends: BackendMetadata[];
+  conversation: Conversation;
+  session: SessionHistoryItem;
+  messages: Message[];
+  onBack: () => void;
+  onShare: () => void;
   onOpenFile: (reference: FileReference) => void;
   onShareFile: (reference: FileReference) => void;
 }) {
   return (
-    <Modal title="Sessions" onClose={props.onClose} full>
-      <div className="modal-scroll">
-        {props.sessions.map((session) => (
-          <article key={session.number} className="list-row">
-            <button onClick={() => props.onPreview(session)}>
-              <strong>Session {session.number}{session.isCurrent ? ' (current)' : ''}</strong>
-              <span>{session.messageCount} messages / {formatDate(session.startedAt)}</span>
-              {session.summary ? <p>{session.summary}</p> : null}
-            </button>
-            <Button label="Share" onClick={() => props.onShare(session)} />
-          </article>
-        ))}
-        {props.previewTitle && props.conversation ? (
-          <section className="preview-panel">
-            <strong>{props.previewTitle}</strong>
-            {props.previewMessages.map((message) => (
-              <MessageBubble key={message.id} message={message} conversation={props.conversation!} client={props.client} onOpenFile={props.onOpenFile} onShareFile={props.onShareFile} />
-            ))}
-          </section>
-        ) : null}
+    <section className="screen session-viewer-screen">
+      <header className="session-viewer-nav">
+        <button className="session-back" type="button" onClick={props.onBack}>
+          <BackChevronIcon />
+          Sessions
+        </button>
+        <div className="session-viewer-title">
+          <h1>{sessionTitle(props.session)}</h1>
+          <p>{lastTwoPathComponents(props.conversation.workingDir)} · {formatDate(props.session.startedAt)}</p>
+        </div>
+        <button className="session-share-icon" type="button" aria-label="Share session" onClick={props.onShare}>
+          <ShareIcon />
+        </button>
+      </header>
+      <div className="session-viewer-scroll">
+        <div className="session-feed">
+          <div className="session-turn-marker">
+            <span>Read-only · {props.messages.length || props.session.messageCount} msgs</span>
+            <span className="line" />
+            <span>{props.session.isCurrent ? 'current' : 'finalized'}</span>
+          </div>
+          {props.messages.map((message) => (
+            <ReadOnlySessionMessage
+              key={message.id}
+              message={message}
+              conversation={props.conversation}
+              client={props.client}
+              backends={props.backends}
+              onOpenFile={props.onOpenFile}
+              onShareFile={props.onShareFile}
+            />
+          ))}
+          {!props.messages.length ? <p className="empty">No messages in this session.</p> : null}
+        </div>
       </div>
-    </Modal>
+      <SessionViewerMeter session={props.session} messageCount={props.messages.length || props.session.messageCount} />
+      <footer className="session-readonly-bar">
+        <div>
+          <LockIcon />
+          read-only · viewing {props.session.isCurrent ? 'current' : 'past'} session
+        </div>
+      </footer>
+    </section>
   );
+}
+
+function ReadOnlySessionMessage(props: {
+  message: Message;
+  conversation: Conversation;
+  client: AgentCockpitAPI;
+  backends: BackendMetadata[];
+  onOpenFile: (reference: FileReference) => void;
+  onShareFile: (reference: FileReference) => void;
+}) {
+  const isUser = props.message.role === 'user';
+  const isPinned = !!props.message.pinned;
+  const [copied, setCopied] = useState<'text' | 'md' | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  function copy(mode: 'text' | 'md') {
+    const text = mode === 'md' ? props.message.content : (contentRef.current?.textContent || props.message.content);
+    if (!text) return;
+    const write = navigator.clipboard?.writeText(text);
+    if (!write) return;
+    void write.then(() => {
+      setCopied(mode);
+      window.setTimeout(() => setCopied(null), 1400);
+    }).catch(() => undefined);
+  }
+  return (
+    <div className={`session-message ${isUser ? 'user' : 'assistant'}${isPinned ? ' pinned' : ''}`}>
+      <div className="session-message-heading">
+        <span className="session-message-author">
+          {isUser ? (
+            <>
+              <span className="session-avatar user" aria-hidden="true">Y</span>
+              <strong>You</strong>
+            </>
+          ) : props.message.role === 'system' ? (
+            <>
+              <span className="session-avatar" aria-hidden="true">S</span>
+              <strong>System</strong>
+            </>
+          ) : (
+            <AssistantIdentity backend={props.message.backend} backends={props.backends} />
+          )}
+          <span>· {formatTime(props.message.timestamp)}</span>
+        </span>
+        <div className="message-actions" role="group" aria-label="Message actions">
+          <button type="button" title="Copy" aria-label={copied === 'text' ? 'Copied' : 'Copy'} className={copied === 'text' ? 'copied' : ''} onClick={() => copy('text')}>
+            <CopyIcon />
+          </button>
+          <button type="button" title="Copy as Markdown" aria-label={copied === 'md' ? 'Copied Markdown' : 'Copy as Markdown'} className={copied === 'md' ? 'copied' : ''} onClick={() => copy('md')}>
+            <MarkdownIcon />
+          </button>
+          <button type="button" title={isPinned ? 'Pinned' : 'Pin'} aria-label={isPinned ? 'Pinned' : 'Pin'} className={isPinned ? 'pinned' : ''}>
+            <PinIcon filled={isPinned} />
+          </button>
+        </div>
+      </div>
+      {isPinned ? (
+        <div className="message-pin-strip">
+          <PinIcon filled />
+          pinned
+        </div>
+      ) : null}
+      <div className={isUser ? 'session-user-message' : 'session-message-body'} ref={contentRef}>
+        {props.message.contentBlocks?.length ? props.message.contentBlocks.map((block, index) => (
+          <ContentBlockView
+            key={`${props.message.id}-${index}`}
+            block={block}
+            message={props.message}
+            conversation={props.conversation}
+            client={props.client}
+            onOpenFile={props.onOpenFile}
+            onShareFile={props.onShareFile}
+          />
+        )) : (
+          <MessageTextWithFiles {...props} content={props.message.content} />
+        )}
+        {props.message.streamError ? <p className="error-text">{props.message.streamError.message}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function SessionViewerMeter(props: { session: SessionHistoryItem; messageCount: number }) {
+  return (
+    <div className="usage-bar session-viewer-meter">
+      <div>
+        <span className="usage-label">Messages</span>
+        <span className="usage-value">{props.messageCount}</span>
+        <span className="usage-track"><i style={{ width: `${Math.min(100, Math.max(8, props.messageCount * 4))}%` }} /></span>
+      </div>
+      <div>
+        <span className="usage-label">Started</span>
+        <span className="usage-value">{formatDate(props.session.startedAt)}</span>
+        <span className="usage-track"><i style={{ width: '38%' }} /></span>
+      </div>
+      <div>
+        <span className="usage-label">Session</span>
+        <span className="usage-value">{props.session.isCurrent ? 'current' : 'closed'}</span>
+        <span className="usage-track"><i style={{ width: '100%', background: props.session.isCurrent ? 'var(--status-running)' : 'var(--status-done)' }} /></span>
+      </div>
+    </div>
+  );
+}
+
+function sessionTitle(session: SessionHistoryItem): string {
+  if (!session.summary) {
+    return session.isCurrent ? `Session ${session.number} · Current` : `Session ${session.number}`;
+  }
+  const normalized = session.summary.replace(/\s+/g, ' ').trim();
+  const firstSentence = normalized.match(/^(.+?[.!?])\s/)?.[1] || normalized;
+  return firstSentence.length > 72 ? `${firstSentence.slice(0, 69).trim()}...` : firstSentence;
+}
+
+function sessionSummary(session: SessionHistoryItem): string {
+  if (session.summary) {
+    return session.summary;
+  }
+  return session.isCurrent
+    ? 'This is the active CLI session for the conversation.'
+    : 'This finalized session is available as a read-only transcript.';
+}
+
+function formatSessionDateTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} · ${date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`;
+}
+
+function formatTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 }
 
 function FilesModal(props: {
@@ -2319,13 +3098,28 @@ function FilesModal(props: {
   onCancelUpload: (upload: ExplorerUpload) => void;
 }) {
   return (
-    <Modal title={`Files ${props.path || '/'}`} onClose={props.onClose} full>
-      <div className="toolbar">
-        <Button label="Parent" disabled={!props.parent} onClick={props.onParent} />
-        <Button label="Refresh" onClick={props.onRefresh} />
-        <Button label="New Folder" onClick={props.onNewFolder} />
-        <Button label="New File" onClick={props.onNewFile} />
-        <Button label="Upload" onClick={() => props.uploadInputRef.current?.click()} />
+    <Modal title="Files" subtitle={props.path || '/'} className="files-modal" onClose={props.onClose} full>
+      <div className="files-toolbar">
+        <button className={`ftb ${props.path ? '' : 'muted'}`} type="button" disabled={!props.path} onClick={props.onParent}>
+          <ParentIcon />
+          Parent
+        </button>
+        <button className="ftb" type="button" onClick={props.onRefresh}>
+          <ResetIcon />
+          Refresh
+        </button>
+        <button className="ftb" type="button" onClick={props.onNewFolder}>
+          <FolderPlusIcon />
+          New folder
+        </button>
+        <button className="ftb" type="button" onClick={props.onNewFile}>
+          <FilePlusIcon />
+          New file
+        </button>
+        <button className="ftb primary" type="button" onClick={() => props.uploadInputRef.current?.click()}>
+          <UploadIcon />
+          Upload
+        </button>
       </div>
       <input ref={props.uploadInputRef} className="hidden-input" type="file" multiple onChange={(event) => props.onUploadFiles(event.currentTarget.files)} />
       <div className="modal-scroll">
@@ -2347,14 +3141,21 @@ function FilesModal(props: {
           </section>
         ) : null}
         {props.entries.map((entry) => (
-          <article key={`${entry.type}-${entry.name}`} className="list-row">
-            <button onClick={() => props.onEntry(entry)}>
-              <strong>{entry.type === 'dir' ? '[dir] ' : ''}{entry.name}</strong>
-              {entry.size !== undefined ? <span>{formatBytes(entry.size)}</span> : null}
+          <article key={`${entry.type}-${entry.name}`} className={`list-row file-entry ${entry.type}`}>
+            <button className="file-entry-main" type="button" onClick={() => props.onEntry(entry)}>
+              <span className="file-icon" aria-hidden="true" />
+              <span className="file-info">
+                <strong>{entry.name}</strong>
+                {entry.size !== undefined ? <span>{formatBytes(entry.size)}</span> : null}
+              </span>
             </button>
-            <div className="button-row">
-              <Button label="Rename" onClick={() => props.onRenameEntry(entry)} />
-              <Button label="Delete" variant="danger" onClick={() => props.onDeleteEntry(entry)} />
+            <div className="file-entry-actions">
+              <button className="file-entry-action" type="button" aria-label={`Rename ${entry.name}`} onClick={() => props.onRenameEntry(entry)}>
+                <EditIcon />
+              </button>
+              <button className="file-entry-action danger" type="button" aria-label={`Delete ${entry.name}`} onClick={() => props.onDeleteEntry(entry)}>
+                <TrashIcon />
+              </button>
             </div>
           </article>
         ))}
@@ -2434,16 +3235,16 @@ function QueueEditorModal(props: {
   );
 }
 
-function Modal(props: { title: string; subtitle?: string; full?: boolean; children: React.ReactNode; onClose: () => void }) {
+function Modal(props: { title: string; subtitle?: string; full?: boolean; className?: string; children: React.ReactNode; onClose: () => void }) {
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <section className={`modal ${props.full ? 'modal-full' : ''}`}>
+      <section className={['modal', props.full ? 'modal-full' : '', props.className].filter(Boolean).join(' ')}>
         <header className="modal-header">
           <div>
             <h2>{props.title}</h2>
             {props.subtitle ? <p>{props.subtitle}</p> : null}
           </div>
-          <Button label="Close" onClick={props.onClose} />
+          <button className="sheet-close" type="button" onClick={props.onClose}>Close</button>
         </header>
         {props.children}
       </section>
