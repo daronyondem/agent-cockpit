@@ -15,6 +15,7 @@ import { AgentApi } from './api.js';
 import { PlanUsageStore } from './planUsageStore.js';
 import { KiroPlanUsageStore } from './kiroPlanUsageStore.js';
 import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
+import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
   /** @typedef {import('../../../src/contracts/streams').ConversationInputRequest} ConversationInputRequest */
   /** @typedef {import('../../../src/contracts/streams').SendMessageRequest} SendMessageRequest */
   /** @typedef {{
@@ -85,6 +86,7 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
    *   composerEffort: string | null,
    *   composerServiceTier: string | null,
    *   goal: ThreadGoal | null,
+   *   goalUpdatedAtMs: number | null,
    *   goalMode: boolean,
    *   pendingAttachments: PendingAttachment[],
    *   queue: QueuedMessage[],
@@ -243,6 +245,7 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
       composerEffort: null,
       composerServiceTier: null,
       goal: null,
+      goalUpdatedAtMs: null,
       goalMode: false,
       pendingAttachments: [],
       queue: [],
@@ -261,11 +264,19 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
     return states.get(convId) || null;
   }
 
+  function sidebarStateForConvState(s){
+    if (!s) return null;
+    if (s.uiState) return s.uiState;
+    if (isActiveGoal(s.goal)) return 'streaming';
+    if (s.unread) return 'unread';
+    return 'idle';
+  }
+
   function commit(convId, next, prev, wasNew){
     states.set(convId, next);
     const subs = convSubs.get(convId);
     if (subs) subs.forEach(l => { try { l(); } catch {} });
-    if (wasNew || prev.uiState !== next.uiState || prev.unread !== next.unread) {
+    if (wasNew || sidebarStateForConvState(prev) !== sidebarStateForConvState(next)) {
       globalSubs.forEach(l => { try { l(); } catch {} });
     }
   }
@@ -298,6 +309,7 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
     const out = {};
     for (const [id, s] of states) {
       if (s.uiState) out[id] = s.uiState;
+      else if (isActiveGoal(s.goal)) out[id] = 'streaming';
       else if (s.unread) out[id] = 'unread';
       /* 'idle' sentinel — touched conv with no active state and no unread
          flag. Sidebar uses this to override any stale `c.unread=true` left
@@ -307,6 +319,22 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
       else out[id] = 'idle';
     }
     return out;
+  }
+
+  function applyGoalSnapshot(convId, goal){
+    if (!goal) {
+      update(convId, { goal: null, goalUpdatedAtMs: Date.now() });
+      return;
+    }
+    const incomingAt = goalSnapshotTimeMs(goal);
+    update(convId, cur => {
+      if (incomingAt && cur.goalUpdatedAtMs && incomingAt < cur.goalUpdatedAtMs) return cur;
+      return {
+        ...cur,
+        goal,
+        goalUpdatedAtMs: incomingAt || cur.goalUpdatedAtMs || null,
+      };
+    });
   }
 
   /* ── Conversation list ─────────────────────────────────────────────── */
@@ -534,14 +562,32 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
         AgentApi.conv.getGoal(convId)
           .then(goalData => {
             const goal = goalData && goalData.goal ? goalData.goal : null;
-            update(convId, { goal });
+            applyGoalSnapshot(convId, goal);
           })
           .catch(() => {});
       } else {
-        update(convId, { goal: null });
+        applyGoalSnapshot(convId, null);
       }
     } catch (err) {
       update(convId, { loadError: err.message || String(err) });
+    }
+  }
+
+  async function refreshGoal(convId){
+    const s = states.get(convId);
+    if (!s || !AgentApi.conv || !AgentApi.conv.getGoal) return null;
+    const backend = (s.conv && s.conv.backend) || s.composerBackend || null;
+    if (backend && backend !== 'codex') {
+      applyGoalSnapshot(convId, null);
+      return null;
+    }
+    try {
+      const goalData = await AgentApi.conv.getGoal(convId);
+      const goal = goalData && goalData.goal ? goalData.goal : null;
+      applyGoalSnapshot(convId, goal);
+      return goal;
+    } catch {
+      return null;
     }
   }
 
@@ -910,11 +956,11 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
       return;
     }
     if (frame.type === 'goal_updated') {
-      update(convId, { goal: frame.goal || null });
+      applyGoalSnapshot(convId, frame.goal || null);
       return;
     }
     if (frame.type === 'goal_cleared') {
-      update(convId, { goal: null });
+      applyGoalSnapshot(convId, null);
       return;
     }
     if (frame.type === 'assistant_message' && frame.message) {
@@ -1380,6 +1426,7 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
       streaming: true,
       uiState: 'streaming',
       input: '',
+      goalUpdatedAtMs: null,
       goalMode: false,
     }));
 
@@ -1845,7 +1892,7 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
     if (!s || !s.goal) return;
     try {
       const data = await AgentApi.conv.pauseGoal(convId);
-      update(convId, { goal: data && data.goal ? data.goal : s.goal });
+      applyGoalSnapshot(convId, data && data.goal ? data.goal : s.goal);
     } catch (err) {
       update(convId, { streamError: err.message || String(err), streamErrorSource: null, uiState: 'error' });
     }
@@ -1854,6 +1901,7 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
   async function resumeGoal(convId){
     const s = states.get(convId);
     if (!s || s.sending || s.streaming) return;
+    const prevGoal = s.goal;
     update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null });
     try {
       await ensureWsOpen(convId);
@@ -1871,6 +1919,8 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
       streamingMsgId: tempAssistId,
       streaming: true,
       uiState: 'streaming',
+      goal: cur.goal ? { ...cur.goal, status: 'active', updatedAt: Date.now() } : cur.goal,
+      goalUpdatedAtMs: goalSnapshotTimeMs(cur.goal),
     }));
 
     try {
@@ -1896,6 +1946,8 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
         streaming: false,
         streamingMsgId: null,
         uiState: 'error',
+        goal: prevGoal,
+        goalUpdatedAtMs: goalSnapshotTimeMs(prevGoal),
         messages: cur.messages.filter(m => m.id !== tempAssistId),
       }));
     } finally {
@@ -1907,11 +1959,17 @@ import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
     const s = states.get(convId);
     if (!s || !s.goal) return;
     const prev = s.goal;
-    update(convId, { goal: null });
+    applyGoalSnapshot(convId, null);
     try {
       await AgentApi.conv.clearGoal(convId);
     } catch (err) {
-      update(convId, { goal: prev, streamError: err.message || String(err), streamErrorSource: null, uiState: 'error' });
+      update(convId, {
+        goal: prev,
+        goalUpdatedAtMs: goalSnapshotTimeMs(prev),
+        streamError: err.message || String(err),
+        streamErrorSource: null,
+        uiState: 'error',
+      });
     }
   }
 
@@ -2318,6 +2376,7 @@ export const StreamStore = {
     send,
     setGoal,
     setGoalMode,
+    refreshGoal,
     respond,
     setInput,
     setComposerCliProfile,
