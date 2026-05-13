@@ -169,29 +169,29 @@ export class AgentCockpitAPI {
     });
   }
 
-  async setGoal(conversationID: string, input: SetGoalRequest): Promise<{ streamReady?: boolean }> {
-    return this.request<{ streamReady?: boolean }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal`, {
+  async setGoal(conversationID: string, input: SetGoalRequest): Promise<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }> {
+    return this.request<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal`, {
       csrf: true,
       body: stripUndefined(input),
     });
   }
 
-  async resumeGoal(conversationID: string): Promise<{ streamReady?: boolean }> {
-    return this.request<{ streamReady?: boolean }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal/resume`, {
+  async resumeGoal(conversationID: string): Promise<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }> {
+    return this.request<{ streamReady?: boolean; goal?: ThreadGoal | null; message?: Message | null }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal/resume`, {
       csrf: true,
       body: {},
     });
   }
 
-  async pauseGoal(conversationID: string): Promise<{ goal: ThreadGoal | null }> {
-    return this.request<{ goal: ThreadGoal | null }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal/pause`, {
+  async pauseGoal(conversationID: string): Promise<{ goal: ThreadGoal | null; message?: Message | null }> {
+    return this.request<{ goal: ThreadGoal | null; message?: Message | null }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal/pause`, {
       csrf: true,
       body: {},
     });
   }
 
-  async clearGoal(conversationID: string): Promise<{ cleared: boolean; threadId?: string | null }> {
-    return this.request<{ cleared: boolean; threadId?: string | null }>(
+  async clearGoal(conversationID: string): Promise<{ cleared: boolean; threadId?: string | null; sessionId?: string | null; message?: Message | null }> {
+    return this.request<{ cleared: boolean; threadId?: string | null; sessionId?: string | null; message?: Message | null }>(
       'DELETE',
       `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal`,
       { csrf: true },

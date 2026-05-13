@@ -4,6 +4,7 @@ import { marked } from 'marked';
 import { AgentAPIError, AgentCockpitAPI } from './api';
 import {
   ALL_WORKSPACES,
+  cleanGoalObjectiveText,
   completedAttachmentMetas,
   conversationListItemFromConversation,
   displayMessagePreview,
@@ -16,6 +17,7 @@ import {
   goalElapsedSeconds,
   goalSnapshotTimeMs,
   goalStatusLabel,
+  goalSupportsAction,
   joinExplorerPath,
   lastTwoPathComponents,
   isImageFileName,
@@ -65,6 +67,46 @@ const STREAM_RECONNECT_MAX_MS = 15_000;
 
 type Screen = 'list' | 'chat';
 type SessionViewerState = { session: SessionHistoryItem; messages: Message[] };
+type GoalCapabilityMetadata = NonNullable<NonNullable<BackendMetadata['capabilities']>['goals']>;
+type GoalCapability = {
+  set: boolean;
+  clear: boolean;
+  pause: boolean;
+  resume: boolean;
+  status: 'native' | 'transcript' | 'none';
+};
+
+function normalizeGoalCapability(capability: GoalCapabilityMetadata | undefined, backendID?: string): GoalCapability {
+  if (capability === true) {
+    return { set: true, clear: true, pause: true, resume: true, status: 'native' };
+  }
+  if (capability && typeof capability === 'object') {
+    return {
+      set: capability.set === true,
+      clear: capability.clear === true,
+      pause: capability.pause === true,
+      resume: capability.resume === true,
+      status: capability.status || 'none',
+    };
+  }
+  if (backendID === 'codex') return { set: true, clear: true, pause: true, resume: true, status: 'native' };
+  if (backendID === 'claude-code') return { set: true, clear: true, pause: false, resume: false, status: 'transcript' };
+  return { set: false, clear: false, pause: false, resume: false, status: 'none' };
+}
+
+function goalCapabilityForBackend(
+  backends: BackendMetadata[],
+  backendID?: string | null,
+  metadata?: BackendMetadata,
+): GoalCapability {
+  const backend = metadata || (backends || []).find((item) => item.id === backendID);
+  return normalizeGoalCapability(backend?.capabilities?.goals, backendID || backend?.id);
+}
+
+function goalActionUnsupportedMessage(action: 'pause' | 'resume' | 'clear', backendID?: string | null): string {
+  const backendName = backendID === 'claude-code' ? 'Claude Code' : backendID === 'codex' ? 'Codex' : 'this backend';
+  return `Goal ${action} is not supported by ${backendName}.`;
+}
 
 function messageWithPinned(message: Message, pinned: boolean): Message {
   const next: Message = { ...message };
@@ -177,7 +219,11 @@ export default function App() {
   );
   const supportedEfforts = selectedModelMetadata?.supportedEffortLevels || [];
   const selectedBackendID = selectedProfile?.vendor || selectedBackendMetadata?.id || selectedBackend;
-  const goalCapable = selectedBackendID === 'codex';
+  const selectedGoalCapability = useMemo(
+    () => goalCapabilityForBackend(backends, selectedBackendID, selectedBackendMetadata),
+    [backends, selectedBackendID, selectedBackendMetadata],
+  );
+  const goalCapable = selectedGoalCapability.set === true;
   const serviceTierEnabled = selectedBackendID === 'codex';
   const hasUploadingAttachments = pendingAttachments.some((attachment) => attachment.status === 'uploading');
   const profileSelectionLocked = (activeConversation?.messages.length || 0) > 0;
@@ -380,21 +426,53 @@ export default function App() {
     return true;
   }
 
+  function shouldPreserveLocalRuntimeGoalOnNull(conversationID: string): boolean {
+    if (goalStateRef.current.conversationID !== conversationID) return false;
+    const currentGoal = goalStateRef.current.goal;
+    return !!currentGoal && currentGoal.status === 'active' && currentGoal.source === 'runtime';
+  }
+
+  function applyServerMessage(conversationID: string, message: Message | null | undefined) {
+    if (!message) return;
+    setActiveConversation((current) =>
+      current && current.id === conversationID ? { ...current, messages: upsertMessage(current.messages, message) } : current,
+    );
+    setConversations((items) =>
+      items.map((item) =>
+        item.id === conversationID
+          ? {
+              ...item,
+              lastMessage: message.content || item.lastMessage,
+              updatedAt: message.timestamp || item.updatedAt,
+            }
+          : item,
+      ),
+    );
+  }
+
   async function refreshGoalState(conversationID = activeConversationRef.current?.id) {
     const conversation = activeConversationRef.current;
     if (!conversationID || !conversation || conversation.id !== conversationID) {
       return null;
     }
-    if (conversation.backend !== 'codex') {
+    const conversationGoalCapability = goalCapabilityForBackend(
+      backends,
+      conversation.backend,
+      conversation.cliProfileId ? profileMetadata[conversation.cliProfileId] : undefined,
+    );
+    if (conversationGoalCapability.status === 'none') {
       applyGoalSnapshot(conversationID, null);
       return null;
     }
-    if (!conversation.externalSessionId) {
+    if (!conversation.externalSessionId && conversation.backend === 'codex') {
       if (!goalStateRef.current.goal) applyGoalSnapshot(conversationID, null);
       return goalStateRef.current.goal;
     }
     try {
       const response = await clientRef.current.getGoal(conversationID);
+      if (!response.goal && shouldPreserveLocalRuntimeGoalOnNull(conversationID)) {
+        return goalStateRef.current.goal;
+      }
       applyGoalSnapshot(conversationID, response.goal || null);
       return response.goal || null;
     } catch {
@@ -507,7 +585,7 @@ export default function App() {
       return false;
     }
     if (!goalCapable) {
-      setErrorMessage('Goals are only available for Codex conversations.');
+      setErrorMessage('Goals are not available for this backend.');
       return true;
     }
     const arg = content.replace(/^\/goal\b/i, '').trim();
@@ -520,14 +598,26 @@ export default function App() {
     const command = arg.toLowerCase();
     setDraft('');
     if (command === 'pause') {
+      if (!selectedGoalCapability.pause) {
+        setErrorMessage(goalActionUnsupportedMessage('pause', selectedBackendID));
+        return true;
+      }
       void pauseGoalNow();
       return true;
     }
     if (command === 'resume') {
+      if (!selectedGoalCapability.resume) {
+        setErrorMessage(goalActionUnsupportedMessage('resume', selectedBackendID));
+        return true;
+      }
       void resumeGoalNow();
       return true;
     }
     if (command === 'clear') {
+      if (!selectedGoalCapability.clear) {
+        setErrorMessage(goalActionUnsupportedMessage('clear', selectedBackendID));
+        return true;
+      }
       void clearGoalNow();
       return true;
     }
@@ -579,17 +669,39 @@ export default function App() {
       return;
     }
     if (!goalCapable) {
-      setErrorMessage('Goals are only available for Codex conversations.');
+      setErrorMessage('Goals are not available for this backend.');
       return;
     }
-    const objective = wireContent(message).trim();
+    const objective = cleanGoalObjectiveText(wireContent(message));
     if (!objective) {
       return;
     }
+    const previousGoal = goalStateRef.current.conversationID === conversation.id ? goalStateRef.current.goal : null;
+    const previousGoalUpdatedAtMs = goalStateRef.current.conversationID === conversation.id ? goalStateRef.current.updatedAtMs : null;
+    const goalStartedAtMs = Date.now();
+    const optimisticBackend = selectedBackendID === 'codex' || selectedBackendID === 'claude-code' ? selectedBackendID : undefined;
+    const optimisticGoal: ThreadGoal = {
+      backend: optimisticBackend,
+      objective,
+      status: 'active',
+      supportedActions: {
+        clear: true,
+        stopTurn: true,
+        pause: selectedGoalCapability.pause,
+        resume: selectedGoalCapability.resume,
+      },
+      tokenBudget: null,
+      tokensUsed: null,
+      timeUsedSeconds: 0,
+      createdAt: goalStartedAtMs,
+      updatedAt: goalStartedAtMs,
+      source: 'runtime',
+    };
     try {
       setDraft('');
       setPendingAttachments([]);
       setPendingInteraction(null);
+      commitGoalSnapshot(conversation.id, optimisticGoal, goalStartedAtMs);
       const response = await clientRef.current.setGoal(conversation.id, {
         objective,
         backend: selectedBackend,
@@ -598,6 +710,8 @@ export default function App() {
         effort: selectedEffort,
         serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
       });
+      if (response.goal) applyGoalSnapshot(conversation.id, response.goal);
+      applyServerMessage(conversation.id, response.message);
       setGoalMode(false);
       setActiveConversation((current) =>
         current && current.id === conversation.id
@@ -616,6 +730,7 @@ export default function App() {
       }
     } catch (error) {
       setDraft(message.content);
+      commitGoalSnapshot(conversation.id, previousGoal, previousGoalUpdatedAtMs);
       if (error instanceof AgentAPIError && error.status === 409) {
         startStream(conversation.id);
         return;
@@ -629,9 +744,14 @@ export default function App() {
     if (!conversation || !goal) {
       return;
     }
+    if (!goalSupportsAction(goal, 'pause')) {
+      setErrorMessage(goalActionUnsupportedMessage('pause', goal.backend || conversation.backend));
+      return;
+    }
     try {
       const response = await clientRef.current.pauseGoal(conversation.id);
       applyGoalSnapshot(conversation.id, response.goal || null);
+      applyServerMessage(conversation.id, response.message);
     } catch (error) {
       handleError(error);
     }
@@ -642,10 +762,16 @@ export default function App() {
     if (!conversation || !goal || isStreaming) {
       return;
     }
+    if (!goalSupportsAction(goal, 'resume')) {
+      setErrorMessage(goalActionUnsupportedMessage('resume', goal.backend || conversation.backend));
+      return;
+    }
     const previousGoal = goal;
     commitGoalSnapshot(conversation.id, { ...goal, status: 'active', updatedAt: Date.now() }, goalSnapshotTimeMs(goal) || Date.now());
     try {
       const response = await clientRef.current.resumeGoal(conversation.id);
+      if (response.goal) applyGoalSnapshot(conversation.id, response.goal);
+      applyServerMessage(conversation.id, response.message);
       if (response.streamReady !== false) {
         startStream(conversation.id);
       }
@@ -664,10 +790,19 @@ export default function App() {
     if (!conversation || !goal) {
       return;
     }
+    if (!goalSupportsAction(goal, 'clear')) {
+      setErrorMessage(goalActionUnsupportedMessage('clear', goal.backend || conversation.backend));
+      return;
+    }
+    if (goal.backend === 'claude-code' && isStreaming) {
+      setErrorMessage('Wait for the current stream to finish before clearing this Claude Code goal.');
+      return;
+    }
     const previousGoal = goal;
     applyGoalSnapshot(conversation.id, null);
     try {
-      await clientRef.current.clearGoal(conversation.id);
+      const response = await clientRef.current.clearGoal(conversation.id);
+      applyServerMessage(conversation.id, response.message);
     } catch (error) {
       commitGoalSnapshot(conversation.id, previousGoal, Date.now());
       handleError(error);
@@ -2113,7 +2248,7 @@ function ChatScreen(props: {
     !!props.pendingInteraction ||
     (props.goalMode && props.isStreaming);
   const composerPlaceholder = props.goalMode
-    ? (props.isStreaming ? 'Goal can be set after this stream finishes.' : 'Set a Codex goal')
+    ? (props.isStreaming ? 'Goal can be set after this stream finishes.' : 'Set a goal')
     : (props.isStreaming ? 'Message will be queued while the stream runs.' : 'Message Agent Cockpit');
   const sendLabel = props.goalMode ? 'Set goal' : (props.isStreaming ? 'Queue' : 'Send');
 
@@ -2257,8 +2392,10 @@ function GoalStrip(props: {
     return null;
   }
   const elapsed = formatGoalElapsed(goalElapsedSeconds(props.goal, nowMs));
-  const canPause = props.goal.status === 'active';
-  const canResume = props.goal.status === 'paused' && !props.isStreaming;
+  const canPause = props.goal.status === 'active' && goalSupportsAction(props.goal, 'pause');
+  const canResume = props.goal.status === 'paused' && !props.isStreaming && goalSupportsAction(props.goal, 'resume');
+  const canClear = goalSupportsAction(props.goal, 'clear');
+  const clearDisabled = props.goal.backend === 'claude-code' && props.isStreaming;
   return (
     <div className={`goal-strip ${props.goal.status}`} aria-live="polite">
       <div className="goal-strip-main">
@@ -2269,9 +2406,49 @@ function GoalStrip(props: {
       </div>
       <div className="goal-actions">
         {canPause ? <button type="button" onClick={props.onPause}>Pause</button> : null}
-        {props.goal.status === 'paused' ? <button type="button" disabled={!canResume} onClick={props.onResume}>Resume</button> : null}
-        <button type="button" onClick={props.onClear}>Clear</button>
+        {props.goal.status === 'paused' && goalSupportsAction(props.goal, 'resume') ? (
+          <button type="button" disabled={!canResume} onClick={props.onResume}>Resume</button>
+        ) : null}
+        {canClear ? <button type="button" disabled={clearDisabled} onClick={props.onClear}>Clear</button> : null}
       </div>
+    </div>
+  );
+}
+
+function goalEventTitle(event: NonNullable<Message['goalEvent']>): string {
+  switch (event.kind) {
+    case 'set':
+      return 'Goal set';
+    case 'resumed':
+      return 'Goal resumed';
+    case 'paused':
+      return 'Goal paused';
+    case 'achieved':
+      return 'Goal achieved';
+    case 'budget_limited':
+      return 'Goal budget limited';
+    case 'cleared':
+      return 'Goal cleared';
+    default:
+      return event.status ? goalStatusLabel({ status: event.status }) : 'Goal updated';
+  }
+}
+
+function GoalEventView(props: { message: Message }) {
+  const event = props.message.goalEvent;
+  if (!event) return null;
+  const objective = event.objective || event.goal?.objective || '';
+  const reason = event.reason || event.goal?.lastReason || '';
+  const backend = event.backend || props.message.backend || '';
+  const kind = String(event.kind || event.status || 'updated').replace(/[^a-zA-Z0-9_-]/g, '');
+  return (
+    <div className={`goal-event-card kind-${kind}`}>
+      <div className="goal-event-row">
+        <strong>{goalEventTitle(event)}</strong>
+        {backend ? <span>{backend}</span> : null}
+      </div>
+      {objective ? <p className="goal-event-objective">{objective}</p> : null}
+      {reason ? <p className="goal-event-reason">{reason}</p> : null}
     </div>
   );
 }
@@ -2587,6 +2764,7 @@ function MessageBubble(props: {
   onShareFile: (reference: FileReference) => void;
 }) {
   const isUser = props.message.role === 'user';
+  const isGoalEvent = !!props.message.goalEvent;
   const isPinned = !!props.message.pinned;
   const [copied, setCopied] = useState<'text' | 'md' | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -2601,10 +2779,10 @@ function MessageBubble(props: {
     }).catch(() => undefined);
   }
   return (
-    <div ref={props.messageRef} className={`message ${isUser ? 'user' : 'assistant'}${isPinned ? ' pinned' : ''}${props.focused ? ' focused' : ''}`}>
+    <div ref={props.messageRef} className={`message ${isUser ? 'user' : 'assistant'}${isGoalEvent ? ' goal-event' : ''}${isPinned ? ' pinned' : ''}${props.focused ? ' focused' : ''}`}>
       <div className="message-heading">
         <span className="message-author">
-          {isUser ? <strong>You</strong> : <AssistantIdentity backend={props.message.backend} backends={props.backends} />}
+          {isUser ? <strong>You</strong> : isGoalEvent ? <strong>Goal</strong> : <AssistantIdentity backend={props.message.backend} backends={props.backends} />}
         </span>
         <div className="message-actions" role="group" aria-label="Message actions">
           <button title="Copy" aria-label={copied === 'text' ? 'Copied' : 'Copy'} className={copied === 'text' ? 'copied' : ''} onClick={() => copy('text')}>
@@ -2627,7 +2805,9 @@ function MessageBubble(props: {
         </div>
       ) : null}
       <div className="message-body" ref={contentRef}>
-        {props.message.contentBlocks?.length ? props.message.contentBlocks.map((block, index) => (
+        {isGoalEvent ? (
+          <GoalEventView message={props.message} />
+        ) : props.message.contentBlocks?.length ? props.message.contentBlocks.map((block, index) => (
           <ContentBlockView
             key={`${props.message.id}-${index}`}
             block={block}
@@ -3311,6 +3491,7 @@ function ReadOnlySessionMessage(props: {
   onShareFile: (reference: FileReference) => void;
 }) {
   const isUser = props.message.role === 'user';
+  const isGoalEvent = !!props.message.goalEvent;
   const isPinned = !!props.message.pinned;
   const [copied, setCopied] = useState<'text' | 'md' | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -3325,13 +3506,18 @@ function ReadOnlySessionMessage(props: {
     }).catch(() => undefined);
   }
   return (
-    <div className={`session-message ${isUser ? 'user' : 'assistant'}${isPinned ? ' pinned' : ''}`}>
+    <div className={`session-message ${isUser ? 'user' : 'assistant'}${isGoalEvent ? ' goal-event' : ''}${isPinned ? ' pinned' : ''}`}>
       <div className="session-message-heading">
         <span className="session-message-author">
           {isUser ? (
             <>
               <span className="session-avatar user" aria-hidden="true">Y</span>
               <strong>You</strong>
+            </>
+          ) : isGoalEvent ? (
+            <>
+              <span className="session-avatar goal" aria-hidden="true">G</span>
+              <strong>Goal</strong>
             </>
           ) : props.message.role === 'system' ? (
             <>
@@ -3362,7 +3548,9 @@ function ReadOnlySessionMessage(props: {
         </div>
       ) : null}
       <div className={isUser ? 'session-user-message' : 'session-message-body'} ref={contentRef}>
-        {props.message.contentBlocks?.length ? props.message.contentBlocks.map((block, index) => (
+        {isGoalEvent ? (
+          <GoalEventView message={props.message} />
+        ) : props.message.contentBlocks?.length ? props.message.contentBlocks.map((block, index) => (
           <ContentBlockView
             key={`${props.message.id}-${index}`}
             block={block}

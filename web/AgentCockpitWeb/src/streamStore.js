@@ -15,7 +15,7 @@ import { AgentApi } from './api.js';
 import { PlanUsageStore } from './planUsageStore.js';
 import { KiroPlanUsageStore } from './kiroPlanUsageStore.js';
 import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
-import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
+import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
   /** @typedef {import('../../../src/contracts/streams').ConversationInputRequest} ConversationInputRequest */
   /** @typedef {import('../../../src/contracts/streams').SendMessageRequest} SendMessageRequest */
   /** @typedef {{
@@ -46,14 +46,17 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
    * }} PendingAttachment */
 
   /** @typedef {{
-   *   threadId: string,
+   *   backend?: 'codex'|'claude-code',
+   *   threadId?: string | null,
+   *   sessionId?: string | null,
    *   objective: string,
-   *   status: 'active' | 'paused' | 'budgetLimited' | 'complete',
-   *   tokenBudget: number | null,
-   *   tokensUsed: number,
-   *   timeUsedSeconds: number,
-   *   createdAt: number,
-   *   updatedAt: number,
+   *   status: 'active' | 'paused' | 'budgetLimited' | 'complete' | 'cleared' | 'unknown',
+   *   supportedActions?: { clear?: boolean, stopTurn?: boolean, pause?: boolean, resume?: boolean },
+   *   tokenBudget?: number | null,
+   *   tokensUsed?: number | null,
+   *   timeUsedSeconds?: number | null,
+   *   createdAt?: number | null,
+   *   updatedAt?: number | null,
    * }} ThreadGoal */
 
   /** @typedef {{
@@ -321,9 +324,18 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
     return out;
   }
 
-  function applyGoalSnapshot(convId, goal){
+  function shouldPreserveLocalRuntimeGoalOnNull(cur){
+    const goal = cur && cur.goal;
+    if (!goal || goal.status !== 'active') return false;
+    return goal.source === 'runtime' || cur.streaming || cur.sending;
+  }
+
+  function applyGoalSnapshot(convId, goal, opts = {}){
     if (!goal) {
-      update(convId, { goal: null, goalUpdatedAtMs: Date.now() });
+      update(convId, cur => {
+        if (opts.preserveLocalRuntimeGoal && shouldPreserveLocalRuntimeGoalOnNull(cur)) return cur;
+        return { ...cur, goal: null, goalUpdatedAtMs: Date.now() };
+      });
       return;
     }
     const incomingAt = goalSnapshotTimeMs(goal);
@@ -335,6 +347,23 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
         goalUpdatedAtMs: incomingAt || cur.goalUpdatedAtMs || null,
       };
     });
+  }
+
+  function optimisticGoalActions(backend){
+    const isClaude = backend === 'claude-code';
+    return { clear: true, stopTurn: true, pause: !isClaude, resume: !isClaude };
+  }
+
+  function upsertPersistedMessage(convId, message){
+    if (!message || !message.id) return;
+    update(convId, cur => {
+      const existing = cur.messages.findIndex(m => m.id === message.id);
+      if (existing < 0) return { ...cur, messages: [...cur.messages, message] };
+      const messages = cur.messages.slice();
+      messages[existing] = message;
+      return { ...cur, messages };
+    });
+    bumpConvListActivity(convId, message.timestamp);
   }
 
   /* ── Conversation list ─────────────────────────────────────────────── */
@@ -558,7 +587,7 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
           ? hydrateAttachmentsFromDraft(draft.attachments)
           : cur.pendingAttachments,
       }));
-      if (data.backend === 'codex' && data.externalSessionId && AgentApi.conv && AgentApi.conv.getGoal) {
+      if ((data.backend === 'codex' || data.backend === 'claude-code') && AgentApi.conv && AgentApi.conv.getGoal) {
         AgentApi.conv.getGoal(convId)
           .then(goalData => {
             const goal = goalData && goalData.goal ? goalData.goal : null;
@@ -577,14 +606,14 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
     const s = states.get(convId);
     if (!s || !AgentApi.conv || !AgentApi.conv.getGoal) return null;
     const backend = (s.conv && s.conv.backend) || s.composerBackend || null;
-    if (backend && backend !== 'codex') {
+    if (backend && backend !== 'codex' && backend !== 'claude-code') {
       applyGoalSnapshot(convId, null);
       return null;
     }
     try {
       const goalData = await AgentApi.conv.getGoal(convId);
       const goal = goalData && goalData.goal ? goalData.goal : null;
-      applyGoalSnapshot(convId, goal);
+      applyGoalSnapshot(convId, goal, { preserveLocalRuntimeGoal: true });
       return goal;
     } catch {
       return null;
@@ -964,6 +993,27 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
       return;
     }
     if (frame.type === 'assistant_message' && frame.message) {
+      if (frame.message.goalEvent) {
+        update(convId, cur => {
+          const incomingId = frame.message.id;
+          const existing = incomingId ? cur.messages.findIndex(m => m.id === incomingId) : -1;
+          if (existing >= 0) {
+            const messages = cur.messages.slice();
+            messages[existing] = frame.message;
+            return { ...cur, messages };
+          }
+          const phId = cur.streamingMsgId;
+          const phIndex = phId ? cur.messages.findIndex(m => m.id === phId) : -1;
+          if (phIndex >= 0) {
+            const messages = cur.messages.slice();
+            messages.splice(phIndex, 0, frame.message);
+            return { ...cur, messages };
+          }
+          return { ...cur, messages: [...cur.messages, frame.message] };
+        });
+        bumpConvListActivity(convId, frame.message.timestamp);
+        return;
+      }
       update(convId, cur => {
         const phId = cur.streamingMsgId;
         const matched = phId && cur.messages.some(m => m.id === phId);
@@ -1089,6 +1139,14 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
         && !states.get(convId)?.pendingInteraction;
       update(convId, cur => ({
         ...cur,
+        messages: cur.streamingMsgId
+          ? cur.messages.filter(m => (
+            m.id !== cur.streamingMsgId
+            || !!(m.content && String(m.content).trim())
+            || !!(Array.isArray(m.contentBlocks) && m.contentBlocks.length)
+            || !!m.streamError
+          ))
+          : cur.messages,
         streaming: false,
         streamingMsgId: null,
         planModeActive: false,
@@ -1393,8 +1451,11 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
 
     const attsSnapshot = s.pendingAttachments.slice();
     const inputSnapshot = s.input;
+    const previousGoal = s.goal;
+    const previousGoalUpdatedAtMs = s.goalUpdatedAtMs;
     const attachmentsMeta = doneAtts.map(f => f.result).filter(Boolean);
-    const objective = composeWireContent({ content: String(text || '').trim(), attachments: attachmentsMeta });
+    const objective = cleanGoalObjectiveText(composeWireContent({ content: String(text || '').trim(), attachments: attachmentsMeta }));
+    if (!objective) return;
     flushDraftNow(convId);
 
     update(convId, { sending: true, streamError: null, streamErrorSource: null, pendingInteraction: null, pendingAttachments: [] });
@@ -1415,6 +1476,20 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
     const sendServiceTier = s.composerServiceTier !== null
       ? s.composerServiceTier
       : (s.conv && s.conv.serviceTier) || null;
+    const goalStartedAtMs = Date.now();
+    const optimisticBackend = (sendBackend === 'codex' || sendBackend === 'claude-code') ? sendBackend : undefined;
+    const optimisticGoal = {
+      backend: optimisticBackend,
+      objective,
+      status: 'active',
+      supportedActions: optimisticGoalActions(optimisticBackend),
+      tokenBudget: null,
+      tokensUsed: null,
+      timeUsedSeconds: 0,
+      createdAt: goalStartedAtMs,
+      updatedAt: goalStartedAtMs,
+      source: 'runtime',
+    };
 
     update(convId, cur => ({
       ...cur,
@@ -1426,7 +1501,8 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
       streaming: true,
       uiState: 'streaming',
       input: '',
-      goalUpdatedAtMs: null,
+      goal: optimisticGoal,
+      goalUpdatedAtMs: goalStartedAtMs,
       goalMode: false,
     }));
 
@@ -1437,7 +1513,9 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
       if (sendModel)   body.model   = sendModel;
       if (sendEffort)  body.effort  = sendEffort;
       if (sendBackend === 'codex' && sendServiceTier) body.serviceTier = sendServiceTier;
-      await AgentApi.conv.setGoal(convId, body);
+      const data = await AgentApi.conv.setGoal(convId, body);
+      if (data && data.goal) applyGoalSnapshot(convId, data.goal);
+      if (data && data.message) upsertPersistedMessage(convId, data.message);
       update(convId, cur => ({
         ...cur,
         conv: cur.conv ? {
@@ -1462,6 +1540,8 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
           messages: cur.messages.filter(m => m.id !== tempAssistId),
           pendingAttachments: attsSnapshot,
           input: inputSnapshot,
+          goal: previousGoal,
+          goalUpdatedAtMs: previousGoalUpdatedAtMs,
         }));
         ensureWsOpen(convId).catch(() => {});
         return;
@@ -1476,6 +1556,8 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
         messages: cur.messages.filter(m => m.id !== tempAssistId),
         pendingAttachments: attsSnapshot,
         input: inputSnapshot,
+        goal: previousGoal,
+        goalUpdatedAtMs: previousGoalUpdatedAtMs,
       }));
     } finally {
       update(convId, { sending: false });
@@ -1629,7 +1711,7 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
     update(convId, {
       composerBackend: value || null,
       composerServiceTier: value === 'codex' ? s.composerServiceTier : null,
-      goalMode: value === 'codex' ? s.goalMode : false,
+      goalMode: (value === 'codex' || value === 'claude-code') ? s.goalMode : false,
     });
   }
   function setComposerCliProfile(convId, profileId, backendId){
@@ -1641,7 +1723,7 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
       composerModel: null,
       composerEffort: null,
       composerServiceTier: backendId === 'codex' ? s.composerServiceTier : null,
-      goalMode: backendId === 'codex' ? s.goalMode : false,
+      goalMode: (backendId === 'codex' || backendId === 'claude-code') ? s.goalMode : false,
     });
   }
   function setComposerModel(convId, value){
@@ -1893,6 +1975,7 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
     try {
       const data = await AgentApi.conv.pauseGoal(convId);
       applyGoalSnapshot(convId, data && data.goal ? data.goal : s.goal);
+      if (data && data.message) upsertPersistedMessage(convId, data.message);
     } catch (err) {
       update(convId, { streamError: err.message || String(err), streamErrorSource: null, uiState: 'error' });
     }
@@ -1924,7 +2007,8 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
     }));
 
     try {
-      await AgentApi.conv.resumeGoal(convId);
+      const data = await AgentApi.conv.resumeGoal(convId);
+      if (data && data.goal) applyGoalSnapshot(convId, data.goal);
     } catch (err) {
       if (err && err.status === 409) {
         update(convId, cur => ({
@@ -1961,7 +2045,8 @@ import { goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
     const prev = s.goal;
     applyGoalSnapshot(convId, null);
     try {
-      await AgentApi.conv.clearGoal(convId);
+      const data = await AgentApi.conv.clearGoal(convId);
+      if (data && data.message) upsertPersistedMessage(convId, data.message);
     } catch (err) {
       update(convId, {
         goal: prev,

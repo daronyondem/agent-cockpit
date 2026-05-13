@@ -38,7 +38,7 @@ import {
 } from './chat/messageParsing';
 import { AttTray } from './chat/attachments.jsx';
 import { QueueStack, SuspendedQueueBanner } from './chat/queue.jsx';
-import { goalElapsedSeconds } from './goalState.js';
+import { goalElapsedSeconds, goalStatusLabel, goalSupportsAction } from './goalState.js';
 
 const KbBrowser = React.lazy(() => import('./screens/kbBrowser.jsx').then(mod => ({ default: mod.KbBrowser })));
 const FilesBrowser = React.lazy(() => import('./screens/filesBrowser.jsx').then(mod => ({ default: mod.FilesBrowser })));
@@ -778,14 +778,6 @@ function WelcomeLine({ label, status, summary, detail }){
   );
 }
 
-function goalStatusLabel(status){
-  if (status === 'active') return 'Goal active';
-  if (status === 'paused') return 'Goal paused';
-  if (status === 'complete') return 'Goal complete';
-  if (status === 'budgetLimited') return 'Goal budget limited';
-  return 'Goal';
-}
-
 function compactDuration(seconds){
   const total = Math.max(0, Math.floor(Number(seconds) || 0));
   if (total < 60) return total + 's';
@@ -796,11 +788,36 @@ function compactDuration(seconds){
   return rem ? `${hours}h ${rem}m` : `${hours}h`;
 }
 
+function normalizeGoalCapability(capability, backendId){
+  if (capability === true) {
+    return { set: true, clear: true, pause: true, resume: true, status: 'native' };
+  }
+  if (capability && typeof capability === 'object') {
+    return {
+      set: capability.set === true,
+      clear: capability.clear === true,
+      pause: capability.pause === true,
+      resume: capability.resume === true,
+      status: capability.status || 'none',
+    };
+  }
+  if (backendId === 'codex') return { set: true, clear: true, pause: true, resume: true, status: 'native' };
+  if (backendId === 'claude-code') return { set: true, clear: true, pause: false, resume: false, status: 'transcript' };
+  return { set: false, clear: false, pause: false, resume: false, status: 'none' };
+}
+
+function goalCapabilityForBackend(backends, backendId){
+  const backend = (backends || []).find(b => b && b.id === backendId);
+  return normalizeGoalCapability(backend?.capabilities?.goals, backendId);
+}
+
 function GoalStrip({ convId, goal, streaming, sending }){
   if (!goal) return null;
   const status = goal.status || 'active';
-  const canPause = status === 'active';
-  const canResume = status === 'paused' && !streaming;
+  const canPause = status === 'active' && goalSupportsAction(goal, 'pause');
+  const canResume = status === 'paused' && !streaming && goalSupportsAction(goal, 'resume');
+  const canClear = goalSupportsAction(goal, 'clear');
+  const clearDisabled = sending || (goal.backend === 'claude-code' && streaming);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
   React.useEffect(() => {
     if (!goal) return undefined;
@@ -831,10 +848,17 @@ function GoalStrip({ convId, goal, streaming, sending }){
         {canPause ? (
           <button type="button" onClick={() => StreamStore.pauseGoal(convId)} disabled={sending} title="Pause goal">Pause</button>
         ) : null}
-        {status === 'paused' ? (
+        {status === 'paused' && goalSupportsAction(goal, 'resume') ? (
           <button type="button" onClick={() => StreamStore.resumeGoal(convId)} disabled={sending || !canResume} title="Resume goal">Resume</button>
         ) : null}
-        <button type="button" onClick={() => StreamStore.clearGoal(convId)} disabled={sending} title="Clear goal">Clear</button>
+        {canClear ? (
+          <button
+            type="button"
+            onClick={() => StreamStore.clearGoal(convId)}
+            disabled={clearDisabled}
+            title={clearDisabled && goal.backend === 'claude-code' ? 'Claude Code goals can be cleared after the active turn finishes' : 'Clear goal'}
+          >Clear</button>
+        ) : null}
       </div>
     </div>
   );
@@ -1066,7 +1090,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     : profileLocked
       ? conv.backend
       : (state.composerBackend || conv.backend);
-  const goalCapable = topbarBackendId === 'codex';
+  const goalCapability = goalCapabilityForBackend(backends, topbarBackendId);
+  const goalCapable = goalCapability.set === true;
   const goalMode = goalCapable && !!state.goalMode;
   const activeGoal = state.goal || null;
   const hasContent = !!(input || '').trim() || hasDoneFiles;
@@ -1227,7 +1252,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   function handleGoalSlash(text){
     if (!text || !/^\/goal(?:\s|$)/i.test(text)) return false;
     if (!goalCapable) {
-      toast.error('Goals are only available for Codex conversations');
+      const backendLabel = (backends.find(b => b && b.id === topbarBackendId) || {}).label || topbarBackendId || 'this backend';
+      toast.error('Goals are not supported by ' + backendLabel);
       return true;
     }
     const arg = text.replace(/^\/goal\b/i, '').trim();
@@ -1239,10 +1265,20 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     const command = arg.toLowerCase();
     StreamStore.setInput(convId, '');
     if (command === 'pause') {
+      if (!goalCapability.pause) {
+        const backendLabel = (backends.find(b => b && b.id === topbarBackendId) || {}).label || topbarBackendId || 'this backend';
+        toast.error('Goal pause is not supported by ' + backendLabel);
+        return true;
+      }
       StreamStore.pauseGoal(convId);
       return true;
     }
     if (command === 'resume') {
+      if (!goalCapability.resume) {
+        const backendLabel = (backends.find(b => b && b.id === topbarBackendId) || {}).label || topbarBackendId || 'this backend';
+        toast.error('Goal resume is not supported by ' + backendLabel);
+        return true;
+      }
       StreamStore.resumeGoal(convId);
       return true;
     }
@@ -1527,7 +1563,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                 awaiting
                   ? 'Answer the prompt above to continue…'
                   : streaming ? 'Agent is running — Enter queues behind the current run.'
-                    : goalMode ? 'Set a Codex goal…' : 'Message Agent Cockpit…'
+                    : goalMode ? 'Set a goal…' : 'Message Agent Cockpit…'
               }
               value={input || ''}
               onChange={(e)=>StreamStore.setInput(convId, e.target.value)}
@@ -1896,8 +1932,38 @@ function PinnedTag(){
   );
 }
 
+function goalEventTitle(event){
+  if (!event) return 'Goal updated';
+  if (event.kind === 'set') return 'Goal set';
+  if (event.kind === 'resumed') return 'Goal resumed';
+  if (event.kind === 'paused') return 'Goal paused';
+  if (event.kind === 'achieved') return 'Goal achieved';
+  if (event.kind === 'budget_limited') return 'Goal budget limited';
+  if (event.kind === 'cleared') return 'Goal cleared';
+  return goalStatusLabel(event.status || 'unknown');
+}
+
+function GoalEventCard({ message }){
+  const event = message.goalEvent || {};
+  const objective = event.objective || (event.goal && event.goal.objective) || '';
+  const reason = event.reason || (event.goal && event.goal.lastReason) || '';
+  const backend = event.backend || message.backend || '';
+  const kind = String(event.kind || event.status || 'updated').replace(/[^a-zA-Z0-9_-]/g, '');
+  return (
+    <div className={"goal-event-card kind-" + kind}>
+      <div className="goal-event-row">
+        <span className="goal-event-title">{goalEventTitle(event)}</span>
+        {backend ? <span className="goal-event-backend">{backend}</span> : null}
+      </div>
+      {objective ? <div className="goal-event-objective">{objective}</div> : null}
+      {reason ? <div className="goal-event-reason">{reason}</div> : null}
+    </div>
+  );
+}
+
 function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs, onPinToggle, messageRef, pinFocused }){
   const isUser = message.role === 'user';
+  const isGoalEvent = !!message.goalEvent;
   const contentRef = React.useRef(null);
   const [copied, setCopied] = React.useState(null);
   const hasContent = !!(message.content && message.content.trim());
@@ -1922,6 +1988,7 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs, onPi
   const rootClass = [
     'msg',
     isUser ? 'msg-user' : 'msg-agent',
+    isGoalEvent ? 'msg-goal-event' : '',
     message.streamError ? 'msg-stream-error' : '',
     isPinned ? 'msg-pinned' : '',
     pinFocused ? 'msg-pin-focus' : '',
@@ -1945,7 +2012,7 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs, onPi
         ) : (
           <>
             <div className="head">
-              <span className="who">{message.backend || 'assistant'}</span>
+              <span className="who">{isGoalEvent ? 'Goal' : (message.backend || 'assistant')}</span>
               <span>·</span>
               <span>{isStreaming ? 'streaming…' : msgTime(message.timestamp)}</span>
               {isPinned ? <PinnedTag/> : null}
@@ -1953,11 +2020,11 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs, onPi
                 <span className="msg-elapsed" title="Time since the previous user message">{formatMsgElapsed(elapsedMs)}</span>
               ) : null}
             </div>
-            {attachedProgress && attachedProgress.length ? (
+            {!isGoalEvent && attachedProgress && attachedProgress.length ? (
               <ProgressBreadcrumb progressRun={attachedProgress}/>
             ) : null}
             <div ref={contentRef}>
-              <AssistantBody message={message} isStreaming={isStreaming}/>
+              {isGoalEvent ? <GoalEventCard message={message}/> : <AssistantBody message={message} isStreaming={isStreaming}/>}
             </div>
           </>
         )}

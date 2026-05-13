@@ -5,8 +5,19 @@ import type { ChatService } from '../../services/chatService';
 import type { BackendRegistry } from '../../services/backends/registry';
 import type { BaseBackendAdapter } from '../../services/backends/base';
 import { StreamJobSupervisor, type PendingMessageSend } from '../../services/streamJobSupervisor';
-import type { EffortLevel, McpServerConfig, Request, Response, SendMessageResult, ServiceTier, WsServerFrame } from '../../types';
+import type { BackendGoalCapability, EffortLevel, GoalEvent, McpServerConfig, Request, Response, SendMessageResult, ServiceTier, ThreadGoal, WsServerFrame } from '../../types';
 import { logger } from '../../utils/logger';
+import {
+  cleanGoalObjectiveText,
+  clearGoalEvent,
+  createRuntimeGoalSnapshot,
+  formatGoalEventMessage,
+  goalEventDedupeKey,
+  goalEventFromGoal,
+  goalEventFromStatus,
+  normalizeGoalSnapshot,
+  supportedActionsFromGoalCapability,
+} from '../../services/chat/goalEventMessages';
 import { isCliProfileResolutionError, param } from './routeUtils';
 
 const log = logger.child({ module: 'goal-routes' });
@@ -53,16 +64,69 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
   } = opts;
   const router = express.Router();
 
-  async function resolveCodexGoalAdapter(conv: NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>) {
-    const runtime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
-    if (runtime.backendId !== 'codex') {
-      throw new Error(`Goals are only available for Codex conversations`);
+  function normalizeGoalCapability(capability: unknown): BackendGoalCapability {
+    if (capability === true) {
+      return { set: true, clear: true, pause: true, resume: true, status: 'native' };
     }
+    if (capability && typeof capability === 'object') {
+      const value = capability as Partial<BackendGoalCapability>;
+      return {
+        set: value.set === true,
+        clear: value.clear === true,
+        pause: value.pause === true,
+        resume: value.resume === true,
+        status: value.status === 'native' || value.status === 'transcript' ? value.status : 'none',
+      };
+    }
+    return { set: false, clear: false, pause: false, resume: false, status: 'none' };
+  }
+
+  async function resolveGoalAdapter(conv: NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>) {
+    const runtime = await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
     const adapter = backendRegistry.get(runtime.backendId);
     if (!adapter) {
       throw new Error(`Unknown backend: ${runtime.backendId}`);
     }
-    return { runtime, adapter, backendId: runtime.backendId };
+    const goals = normalizeGoalCapability(adapter.metadata.capabilities.goals);
+    if (!goals.set && goals.status === 'none' && !goals.clear) {
+      throw new Error(`Goals are not supported by ${adapter.metadata.label || runtime.backendId}`);
+    }
+    return { runtime, adapter, backendId: runtime.backendId, goals };
+  }
+
+  function unsupportedGoalAction(backendId: string, action: string): Error {
+    const adapter = backendRegistry.get(backendId);
+    const label = adapter?.metadata.label || backendId;
+    return new Error(`Goal ${action} is not supported by ${label}`);
+  }
+
+  async function persistGoalEventMessage(convId: string, backendId: string, goalEvent: GoalEvent) {
+    const goalMessage = await chatService.addMessage(
+      convId,
+      'system',
+      formatGoalEventMessage(goalEvent),
+      backendId,
+      null,
+      undefined,
+      undefined,
+      undefined,
+      { goalEvent },
+    );
+    if (goalMessage) {
+      sendIdleGoalFrame(convId, { type: 'assistant_message', message: goalMessage });
+    }
+    return goalMessage;
+  }
+
+  function conversationHasGoalEvent(conv: Conversation, goalEvent: GoalEvent): boolean {
+    const key = goalEventDedupeKey(goalEvent);
+    return conv.messages.some((message) => message.goalEvent && goalEventDedupeKey(message.goalEvent) === key);
+  }
+
+  async function persistGoalEventMessageOnce(convId: string, backendId: string, goalEvent: GoalEvent) {
+    const latestConv = await chatService.getConversation(convId);
+    if (latestConv && conversationHasGoalEvent(latestConv, goalEvent)) return null;
+    return persistGoalEventMessage(convId, backendId, goalEvent);
   }
 
   router.get('/conversations/:id/goal', async (req: Request, res: Response) => {
@@ -70,8 +134,9 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       const convId = param(req, 'id');
       const conv = await chatService.getConversation(convId);
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
-      const { runtime, adapter } = await resolveCodexGoalAdapter(conv);
-      const goal = await adapter.getGoal({
+      const { runtime, adapter, goals } = await resolveGoalAdapter(conv);
+      if (goals.status === 'none') throw unsupportedGoalAction(runtime.backendId, 'status');
+      const rawGoal = await adapter.getGoal({
         sessionId: conv.currentSessionId,
         conversationId: convId,
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
@@ -84,6 +149,11 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         effort: conv.effort || undefined,
         serviceTier: conv.serviceTier || undefined,
       });
+      const goal = rawGoal ? normalizeGoalSnapshot(rawGoal) : null;
+      const terminalGoalEvent = goal ? goalEventFromStatus(goal) : null;
+      if (terminalGoalEvent) {
+        await persistGoalEventMessageOnce(convId, runtime.backendId, terminalGoalEvent);
+      }
       res.json({ goal });
     } catch (err: unknown) {
       if (isCliProfileResolutionError(err)) {
@@ -109,6 +179,10 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       return res.status(400).json({ error: (err as Error).message });
     }
     if (!objective || typeof objective !== 'string' || !objective.trim()) {
+      return res.status(400).json({ error: 'Goal objective required' });
+    }
+    const cleanObjective = cleanGoalObjectiveText(objective);
+    if (!cleanObjective) {
       return res.status(400).json({ error: 'Goal objective required' });
     }
 
@@ -171,11 +245,16 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         throw err;
       }
       const backendId = runtime.backendId;
-      if (backendId !== 'codex') {
-        return res.status(400).json({ error: 'Goals are only available for Codex conversations' });
-      }
       if (cliProfileId && backend && backend !== backendId) {
         return res.status(400).json({ error: `CLI profile vendor ${backendId} does not match backend ${backend}` });
+      }
+      const adapter = backendRegistry.get(backendId);
+      if (!adapter) {
+        return res.status(400).json({ error: `Unknown backend: ${backendId}` });
+      }
+      const goals = normalizeGoalCapability(adapter.metadata.capabilities.goals);
+      if (!goals.set) {
+        return res.status(400).json({ error: unsupportedGoalAction(backendId, 'set').message });
       }
       await streamSupervisor.markPreparing(jobId, {
         backend: backendId,
@@ -190,10 +269,6 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         return res.json({ streamReady: false, aborted: true });
       }
 
-      const adapter = backendRegistry.get(backendId);
-      if (!adapter) {
-        return res.status(400).json({ error: `Unknown backend: ${backendId}` });
-      }
       const isNewSession = conv.messages.length === 0;
       const { systemPrompt, mcpServers } = await buildGoalRunEnvironment(convId, isNewSession);
       const refreshedConv = await chatService.getConversation(convId);
@@ -206,7 +281,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       const effectiveServiceTier = serviceTier !== undefined
         ? (refreshedConv?.serviceTier || undefined)
         : (conv.serviceTier || undefined);
-      const sendResult = adapter.setGoalObjective(objective.trim(), {
+      const sendResult = adapter.setGoalObjective(cleanObjective, {
         sessionId: conv.currentSessionId,
         conversationId: convId,
         cliProfileId: runtime.cliProfileId || refreshedConv?.cliProfileId || conv.cliProfileId || undefined,
@@ -220,6 +295,15 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         serviceTier: effectiveServiceTier,
         mcpServers,
       });
+      const runtimeGoal = createRuntimeGoalSnapshot({
+        backendId,
+        objective: cleanObjective,
+        sessionId: conv.currentSessionId,
+        threadId: conv.externalSessionId || null,
+        supportedActions: supportedActionsFromGoalCapability(goals),
+      });
+      const goalMessage = await persistGoalEventMessage(convId, backendId, goalEventFromGoal('set', runtimeGoal));
+      sendIdleGoalFrame(convId, { type: 'goal_updated', goal: runtimeGoal });
       await attachAndPipeStream({
         convId,
         conv,
@@ -229,13 +313,13 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         sendResult,
         jobId,
         needsTitleUpdate: isNewSession && !conv.titleManuallySet,
-        titleUpdateMessage: objective.trim(),
+        titleUpdateMessage: cleanObjective,
         model: model || conv.model || null,
         effort: effectiveEffort || null,
         serviceTier: effectiveServiceTier || null,
       });
       jobHandedOff = true;
-      res.json({ streamReady: true });
+      res.json({ streamReady: true, goal: runtimeGoal, message: goalMessage });
     } finally {
       if (pendingMessageSend) {
         streamSupervisor.clearPending(convId, pendingMessageSend);
@@ -261,7 +345,8 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     let jobHandedOff = false;
     let pendingMessageSend: PendingMessageSend | null = null;
     try {
-      const { runtime, adapter, backendId } = await resolveCodexGoalAdapter(conv);
+      const { runtime, adapter, backendId, goals } = await resolveGoalAdapter(conv);
+      if (!goals.resume) throw unsupportedGoalAction(backendId, 'resume');
       pendingMessageSend = await streamSupervisor.beginAcceptedTurn({
         conversationId: convId,
         sessionId: conv.currentSessionId,
@@ -287,6 +372,27 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       }
       conv = (await chatService.getConversation(convId))!;
       const { systemPrompt, mcpServers } = await buildGoalRunEnvironment(convId, false);
+      let resumedGoal: ThreadGoal | null = null;
+      try {
+        const currentGoal = await adapter.getGoal({
+          sessionId: conv.currentSessionId,
+          conversationId: convId,
+          cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
+          cliProfile: runtime.profile,
+          isNewSession: false,
+          workingDir: conv.workingDir || null,
+          systemPrompt: '',
+          externalSessionId: conv.externalSessionId || null,
+          model: conv.model || undefined,
+          effort: conv.effort || undefined,
+          serviceTier: conv.serviceTier || undefined,
+        });
+        resumedGoal = currentGoal
+          ? normalizeGoalSnapshot({ ...currentGoal, status: 'active', updatedAt: Date.now() })
+          : null;
+      } catch (err: unknown) {
+        log.debug('Goal resume could not read current goal snapshot', { conversationId: convId, error: err });
+      }
       const sendResult = adapter.resumeGoal({
         sessionId: conv.currentSessionId,
         conversationId: convId,
@@ -301,6 +407,10 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         serviceTier: conv.serviceTier || undefined,
         mcpServers,
       });
+      const goalMessage = resumedGoal
+        ? await persistGoalEventMessage(convId, backendId, goalEventFromGoal('resumed', resumedGoal))
+        : null;
+      if (resumedGoal) sendIdleGoalFrame(convId, { type: 'goal_updated', goal: resumedGoal });
       await attachAndPipeStream({
         convId,
         conv,
@@ -316,7 +426,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         serviceTier: conv.serviceTier || null,
       });
       jobHandedOff = true;
-      res.json({ streamReady: true });
+      res.json({ streamReady: true, goal: resumedGoal, message: goalMessage });
     } catch (err: unknown) {
       if (isCliProfileResolutionError(err)) {
         return res.status(400).json({ error: (err as Error).message });
@@ -341,8 +451,9 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       const convId = param(req, 'id');
       const conv = await chatService.getConversation(convId);
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
-      const { runtime, adapter } = await resolveCodexGoalAdapter(conv);
-      const goal = await adapter.pauseGoal({
+      const { runtime, adapter, backendId, goals } = await resolveGoalAdapter(conv);
+      if (!goals.pause) throw unsupportedGoalAction(backendId, 'pause');
+      const rawGoal = await adapter.pauseGoal({
         sessionId: conv.currentSessionId,
         conversationId: convId,
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
@@ -355,8 +466,12 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         effort: conv.effort || undefined,
         serviceTier: conv.serviceTier || undefined,
       });
+      const goal = rawGoal ? normalizeGoalSnapshot(rawGoal) : null;
+      const goalMessage = goal
+        ? await persistGoalEventMessage(convId, backendId, goalEventFromGoal('paused', goal))
+        : null;
       if (goal) sendIdleGoalFrame(convId, { type: 'goal_updated', goal });
-      res.json({ goal });
+      res.json({ goal, message: goalMessage });
     } catch (err: unknown) {
       if (isCliProfileResolutionError(err)) {
         return res.status(400).json({ error: (err as Error).message });
@@ -370,7 +485,11 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       const convId = param(req, 'id');
       const conv = await chatService.getConversation(convId);
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
-      const { runtime, adapter } = await resolveCodexGoalAdapter(conv);
+      const { runtime, adapter, backendId, goals } = await resolveGoalAdapter(conv);
+      if (!goals.clear) throw unsupportedGoalAction(backendId, 'clear');
+      if (backendId === 'claude-code' && hasInFlightTurn(convId)) {
+        return res.status(409).json({ error: 'Cannot clear a Claude Code goal while a turn is active' });
+      }
       const result = await adapter.clearGoal({
         sessionId: conv.currentSessionId,
         conversationId: convId,
@@ -384,8 +503,9 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         effort: conv.effort || undefined,
         serviceTier: conv.serviceTier || undefined,
       });
-      sendIdleGoalFrame(convId, { type: 'goal_cleared', threadId: result.threadId || conv.externalSessionId || null });
-      res.json(result);
+      const goalMessage = await persistGoalEventMessage(convId, backendId, clearGoalEvent(backendId));
+      sendIdleGoalFrame(convId, { type: 'goal_cleared', threadId: result.threadId || result.sessionId || conv.externalSessionId || conv.currentSessionId || null });
+      res.json({ ...result, message: goalMessage });
     } catch (err: unknown) {
       if (isCliProfileResolutionError(err)) {
         return res.status(400).json({ error: (err as Error).message });

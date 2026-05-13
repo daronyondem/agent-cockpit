@@ -700,12 +700,50 @@ Detection is filesystem-based and read-only: `AGENTS.md` covers Codex/vendor-neu
                                 // Error source. Terminal backend/server failures are
                                 // persisted; non-terminal warning frames are not.
   },
+  goalEvent?: GoalEvent,        // System only. Marks a durable goal lifecycle event
+                                //   (`set`, `resumed`, `paused`, `achieved`,
+                                //   `budget_limited`, `cleared`, etc.) rendered by
+                                //   desktop and mobile as a goal timeline card rather
+                                //   than ordinary assistant/user dialogue.
   pinned?: boolean              // User-controlled pin marker. `true` marks the
                                 //   active-session message for the pinned strip
                                 //   and inline pinned styling. Omitted/absent is
                                 //   equivalent to unpinned.
 }
 ```
+
+### GoalEvent
+
+```ts
+type GoalEventKind =
+  | 'set'
+  | 'resumed'
+  | 'paused'
+  | 'achieved'
+  | 'budget_limited'
+  | 'cleared'
+  | 'updated'
+  | 'unknown';
+
+interface GoalEvent {
+  kind: GoalEventKind;
+  backend?: 'codex' | 'claude-code' | string;
+  objective?: string;
+  status?: 'active' | 'paused' | 'budgetLimited' | 'complete' | 'cleared' | 'unknown';
+  reason?: string | null;
+  goal?: ThreadGoal | null;
+}
+```
+
+Goal lifecycle messages use `role: 'system'` and ordinary `Message.content`
+for export/search previews, but `goalEvent` is the authoritative structured
+payload for rendering. The route layer persists a `set` event for every
+accepted goal objective, route-level `paused`/`resumed`/`cleared` events for
+idle controls, and terminal stream-derived events such as `achieved` or
+`budget_limited` when a backend reports those statuses. Goal objectives stored
+on both `goalEvent.objective` and embedded `goalEvent.goal.objective` are
+normalized by the route layer to remove accidental copied lifecycle-card or
+goal-strip prefixes such as `Goal setcodex...`.
 
 ### ContentBlock
 
