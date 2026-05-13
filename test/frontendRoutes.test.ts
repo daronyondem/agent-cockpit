@@ -91,6 +91,9 @@ describe('frontend routes', () => {
     expect(cssSrc).toMatch(/\.app-shell \{[\s\S]*width: var\(--app-width, 100vw\);/);
     expect(cssSrc).toMatch(/\.modal-backdrop \{[\s\S]*top: var\(--app-top, 0px\);/);
     expect(cssSrc).toMatch(/\.modal-backdrop \{[\s\S]*left: var\(--app-left, 0px\);/);
+    expect(cssSrc).toMatch(/\.modal-header > div \{[\s\S]*min-width: 0;/);
+    expect(cssSrc).toMatch(/\.modal h2 \{[\s\S]*text-overflow: ellipsis;/);
+    expect(cssSrc).toMatch(/\.sheet-close \{[\s\S]*flex: 0 0 auto;/);
     expect(cssSrc).toMatch(/textarea, input \{[\s\S]*font-size: 16px;/);
     expect(cssSrc).toMatch(/\.editor \{[\s\S]*font-size: 16px;/);
     expect(appSrc).toContain('className="modal-scroll run-settings-scroll"');
