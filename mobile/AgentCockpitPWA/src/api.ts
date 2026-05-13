@@ -6,6 +6,7 @@ import type {
   ConversationListItem,
   CurrentUser,
   DirectoryBrowseResponse,
+  EffortLevel,
   ExplorerPreviewResponse,
   ExplorerTreeResponse,
   FilePreviewResponse,
@@ -14,8 +15,10 @@ import type {
   QueuedMessage,
   ResetSessionResponse,
   SendMessageResponse,
+  ServiceTier,
   SessionHistoryItem,
   Settings,
+  ThreadGoal,
 } from './types';
 import type { CreateConversationRequest, SetMessagePinnedRequest } from '../../../src/contracts/conversations';
 import type {
@@ -35,6 +38,15 @@ type RequestOptions = {
 type UploadOptions = {
   onProgress?: (progress: number) => void;
   onXhr?: (xhr: XMLHttpRequest) => void;
+};
+
+export type SetGoalRequest = {
+  objective: string;
+  backend?: string;
+  cliProfileId?: string;
+  model?: string;
+  effort?: EffortLevel;
+  serviceTier?: ServiceTier | 'default';
 };
 
 export class AgentAPIError extends Error {
@@ -149,6 +161,41 @@ export class AgentCockpitAPI {
       csrf: true,
       body: stripUndefined(input),
     });
+  }
+
+  async getGoal(conversationID: string): Promise<{ goal: ThreadGoal | null }> {
+    return this.request<{ goal: ThreadGoal | null }>('GET', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal`, {
+      csrf: true,
+    });
+  }
+
+  async setGoal(conversationID: string, input: SetGoalRequest): Promise<{ streamReady?: boolean }> {
+    return this.request<{ streamReady?: boolean }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal`, {
+      csrf: true,
+      body: stripUndefined(input),
+    });
+  }
+
+  async resumeGoal(conversationID: string): Promise<{ streamReady?: boolean }> {
+    return this.request<{ streamReady?: boolean }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal/resume`, {
+      csrf: true,
+      body: {},
+    });
+  }
+
+  async pauseGoal(conversationID: string): Promise<{ goal: ThreadGoal | null }> {
+    return this.request<{ goal: ThreadGoal | null }>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal/pause`, {
+      csrf: true,
+      body: {},
+    });
+  }
+
+  async clearGoal(conversationID: string): Promise<{ cleared: boolean; threadId?: string | null }> {
+    return this.request<{ cleared: boolean; threadId?: string | null }>(
+      'DELETE',
+      `/api/chat/conversations/${encodeURIComponent(conversationID)}/goal`,
+      { csrf: true },
+    );
   }
 
   async sendInput(conversationID: string, text: string, streamActive: boolean): Promise<InputResponse> {

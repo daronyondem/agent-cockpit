@@ -220,6 +220,19 @@ export interface ConversationInputResponse {
   mode: 'stdin' | 'message';
 }
 
+export type CodexThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete';
+
+export interface CodexThreadGoal {
+  threadId: string;
+  objective: string;
+  status: CodexThreadGoalStatus;
+  tokenBudget: number | null;
+  tokensUsed: number;
+  timeUsedSeconds: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface StreamJobRuntimeInfo {
   externalSessionId?: string;
   activeTurnId?: string;
@@ -289,6 +302,8 @@ export type StreamEvent =
   | { type: 'title_updated'; title?: string }
   | { type: 'usage'; usage: Usage; sessionUsage?: Usage }
   | { type: 'error'; error?: string; terminal?: boolean; source?: StreamError['source'] }
+  | { type: 'goal_updated'; goal: CodexThreadGoal }
+  | { type: 'goal_cleared'; threadId?: string | null }
   | { type: 'done' }
   | { type: 'replay_start'; bufferedEvents?: number }
   | { type: 'replay_end' }

@@ -138,6 +138,29 @@ describe('frontend routes', () => {
     expect(appSrc).not.toContain("socket.onerror = () => setErrorMessage('Stream connection failed.')");
   });
 
+  test('mobile PWA exposes Codex goal controls through the composer shell', () => {
+    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
+    const modelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+
+    expect(apiSrc).toContain('async getGoal');
+    expect(apiSrc).toContain('async setGoal');
+    expect(apiSrc).toContain('async resumeGoal');
+    expect(apiSrc).toContain('async pauseGoal');
+    expect(apiSrc).toContain('async clearGoal');
+    expect(modelSrc).toContain('function goalElapsedSeconds');
+    expect(modelSrc).toContain('function shouldApplyGoalSnapshot');
+    expect(appSrc).toContain('function GoalStrip');
+    expect(appSrc).toContain('function handleGoalSlash');
+    expect(appSrc).toContain("case 'goal_updated'");
+    expect(appSrc).toContain("case 'goal_cleared'");
+    expect(appSrc).toContain('activeGoalIDs');
+    expect(appSrc).toContain('aria-pressed={props.goalMode}');
+    expect(cssSrc).toContain('.goal-strip');
+    expect(cssSrc).toContain('.goal-toggle.enabled');
+  });
+
   test('memory update notifications open the focused memory-update modal first', () => {
     const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
     const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');

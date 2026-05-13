@@ -8,6 +8,8 @@ import type {
   ConversationArtifact,
   ConversationInputResponse,
   ConversationListItem,
+  CodexThreadGoal,
+  CodexThreadGoalStatus,
   CurrentUserResponse,
   EffortLevel,
   Message,
@@ -28,6 +30,8 @@ export type {
   Conversation,
   ConversationArtifact,
   ConversationListItem,
+  CodexThreadGoal,
+  CodexThreadGoalStatus,
   EffortLevel,
   Message,
   QueuedMessage,
@@ -38,6 +42,9 @@ export type {
   ToolActivity,
   Usage,
 };
+
+export type ThreadGoal = CodexThreadGoal;
+export type ThreadGoalStatus = CodexThreadGoalStatus;
 
 export type PendingAttachment = {
   id: string;
@@ -154,6 +161,8 @@ export type StreamEvent =
   | { type: 'title_updated'; title?: string }
   | { type: 'usage'; usage: Usage; sessionUsage?: Usage }
   | { type: 'error'; error?: string; terminal?: boolean; source?: StreamError['source'] }
+  | { type: 'goal_updated'; goal: ThreadGoal }
+  | { type: 'goal_cleared'; threadId?: string | null }
   | { type: 'done' }
   | { type: 'replay_start'; bufferedEvents?: number }
   | { type: 'replay_end' }
