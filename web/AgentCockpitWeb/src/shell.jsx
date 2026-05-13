@@ -38,6 +38,7 @@ import {
 } from './chat/messageParsing';
 import { AttTray } from './chat/attachments.jsx';
 import { QueueStack, SuspendedQueueBanner } from './chat/queue.jsx';
+import { goalElapsedSeconds } from './goalState.js';
 
 const KbBrowser = React.lazy(() => import('./screens/kbBrowser.jsx').then(mod => ({ default: mod.KbBrowser })));
 const FilesBrowser = React.lazy(() => import('./screens/filesBrowser.jsx').then(mod => ({ default: mod.FilesBrowser })));
@@ -794,7 +795,23 @@ function GoalStrip({ convId, goal, streaming, sending }){
   const status = goal.status || 'active';
   const canPause = status === 'active';
   const canResume = status === 'paused' && !streaming;
-  const elapsed = compactDuration(goal.timeUsedSeconds || 0);
+  const [nowMs, setNowMs] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!goal) return undefined;
+    StreamStore.refreshGoal(convId);
+    const delay = status === 'active' ? 2000 : 5000;
+    const poll = setInterval(() => {
+      setNowMs(Date.now());
+      StreamStore.refreshGoal(convId);
+    }, delay);
+    return () => clearInterval(poll);
+  }, [convId, goal?.threadId, status]);
+  React.useEffect(() => {
+    if (status !== 'active') return undefined;
+    const tick = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(tick);
+  }, [status, goal?.updatedAt, goal?.timeUsedSeconds]);
+  const elapsed = compactDuration(goalElapsedSeconds(goal, nowMs));
   const objective = typeof goal.objective === 'string' ? goal.objective : '';
   return (
     <div className={"goal-strip status-" + status}>

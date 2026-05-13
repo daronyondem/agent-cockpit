@@ -118,6 +118,19 @@ async function startAcceptedStream(convId: string, ws: FakeWS) {
   api.fetch.mockReset();
 }
 
+function makeGoal(status: 'active' | 'paused' | 'budgetLimited' | 'complete', updatedAt: number) {
+  return {
+    threadId: 'thread-goal',
+    objective: 'ship the goal',
+    status,
+    tokenBudget: null,
+    tokensUsed: 0,
+    timeUsedSeconds: 12,
+    createdAt: updatedAt - 1000,
+    updatedAt,
+  };
+}
+
 test('plan-exit frame sets pendingInteraction and uiState=awaiting', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;
@@ -283,6 +296,71 @@ test('hydrateActiveStreams marks server-active conversations as streaming and bl
 
   await Store.send('c1', 'should not post');
   expect(api.fetch).not.toHaveBeenCalled();
+});
+
+test('active goal keeps sidebar state streaming after the current turn is done', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  Store.setActiveConvId('c1');
+  await startAcceptedStream('c1', ws);
+  ws.dispatch({ type: 'goal_updated', goal: makeGoal('active', 2000) });
+  ws.dispatch({ type: 'done' });
+
+  expect(Store.getState('c1').streaming).toBe(false);
+  expect(Store.getState('c1').uiState).toBeNull();
+  expect(Store.convStates()['c1']).toBe('streaming');
+});
+
+test('paused goal removes goal-derived streaming sidebar state', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  ws.dispatch({ type: 'goal_updated', goal: makeGoal('active', 2000) });
+  expect(Store.convStates()['c1']).toBe('streaming');
+
+  ws.dispatch({ type: 'goal_updated', goal: makeGoal('paused', 3000) });
+
+  expect(Store.getState('c1').goal.status).toBe('paused');
+  expect(Store.convStates()['c1']).toBe('idle');
+});
+
+test('older replayed goal updates cannot overwrite a newer paused goal', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  ws.dispatch({ type: 'goal_updated', goal: makeGoal('active', 1000) });
+  ws.dispatch({ type: 'goal_updated', goal: makeGoal('paused', 2000) });
+  ws.dispatch({ type: 'goal_updated', goal: makeGoal('active', 1000) });
+
+  expect(Store.getState('c1').goal.status).toBe('paused');
+  expect(Store.convStates()['c1']).toBe('idle');
+});
+
+test('load hydrates active Codex goal and notifies sidebar subscribers', async () => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  const listener = jest.fn();
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    id: 'c1',
+    title: 'Goal conversation',
+    backend: 'codex',
+    externalSessionId: 'thread-goal',
+    messages: [],
+  }));
+  api.conv = {
+    getGoal: jest.fn().mockResolvedValue({ goal: makeGoal('active', 4000) }),
+  };
+
+  Store.subscribeGlobal(listener);
+  await Store.load('c1');
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(api.conv.getGoal).toHaveBeenCalledWith('c1');
+  expect(Store.getState('c1').goal.status).toBe('active');
+  expect(Store.convStates()['c1']).toBe('streaming');
+  expect(listener).toHaveBeenCalled();
 });
 
 test('done frame preserves pendingInteraction and sets uiState=awaiting', async () => {
