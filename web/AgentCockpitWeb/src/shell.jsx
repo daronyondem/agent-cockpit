@@ -123,7 +123,7 @@ function App(){
   const [viewingArchive, setViewingArchive] = React.useState(false);
   const [updateTarget, setUpdateTarget] = React.useState(null); // { localVersion, remoteVersion } | null
   const [restarting, setRestarting] = React.useState(false);
-  const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label, initialTab } | null
+  const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label, initialTab, initialContextMapSection } | null
   const [memoryUpdateView, setMemoryUpdateView] = React.useState(null); // { hash, label, update } | null
   const [memoryReviewView, setMemoryReviewView] = React.useState(null); // { hash, label, runId } | null
   const [welcomeOpen, setWelcomeOpen] = React.useState(() => {
@@ -367,14 +367,19 @@ function App(){
     });
   }, []);
 
-  const onOpenWorkspaceSettings = React.useCallback((hash, label, initialTab) => {
+  const onOpenWorkspaceSettings = React.useCallback((hash, label, initialTab, initialContextMapSection) => {
     setWelcomeOpen(false);
     setKbView(null);
     setFilesView(null);
     setSettingsView(null);
     setMemoryUpdateView(null);
     setMemoryReviewView(null);
-    setWorkspaceSettings({ hash, label, initialTab: initialTab || null });
+    setWorkspaceSettings({
+      hash,
+      label,
+      initialTab: initialTab || null,
+      initialContextMapSection: initialContextMapSection || null,
+    });
     setSbOpen(false);
   }, []);
 
@@ -504,6 +509,7 @@ function App(){
               hash={workspaceSettings.hash}
               label={workspaceSettings.label}
               initialTab={workspaceSettings.initialTab}
+              initialContextMapSection={workspaceSettings.initialContextMapSection}
               onOpenMemoryReview={onOpenMemoryReview}
               onClose={onCloseWorkspaceSettings}
             />
@@ -3661,7 +3667,8 @@ function ComposerContextMapIcon({ conv, workspaceLabel, onOpenWorkspaceSettings 
   function openContextMap(){
     setOpen(false);
     if (onOpenWorkspaceSettings && conv && conv.workspaceHash) {
-      onOpenWorkspaceSettings(conv.workspaceHash, workspaceLabel || 'workspace', 'contextMap');
+      const targetSection = pending > 0 ? 'attention' : null;
+      onOpenWorkspaceSettings(conv.workspaceHash, workspaceLabel || 'workspace', 'contextMap', targetSection);
     }
   }
 

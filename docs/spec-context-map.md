@@ -274,7 +274,7 @@ The Context Map left rail and right content area scroll vertically as separate p
 
 ### Chat Surface
 
-Conversations expose compact `contextMap` status when the workspace has Context Map enabled. The composer can show a Context Map notification when items need attention or a run is active/failed. Context Map notifications are not inserted into the transcript as chat messages.
+Conversations expose compact `contextMap` status when the workspace has Context Map enabled. The composer can show a Context Map notification when items need attention or a run is active/failed. Context Map notifications are not inserted into the transcript as chat messages. Opening the notification routes to Workspace Settings on the Context Map tab; when the compact status reports pending review candidates, the Context Map tab opens directly to its Needs Attention section.
 
 ### User Workflow Summary
 
@@ -285,6 +285,7 @@ Conversations expose compact `contextMap` status when the workspace has Context 
 | Click Details | Modal opens with loading state, detail content and relationship-neighborhood rows. | `GET /context-map/entities/:entityId` reads aliases, facts, relationships, evidence, and audit rows with secret redaction. |
 | Edit entity | Detail modal/card refreshes after save. | Entity row updates, audit row is inserted, update frame is broadcast. |
 | Review Needs Attention | Pending or dismissed candidate groups show by source/run with candidate impact previews. | `GET /context-map/review` reads candidate rows, counts, and recent/referenced runs. |
+| Open composer Context Map notification | Workspace Settings opens on Context Map; pending candidates focus the Needs Attention section, otherwise Overview remains the entry point. | No mutation; the client uses the conversation `contextMap` status already hydrated from `GET /conversations/:id` or update frames. |
 | Accept All | One confirmation, then non-dismissed pending items apply in dependency-aware order. | Entity/update/evidence candidates are applied before relationships; relationship dependencies can be applied transactionally. |
 | Rescan Now | Right content pane returns to Overview and shows running progress. | Async `manual_rebuild` starts and reprocesses selected workspace sources regardless of cursors. |
 | Stop | Running row clears after refresh/update. | Active run aborts cooperatively and is marked `stopped`; interrupted work remains retryable. |
