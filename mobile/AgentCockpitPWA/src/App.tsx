@@ -11,15 +11,21 @@ import {
   fileReferencesFromParsed,
   formatBytes,
   formatDate,
+  formatGoalElapsed,
   formatPercent,
+  goalElapsedSeconds,
+  goalSnapshotTimeMs,
+  goalStatusLabel,
   joinExplorerPath,
   lastTwoPathComponents,
   isImageFileName,
+  isActiveGoal,
   makeConversationArtifactReference,
   makeExplorerFileReference,
   parentExplorerPath,
   parseMessageFiles,
   reconcileEffort,
+  shouldApplyGoalSnapshot,
   updateSessionsAfterReset,
   upsertMessage,
   userLabel,
@@ -49,6 +55,7 @@ import type {
   ServiceTier,
   Settings,
   StreamEvent,
+  ThreadGoal,
   Usage,
 } from './types';
 
@@ -90,6 +97,12 @@ export default function App() {
   const streamReconnectAttemptsRef = useRef(0);
   const activeConversationRef = useRef<Conversation | null>(null);
   const isStreamingRef = useRef(false);
+  const goalUpdatedAtByConversationRef = useRef<Map<string, number>>(new Map());
+  const goalStateRef = useRef<{ conversationID: string | null; goal: ThreadGoal | null; updatedAtMs: number | null }>({
+    conversationID: null,
+    goal: null,
+    updatedAtMs: null,
+  });
   const resumeStreamConnectionRef = useRef<(conversationID: string, force?: boolean) => Promise<void> | void>(() => undefined);
   const attachInputRef = useRef<HTMLInputElement | null>(null);
   const explorerUploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -103,9 +116,13 @@ export default function App() {
   const [profileMetadata, setProfileMetadata] = useState<Record<string, BackendMetadata>>({});
   const [conversations, setConversations] = useState<ConversationListItem[]>([]);
   const [activeStreamIDs, setActiveStreamIDs] = useState<Set<string>>(new Set());
+  const [activeGoalIDs, setActiveGoalIDs] = useState<Set<string>>(new Set());
   const [listArchived, setListArchived] = useState(false);
   const [workspaceFilter, setWorkspaceFilter] = useState(ALL_WORKSPACES);
   const [activeConversation, setActiveConversation] = useState<Conversation | null>(null);
+  const [goal, setGoal] = useState<ThreadGoal | null>(null);
+  const [goalUpdatedAtMs, setGoalUpdatedAtMs] = useState<number | null>(null);
+  const [goalMode, setGoalMode] = useState(false);
   const [draft, setDraft] = useState('');
   const [streamText, setStreamText] = useState('');
   const [isStreaming, setIsStreaming] = useState(false);
@@ -160,6 +177,7 @@ export default function App() {
   );
   const supportedEfforts = selectedModelMetadata?.supportedEffortLevels || [];
   const selectedBackendID = selectedProfile?.vendor || selectedBackendMetadata?.id || selectedBackend;
+  const goalCapable = selectedBackendID === 'codex';
   const serviceTierEnabled = selectedBackendID === 'codex';
   const hasUploadingAttachments = pendingAttachments.some((attachment) => attachment.status === 'uploading');
   const profileSelectionLocked = (activeConversation?.messages.length || 0) > 0;
@@ -180,6 +198,12 @@ export default function App() {
   useEffect(() => {
     isStreamingRef.current = isStreaming;
   }, [isStreaming]);
+
+  useEffect(() => {
+    if (!goalCapable && goalMode) {
+      setGoalMode(false);
+    }
+  }, [goalCapable, goalMode]);
 
   useEffect(() => {
     resumeStreamConnectionRef.current = resumeStreamConnection;
@@ -314,6 +338,70 @@ export default function App() {
     }
   }
 
+  function clearOpenGoalState(conversationID: string | null = activeConversationRef.current?.id || null) {
+    goalStateRef.current = { conversationID, goal: null, updatedAtMs: null };
+    setGoal(null);
+    setGoalUpdatedAtMs(null);
+  }
+
+  function commitGoalSnapshot(conversationID: string, nextGoal: ThreadGoal | null, timestampMs: number | null) {
+    if (timestampMs) {
+      goalUpdatedAtByConversationRef.current.set(conversationID, timestampMs);
+    } else {
+      goalUpdatedAtByConversationRef.current.delete(conversationID);
+    }
+
+    setActiveGoalIDs((current) => {
+      const next = new Set(current);
+      if (isActiveGoal(nextGoal)) next.add(conversationID);
+      else next.delete(conversationID);
+      return next;
+    });
+
+    if (activeConversationRef.current?.id === conversationID) {
+      goalStateRef.current = {
+        conversationID,
+        goal: nextGoal,
+        updatedAtMs: timestampMs,
+      };
+      setGoal(nextGoal);
+      setGoalUpdatedAtMs(timestampMs);
+    }
+  }
+
+  function applyGoalSnapshot(conversationID: string, nextGoal: ThreadGoal | null): boolean {
+    const currentTimestamp = goalUpdatedAtByConversationRef.current.get(conversationID) || null;
+    if (!shouldApplyGoalSnapshot(currentTimestamp, nextGoal)) {
+      return false;
+    }
+
+    const nextTimestamp = nextGoal ? goalSnapshotTimeMs(nextGoal) || currentTimestamp : Date.now();
+    commitGoalSnapshot(conversationID, nextGoal, nextTimestamp || null);
+    return true;
+  }
+
+  async function refreshGoalState(conversationID = activeConversationRef.current?.id) {
+    const conversation = activeConversationRef.current;
+    if (!conversationID || !conversation || conversation.id !== conversationID) {
+      return null;
+    }
+    if (conversation.backend !== 'codex') {
+      applyGoalSnapshot(conversationID, null);
+      return null;
+    }
+    if (!conversation.externalSessionId) {
+      if (!goalStateRef.current.goal) applyGoalSnapshot(conversationID, null);
+      return goalStateRef.current.goal;
+    }
+    try {
+      const response = await clientRef.current.getGoal(conversationID);
+      applyGoalSnapshot(conversationID, response.goal || null);
+      return response.goal || null;
+    } catch {
+      return null;
+    }
+  }
+
   async function openConversation(id: string) {
     try {
       setLoading(true);
@@ -332,10 +420,13 @@ export default function App() {
       setStreamText('');
       setPendingInteraction(null);
       setPendingAttachments([]);
+      setGoalMode(false);
       hydrateSelectionFromConversation(conversation);
       setIsStreaming(streamActive);
       isStreamingRef.current = streamActive;
       setScreen('chat');
+      clearOpenGoalState(id);
+      void refreshGoalState(id);
       if (streamActive) {
         startStream(id);
       }
@@ -371,6 +462,8 @@ export default function App() {
       setNewWorkingDir('');
       setActiveConversation(conversation);
       activeConversationRef.current = conversation;
+      clearOpenGoalState(conversation.id);
+      setGoalMode(false);
       setConversations((items) => [conversationListItemFromConversation(conversation), ...items]);
       setScreen('chat');
     } catch (error) {
@@ -385,7 +478,21 @@ export default function App() {
       setErrorMessage('Answer the prompt above to continue.');
       return;
     }
-    if (hasUploadingAttachments || (!content && !attachments.length)) {
+    if (hasUploadingAttachments) {
+      return;
+    }
+    if (handleGoalSlash(content, attachments)) {
+      return;
+    }
+    if (!content && !attachments.length) {
+      return;
+    }
+    if (goalMode) {
+      if (isStreaming) {
+        setErrorMessage('Wait for the current stream to finish before setting a goal.');
+        return;
+      }
+      await setGoalNow({ content, attachments: attachments.length ? attachments : undefined });
       return;
     }
     if (isStreaming) {
@@ -393,6 +500,43 @@ export default function App() {
       return;
     }
     await sendMessageNow({ content, attachments: attachments.length ? attachments : undefined });
+  }
+
+  function handleGoalSlash(content: string, attachments: AttachmentMeta[]): boolean {
+    if (!content || !/^\/goal(?:\s|$)/i.test(content)) {
+      return false;
+    }
+    if (!goalCapable) {
+      setErrorMessage('Goals are only available for Codex conversations.');
+      return true;
+    }
+    const arg = content.replace(/^\/goal\b/i, '').trim();
+    if (!arg) {
+      setDraft('');
+      setGoalMode(true);
+      setErrorMessage(null);
+      return true;
+    }
+    const command = arg.toLowerCase();
+    setDraft('');
+    if (command === 'pause') {
+      void pauseGoalNow();
+      return true;
+    }
+    if (command === 'resume') {
+      void resumeGoalNow();
+      return true;
+    }
+    if (command === 'clear') {
+      void clearGoalNow();
+      return true;
+    }
+    if (isStreaming) {
+      setErrorMessage('Wait for the current stream to finish before setting a goal.');
+      return true;
+    }
+    void setGoalNow({ content: arg, attachments: attachments.length ? attachments : undefined });
+    return true;
   }
 
   async function sendMessageNow(message: QueuedMessage) {
@@ -425,6 +569,107 @@ export default function App() {
       }
     } catch (error) {
       setDraft(message.content);
+      handleError(error);
+    }
+  }
+
+  async function setGoalNow(message: QueuedMessage) {
+    const conversation = activeConversation;
+    if (!conversation) {
+      return;
+    }
+    if (!goalCapable) {
+      setErrorMessage('Goals are only available for Codex conversations.');
+      return;
+    }
+    const objective = wireContent(message).trim();
+    if (!objective) {
+      return;
+    }
+    try {
+      setDraft('');
+      setPendingAttachments([]);
+      setPendingInteraction(null);
+      const response = await clientRef.current.setGoal(conversation.id, {
+        objective,
+        backend: selectedBackend,
+        cliProfileId: selectedCliProfileId,
+        model: selectedModel,
+        effort: selectedEffort,
+        serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
+      });
+      setGoalMode(false);
+      setActiveConversation((current) =>
+        current && current.id === conversation.id
+          ? {
+              ...current,
+              backend: selectedBackend || current.backend,
+              cliProfileId: selectedCliProfileId || current.cliProfileId,
+              model: selectedModel || current.model,
+              effort: selectedEffort || current.effort,
+              serviceTier: selectedServiceTier === 'fast' ? 'fast' : undefined,
+            }
+          : current,
+      );
+      if (response.streamReady !== false) {
+        startStream(conversation.id);
+      }
+    } catch (error) {
+      setDraft(message.content);
+      if (error instanceof AgentAPIError && error.status === 409) {
+        startStream(conversation.id);
+        return;
+      }
+      handleError(error);
+    }
+  }
+
+  async function pauseGoalNow() {
+    const conversation = activeConversation;
+    if (!conversation || !goal) {
+      return;
+    }
+    try {
+      const response = await clientRef.current.pauseGoal(conversation.id);
+      applyGoalSnapshot(conversation.id, response.goal || null);
+    } catch (error) {
+      handleError(error);
+    }
+  }
+
+  async function resumeGoalNow() {
+    const conversation = activeConversation;
+    if (!conversation || !goal || isStreaming) {
+      return;
+    }
+    const previousGoal = goal;
+    commitGoalSnapshot(conversation.id, { ...goal, status: 'active', updatedAt: Date.now() }, goalSnapshotTimeMs(goal) || Date.now());
+    try {
+      const response = await clientRef.current.resumeGoal(conversation.id);
+      if (response.streamReady !== false) {
+        startStream(conversation.id);
+      }
+    } catch (error) {
+      commitGoalSnapshot(conversation.id, previousGoal, Date.now());
+      if (error instanceof AgentAPIError && error.status === 409) {
+        startStream(conversation.id);
+        return;
+      }
+      handleError(error);
+    }
+  }
+
+  async function clearGoalNow() {
+    const conversation = activeConversation;
+    if (!conversation || !goal) {
+      return;
+    }
+    const previousGoal = goal;
+    applyGoalSnapshot(conversation.id, null);
+    try {
+      await clientRef.current.clearGoal(conversation.id);
+    } catch (error) {
+      commitGoalSnapshot(conversation.id, previousGoal, Date.now());
       handleError(error);
     }
   }
@@ -602,6 +847,12 @@ export default function App() {
           setConversations((items) => items.map((item) => (item.id === conversationID ? { ...item, title: event.title || item.title } : item)));
         }
         break;
+      case 'goal_updated':
+        applyGoalSnapshot(conversationID, event.goal);
+        break;
+      case 'goal_cleared':
+        applyGoalSnapshot(conversationID, null);
+        break;
       case 'error':
         if (event.terminal !== false) {
           markListStreamFinished(conversationID);
@@ -673,6 +924,12 @@ export default function App() {
           current && current.id === conversationID ? { ...current, usage: event.usage, sessionUsage: event.sessionUsage || current.sessionUsage } : current,
         );
         break;
+      case 'goal_updated':
+        applyGoalSnapshot(conversationID, event.goal);
+        break;
+      case 'goal_cleared':
+        applyGoalSnapshot(conversationID, null);
+        break;
       case 'error':
         setErrorMessage(event.error || 'The stream ended with an error.');
         if (event.terminal !== false) {
@@ -714,15 +971,18 @@ export default function App() {
         clientRef.current.getActiveStreams(),
         clientRef.current.listConversations(listArchived),
       ]);
+      if (activeConversationRef.current?.id === conversationID) {
+        activeConversationRef.current = conversation;
+      }
       setActiveConversation((current) => {
         if (current?.id !== conversationID) {
           return current;
         }
-        activeConversationRef.current = conversation;
         return conversation;
       });
       setActiveStreamIDs(streamIDs);
       setConversations(loadedConversations);
+      await refreshGoalState(conversationID);
       if (conversation.messageQueue?.length && !pendingInteraction) {
         await drainNextQueuedMessage(conversation);
       }
@@ -761,7 +1021,9 @@ export default function App() {
       setPendingInteraction(null);
       await clientRef.current.abortConversation(conversation.id);
       const reloaded = await clientRef.current.getConversation(conversation.id);
+      activeConversationRef.current = reloaded;
       setActiveConversation(reloaded);
+      await refreshGoalState(conversation.id);
       await refreshConversationList();
     } catch (error) {
       handleError(error);
@@ -1410,6 +1672,7 @@ export default function App() {
         <ConversationListScreen
           conversations={conversations}
           activeStreamIDs={activeStreamIDs}
+          activeGoalIDs={activeGoalIDs}
           archived={listArchived}
           workspaceFilter={workspaceFilter}
           loading={loading}
@@ -1434,6 +1697,10 @@ export default function App() {
           isStreaming={isStreaming}
           loading={loading}
           errorMessage={errorMessage}
+          goal={goal}
+          goalUpdatedAtMs={goalUpdatedAtMs}
+          goalMode={goalMode}
+          goalCapable={goalCapable}
           pendingInteraction={pendingInteraction}
           interactionAnswer={interactionAnswer}
           setInteractionAnswer={setInteractionAnswer}
@@ -1455,6 +1722,11 @@ export default function App() {
           }}
           onSend={() => void sendDraft()}
           onStop={() => void stopStream()}
+          onGoalModeChange={setGoalMode}
+          onRefreshGoal={() => void refreshGoalState()}
+          onPauseGoal={() => void pauseGoalNow()}
+          onResumeGoal={() => void resumeGoalNow()}
+          onClearGoal={() => void clearGoalNow()}
           onAttach={() => attachInputRef.current?.click()}
           onRemoveAttachment={(id) => void removePendingAttachment(id)}
           onOcrAttachment={(id) => void ocrPendingAttachment(id)}
@@ -1623,6 +1895,7 @@ export default function App() {
 function ConversationListScreen(props: {
   conversations: ConversationListItem[];
   activeStreamIDs: Set<string>;
+  activeGoalIDs: Set<string>;
   archived: boolean;
   workspaceFilter: string;
   loading: boolean;
@@ -1694,32 +1967,37 @@ function ConversationListScreen(props: {
       </nav>
       {props.errorMessage ? <ErrorBanner message={props.errorMessage} /> : null}
       <div className="conversation-list">
-        {visibleConversations.length ? visibleConversations.map((conversation) => (
-          <button
-            key={conversation.id}
-            className={`conversation-card ${props.activeStreamIDs.has(conversation.id) ? 'streaming' : ''}`}
-            onClick={() => props.onOpenConversation(conversation.id)}
-          >
-            <span className="conversation-kicker">
-              <span className="status-dot" aria-hidden="true" />
-              <span className="workspace">{lastTwoPathComponents(conversation.workingDir)}</span>
-            </span>
-            <strong className="conversation-title">{conversation.title || 'Untitled'}</strong>
-            {props.activeStreamIDs.has(conversation.id) ? (
-              <span className="live-strip"><span className="live-ring" aria-hidden="true" />running · stream active</span>
-            ) : conversation.lastMessage ? (
-              <span className="last-message">{displayMessagePreview(conversation.lastMessage)}</span>
-            ) : (
-              <span className="last-message empty-preview">Untitled · first message will name this conversation.</span>
-            )}
-            <span className="conversation-meta">
-              {props.activeStreamIDs.has(conversation.id) ? <span className="meta-live">live</span> : null}
-              <span>{conversation.messageCount} msgs</span>
-              <span className="meta-spacer" />
-              <span>{formatDate(conversation.updatedAt)}</span>
-            </span>
-          </button>
-        )) : <p className="empty">{props.conversations.length ? 'No conversations in this workspace.' : 'No conversations.'}</p>}
+        {visibleConversations.length ? visibleConversations.map((conversation) => {
+          const streamActive = props.activeStreamIDs.has(conversation.id);
+          const goalActive = props.activeGoalIDs.has(conversation.id);
+          const live = streamActive || goalActive;
+          return (
+            <button
+              key={conversation.id}
+              className={`conversation-card ${live ? 'streaming' : ''}`}
+              onClick={() => props.onOpenConversation(conversation.id)}
+            >
+              <span className="conversation-kicker">
+                <span className="status-dot" aria-hidden="true" />
+                <span className="workspace">{lastTwoPathComponents(conversation.workingDir)}</span>
+              </span>
+              <strong className="conversation-title">{conversation.title || 'Untitled'}</strong>
+              {live ? (
+                <span className="live-strip"><span className="live-ring" aria-hidden="true" />running · {streamActive ? 'stream active' : 'goal active'}</span>
+              ) : conversation.lastMessage ? (
+                <span className="last-message">{displayMessagePreview(conversation.lastMessage)}</span>
+              ) : (
+                <span className="last-message empty-preview">Untitled · first message will name this conversation.</span>
+              )}
+              <span className="conversation-meta">
+                {live ? <span className="meta-live">live</span> : null}
+                <span>{conversation.messageCount} msgs</span>
+                <span className="meta-spacer" />
+                <span>{formatDate(conversation.updatedAt)}</span>
+              </span>
+            </button>
+          );
+        }) : <p className="empty">{props.conversations.length ? 'No conversations in this workspace.' : 'No conversations.'}</p>}
       </div>
     </section>
   );
@@ -1734,6 +2012,10 @@ function ChatScreen(props: {
   isStreaming: boolean;
   loading: boolean;
   errorMessage: string | null;
+  goal: ThreadGoal | null;
+  goalUpdatedAtMs: number | null;
+  goalMode: boolean;
+  goalCapable: boolean;
   pendingInteraction: PendingInteraction | null;
   interactionAnswer: string;
   setInteractionAnswer: (value: string) => void;
@@ -1748,6 +2030,11 @@ function ChatScreen(props: {
   onBack: () => void;
   onSend: () => void;
   onStop: () => void;
+  onGoalModeChange: (enabled: boolean) => void;
+  onRefreshGoal: () => void;
+  onPauseGoal: () => void;
+  onResumeGoal: () => void;
+  onClearGoal: () => void;
   onAttach: () => void;
   onRemoveAttachment: (id: string) => void;
   onOcrAttachment: (id: string) => void;
@@ -1823,7 +2110,12 @@ function ChatScreen(props: {
   const sendDisabled =
     (!props.draft.trim() && !completedAttachmentMetas(props.pendingAttachments).length) ||
     props.hasUploadingAttachments ||
-    !!props.pendingInteraction;
+    !!props.pendingInteraction ||
+    (props.goalMode && props.isStreaming);
+  const composerPlaceholder = props.goalMode
+    ? (props.isStreaming ? 'Goal can be set after this stream finishes.' : 'Set a Codex goal')
+    : (props.isStreaming ? 'Message will be queued while the stream runs.' : 'Message Agent Cockpit');
+  const sendLabel = props.goalMode ? 'Set goal' : (props.isStreaming ? 'Queue' : 'Send');
 
   return (
     <section className="screen chat-screen">
@@ -1889,13 +2181,34 @@ function ChatScreen(props: {
       ) : null}
       <AttachmentTray attachments={props.pendingAttachments} onRemove={props.onRemoveAttachment} onOcr={props.onOcrAttachment} />
       <footer className="composer">
-        <button className="selection-bar composer-profile" type="button" onClick={props.onOpenSettings}>
-          <b>{props.selectedProfile || props.selectedBackend || 'Profile'}</b>
-          <span>/</span>
-          <span>{props.selectedModel || 'Model'}</span>
-          {props.selectedEffort ? <span>/ {props.selectedEffort}</span> : null}
-          {props.selectedServiceTier === 'fast' ? <span>/ Fast</span> : null}
-        </button>
+        <GoalStrip
+          goal={props.goal}
+          goalUpdatedAtMs={props.goalUpdatedAtMs}
+          isStreaming={props.isStreaming}
+          onRefresh={props.onRefreshGoal}
+          onPause={props.onPauseGoal}
+          onResume={props.onResumeGoal}
+          onClear={props.onClearGoal}
+        />
+        <div className="composer-meta-row">
+          <button className="selection-bar composer-profile" type="button" onClick={props.onOpenSettings}>
+            <b>{props.selectedProfile || props.selectedBackend || 'Profile'}</b>
+            <span>/</span>
+            <span>{props.selectedModel || 'Model'}</span>
+            {props.selectedEffort ? <span>/ {props.selectedEffort}</span> : null}
+            {props.selectedServiceTier === 'fast' ? <span>/ Fast</span> : null}
+          </button>
+          {props.goalCapable ? (
+            <button
+              className={`goal-toggle ${props.goalMode ? 'enabled' : ''}`}
+              type="button"
+              aria-pressed={props.goalMode}
+              onClick={() => props.onGoalModeChange(!props.goalMode)}
+            >
+              Goal
+            </button>
+          ) : null}
+        </div>
         <div className="composer-box">
           <button className="composer-icon" type="button" aria-label="Attach" onClick={props.onAttach}>
             <PaperclipIcon />
@@ -1903,15 +2216,63 @@ function ChatScreen(props: {
           <textarea
             value={props.draft}
             onChange={(event) => props.setDraft(event.target.value)}
-            placeholder={props.isStreaming ? 'Message will be queued while the stream runs.' : 'Message Agent Cockpit'}
+            placeholder={composerPlaceholder}
             rows={1}
           />
-          <button className={`composer-icon send ${sendDisabled ? 'idle' : ''}`} type="button" aria-label={props.isStreaming ? 'Queue' : 'Send'} disabled={sendDisabled} onClick={props.onSend}>
+          <button className={`composer-icon send ${sendDisabled ? 'idle' : ''}`} type="button" aria-label={sendLabel} disabled={sendDisabled} onClick={props.onSend}>
             <SendIcon />
           </button>
         </div>
       </footer>
     </section>
+  );
+}
+
+function GoalStrip(props: {
+  goal: ThreadGoal | null;
+  goalUpdatedAtMs: number | null;
+  isStreaming: boolean;
+  onRefresh: () => void;
+  onPause: () => void;
+  onResume: () => void;
+  onClear: () => void;
+}) {
+  const [nowMs, setNowMs] = useState(Date.now());
+  const goalKey = `${props.goal?.threadId || 'none'}:${props.goal?.status || 'none'}:${props.goalUpdatedAtMs || ''}`;
+  useEffect(() => {
+    if (!props.goal) {
+      return;
+    }
+    const interval = window.setInterval(() => setNowMs(Date.now()), isActiveGoal(props.goal) ? 1000 : 10_000);
+    return () => window.clearInterval(interval);
+  }, [goalKey]);
+  useEffect(() => {
+    if (!props.goal) {
+      return;
+    }
+    const interval = window.setInterval(() => props.onRefresh(), 10_000);
+    return () => window.clearInterval(interval);
+  }, [goalKey]);
+  if (!props.goal) {
+    return null;
+  }
+  const elapsed = formatGoalElapsed(goalElapsedSeconds(props.goal, nowMs));
+  const canPause = props.goal.status === 'active';
+  const canResume = props.goal.status === 'paused' && !props.isStreaming;
+  return (
+    <div className={`goal-strip ${props.goal.status}`} aria-live="polite">
+      <div className="goal-strip-main">
+        <span className="goal-dot" aria-hidden="true" />
+        <strong>{goalStatusLabel(props.goal)}</strong>
+        <span className="goal-elapsed">{elapsed}</span>
+        <span className="goal-objective">{props.goal.objective || 'No objective'}</span>
+      </div>
+      <div className="goal-actions">
+        {canPause ? <button type="button" onClick={props.onPause}>Pause</button> : null}
+        {props.goal.status === 'paused' ? <button type="button" disabled={!canResume} onClick={props.onResume}>Resume</button> : null}
+        <button type="button" onClick={props.onClear}>Clear</button>
+      </div>
+    </div>
   );
 }
 

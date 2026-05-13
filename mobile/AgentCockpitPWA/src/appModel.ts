@@ -13,6 +13,7 @@ import type {
   QueuedMessage,
   ResetSessionResponse,
   SessionHistoryItem,
+  ThreadGoal,
 } from './types';
 
 export const ALL_WORKSPACES = 'all';
@@ -257,6 +258,61 @@ export function formatDate(value: string): string {
 
 export function formatPercent(value: number): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value).toString()}%`;
+}
+
+export function goalTimestampMs(value: unknown): number | null {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return null;
+  return timestamp >= 1e12 ? Math.floor(timestamp) : Math.floor(timestamp * 1000);
+}
+
+export function goalSnapshotTimeMs(goal: Pick<ThreadGoal, 'createdAt' | 'updatedAt'> | null | undefined): number | null {
+  if (!goal || typeof goal !== 'object') return null;
+  return goalTimestampMs(goal.updatedAt) || goalTimestampMs(goal.createdAt);
+}
+
+export function shouldApplyGoalSnapshot(currentUpdatedAtMs: number | null, incomingGoal: ThreadGoal | null): boolean {
+  if (!incomingGoal) return true;
+  const incomingAt = goalSnapshotTimeMs(incomingGoal);
+  return !(incomingAt && currentUpdatedAtMs && incomingAt < currentUpdatedAtMs);
+}
+
+export function isActiveGoal(goal: Pick<ThreadGoal, 'status'> | null | undefined): boolean {
+  return !!goal && goal.status === 'active';
+}
+
+export function goalElapsedSeconds(goal: ThreadGoal | null | undefined, nowMs = Date.now()): number {
+  if (!goal || typeof goal !== 'object') return 0;
+  const base = Math.max(0, Math.floor(Number(goal.timeUsedSeconds) || 0));
+  if (!isActiveGoal(goal)) return base;
+  const snapshotAt = goalSnapshotTimeMs(goal);
+  if (!snapshotAt) return base;
+  return base + Math.max(0, Math.floor((nowMs - snapshotAt) / 1000));
+}
+
+export function goalStatusLabel(goal: Pick<ThreadGoal, 'status'> | null | undefined): string {
+  switch (goal?.status) {
+    case 'active':
+      return 'Goal active';
+    case 'paused':
+      return 'Goal paused';
+    case 'complete':
+      return 'Goal complete';
+    case 'budgetLimited':
+      return 'Goal budget limited';
+    default:
+      return 'Goal';
+  }
+}
+
+export function formatGoalElapsed(totalSeconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(totalSeconds));
+  const seconds = safeSeconds % 60;
+  const minutes = Math.floor(safeSeconds / 60) % 60;
+  const hours = Math.floor(safeSeconds / 3600);
+  if (hours > 0) return `${hours}h ${minutes.toString().padStart(2, '0')}m`;
+  if (minutes > 0) return `${minutes}m ${seconds.toString().padStart(2, '0')}s`;
+  return `${seconds}s`;
 }
 
 export function formatBytes(value: number): string {

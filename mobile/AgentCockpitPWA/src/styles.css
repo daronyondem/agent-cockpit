@@ -2207,6 +2207,113 @@ code {
   padding: 10px 14px calc(16px + env(safe-area-inset-bottom));
 }
 
+.goal-strip {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-1);
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+  min-width: 0;
+  padding: 9px;
+}
+
+.goal-strip-main {
+  align-items: center;
+  display: grid;
+  gap: 7px;
+  grid-template-columns: 8px auto auto minmax(0, 1fr);
+  min-width: 0;
+}
+
+.goal-dot {
+  background: var(--status-running);
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px rgba(2, 166, 245, 0.12);
+  display: inline-block;
+  height: 8px;
+  width: 8px;
+}
+
+.goal-strip.paused .goal-dot {
+  background: var(--status-awaiting);
+  box-shadow: 0 0 0 4px rgba(232, 163, 61, 0.14);
+}
+
+.goal-strip.complete .goal-dot {
+  background: var(--status-done);
+  box-shadow: 0 0 0 4px rgba(63, 178, 127, 0.14);
+}
+
+.goal-strip.budgetLimited .goal-dot {
+  background: var(--status-error);
+  box-shadow: 0 0 0 4px rgba(229, 72, 77, 0.12);
+}
+
+.goal-strip strong {
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 700;
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.goal-elapsed {
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.goal-objective {
+  color: var(--text-2);
+  font-size: 12.5px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.goal-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.goal-actions button,
+.goal-toggle {
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--accent-dark);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.goal-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.composer-meta-row {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+  padding-bottom: 8px;
+}
+
 .composer-profile {
   background: transparent;
   border: 0;
@@ -2224,9 +2331,27 @@ code {
   width: 100%;
 }
 
+.composer-meta-row .composer-profile {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-bottom: 0;
+}
+
 .composer-profile b {
   color: var(--text);
   font-weight: 600;
+}
+
+.goal-toggle {
+  flex: 0 0 auto;
+  min-height: 28px;
+}
+
+.goal-toggle.enabled {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 7px 16px -12px rgba(2, 166, 245, 0.85);
+  color: #fff;
 }
 
 .composer-box {

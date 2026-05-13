@@ -97,4 +97,43 @@ describe('mobile app model helpers', () => {
       messageCount: 0,
     }));
   });
+
+  test('normalizes Codex goal elapsed time and status labels for mobile UI', () => {
+    const activeGoal = {
+      threadId: 'thread-1',
+      objective: 'Ship mobile goals',
+      status: 'active',
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 10,
+      createdAt: 1_760_000_000,
+      updatedAt: 1_760_000_000,
+    };
+    const pausedGoal = { ...activeGoal, status: 'paused', updatedAt: 1_760_000_005_123 };
+
+    expect(model.goalSnapshotTimeMs(activeGoal)).toBe(1_760_000_000_000);
+    expect(model.goalSnapshotTimeMs(pausedGoal)).toBe(1_760_000_005_123);
+    expect(model.isActiveGoal(activeGoal)).toBe(true);
+    expect(model.goalElapsedSeconds(activeGoal, 1_760_000_005_900)).toBe(15);
+    expect(model.goalElapsedSeconds(pausedGoal, 1_760_000_020_000)).toBe(10);
+    expect(model.goalStatusLabel(pausedGoal)).toBe('Goal paused');
+    expect(model.formatGoalElapsed(65)).toBe('1m 05s');
+  });
+
+  test('rejects stale replayed goal snapshots', () => {
+    const olderGoal = {
+      threadId: 'thread-1',
+      objective: 'Older',
+      status: 'active',
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 1000,
+      updatedAt: 1000,
+    };
+
+    expect(model.shouldApplyGoalSnapshot(2_000_000, olderGoal)).toBe(false);
+    expect(model.shouldApplyGoalSnapshot(999_000, olderGoal)).toBe(true);
+    expect(model.shouldApplyGoalSnapshot(2_000_000, null)).toBe(true);
+  });
 });
