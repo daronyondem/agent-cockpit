@@ -25,6 +25,7 @@ import type {
   MemoryFile,
   MemoryType,
   CliProfile,
+  ThreadGoal,
 } from '../../types';
 
 // Re-export shared helpers for backwards compatibility with existing imports
@@ -33,6 +34,7 @@ export { sanitizeSystemPrompt, isApiError, shortenPath, extractToolDetails, extr
 // ── Icon ────────────────────────────────────────────────────────────────────
 
 const CLAUDE_CODE_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" rx="128" fill="#D37D5B"/><path d="M256 220L285 85L305 92L275 225L380 145L395 165L285 245L440 265L435 290L285 275L390 380L365 400L265 295L295 440L265 445L245 295L180 420L155 405L230 280L100 340L90 315L225 260L70 250L75 225L225 235L110 145L130 130L235 215L170 85L195 80L245 210L256 220Z" fill="#F9EDE6"/></svg>';
+const CLAUDE_GOAL_SUPPORTED_ACTIONS = { clear: true, stopTurn: true, pause: false, resume: false };
 
 function filterStdinWarning(stderr: string): string {
   return String(stderr || '')
@@ -106,6 +108,13 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
         toolActivity: true,
         userQuestions: true,
         stdinInput: true,
+        goals: {
+          set: true,
+          clear: true,
+          pause: false,
+          resume: false,
+          status: 'transcript',
+        },
       },
       resumeCapabilities: {
         activeTurnResume: 'unsupported',
@@ -168,6 +177,50 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     };
 
     return { stream, abort, sendInput };
+  }
+
+  async getGoal(options: SendMessageOptions): Promise<ThreadGoal | null> {
+    const runtime = resolveClaudeCliRuntime(options.cliProfile);
+    const sessionId = options.sessionId;
+    if (!sessionId) return null;
+    const cwd = options.workingDir || this.workingDir || process.cwd();
+    const projectDirs = resolveClaudeProjectDirCandidates(cwd, runtime.configDir);
+    for (const projectDir of projectDirs) {
+      const transcriptPath = path.join(projectDir, `${sessionId}.jsonl`);
+      let content: string;
+      try {
+        content = await fsp.readFile(transcriptPath, 'utf8');
+      } catch (err: unknown) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+        throw err;
+      }
+      return parseClaudeGoalFromJsonl(content, sessionId);
+    }
+    return null;
+  }
+
+  setGoalObjective(objective: string, options: SendMessageOptions = {} as SendMessageOptions): SendMessageResult {
+    return this.sendMessage(`/goal ${objective.trim()}`, options);
+  }
+
+  resumeGoal(): SendMessageResult {
+    throw new Error('Goal resume is not supported by Claude Code');
+  }
+
+  async pauseGoal(): Promise<ThreadGoal | null> {
+    throw new Error('Goal pause is not supported by Claude Code');
+  }
+
+  async clearGoal(options: SendMessageOptions): Promise<{ cleared: boolean; threadId?: string | null; sessionId?: string | null }> {
+    const state: StreamState = { proc: null, aborted: false };
+    let terminalError: string | null = null;
+    for await (const event of this._createStream('/goal clear', { ...options, isNewSession: false }, state)) {
+      if (event.type === 'error' && event.terminal !== false) {
+        terminalError = event.error;
+      }
+    }
+    if (terminalError) throw new Error(terminalError);
+    return { cleared: true, sessionId: options.sessionId || null };
   }
 
   async generateSummary(
@@ -742,6 +795,32 @@ export function resolveCanonicalWorkspacePath(workspacePath: string): string {
   return mainWorkspace;
 }
 
+export function resolveClaudeProjectDir(workspacePath: string, configDir?: string): string | null {
+  return resolveClaudeProjectDirCandidates(workspacePath, configDir)[0] || null;
+}
+
+function resolveClaudeProjectDirCandidates(workspacePath: string, configDir?: string): string[] {
+  const home = process.env.HOME || os.homedir();
+  const projectsDir = path.join(configDir || path.join(home, '.claude'), 'projects');
+  const sanitized = workspacePath.replace(/[^a-zA-Z0-9]/g, '-');
+  const direct = path.join(projectsDir, sanitized);
+  if (sanitized.length <= 200) return [direct];
+
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(projectsDir);
+  } catch {
+    return [];
+  }
+
+  const prefix = sanitized.slice(0, Math.min(sanitized.length, 200));
+  const candidates = entries
+    .filter(entry => entry === sanitized || entry.startsWith(prefix + '-') || entry.startsWith(prefix))
+    .map(entry => path.join(projectsDir, entry));
+  candidates.sort((a, b) => a.length - b.length);
+  return candidates;
+}
+
 /**
  * Claude Code stores per-project memory under:
  *   ~/.claude/projects/{sanitized-path}/memory/
@@ -767,8 +846,8 @@ export function resolveClaudeMemoryDir(workspacePath: string, configDir?: string
   // lookup by pointing HOME at a temp directory — os.homedir() caches
   // its result in some runtimes and ignores later env-var changes. A
   // profile configDir mirrors Claude Code's CLAUDE_CONFIG_DIR behavior.
-  const home = process.env.HOME || os.homedir();
-  const projectsDir = path.join(configDir || path.join(home, '.claude'), 'projects');
+  const projectDir = resolveClaudeProjectDir(workspacePath, configDir);
+  if (!projectDir) return null;
   const sanitized = workspacePath.replace(/[^a-zA-Z0-9]/g, '-');
 
   // Short paths: the sanitized name is the exact dirname, so return
@@ -776,7 +855,7 @@ export function resolveClaudeMemoryDir(workspacePath: string, configDir?: string
   // written yet.  `extractMemory` independently handles ENOENT when
   // actually reading files, so returning a non-existent path here is
   // safe and lets the watcher attach early.
-  const direct = path.join(projectsDir, sanitized, 'memory');
+  const direct = path.join(projectDir, 'memory');
   if (sanitized.length <= 200) {
     return direct;
   }
@@ -788,7 +867,7 @@ export function resolveClaudeMemoryDir(workspacePath: string, configDir?: string
 
   let entries: string[];
   try {
-    entries = fs.readdirSync(projectsDir);
+    entries = fs.readdirSync(path.dirname(projectDir));
   } catch {
     return null;
   }
@@ -797,7 +876,7 @@ export function resolveClaudeMemoryDir(workspacePath: string, configDir?: string
   const candidates: string[] = [];
   for (const entry of entries) {
     if (entry === sanitized || entry.startsWith(prefix + '-') || entry.startsWith(prefix)) {
-      const candidate = path.join(projectsDir, entry, 'memory');
+      const candidate = path.join(path.dirname(projectDir), entry, 'memory');
       if (dirHasMemory(candidate)) candidates.push(candidate);
     }
   }
@@ -806,6 +885,90 @@ export function resolveClaudeMemoryDir(workspacePath: string, configDir?: string
   // Deterministic pick: shortest dir name (no suffix) wins.
   candidates.sort((a, b) => a.length - b.length);
   return candidates[0];
+}
+
+interface ClaudeGoalStatusAttachment {
+  type?: string;
+  met?: boolean;
+  sentinel?: boolean;
+  condition?: string;
+  reason?: string;
+  iterations?: number;
+  durationMs?: number;
+  tokens?: number;
+}
+
+interface ClaudeTranscriptEntry {
+  type?: string;
+  timestamp?: string;
+  attachment?: ClaudeGoalStatusAttachment;
+  message?: {
+    content?: unknown;
+  };
+}
+
+export function parseClaudeGoalFromJsonl(content: string, sessionId?: string | null): ThreadGoal | null {
+  let latestGoal: { goal: ThreadGoal; line: number } | null = null;
+  let latestClearLine = -1;
+  const lines = String(content || '').split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+    let entry: ClaudeTranscriptEntry;
+    try {
+      entry = JSON.parse(line) as ClaudeTranscriptEntry;
+    } catch {
+      continue;
+    }
+
+    const text = extractClaudeTranscriptText(entry);
+    if (/\bGoal cleared\b/i.test(text) || /<command-args>\s*(?:clear|stop|off|reset|none|cancel)\s*<\/command-args>/i.test(text)) {
+      latestClearLine = i;
+    }
+
+    const attachment = entry.attachment;
+    if (!attachment || attachment.type !== 'goal_status') continue;
+    const objective = typeof attachment.condition === 'string' ? attachment.condition.trim() : '';
+    if (!objective) continue;
+    const updatedAt = Date.parse(entry.timestamp || '') || Date.now();
+    const status = attachment.met === true ? 'complete' : 'active';
+    latestGoal = {
+      line: i,
+      goal: {
+        backend: 'claude-code',
+        sessionId: sessionId || null,
+        objective,
+        status,
+        supportedActions: CLAUDE_GOAL_SUPPORTED_ACTIONS,
+        timeUsedSeconds: typeof attachment.durationMs === 'number' ? Math.max(0, Math.floor(attachment.durationMs / 1000)) : null,
+        tokensUsed: typeof attachment.tokens === 'number' ? attachment.tokens : null,
+        turns: typeof attachment.iterations === 'number' ? attachment.iterations : null,
+        iterations: typeof attachment.iterations === 'number' ? attachment.iterations : null,
+        lastReason: typeof attachment.reason === 'string' ? attachment.reason : null,
+        createdAt: updatedAt,
+        updatedAt,
+        source: 'transcript',
+      },
+    };
+  }
+
+  if (!latestGoal) return null;
+  if (latestClearLine > latestGoal.line) return null;
+  return latestGoal.goal;
+}
+
+function extractClaudeTranscriptText(entry: ClaudeTranscriptEntry): string {
+  const content = entry.message?.content;
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  const parts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== 'object') continue;
+    const text = (block as { text?: unknown }).text;
+    if (typeof text === 'string') parts.push(text);
+  }
+  return parts.join('\n');
 }
 
 function dirHasMemory(memDir: string): boolean {

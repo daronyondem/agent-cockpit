@@ -271,6 +271,34 @@ export function goalSnapshotTimeMs(goal: Pick<ThreadGoal, 'createdAt' | 'updated
   return goalTimestampMs(goal.updatedAt) || goalTimestampMs(goal.createdAt);
 }
 
+export function cleanGoalObjectiveText(value: unknown): string {
+  let text = String(value || '').replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  for (let i = 0; i < 4; i += 1) {
+    const before = text;
+    let strippedPrefix = false;
+    const withoutStatusPrefix = text.replace(
+      /^Goal\s*(?:active|paused|achieved|budget\s*limited|cleared|updated)(?=\s|:|\d|$)\s*(?:\d+\s*(?:s|m|h|sec|secs|seconds|min|mins|minutes|hr|hrs|hours)\s*)*/i,
+      '',
+    ).trim();
+    if (withoutStatusPrefix !== text) {
+      text = withoutStatusPrefix;
+      strippedPrefix = true;
+    }
+    const withoutEventPrefix = text.replace(
+      /^Goal\s*(?:set(?=\s|:|codex|claude-code|$)|resumed(?=\s|:|codex|claude-code|$)|paused(?=\s|:|codex|claude-code|$)|achieved(?=\s|:|codex|claude-code|$)|budget\s*limited(?=\s|:|codex|claude-code|$)|cleared(?=\s|:|codex|claude-code|$)|updated(?=\s|:|codex|claude-code|$))\s*:?\s*/i,
+      '',
+    ).trim();
+    if (withoutEventPrefix !== text) {
+      text = withoutEventPrefix;
+      strippedPrefix = true;
+    }
+    if (strippedPrefix) text = text.replace(/^(?:codex|claude-code)\s*/i, '').trim();
+    if (text === before) break;
+  }
+  return text;
+}
+
 export function shouldApplyGoalSnapshot(currentUpdatedAtMs: number | null, incomingGoal: ThreadGoal | null): boolean {
   if (!incomingGoal) return true;
   const incomingAt = goalSnapshotTimeMs(incomingGoal);
@@ -279,6 +307,19 @@ export function shouldApplyGoalSnapshot(currentUpdatedAtMs: number | null, incom
 
 export function isActiveGoal(goal: Pick<ThreadGoal, 'status'> | null | undefined): boolean {
   return !!goal && goal.status === 'active';
+}
+
+export function goalSupportsAction(
+  goal: Pick<ThreadGoal, 'backend' | 'supportedActions'> | null | undefined,
+  action: keyof NonNullable<ThreadGoal['supportedActions']>,
+): boolean {
+  if (!goal || !action) return false;
+  const actions = goal.supportedActions;
+  if (actions && Object.prototype.hasOwnProperty.call(actions, action)) return actions[action] === true;
+  const backend = goal.backend || 'codex';
+  if (action === 'clear' || action === 'stopTurn') return true;
+  if (action === 'pause' || action === 'resume') return backend === 'codex';
+  return false;
 }
 
 export function goalElapsedSeconds(goal: ThreadGoal | null | undefined, nowMs = Date.now()): number {
@@ -297,9 +338,11 @@ export function goalStatusLabel(goal: Pick<ThreadGoal, 'status'> | null | undefi
     case 'paused':
       return 'Goal paused';
     case 'complete':
-      return 'Goal complete';
+      return 'Goal achieved';
     case 'budgetLimited':
       return 'Goal budget limited';
+    case 'cleared':
+      return 'Goal cleared';
     default:
       return 'Goal';
   }

@@ -6,7 +6,9 @@ import { BackendRegistry } from '../src/services/backends/registry';
 import {
   ClaudeCodeAdapter,
   parseFrontmatter,
+  parseClaudeGoalFromJsonl,
   resolveClaudeCliRuntime,
+  resolveClaudeProjectDir,
   resolveClaudeMemoryDir,
   resolveCanonicalWorkspacePath,
   mcpServersToClaudeConfigJson,
@@ -159,6 +161,13 @@ describe('ClaudeCodeAdapter', () => {
       toolActivity: true,
       userQuestions: true,
       stdinInput: true,
+      goals: {
+        set: true,
+        clear: true,
+        pause: false,
+        resume: false,
+        status: 'transcript',
+      },
     });
   });
 
@@ -255,6 +264,116 @@ describe('ClaudeCodeAdapter', () => {
   test('accepts custom working directory', () => {
     const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp/test' });
     expect(adapter.workingDir).toBe('/tmp/test');
+  });
+});
+
+describe('Claude Code goals', () => {
+  test('parses active and complete goal_status attachments from transcript JSONL', () => {
+    const jsonl = [
+      JSON.stringify({
+        type: 'attachment',
+        timestamp: '2026-05-13T15:42:50.187Z',
+        attachment: {
+          type: 'goal_status',
+          met: false,
+          sentinel: true,
+          condition: 'npm test exits 0',
+        },
+      }),
+      JSON.stringify({
+        type: 'attachment',
+        timestamp: '2026-05-13T15:43:00.000Z',
+        attachment: {
+          type: 'goal_status',
+          met: true,
+          condition: 'npm test exits 0',
+          reason: 'The transcript shows npm test exited 0.',
+          iterations: 2,
+          durationMs: 12000,
+          tokens: 345,
+        },
+      }),
+    ].join('\n');
+
+    expect(parseClaudeGoalFromJsonl(jsonl, 'session-1')).toMatchObject({
+      backend: 'claude-code',
+      sessionId: 'session-1',
+      objective: 'npm test exits 0',
+      status: 'complete',
+      supportedActions: { clear: true, stopTurn: true, pause: false, resume: false },
+      turns: 2,
+      iterations: 2,
+      timeUsedSeconds: 12,
+      tokensUsed: 345,
+      lastReason: 'The transcript shows npm test exited 0.',
+      source: 'transcript',
+    });
+  });
+
+  test('returns null when a clear command appears after the latest goal status', () => {
+    const jsonl = [
+      JSON.stringify({
+        type: 'attachment',
+        timestamp: '2026-05-13T15:42:50.187Z',
+        attachment: { type: 'goal_status', met: false, condition: 'finish the task' },
+      }),
+      JSON.stringify({
+        type: 'user',
+        timestamp: '2026-05-13T15:43:00.000Z',
+        message: { role: 'user', content: '<local-command-stdout>Goal cleared: finish the task</local-command-stdout>' },
+      }),
+    ].join('\n');
+
+    expect(parseClaudeGoalFromJsonl(jsonl, 'session-1')).toBeNull();
+  });
+
+  test('resolves deterministic Claude project dir for short workspace paths', () => {
+    const dir = resolveClaudeProjectDir('/tmp/goal-project');
+    expect(dir).toBe(path.join(process.env.HOME || os.homedir(), '.claude', 'projects', '-tmp-goal-project'));
+  });
+
+  test('reads goal transcript from later long-path candidate when first candidate lacks session file', async () => {
+    const configDir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-goal-config-'));
+    const longWorkspace = path.join(
+      os.tmpdir(),
+      'workspace-' + 'a'.repeat(220),
+    );
+    const sanitized = longWorkspace.replace(/[^a-zA-Z0-9]/g, '-');
+    const prefix = sanitized.slice(0, 200);
+    const firstCandidate = path.join(configDir, 'projects', `${prefix}-aaa`);
+    const secondCandidate = path.join(configDir, 'projects', `${prefix}-bbbb`);
+    fs.mkdirSync(firstCandidate, { recursive: true });
+    fs.mkdirSync(secondCandidate, { recursive: true });
+    fs.writeFileSync(
+      path.join(secondCandidate, 'session-long.jsonl'),
+      JSON.stringify({
+        type: 'attachment',
+        timestamp: '2026-05-13T15:42:50.187Z',
+        attachment: { type: 'goal_status', met: false, condition: 'find the right transcript' },
+      }),
+    );
+
+    const adapter = new ClaudeCodeAdapter({ workingDir: longWorkspace });
+    const goal = await adapter.getGoal({
+      sessionId: 'session-long',
+      workingDir: longWorkspace,
+      cliProfile: {
+        id: 'profile-claude',
+        name: 'Claude',
+        vendor: 'claude-code',
+        authMode: 'account',
+        configDir,
+        createdAt: '2026-05-13T00:00:00.000Z',
+        updatedAt: '2026-05-13T00:00:00.000Z',
+      },
+    } as any);
+
+    expect(goal).toMatchObject({
+      backend: 'claude-code',
+      sessionId: 'session-long',
+      objective: 'find the right transcript',
+      status: 'active',
+    });
   });
 });
 

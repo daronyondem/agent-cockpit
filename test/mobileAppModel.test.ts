@@ -98,11 +98,13 @@ describe('mobile app model helpers', () => {
     }));
   });
 
-  test('normalizes Codex goal elapsed time and status labels for mobile UI', () => {
+  test('normalizes backend-neutral goal elapsed time, actions, and status labels for mobile UI', () => {
     const activeGoal = {
+      backend: 'codex',
       threadId: 'thread-1',
       objective: 'Ship mobile goals',
       status: 'active',
+      supportedActions: { clear: true, stopTurn: true, pause: true, resume: true },
       tokenBudget: null,
       tokensUsed: 0,
       timeUsedSeconds: 10,
@@ -117,7 +119,18 @@ describe('mobile app model helpers', () => {
     expect(model.goalElapsedSeconds(activeGoal, 1_760_000_005_900)).toBe(15);
     expect(model.goalElapsedSeconds(pausedGoal, 1_760_000_020_000)).toBe(10);
     expect(model.goalStatusLabel(pausedGoal)).toBe('Goal paused');
+    expect(model.goalStatusLabel({ ...activeGoal, status: 'complete' })).toBe('Goal achieved');
+    expect(model.goalSupportsAction(activeGoal, 'pause')).toBe(true);
+    expect(model.goalSupportsAction({
+      ...activeGoal,
+      backend: 'claude-code',
+      supportedActions: { clear: true, stopTurn: true, pause: false, resume: false },
+    }, 'pause')).toBe(false);
+    expect(model.goalSupportsAction({ backend: 'claude-code' }, 'clear')).toBe(true);
     expect(model.formatGoalElapsed(65)).toBe('1m 05s');
+    expect(model.cleanGoalObjectiveText('Goal setcodexShip mobile goals')).toBe('Ship mobile goals');
+    expect(model.cleanGoalObjectiveText('Codex should keep this prefix')).toBe('Codex should keep this prefix');
+    expect(model.cleanGoalObjectiveText('Goal settings should stay intact')).toBe('Goal settings should stay intact');
   });
 
   test('rejects stale replayed goal snapshots', () => {

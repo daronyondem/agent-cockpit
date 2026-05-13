@@ -141,7 +141,7 @@ describe('frontend routes', () => {
     expect(appSrc).not.toContain("socket.onerror = () => setErrorMessage('Stream connection failed.')");
   });
 
-  test('mobile PWA exposes Codex goal controls through the composer shell', () => {
+  test('mobile PWA exposes backend-neutral goal controls through the composer shell', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
     const apiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
     const modelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
@@ -153,15 +153,38 @@ describe('frontend routes', () => {
     expect(apiSrc).toContain('async pauseGoal');
     expect(apiSrc).toContain('async clearGoal');
     expect(modelSrc).toContain('function goalElapsedSeconds');
+    expect(modelSrc).toContain('function goalSupportsAction');
     expect(modelSrc).toContain('function shouldApplyGoalSnapshot');
+    expect(appSrc).toContain('function normalizeGoalCapability');
+    expect(appSrc).toContain('function goalCapabilityForBackend');
     expect(appSrc).toContain('function GoalStrip');
+    expect(appSrc).toContain('function GoalEventView');
+    expect(appSrc).toContain('applyServerMessage(conversation.id, response.message)');
     expect(appSrc).toContain('function handleGoalSlash');
+    expect(appSrc).toContain("backendID === 'claude-code'");
     expect(appSrc).toContain("case 'goal_updated'");
     expect(appSrc).toContain("case 'goal_cleared'");
     expect(appSrc).toContain('activeGoalIDs');
     expect(appSrc).toContain('aria-pressed={props.goalMode}');
+    expect(appSrc).toContain('Set a goal');
+    expect(appSrc).not.toContain(['Set a', 'Codex goal'].join(' '));
+    expect(appSrc).not.toContain(['Goals are only available for', 'Codex conversations.'].join(' '));
     expect(cssSrc).toContain('.goal-strip');
+    expect(cssSrc).toContain('.goal-event-card');
     expect(cssSrc).toContain('.goal-toggle.enabled');
+  });
+
+  test('desktop web renders persisted goal lifecycle messages', () => {
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+
+    expect(shellSrc).toContain('function GoalEventCard');
+    expect(shellSrc).toContain('message.goalEvent');
+    expect(storeSrc).toContain('function upsertPersistedMessage');
+    expect(storeSrc).toContain('if (data && data.goal) applyGoalSnapshot');
+    expect(cssSrc).toContain('.msg-goal-event');
+    expect(cssSrc).toContain('.goal-event-card');
   });
 
   test('memory update notifications open the focused memory-update modal first', () => {

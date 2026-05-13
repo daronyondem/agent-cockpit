@@ -27,7 +27,7 @@ import { createContextMapMcpServer, type ContextMapMcpServer } from '../services
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
 import { SessionFinalizerQueue, type SessionFinalizerJob } from '../services/sessionFinalizerQueue';
-import type { Request, Response, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, MemoryReviewUpdateEvent, ContextMapUpdateEvent, StreamJobRuntimeInfo, SendMessageResult } from '../types';
+import type { Request, Response, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, MemoryReviewUpdateEvent, ContextMapUpdateEvent, StreamJobRuntimeInfo, SendMessageResult, ThreadGoal, GoalEvent } from '../types';
 import { logger } from '../utils/logger';
 import type { WsFunctions } from '../ws';
 import { createChatStatusRouter } from './chat/statusRoutes';
@@ -43,6 +43,7 @@ import { buildMemoryMcpAddendum } from './chat/memoryPrompt';
 import { createStreamRouter } from './chat/streamRoutes';
 import { createUploadRouter } from './chat/uploadRoutes';
 import { createWorkspaceInstructionRouter } from './chat/workspaceInstructionRoutes';
+import { clearGoalEvent, formatGoalEventMessage, goalEventDedupeKey, goalEventFromStatus, normalizeGoalSnapshot } from '../services/chat/goalEventMessages';
 
 const log = logger.child({ module: 'chat-routes' });
 
@@ -183,6 +184,7 @@ export async function processStream(
   let terminalErrorPersisted = false;
   let terminalErrorSeen = false;
   let doneEmitted = false;
+  const persistedGoalEventKeys = new Set<string>();
 
   async function markJobFinalizing(message: string, source: StreamErrorSource): Promise<void> {
     if (!deps.streamSupervisor || !deps.jobId) return;
@@ -258,6 +260,31 @@ export async function processStream(
     await flushAccumulatedAssistant('progress', forceEmit);
     const errorMsg = await chatService.addStreamErrorMessage(convId, backend, message, source);
     if (errorMsg && (forceEmit || !isClosed())) emit({ type: 'assistant_message', message: errorMsg });
+  }
+
+  async function persistGoalSnapshotEvent(goal: ThreadGoal): Promise<void> {
+    const goalEvent = goalEventFromStatus(goal);
+    if (!goalEvent) return;
+    await flushAccumulatedAssistant('final');
+    await persistGoalEvent(goalEvent);
+  }
+
+  async function persistGoalEvent(goalEvent: GoalEvent): Promise<void> {
+    const key = goalEventDedupeKey(goalEvent);
+    if (persistedGoalEventKeys.has(key)) return;
+    persistedGoalEventKeys.add(key);
+    const goalMsg = await chatService.addMessage(
+      convId,
+      'system',
+      formatGoalEventMessage(goalEvent),
+      backend,
+      null,
+      undefined,
+      undefined,
+      undefined,
+      { goalEvent },
+    );
+    if (goalMsg && !isClosed()) emit({ type: 'assistant_message', message: goalMsg });
   }
 
   async function finalizeTerminalError(message: string, source: StreamErrorSource, forceEmit = false): Promise<void> {
@@ -429,9 +456,13 @@ export async function processStream(
       } else if (event.type === 'result') {
         resultText = event.content;
       } else if (event.type === 'goal_updated') {
-        emit({ type: 'goal_updated', goal: event.goal });
+        const normalizedGoal = normalizeGoalSnapshot(event.goal);
+        emit({ type: 'goal_updated', goal: normalizedGoal });
+        await persistGoalSnapshotEvent(normalizedGoal);
       } else if (event.type === 'goal_cleared') {
         emit({ type: 'goal_cleared', threadId: event.threadId });
+        await flushAccumulatedAssistant('final');
+        await persistGoalEvent(clearGoalEvent(backend));
       } else if (event.type === 'external_session') {
         // Vendor-agnostic: any backend that obtains its own session ID emits
         // this so we can persist it onto the active SessionEntry and rehydrate

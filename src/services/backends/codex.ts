@@ -23,6 +23,7 @@ import type {
   CliProfile,
   CodexThreadGoal,
   CodexThreadGoalStatus,
+  ThreadGoal,
 } from '../../types';
 
 // ── Icon ────────────────────────────────────────────────────────────────────
@@ -40,6 +41,8 @@ const CODEX_APP_SERVER_ARGS = ['app-server', '--enable', 'goals'];
 const CODEX_CLIENT_CAPABILITIES = { experimentalApi: true };
 const CODEX_FAST_SERVICE_TIER_ARGS = ['-c', 'service_tier="fast"', '-c', 'features.fast_mode=true'];
 const codexLog = logger.child({ module: 'codex-backend' });
+const CODEX_GOAL_SUPPORTED_ACTIONS = { clear: true, stopTurn: true, pause: true, resume: true };
+const CODEX_GOAL_STATUS_POLL_MS = 1_000;
 
 // Used as the polite-shutdown deadline before SIGKILL during process kill.
 const PROCESS_KILL_GRACE_MS = 1_000;
@@ -79,6 +82,16 @@ export function resolveCodexCliRuntime(profile?: CliProfile): CodexCliRuntime {
     env,
     ...(configDir ? { configDir } : {}),
     profileKey: profile ? `${profile.id}:${hash}` : `server-configured:${hash}`,
+  };
+}
+
+function normalizeCodexGoal(goal: CodexThreadGoal | null | undefined): ThreadGoal | null {
+  if (!goal) return null;
+  return {
+    ...goal,
+    backend: 'codex',
+    supportedActions: CODEX_GOAL_SUPPORTED_ACTIONS,
+    source: 'native',
   };
 }
 
@@ -865,6 +878,22 @@ export function buildCodexTurnStartParams(
   return params;
 }
 
+function buildCodexGoalTurnPrompt(objective: string | null | undefined): string {
+  const trimmedObjective = typeof objective === 'string' ? objective.trim() : '';
+  if (!trimmedObjective) return 'Continue working on the active goal and report the result in this chat.';
+  return `Work on this active goal and report the result in this chat:\n\n${trimmedObjective}`;
+}
+
+function buildCodexGoalReportPrompt(objective: string | null | undefined): string {
+  const trimmedObjective = typeof objective === 'string' ? objective.trim() : '';
+  if (!trimmedObjective) return 'The goal has completed, but no final report was emitted. Provide the final report in this chat.';
+  return `The goal has completed, but no final report was emitted. Provide the final report in this chat.\n\nGoal:\n${trimmedObjective}`;
+}
+
+function isTerminalCodexGoalStatus(status: CodexThreadGoalStatus | undefined): boolean {
+  return status === 'complete' || status === 'budgetLimited';
+}
+
 interface CodexProcessEntry {
   proc: ChildProcess;
   client: CodexAppServerClient;
@@ -1076,7 +1105,13 @@ export class CodexAdapter extends BaseBackendAdapter {
         toolActivity: true,
         userQuestions: true,
         stdinInput: true,
-        goals: true,
+        goals: {
+          set: true,
+          clear: true,
+          pause: true,
+          resume: true,
+          status: 'native',
+        },
       },
       resumeCapabilities: {
         activeTurnResume: 'unsupported',
@@ -1190,11 +1225,11 @@ export class CodexAdapter extends BaseBackendAdapter {
     return { stream, abort, sendInput };
   }
 
-  async getGoal(options: SendMessageOptions): Promise<CodexThreadGoal | null> {
+  async getGoal(options: SendMessageOptions): Promise<ThreadGoal | null> {
     const ctx = await this._getGoalThreadContext(options, { allowStart: false, reuseExistingMcp: true });
     if (!ctx.threadId) return null;
     const result = await ctx.client.request('thread/goal/get', { threadId: ctx.threadId }) as ThreadGoalGetResult;
-    return result.goal || null;
+    return normalizeCodexGoal(result.goal);
   }
 
   setGoalObjective(objective: string, options: SendMessageOptions = {} as SendMessageOptions): SendMessageResult {
@@ -1205,14 +1240,14 @@ export class CodexAdapter extends BaseBackendAdapter {
     return this._createGoalRun({ status: 'active' }, options);
   }
 
-  async pauseGoal(options: SendMessageOptions): Promise<CodexThreadGoal | null> {
+  async pauseGoal(options: SendMessageOptions): Promise<ThreadGoal | null> {
     const ctx = await this._getGoalThreadContext(options, { allowStart: false, reuseExistingMcp: true });
     if (!ctx.threadId) return null;
     const result = await ctx.client.request('thread/goal/set', {
       threadId: ctx.threadId,
       status: 'paused',
     }) as ThreadGoalSetResult;
-    return result.goal || null;
+    return normalizeCodexGoal(result.goal);
   }
 
   async clearGoal(options: SendMessageOptions): Promise<{ cleared: boolean; threadId?: string | null }> {
@@ -1735,7 +1770,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       subagentByThreadId: Map<string, string>;
     },
   ): AsyncGenerator<StreamEvent> {
-    const { model, cliProfile } = options;
+    const { model, effort, cliProfile } = options;
     const runtime = resolveCodexCliRuntime(cliProfile);
 
     let ctx: Awaited<ReturnType<CodexAdapter['_getGoalThreadContext']>>;
@@ -1783,15 +1818,14 @@ export class CodexAdapter extends BaseBackendAdapter {
       };
       if (goalPatch.objective) setParams.objective = goalPatch.objective;
       const setResult = await client.request('thread/goal/set', setParams) as ThreadGoalSetResult;
-      if (setResult.goal) yield { type: 'goal_updated', goal: setResult.goal };
+      const normalizedGoal = normalizeCodexGoal(setResult.goal);
+      if (normalizedGoal) yield { type: 'goal_updated', goal: normalizedGoal };
 
       const toolByItemId: Map<string, string> = new Map();
-      const notificationIterator = client.notifications()[Symbol.asyncIterator]();
-      let nextNotification = notificationIterator.next();
-      const goalResponseAt = Date.now();
       let turnStarted = false;
       let turnEnded = false;
-      const noTurnTimeoutMs = 5_000;
+      let emittedText = false;
+      let needsReportTurn = false;
       let emittedRuntimeTurnId: string | null = null;
       const emitRuntimeTurnId = (turnId: string): StreamEvent | null => {
         if (emittedRuntimeTurnId === turnId) return null;
@@ -1807,18 +1841,53 @@ export class CodexAdapter extends BaseBackendAdapter {
         };
       };
 
-      while (true) {
-        const next = !turnStarted
-          ? await Promise.race([
-              nextNotification.then((result) => ({ type: 'notification' as const, result })),
-              new Promise<{ type: 'timeout' }>((resolve) => setTimeout(() => resolve({ type: 'timeout' }), 250)),
-            ])
-          : await nextNotification.then((result) => ({ type: 'notification' as const, result }));
+      const activeObjective = normalizedGoal?.objective || goalPatch.objective || '';
+      const userInput = [{
+        type: 'text',
+        text: buildCodexGoalTurnPrompt(activeObjective),
+        text_elements: [],
+      }];
+      const modelCatalog = this._modelsFor(cliProfile);
+      const turnParams = buildCodexTurnStartParams(threadId, userInput, model, effort, modelCatalog);
+      try {
+        const turnResp = await client.request('turn/start', turnParams) as TurnStartResult;
+        const turnId = turnResp.turn.id;
+        const runtimeEvent = emitRuntimeTurnId(turnId);
+        if (runtimeEvent) yield runtimeEvent;
+      } catch (err) {
+        yield { type: 'error', error: `Codex goal turn failed: ${(err as Error).message}` };
+        yield { type: 'done' };
+        return;
+      }
 
-        if (next.type === 'timeout') {
-          if (Date.now() - goalResponseAt >= noTurnTimeoutMs) {
-            client.stopNotifications();
-            break;
+      const notificationIterator = client.notifications()[Symbol.asyncIterator]();
+      let nextNotification = notificationIterator.next();
+
+      while (true) {
+        const next = await Promise.race([
+          nextNotification.then((result) => ({ type: 'notification' as const, result })),
+          new Promise<{ type: 'goal_poll' }>((resolve) => {
+            setTimeout(() => resolve({ type: 'goal_poll' }), CODEX_GOAL_STATUS_POLL_MS);
+          }),
+        ]);
+
+        if (next.type === 'goal_poll') {
+          try {
+            const goalResult = await client.request('thread/goal/get', { threadId }) as ThreadGoalGetResult;
+            const polledGoal = normalizeCodexGoal(goalResult.goal);
+            if (isTerminalCodexGoalStatus(goalResult.goal?.status)) {
+              if (polledGoal) yield { type: 'goal_updated', goal: polledGoal };
+              if (!emittedText) needsReportTurn = true;
+              turnEnded = true;
+              client.stopNotifications();
+              break;
+            }
+          } catch (err) {
+            codexLog.warn('failed to poll Codex goal status while streaming', {
+              conversationId: convId,
+              threadId,
+              errorMessage: (err as Error).message,
+            });
           }
           continue;
         }
@@ -1899,11 +1968,20 @@ export class CodexAdapter extends BaseBackendAdapter {
           case 'thread/goal/updated': {
             if (extractCodexThreadId(params) !== threadId) break;
             const goal = (params as { goal?: CodexThreadGoal }).goal;
-            if (goal) yield { type: 'goal_updated', goal };
+            const normalizedGoal = normalizeCodexGoal(goal);
+            if (normalizedGoal) yield { type: 'goal_updated', goal: normalizedGoal };
             const turnId = extractCodexTurnId(params);
             if (turnId) {
               const event = emitRuntimeTurnId(turnId);
               if (event) yield event;
+            }
+            if (
+              isTerminalCodexGoalStatus(goal?.status)
+              && (!turnId || !state.turnId || turnId === state.turnId)
+            ) {
+              if (!emittedText) needsReportTurn = true;
+              turnEnded = true;
+              client.stopNotifications();
             }
             break;
           }
@@ -1942,6 +2020,7 @@ export class CodexAdapter extends BaseBackendAdapter {
             if (!eventBelongsToActiveParentTurn(params, state.threadId, state.turnId)) break;
             const delta = (params as { delta?: string }).delta;
             if (typeof delta === 'string' && delta.length > 0) {
+              emittedText = true;
               yield { type: 'text', content: delta, streaming: true };
             }
             break;
@@ -2050,6 +2129,22 @@ export class CodexAdapter extends BaseBackendAdapter {
       if (!turnEnded && turnStarted) {
         // Notification stream exited before turn/completed. Let processStream
         // persist whatever content was already emitted and close the UI turn.
+      }
+
+      if (needsReportTurn && !state.aborted) {
+        state.turnId = null;
+        state.pendingUserInput = null;
+        state.subagentByThreadId.clear();
+        yield* this._createStream(
+          buildCodexGoalReportPrompt(activeObjective),
+          {
+            ...options,
+            isNewSession: false,
+            externalSessionId: threadId,
+          },
+          state,
+        );
+        return;
       }
 
       yield { type: 'done' };

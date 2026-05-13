@@ -87,6 +87,7 @@ export interface Message {
   toolActivity?: ToolActivity[];
   contentBlocks?: ContentBlock[];
   streamError?: StreamError;
+  goalEvent?: GoalEvent;
   turn?: 'progress' | 'final';
   pinned?: boolean;
 }
@@ -173,10 +174,29 @@ export interface ModelOption {
   supportedEffortLevels?: EffortLevel[];
 }
 
+export interface BackendGoalCapability {
+  set: boolean;
+  clear: boolean;
+  pause: boolean;
+  resume: boolean;
+  status: 'native' | 'transcript' | 'none';
+}
+
+export interface BackendCapabilities {
+  thinking?: boolean;
+  planMode?: boolean;
+  agents?: boolean;
+  toolActivity?: boolean;
+  userQuestions?: boolean;
+  stdinInput?: boolean;
+  goals?: boolean | BackendGoalCapability;
+}
+
 export interface BackendMetadata {
   id: string;
   label: string;
   icon?: string;
+  capabilities?: BackendCapabilities;
   models?: ModelOption[];
 }
 
@@ -220,18 +240,57 @@ export interface ConversationInputResponse {
   mode: 'stdin' | 'message';
 }
 
-export type CodexThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete';
+export type ThreadGoalBackend = 'codex' | 'claude-code';
+export type ThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete' | 'cleared' | 'unknown';
+export type ThreadGoalSource = 'native' | 'transcript' | 'runtime' | 'unknown';
 
-export interface CodexThreadGoal {
-  threadId: string;
+export interface ThreadGoalSupportedActions {
+  clear: boolean;
+  stopTurn: boolean;
+  pause: boolean;
+  resume: boolean;
+}
+
+export interface ThreadGoal {
+  backend?: ThreadGoalBackend;
+  threadId?: string | null;
+  sessionId?: string | null;
   objective: string;
+  status: ThreadGoalStatus;
+  supportedActions?: ThreadGoalSupportedActions;
+  tokenBudget?: number | null;
+  tokensUsed?: number | null;
+  timeUsedSeconds?: number | null;
+  turns?: number | null;
+  iterations?: number | null;
+  lastReason?: string | null;
+  createdAt?: number | null;
+  updatedAt?: number | null;
+  source?: ThreadGoalSource;
+}
+
+export type GoalEventKind = 'set' | 'resumed' | 'paused' | 'achieved' | 'budget_limited' | 'cleared' | 'updated' | 'unknown';
+
+export interface GoalEvent {
+  kind: GoalEventKind;
+  backend?: ThreadGoalBackend | string;
+  objective?: string;
+  status?: ThreadGoalStatus;
+  reason?: string | null;
+  goal?: ThreadGoal | null;
+}
+
+export type CodexThreadGoalStatus = Extract<ThreadGoalStatus, 'active' | 'paused' | 'budgetLimited' | 'complete'>;
+
+export type CodexThreadGoal = ThreadGoal & {
+  threadId: string;
   status: CodexThreadGoalStatus;
   tokenBudget: number | null;
   tokensUsed: number;
   timeUsedSeconds: number;
   createdAt: number;
   updatedAt: number;
-}
+};
 
 export interface StreamJobRuntimeInfo {
   externalSessionId?: string;
@@ -302,7 +361,7 @@ export type StreamEvent =
   | { type: 'title_updated'; title?: string }
   | { type: 'usage'; usage: Usage; sessionUsage?: Usage }
   | { type: 'error'; error?: string; terminal?: boolean; source?: StreamError['source'] }
-  | { type: 'goal_updated'; goal: CodexThreadGoal }
+  | { type: 'goal_updated'; goal: ThreadGoal }
   | { type: 'goal_cleared'; threadId?: string | null }
   | { type: 'done' }
   | { type: 'replay_start'; bufferedEvents?: number }

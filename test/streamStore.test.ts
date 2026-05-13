@@ -538,6 +538,166 @@ test('replayed assistant_message with id matching an existing message replaces i
   expect(after.messages[0].content).toBe('final reply (replayed)');
 });
 
+test('goal event assistant_message does not replace the streaming placeholder', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  ws.dispatch({ type: 'text', content: 'working' });
+  const placeholderId = Store.getState('c1').streamingMsgId;
+  expect(placeholderId).toBeTruthy();
+
+  ws.dispatch({
+    type: 'assistant_message',
+    message: {
+      id: 'goal-set-1',
+      role: 'system',
+      content: 'Goal set: ship it',
+      backend: 'codex',
+      timestamp: '2026-04-26T12:00:00.000Z',
+      goalEvent: { kind: 'set', backend: 'codex', objective: 'ship it', status: 'active' },
+    },
+  });
+
+  let state = Store.getState('c1');
+  expect(state.streamingMsgId).toBe(placeholderId);
+  expect(state.messages.map((m: any) => m.id)).toEqual(['goal-set-1', placeholderId]);
+
+  ws.dispatch({
+    type: 'assistant_message',
+    message: {
+      id: 'msg-final-1',
+      role: 'assistant',
+      content: 'done',
+      backend: 'codex',
+      timestamp: '2026-04-26T12:00:01.000Z',
+      contentBlocks: [{ type: 'text', content: 'done' }],
+    },
+  });
+
+  state = Store.getState('c1');
+  expect(state.streamingMsgId).toBeNull();
+  expect(state.messages.map((m: any) => m.id)).toEqual(['goal-set-1', 'msg-final-1']);
+});
+
+test('goal-only stream removes the empty assistant placeholder on done', async () => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    id: 'c1',
+    title: 'Goal only',
+    backend: 'codex',
+    externalSessionId: 'thread-goal',
+    messages: [],
+  }));
+  api.conv = {
+    getGoal: jest.fn().mockResolvedValue({ goal: null }),
+    setGoal: jest.fn().mockResolvedValue({ streamReady: true, goal: makeGoal('active', 5000) }),
+  };
+
+  await Store.load('c1');
+  await Store.setGoal('c1', 'ship it');
+  const ws = fakeWSInstance!;
+  const placeholderId = Store.getState('c1').streamingMsgId;
+  expect(placeholderId).toBeTruthy();
+
+  ws.dispatch({
+    type: 'assistant_message',
+    message: {
+      id: 'goal-set-1',
+      role: 'system',
+      content: 'Goal set: ship it',
+      backend: 'codex',
+      timestamp: '2026-04-26T12:00:00.000Z',
+      goalEvent: { kind: 'set', backend: 'codex', objective: 'ship it', status: 'active' },
+    },
+  });
+  ws.dispatch({ type: 'done' });
+
+  const state = Store.getState('c1');
+  expect(state.streamingMsgId).toBeNull();
+  expect(state.messages.map((m: any) => m.id)).toEqual(['goal-set-1']);
+});
+
+test('setGoal shows an immediate optimistic strip and upserts the returned goal message', async () => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    id: 'c1',
+    title: 'Goal optimistic',
+    backend: 'codex',
+    externalSessionId: 'thread-goal',
+    messages: [],
+  }));
+  let resolveSetGoal: ((value: any) => void) | null = null;
+  api.conv = {
+    getGoal: jest.fn().mockResolvedValue({ goal: null }),
+    setGoal: jest.fn().mockImplementation(() => new Promise((resolve) => { resolveSetGoal = resolve; })),
+  };
+
+  await Store.load('c1');
+  const pending = Store.setGoal('c1', 'Goal setcodexship it');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  let state = Store.getState('c1');
+  expect(state.goal).toMatchObject({ objective: 'ship it', status: 'active' });
+  expect(state.streaming).toBe(true);
+  expect(api.conv.setGoal.mock.calls[0][1].objective).toBe('ship it');
+
+  expect(resolveSetGoal).toBeTruthy();
+  (resolveSetGoal as unknown as (value: any) => void)({
+    streamReady: true,
+    goal: { ...makeGoal('active', 5000), objective: 'ship it' },
+    message: {
+      id: 'goal-set-1',
+      role: 'system',
+      content: 'Goal set: ship it',
+      backend: 'codex',
+      timestamp: '2026-04-26T12:00:00.000Z',
+      goalEvent: { kind: 'set', backend: 'codex', objective: 'ship it', status: 'active' },
+    },
+  });
+  await pending;
+
+  state = Store.getState('c1');
+  expect(state.messages.map((m: any) => m.id)).toContain('goal-set-1');
+  expect(state.goal.objective).toBe('ship it');
+});
+
+test('goal status polling keeps a local runtime goal when backend status is not readable yet', async () => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    id: 'c1',
+    title: 'Goal status pending',
+    backend: 'codex',
+    externalSessionId: 'thread-goal',
+    messages: [],
+  }));
+  let resolveSetGoal: ((value: any) => void) | null = null;
+  api.conv = {
+    getGoal: jest.fn().mockResolvedValue({ goal: null }),
+    setGoal: jest.fn().mockImplementation(() => new Promise((resolve) => { resolveSetGoal = resolve; })),
+  };
+
+  await Store.load('c1');
+  const pending = Store.setGoal('c1', 'ship it');
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  await Store.refreshGoal('c1');
+  expect(Store.getState('c1').goal).toMatchObject({
+    objective: 'ship it',
+    status: 'active',
+    source: 'runtime',
+  });
+
+  expect(resolveSetGoal).toBeTruthy();
+  (resolveSetGoal as unknown as (value: any) => void)({
+    streamReady: true,
+    goal: { ...makeGoal('active', 5000), objective: 'ship it', source: 'runtime' },
+  });
+  await pending;
+});
+
 test('replay after turn complete (text → assistant_message) does not duplicate the prior final message', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;

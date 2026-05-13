@@ -996,7 +996,7 @@ export class ChatService {
     toolActivity?: ToolActivity[],
     turn?: 'progress' | 'final',
     contentBlocks?: ContentBlock[],
-    opts?: { streamError?: Message['streamError'] },
+    opts?: { streamError?: Message['streamError']; goalEvent?: Message['goalEvent'] },
   ): Promise<Message | null> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return null;
@@ -1027,6 +1027,10 @@ export class ChatService {
 
       if (opts?.streamError && role === 'assistant') {
         msg.streamError = opts.streamError;
+      }
+
+      if (opts?.goalEvent && role === 'system') {
+        msg.goalEvent = opts.goalEvent;
       }
 
       if (turn && role === 'assistant') {

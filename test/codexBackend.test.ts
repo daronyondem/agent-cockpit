@@ -124,7 +124,13 @@ describe('CodexAdapter', () => {
       toolActivity: true,
       userQuestions: true,
       stdinInput: true,
-      goals: true,
+      goals: {
+        set: true,
+        clear: true,
+        pause: true,
+        resume: true,
+        status: 'native',
+      },
     });
     expect(meta.resumeCapabilities.activeTurnResume).toBe('unsupported');
     expect(meta.resumeCapabilities.sessionResume).toBe('supported');
@@ -510,21 +516,21 @@ describe('CodexAdapter', () => {
 
     jest.isolateModules(() => {
       installCodexAppServerMock((req, emit) => {
+        const goal = {
+          threadId: 'thread-goal',
+          objective: 'ship the goal',
+          status: 'active',
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        };
         if (req.method === 'initialize') {
           setImmediate(() => emit({ id: req.id, result: {} }));
         } else if (req.method === 'thread/start') {
           setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-goal' } } }));
         } else if (req.method === 'thread/goal/set') {
-          const goal = {
-            threadId: 'thread-goal',
-            objective: 'ship the goal',
-            status: 'active',
-            tokenBudget: null,
-            tokensUsed: 0,
-            timeUsedSeconds: 0,
-            createdAt: 1,
-            updatedAt: 1,
-          };
           setImmediate(() => {
             emit({ id: req.id, result: { goal } });
             emit({
@@ -539,6 +545,12 @@ describe('CodexAdapter', () => {
               method: 'turn/completed',
               params: { threadId: 'thread-goal', turn: { id: 'turn-old-goal' } },
             });
+          });
+        } else if (req.method === 'turn/start') {
+          expect(req.params.threadId).toBe('thread-goal');
+          expect(req.params.input[0].text).toContain('ship the goal');
+          setImmediate(() => {
+            emit({ id: req.id, result: { turn: { id: 'turn-goal' } } });
             emit({
               method: 'thread/goal/updated',
               params: { threadId: 'thread-goal', turnId: 'turn-goal', goal },
@@ -774,6 +786,7 @@ describe('CodexAdapter', () => {
     let adapterRef!: { shutdown: () => void };
     const initializeRequests: any[] = [];
     const spawnArgs: string[][] = [];
+    const turnStartRequests: any[] = [];
 
     jest.isolateModules(() => {
       jest.doMock('child_process', () => {
@@ -831,6 +844,22 @@ describe('CodexAdapter', () => {
                         },
                       },
                     }) + '\n'));
+                  });
+                } else if (req.method === 'turn/start') {
+                  turnStartRequests.push(req);
+                  expect(req.params.threadId).toBe('thread-goal');
+                  expect(req.params.input[0].text).toContain('ship the goal');
+                  setImmediate(() => {
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      id: req.id,
+                      result: { turn: { id: 'turn-goal' } },
+                    }) + '\n'));
+                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
+                      jsonrpc: '2.0',
+                      method: 'item/agentMessage/delta',
+                      params: { threadId: 'thread-goal', turnId: 'turn-goal', delta: 'working' },
+                    }) + '\n'));
                     proc.stdout.emit('data', Buffer.from(JSON.stringify({
                       jsonrpc: '2.0',
                       method: 'thread/goal/updated',
@@ -840,24 +869,14 @@ describe('CodexAdapter', () => {
                         goal: {
                           threadId: 'thread-goal',
                           objective: 'ship the goal',
-                          status: 'active',
+                          status: 'complete',
                           tokenBudget: null,
-                          tokensUsed: 0,
-                          timeUsedSeconds: 0,
+                          tokensUsed: 1,
+                          timeUsedSeconds: 2,
                           createdAt: 1,
-                          updatedAt: 1,
+                          updatedAt: 2,
                         },
                       },
-                    }) + '\n'));
-                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
-                      jsonrpc: '2.0',
-                      method: 'turn/started',
-                      params: { threadId: 'thread-goal', turn: { id: 'turn-goal' } },
-                    }) + '\n'));
-                    proc.stdout.emit('data', Buffer.from(JSON.stringify({
-                      jsonrpc: '2.0',
-                      method: 'item/agentMessage/delta',
-                      params: { threadId: 'thread-goal', turnId: 'turn-goal', delta: 'working' },
                     }) + '\n'));
                     proc.stdout.emit('data', Buffer.from(JSON.stringify({
                       jsonrpc: '2.0',
@@ -896,6 +915,7 @@ describe('CodexAdapter', () => {
 
     expect(spawnArgs[0]).toEqual(['app-server', '--enable', 'goals']);
     expect(initializeRequests[0].params.capabilities).toEqual({ experimentalApi: true });
+    expect(turnStartRequests).toHaveLength(1);
     expect(events).toEqual(expect.arrayContaining([
       { type: 'external_session', sessionId: 'thread-goal' },
       { type: 'backend_runtime', externalSessionId: 'thread-goal', processId: 6565 },
@@ -903,6 +923,188 @@ describe('CodexAdapter', () => {
       { type: 'text', content: 'working', streaming: true },
     ]));
     expect(events.filter(event => event.type === 'goal_updated')).toHaveLength(2);
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
+  test('setGoalObjective ends when Codex sends terminal goal status without turn completion', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+    let turnStartCount = 0;
+
+    jest.isolateModules(() => {
+      installCodexAppServerMock((req, emit) => {
+        const activeGoal = {
+          threadId: 'thread-goal',
+          objective: 'ship the goal',
+          status: 'active',
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        };
+        const completeGoal = {
+          ...activeGoal,
+          status: 'complete',
+          tokensUsed: 1,
+          timeUsedSeconds: 2,
+          updatedAt: 2,
+        };
+
+        if (req.method === 'initialize') {
+          setImmediate(() => emit({ id: req.id, result: {} }));
+        } else if (req.method === 'thread/start') {
+          setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-goal' } } }));
+        } else if (req.method === 'thread/goal/set') {
+          setImmediate(() => emit({ id: req.id, result: { goal: activeGoal } }));
+        } else if (req.method === 'thread/read') {
+          setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-goal', turns: [] } } }));
+        } else if (req.method === 'turn/start') {
+          turnStartCount += 1;
+          if (turnStartCount === 1) {
+            setImmediate(() => {
+              emit({ id: req.id, result: { turn: { id: 'turn-goal' } } });
+              emit({
+                method: 'thread/goal/updated',
+                params: { threadId: 'thread-goal', turnId: 'turn-goal', goal: completeGoal },
+              });
+            });
+          } else {
+            expect(req.params.input[0].text).toContain('final report');
+            setImmediate(() => {
+              emit({ id: req.id, result: { turn: { id: 'turn-report' } } });
+              emit({
+                method: 'item/agentMessage/delta',
+                params: { threadId: 'thread-goal', turnId: 'turn-report', delta: 'final report' },
+              });
+              emit({
+                method: 'turn/completed',
+                params: { threadId: 'thread-goal', turn: { id: 'turn-report' } },
+              });
+            });
+          }
+        }
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.setGoalObjective('ship the goal', {
+        sessionId: 'test-session-goal-terminal-no-turn-complete',
+        conversationId: 'test-conv-goal-terminal-no-turn-complete',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'backend_runtime', externalSessionId: 'thread-goal', activeTurnId: 'turn-goal', processId: 7272 },
+      { type: 'backend_runtime', externalSessionId: 'thread-goal', activeTurnId: 'turn-report', processId: 7272 },
+      expect.objectContaining({
+        type: 'goal_updated',
+        goal: expect.objectContaining({ status: 'complete' }),
+      }),
+      { type: 'text', content: 'final report', streaming: true },
+      { type: 'done' },
+    ]));
+    expect(turnStartCount).toBe(2);
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
+  test('setGoalObjective polls terminal goal status when Codex omits stream notifications', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+    let turnStartCount = 0;
+
+    jest.isolateModules(() => {
+      installCodexAppServerMock((req, emit) => {
+        const activeGoal = {
+          threadId: 'thread-goal',
+          objective: 'ship the goal',
+          status: 'active',
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 1,
+        };
+        const completeGoal = {
+          ...activeGoal,
+          status: 'complete',
+          tokensUsed: 1,
+          timeUsedSeconds: 2,
+          updatedAt: 2,
+        };
+
+        if (req.method === 'initialize') {
+          setImmediate(() => emit({ id: req.id, result: {} }));
+        } else if (req.method === 'thread/start') {
+          setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-goal' } } }));
+        } else if (req.method === 'thread/goal/set') {
+          setImmediate(() => emit({ id: req.id, result: { goal: activeGoal } }));
+        } else if (req.method === 'thread/goal/get') {
+          setImmediate(() => emit({ id: req.id, result: { goal: completeGoal } }));
+        } else if (req.method === 'thread/read') {
+          setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-goal', turns: [] } } }));
+        } else if (req.method === 'turn/start') {
+          turnStartCount += 1;
+          if (turnStartCount === 1) {
+            setImmediate(() => emit({ id: req.id, result: { turn: { id: 'turn-goal' } } }));
+          } else {
+            expect(req.params.input[0].text).toContain('final report');
+            setImmediate(() => {
+              emit({ id: req.id, result: { turn: { id: 'turn-report' } } });
+              emit({
+                method: 'item/agentMessage/delta',
+                params: { threadId: 'thread-goal', turnId: 'turn-report', delta: 'polled report' },
+              });
+              emit({
+                method: 'turn/completed',
+                params: { threadId: 'thread-goal', turn: { id: 'turn-report' } },
+              });
+            });
+          }
+        }
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.setGoalObjective('ship the goal', {
+        sessionId: 'test-session-goal-poll-terminal',
+        conversationId: 'test-conv-goal-poll-terminal',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'backend_runtime', externalSessionId: 'thread-goal', activeTurnId: 'turn-goal', processId: 7272 },
+      { type: 'backend_runtime', externalSessionId: 'thread-goal', activeTurnId: 'turn-report', processId: 7272 },
+      expect.objectContaining({
+        type: 'goal_updated',
+        goal: expect.objectContaining({ status: 'complete' }),
+      }),
+      { type: 'text', content: 'polled report', streaming: true },
+      { type: 'done' },
+    ]));
+    expect(turnStartCount).toBe(2);
     adapterRef.shutdown();
     jest.dontMock('child_process');
   });

@@ -12,6 +12,7 @@ import type {
   CodexThreadGoalStatus,
   CurrentUserResponse,
   EffortLevel,
+  GoalEvent,
   Message,
   QueuedMessage,
   SendMessageResponse,
@@ -19,6 +20,8 @@ import type {
   SessionHistoryItem,
   Settings,
   ToolActivity,
+  ThreadGoal,
+  ThreadGoalStatus,
   Usage,
 } from '../../../src/contracts/responses';
 
@@ -33,6 +36,7 @@ export type {
   CodexThreadGoal,
   CodexThreadGoalStatus,
   EffortLevel,
+  GoalEvent,
   Message,
   QueuedMessage,
   SendMessageResponse,
@@ -40,11 +44,10 @@ export type {
   SessionHistoryItem,
   Settings,
   ToolActivity,
+  ThreadGoal,
+  ThreadGoalStatus,
   Usage,
 };
-
-export type ThreadGoal = CodexThreadGoal;
-export type ThreadGoalStatus = CodexThreadGoalStatus;
 
 export type PendingAttachment = {
   id: string;

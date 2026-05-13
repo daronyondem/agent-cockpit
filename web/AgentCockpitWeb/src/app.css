@@ -2735,6 +2735,11 @@ body{
   padding-left: 10px;
 }
 .msg-agent.msg-stream-error .head .who{ color: var(--status-error); }
+.msg-goal-event .avatar{
+  background: color-mix(in oklch, var(--status-running), transparent 86%);
+  color: var(--status-running);
+}
+.msg-goal-event .head .who{ color: var(--status-running); }
 .msg-agent .head{
   display: flex; align-items: center; gap: 10px;
   font-size: 12.5px;
@@ -2834,6 +2839,56 @@ body{
   background: var(--surface-2);
 }
 .msg-action.pinned{ color: var(--accent); }
+
+.goal-event-card{
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  max-width: 640px;
+  min-width: 0;
+  padding: 9px 11px;
+  border: 1px solid color-mix(in oklch, var(--status-running), transparent 72%);
+  border-radius: var(--r-md);
+  background: color-mix(in oklch, var(--status-running), transparent 93%);
+  color: var(--text);
+}
+.goal-event-card.kind-paused{
+  border-color: color-mix(in oklch, var(--status-awaiting), transparent 68%);
+  background: color-mix(in oklch, var(--status-awaiting), transparent 92%);
+}
+.goal-event-card.kind-budget_limited{
+  border-color: color-mix(in oklch, var(--status-error), transparent 68%);
+  background: color-mix(in oklch, var(--status-error), transparent 93%);
+}
+.goal-event-row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.goal-event-title{
+  font-weight: 700;
+  color: var(--text);
+}
+.goal-event-backend{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono-font);
+  font-size: 11px;
+  color: var(--text-3);
+}
+.goal-event-objective{
+  overflow-wrap: anywhere;
+  line-height: 1.45;
+}
+.goal-event-reason{
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
 
 .msg-memory{
   display: grid;

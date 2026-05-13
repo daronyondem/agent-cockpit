@@ -96,6 +96,11 @@ export interface Message {
     source?: StreamErrorSource;
   };
   /**
+   * System messages only. Marks a durable goal lifecycle event that should
+   * render as a goal timeline card rather than ordinary chat dialogue.
+   */
+  goalEvent?: GoalEvent;
+  /**
    * Assistant messages only. `progress` = intermediate segment saved at a
    * `turn_boundary` (agent still has more tool work to do). `final` = last
    * segment of the agent run saved at `done`. Absent on user/system messages
@@ -755,24 +760,63 @@ export interface DoneEvent {
   type: 'done';
 }
 
-// ── Codex Thread Goals ──────────────────────────────────────────────────────
+// ── Thread Goals ────────────────────────────────────────────────────────────
 
-export type CodexThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete';
+export type ThreadGoalBackend = 'codex' | 'claude-code';
+export type ThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete' | 'cleared' | 'unknown';
+export type ThreadGoalSource = 'native' | 'transcript' | 'runtime' | 'unknown';
 
-export interface CodexThreadGoal {
-  threadId: string;
+export interface ThreadGoalSupportedActions {
+  clear: boolean;
+  stopTurn: boolean;
+  pause: boolean;
+  resume: boolean;
+}
+
+export interface ThreadGoal {
+  backend?: ThreadGoalBackend;
+  threadId?: string | null;
+  sessionId?: string | null;
   objective: string;
+  status: ThreadGoalStatus;
+  supportedActions?: ThreadGoalSupportedActions;
+  tokenBudget?: number | null;
+  tokensUsed?: number | null;
+  timeUsedSeconds?: number | null;
+  turns?: number | null;
+  iterations?: number | null;
+  lastReason?: string | null;
+  createdAt?: number | null;
+  updatedAt?: number | null;
+  source?: ThreadGoalSource;
+}
+
+export type GoalEventKind = 'set' | 'resumed' | 'paused' | 'achieved' | 'budget_limited' | 'cleared' | 'updated' | 'unknown';
+
+export interface GoalEvent {
+  kind: GoalEventKind;
+  backend?: ThreadGoalBackend | string;
+  objective?: string;
+  status?: ThreadGoalStatus;
+  reason?: string | null;
+  goal?: ThreadGoal | null;
+}
+
+export type CodexThreadGoalStatus = Extract<ThreadGoalStatus, 'active' | 'paused' | 'budgetLimited' | 'complete'>;
+
+export type CodexThreadGoal = ThreadGoal & {
+  threadId: string;
   status: CodexThreadGoalStatus;
   tokenBudget: number | null;
   tokensUsed: number;
   timeUsedSeconds: number;
   createdAt: number;
   updatedAt: number;
-}
+};
 
 export interface GoalUpdatedEvent {
   type: 'goal_updated';
-  goal: CodexThreadGoal;
+  goal: ThreadGoal;
 }
 
 export interface GoalClearedEvent {
@@ -1603,7 +1647,15 @@ export interface BackendCapabilities {
   toolActivity: boolean;
   userQuestions: boolean;
   stdinInput: boolean;
-  goals?: boolean;
+  goals?: boolean | BackendGoalCapability;
+}
+
+export interface BackendGoalCapability {
+  set: boolean;
+  clear: boolean;
+  pause: boolean;
+  resume: boolean;
+  status: 'native' | 'transcript' | 'none';
 }
 
 export type BackendActiveTurnResumeSupport = 'unsupported' | 'supported';

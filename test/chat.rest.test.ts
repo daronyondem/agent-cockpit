@@ -59,6 +59,7 @@ class CodexGoalMockBackend extends MockBackendAdapter {
         yield { type: 'external_session', sessionId: goal.threadId } as StreamEvent;
         yield { type: 'goal_updated', goal } as StreamEvent;
         yield { type: 'text', content: 'goal output', streaming: true } as StreamEvent;
+        yield { type: 'goal_updated', goal: { ...goal, status: 'complete', updatedAt: 2 } } as StreamEvent;
         yield { type: 'done' } as StreamEvent;
       })(),
       abort: () => {},
@@ -77,6 +78,73 @@ class CodexGoalMockBackend extends MockBackendAdapter {
     const threadId = this.goal?.threadId || 'mock-thread';
     this.goal = null;
     return { cleared: true, threadId };
+  }
+}
+
+class ClaudeGoalMockBackend extends MockBackendAdapter {
+  goal: CodexThreadGoal | null = null;
+  lastGoalObjective: string | null = null;
+  clearCalls = 0;
+
+  get metadata(): BackendMetadata {
+    return {
+      ...super.metadata,
+      id: 'claude-code',
+      label: 'Claude Code',
+      capabilities: {
+        thinking: true,
+        planMode: true,
+        agents: true,
+        toolActivity: true,
+        userQuestions: true,
+        stdinInput: true,
+        goals: {
+          set: true,
+          clear: true,
+          pause: false,
+          resume: false,
+          status: 'transcript',
+        },
+      },
+    };
+  }
+
+  async getGoal(): Promise<CodexThreadGoal | null> {
+    return this.goal;
+  }
+
+  setGoalObjective(objective: string, options?: SendMessageOptions): SendMessageResult {
+    this.lastGoalObjective = objective;
+    this._lastOptions = options || null;
+    this.goal = {
+      backend: 'claude-code',
+      threadId: 'mock-claude-session',
+      sessionId: 'mock-claude-session',
+      objective,
+      status: 'active',
+      supportedActions: { clear: true, stopTurn: true, pause: false, resume: false },
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const goal = this.goal;
+    return {
+      stream: (async function*() {
+        yield { type: 'goal_updated', goal } as StreamEvent;
+        yield { type: 'text', content: 'claude goal output', streaming: true } as StreamEvent;
+        yield { type: 'done' } as StreamEvent;
+      })(),
+      abort: () => {},
+      sendInput: () => {},
+    };
+  }
+
+  async clearGoal(): Promise<{ cleared: boolean; sessionId?: string | null }> {
+    this.clearCalls += 1;
+    this.goal = null;
+    return { cleared: true, sessionId: 'mock-claude-session' };
   }
 }
 
@@ -418,6 +486,8 @@ describe('Codex goal endpoints', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.streamReady).toBe(true);
+    expect(res.body.goal).toMatchObject({ objective: 'Ship the dashboard', status: 'active' });
+    expect(res.body.message.goalEvent).toMatchObject({ kind: 'set', objective: 'Ship the dashboard' });
     expect(codexBackend.lastGoalObjective).toBe('Ship the dashboard');
     expect(codexBackend.lastGoalOptions?.isNewSession).toBe(true);
     expect(codexBackend.lastGoalOptions?.systemPrompt).toContain('do not create or edit local memory files');
@@ -427,7 +497,51 @@ describe('Codex goal endpoints', () => {
 
     const loaded = await env.chatService.getConversation(conv.id);
     expect(loaded?.messages.some(m => m.role === 'user')).toBe(false);
+    expect(loaded?.messages.find(m => m.goalEvent?.kind === 'set')?.content).toBe('Goal set: Ship the dashboard');
     expect(loaded?.messages.find(m => m.role === 'assistant')?.content).toBe('goal output');
+    expect(loaded?.messages.find(m => m.goalEvent?.kind === 'achieved')?.content).toBe('Goal achieved: Ship the dashboard');
+  });
+
+  test('normalizes goal-card text before starting a Codex goal', async () => {
+    const codexBackend = new CodexGoalMockBackend();
+    env.backendRegistry.register(codexBackend);
+    const conv = await env.chatService.createConversation('Goal Paste Cleanup', '/tmp/goal-paste-cleanup', 'codex');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, {
+      objective: 'Goal setcodexResearch the benefits of banana',
+      backend: 'codex',
+    });
+
+    expect(res.status).toBe(200);
+    expect(codexBackend.lastGoalObjective).toBe('Research the benefits of banana');
+    expect(res.body.goal.objective).toBe('Research the benefits of banana');
+    expect(res.body.message.goalEvent.objective).toBe('Research the benefits of banana');
+  });
+
+  test('persists a terminal goal event discovered by status polling', async () => {
+    const codexBackend = new CodexGoalMockBackend();
+    env.backendRegistry.register(codexBackend);
+    const conv = await env.chatService.createConversation('Goal Status Poll', '/tmp/goal-status-poll', 'codex');
+    codexBackend.goal = {
+      threadId: 'mock-thread',
+      objective: 'Ship the dashboard',
+      status: 'complete',
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 20,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+
+    const first = await env.request('GET', `/api/chat/conversations/${conv.id}/goal`);
+    const second = await env.request('GET', `/api/chat/conversations/${conv.id}/goal`);
+
+    expect(first.status).toBe(200);
+    expect(second.status).toBe(200);
+    const loaded = await env.chatService.getConversation(conv.id);
+    const achieved = loaded?.messages.filter(m => m.goalEvent?.kind === 'achieved') || [];
+    expect(achieved).toHaveLength(1);
+    expect(achieved[0].content).toBe('Goal achieved: Ship the dashboard');
   });
 
   test('pauses and clears an idle Codex goal without aborting a stream', async () => {
@@ -452,8 +566,79 @@ describe('Codex goal endpoints', () => {
 
     const clear = await env.request('DELETE', `/api/chat/conversations/${conv.id}/goal`);
     expect(clear.status).toBe(200);
-    expect(clear.body).toEqual({ cleared: true, threadId: 'mock-thread' });
+    expect(clear.body).toMatchObject({ cleared: true, threadId: 'mock-thread' });
+    expect(clear.body.message.goalEvent.kind).toBe('cleared');
     expect(codexBackend.clearCalls).toBe(1);
+  });
+
+  test('starts a Claude Code goal stream without saving a user message', async () => {
+    const claudeBackend = new ClaudeGoalMockBackend();
+    env.backendRegistry.register(claudeBackend);
+    const conv = await env.chatService.createConversation('Claude Goal Test', '/tmp/claude-goal-test', 'claude-code');
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, {
+      objective: 'npm test exits 0',
+      backend: 'claude-code',
+    });
+    const events = await eventsPromise;
+
+    expect(res.status).toBe(200);
+    expect(res.body.streamReady).toBe(true);
+    expect(res.body.goal).toMatchObject({ backend: 'claude-code', objective: 'npm test exits 0', status: 'active' });
+    expect(res.body.message.goalEvent).toMatchObject({ kind: 'set', objective: 'npm test exits 0' });
+    expect(claudeBackend.lastGoalObjective).toBe('npm test exits 0');
+    expect(events.find(e => e.type === 'goal_updated')?.goal).toMatchObject({
+      backend: 'claude-code',
+      objective: 'npm test exits 0',
+      supportedActions: { pause: false, resume: false },
+    });
+    expect(events.find(e => e.type === 'text')?.content).toBe('claude goal output');
+
+    const loaded = await env.chatService.getConversation(conv.id);
+    expect(loaded?.messages.some(m => m.role === 'user')).toBe(false);
+    expect(loaded?.messages.find(m => m.goalEvent?.kind === 'set')?.content).toBe('Goal set: npm test exits 0');
+    expect(loaded?.messages.find(m => m.role === 'assistant')?.content).toBe('claude goal output');
+  });
+
+  test('rejects unsupported Claude Code goal pause and resume actions', async () => {
+    const claudeBackend = new ClaudeGoalMockBackend();
+    env.backendRegistry.register(claudeBackend);
+    const conv = await env.chatService.createConversation('Claude Goal Controls', '/tmp/claude-goal-controls', 'claude-code');
+
+    const pause = await env.request('POST', `/api/chat/conversations/${conv.id}/goal/pause`, {});
+    expect(pause.status).toBe(400);
+    expect(pause.body.error).toBe('Goal pause is not supported by Claude Code');
+
+    const resume = await env.request('POST', `/api/chat/conversations/${conv.id}/goal/resume`, {});
+    expect(resume.status).toBe(400);
+    expect(resume.body.error).toBe('Goal resume is not supported by Claude Code');
+  });
+
+  test('clears an idle Claude Code goal through backend-supported clear', async () => {
+    const claudeBackend = new ClaudeGoalMockBackend();
+    env.backendRegistry.register(claudeBackend);
+    const conv = await env.chatService.createConversation('Claude Goal Clear', '/tmp/claude-goal-clear', 'claude-code');
+    claudeBackend.goal = {
+      backend: 'claude-code',
+      threadId: 'mock-claude-session',
+      sessionId: 'mock-claude-session',
+      objective: 'Keep testing',
+      status: 'active',
+      supportedActions: { clear: true, stopTurn: true, pause: false, resume: false },
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    const clear = await env.request('DELETE', `/api/chat/conversations/${conv.id}/goal`);
+    expect(clear.status).toBe(200);
+    expect(clear.body).toMatchObject({ cleared: true, sessionId: 'mock-claude-session' });
+    expect(clear.body.message.goalEvent.kind).toBe('cleared');
+    expect(claudeBackend.clearCalls).toBe(1);
   });
 });
 
