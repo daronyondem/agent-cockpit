@@ -25,6 +25,8 @@ const WS_SETTINGS_TABS = [
   { id: 'contextMap',   label: 'Context Map' },
 ];
 
+const CONTEXT_MAP_SECTIONS = ['overview', 'processor', 'active', 'attention', 'danger'];
+
 const MEMORY_TYPE_ORDER = ['user', 'feedback', 'project', 'reference', 'unknown'];
 const MEMORY_TYPE_LABELS = {
   user: 'User', feedback: 'Feedback', project: 'Project',
@@ -91,6 +93,10 @@ function workspaceDefaultEffort(levels){
 function contextMapRunsFromReview(reviewOrRuns){
   if (Array.isArray(reviewOrRuns)) return reviewOrRuns;
   return Array.isArray(reviewOrRuns && reviewOrRuns.runs) ? reviewOrRuns.runs : [];
+}
+
+function normalizeContextMapSection(section){
+  return CONTEXT_MAP_SECTIONS.includes(section) ? section : 'overview';
 }
 
 function nextContextMapInitialScanNotice(runs, previous){
@@ -254,7 +260,7 @@ function contextMapCandidateImpactPreview(candidate){
   };
 }
 
-export function WorkspaceSettingsPage({ hash, label, initialTab, onOpenMemoryReview, onClose }){
+export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextMapSection, onOpenMemoryReview, onClose }){
   const [tab, setTab] = React.useState(() => WS_SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'instructions');
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(null);
@@ -1183,6 +1189,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, onOpenMemoryRev
             onReopenCandidate={reopenContextMapCandidate}
             settingsDirty={contextMapSettingsDirty}
             saving={saving}
+            initialSection={initialContextMapSection}
           />
         ) : null}
       </div>
@@ -1953,6 +1960,7 @@ function ContextMapTab({
   onReopenCandidate,
   settingsDirty,
   saving,
+  initialSection,
 }){
   const contextMapTopRef = React.useRef(null);
   const contextMapContentRef = React.useRef(null);
@@ -1994,7 +2002,11 @@ function ContextMapTab({
   const [editingEntity, setEditingEntity] = React.useState(false);
   const [entityEditDraft, setEntityEditDraft] = React.useState(null);
   const [entityEditSaving, setEntityEditSaving] = React.useState(false);
-  const [contextMapSection, setContextMapSection] = React.useState('overview');
+  const [contextMapSection, setContextMapSection] = React.useState(() => normalizeContextMapSection(initialSection));
+
+  React.useEffect(() => {
+    setContextMapSection(normalizeContextMapSection(initialSection));
+  }, [initialSection]);
 
   React.useEffect(() => {
     setEditingEntity(false);

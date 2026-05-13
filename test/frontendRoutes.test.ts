@@ -230,8 +230,12 @@ describe('frontend routes', () => {
     expect(settingsSrc).not.toContain('Synthesis concurrency');
     expect(settingsSrc).not.toContain('CONTEXT_MAP_SOURCE_OPTIONS');
     expect(workspaceSettingsSrc).toContain("{ id: 'contextMap',   label: 'Context Map' }");
+    expect(workspaceSettingsSrc).toContain("const CONTEXT_MAP_SECTIONS = ['overview', 'processor', 'active', 'attention', 'danger']");
+    expect(workspaceSettingsSrc).toContain('function normalizeContextMapSection');
     expect(workspaceSettingsSrc).toContain('function WorkspaceSettingsPage');
     expect(workspaceSettingsSrc).toContain('export function WorkspaceSettingsPage');
+    expect(workspaceSettingsSrc).toContain('initialContextMapSection');
+    expect(workspaceSettingsSrc).toContain('initialSection={initialContextMapSection}');
     expect(workspaceSettingsSrc).toContain('className="settings-shell workspace-settings-shell"');
     expect(workspaceSettingsSrc).toContain('className="settings-tabs"');
     expect(workspaceSettingsSrc).toContain('className="settings-form settings-form-wide ws-form"');
@@ -241,6 +245,8 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).toContain('function ContextMapTab');
     expect(workspaceSettingsSrc).toContain('ac:context-map-update');
     expect(workspaceSettingsSrc).toContain('Context Map settings sections');
+    expect(workspaceSettingsSrc).toContain('const [contextMapSection, setContextMapSection] = React.useState(() => normalizeContextMapSection(initialSection))');
+    expect(workspaceSettingsSrc).toContain('setContextMapSection(normalizeContextMapSection(initialSection))');
     expect(workspaceSettingsSrc).toContain('ws-cm-panel-overview');
     expect(workspaceSettingsSrc).toContain('ws-cm-metrics');
     expect(workspaceSettingsSrc).toContain('ws-cm-insights');
@@ -322,7 +328,9 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).toContain('File ·');
     expect(workspaceSettingsSrc).toContain('Danger Zone');
     expect(shellSrc).toContain('ComposerContextMapIcon');
-    expect(shellSrc).toContain("onOpenWorkspaceSettings(conv.workspaceHash, workspaceLabel || 'workspace', 'contextMap')");
+    expect(shellSrc).toContain('initialContextMapSection');
+    expect(shellSrc).toContain("const targetSection = pending > 0 ? 'attention' : null");
+    expect(shellSrc).toContain("onOpenWorkspaceSettings(conv.workspaceHash, workspaceLabel || 'workspace', 'contextMap', targetSection)");
     expect(shellSrc).toContain('<WorkspaceSettingsPage');
     expect(shellSrc).not.toContain('<WorkspaceSettingsModal');
     expect(streamStoreSrc).toContain("frame.type === 'context_map_update'");
