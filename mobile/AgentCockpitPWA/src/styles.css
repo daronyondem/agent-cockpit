@@ -1343,6 +1343,13 @@ textarea {
   display: flex;
   gap: 10px;
   justify-content: space-between;
+  min-width: 0;
+  width: 100%;
+}
+
+.modal-header > div {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .modal h2 {
@@ -1350,6 +1357,9 @@ textarea {
   font-size: 24px;
   font-weight: 500;
   line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .modal-scroll {
@@ -2162,6 +2172,10 @@ code {
   min-height: 30px;
   padding: 0 10px;
   white-space: nowrap;
+}
+
+.sheet-close {
+  flex: 0 0 auto;
 }
 
 .nav-button svg,
