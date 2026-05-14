@@ -232,8 +232,11 @@ npx pm2 save
 It does not require global PM2. After PM2 starts, the installer polls
 `http://127.0.0.1:<port>/auth/setup` for up to 90 seconds before opening the
 browser. If the server does not answer, the installer fails with a local
-`npx pm2 logs agent-cockpit --lines 100` command. Once the setup endpoint is
-ready, it prints the first-run setup token and opens
+PM2 logs command. When the installer is using a private Node.js runtime, that
+printed command prepends the private runtime `bin` directory and calls the
+private runtime's `npx` so it still works from a fresh user shell that has no
+global Node.js on `PATH`. Once the setup endpoint is ready, it prints the
+first-run setup token and opens
 `http://localhost:<port>/auth/setup` unless `--skip-open` is set.
 Successful owner creation redirects to `/v2/?welcome=1`, where the authenticated
 welcome flow reads install/doctor status, links to Security and CLI Settings,

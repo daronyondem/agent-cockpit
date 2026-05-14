@@ -412,6 +412,15 @@ start_pm2() {
   (cd "$app_dir" && npx pm2 save)
 }
 
+pm2_logs_command() {
+  local app_dir="$1"
+  if [[ -n "$NODE_BIN_DIR" ]]; then
+    printf 'cd "%s" && PATH="%s:$PATH" "%s/npx" pm2 logs agent-cockpit --lines 100' "$app_dir" "$NODE_BIN_DIR" "$NODE_BIN_DIR"
+    return
+  fi
+  printf 'cd "%s" && npx pm2 logs agent-cockpit --lines 100' "$app_dir"
+}
+
 wait_for_server() {
   local app_dir="$1"
   local setup_url="http://127.0.0.1:${PORT}/auth/setup"
@@ -422,7 +431,9 @@ wait_for_server() {
     fi
     sleep 1
   done
-  fail "Agent Cockpit did not answer at ${setup_url}. Check logs with: cd \"${app_dir}\" && npx pm2 logs agent-cockpit --lines 100"
+  local logs_command
+  logs_command="$(pm2_logs_command "$app_dir")"
+  fail "Agent Cockpit did not answer at ${setup_url}. Check logs with: ${logs_command}"
 }
 
 open_setup() {
