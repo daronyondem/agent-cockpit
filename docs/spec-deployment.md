@@ -194,14 +194,16 @@ manifest-designated `app-tarball` from
 `https://github.com/<repo>/releases/latest/download/` by default, or from
 `/releases/download/v<version>/` when `--version` is supplied. The script
 verifies SHA256 for both the manifest and tarball before extraction. After
-extraction it exports `NPM_CONFIG_AUDIT=false`, `NPM_CONFIG_FUND=false`, and
-`NPM_CONFIG_UPDATE_NOTIFIER=false`, runs root `npm ci --no-audit --no-fund`,
-runs `npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund`, verifies
+extraction it exports `NPM_CONFIG_AUDIT=false`, `NPM_CONFIG_FUND=false`,
+`NPM_CONFIG_LOGLEVEL=error`, and `NPM_CONFIG_UPDATE_NOTIFIER=false`, runs root
+`npm ci --no-audit --no-fund --loglevel=error`, runs
+`npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund --loglevel=error`, verifies
 that `public/v2-built/index.html` and `public/mobile-built/index.html` exist,
 and runs the corresponding build command only if an expected prebuilt shell is
 missing. These npm settings keep install-time audit/funding/update-notifier
-prompts out of the fresh-Mac user path while the repository lockfile and release
-gate remain responsible for dependency hygiene.
+prompts, dependency deprecation warnings, and package-count chatter out of the
+fresh-Mac user path while the repository lockfile and release gate remain
+responsible for dependency hygiene.
 
 Dev installs clone `https://github.com/<repo>.git` into `--dev-dir` when missing
 or update an existing checkout with `fetch origin main`, `checkout main`, and

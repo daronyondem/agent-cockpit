@@ -18,6 +18,7 @@ NODE_RUNTIME_NPM_VERSION=""
 NODE_RUNTIME_DIR=""
 export NPM_CONFIG_AUDIT=false
 export NPM_CONFIG_FUND=false
+export NPM_CONFIG_LOGLEVEL=error
 export NPM_CONFIG_UPDATE_NOTIFIER=false
 
 usage() {
@@ -386,9 +387,9 @@ NODE
 install_dependencies() {
   local app_dir="$1"
   log "Installing root dependencies."
-  (cd "$app_dir" && npm ci --no-audit --no-fund)
+  (cd "$app_dir" && npm ci --no-audit --no-fund --loglevel=error)
   log "Installing mobile PWA dependencies."
-  (cd "$app_dir" && npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund)
+  (cd "$app_dir" && npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund --loglevel=error)
 }
 
 ensure_built_assets() {
