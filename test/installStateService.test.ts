@@ -76,12 +76,26 @@ describe('InstallStateService', () => {
       appDir: path.join(tmpDir, 'install', 'current'),
       dataDir: dataRoot,
       installedAt: '2026-05-11T00:00:00.000Z',
+      nodeRuntime: {
+        source: 'private',
+        version: '22.22.3',
+        npmVersion: '10.9.8',
+        binDir: path.join(tmpDir, 'install', 'runtime', 'node', 'bin'),
+        runtimeDir: path.join(tmpDir, 'install', 'runtime', 'node'),
+        requiredMajor: 22,
+        updatedAt: '2026-05-11T00:00:00.000Z',
+      },
     });
 
     let status = service.getStatus();
     expect(status.stateSource).toBe('stored');
     expect(status.channel).toBe('production');
     expect(status.source).toBe('github-release');
+    expect(status.nodeRuntime).toEqual(expect.objectContaining({
+      source: 'private',
+      version: '22.22.3',
+      requiredMajor: 22,
+    }));
     expect(status.welcomeCompletedAt).toBeNull();
 
     status = await service.markWelcomeCompleted('2026-05-12T00:00:00.000Z');

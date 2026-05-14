@@ -26,6 +26,7 @@ function makeInstallState(root: string, overrides: Record<string, unknown> = {})
       dataDir: path.join(root, 'data'),
       installedAt: '2026-05-12T00:00:00.000Z',
       welcomeCompletedAt: null,
+      nodeRuntime: null,
       stateSource: 'stored',
       stateError: null,
       ...overrides,

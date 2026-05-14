@@ -968,7 +968,10 @@ GitHub Release manifest, download and verify the release tarball, stage the new
 release under the Mac install root, run dependency/build preflight work there,
 switch the `current` symlink, then restart through PM2 with a health-check
 rollback script. [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md)
-records the channel decision.
+records the channel decision. Production updates also enforce release-declared
+Node runtime requirements from `release-manifest.json`; private
+installer-managed runtimes are refreshed before dependency installation when a
+release raises the required Node major.
 
 - `start()` — runs `_checkRemoteVersion()` immediately, then polls every 15 minutes (unref'd interval)
 - `stop()` — clears polling interval
@@ -1003,21 +1006,34 @@ Production-channel sequence:
    version.
 6. Extract the tarball into a staging directory under `<installDir>/releases`,
    require `server.ts`, then atomically rename it to the manifest `packageRoot`.
-7. Run root `npm ci` and mobile `npm --prefix mobile/AgentCockpitPWA ci` inside
+7. Resolve the release-required Node major from
+   `manifest.requiredRuntime.node.minimumMajor`, falling back to the extracted
+   release's `package.json` `engines.node`, then to Node 22. If the current
+   runtime already satisfies the major, record a `verify Node.js runtime` step.
+   Otherwise download the latest official Node tarball for that major from
+   Node.org, verify it against `SHASUMS256.txt`, extract it under
+   `<installDir>/runtime/node-v<version>`, repoint `<installDir>/runtime/node`,
+   prepend its `bin` directory to the updater process `PATH`, persist that PATH
+   into the copied `.env` and `ecosystem.config.js`, record the bundled npm
+   version when it can be observed, and report an `install Node.js runtime`
+   step. This migrates system-Node production installs to an installer-owned
+   private runtime without mutating global Node.
+8. Run root `npm ci` and mobile `npm --prefix mobile/AgentCockpitPWA ci` inside
    the extracted release.
-8. Run V2 and mobile build preflight services for the extracted release. Fresh
+9. Run V2 and mobile build preflight services for the extracted release. Fresh
    markers skip builds; missing/stale markers or missing assets run the
    corresponding build. Any build error fails the update before the symlink
    changes.
-9. Confirm `public/v2-built/index.html` and `public/mobile-built/index.html`
+10. Confirm `public/v2-built/index.html` and `public/mobile-built/index.html`
    exist.
-10. Copy `.env` and `ecosystem.config.js` from the previous current release into
+11. Copy `.env` and `ecosystem.config.js` from the previous current release into
     the new release.
-11. Switch `<installDir>/current` to the new release. The path must either be
+12. Switch `<installDir>/current` to the new release. The path must either be
     absent or a symlink; a non-symlink current path is refused.
-12. Update `install.json` through `InstallStateService.writeState()` when the
-    service is available.
-13. Launch `_launchRestartScript({ appRoot: current, healthUrl, currentLink,
+13. Update `install.json` through `InstallStateService.writeState()` when the
+    service is available, including the current `nodeRuntime` metadata and the
+    release version.
+14. Launch `_launchRestartScript({ appRoot: current, healthUrl, currentLink,
     rollbackTarget })`. The health URL is derived from the new release `.env`
     `PORT` value and defaults to `3334`.
 

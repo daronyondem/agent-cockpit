@@ -119,7 +119,9 @@ Beyond the core, Agent Cockpit also ships with:
 
 ## Prerequisites
 
-- Node.js 22+ (declared in `engines`)
+- Node.js 22+ (declared in `engines`) for manual development installs. The macOS
+  release installer can install a private Node.js runtime automatically when
+  Node/npm are missing.
 - At least one CLI backend installed and authenticated on the same machine:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [Kiro CLI](https://kiro.dev) (`kiro-cli`)

@@ -7,8 +7,15 @@ VERSION=""
 PORT="3334"
 INSTALL_DIR="${HOME}/Library/Application Support/Agent Cockpit"
 DEV_DIR="${HOME}/agent-cockpit"
-INSTALL_NODE="false"
+INSTALL_NODE="auto"
 OPEN_BROWSER="true"
+NODE_MAJOR="22"
+NODE_BIN_DIR=""
+NODE_RUNTIME_PATH=""
+NODE_RUNTIME_SOURCE=""
+NODE_RUNTIME_VERSION=""
+NODE_RUNTIME_NPM_VERSION=""
+NODE_RUNTIME_DIR=""
 
 usage() {
   cat <<'USAGE'
@@ -21,7 +28,8 @@ Options:
   --install-dir <path>       Install root. Default: ~/Library/Application Support/Agent Cockpit.
   --dev-dir <path>           Dev checkout path. Default: ~/agent-cockpit.
   --port <port>              Local HTTP port. Default: 3334.
-  --install-node             Install Node.js with Homebrew when Node 22+ is missing.
+  --install-node             Install a private Node.js runtime when Node 22+ is missing. Default.
+  --no-install-node          Fail instead of installing a private Node.js runtime.
   --skip-open                Do not open the browser after PM2 starts.
   -h, --help                 Show this help.
 
@@ -68,7 +76,11 @@ while [[ $# -gt 0 ]]; do
       shift 2
       ;;
     --install-node)
-      INSTALL_NODE="true"
+      INSTALL_NODE="auto"
+      shift
+      ;;
+    --no-install-node)
+      INSTALL_NODE="false"
       shift
       ;;
     --skip-open)
@@ -124,18 +136,82 @@ ensure_node() {
     major="$(node -p "process.versions.node.split('.')[0]")"
     if [[ "$major" =~ ^[0-9]+$ && "$major" -ge 22 ]] && command -v npm >/dev/null 2>&1; then
       log "Found Node.js $(node -v) and npm $(npm -v)."
+      NODE_RUNTIME_SOURCE="system"
+      NODE_RUNTIME_VERSION="$(node -p "process.versions.node")"
+      NODE_RUNTIME_NPM_VERSION="$(npm -v)"
+      NODE_BIN_DIR="$(dirname "$(command -v node)")"
       return
     fi
   fi
 
-  if [[ "$INSTALL_NODE" == "true" ]]; then
-    require_command brew "Install Homebrew from https://brew.sh, then rerun with --install-node."
-    log "Installing Node.js with Homebrew because --install-node was provided."
-    brew install node
+  if [[ "$INSTALL_NODE" != "false" ]]; then
+    install_private_node
     return
   fi
 
-  fail "Node.js 22+ and npm are required. Install Node from https://nodejs.org or run: brew install node"
+  fail "Node.js 22+ and npm are required. Re-run without --no-install-node to let the installer install a private Node runtime, or install Node from https://nodejs.org."
+}
+
+install_private_node() {
+  local arch
+  local node_arch
+  arch="$(uname -m)"
+  case "$arch" in
+    arm64)
+      node_arch="arm64"
+      ;;
+    x86_64)
+      node_arch="x64"
+      ;;
+    *)
+      fail "Unsupported Mac CPU architecture for Node.js: ${arch}"
+      ;;
+  esac
+
+  local runtime_root="${INSTALL_DIR}/runtime"
+  local current_link="${runtime_root}/node"
+  local tmp_dir
+  tmp_dir="$(mktemp -d)"
+  local checksums_path="${tmp_dir}/SHASUMS256.txt"
+  local shasums_url="https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/SHASUMS256.txt"
+
+  log "Node.js ${NODE_MAJOR}+ and npm were not found. Installing a private Node.js runtime."
+  download_file "$shasums_url" "$checksums_path"
+
+  local tarball_name
+  tarball_name="$(awk -v arch="$node_arch" '$2 ~ "^node-v[0-9]+[.][0-9]+[.][0-9]+-darwin-" arch "[.]tar[.]gz$" { print $2; exit }' "$checksums_path")"
+  if [[ -z "$tarball_name" ]]; then
+    fail "Could not find a macOS ${node_arch} Node.js ${NODE_MAJOR} tarball in SHASUMS256.txt"
+  fi
+
+  local node_version="${tarball_name#node-v}"
+  node_version="${node_version%-darwin-${node_arch}.tar.gz}"
+  local tarball_path="${tmp_dir}/${tarball_name}"
+  download_file "https://nodejs.org/dist/latest-v${NODE_MAJOR}.x/${tarball_name}" "$tarball_path"
+  verify_checksum "$tarball_path" "$tarball_name" "$checksums_path"
+
+  mkdir -p "$runtime_root"
+  local extracted_dir="${runtime_root}/node-v${node_version}-darwin-${node_arch}"
+  local final_dir="${runtime_root}/node-v${node_version}"
+  rm -rf "$extracted_dir" "$final_dir"
+  tar -xzf "$tarball_path" -C "$runtime_root"
+  mv "$extracted_dir" "$final_dir"
+
+  if [[ -e "$current_link" && ! -L "$current_link" ]]; then
+    fail "${current_link} exists and is not a symlink"
+  fi
+  rm -f "$current_link"
+  ln -s "$final_dir" "$current_link"
+  rm -rf "$tmp_dir"
+
+  NODE_BIN_DIR="${current_link}/bin"
+  export PATH="${NODE_BIN_DIR}:${PATH}"
+  NODE_RUNTIME_PATH="$PATH"
+  NODE_RUNTIME_SOURCE="private"
+  NODE_RUNTIME_VERSION="$node_version"
+  NODE_RUNTIME_NPM_VERSION="$("${NODE_BIN_DIR}/npm" -v)"
+  NODE_RUNTIME_DIR="$current_link"
+  log "Using private Node.js $("${NODE_BIN_DIR}/node" -v) and npm $("${NODE_BIN_DIR}/npm" -v)."
 }
 
 random_hex() {
@@ -182,6 +258,7 @@ write_env_file() {
   local data_dir="$2"
   local session_secret="$3"
   local setup_token="$4"
+  local runtime_path="$5"
 
   cat > "${app_dir}/.env" <<ENV
 PORT=${PORT}
@@ -191,6 +268,11 @@ AGENT_COCKPIT_DATA_DIR="${data_dir}"
 WEB_BUILD_MODE=auto
 AUTH_ENABLE_LEGACY_OAUTH=false
 ENV
+  if [[ -n "$runtime_path" ]]; then
+    cat >> "${app_dir}/.env" <<ENV
+PATH="${runtime_path}"
+ENV
+  fi
 }
 
 write_ecosystem_config() {
@@ -198,15 +280,22 @@ write_ecosystem_config() {
   local data_dir="$2"
   local session_secret="$3"
   local setup_token="$4"
+  local runtime_path="$5"
   local app_dir_json
   local data_dir_json
   local session_secret_json
   local setup_token_json
+  local runtime_path_line=""
 
   app_dir_json="$(json_string "$app_dir")"
   data_dir_json="$(json_string "$data_dir")"
   session_secret_json="$(json_string "$session_secret")"
   setup_token_json="$(json_string "$setup_token")"
+  if [[ -n "$runtime_path" ]]; then
+    local runtime_path_json
+    runtime_path_json="$(json_string "$runtime_path")"
+    runtime_path_line="      PATH: ${runtime_path_json},"
+  fi
 
   cat > "${app_dir}/ecosystem.config.js" <<CONFIG
 module.exports = {
@@ -222,6 +311,7 @@ module.exports = {
       AGENT_COCKPIT_DATA_DIR: ${data_dir_json},
       WEB_BUILD_MODE: 'auto',
       AUTH_ENABLE_LEGACY_OAUTH: 'false',
+${runtime_path_line}
     },
   }],
 };
@@ -236,9 +326,14 @@ write_install_manifest() {
   local branch="$5"
   local install_dir="$6"
   local app_dir="$7"
+  local node_runtime_source="$8"
+  local node_runtime_version="$9"
+  local node_runtime_npm_version="${10}"
+  local node_runtime_bin_dir="${11}"
+  local node_runtime_dir="${12}"
 
   mkdir -p "$data_dir"
-  node - "$data_dir/install.json" "$channel" "$source" "$REPO" "$version" "$branch" "$install_dir" "$app_dir" "$data_dir" <<'NODE'
+  node - "$data_dir/install.json" "$channel" "$source" "$REPO" "$version" "$branch" "$install_dir" "$app_dir" "$data_dir" "$node_runtime_source" "$node_runtime_version" "$node_runtime_npm_version" "$node_runtime_bin_dir" "$node_runtime_dir" "$NODE_MAJOR" <<'NODE'
 const fs = require('fs');
 const [
   manifestPath,
@@ -250,6 +345,12 @@ const [
   installDir,
   appDir,
   dataDir,
+  nodeRuntimeSource,
+  nodeRuntimeVersion,
+  nodeRuntimeNpmVersion,
+  nodeRuntimeBinDir,
+  nodeRuntimeDir,
+  nodeRuntimeRequiredMajor,
 ] = process.argv.slice(2);
 
 const manifest = {
@@ -264,6 +365,15 @@ const manifest = {
   dataDir,
   installedAt: new Date().toISOString(),
   welcomeCompletedAt: null,
+  nodeRuntime: nodeRuntimeSource ? {
+    source: nodeRuntimeSource,
+    version: nodeRuntimeVersion || null,
+    npmVersion: nodeRuntimeNpmVersion || null,
+    binDir: nodeRuntimeBinDir || null,
+    runtimeDir: nodeRuntimeDir || null,
+    requiredMajor: Number(nodeRuntimeRequiredMajor) || null,
+    updatedAt: new Date().toISOString(),
+  } : null,
 };
 
 fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -359,9 +469,9 @@ install_production() {
 
   install_dependencies "$current_link"
   ensure_built_assets "$current_link" "false"
-  write_env_file "$current_link" "$data_dir" "$session_secret" "$setup_token"
-  write_ecosystem_config "$current_link" "$data_dir" "$session_secret" "$setup_token"
-  write_install_manifest "$data_dir" "production" "github-release" "$release_version" "" "$INSTALL_DIR" "$current_link"
+  write_env_file "$current_link" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
+  write_ecosystem_config "$current_link" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
+  write_install_manifest "$data_dir" "production" "github-release" "$release_version" "" "$INSTALL_DIR" "$current_link" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
   start_pm2 "$current_link"
 
   log "First-run setup token: ${setup_token}"
@@ -392,9 +502,9 @@ install_dev() {
 
   install_dependencies "$DEV_DIR"
   ensure_built_assets "$DEV_DIR" "true"
-  write_env_file "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token"
-  write_ecosystem_config "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token"
-  write_install_manifest "$data_dir" "dev" "git-main" "$dev_version" "main" "$INSTALL_DIR" "$DEV_DIR"
+  write_env_file "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
+  write_ecosystem_config "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
+  write_install_manifest "$data_dir" "dev" "git-main" "$dev_version" "main" "$INSTALL_DIR" "$DEV_DIR" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
   start_pm2 "$DEV_DIR"
 
   log "First-run setup token: ${setup_token}"

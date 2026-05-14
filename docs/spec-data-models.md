@@ -194,7 +194,16 @@ Current schema:
   "appDir": "/Users/<user>/Library/Application Support/Agent Cockpit/current",
   "dataDir": "/Users/<user>/Library/Application Support/Agent Cockpit/data",
   "installedAt": "2026-05-11T00:00:00.000Z",
-  "welcomeCompletedAt": null
+  "welcomeCompletedAt": null,
+  "nodeRuntime": {
+    "source": "private",
+    "version": "22.22.3",
+    "npmVersion": "10.9.8",
+    "binDir": "/Users/<user>/Library/Application Support/Agent Cockpit/runtime/node/bin",
+    "runtimeDir": "/Users/<user>/Library/Application Support/Agent Cockpit/runtime/node",
+    "requiredMajor": 22,
+    "updatedAt": "2026-05-11T00:00:00.000Z"
+  }
 }
 ```
 
@@ -202,6 +211,15 @@ Read responses add operational metadata that is not persisted:
 
 - `stateSource`: `"stored"`, `"inferred"`, `"legacy"`, or `"corrupt"`
 - `stateError`: `null` or a read/parse error string for corrupt manifests
+
+`nodeRuntime` is `null` for older/inferred manifests. New macOS installer
+manifests record whether Agent Cockpit is using a host-managed `system` Node
+runtime or an installer-managed `private` runtime under the install root.
+`version` is the Node.js version without a leading `v`; `npmVersion` is the npm
+version observed by the installer when available. For private runtimes,
+`runtimeDir` is the stable symlink and `binDir` is the directory prepended to
+`PATH`. Production self-update rewrites this object when it upgrades the private
+runtime to satisfy a newer release's required Node major.
 
 ## Release Manifest (`release-manifest.json`)
 
@@ -223,6 +241,12 @@ Current schema:
   "sourceCommit": "0123456789abcdef",
   "generatedAt": "2026-05-11T00:00:00.000Z",
   "packageRoot": "agent-cockpit-v1.0.0",
+  "requiredRuntime": {
+    "node": {
+      "engine": ">=22",
+      "minimumMajor": 22
+    }
+  },
   "requiredBuilds": {
     "web": "public/v2-built/index.html",
     "mobile": "public/mobile-built/index.html"
@@ -258,6 +282,11 @@ It excludes mutable/local-only state such as `node_modules/`, `data/`, `.env`,
 `ecosystem.config.js`, `coverage/`, `plans/`, `plan.md`, release `dist/` output,
 and generated build staging directories. `SHA256SUMS` currently contains
 checksums for the tarball, this external manifest, and `install-macos.sh`.
+`requiredRuntime.node` is derived from root `package.json` `engines.node`.
+Current packaging extracts simple lower-bound engines such as `>=22` into
+`minimumMajor`; production self-update uses that value to decide whether a
+private installer-managed Node runtime must be installed or refreshed before
+running `npm ci`.
 
 ## Persistence Durability
 

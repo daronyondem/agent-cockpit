@@ -14,6 +14,7 @@ describe('macOS installer script', () => {
     const help = execFileSync(scriptPath, ['--help'], { encoding: 'utf8' });
     expect(help).toContain('--channel production|dev');
     expect(help).toContain('--install-node');
+    expect(help).toContain('--no-install-node');
     expect(help).toContain('--skip-open');
   });
 
@@ -23,8 +24,14 @@ describe('macOS installer script', () => {
     expect(source).toContain('arm64|x86_64');
     expect(source).toContain('process.versions.node.split');
     expect(source).toContain('-ge 22');
-    expect(source).toContain('brew install node');
-    expect(source).toContain('INSTALL_NODE" == "true"');
+    expect(source).toContain('install_private_node');
+    expect(source).toContain('latest-v${NODE_MAJOR}.x/SHASUMS256.txt');
+    expect(source).toContain('node-v${node_version}');
+    expect(source).toContain('node_arch="arm64"');
+    expect(source).toContain('node_arch="x64"');
+    expect(source).toContain('darwin-${node_arch}.tar.gz');
+    expect(source).toContain('NODE_RUNTIME_PATH="$PATH"');
+    expect(source).toContain('INSTALL_NODE" != "false"');
   });
 
   test('uses GitHub Release assets for production installs', () => {
@@ -50,9 +57,13 @@ describe('macOS installer script', () => {
     expect(source).toContain('AUTH_SETUP_TOKEN=${setup_token}');
     expect(source).toContain('AGENT_COCKPIT_DATA_DIR="${data_dir}"');
     expect(source).toContain('WEB_BUILD_MODE=auto');
+    expect(source).toContain('PATH="${runtime_path}"');
     expect(source).toContain('ecosystem.config.js');
     expect(source).toContain('interpreter: \'./node_modules/.bin/tsx\'');
+    expect(source).toContain('PATH: ${runtime_path_json}');
     expect(source).toContain('schemaVersion: 1');
+    expect(source).toContain('nodeRuntime: nodeRuntimeSource ?');
+    expect(source).toContain('npmVersion: nodeRuntimeNpmVersion || null');
     expect(source).toContain('npx pm2 startOrRestart ecosystem.config.js --update-env');
     expect(source).toContain('npx pm2 save');
     expect(source).toContain('http://localhost:${PORT}/auth/setup');

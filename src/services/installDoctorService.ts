@@ -9,6 +9,7 @@ import { detectLibreOffice, type LibreOfficeStatus } from './knowledgeBase/libre
 import { detectPandoc, type PandocStatus } from './knowledgeBase/pandoc';
 
 const execFileAsync = promisify(execFile);
+const NODE_REMEDIATION = 'Install Node.js 22+ from nodejs.org, or rerun the macOS installer without --no-install-node so it can install a private runtime.';
 
 interface CommandResult {
   ok: boolean;
@@ -88,7 +89,7 @@ export class InstallDoctorService {
     const checks: InstallDoctorCheck[] = [];
 
     checks.push(this.checkNode());
-    checks.push(await this.checkCommand('npm', 'npm', ['npm', '--version'], true, 'npm is available.', 'Install Node.js 22+ from nodejs.org or Homebrew.'));
+    checks.push(await this.checkCommand('npm', 'npm', ['npm', '--version'], true, 'npm is available.', NODE_REMEDIATION));
     checks.push(await this.checkCommand('pm2', 'PM2', ['npx', '--no-install', 'pm2', '--version'], true, 'Local PM2 is available through npx.', 'Run npm ci in the app directory, then retry.'));
     checks.push(await this.checkDataDir());
     checks.push(this.checkAppDir());
@@ -116,7 +117,7 @@ export class InstallDoctorService {
     if (Number.isFinite(major) && major >= 22) {
       return check('node', 'Node.js', 'ok', true, `Node.js ${version} is running.`);
     }
-    return check('node', 'Node.js', 'error', true, `Node.js ${version} is too old.`, undefined, 'Install Node.js 22+ from nodejs.org or Homebrew.');
+    return check('node', 'Node.js', 'error', true, `Node.js ${version} is too old.`, undefined, NODE_REMEDIATION);
   }
 
   private async checkCommand(id: string, label: string, commandAndArgs: string[], required: boolean, okSummary: string, remediation: string): Promise<InstallDoctorCheck> {

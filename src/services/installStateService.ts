@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { atomicWriteFile } from '../utils/atomicWrite';
-import type { InstallChannel, InstallSource, InstallStateSource, InstallStatus } from '../types';
+import type { InstallChannel, InstallNodeRuntime, InstallSource, InstallStateSource, InstallStatus } from '../types';
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_REPO = 'daronyondem/agent-cockpit';
@@ -36,6 +36,27 @@ function normalizeSource(value: unknown, channel: InstallChannel): InstallSource
 
 function stringOrNull(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
+}
+
+function numberOrNull(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function normalizeNodeRuntime(value: unknown): InstallNodeRuntime | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Partial<InstallNodeRuntime>;
+  const source = raw.source === 'private' || raw.source === 'system' || raw.source === 'unknown'
+    ? raw.source
+    : 'unknown';
+  return {
+    source,
+    version: stringOrNull(raw.version),
+    npmVersion: stringOrNull(raw.npmVersion),
+    binDir: stringOrNull(raw.binDir),
+    runtimeDir: stringOrNull(raw.runtimeDir),
+    requiredMajor: numberOrNull(raw.requiredMajor),
+    updatedAt: stringOrNull(raw.updatedAt),
+  };
 }
 
 export class InstallStateService {
@@ -95,6 +116,7 @@ export class InstallStateService {
       dataDir: normalized.dataDir,
       installedAt: normalized.installedAt,
       welcomeCompletedAt: normalized.welcomeCompletedAt,
+      nodeRuntime: normalized.nodeRuntime,
     };
     await fs.promises.mkdir(path.dirname(this._manifestPath), { recursive: true });
     await atomicWriteFile(this._manifestPath, JSON.stringify(persisted, null, 2) + '\n');
@@ -122,6 +144,7 @@ export class InstallStateService {
       dataDir: stringOrNull(parsed.dataDir) || this._dataRoot,
       installedAt: stringOrNull(parsed.installedAt),
       welcomeCompletedAt: stringOrNull(parsed.welcomeCompletedAt),
+      nodeRuntime: normalizeNodeRuntime(parsed.nodeRuntime),
       stateSource: legacy ? 'legacy' : 'stored',
       stateError: null,
     };
@@ -140,6 +163,7 @@ export class InstallStateService {
       dataDir: this._dataRoot,
       installedAt: null,
       welcomeCompletedAt: null,
+      nodeRuntime: null,
       stateSource,
       stateError,
     };
