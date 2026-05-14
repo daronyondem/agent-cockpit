@@ -16,6 +16,9 @@ NODE_RUNTIME_SOURCE=""
 NODE_RUNTIME_VERSION=""
 NODE_RUNTIME_NPM_VERSION=""
 NODE_RUNTIME_DIR=""
+export NPM_CONFIG_AUDIT=false
+export NPM_CONFIG_FUND=false
+export NPM_CONFIG_UPDATE_NOTIFIER=false
 
 usage() {
   cat <<'USAGE'
@@ -383,9 +386,9 @@ NODE
 install_dependencies() {
   local app_dir="$1"
   log "Installing root dependencies."
-  (cd "$app_dir" && npm ci)
+  (cd "$app_dir" && npm ci --no-audit --no-fund)
   log "Installing mobile PWA dependencies."
-  (cd "$app_dir" && npm --prefix mobile/AgentCockpitPWA ci)
+  (cd "$app_dir" && npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund)
 }
 
 ensure_built_assets() {

@@ -64,6 +64,11 @@ describe('macOS installer script', () => {
     expect(source).toContain('schemaVersion: 1');
     expect(source).toContain('nodeRuntime: nodeRuntimeSource ?');
     expect(source).toContain('npmVersion: nodeRuntimeNpmVersion || null');
+    expect(source).toContain('NPM_CONFIG_UPDATE_NOTIFIER=false');
+    expect(source).toContain('NPM_CONFIG_AUDIT=false');
+    expect(source).toContain('NPM_CONFIG_FUND=false');
+    expect(source).toContain('npm ci --no-audit --no-fund');
+    expect(source).toContain('npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund');
     expect(source).toContain('npx pm2 startOrRestart ecosystem.config.js --update-env');
     expect(source).toContain('npx pm2 save');
     expect(source).toContain('wait_for_server "$current_link"');
