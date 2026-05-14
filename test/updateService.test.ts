@@ -97,6 +97,17 @@ function writeText(filePath: string, value: string) {
   originalWriteFileSync(filePath, value);
 }
 
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+function mockProcessPlatform(platform: NodeJS.Platform): () => void {
+  Object.defineProperty(process, 'platform', { value: platform });
+  return () => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  };
+}
+
 function makeProductionInstall(rootPrefix = 'agent-cockpit-install-') {
   const installDir = fs.mkdtempSync(path.join(os.tmpdir(), rootPrefix));
   const releasesDir = path.join(installDir, 'releases');
@@ -787,6 +798,7 @@ describe('UpdateService', () => {
 
     test('updates a private Node.js runtime before production dependency install when required major increases', async () => {
       mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('darwin');
       const install = makeProductionInstall('agent-cockpit-prod-node-update-');
       const nodeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
       const nodeVersion = '23.9.0';
@@ -890,12 +902,14 @@ describe('UpdateService', () => {
         expect(fs.realpathSync(path.join(install.installDir, 'runtime', 'node')))
           .toBe(fs.realpathSync(path.join(install.installDir, 'runtime', `node-v${nodeVersion}`)));
       } finally {
+        restorePlatform();
         fs.rmSync(install.installDir, { recursive: true, force: true });
       }
     });
 
     test('migrates a system Node production install to a private runtime when required major increases', async () => {
       mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('darwin');
       const install = makeProductionInstall('agent-cockpit-prod-node-system-');
       const nodeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
       const nodeVersion = '99.1.0';
@@ -996,6 +1010,7 @@ describe('UpdateService', () => {
         expect(finalEnv).toContain(`PATH="${path.join(install.installDir, 'runtime', 'node', 'bin')}`);
         expect(finalEcosystem).toContain(`"PATH": "${path.join(install.installDir, 'runtime', 'node', 'bin')}`);
       } finally {
+        restorePlatform();
         fs.rmSync(install.installDir, { recursive: true, force: true });
       }
     });
