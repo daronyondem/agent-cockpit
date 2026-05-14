@@ -2546,7 +2546,13 @@ body{
 }
 
 /* feed */
+.feed-wrap{
+  position: relative;
+  min-height: 0;
+  display: flex;
+}
 .feed{
+  flex: 1 1 auto;
   overflow: auto; min-height: 0;
   padding: 0 0 8px;
   background: var(--bg);
@@ -2555,6 +2561,32 @@ body{
   max-width: 760px; margin: 0 auto; padding: 28px 28px 0;
 }
 .feed.wide .feed-inner{ max-width: 880px; }
+.chat-back-to-end{
+  position: absolute;
+  right: max(24px, calc((100% - 760px) / 2 + 28px));
+  bottom: 16px;
+  z-index: 6;
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: color-mix(in oklch, var(--surface), transparent 6%);
+  color: var(--text);
+  box-shadow: var(--shadow-2);
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 12px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+.chat-back-to-end:hover{
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
 
 /* pinned message strip */
 .pin-strip{
