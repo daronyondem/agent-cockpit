@@ -7,7 +7,7 @@ import type {
   Settings,
   WorkspaceIndex,
 } from '../../types';
-import { isCliVendor } from '../cliProfiles';
+import { backendForCliProfile, cliVendorForBackend } from '../cliProfiles';
 import { DEFAULT_KB_AUTO_DREAM_CONFIG, normalizeKbAutoDreamConfig } from '../knowledgeBase/autoDream';
 
 const CONTEXT_MAP_EFFORT_LEVELS = new Set<EffortLevel>([
@@ -54,8 +54,8 @@ export function normalizeContextMapWorkspaceSettings(
     : undefined;
   if (selectedProfile) {
     settings.cliProfileId = selectedProfile.id;
-    settings.cliBackend = selectedProfile.vendor;
-  } else if (typeof raw.cliBackend === 'string' && isCliVendor(raw.cliBackend)) {
+    settings.cliBackend = backendForCliProfile(selectedProfile, typeof raw.cliBackend === 'string' ? raw.cliBackend : undefined);
+  } else if (typeof raw.cliBackend === 'string' && cliVendorForBackend(raw.cliBackend)) {
     settings.cliBackend = raw.cliBackend;
   }
 

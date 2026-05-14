@@ -313,7 +313,7 @@ Global settings are stored under `Settings.contextMap`:
 | Field | Default | Normalization | Purpose |
 |-------|---------|---------------|---------|
 | `cliProfileId` | unset | Must reference an enabled CLI profile to be kept. | Preferred processor CLI profile. |
-| `cliBackend` | unset | Deprecated mirror/fallback. Synced from selected profile vendor when possible. | Legacy backend selector. |
+| `cliBackend` | unset | Deprecated mirror/fallback. Synced from selected profile protocol-derived backend when possible. | Legacy backend selector. |
 | `cliModel` | unset | Kept as optional string. | Optional processor model override. |
 | `cliEffort` | unset | Kept as optional supported effort value. | Optional processor effort override. |
 | `scanIntervalMinutes` | `5` | Rounded and clamped to `1..1440`. | Background scheduled scan interval. |
@@ -327,7 +327,7 @@ Workspace settings are stored under `WorkspaceIndex.contextMap`:
 |-------|---------|---------------|---------|
 | `processorMode` | `global` | Only `global` or `override`; absent behaves as `global`. | Chooses global defaults or workspace-specific processor settings. |
 | `cliProfileId` | unset | Kept only in override mode when valid. | Workspace-specific processor CLI profile. |
-| `cliBackend` | unset | Deprecated mirror/fallback. | Legacy workspace backend selector. |
+| `cliBackend` | unset | Deprecated mirror/fallback. Synced from selected profile protocol-derived backend when possible. | Legacy workspace backend selector. |
 | `cliModel` | unset | Dropped in global mode, kept in override mode. | Workspace-specific model override. |
 | `cliEffort` | unset | Dropped in global mode, kept in override mode. | Workspace-specific effort override. |
 | `scanIntervalMinutes` | global default | Rounded and clamped to `1..1440`. Kept in global mode too. | Workspace-specific scheduled scan interval override. |

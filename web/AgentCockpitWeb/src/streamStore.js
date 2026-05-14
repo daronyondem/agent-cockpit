@@ -350,7 +350,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
   }
 
   function optimisticGoalActions(backend){
-    const isClaude = backend === 'claude-code';
+    const isClaude = backend === 'claude-code' || backend === 'claude-code-interactive';
     return { clear: true, stopTurn: true, pause: !isClaude, resume: !isClaude };
   }
 
@@ -587,7 +587,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
           ? hydrateAttachmentsFromDraft(draft.attachments)
           : cur.pendingAttachments,
       }));
-      if ((data.backend === 'codex' || data.backend === 'claude-code') && AgentApi.conv && AgentApi.conv.getGoal) {
+      if ((data.backend === 'codex' || data.backend === 'claude-code' || data.backend === 'claude-code-interactive') && AgentApi.conv && AgentApi.conv.getGoal) {
         AgentApi.conv.getGoal(convId)
           .then(goalData => {
             const goal = goalData && goalData.goal ? goalData.goal : null;
@@ -606,7 +606,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     const s = states.get(convId);
     if (!s || !AgentApi.conv || !AgentApi.conv.getGoal) return null;
     const backend = (s.conv && s.conv.backend) || s.composerBackend || null;
-    if (backend && backend !== 'codex' && backend !== 'claude-code') {
+    if (backend && backend !== 'codex' && backend !== 'claude-code' && backend !== 'claude-code-interactive') {
       applyGoalSnapshot(convId, null);
       return null;
     }
@@ -906,7 +906,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     const conv = snapshot && snapshot.conv;
     if (!conv) return;
     const cliProfileId = conv.cliProfileId || null;
-    const store = conv.backend === 'claude-code' ? PlanUsageStore
+    const store = (conv.backend === 'claude-code' || conv.backend === 'claude-code-interactive') ? PlanUsageStore
       : conv.backend === 'kiro'        ? KiroPlanUsageStore
       : conv.backend === 'codex'       ? CodexPlanUsageStore
       : null;
@@ -954,11 +954,17 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       if (frame.isQuestion) {
         const qs = Array.isArray(frame.questions) ? frame.questions : [];
         const first = qs[0] || {};
+        const questionText = typeof first === 'string'
+          ? first
+          : (first.question || frame.description || 'Input needed');
+        const options = first && typeof first === 'object' && Array.isArray(first.options)
+          ? first.options
+          : [];
         update(convId, {
           pendingInteraction: {
             type: 'userQuestion',
-            question: first.question || frame.description || 'Input needed',
-            options: Array.isArray(first.options) ? first.options : [],
+            question: questionText,
+            options,
           },
           uiState: 'awaiting',
         });
@@ -1477,7 +1483,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       ? s.composerServiceTier
       : (s.conv && s.conv.serviceTier) || null;
     const goalStartedAtMs = Date.now();
-    const optimisticBackend = (sendBackend === 'codex' || sendBackend === 'claude-code') ? sendBackend : undefined;
+    const optimisticBackend = (sendBackend === 'codex' || sendBackend === 'claude-code' || sendBackend === 'claude-code-interactive') ? sendBackend : undefined;
     const optimisticGoal = {
       backend: optimisticBackend,
       objective,
@@ -1711,7 +1717,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     update(convId, {
       composerBackend: value || null,
       composerServiceTier: value === 'codex' ? s.composerServiceTier : null,
-      goalMode: (value === 'codex' || value === 'claude-code') ? s.goalMode : false,
+      goalMode: (value === 'codex' || value === 'claude-code' || value === 'claude-code-interactive') ? s.goalMode : false,
     });
   }
   function setComposerCliProfile(convId, profileId, backendId){
@@ -1723,7 +1729,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       composerModel: null,
       composerEffort: null,
       composerServiceTier: backendId === 'codex' ? s.composerServiceTier : null,
-      goalMode: (backendId === 'codex' || backendId === 'claude-code') ? s.goalMode : false,
+      goalMode: (backendId === 'codex' || backendId === 'claude-code' || backendId === 'claude-code-interactive') ? s.goalMode : false,
     });
   }
   function setComposerModel(convId, value){

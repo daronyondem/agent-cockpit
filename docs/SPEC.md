@@ -25,6 +25,8 @@ Design and planning documents that preserve product intent, implementation plans
 | Document | Status | Description |
 |----------|--------|-------------|
 | [design-context-map.md](design-context-map.md) | Proposed | Context Map full-scope design: workspace entity/relationship graph, evidence model, background processor with synthesis/ranking, auto-apply plus needs-attention workflow, read-only MCP retrieval, and global-default/workspace-override settings |
+| [design-claude-code-interactive-implementation-plan.md](design-claude-code-interactive-implementation-plan.md) | Proposed | End-to-end implementation plan for a separate Claude Code Interactive backend using hidden PTY control, transcript-derived events, shared Claude profiles, and provider-specific CLI compatibility warnings |
+| [design-claude-code-interactive-hardening-plan.md](design-claude-code-interactive-hardening-plan.md) | Proposed | Follow-up hardening plan for Claude Code Interactive terminal query responses, hook-driven lifecycle signals, transcript finalization, and real-CLI drift coverage |
 | [design-kb-ingestion-hybrid.md](design-kb-ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |
 | [design-kb-vnext-implementation-plan.md](design-kb-vnext-implementation-plan.md) | Proposed | Phased Knowledge Base vNext plan: document structure, chunked digestion, gleaning, glossary expansion, graph retrieval, synthesis history, and pipeline visualization |
 
@@ -34,6 +36,8 @@ Engineering notes that capture empirical findings — not proposals or specs, bu
 
 | Document | Description |
 |----------|-------------|
+| [research-claude-code-interactive.md](research-claude-code-interactive.md) | Research prompt and test matrix for evaluating Claude Code Interactive viability without Remote Control or a user-facing terminal. |
+| [research-claude-code-interactive-report.md](research-claude-code-interactive-report.md) | Findings from the Claude Code Interactive spike: hidden PTY plus transcript watching is viable but private-shape/version-sensitive. |
 | [notes-kiro-bedrock-parity.md](notes-kiro-bedrock-parity.md) | Differences observed between Kiro (AWS Bedrock-routed) and Claude Code (direct Anthropic API) for Opus 4.7 — image format/dimension caps, ACP stream termination, JSON-RPC error extraction, etc. |
 | [parity-decisions.md](parity-decisions.md) | Intentional parity decisions between the desktop web UI and the mobile PWA, especially features that are deliberately web-only. |
 

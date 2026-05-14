@@ -73,6 +73,15 @@ Follow ADR-0051 for shared contracts, logging, and ownership boundaries.
 - When adding or changing an ownership boundary, update the relevant spec docs and add focused tests for the new module instead of only testing through the largest facade.
 - Before opening a PR, run `npm run maintainability:check` and `npm run spec:drift` in addition to the existing required verification commands.
 
+# Claude Code Interactive Compatibility
+
+Claude Code Interactive depends on private Claude CLI terminal and transcript behavior. Any change to its protocol implementation must evaluate and update the real-Claude compatibility suites:
+
+- Review `test/claudeCodeInteractive.e2e.test.ts` whenever touching `src/services/backends/claudeCodeInteractive.ts`, `claudeInteractivePty.ts`, `claudeInteractiveTerminal.ts`, `claudeInteractiveHooks.ts`, `claudeTranscriptEvents.ts`, `claudeTranscriptTailer.ts`, Claude Code profile protocol resolution, or Claude CLI update/compatibility warnings.
+- Review `test/e2e/claudeCodeInteractive.ui.pw.ts` whenever touching the Claude Code Interactive composer/profile UI, reset/abort flow, or browser stream rendering. Keep this Playwright suite aligned with user-visible protocol behavior.
+- Keep the suites aligned with the behavior being changed. Add or adjust real-CLI scenarios when changing prompt submission, PTY lifecycle, hook handling, transcript parsing, tool mapping, goal handling, abort cleanup, browser composer/profile selection, reset, or version compatibility.
+- For Claude CLI version compatibility checks on a dev machine, run `npm run e2e:claude-interactive:report` and `npm run e2e:claude-interactive-ui:report` with an authenticated real `claude` CLI. These suites are intentionally not part of normal CI and should not be replaced with mocks for version-drift validation.
+
 # Server Management
 
 NEVER run `node server.js` directly. This causes orphan processes and port conflicts.

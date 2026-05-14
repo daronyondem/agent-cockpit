@@ -164,6 +164,7 @@ export interface CliProfile {
   id: string;
   name: string;
   vendor: 'codex' | 'claude-code' | 'kiro';
+  protocol?: 'standard' | 'interactive';
   disabled?: boolean;
 }
 
@@ -240,7 +241,7 @@ export interface ConversationInputResponse {
   mode: 'stdin' | 'message';
 }
 
-export type ThreadGoalBackend = 'codex' | 'claude-code';
+export type ThreadGoalBackend = 'codex' | 'claude-code' | 'claude-code-interactive';
 export type ThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete' | 'cleared' | 'unknown';
 export type ThreadGoalSource = 'native' | 'transcript' | 'runtime' | 'unknown';
 
@@ -339,6 +340,19 @@ export interface CliUpdateStatus {
   lastCheckedAt?: string | null;
   lastError?: string | null;
   updateInProgress?: boolean;
+  interactiveCompatibility?: CliCompatibilityStatus[];
+  blocksAutoUpdate?: boolean;
+  updateCaution?: string | null;
+}
+
+export interface CliCompatibilityStatus {
+  providerId: 'claude-code-interactive';
+  command: string;
+  currentVersion: string | null;
+  testedVersion: string;
+  status: 'supported' | 'newer' | 'older' | 'unknown' | 'missing';
+  severity: 'none' | 'warning' | 'error';
+  message: string | null;
 }
 
 export interface CliUpdatesResponse {
@@ -353,6 +367,7 @@ export type StreamEvent =
       isPlanMode?: boolean;
       planAction?: 'enter' | 'exit';
       planContent?: string;
+      planFilePath?: string;
       isQuestion?: boolean;
       questions?: Array<{ question: string; options?: Array<{ label: string; description?: string }> }>;
     })

@@ -55,7 +55,15 @@ agent-cockpit/
 │   └── services/
 │       ├── backends/
 │       │   ├── base.ts                 # BaseBackendAdapter interface
-│       │   ├── claudeCode.ts           # Claude Code adapter — CLI spawning, stream parsing
+│       │   ├── claudeCode.ts           # Claude Code adapter — headless CLI spawning and stream-json parsing
+│       │   ├── claudeCodeInteractive.ts # Claude Code Interactive adapter — hidden PTY control plus transcript-derived events
+│       │   ├── claudeInteractiveHooks.ts # Claude Code Interactive SessionStart/PreToolUse/Stop hook harness
+│       │   ├── claudeInteractivePty.ts # node-pty controller for interactive Claude Code prompts/input/abort/exit
+│       │   ├── claudeInteractiveSessionManager.ts # Process-local hidden PTY controller registry
+│       │   ├── claudeInteractiveTerminal.ts # DEC/XTerm terminal query responder for hidden PTY startup
+│       │   ├── claudeTranscriptEvents.ts # Claude transcript JSONL to backend StreamEvent mapping
+│       │   ├── claudeTranscriptTailer.ts # Claude transcript file discovery/tailing/deduplication
+│       │   ├── claudeInteractiveCompatibility.ts # Tested Claude CLI version and compatibility warnings
 │       │   ├── kiro.ts                 # Kiro adapter — ACP (Agent Client Protocol) over kiro-cli
 │       │   ├── toolUtils.ts            # Shared tool helpers (extractToolDetails, extractUsage, etc.)
 │       │   └── registry.ts             # BackendRegistry — maps IDs to adapter instances
@@ -293,7 +301,7 @@ Together these guarantee that a workspace index always parses on disk and that c
   contextMap: {                     // Per-workspace Context Map processor settings. Defaults to { processorMode: 'global' }.
     processorMode?: 'global' | 'override', // 'global' uses Settings.contextMap processor defaults; 'override' stores workspace CLI overrides.
     cliProfileId?: string,          // Optional workspace processor profile when processorMode='override'.
-    cliBackend?: string,            // Deprecated legacy fallback/mirror of selected profile vendor.
+    cliBackend?: string,            // Deprecated legacy fallback/mirror of the selected profile's protocol-derived backend.
     cliModel?: string,              // Optional workspace processor model when processorMode='override'.
     cliEffort?: string,             // Optional adaptive effort when processorMode='override'.
     scanIntervalMinutes?: number,   // Optional workspace cadence override, clamped to 1..1440.
@@ -302,8 +310,8 @@ Together these guarantee that a workspace index always parses on disk and that c
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
     titleManuallySet?: boolean, // true once `renameConversation()` has run. Locks the title against all automatic mutations (resetSession, addMessage's first-message snapshot, generateAndUpdateTitle). Absent when the title is still auto-managed.
-    backend: string,            // Backend vendor id: 'claude-code' | 'kiro' | 'codex'. Kept during the CLI-profile transition for back-compat and synchronized from the selected profile's vendor.
-    cliProfileId?: string,      // Runtime CLI profile selected for this conversation. When present, runtime adapter selection resolves through Settings.cliProfiles[id].vendor.
+    backend: string,            // Internal backend id: 'claude-code' | 'claude-code-interactive' | 'kiro' | 'codex'. Kept for back-compat and transcript rendering. Some backends share a physical CLI vendor/profile.
+    cliProfileId?: string,      // Runtime CLI profile selected for this conversation. When present, runtime adapter selection is derived from Settings.cliProfiles[id].vendor plus Claude Code's optional protocol while command/auth/config still come from the physical profile.
     model?: string,             // Full model ID (e.g. 'claude-opus-4-7', 'claude-sonnet-4-6', 'claude-haiku-4-5'); absent = backend default
     effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
     serviceTier?: string,       // Codex-only service tier override. Current value: 'fast'. Absent = use the selected Codex profile/config default.
@@ -679,6 +687,7 @@ Detection is filesystem-based and read-only: `AGENTS.md` covers Codex/vendor-neu
     isAgent?: boolean,          // true for Agent tool invocations
     subagentType?: string,      // 'Explore', 'general-purpose', etc. (when isAgent)
     parentAgentId?: string,     // ID of parent agent (when tool runs inside a sub-agent)
+    planFilePath?: string,      // Claude plan file path when a plan Write/ExitPlanMode event exposes it
     duration: number|null,      // Estimated duration in milliseconds
     startTime: number,          // Unix timestamp ms when event was received
     outcome?: string,           // Short outcome summary (e.g. 'exit 0', '4 matches', 'not found')
@@ -727,7 +736,7 @@ type GoalEventKind =
 
 interface GoalEvent {
   kind: GoalEventKind;
-  backend?: 'codex' | 'claude-code' | string;
+  backend?: 'codex' | 'claude-code' | 'claude-code-interactive' | string;
   objective?: string;
   status?: 'active' | 'paused' | 'budgetLimited' | 'complete' | 'cleared' | 'unknown';
   reason?: string | null;
@@ -772,9 +781,10 @@ one block:
 
 Ordering rules:
 
-- Blocks are appended in the order the backend emits events. Both the
-  Claude Code adapter and the Kiro adapter yield `text` / `thinking` /
-  `tool_activity` / `tool_outcomes` stream events in native source order.
+- Blocks are appended in the order the backend emits events. The Claude Code
+  stream-json adapter, Claude Code Interactive transcript mapper, and Kiro
+  adapter yield `text` / `thinking` / `tool_activity` / `tool_outcomes`
+  stream events in native source order.
 - Consecutive `text` events collapse into one `text` block (same for
   `thinking`). This keeps the block list compact while preserving the
   interleaving relative to tools.
@@ -903,8 +913,8 @@ next startup reconciliation pass uses the same durable terminal path.
 `runtime` is operational metadata, not an audit log. `processStream` writes
 `runtime.externalSessionId` when it consumes an adapter's `external_session`
 event, and merges `backend_runtime` events carrying process IDs and backend
-active-turn IDs. Claude Code, Kiro, and Codex emit `processId` when their local
-child process is available; Codex records the app-server turn id from the
+active-turn IDs. Claude Code, Claude Code Interactive, Kiro, and Codex emit
+`processId` when their local child process is available; Codex records the app-server turn id from the
 `turn/start` response path, emits it as `backend_runtime.activeTurnId` from
 that path, and dedupes `turn/started` if the notification is also emitted.
 Today those identifiers support diagnostics and
@@ -1056,6 +1066,19 @@ interface CliUpdateStatus {
   lastCheckAt: string | null;
   lastError: string | null;
   updateCommand: string[] | null;
+  interactiveCompatibility?: CliCompatibilityStatus[];
+  blocksAutoUpdate?: boolean;
+  updateCaution?: string | null;
+}
+
+interface CliCompatibilityStatus {
+  providerId: 'claude-code-interactive';
+  command: string;
+  currentVersion: string | null;
+  testedVersion: string;
+  status: 'supported' | 'newer' | 'older' | 'unknown' | 'missing';
+  severity: 'none' | 'warning' | 'error';
+  message: string | null;
 }
 
 interface CliUpdatesResponse {
@@ -1079,6 +1102,7 @@ interface CliUpdatesResponse {
       "id": "server-configured-claude-code",
       "name": "Claude Code (Server Configured)",
       "vendor": "claude-code",
+      "protocol": "standard",
       "authMode": "server-configured",
       "createdAt": "2026-04-29T00:00:00.000Z",
       "updatedAt": "2026-04-29T00:00:00.000Z"
@@ -1125,11 +1149,11 @@ interface CliUpdatesResponse {
 }
 ```
 
-`cliProfiles` is the global list of runnable CLI identities. The current implementation supports server-configured and account/custom profiles for Codex and Claude Code, and resolves `cliProfileId → CliProfile.vendor → backend adapter` at runtime. Server-configured profiles preserve existing behavior where each adapter uses the server user's already-configured CLI state. Codex profiles apply `command`, merged `env`, and `configDir → CODEX_HOME` for `codex app-server`, `codex exec`, MCP config collision reads, Codex plan usage, and remote auth jobs. Claude Code profiles apply `command`, merged `env`, and `configDir → CLAUDE_CONFIG_DIR` for streaming, one-shots, native memory path resolution/capture, Claude plan usage, and remote auth jobs. For both implemented vendors, `configDir` takes precedence over the matching env key when both are present. If a Codex or Claude Code account profile starts a remote auth check/job without a `configDir`, the server persists a deterministic default under `data/cli-profiles/<slug>-<sha1>/` so authentication and later runtime spawns use the same isolated config/auth home. Kiro profiles are self-configured only: `SettingsService.saveSettings()` forces `authMode: "server-configured"` and strips `command`, `configDir`, and `env` because `kiro-cli` has no dedicated documented profile directory override and isolating via `HOME` changes unrelated process behavior. Deterministic server-configured IDs are `server-configured-claude-code`, `server-configured-kiro`, and `server-configured-codex`. `SettingsService.getSettings()` ensures the default backend has a matching server-configured profile in memory.
+`cliProfiles` is the global list of runnable CLI identities. The current implementation supports server-configured and account/custom profiles for Codex and Claude Code, and resolves `cliProfileId → CliProfile` for command/auth/config plus the runtime communication path. Claude Code profiles also carry `protocol: "standard" | "interactive"`: `standard` maps to internal backend `claude-code`, while `interactive` maps to internal backend `claude-code-interactive`. `claude-code-interactive` is therefore not a separate profile vendor; it shares `vendor: "claude-code"` for `command`, `env`, `CLAUDE_CONFIG_DIR`, auth, plan usage, and CLI update targets. Server-configured profiles preserve existing behavior where each adapter uses the server user's already-configured CLI state. Codex profiles apply `command`, merged `env`, and `configDir → CODEX_HOME` for `codex app-server`, `codex exec`, MCP config collision reads, Codex plan usage, and remote auth jobs. Claude Code profiles apply `command`, merged `env`, and `configDir → CLAUDE_CONFIG_DIR` for both standard streaming and interactive hidden PTY sessions, one-shots, native memory path resolution/capture, Claude plan usage, and remote auth jobs. For both implemented vendors, `configDir` takes precedence over the matching env key when both are present. If a Codex or Claude Code account profile starts a remote auth check/job without a `configDir`, the server persists a deterministic default under `data/cli-profiles/<slug>-<sha1>/` so authentication and later runtime spawns use the same isolated config/auth home. Kiro profiles are self-configured only: `SettingsService.saveSettings()` forces `authMode: "server-configured"` and strips `command`, `configDir`, `env`, and `protocol` because `kiro-cli` has no dedicated documented profile directory override and isolating via `HOME` changes unrelated process behavior. Deterministic server-configured IDs are `server-configured-claude-code`, `server-configured-kiro`, and `server-configured-codex`. `SettingsService.getSettings()` ensures the default backend has a matching server-configured physical profile in memory.
 
-`defaultCliProfileId` points at the profile used by the V2 UI for new conversations. New conversations still accept/return `backend` for compatibility. `ChatService.createConversation()` accepts an optional `cliProfileId`; when supplied, the profile vendor becomes the stored `backend`, and a conflicting explicit `backend` is rejected. When neither profile nor backend is supplied, the service uses `settings.defaultCliProfileId` when valid. When only a backend is supplied, the service derives `cliProfileId` from the selected backend's server-configured profile.
+`defaultCliProfileId` points at the CLI profile used by the V2 UI for new conversations. New conversations still accept/return `backend` for compatibility, but new profile-based selection derives `backend` from `CliProfile.vendor + CliProfile.protocol` instead of exposing a separate backend/provider picker. `ChatService.createConversation()` accepts an optional `cliProfileId`; when supplied without an explicit backend, the profile's protocol-derived backend is stored. A conflicting explicit `backend` is rejected. When neither profile nor backend is supplied, the service uses `settings.defaultCliProfileId` when valid and derives the backend from that profile; otherwise it falls back to `settings.defaultBackend` and then the registry default. When only a backend is supplied, the service derives `cliProfileId` from the selected backend's physical server-configured profile.
 
-`memory.cliProfileId` selects the profile used by the Memory CLI for `memory_note` formatting/deduping and post-session extraction. `memory.cliBackend` is retained as a legacy fallback and is kept aligned to the selected profile vendor on settings save. If `cliProfileId` is absent, runtime resolution falls back to `cliBackend`, then `defaultBackend`.
+`memory.cliProfileId` selects the profile used by the Memory CLI for `memory_note` formatting/deduping and post-session extraction. `memory.cliBackend` is retained as a legacy fallback and is kept aligned to the selected profile's protocol-derived backend on settings save. If `cliProfileId` is absent, runtime resolution falls back to `cliBackend`, then `defaultBackend`.
 
 `memory.lastProcessorStatus` stores the last redacted Memory processor status known to Agent Cockpit ([ADR-0053](adr/0053-persist-memory-processor-status.md)). Shape: `{ status, updatedAt, backendId?, profileId?, profileName?, chatBackendId?, chatProfileId?, chatProfileName?, differsFromChatProfile?, error? }`. `status` is one of `last_succeeded`, `authentication_failed`, `unavailable`, `runtime_failed`, or `bad_output`. Successful `memory_note` write/skip decisions store `last_succeeded`; processor profile resolution, adapter availability, `runOneShot`, and bad-output failures store the corresponding failure class. `error` is bounded and redacted before persistence, including credential-looking paths and token values. Chat profile fields are present only when the active conversation runtime supplied them while issuing the Memory MCP session.
 
@@ -1141,9 +1165,9 @@ The `systemPrompt` is passed to the CLI via `--append-system-prompt` at the star
 
 The `memory` block configures the globally-shared **Memory CLI profile** used for `memory_note` MCP processing and post-session extraction (see [Backend Services — Workspace Memory](spec-backend-services.md#workspace-memory)).
 
-The `knowledgeBase` block configures the globally-shared **Ingestion CLI profile**, **Digestion CLI profile**, and **Dreaming CLI profile** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). The matching legacy `*CliBackend` fields are retained as fallbacks and are aligned to the selected profile vendors on save. Ingestion is opt-in (must be vision-capable, currently used for AI-assisted page/slide/image conversion at ingest time); leaving it unset falls back to image-only references for visual content. Digestion and Dreaming require a configured profile/backend before they run. `cliConcurrency` (default 2) caps how many documents are processed in parallel by ingestion, digestion, and dreaming pipelines per workspace; within a single document, work stays sequential. `kbGleaningEnabled` (default `false`) opts digestion into a second per-chunk pass that asks for missed entries after the first extraction. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
+The `knowledgeBase` block configures the globally-shared **Ingestion CLI profile**, **Digestion CLI profile**, and **Dreaming CLI profile** for the per-workspace Knowledge Base feature (see **Workspace Knowledge Base** subsection under `ChatService` below). The matching legacy `*CliBackend` fields are retained as fallbacks and are aligned to the selected profile's protocol-derived backend on save. Ingestion is opt-in (must be vision-capable, currently used for AI-assisted page/slide/image conversion at ingest time); leaving it unset falls back to image-only references for visual content. Digestion and Dreaming require a configured profile/backend before they run. `cliConcurrency` (default 2) caps how many documents are processed in parallel by ingestion, digestion, and dreaming pipelines per workspace; within a single document, work stays sequential. `kbGleaningEnabled` (default `false`) opts digestion into a second per-chunk pass that asks for missed entries after the first extraction. `convertSlidesToImages` opts into the LibreOffice-backed PPTX slide rasterization path; when enabled but LibreOffice is absent on `PATH`, ingestion logs a warning and falls back to text + speaker notes + embedded media only. LibreOffice presence is detected at server startup (`which soffice` / `where soffice`) and cached for the process lifetime. `dreamingStrongMatchThreshold` (default 0.75) and `dreamingBorderlineThreshold` (default 0.45) control the retrieval-based routing score thresholds: entries with a top hybrid-search score ≥ strong go directly to synthesis, ≥ borderline go to LLM verification, and below borderline create new topics.
 
-The `contextMap` block configures globally-shared Context Map processor defaults for workspaces that opt into Context Map and keep `WorkspaceIndex.contextMap.processorMode` at `global`. `cliProfileId` selects the processor CLI profile; `cliBackend` is retained as a deprecated fallback/mirror and is aligned to the selected profile vendor on settings save. `cliModel` and `cliEffort` are optional processor overrides. `scanIntervalMinutes` defaults to `5` and is normalized to an integer from 1 to 1440. `cliConcurrency` defaults to `1` and is normalized to an integer from 1 to 10; it controls how many workspace scans the scheduler can start at once. `extractionConcurrency` and `synthesisConcurrency` both default to `3` and are normalized to integers from 1 to 6; they control process-wide extraction and synthesis one-shot CLI queues across all active Context Map scans. Source selection is not stored in settings: conversation spans are always processed, initial/manual scans process every discovered workspace instruction/Markdown/code-outline packet, and scheduled scans process only changed, new, or previously missing workspace source packets.
+The `contextMap` block configures globally-shared Context Map processor defaults for workspaces that opt into Context Map and keep `WorkspaceIndex.contextMap.processorMode` at `global`. `cliProfileId` selects the processor CLI profile; `cliBackend` is retained as a deprecated fallback/mirror and is aligned to the selected profile's protocol-derived backend on settings save. `cliModel` and `cliEffort` are optional processor overrides. `scanIntervalMinutes` defaults to `5` and is normalized to an integer from 1 to 1440. `cliConcurrency` defaults to `1` and is normalized to an integer from 1 to 10; it controls how many workspace scans the scheduler can start at once. `extractionConcurrency` and `synthesisConcurrency` both default to `3` and are normalized to integers from 1 to 6; they control process-wide extraction and synthesis one-shot CLI queues across all active Context Map scans. Source selection is not stored in settings: conversation spans are always processed, initial/manual scans process every discovered workspace instruction/Markdown/code-outline packet, and scheduled scans process only changed, new, or previously missing workspace source packets.
 
 **Migration:** `dreamingConcurrency` was renamed to `cliConcurrency` in the hybrid-ingestion design (PR 1). On read, `SettingsService.getSettings()` copies `dreamingConcurrency` forward to `cliConcurrency` when the new key is missing — disk state is left untouched until the next save. Existing settings files load without warnings; the deprecated `dreamingConcurrency` field stays on the `Settings` type for one release cycle, then is removed.
 

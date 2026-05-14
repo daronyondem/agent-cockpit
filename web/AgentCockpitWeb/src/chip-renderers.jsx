@@ -606,6 +606,14 @@ const CHIP_RENDERERS = {
       return <ClaudeCodeTokenCard usage={usage} planUsage={opts && opts.planUsage}/>;
     },
   },
+  'claude-code-interactive': {
+    renderChipText(usage){
+      return CHIP_RENDERERS['claude-code'].renderChipText(usage);
+    },
+    renderTooltipCard(usage, opts){
+      return CHIP_RENDERERS['claude-code'].renderTooltipCard(usage, opts);
+    },
+  },
   'kiro': {
     renderChipText(usage){
       const total = (usage.inputTokens || 0) + (usage.outputTokens || 0);

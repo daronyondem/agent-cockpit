@@ -89,6 +89,7 @@ function validateCliProfiles(value: unknown): void {
     optionalString(record, 'id', 'cliProfiles entries must have string ids');
     optionalString(record, 'name', 'cliProfiles entries names must be strings');
     optionalString(record, 'vendor', 'cliProfiles entries vendors must be strings');
+    optionalStringEnum(record, 'protocol', ['standard', 'interactive'], 'cliProfiles entries protocols must be standard or interactive');
   }
 }
 

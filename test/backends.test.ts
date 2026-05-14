@@ -9,6 +9,7 @@ import {
   parseClaudeGoalFromJsonl,
   resolveClaudeCliRuntime,
   resolveClaudeProjectDir,
+  resolveClaudeProjectDirCandidates,
   resolveClaudeMemoryDir,
   resolveCanonicalWorkspacePath,
   mcpServersToClaudeConfigJson,
@@ -330,6 +331,25 @@ describe('Claude Code goals', () => {
   test('resolves deterministic Claude project dir for short workspace paths', () => {
     const dir = resolveClaudeProjectDir('/tmp/goal-project');
     expect(dir).toBe(path.join(process.env.HOME || os.homedir(), '.claude', 'projects', '-tmp-goal-project'));
+  });
+
+  test('includes realpath Claude project dir candidates for symlinked workspaces', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-project-dir-'));
+    try {
+      const realWorkspace = path.join(tmp, 'real-workspace');
+      const linkedWorkspace = path.join(tmp, 'linked-workspace');
+      const configDir = path.join(tmp, 'claude-config');
+      fs.mkdirSync(realWorkspace, { recursive: true });
+      fs.symlinkSync(realWorkspace, linkedWorkspace, 'dir');
+
+      const candidates = resolveClaudeProjectDirCandidates(linkedWorkspace, configDir);
+      const resolvedWorkspace = fs.realpathSync(realWorkspace);
+
+      expect(candidates).toContain(path.join(configDir, 'projects', linkedWorkspace.replace(/[^a-zA-Z0-9]/g, '-')));
+      expect(candidates).toContain(path.join(configDir, 'projects', resolvedWorkspace.replace(/[^a-zA-Z0-9]/g, '-')));
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 
   test('reads goal transcript from later long-path candidate when first candidate lacks session file', async () => {

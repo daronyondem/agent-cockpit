@@ -1955,7 +1955,7 @@ export class CodexAdapter extends BaseBackendAdapter {
               questions: questions.map((q) => ({
                 question: q.question,
                 options: Array.isArray(q.options) ? q.options : [],
-              })) as unknown as string[],
+              })),
             };
             continue;
           }
@@ -2325,13 +2325,10 @@ export class CodexAdapter extends BaseBackendAdapter {
               id: p.itemId,
               description: (first && first.header) || 'Question',
               isQuestion: true,
-              // Frontend reads questions[0].question and questions[0].options
-              // (object shape, not the typedef's string[]). Cast through
-              // unknown to match the runtime contract.
               questions: questions.map((q) => ({
                 question: q.question,
                 options: Array.isArray(q.options) ? q.options : [],
-              })) as unknown as string[],
+              })),
             };
             continue;
           }

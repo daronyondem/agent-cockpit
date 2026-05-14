@@ -443,6 +443,7 @@ export interface ConversationListItem {
 
 export type CliVendor = 'codex' | 'claude-code' | 'kiro';
 export type CliAuthMode = 'server-configured' | 'account';
+export type CliCommunicationProtocol = 'standard' | 'interactive';
 
 export type WorkspaceInstructionSourceId = 'agents' | 'claude' | 'kiro';
 
@@ -488,6 +489,8 @@ export interface CliProfile {
   id: string;
   name: string;
   vendor: CliVendor;
+  /** Claude Code only: how Agent Cockpit communicates with the shared Claude CLI. */
+  protocol?: CliCommunicationProtocol;
   /** Optional executable override. When omitted, the vendor default command is used. */
   command?: string;
   /** Server-configured keeps current server-side CLI state; account means Cockpit owns setup for this profile. */
@@ -684,10 +687,21 @@ export interface ToolActivityEvent {
   parentAgentId?: string;
   isPlanFile?: boolean;
   planContent?: string;
+  planFilePath?: string;
   isPlanMode?: boolean;
   planAction?: 'enter' | 'exit';
   isQuestion?: boolean;
-  questions?: string[];
+  questions?: ToolQuestion[];
+}
+
+export interface ToolQuestionOption {
+  label: string;
+  description?: string;
+}
+
+export interface ToolQuestion {
+  question: string;
+  options?: ToolQuestionOption[];
 }
 
 export interface ToolOutcome {
@@ -762,7 +776,7 @@ export interface DoneEvent {
 
 // ── Thread Goals ────────────────────────────────────────────────────────────
 
-export type ThreadGoalBackend = 'codex' | 'claude-code';
+export type ThreadGoalBackend = 'codex' | 'claude-code' | 'claude-code-interactive';
 export type ThreadGoalStatus = 'active' | 'paused' | 'budgetLimited' | 'complete' | 'cleared' | 'unknown';
 export type ThreadGoalSource = 'native' | 'transcript' | 'runtime' | 'unknown';
 
@@ -1890,6 +1904,9 @@ export interface CliUpdateStatus {
   lastCheckAt: string | null;
   lastError: string | null;
   updateCommand: string[] | null;
+  interactiveCompatibility?: CliCompatibilityStatus[];
+  blocksAutoUpdate?: boolean;
+  updateCaution?: string | null;
 }
 
 export interface CliUpdatesResponse {
@@ -1903,6 +1920,16 @@ export interface CliUpdateResult {
   item?: CliUpdateStatus;
   steps: UpdateStep[];
   error?: string;
+}
+
+export interface CliCompatibilityStatus {
+  providerId: 'claude-code-interactive';
+  command: string;
+  currentVersion: string | null;
+  testedVersion: string;
+  status: 'supported' | 'newer' | 'older' | 'unknown' | 'missing';
+  severity: 'none' | 'warning' | 'error';
+  message: string | null;
 }
 
 // ── WebSocket Frames ────────────────────────────────────────────────────────
@@ -1970,6 +1997,9 @@ export interface ActiveStreamEntry {
     source: StreamErrorSource;
     at: string;
   };
+  deferPlanApprovalInput?: boolean;
+  pendingPlanApprovalInput?: string | null;
+  pendingPlanApprovalTimer?: NodeJS.Timeout | null;
   abortFinalizing?: Promise<void>;
   finalizeAbort?: () => Promise<void>;
   terminalFinalizing?: Promise<void>;
@@ -1986,10 +2016,11 @@ export interface ToolDetail {
   subagentType?: string;
   isPlanFile?: boolean;
   planContent?: string;
+  planFilePath?: string;
   isPlanMode?: boolean;
   planAction?: 'enter' | 'exit';
   isQuestion?: boolean;
-  questions?: string[];
+  questions?: ToolQuestion[];
   parentAgentId?: string;
 }
 

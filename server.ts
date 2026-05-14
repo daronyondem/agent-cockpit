@@ -12,6 +12,7 @@ import { attachWebSocket } from './src/ws';
 import { ChatService } from './src/services/chatService';
 import { BackendRegistry } from './src/services/backends/registry';
 import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
+import { ClaudeCodeInteractiveAdapter } from './src/services/backends/claudeCodeInteractive';
 import { KiroAdapter } from './src/services/backends/kiro';
 import { CodexAdapter } from './src/services/backends/codex';
 import { UpdateService } from './src/services/updateService';
@@ -93,6 +94,7 @@ app.get('/api/me', meHandler);
 
 const backendRegistry = new BackendRegistry();
 backendRegistry.register(new ClaudeCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
+backendRegistry.register(new ClaudeCodeInteractiveAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 backendRegistry.register(new KiroAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 backendRegistry.register(new CodexAdapter({
   workingDir: config.DEFAULT_WORKSPACE,

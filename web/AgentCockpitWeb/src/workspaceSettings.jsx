@@ -47,10 +47,22 @@ function activeWorkspaceCliProfiles(settings){
     : [];
 }
 
+function cliVendorForBackend(backendId){
+  return backendId === 'claude-code-interactive' ? 'claude-code' : backendId;
+}
+
+function workspaceBackendIdForProfile(profile){
+  if (!profile) return null;
+  if (profile.vendor === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
+  return profile.vendor;
+}
+
 function workspaceProfileForBackend(profiles, backendId){
   if (!backendId) return null;
-  return profiles.find(p => p.id === 'server-configured-' + backendId)
-    || profiles.find(p => p.vendor === backendId)
+  const vendor = cliVendorForBackend(backendId);
+  return profiles.find(p => workspaceBackendIdForProfile(p) === backendId)
+    || profiles.find(p => p.id === 'server-configured-' + vendor)
+    || profiles.find(p => p.vendor === vendor)
     || null;
 }
 
@@ -64,7 +76,7 @@ function workspaceProfileForSetting(profiles, profileId, backendId, fallbackBack
 function workspaceBackendForProfile(backends, profileBackends, profile){
   if (!profile) return null;
   return (profileBackends && profileBackends[profile.id])
-    || (backends || []).find(b => b.id === profile.vendor)
+    || (backends || []).find(b => b.id === workspaceBackendIdForProfile(profile))
     || null;
 }
 
@@ -2149,7 +2161,7 @@ function ContextMapTab({
         onPatch({
           processorMode: 'override',
           cliProfileId: selectedProfile.id,
-          cliBackend: selectedProfile.vendor,
+          cliBackend: workspaceBackendIdForProfile(selectedProfile),
           cliModel: newModel,
           cliEffort: workspaceDefaultEffort(e),
         });
@@ -2168,7 +2180,7 @@ function ContextMapTab({
     onPatch({
       processorMode: 'override',
       cliProfileId: profile.id,
-      cliBackend: profile.vendor,
+      cliBackend: workspaceBackendIdForProfile(profile),
       cliModel: newModel,
       cliEffort: workspaceDefaultEffort(e),
     });

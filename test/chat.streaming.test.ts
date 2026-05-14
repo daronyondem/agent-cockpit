@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
 import { MockBackendAdapter } from './helpers/mockBackendAdapter';
+import { processStream } from '../src/routes/chat';
 import type { BackendMetadata, StreamEvent } from '../src/types';
 
 class KiroMockBackend extends MockBackendAdapter {
@@ -16,12 +17,67 @@ class KiroMockBackend extends MockBackendAdapter {
   }
 }
 
+class InteractiveMockBackend extends MockBackendAdapter {
+  get metadata(): BackendMetadata {
+    return {
+      ...super.metadata,
+      id: 'claude-code-interactive',
+      label: 'Claude Code Interactive',
+    };
+  }
+}
+
 let env: ChatRouterEnv;
 
 beforeEach(async () => { env = await createChatRouterEnv(); });
 afterEach(async () => { await destroyChatRouterEnv(env); });
 
 describe('Terminal stream errors', () => {
+  test('runs stream cleanup before emitting done', async () => {
+    async function* stream() {
+      yield { type: 'text', content: 'complete' } as StreamEvent;
+      yield { type: 'done' } as StreamEvent;
+    }
+
+    const frames: any[] = [];
+    let cleanupRan = false;
+    const chatService = {
+      addMessage: jest.fn(async (_convId: string, role: string, content: string, backend: string) => ({
+        id: 'assistant-1',
+        role,
+        content,
+        backend,
+        timestamp: new Date().toISOString(),
+      })),
+    };
+
+    await processStream(
+      'conv-cleanup-before-done',
+      {
+        stream: stream(),
+        abort: () => {},
+        sendInput: () => {},
+        backend: 'claude-code-interactive',
+        needsTitleUpdate: false,
+        titleUpdateMessage: null,
+      },
+      (frame) => {
+        if (frame.type === 'done') {
+          expect(cleanupRan).toBe(true);
+        }
+        frames.push(frame);
+      },
+      () => false,
+      async () => {
+        cleanupRan = true;
+      },
+      { chatService: chatService as any },
+    );
+
+    expect(cleanupRan).toBe(true);
+    expect(frames.some(frame => frame.type === 'done')).toBe(true);
+  });
+
   test('persists partial output before stream-error message and emits synthetic done', async () => {
     const conv = await env.chatService.createConversation('Terminal Error');
 
@@ -219,6 +275,78 @@ describe('Tool activity forwarding', () => {
     expect(exitEvent).toBeDefined();
     expect(exitEvent.planContent).toContain('## Proposed plan');
     expect(exitEvent.planContent).toContain('1. First step');
+  });
+
+  test('preserves backend planContent on plan exit', async () => {
+    const conv = await env.chatService.createConversation('Plan Content Direct');
+
+    env.mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'ExitPlanMode', isPlanMode: true, planAction: 'exit', planContent: '# Direct plan', description: 'Plan ready for approval' },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+
+    await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'plan',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    const exitEvent = events.find((e: any) => e.type === 'tool_activity' && e.isPlanMode && e.planAction === 'exit');
+    expect(exitEvent).toBeDefined();
+    expect(exitEvent.planContent).toBe('# Direct plan');
+  });
+
+  test('surfaces plan approval after a plan file write completes in plan mode', async () => {
+    const conv = await env.chatService.createConversation('Plan File Content');
+
+    env.mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'EnterPlanMode', isPlanMode: true, planAction: 'enter', description: 'Entering plan mode' },
+      { type: 'tool_activity', tool: 'Write', id: 'plan-write', isPlanFile: true, planContent: '# Plan from file', description: 'Writing plan file' },
+      { type: 'tool_outcomes', outcomes: [{ toolUseId: 'plan-write', isError: false, outcome: 'written', status: 'success' }] },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+
+    await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'plan',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    const exitEvent = events.find((e: any) => e.type === 'tool_activity' && e.isPlanMode && e.planAction === 'exit');
+    expect(exitEvent).toBeDefined();
+    expect(exitEvent.planContent).toBe('# Plan from file');
+  });
+
+  test('does not reopen plan approval when transcript ExitPlanMode follows plan file fallback', async () => {
+    const conv = await env.chatService.createConversation('Plan File Duplicate');
+
+    env.mockBackend.setMockEvents([
+      { type: 'tool_activity', tool: 'EnterPlanMode', isPlanMode: true, planAction: 'enter', description: 'Entering plan mode' },
+      { type: 'tool_activity', tool: 'Write', id: 'plan-write', isPlanFile: true, planContent: '# Plan from file', description: 'Writing plan file' },
+      { type: 'tool_outcomes', outcomes: [{ toolUseId: 'plan-write', isError: false, outcome: 'written', status: 'success' }] },
+      { type: 'tool_activity', tool: 'ExitPlanMode', isPlanMode: true, planAction: 'exit', planContent: '# Plan from file', description: 'Plan ready for approval' },
+      { type: 'text', content: 'after approval' },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+
+    await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'plan',
+      backend: 'claude-code',
+    });
+
+    const events = await eventsPromise;
+    const exitEvents = events.filter((e: any) => e.type === 'tool_activity' && e.isPlanMode && e.planAction === 'exit');
+    expect(exitEvents).toHaveLength(1);
+    expect(exitEvents[0].planContent).toBe('# Plan from file');
   });
 
   test('forwards isQuestion flag and questions via WebSocket', async () => {
@@ -1734,8 +1862,46 @@ describe('CLI profile runtime selection', () => {
     });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe('CLI profile vendor kiro does not match backend claude-code');
+    expect(res.body.error).toBe('CLI profile backend kiro does not match requested backend claude-code');
     expect(env.mockBackend._lastMessage).toBeNull();
+  });
+
+  test('uses Claude Code Interactive when the Claude Code profile protocol is interactive', async () => {
+    const interactiveBackend = new InteractiveMockBackend();
+    env.backendRegistry.register(interactiveBackend);
+    interactiveBackend.setMockEvents([
+      { type: 'text', content: 'Interactive hi', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: 'server-configured-claude-code',
+      cliProfiles: (settings.cliProfiles || []).map(profile => (
+        profile.id === 'server-configured-claude-code'
+          ? { ...profile, protocol: 'interactive' }
+          : profile
+      )),
+    });
+
+    const conv = await env.chatService.createConversation('Interactive Switch Test');
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Use interactive',
+      cliProfileId: 'server-configured-claude-code',
+    });
+    const events = await eventsPromise;
+
+    expect(res.status).toBe(200);
+    expect(interactiveBackend._lastMessage).toContain('Use interactive');
+    expect(interactiveBackend._lastOptions?.cliProfileId).toBe('server-configured-claude-code');
+    expect(events.find((e: any) => e.type === 'text')?.content).toBe('Interactive hi');
+
+    const loaded = await env.chatService.getConversation(conv.id);
+    expect(loaded?.backend).toBe('claude-code-interactive');
+    expect(loaded?.cliProfileId).toBe('server-configured-claude-code');
   });
 
   test('allows profile selection before the first message and blocks it after messages exist', async () => {

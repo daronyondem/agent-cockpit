@@ -201,11 +201,12 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
 
       try {
         if (cliProfileId) {
-          if (cliProfileId !== conv.cliProfileId) {
+          const profileOrProviderChanged = cliProfileId !== conv.cliProfileId || (backend && backend !== conv.backend);
+          if (profileOrProviderChanged) {
             if (conv.messages.length > 0) {
               return res.status(409).json({ error: 'Cannot switch CLI profile after the active session has messages' });
             }
-            await chatService.updateConversationCliProfile(convId, cliProfileId);
+            await chatService.updateConversationCliProfile(convId, cliProfileId, backend || conv.backend);
           }
         } else if (backend && backend !== conv.backend) {
           await chatService.updateConversationBackend(convId, backend);
@@ -238,7 +239,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     }
     const backendId = runtime.backendId;
     if (cliProfileId && backend && backend !== backendId) {
-      return res.status(400).json({ error: `CLI profile vendor ${backendId} does not match backend ${backend}` });
+      return res.status(400).json({ error: `CLI profile backend ${backendId} does not match requested backend ${backend}` });
     }
     await streamSupervisor.markPreparing(jobId, {
       backend: backendId,
@@ -483,6 +484,22 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     const entry = activeStreams.get(convId);
     if (streamActive && entry?.sendInput) {
       log.debug('Delivering interaction input via active stream', { conversationId: convId });
+      if (entry.deferPlanApprovalInput) {
+        entry.pendingPlanApprovalInput = text.trim();
+        if (!entry.pendingPlanApprovalTimer) {
+          entry.pendingPlanApprovalTimer = setTimeout(() => {
+            const current = activeStreams.get(convId);
+            if (current !== entry || !entry.pendingPlanApprovalInput || !entry.sendInput) return;
+            const deferred = entry.pendingPlanApprovalInput;
+            entry.pendingPlanApprovalInput = null;
+            entry.deferPlanApprovalInput = false;
+            entry.pendingPlanApprovalTimer = null;
+            entry.sendInput(deferred);
+          }, 3_000);
+          entry.pendingPlanApprovalTimer.unref?.();
+        }
+        return res.json({ mode: 'stdin' });
+      }
       entry.sendInput(text.trim());
       return res.json({ mode: 'stdin' });
     }

@@ -69,6 +69,10 @@ const subs = new Set();
     return () => subs.delete(fn);
   }
 
+  function cliVendorForBackend(backendId){
+    return backendId === 'claude-code-interactive' ? 'claude-code' : backendId;
+  }
+
   function findForSelection(cliProfileId, backendId){
     const items = cached && Array.isArray(cached.items) ? cached.items : [];
     if (cliProfileId) {
@@ -76,9 +80,10 @@ const subs = new Set();
       if (byProfile) return byProfile;
     }
     if (backendId) {
-      const serverProfileId = 'server-configured-' + backendId;
+      const vendor = cliVendorForBackend(backendId);
+      const serverProfileId = 'server-configured-' + vendor;
       return items.find(item => Array.isArray(item.profileIds) && item.profileIds.includes(serverProfileId))
-        || items.find(item => item.vendor === backendId)
+        || items.find(item => item.vendor === vendor)
         || null;
     }
     return null;

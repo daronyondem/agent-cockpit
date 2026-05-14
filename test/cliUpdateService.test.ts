@@ -93,6 +93,48 @@ describe('CliUpdateService', () => {
     });
   });
 
+  test('adds Claude Code Interactive compatibility caution to the shared Claude CLI target', async () => {
+    settings = {
+      ...settings,
+      defaultBackend: 'claude-code-interactive',
+      cliProfiles: [{
+        id: 'server-configured-claude-code',
+        name: 'Claude Code (Server Configured)',
+        vendor: 'claude-code',
+        authMode: 'server-configured',
+        createdAt: '2026-05-04T00:00:00.000Z',
+        updatedAt: '2026-05-04T00:00:00.000Z',
+      }],
+    };
+    const claudeBin = path.join(npmRoot, '@anthropic-ai', 'claude-code', 'bin', 'claude.js');
+    fs.mkdirSync(path.dirname(claudeBin), { recursive: true });
+    fs.writeFileSync(claudeBin, '#!/usr/bin/env node\n');
+
+    const service = new CliUpdateService(tmpDir);
+    mockExecFile((cmd, args) => {
+      if (cmd === 'claude' && args.join(' ') === '--version') return 'Claude Code 2.1.141';
+      if (cmd === 'which' && args[0] === 'claude') return claudeBin;
+      if (cmd === 'npm' && args.join(' ') === 'root -g') return npmRoot;
+      if (cmd === 'npm' && args.join(' ') === 'view @anthropic-ai/claude-code version') return '2.1.142';
+      return new Error(`unexpected command: ${cmd} ${args.join(' ')}`);
+    });
+
+    const status = await service.checkNow(async () => settings);
+    expect(status.items).toHaveLength(1);
+    expect(status.items[0]).toMatchObject({
+      vendor: 'claude-code',
+      currentVersion: '2.1.141',
+      latestVersion: '2.1.142',
+      interactiveCompatibility: [expect.objectContaining({
+        providerId: 'claude-code-interactive',
+        testedVersion: '2.1.141',
+        status: 'supported',
+      })],
+      blocksAutoUpdate: false,
+    });
+    expect(status.items[0].updateCaution).toMatch(/newer than the version tested/);
+  });
+
   test('triggerUpdate runs the supported updater and refreshes status', async () => {
     const service = new CliUpdateService(tmpDir);
     let npmInstallCalled = false;
