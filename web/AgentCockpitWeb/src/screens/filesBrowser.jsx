@@ -4,6 +4,7 @@ import DOMPurify from 'dompurify';
 import { AgentApi } from '../api.js';
 import { Ico } from '../icons.jsx';
 import { useDialog } from '../dialog.jsx';
+import { buildSideBySideRows, foldSideBySideRows, inlineDiffParts } from '../gitDiffRows';
 
 /* Files Browser — modal-swap over the chat main pane.
    Full-screen workspace file explorer: lazy-loaded tree, preview/edit pane,
@@ -20,6 +21,16 @@ const FX_WIDTH_STORAGE_PREFIX = 'ac:v2:fx-tree-width:';
 const FX_WIDTH_DEFAULT = 220;
 const FX_WIDTH_MIN = 140;
 const FX_WIDTH_MAX = 600;
+const STATUS_META = {
+  modified: { label: 'M', text: 'Modified' },
+  added: { label: 'A', text: 'Added' },
+  deleted: { label: 'D', text: 'Deleted' },
+  renamed: { label: 'R', text: 'Renamed' },
+  copied: { label: 'C', text: 'Copied' },
+  untracked: { label: 'U', text: 'Untracked' },
+  conflicted: { label: '!', text: 'Conflict' },
+};
+const STATUS_PRIORITY = ['conflicted', 'deleted', 'added', 'untracked', 'renamed', 'copied', 'modified'];
 
 function loadFxWidth(hash){
   try {
@@ -72,8 +83,32 @@ function renderFileMd(md){
   return DOMPurify.sanitize(raw);
 }
 
+function statusMeta(status){
+  return STATUS_META[status] || { label: '?', text: status || 'Changed' };
+}
+
+function statusClass(status){
+  if (status === 'deleted' || status === 'conflicted') return 'danger';
+  if (status === 'added' || status === 'untracked') return 'success';
+  if (status === 'renamed' || status === 'copied') return 'info';
+  return 'warn';
+}
+
+function pathFileName(rel){
+  if (!rel) return '';
+  const parts = String(rel).split('/');
+  return parts[parts.length - 1] || rel;
+}
+
+function pathDirName(rel){
+  if (!rel) return '';
+  const i = String(rel).lastIndexOf('/');
+  return i < 0 ? '' : String(rel).slice(0, i);
+}
+
 export function FilesBrowser({ hash, label, onClose }){
   const dialog = useDialog();
+  const [mode, setMode] = React.useState('files');
   const [currentFolder, setCurrentFolder] = React.useState('');
   const [entries, setEntries] = React.useState([]);
   const [childrenMap, setChildrenMap] = React.useState(() => new Map());
@@ -81,12 +116,43 @@ export function FilesBrowser({ hash, label, onClose }){
   const [selected, setSelected] = React.useState(null); // { path, type, name }
   const [preview, setPreview] = React.useState(null);   // { path, name, size, kind, loading, content, language, editing, draft, saving, error }
   const [uploads, setUploads] = React.useState([]);     // [{ id, file, target, loaded, total, status, error, xhr }]
+  const [gitStatus, setGitStatus] = React.useState({ loading: false, isGitRepo: null, branch: null, files: [], error: null });
+  const [selectedChange, setSelectedChange] = React.useState(null);
+  const [gitDiff, setGitDiff] = React.useState(null);
   const [err, setErr] = React.useState(null);
   const [dragOver, setDragOver] = React.useState(false);
   const [treeWidth, setTreeWidth] = React.useState(() => loadFxWidth(hash));
   const [resizing, setResizing] = React.useState(false);
 
   React.useEffect(() => { setTreeWidth(loadFxWidth(hash)); }, [hash]);
+
+  const gitFiles = gitStatus.files || [];
+  const gitByPath = React.useMemo(() => {
+    const next = new Map();
+    for (const file of gitFiles) {
+      next.set(file.path, file);
+      if (file.oldPath) next.set(file.oldPath, file);
+    }
+    return next;
+  }, [gitFiles]);
+
+  const gitStatusForRel = React.useCallback((rel, isDir) => {
+    if (!isDir) return gitByPath.get(rel)?.status || null;
+    const prefix = rel ? `${rel}/` : '';
+    let best = null;
+    let bestPriority = Infinity;
+    for (const file of gitFiles) {
+      const matches = file.path.startsWith(prefix) || (file.oldPath && file.oldPath.startsWith(prefix));
+      if (!matches) continue;
+      const priority = STATUS_PRIORITY.indexOf(file.status);
+      const rank = priority < 0 ? STATUS_PRIORITY.length : priority;
+      if (rank < bestPriority) {
+        bestPriority = rank;
+        best = file.status;
+      }
+    }
+    return best;
+  }, [gitByPath, gitFiles]);
 
   const treeWidthRef = React.useRef(treeWidth);
   treeWidthRef.current = treeWidth;
@@ -142,10 +208,39 @@ export function FilesBrowser({ hash, label, onClose }){
     }
   }, [hash]);
 
-  React.useEffect(() => { loadFolder(''); }, [loadFolder]);
-
   const currentFolderRef = React.useRef(currentFolder);
   currentFolderRef.current = currentFolder;
+
+  const loadGitStatus = React.useCallback(async () => {
+    setGitStatus(prev => ({ ...prev, loading: true, error: null }));
+    try {
+      const data = await AgentApi.git.status(hash);
+      setGitStatus({
+        loading: false,
+        isGitRepo: !!data.isGitRepo,
+        branch: data.branch || null,
+        files: Array.isArray(data.files) ? data.files : [],
+        error: data.error || null,
+      });
+      setGitDiff(prev => {
+        if (!prev || !prev.path) return prev;
+        const stillChanged = (data.files || []).some(file => file.path === prev.path || file.oldPath === prev.path);
+        return stillChanged ? prev : null;
+      });
+      setSelectedChange(prev => {
+        if (!prev) return prev;
+        const next = (data.files || []).find(file => file.path === prev.path || file.oldPath === prev.path);
+        return next || null;
+      });
+    } catch (e) {
+      setGitStatus({ loading: false, isGitRepo: null, branch: null, files: [], error: e.message || String(e) });
+    }
+  }, [hash]);
+
+  React.useEffect(() => {
+    loadFolder('');
+    loadGitStatus();
+  }, [loadFolder, loadGitStatus]);
 
   /* Refresh a single folder's children in the map in place. Used after any
      mutation so only the affected branch is re-fetched — avoids the
@@ -164,10 +259,11 @@ export function FilesBrowser({ hash, label, onClose }){
         setEntries(data.entries || []);
       }
       setErr(null);
+      await loadGitStatus();
     } catch (e) {
       setErr(e.message || String(e));
     }
-  }, [hash]);
+  }, [hash, loadGitStatus]);
 
   const expandFolder = React.useCallback(async (rel) => {
     if (!childrenMap.has(rel)) {
@@ -201,7 +297,8 @@ export function FilesBrowser({ hash, label, onClose }){
   const refreshAll = React.useCallback(async () => {
     setChildrenMap(new Map());
     await loadFolder(currentFolder);
-  }, [currentFolder, loadFolder]);
+    await loadGitStatus();
+  }, [currentFolder, loadFolder, loadGitStatus]);
 
   /* ----- preview loading ----- */
   const loadPreview = React.useCallback(async (rel, entry) => {
@@ -239,6 +336,31 @@ export function FilesBrowser({ hash, label, onClose }){
       loadPreview(rel, entry);
     }
   }, [expanded, expandFolder, collapseFolder, childrenMap, entries, loadPreview]);
+
+  const loadGitDiff = React.useCallback(async (change) => {
+    if (!change) return;
+    setMode('changes');
+    setSelectedChange(change);
+    setPreview(null);
+    setSelected(null);
+    setGitDiff({ path: change.path, oldPath: change.oldPath, status: change.status, loading: true, error: null });
+    try {
+      const data = await AgentApi.git.diff(hash, change.path);
+      setGitDiff({ ...data, loading: false, error: null });
+    } catch (e) {
+      setGitDiff({
+        path: change.path,
+        oldPath: change.oldPath,
+        status: change.status,
+        loading: false,
+        error: e.message || 'Diff failed',
+      });
+    }
+  }, [hash]);
+
+  React.useEffect(() => {
+    if (mode === 'changes') loadGitStatus();
+  }, [mode, loadGitStatus]);
 
   /* ----- toolbar actions ----- */
   const targetFolder = React.useCallback(() => {
@@ -549,6 +671,7 @@ export function FilesBrowser({ hash, label, onClose }){
   const rootEntries = childrenMap.get(currentFolder) || entries;
   const crumbs = currentFolder ? currentFolder.split('/') : [];
   const fileInputRef = React.useRef(null);
+  const changeCount = gitFiles.length;
 
   const onUploadClick = () => { if (fileInputRef.current) fileInputRef.current.click(); };
   const onUploadInputChange = (e) => {
@@ -564,66 +687,97 @@ export function FilesBrowser({ hash, label, onClose }){
           <span style={{width:18,height:18,borderRadius:4,background:"var(--accent-soft)",display:"inline-flex",alignItems:"center",justifyContent:"center",color:"var(--accent)"}}>
             {Ico.folder(12)}
           </span>
-          <span className="u-mono" style={{fontSize:12}}>Files</span>
+          <span className="fx-mode-toggle" role="tablist" aria-label="Workspace file view">
+            <button className={mode === 'files' ? 'active' : ''} role="tab" aria-selected={mode === 'files'} onClick={() => setMode('files')}>Files</button>
+            <button className={mode === 'changes' ? 'active' : ''} role="tab" aria-selected={mode === 'changes'} onClick={() => setMode('changes')}>
+              Changes{changeCount ? ` ${changeCount}` : ''}
+            </button>
+          </span>
         </span>
-        <span className="path">
-          <span
-            className="fx-crumb"
-            role="button"
-            tabIndex={0}
-            onClick={() => loadFolder('')}
-            onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadFolder(''); } }}
-          >{label || 'workspace'}</span>
-          {crumbs.map((p, i) => {
-            const rel = crumbs.slice(0, i + 1).join('/');
-            const isLast = i === crumbs.length - 1;
-            return (
-              <React.Fragment key={rel}>
-                <span className="slash">/</span>
-                <span
-                  className="fx-crumb"
-                  role="button"
-                  tabIndex={0}
-                  style={isLast ? { color: 'var(--text)' } : undefined}
-                  onClick={() => loadFolder(rel)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadFolder(rel); } }}
-                >{p}</span>
-              </React.Fragment>
-            );
-          })}
-        </span>
+        {mode === 'files' ? (
+          <span className="path">
+            <span
+              className="fx-crumb"
+              role="button"
+              tabIndex={0}
+              onClick={() => loadFolder('')}
+              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadFolder(''); } }}
+            >{label || 'workspace'}</span>
+            {crumbs.map((p, i) => {
+              const rel = crumbs.slice(0, i + 1).join('/');
+              const isLast = i === crumbs.length - 1;
+              return (
+                <React.Fragment key={rel}>
+                  <span className="slash">/</span>
+                  <span
+                    className="fx-crumb"
+                    role="button"
+                    tabIndex={0}
+                    style={isLast ? { color: 'var(--text)' } : undefined}
+                    onClick={() => loadFolder(rel)}
+                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); loadFolder(rel); } }}
+                  >{p}</span>
+                </React.Fragment>
+              );
+            })}
+          </span>
+        ) : (
+          <span className="path">
+            <span>{label || 'workspace'}</span>
+            {gitStatus.branch ? <span className="slash">/</span> : null}
+            {gitStatus.branch ? <span>{gitStatus.branch}</span> : null}
+          </span>
+        )}
         <span style={{marginLeft:"auto",display:"flex",gap:6}}>
           <button className="btn ghost" style={{padding:"4px 8px"}} onClick={refreshAll} title="Refresh">{Ico.reset(12)}</button>
-          <button className="btn ghost" style={{padding:"4px 8px"}} onClick={(e) => doMkdir(e.currentTarget)} title="New folder">{Ico.folder(12)} New folder</button>
-          <button className="btn ghost" style={{padding:"4px 8px"}} onClick={(e) => doNewFile(e.currentTarget)} title="New file">{Ico.fileAdd(12)} New file</button>
-          <button className="btn primary" style={{padding:"4px 10px"}} onClick={onUploadClick} title="Upload files">{Ico.upload(12)} Upload</button>
-          <input ref={fileInputRef} type="file" multiple style={{display:"none"}} onChange={onUploadInputChange}/>
+          {mode === 'files' ? (
+            <>
+              <button className="btn ghost" style={{padding:"4px 8px"}} onClick={(e) => doMkdir(e.currentTarget)} title="New folder">{Ico.folder(12)} New folder</button>
+              <button className="btn ghost" style={{padding:"4px 8px"}} onClick={(e) => doNewFile(e.currentTarget)} title="New file">{Ico.fileAdd(12)} New file</button>
+              <button className="btn primary" style={{padding:"4px 10px"}} onClick={onUploadClick} title="Upload files">{Ico.upload(12)} Upload</button>
+              <input ref={fileInputRef} type="file" multiple style={{display:"none"}} onChange={onUploadInputChange}/>
+            </>
+          ) : null}
           <button className="btn" onClick={onClose}>Close</button>
         </span>
       </div>
 
       <div
         className={`fx-tree ${dragOver ? 'drag-over' : ''}`}
-        onDragOver={onPaneDragOver}
-        onDragLeave={onPaneDragLeave}
-        onDrop={onPaneDrop}
+        onDragOver={mode === 'files' ? onPaneDragOver : undefined}
+        onDragLeave={mode === 'files' ? onPaneDragLeave : undefined}
+        onDrop={mode === 'files' ? onPaneDrop : undefined}
       >
-        {err ? (
+        {mode === 'files' && err ? (
           <div className="u-err" style={{padding:"12px 8px",fontSize:12}}>{err}</div>
         ) : null}
-        <FxTreeBranch
-          parentRel={currentFolder}
-          entries={rootEntries}
-          depth={0}
-          expanded={expanded}
-          childrenMap={childrenMap}
-          selectedPath={selected ? selected.path : null}
-          onRowClick={handleRowClick}
-          onRename={doRename}
-          onDelete={doDelete}
-          onDownload={doDownload}
-        />
-        {uploads.length ? (
+        {mode === 'files' ? (
+          <FxTreeBranch
+            parentRel={currentFolder}
+            entries={rootEntries}
+            depth={0}
+            expanded={expanded}
+            childrenMap={childrenMap}
+            selectedPath={selected ? selected.path : null}
+            gitStatusForRel={gitStatusForRel}
+            onRowClick={handleRowClick}
+            onRename={doRename}
+            onDelete={doDelete}
+            onDownload={doDownload}
+            onOpenChange={loadGitDiff}
+            gitByPath={gitByPath}
+          />
+        ) : (
+          <FxChangesList
+            loading={gitStatus.loading}
+            isGitRepo={gitStatus.isGitRepo}
+            error={gitStatus.error}
+            files={gitFiles}
+            selectedPath={selectedChange ? selectedChange.path : null}
+            onSelect={loadGitDiff}
+          />
+        )}
+        {mode === 'files' && uploads.length ? (
           <FxUploadPanel uploads={uploads} onClear={clearDoneUploads}/>
         ) : null}
       </div>
@@ -638,21 +792,25 @@ export function FilesBrowser({ hash, label, onClose }){
       />
 
       <div className="fx-edit">
-        <FxPreviewPane
-          preview={preview}
-          hash={hash}
-          onStartEdit={startEdit}
-          onCancelEdit={cancelEdit}
-          onSaveEdit={saveEdit}
-          onDraftChange={(v) => setPreview(p => p ? { ...p, draft: v } : p)}
-          onDownload={doDownload}
-        />
+        {mode === 'files' ? (
+          <FxPreviewPane
+            preview={preview}
+            hash={hash}
+            onStartEdit={startEdit}
+            onCancelEdit={cancelEdit}
+            onSaveEdit={saveEdit}
+            onDraftChange={(v) => setPreview(p => p ? { ...p, draft: v } : p)}
+            onDownload={doDownload}
+          />
+        ) : (
+          <FxGitDiffPane diff={gitDiff} selectedChange={selectedChange}/>
+        )}
       </div>
     </div>
   );
 }
 
-function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, selectedPath, onRowClick, onRename, onDelete, onDownload }){
+function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, selectedPath, gitStatusForRel, onRowClick, onRename, onDelete, onDownload, onOpenChange, gitByPath }){
   if (!entries || !entries.length) {
     return depth === 0 ? (
       <div className="u-dim" style={{padding:"10px 8px",fontSize:12}}>Empty folder</div>
@@ -665,6 +823,8 @@ function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, select
         const isDir = e.type === 'dir';
         const isExpanded = isDir && expanded.has(rel);
         const isSelected = selectedPath === rel;
+        const changeStatus = gitStatusForRel ? gitStatusForRel(rel, isDir) : null;
+        const change = gitByPath ? gitByPath.get(rel) : null;
         return (
           <React.Fragment key={rel}>
             <FxTreeRow
@@ -672,6 +832,7 @@ function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, select
               name={e.name}
               isDir={isDir}
               size={e.size}
+              changeStatus={changeStatus}
               isExpanded={isExpanded}
               isSelected={isSelected}
               depth={depth}
@@ -679,6 +840,7 @@ function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, select
               onRename={(anchor) => onRename(rel, e.name, anchor)}
               onDelete={(anchor) => onDelete(rel, e.type, e.name, anchor)}
               onDownload={() => onDownload(rel)}
+              onOpenChange={change && !isDir ? () => onOpenChange(change) : null}
             />
             {isDir && isExpanded ? (
               <FxTreeBranch
@@ -688,10 +850,13 @@ function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, select
                 expanded={expanded}
                 childrenMap={childrenMap}
                 selectedPath={selectedPath}
+                gitStatusForRel={gitStatusForRel}
                 onRowClick={onRowClick}
                 onRename={onRename}
                 onDelete={onDelete}
                 onDownload={onDownload}
+                onOpenChange={onOpenChange}
+                gitByPath={gitByPath}
               />
             ) : null}
           </React.Fragment>
@@ -701,11 +866,12 @@ function FxTreeBranch({ parentRel, entries, depth, expanded, childrenMap, select
   );
 }
 
-function FxTreeRow({ rel, name, isDir, size, isExpanded, isSelected, depth, onClick, onRename, onDelete, onDownload }){
+function FxTreeRow({ rel, name, isDir, size, changeStatus, isExpanded, isSelected, depth, onClick, onRename, onDelete, onDownload, onOpenChange }){
   const indent = depth * 14;
   const chev = isDir
     ? (isExpanded ? Ico.chevD(12) : Ico.chev(12))
     : null;
+  const meta = changeStatus ? statusMeta(changeStatus) : null;
   return (
     <div
       className={`fx-tree-row ${isSelected ? 'active' : ''} ${isDir ? 'folder' : ''}`}
@@ -721,8 +887,16 @@ function FxTreeRow({ rel, name, isDir, size, isExpanded, isSelected, depth, onCl
       <span className="fx-tree-chev">{chev}</span>
       <span className="fx-tree-ico">{isDir ? Ico.folder(12) : Ico.file(12)}</span>
       <span className="fx-tree-name">{name}</span>
+      {meta ? <span className={`fx-status-badge ${statusClass(changeStatus)}`} title={meta.text}>{meta.label}</span> : null}
       {!isDir && size != null ? <span className="fx-tree-size u-mono u-dim">{formatBytes(size)}</span> : null}
       <span className="fx-tree-actions">
+        {onOpenChange ? (
+          <button
+            className="iconbtn"
+            title="View changes"
+            onClick={(e) => { e.stopPropagation(); onOpenChange(); }}
+          >{Ico.diff ? Ico.diff(12) : Ico.file(12)}</button>
+        ) : null}
         <button
           className="iconbtn"
           title="Rename"
@@ -742,6 +916,202 @@ function FxTreeRow({ rel, name, isDir, size, isExpanded, isSelected, depth, onCl
         >{Ico.trash(12)}</button>
       </span>
     </div>
+  );
+}
+
+function FxChangesList({ loading, isGitRepo, error, files, selectedPath, onSelect }){
+  if (loading && (!files || !files.length)) {
+    return <div className="u-dim" style={{padding:"10px 8px",fontSize:12}}>Loading changes...</div>;
+  }
+  if (error && isGitRepo !== false) {
+    return <div className="u-err" style={{padding:"12px 8px",fontSize:12}}>{error}</div>;
+  }
+  if (isGitRepo === false) {
+    return (
+      <div className="fx-empty-state">
+        <div className="u-mono">No Git repository</div>
+        <div>{error || 'This workspace is not a Git repository root.'}</div>
+      </div>
+    );
+  }
+  if (error) {
+    return <div className="u-err" style={{padding:"12px 8px",fontSize:12}}>{error}</div>;
+  }
+  if (!files || !files.length) {
+    return (
+      <div className="fx-empty-state">
+        <div className="u-mono">No local changes</div>
+        <div>The working tree is clean.</div>
+      </div>
+    );
+  }
+  return (
+    <div className="fx-changes-list">
+      {files.map(file => {
+        const meta = statusMeta(file.status);
+        const selected = selectedPath === file.path;
+        return (
+          <button
+            key={`${file.status}:${file.oldPath || ''}:${file.path}`}
+            className={`fx-change-row ${selected ? 'active' : ''}`}
+            onClick={() => onSelect(file)}
+            title={file.oldPath ? `${file.oldPath} -> ${file.path}` : file.path}
+          >
+            <span className={`fx-status-badge ${statusClass(file.status)}`}>{meta.label}</span>
+            <span className="fx-change-main">
+              <span className="fx-change-name">{pathFileName(file.path)}</span>
+              <span className="fx-change-path">{file.oldPath ? `${file.oldPath} -> ${file.path}` : pathDirName(file.path)}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function FxGitDiffPane({ diff, selectedChange }){
+  const [expandedHunks, setExpandedHunks] = React.useState(() => new Set());
+  const diffKey = selectedChange
+    ? `${selectedChange.oldPath || ''}:${selectedChange.path}:${diff?.status || ''}:${diff?.oldContent?.length || 0}:${diff?.newContent?.length || 0}`
+    : '';
+  React.useEffect(() => {
+    setExpandedHunks(new Set());
+  }, [diffKey]);
+
+  if (!selectedChange) {
+    return <div style={{padding:"24px 18px"}} className="u-dim">Select a changed file to review</div>;
+  }
+  const displayPath = selectedChange.oldPath ? `${selectedChange.oldPath} -> ${selectedChange.path}` : selectedChange.path;
+  const meta = statusMeta(selectedChange.status);
+  if (!diff || diff.loading) {
+    return (
+      <>
+        <div className="fx-edit-head">
+          <span className="filename">{displayPath}</span>
+          <span className={`fx-status-badge ${statusClass(selectedChange.status)}`}>{meta.label}</span>
+        </div>
+        <div className="fx-edit-body">
+          <div className="u-dim">Loading diff...</div>
+        </div>
+      </>
+    );
+  }
+  if (diff.error) {
+    return (
+      <>
+        <div className="fx-edit-head">
+          <span className="filename">{displayPath}</span>
+          <span className={`fx-status-badge ${statusClass(selectedChange.status)}`}>{meta.label}</span>
+        </div>
+        <div className="fx-edit-body">
+          <div className="u-err">Error: {diff.error}</div>
+        </div>
+      </>
+    );
+  }
+  if (diff.binary) {
+    return (
+      <>
+        <div className="fx-edit-head">
+          <span className="filename">{displayPath}</span>
+          <span className={`fx-status-badge ${statusClass(selectedChange.status)}`}>{meta.label}</span>
+        </div>
+        <div className="fx-edit-body">
+          <div className="u-dim">Binary diff is not available.</div>
+        </div>
+      </>
+    );
+  }
+  if (diff.tooLarge) {
+    return (
+      <>
+        <div className="fx-edit-head">
+          <span className="filename">{displayPath}</span>
+          <span className={`fx-status-badge ${statusClass(selectedChange.status)}`}>{meta.label}</span>
+        </div>
+        <div className="fx-edit-body">
+          <div className="u-dim">File is too large to diff in-browser (limit {formatBytes(diff.sizeLimit)}).</div>
+        </div>
+      </>
+    );
+  }
+
+  const rawRows = buildSideBySideRows(diff.oldContent || '', diff.newContent || '');
+  const rows = foldSideBySideRows(rawRows);
+  const visibleRows = rows.reduce((count, row) => {
+    if (row.kind === 'line') return count + 1;
+    return count + (expandedHunks.has(row.id) ? row.hiddenRows.length : 0);
+  }, 0);
+  const expandHunk = (id) => {
+    setExpandedHunks(prev => {
+      const next = new Set(prev);
+      next.add(id);
+      return next;
+    });
+  };
+  const renderParts = (parts, side) => parts.map((part, idx) => (
+    part.changed
+      ? <span className={`fx-diff-inline ${side}`} key={idx}>{part.text}</span>
+      : <React.Fragment key={idx}>{part.text}</React.Fragment>
+  ));
+  const renderLine = (row, key) => {
+    const inline = row.type === 'changed' ? inlineDiffParts(row.oldLine, row.newLine) : null;
+    return (
+      <React.Fragment key={key}>
+        <div className={`fx-diff-cell old ${row.type}`}>
+          <span className="fx-diff-ln">{row.oldNumber || ''}</span>
+          <code>{inline ? renderParts(inline.oldParts, 'old') : row.oldLine}</code>
+        </div>
+        <div className={`fx-diff-cell new ${row.type}`}>
+          <span className="fx-diff-ln">{row.newNumber || ''}</span>
+          <code>{inline ? renderParts(inline.newParts, 'new') : row.newLine}</code>
+        </div>
+      </React.Fragment>
+    );
+  };
+  return (
+    <>
+      <div className="fx-edit-head">
+        <span className="filename">{displayPath}</span>
+        <span className={`fx-status-badge ${statusClass(diff.status || selectedChange.status)}`}>{meta.label}</span>
+        <span className="u-mono u-dim" style={{fontSize:10.5}}>
+          {diff.oldMissing ? 'new file' : diff.newMissing ? 'deleted file' : `${visibleRows}/${rawRows.length} lines shown`}
+        </span>
+      </div>
+      <div className="fx-edit-body fx-diff-body">
+        <div className="fx-diff-grid" role="table" aria-label={`Diff for ${selectedChange.path}`}>
+          <div className="fx-diff-side-head">Base</div>
+          <div className="fx-diff-side-head">Working tree</div>
+          {rows.map((row, idx) => {
+            if (row.kind === 'line') return renderLine(row.row, `line:${idx}`);
+            if (expandedHunks.has(row.id)) {
+              return row.hiddenRows.map((hiddenRow, hiddenIdx) => renderLine(hiddenRow, `expanded:${row.id}:${hiddenIdx}`));
+            }
+            if (!row.hiddenBefore) {
+              return (
+                <div className="fx-diff-hunk" role="row" key={`hunk:${idx}`}>
+                  <span className="fx-diff-hunk-label">{row.label}</span>
+                </div>
+              );
+            }
+            return (
+              <button
+                type="button"
+                className="fx-diff-hunk fx-diff-hunk-button"
+                aria-label={`Show ${row.hiddenBefore} unchanged ${row.hiddenBefore === 1 ? 'line' : 'lines'}`}
+                aria-expanded="false"
+                onClick={() => expandHunk(row.id)}
+                key={`hunk:${idx}`}
+              >
+                <span className="fx-diff-hunk-icon">{Ico.chevD(12)}</span>
+                <span className="fx-diff-hunk-label">{row.label}</span>
+                <span className="fx-diff-hunk-count">Show {row.hiddenBefore} unchanged {row.hiddenBefore === 1 ? 'line' : 'lines'}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </>
   );
 }
 

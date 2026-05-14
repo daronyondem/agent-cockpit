@@ -31,6 +31,7 @@ agent-cockpit/
 │   │   ├── conversations.ts           # Browser-safe conversation mutation contracts
 │   │   ├── streams.ts                 # Browser-safe message/input mutation contracts
 │   │   ├── explorer.ts                # Workspace file explorer mutation contracts
+│   │   ├── gitChanges.ts              # Workspace Git status/diff response contracts
 │   │   ├── uploads.ts                 # Attachment/OCR mutation contracts
 │   │   ├── memory.ts                  # Workspace memory enablement/review mutation contracts
 │   │   ├── contextMap.ts              # Context Map settings/candidate mutation contracts
@@ -47,7 +48,7 @@ agent-cockpit/
 │   │   └── security.ts                 # Helmet CSP configuration
 │   ├── routes/
 │   │   ├── chat.ts                     # Chat API composition root and stream orchestration
-│   │   └── chat/                       # Focused chat route modules: status, CLI profile, conversation, stream, goal, upload, filesystem, instructions, explorer, memory, Context Map, KB, shared helpers
+│   │   └── chat/                       # Focused chat route modules: status, CLI profile, conversation, stream, goal, upload, filesystem, instructions, explorer, Git changes, memory, Context Map, KB, shared helpers
 │   ├── utils/
 │   │   ├── atomicWrite.ts              # Atomic JSON/file write helper
 │   │   ├── keyedMutex.ts               # FIFO per-key async mutex

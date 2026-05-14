@@ -6,7 +6,7 @@
 
 All chat endpoints are mounted under `/api/chat`. All require authentication via `requireAuth`. State-changing operations (POST, PUT, PATCH, DELETE) additionally require `csrfGuard`.
 
-Route implementation is intentionally split by domain while keeping `src/routes/chat.ts` as the composition root and stream orchestration shell. Focused modules under `src/routes/chat/` own status/settings, CLI profiles, conversations/sessions/queue, streaming sends/input/abort, goals, uploads/file delivery, workspace instructions, filesystem browsing, workspace file explorer, memory, Context Map, and Knowledge Base routes. Shared Express helpers live in `src/routes/chat/routeUtils.ts`, and request/response boundary contracts shared by routes, tests, and type-aware clients live in focused files under `src/contracts/`. Endpoint paths and response shapes remain the API contract; the module split is an implementation boundary only.
+Route implementation is intentionally split by domain while keeping `src/routes/chat.ts` as the composition root and stream orchestration shell. Focused modules under `src/routes/chat/` own status/settings, CLI profiles, conversations/sessions/queue, streaming sends/input/abort, goals, uploads/file delivery, workspace instructions, filesystem browsing, workspace file explorer, workspace Git changes, memory, Context Map, and Knowledge Base routes. Shared Express helpers live in `src/routes/chat/routeUtils.ts`, and request/response boundary contracts shared by routes, tests, and type-aware clients live in focused files under `src/contracts/`. Endpoint paths and response shapes remain the API contract; the module split is an implementation boundary only.
 
 ## 3.0 Auth Support
 
@@ -459,7 +459,24 @@ Constants (defined in `src/routes/chat/explorerRoutes.ts`):
 
 **V2 frontend integration (`web/AgentCockpitWeb/src/screens/filesBrowser.jsx`):** a React port of the same model. The same endpoints back a `<FilesBrowser hash label onClose>` component swapped into the main pane (sibling to the v2 KB Browser) when the Sidebar's per-workspace Files button fires `onOpenFiles(hash, label)`. All fetches go through `AgentApi.explorer` (see `spec-frontend.md`); the upload path uses XHR so per-file progress bars can render in the bottom-of-tree `<FxUploadPanel>`. 409 conflicts on upload or rename use the shared dialog system to confirm retrying with `overwrite: true`.
 
-## 3.13 Version & Self-Update
+## 3.13 Workspace Git Changes
+
+Read-only local Git inspection for workspace roots that are Git repositories. Routes are mounted under `/api/chat/workspaces/:hash/git/…` by `src/routes/chat/gitRoutes.ts`, and shared response shapes live in `src/contracts/gitChanges.ts`.
+
+The route resolves `:hash` through `chatService.getWorkspacePath(hash)`, then runs `git rev-parse --show-toplevel` with the workspace as cwd. The workspace is considered Git-backed when the workspace realpath equals the Git top-level realpath or is inside it. Nested workspace paths are supported: status paths are filtered to the workspace subtree and rewritten to workspace-relative paths before they leave the server. All Git commands use `child_process.execFile('git', args, { cwd: gitRoot })`, never shell interpolation. Diff paths are normalized by stripping leading slashes, resolving under the workspace root, and rejecting any traversal outside the workspace root.
+
+Constants (defined in `src/routes/chat/gitRoutes.ts`):
+- `GIT_TEXT_DIFF_LIMIT = 2 * 1024 * 1024` — max bytes read from either side of a text diff before returning `tooLarge:true`.
+- `GIT_COMMAND_TIMEOUT_MS = 5000` — timeout for status, branch, and blob reads.
+
+| Method | Path | CSRF | Description |
+|--------|------|------|-------------|
+| GET | `/workspaces/:hash/git/status` | — | Returns `{ isGitRepo, root?, repoRoot?, branch?, files, error? }`. For non-repo workspaces, returns `200 { isGitRepo:false, files:[], error }`. Unknown workspaces return `404`. For Git-backed workspaces, runs `git status --porcelain=v1 -z --untracked-files=all`, parses modified/added/deleted/renamed/copied/untracked/conflicted entries into `{ path, oldPath?, status, indexStatus, workingTreeStatus, staged, unstaged }`, filters entries to the workspace subtree, rewrites `path`/`oldPath` to workspace-relative paths, and reports the current branch from `git branch --show-current` or short `HEAD` for detached states. Renames into the workspace from outside its subtree are treated as additions, and renames out of the workspace are treated as deletions, so diff content outside the workspace boundary is not exposed. |
+| GET | `/workspaces/:hash/git/diff?path=<rel>` | — | Returns an aggregate uncommitted diff for one changed path as `{ path, oldPath?, status, oldContent, newContent, oldMissing, newMissing, binary, tooLarge, sizeLimit }`. The old side is read from `HEAD:<oldPath|path>` unless the file is added/untracked; the new side is read from the workspace file unless the file is deleted. Binary files return `binary:true` with blank content; files over `GIT_TEXT_DIFF_LIMIT` return `tooLarge:true` with blank content. Returns `400` when the workspace is not a Git repo, `403` on path traversal, `404` when the path has no uncommitted change, and `409` for conflicted files because the route does not attempt to synthesize conflict-stage diffs. |
+
+**V2 frontend integration (`web/AgentCockpitWeb/src/screens/filesBrowser.jsx`):** the existing Files Browser now has a `Files | Changes` segmented control. `Files` remains the mutable explorer and shows compact Git badges beside changed files/folders when status is available. `Changes` replaces the tree pane with a flat local-change list and opens a read-only side-by-side base-vs-working-tree diff when the user selects a changed file. The first slice intentionally has no stage, discard, checkout, or commit actions.
+
+## 3.14 Version & Self-Update
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
@@ -472,7 +489,7 @@ Constants (defined in `src/routes/chat/explorerRoutes.ts`):
 | POST | `/update-trigger` | Yes | Channel-aware update sequence (see Section 4, UpdateService). Refuses while any conversation turn is active or still in the pending-send setup window. Dev installs keep the git/main path: `git checkout main`, `git pull origin main`, root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, forced V2/mobile builds, interpreter verification, then PM2 restart. Production installs download the latest GitHub Release manifest/checksums/tarball, verify SHA256, extract under the Mac install root, run root/mobile `npm ci`, run V2/mobile build preflight for the extracted release when markers or assets require it, switch the `current` symlink, update `install.json`, and launch PM2 restart with health-check rollback. If any install, checksum, extraction, build, or config step fails, the route returns a failed update result before switching or restarting. |
 | POST | `/server/restart` | Yes | Plain pm2 restart (no git pull / npm install) via `UpdateService.restart()`. Returns `409` if an update is in progress or any conversation turn is active or still in the pending-send setup window. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. |
 
-## 3.13.1 CLI Updates
+## 3.14.1 CLI Updates
 
 CLI update status covers the local vendor CLIs used by configured CLI profiles. The server groups profiles by `(vendor, command, PATH)` so multiple profiles that resolve to the same binary produce one status row with multiple `profileIds`/`profileNames`.
 
@@ -525,7 +542,7 @@ Supported update methods:
 - Kiro exposes a self-updater command (`kiro-cli update --non-interactive`), so the service records `installMethod: 'self-update'` and `updateSupported: true`, but it currently has no latest-version source and therefore does not raise `updateAvailable` from background checks. Settings can still run the updater manually; the composer notification does not appear without `updateAvailable`.
 - Unknown, missing, native, or otherwise unmanaged installs are shown in Settings with diagnostics but do not render the composer update notification or enable the update action.
 
-## 3.14 Claude Code Plan Usage
+## 3.15 Claude Code Plan Usage
 
 Account-wide Claude Code plan usage snapshot (5-hour session %, weekly %, per-model breakdown, reset times, plan tier, optional extra-credit balance). Surfaced in the ContextChip tooltip on Claude Code conversations. The default route reads the server-configured Claude cache; an optional `cliProfileId` reads the selected Claude profile cache.
 
@@ -557,7 +574,7 @@ Account-wide Claude Code plan usage snapshot (5-hour session %, weekly %, per-mo
 
 See Section 4 (`ClaudePlanUsageService`) for the caching, credential resolution, and HTTP semantics.
 
-## 3.15 Kiro Plan Usage
+## 3.16 Kiro Plan Usage
 
 Account-wide Kiro (Amazon Q) plan usage snapshot (subscription tier, monthly credits used / cap, overage status + dollar charges, bonus credits, reset date). Surfaced in the ContextChip tooltip on Kiro conversations. The service fetches this directly from Amazon — it does **not** piggyback on the ACP stream (an earlier ACP-based attempt caused cross-conversation message leakage and was abandoned in favor of this direct path).
 
@@ -604,7 +621,7 @@ Account-wide Kiro (Amazon Q) plan usage snapshot (subscription tier, monthly cre
 
 See Section 4 (`KiroPlanUsageService`) for the caching, SQLite credential resolution, and HTTP semantics.
 
-## 3.16 Codex Plan Usage
+## 3.17 Codex Plan Usage
 
 Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pro / Business / Enterprise / etc.), 5-hour rate-limit window utilization, weekly rate-limit window utilization, and optional credit balance. Surfaced in the ContextChip tooltip on Codex conversations. The service spawns a one-shot Codex `app-server` using the server-configured runtime or the requested Codex CLI profile and calls its `account/read` + `account/rateLimits/read` JSON-RPC methods — it does **not** piggyback on the long-lived `app-server` instance owned by `CodexAdapter` (the latter is bound to a specific conversation thread).
 
@@ -656,7 +673,7 @@ Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pr
 
 See Section 4.6 (`CodexPlanUsageService`) for the spawn / RPC / kill semantics.
 
-## 3.17 Error Response Patterns
+## 3.18 Error Response Patterns
 
 | Status | Meaning | Body |
 |--------|---------|------|

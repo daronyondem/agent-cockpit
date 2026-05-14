@@ -36,6 +36,7 @@ import { createContextMapRouter } from './chat/contextMapRoutes';
 import { createConversationRouter } from './chat/conversationRoutes';
 import { createExplorerRouter } from './chat/explorerRoutes';
 import { createFilesystemRouter } from './chat/filesystemRoutes';
+import { createGitRouter } from './chat/gitRoutes';
 import { createGoalRouter } from './chat/goalRoutes';
 import { createKbRouter } from './chat/kbRoutes';
 import { createMemoryRouter } from './chat/memoryRoutes';
@@ -1107,6 +1108,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   }));
   router.use(createContextMapRouter({ chatService, contextMapService, emitFreshContextMapUpdate }));
   router.use(createExplorerRouter(chatService));
+  router.use(createGitRouter(chatService));
   router.use(createGoalRouter({
     chatService,
     backendRegistry,

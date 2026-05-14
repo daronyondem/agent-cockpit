@@ -211,6 +211,8 @@ Several routes accept user-supplied relative paths that resolve inside a workspa
 | `PUT /workspaces/:hash/explorer/file` | traversal; refuses directories and workspace root; `content` must be a string; `Buffer.byteLength(content, 'utf8')` checked against the 5 MB edit cap before any write; over-limit payloads return 413 and leave the file untouched |
 | `PATCH /workspaces/:hash/explorer/rename` | traversal on both `from` and `to`; root-rename refusal; 409 on non-overwrite conflict |
 | `DELETE /workspaces/:hash/explorer/entry` | traversal; root-delete refusal |
+| `GET /workspaces/:hash/git/status` | workspace hash lookup; Git top-level realpath must contain the workspace root realpath; changed paths are filtered and rewritten to the workspace subtree before being returned |
+| `GET /workspaces/:hash/git/diff` | traversal on `path` under the workspace root; Git top-level realpath must contain the workspace root realpath; diff content capped at 2 MB per side; binary content withheld |
 | `GET /workspaces/:hash/files` | traversal (pre-existing file-delivery route) |
 | `POST /workspaces/:hash/kb/raw` | filename + folder segment validation via `KbValidationError`; MIME-typed stage path verified under `knowledge/raw/` |
 | `DELETE /workspaces/:hash/kb/raw/:rawId` | hex-only `rawId` regex gate; staged path verified under `knowledge/raw/` |

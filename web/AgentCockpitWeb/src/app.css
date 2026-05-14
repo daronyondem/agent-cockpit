@@ -5926,6 +5926,29 @@ body{
   color: var(--text-2);
 }
 .fx-top .fx-crumb:hover{ color: var(--text); }
+.fx-mode-toggle{
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface-2);
+}
+.fx-mode-toggle button{
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.fx-mode-toggle button.active{
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 0 0 1px var(--border);
+}
 .fx-tree{ position: relative; }
 .fx-tree.drag-over{
   background: color-mix(in oklch, var(--accent-soft), var(--bg-sunk) 30%);
@@ -5933,7 +5956,7 @@ body{
 }
 .fx-tree-row{
   display: grid;
-  grid-template-columns: 14px 14px 1fr auto auto;
+  grid-template-columns: 14px 14px minmax(0, 1fr) auto auto auto;
   gap: 6px; align-items: center;
   padding: 4px 6px;
   border-radius: var(--r-sm);
@@ -5954,6 +5977,41 @@ body{
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .fx-tree-row .fx-tree-size{ font-size: 10.5px; }
+.fx-status-badge{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 10px;
+  line-height: 1;
+}
+.fx-status-badge.success{
+  color: var(--status-done);
+  border-color: color-mix(in oklch, var(--status-done), transparent 55%);
+  background: color-mix(in oklch, var(--status-done), transparent 90%);
+}
+.fx-status-badge.danger{
+  color: var(--status-error);
+  border-color: color-mix(in oklch, var(--status-error), transparent 55%);
+  background: color-mix(in oklch, var(--status-error), transparent 90%);
+}
+.fx-status-badge.warn{
+  color: var(--status-awaiting);
+  border-color: color-mix(in oklch, var(--status-awaiting), transparent 55%);
+  background: color-mix(in oklch, var(--status-awaiting), transparent 90%);
+}
+.fx-status-badge.info{
+  color: var(--accent);
+  border-color: color-mix(in oklch, var(--accent), transparent 55%);
+  background: color-mix(in oklch, var(--accent), transparent 90%);
+}
 .fx-tree-row .fx-tree-actions{
   display: inline-flex; gap: 2px;
   visibility: hidden;
@@ -6016,6 +6074,65 @@ body{
   background: color-mix(in oklch, var(--status-error), transparent 92%);
 }
 
+.fx-empty-state{
+  padding: 18px 10px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.fx-empty-state .u-mono{
+  color: var(--text-2);
+  margin-bottom: 4px;
+}
+.fx-changes-list{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fx-change-row{
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  text-align: left;
+  padding: 6px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-family: var(--mono-font);
+}
+.fx-change-row:hover,
+.fx-change-row.active{
+  background: var(--surface);
+  color: var(--text);
+}
+.fx-change-row.active{
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.fx-change-main{
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.fx-change-name,
+.fx-change-path{
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fx-change-name{
+  color: var(--text);
+  font-size: 11.5px;
+}
+.fx-change-path{
+  color: var(--text-4);
+  font-size: 10.5px;
+}
+
 .fx-edit-body .fx-editor{
   width: 100%;
   min-height: 100%;
@@ -6032,6 +6149,107 @@ body{
 }
 .fx-edit-body .prose{ color: var(--text); font-size: 13px; line-height: 1.65; }
 .fx-edit-body .prose img{ max-width: 100%; height: auto; }
+.fx-diff-body{
+  padding: 0;
+  background: var(--bg-sunk);
+}
+.fx-diff-grid{
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  min-width: 760px;
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+.fx-diff-side-head{
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font-size: 10.5px;
+}
+.fx-diff-side-head + .fx-diff-side-head{
+  border-left: 1px solid var(--border);
+}
+.fx-diff-hunk{
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 28px;
+  padding: 4px 10px;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklch, var(--accent), var(--surface-2) 88%);
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 11px;
+  text-align: left;
+  user-select: none;
+}
+.fx-diff-hunk-button{
+  width: 100%;
+  cursor: pointer;
+}
+.fx-diff-hunk-button:hover{
+  background: color-mix(in oklch, var(--accent), var(--surface-2) 80%);
+}
+.fx-diff-hunk-icon{
+  display: inline-flex;
+  color: var(--accent);
+}
+.fx-diff-hunk-label{
+  white-space: nowrap;
+}
+.fx-diff-hunk-count{
+  color: var(--text-4);
+}
+.fx-diff-cell{
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 8px;
+  min-height: 22px;
+  padding: 2px 10px 2px 0;
+  border-bottom: 1px solid color-mix(in oklch, var(--border), transparent 45%);
+  background: var(--surface);
+}
+.fx-diff-cell.new{
+  border-left: 1px solid var(--border);
+}
+.fx-diff-cell.added,
+.fx-diff-cell.new.changed{
+  background: color-mix(in oklch, var(--status-done), var(--surface) 88%);
+}
+.fx-diff-cell.removed,
+.fx-diff-cell.old.changed{
+  background: color-mix(in oklch, var(--status-error), var(--surface) 88%);
+}
+.fx-diff-ln{
+  color: var(--text-4);
+  text-align: right;
+  user-select: none;
+}
+.fx-diff-cell code{
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-2);
+  font-family: var(--mono-font);
+}
+.fx-diff-inline{
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.fx-diff-inline.old{
+  background: color-mix(in oklch, var(--status-error), transparent 72%);
+  color: var(--text);
+}
+.fx-diff-inline.new{
+  background: color-mix(in oklch, var(--status-done), transparent 70%);
+  color: var(--text);
+}
 
 /* ============================================================
    Tweaks panel
