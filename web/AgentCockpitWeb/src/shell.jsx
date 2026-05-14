@@ -62,6 +62,11 @@ const SessionsModal = React.lazy(() => import('./sessionsModal.jsx').then(mod =>
    tagging `batchIndex`, we approximate parallel grouping by startTime proximity. */
 const PARALLEL_THRESHOLD_MS = 500;
 const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
+const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
+
+function isChatScrolledToEnd(el){
+  return el.scrollHeight - el.clientHeight - el.scrollTop <= CHAT_SCROLL_BOTTOM_THRESHOLD_PX;
+}
 
 function cliVendorForBackend(backendId){
   return backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID ? 'claude-code' : backendId;
@@ -887,6 +892,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const dialog = useDialog();
   const toast = useToasts();
   const feedRef = React.useRef(null);
+  const feedAutoFollowRef = React.useRef(true);
+  const feedStreamingRef = React.useRef(false);
   const fileInputRef = React.useRef(null);
   const composerTextRef = React.useRef(null);
   const dragCounterRef = React.useRef(0);
@@ -895,6 +902,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const [editingTitle, setEditingTitle] = React.useState(false);
   const [titleDraft, setTitleDraft] = React.useState('');
   const [savingTitle, setSavingTitle] = React.useState(false);
+  const [showFeedBackToEnd, setShowFeedBackToEnd] = React.useState(false);
   const titleInputRef = React.useRef(null);
   const [fileViewer, setFileViewer] = React.useState(null);
   const openFileViewer = React.useCallback((descriptor) => {
@@ -927,6 +935,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const activeStreamErrorSource = state ? state.streamErrorSource : null;
   const streaming = state ? state.streaming : false;
   const streamingMsgId = state ? state.streamingMsgId : null;
+  feedStreamingRef.current = streaming;
   const profileLocked = messages.length > 0;
   const lastMessage = messages[messages.length - 1] || null;
   const hiddenStreamErrorMessageIdsSet = React.useMemo(
@@ -1017,7 +1026,36 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     return map;
   }, [messages]);
 
-  // Auto-scroll the feed to the bottom on new content within the active conv
+  const handleFeedScroll = React.useCallback(() => {
+    const el = feedRef.current;
+    if (!el) return;
+    if (isChatScrolledToEnd(el)) {
+      feedAutoFollowRef.current = true;
+      setShowFeedBackToEnd(false);
+      return;
+    }
+    feedAutoFollowRef.current = false;
+    if (feedStreamingRef.current) setShowFeedBackToEnd(true);
+  }, []);
+
+  const scrollFeedToEnd = React.useCallback((behavior = 'auto') => {
+    const el = feedRef.current;
+    if (!el) return;
+    feedAutoFollowRef.current = true;
+    setShowFeedBackToEnd(false);
+    if (typeof el.scrollTo === 'function') {
+      el.scrollTo({ top: el.scrollHeight, behavior });
+    } else {
+      el.scrollTop = el.scrollHeight;
+    }
+  }, []);
+
+  React.useEffect(() => {
+    feedAutoFollowRef.current = true;
+    setShowFeedBackToEnd(false);
+  }, [convId]);
+
+  // Auto-follow new content until the user scrolls away from the active conv.
   const resettingDep = !!(state && state.resetting);
   const feedScrollKey = [
     convId,
@@ -1029,7 +1067,13 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   ].join(':');
   React.useEffect(() => {
     const el = feedRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (feedAutoFollowRef.current) {
+      el.scrollTop = el.scrollHeight;
+      setShowFeedBackToEnd(false);
+    } else {
+      setShowFeedBackToEnd(true);
+    }
   }, [feedScrollKey]);
 
   function onKeyDown(e){
@@ -1479,89 +1523,103 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
         </div>
       </div>
 
-      <div className="feed" ref={feedRef}>
-        <PinStrip
-          messages={pinnedMessages}
-          currentIndex={pinStripIndex}
-          onSelect={jumpToPinnedMessage}
-        />
-        <div className="feed-inner">
-          {messages.length === 0 && !streaming && (
-            <div className="u-dim" style={{padding:"24px 12px",fontSize:13}}>
-              No messages yet. Say hello below.
-            </div>
-          )}
-          <FileViewerContext.Provider value={{ wsHash: conv.workspaceHash || null, convId, workingDir: conv.workingDir || null, openFileViewer, openLightbox }}>
-          <AgentIndexProvider messages={feedMessages}>
-            {collapseProgressRuns(feedMessages).map(entry => {
-              if (entry.kind === 'plain') {
-                if (entry.message.role === 'memory') {
+      <div className="feed-wrap">
+        <div className="feed" ref={feedRef} onScroll={handleFeedScroll}>
+          <PinStrip
+            messages={pinnedMessages}
+            currentIndex={pinStripIndex}
+            onSelect={jumpToPinnedMessage}
+          />
+          <div className="feed-inner">
+            {messages.length === 0 && !streaming && (
+              <div className="u-dim" style={{padding:"24px 12px",fontSize:13}}>
+                No messages yet. Say hello below.
+              </div>
+            )}
+            <FileViewerContext.Provider value={{ wsHash: conv.workspaceHash || null, convId, workingDir: conv.workingDir || null, openFileViewer, openLightbox }}>
+            <AgentIndexProvider messages={feedMessages}>
+              {collapseProgressRuns(feedMessages).map(entry => {
+                if (entry.kind === 'plain') {
+                  if (entry.message.role === 'memory') {
+                    return (
+                      <MemoryUpdateBubble
+                        key={entry.message.id}
+                        message={entry.message}
+                        onOpen={() => {
+                          if (!onOpenMemoryUpdate || !conv.workspaceHash) return;
+                          onOpenMemoryUpdate(conv.workspaceHash, wsLabel, entry.message.memoryUpdate || null);
+                        }}
+                      />
+                    );
+                  }
                   return (
-                    <MemoryUpdateBubble
+                    <MessageBubble
                       key={entry.message.id}
                       message={entry.message}
-                      onOpen={() => {
-                        if (!onOpenMemoryUpdate || !conv.workspaceHash) return;
-                        onOpenMemoryUpdate(conv.workspaceHash, wsLabel, entry.message.memoryUpdate || null);
-                      }}
+                      isStreaming={streaming && streamingMsgId === entry.message.id}
+                      elapsedMs={elapsedByMsgId.get(entry.message.id)}
+                      onPinToggle={toggleMessagePin}
+                      messageRef={(node) => setMessageRef(entry.message.id, node)}
+                      pinFocused={focusedPinId === entry.message.id}
                     />
                   );
                 }
+                if (entry.kind === 'final-with-progress') {
+                  return (
+                    <MessageBubble
+                      key={entry.message.id}
+                      message={entry.message}
+                      isStreaming={streaming && streamingMsgId === entry.message.id}
+                      attachedProgress={entry.progressRun}
+                      elapsedMs={elapsedByMsgId.get(entry.message.id)}
+                      onPinToggle={toggleMessagePin}
+                      messageRef={(node) => setMessageRef(entry.message.id, node)}
+                      pinFocused={focusedPinId === entry.message.id}
+                    />
+                  );
+                }
+                // progress-trailing
                 return (
-                  <MessageBubble
-                    key={entry.message.id}
-                    message={entry.message}
-                    isStreaming={streaming && streamingMsgId === entry.message.id}
-                    elapsedMs={elapsedByMsgId.get(entry.message.id)}
-                    onPinToggle={toggleMessagePin}
-                    messageRef={(node) => setMessageRef(entry.message.id, node)}
-                    pinFocused={focusedPinId === entry.message.id}
+                  <ProgressBreadcrumbBubble
+                    key={entry.progressRun[0].id}
+                    progressRun={entry.progressRun}
                   />
                 );
-              }
-              if (entry.kind === 'final-with-progress') {
-                return (
-                  <MessageBubble
-                    key={entry.message.id}
-                    message={entry.message}
-                    isStreaming={streaming && streamingMsgId === entry.message.id}
-                    attachedProgress={entry.progressRun}
-                    elapsedMs={elapsedByMsgId.get(entry.message.id)}
-                    onPinToggle={toggleMessagePin}
-                    messageRef={(node) => setMessageRef(entry.message.id, node)}
-                    pinFocused={focusedPinId === entry.message.id}
-                  />
-                );
-              }
-              // progress-trailing
-              return (
-                <ProgressBreadcrumbBubble
-                  key={entry.progressRun[0].id}
-                  progressRun={entry.progressRun}
-                />
-              );
-            })}
-          </AgentIndexProvider>
-          </FileViewerContext.Provider>
-          {state.planModeActive && !pendingInteraction ? <PlanModeBanner/> : null}
-          {pendingInteraction ? (
-            <InteractionCard
-              convId={convId}
-              interaction={pendingInteraction}
-              respondPending={!!respondPending}
-            />
-          ) : null}
-          {streamError && (
-            <StreamErrorCard
-              convId={convId}
-              error={streamError}
-              source={state.streamErrorSource}
-              queueLength={queue.length}
-              messages={messages}
-            />
-          )}
-          {resetting ? <ResetProgressBubble/> : null}
+              })}
+            </AgentIndexProvider>
+            </FileViewerContext.Provider>
+            {state.planModeActive && !pendingInteraction ? <PlanModeBanner/> : null}
+            {pendingInteraction ? (
+              <InteractionCard
+                convId={convId}
+                interaction={pendingInteraction}
+                respondPending={!!respondPending}
+              />
+            ) : null}
+            {streamError && (
+              <StreamErrorCard
+                convId={convId}
+                error={streamError}
+                source={state.streamErrorSource}
+                queueLength={queue.length}
+                messages={messages}
+              />
+            )}
+            {resetting ? <ResetProgressBubble/> : null}
+          </div>
         </div>
+        {showFeedBackToEnd ? (
+          <button
+            type="button"
+            className="chat-back-to-end"
+            onClick={() => scrollFeedToEnd()}
+            aria-label="Back to end"
+            title="Back to end"
+          >
+            {Ico.down(14)}
+            <span>Back to end</span>
+          </button>
+        ) : null}
       </div>
 
       <div className="composer">

@@ -141,6 +141,30 @@ describe('frontend routes', () => {
     expect(appSrc).not.toContain("socket.onerror = () => setErrorMessage('Stream connection failed.')");
   });
 
+  test('desktop and mobile chat transcripts pause auto-follow when users scroll away', () => {
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const webCssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const mobileAppSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const mobileCssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+
+    expect(shellSrc).toContain('CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48');
+    expect(shellSrc).toContain('function isChatScrolledToEnd');
+    expect(shellSrc).toContain('feedAutoFollowRef');
+    expect(shellSrc).toContain('onScroll={handleFeedScroll}');
+    expect(shellSrc).toContain('className="chat-back-to-end"');
+    expect(shellSrc).toContain('scrollFeedToEnd()');
+    expect(webCssSrc).toContain('.feed-wrap');
+    expect(webCssSrc).toContain('.chat-back-to-end');
+
+    expect(mobileAppSrc).toContain('CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48');
+    expect(mobileAppSrc).toContain('transcriptAutoFollowRef');
+    expect(mobileAppSrc).toContain('onScroll={handleTranscriptScroll}');
+    expect(mobileAppSrc).toContain('className="mobile-back-to-end"');
+    expect(mobileAppSrc).toContain('scrollTranscriptToEnd()');
+    expect(mobileCssSrc).toContain('.transcript-wrap');
+    expect(mobileCssSrc).toContain('.mobile-back-to-end');
+  });
+
   test('mobile PWA exposes backend-neutral goal controls through the composer shell', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
     const apiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');

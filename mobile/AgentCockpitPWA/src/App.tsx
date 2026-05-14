@@ -65,6 +65,7 @@ const LIST_AUTO_REFRESH_MS = 15_000;
 const STREAM_RECONNECT_BASE_MS = 1_000;
 const STREAM_RECONNECT_MAX_MS = 15_000;
 const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
+const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
 
 type Screen = 'list' | 'chat';
 type SessionViewerState = { session: SessionHistoryItem; messages: Message[] };
@@ -76,6 +77,10 @@ type GoalCapability = {
   resume: boolean;
   status: 'native' | 'transcript' | 'none';
 };
+
+function isChatScrolledToEnd(element: HTMLElement): boolean {
+  return element.scrollHeight - element.clientHeight - element.scrollTop <= CHAT_SCROLL_BOTTOM_THRESHOLD_PX;
+}
 
 function backendIdForProfile(profile?: { vendor: string; protocol?: string } | null): string | undefined {
   if (!profile) return undefined;
@@ -2221,11 +2226,15 @@ function ChatScreen(props: {
 }) {
   const conversation = props.conversation;
   const transcriptRef = useRef<HTMLDivElement | null>(null);
+  const transcriptAutoFollowRef = useRef(true);
+  const transcriptStreamingRef = useRef(false);
   const messageRefs = useRef<Map<string, HTMLDivElement>>(new Map());
   const pinFocusTimerRef = useRef<number | null>(null);
   const [pinStripIndex, setPinStripIndex] = useState(0);
   const [focusedPinID, setFocusedPinID] = useState<string | null>(null);
+  const [showTranscriptBackToEnd, setShowTranscriptBackToEnd] = useState(false);
   const lastMessage = conversation?.messages[conversation.messages.length - 1];
+  transcriptStreamingRef.current = props.isStreaming;
   const pinnedMessages = useMemo(
     () => (conversation?.messages || []).filter((message) => !!message.pinned),
     [conversation?.messages],
@@ -2238,12 +2247,47 @@ function ChatScreen(props: {
     props.streamText.length,
     props.isStreaming ? 'streaming' : 'idle',
   ].join(':');
+
+  function handleTranscriptScroll() {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    if (isChatScrolledToEnd(transcript)) {
+      transcriptAutoFollowRef.current = true;
+      setShowTranscriptBackToEnd(false);
+      return;
+    }
+    transcriptAutoFollowRef.current = false;
+    if (transcriptStreamingRef.current) setShowTranscriptBackToEnd(true);
+  }
+
+  function scrollTranscriptToEnd(behavior: ScrollBehavior = 'auto') {
+    const transcript = transcriptRef.current;
+    if (!transcript) return;
+    transcriptAutoFollowRef.current = true;
+    setShowTranscriptBackToEnd(false);
+    if (typeof transcript.scrollTo === 'function') {
+      transcript.scrollTo({ top: transcript.scrollHeight, behavior });
+    } else {
+      transcript.scrollTop = transcript.scrollHeight;
+    }
+  }
+
+  useEffect(() => {
+    transcriptAutoFollowRef.current = true;
+    setShowTranscriptBackToEnd(false);
+  }, [conversation?.id]);
+
   useEffect(() => {
     const transcript = transcriptRef.current;
     if (!transcript) {
       return;
     }
-    transcript.scrollTop = transcript.scrollHeight;
+    if (transcriptAutoFollowRef.current) {
+      transcript.scrollTop = transcript.scrollHeight;
+      setShowTranscriptBackToEnd(false);
+    } else {
+      setShowTranscriptBackToEnd(true);
+    }
   }, [scrollKey]);
   useEffect(() => {
     setPinStripIndex(0);
@@ -2305,31 +2349,44 @@ function ChatScreen(props: {
       </header>
       {props.errorMessage ? <ErrorBanner message={props.errorMessage} /> : null}
       <MobilePinStrip messages={pinnedMessages} backends={props.backends} currentIndex={pinStripIndex} onSelect={jumpToPinnedMessage} />
-      <div className="transcript" ref={transcriptRef}>
-        {conversation.messages.map((message) => (
-          <MessageBubble
-            key={message.id}
-            message={message}
-            conversation={conversation}
-            client={props.client}
-            backends={props.backends}
-            focused={focusedPinID === message.id}
-            messageRef={(node) => setMessageRef(message.id, node)}
-            onTogglePin={(pinned) => props.onTogglePin(message.id, pinned)}
-            onOpenFile={props.onOpenFile}
-            onShareFile={props.onShareFile}
-          />
-        ))}
-        {props.isStreaming && props.streamText ? (
-          <div className="message assistant">
-            <div className="message-heading">
-              <AssistantIdentity backend={conversation.backend} backends={props.backends} />
+      <div className="transcript-wrap">
+        <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
+          {conversation.messages.map((message) => (
+            <MessageBubble
+              key={message.id}
+              message={message}
+              conversation={conversation}
+              client={props.client}
+              backends={props.backends}
+              focused={focusedPinID === message.id}
+              messageRef={(node) => setMessageRef(message.id, node)}
+              onTogglePin={(pinned) => props.onTogglePin(message.id, pinned)}
+              onOpenFile={props.onOpenFile}
+              onShareFile={props.onShareFile}
+            />
+          ))}
+          {props.isStreaming && props.streamText ? (
+            <div className="message assistant">
+              <div className="message-heading">
+                <AssistantIdentity backend={conversation.backend} backends={props.backends} />
+              </div>
+              <MarkdownContent content={props.streamText} />
+              <span className="meta">Streaming...</span>
             </div>
-            <MarkdownContent content={props.streamText} />
-            <span className="meta">Streaming...</span>
-          </div>
+          ) : null}
+          {props.loading ? <div className="mini-spinner" /> : null}
+        </div>
+        {showTranscriptBackToEnd ? (
+          <button
+            className="mobile-back-to-end"
+            type="button"
+            aria-label="Back to end"
+            onClick={() => scrollTranscriptToEnd()}
+          >
+            <DownArrowIcon />
+            <span>Back to end</span>
+          </button>
         ) : null}
-        {props.loading ? <div className="mini-spinner" /> : null}
       </div>
       {conversation.messageQueue?.length ? (
         <QueueStack
@@ -2603,6 +2660,15 @@ function BackChevronIcon() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
       <path d="M15 6l-6 6 6 6" />
+    </svg>
+  );
+}
+
+function DownArrowIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      <path d="M12 5v14" />
+      <path d="M6 13l6 6 6-6" />
     </svg>
   );
 }

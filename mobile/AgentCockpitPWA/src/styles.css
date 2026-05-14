@@ -663,6 +663,13 @@ button {
   background: var(--text);
 }
 
+.transcript-wrap {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
 .transcript {
   display: flex;
   flex: 1;
@@ -674,6 +681,27 @@ button {
   overscroll-behavior: contain;
   padding: 16px 18px 14px;
   -webkit-overflow-scrolling: touch;
+}
+
+.mobile-back-to-end {
+  align-items: center;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  bottom: 14px;
+  box-shadow: var(--shadow-2);
+  color: var(--text);
+  display: inline-flex;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  font-weight: 700;
+  gap: 7px;
+  min-height: 38px;
+  padding: 8px 12px;
+  position: absolute;
+  right: 16px;
+  z-index: 5;
 }
 
 .message {
