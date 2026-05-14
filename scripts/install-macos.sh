@@ -408,9 +408,22 @@ start_pm2() {
   (cd "$app_dir" && npx pm2 save)
 }
 
+wait_for_server() {
+  local app_dir="$1"
+  local setup_url="http://127.0.0.1:${PORT}/auth/setup"
+  log "Waiting for Agent Cockpit to answer at ${setup_url}."
+  for _attempt in {1..90}; do
+    if curl -fsS --max-time 2 -o /dev/null "$setup_url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+  done
+  fail "Agent Cockpit did not answer at ${setup_url}. Check logs with: cd \"${app_dir}\" && npx pm2 logs agent-cockpit --lines 100"
+}
+
 open_setup() {
   local setup_url="http://localhost:${PORT}/auth/setup"
-  log "Agent Cockpit is starting at ${setup_url}"
+  log "Agent Cockpit is ready at ${setup_url}"
   if [[ "$OPEN_BROWSER" == "true" ]]; then
     open "$setup_url"
   fi
@@ -473,6 +486,7 @@ install_production() {
   write_ecosystem_config "$current_link" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_install_manifest "$data_dir" "production" "github-release" "$release_version" "" "$INSTALL_DIR" "$current_link" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
   start_pm2 "$current_link"
+  wait_for_server "$current_link"
 
   log "First-run setup token: ${setup_token}"
   open_setup
@@ -506,6 +520,7 @@ install_dev() {
   write_ecosystem_config "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_install_manifest "$data_dir" "dev" "git-main" "$dev_version" "main" "$INSTALL_DIR" "$DEV_DIR" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
   start_pm2 "$DEV_DIR"
+  wait_for_server "$DEV_DIR"
 
   log "First-run setup token: ${setup_token}"
   open_setup

@@ -41,7 +41,9 @@ PM2 ecosystem configuration, writes install-channel metadata, then launches the
 same server initialization flow documented below. First-run owner creation
 begins at `/auth/setup`; successful owner creation redirects to
 `/v2/?welcome=1` so the authenticated welcome flow can show install diagnostics
-and mark setup complete.
+and mark setup complete. Local password setup and password login explicitly save
+the file-backed session before redirecting so the next browser request can use
+the newly issued `connect.sid` immediately after a fresh install.
 
 Server logging is migrating to `src/utils/logger.ts`. The logger writes one structured line per event, applies `LOG_LEVEL` filtering, redacts metadata keys that look like credentials, cookies, session ids, tokens, or passwords before emitting, and serializes cyclic/rich metadata safely (`Error`, `Date`, `Map`, `Set`, `bigint`, functions, symbols, bounded arrays/objects/strings). WebSocket diagnostics, `MemoryWatcher`, `StreamJobSupervisor`, chat stream orchestration, upload OCR failures, `ChatService` maintenance paths, and Context Map processor update-emission failures use this path for migrated slices and avoid logging stdin message content; debug logs record only lengths and operational identifiers.
 

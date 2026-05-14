@@ -66,6 +66,11 @@ describe('macOS installer script', () => {
     expect(source).toContain('npmVersion: nodeRuntimeNpmVersion || null');
     expect(source).toContain('npx pm2 startOrRestart ecosystem.config.js --update-env');
     expect(source).toContain('npx pm2 save');
+    expect(source).toContain('wait_for_server "$current_link"');
+    expect(source).toContain('wait_for_server "$DEV_DIR"');
+    expect(source).toContain('curl -fsS --max-time 2 -o /dev/null "$setup_url"');
+    expect(source).toContain('npx pm2 logs agent-cockpit --lines 100');
+    expect(source).toContain('Agent Cockpit is ready at ${setup_url}');
     expect(source).toContain('http://localhost:${PORT}/auth/setup');
   });
 });

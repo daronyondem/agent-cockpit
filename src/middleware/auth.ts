@@ -807,7 +807,18 @@ export function setupAuth(app: Express, config: AppConfig): void {
       if (mode.popup && req.session) {
         req.session.reAuthPopup = true;
       }
-      finishAuthRedirect(req, res, mode.redirectTo || '/');
+      const sess = req.session as unknown as { reAuthPopup?: boolean } | undefined;
+      const redirectTo = sess?.reAuthPopup ? '/auth/popup-done' : mode.redirectTo || '/';
+      if (sess?.reAuthPopup) {
+        delete sess.reAuthPopup;
+      }
+      req.session.save((saveErr) => {
+        if (saveErr) {
+          next(saveErr);
+          return;
+        }
+        res.redirect(redirectTo);
+      });
     });
   };
 

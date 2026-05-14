@@ -224,8 +224,12 @@ npx pm2 startOrRestart ecosystem.config.js --update-env
 npx pm2 save
 ```
 
-It does not require global PM2. After startup it prints the first-run setup token
-and opens `http://localhost:<port>/auth/setup` unless `--skip-open` is set.
+It does not require global PM2. After PM2 starts, the installer polls
+`http://127.0.0.1:<port>/auth/setup` for up to 90 seconds before opening the
+browser. If the server does not answer, the installer fails with a local
+`npx pm2 logs agent-cockpit --lines 100` command. Once the setup endpoint is
+ready, it prints the first-run setup token and opens
+`http://localhost:<port>/auth/setup` unless `--skip-open` is set.
 Successful owner creation redirects to `/v2/?welcome=1`, where the authenticated
 welcome flow reads install/doctor status, links to Security and CLI Settings,
 offers workspace selection, and calls `POST /api/chat/install/welcome-complete`

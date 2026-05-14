@@ -268,11 +268,24 @@ describe('setupAuth — /auth/setup', () => {
 
   test('allows localhost setup and signs in the owner', async () => {
     const app = buildAuthApp();
+    app.use(requireAuth);
+    app.get('/api/me', meHandler);
+
     await withServer(app, async (server) => {
       const res = await setupOwner(server);
       expect(res.status).toBe(302);
       expect(res.headers.location).toBe('/v2/?welcome=1');
       expect(String(res.headers['set-cookie'] || '')).toContain('connect.sid');
+
+      const me = await makeRequest(server, 'GET', '/api/me', 'example.com', {
+        headers: { cookie: cookieFrom(res) },
+      });
+      expect(me.status).toBe(200);
+      expect(JSON.parse(me.body)).toEqual({
+        displayName: 'Owner User',
+        email: 'owner@example.com',
+        provider: 'local',
+      });
     });
   });
 
