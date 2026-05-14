@@ -209,11 +209,12 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
 
       try {
         if (cliProfileId) {
-          if (cliProfileId !== conv.cliProfileId) {
+          const profileOrProviderChanged = cliProfileId !== conv.cliProfileId || (backend && backend !== conv.backend);
+          if (profileOrProviderChanged) {
             if (conv.messages.length > 0) {
               return res.status(409).json({ error: 'Cannot switch CLI profile after the active session has messages' });
             }
-            await chatService.updateConversationCliProfile(convId, cliProfileId);
+            await chatService.updateConversationCliProfile(convId, cliProfileId, backend || conv.backend);
           }
         } else if (backend && backend !== conv.backend) {
           await chatService.updateConversationBackend(convId, backend);
@@ -246,7 +247,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       }
       const backendId = runtime.backendId;
       if (cliProfileId && backend && backend !== backendId) {
-        return res.status(400).json({ error: `CLI profile vendor ${backendId} does not match backend ${backend}` });
+        return res.status(400).json({ error: `CLI profile backend ${backendId} does not match requested backend ${backend}` });
       }
       const adapter = backendRegistry.get(backendId);
       if (!adapter) {
@@ -487,7 +488,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
       const { runtime, adapter, backendId, goals } = await resolveGoalAdapter(conv);
       if (!goals.clear) throw unsupportedGoalAction(backendId, 'clear');
-      if (backendId === 'claude-code' && hasInFlightTurn(convId)) {
+      if ((backendId === 'claude-code' || backendId === 'claude-code-interactive') && hasInFlightTurn(convId)) {
         return res.status(409).json({ error: 'Cannot clear a Claude Code goal while a turn is active' });
       }
       const result = await adapter.clearGoal({

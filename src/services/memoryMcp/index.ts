@@ -68,6 +68,7 @@ import type {
 import type { ChatService } from '../chatService';
 import type { BackendRegistry } from '../backends/registry';
 import { parseFrontmatter } from '../backends/claudeCode';
+import { backendForCliProfile } from '../cliProfiles';
 import { logger } from '../../utils/logger';
 
 // ── Session registry ────────────────────────────────────────────────────────
@@ -608,7 +609,7 @@ function profileContextFromRuntime(runtime: {
   profile?: CliProfile;
 } | undefined | null): MemoryProfileContext | undefined {
   if (!runtime) return undefined;
-  const backendId = runtime.profile?.vendor || runtime.backendId;
+  const backendId = runtime.backendId || backendForCliProfile(runtime.profile);
   const profileId = runtime.profile?.id || runtime.cliProfileId;
   const profileName = runtime.profile?.name || profileId || backendId;
   return {
@@ -623,7 +624,9 @@ function configuredMemoryProfileContext(settings: Settings): MemoryProfileContex
   const profile = memory.cliProfileId
     ? settings.cliProfiles?.find((candidate) => candidate.id === memory.cliProfileId)
     : undefined;
-  const backendId = profile?.vendor || memory.cliBackend || settings.defaultBackend || 'claude-code';
+  const backendId = profile
+    ? backendForCliProfile(profile, memory.cliBackend || settings.defaultBackend)
+    : memory.cliBackend || settings.defaultBackend || 'claude-code';
   const profileId = profile?.id || memory.cliProfileId;
   const profileName = profile?.name || profileId || backendId;
   return {

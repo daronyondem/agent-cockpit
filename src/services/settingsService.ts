@@ -2,7 +2,14 @@ import fsp from 'fs/promises';
 import path from 'path';
 import type { CliProfile, Settings } from '../types';
 import { atomicWriteFile } from '../utils/atomicWrite';
-import { ensureServerConfiguredCliProfiles, isCliVendor, serverConfiguredCliProfileId } from './cliProfiles';
+import {
+  backendForCliProfile,
+  cliProtocolForBackend,
+  cliVendorForBackend,
+  ensureServerConfiguredCliProfiles,
+  isCliVendor,
+  serverConfiguredCliProfileId,
+} from './cliProfiles';
 import {
   DEFAULT_CONTEXT_MAP_CLI_CONCURRENCY,
   DEFAULT_CONTEXT_MAP_EXTRACTION_CONCURRENCY,
@@ -104,7 +111,11 @@ export class SettingsService {
     const now = new Date().toISOString();
     const profiles = Array.isArray(settings.cliProfiles)
       ? settings.cliProfiles
-        .map((profile) => this._normalizeCliProfile(profile, now))
+        .map((profile) => this._normalizeCliProfile(
+          profile,
+          now,
+          profile.id === settings.defaultCliProfileId ? settings.defaultBackend : undefined,
+        ))
         .filter((profile): profile is CliProfile => !!profile)
       : [];
 
@@ -115,7 +126,11 @@ export class SettingsService {
     const next: Settings = {
       ...settings,
       cliProfiles: profiles,
-      ...(defaultProfile ? { defaultBackend: defaultProfile.vendor } : {}),
+      ...(defaultProfile
+        ? {
+            defaultBackend: backendForCliProfile(defaultProfile, settings.defaultBackend),
+          }
+        : {}),
     };
     if (next.defaultBackend !== 'codex' || next.defaultServiceTier !== 'fast') {
       delete next.defaultServiceTier;
@@ -206,26 +221,30 @@ export class SettingsService {
       ? profiles.find((profile) => profile.id === profileId && !profile.disabled)
       : undefined;
     if (selected) {
-      return { profileId: selected.id, backend: selected.vendor };
+      return {
+        profileId: selected.id,
+        backend: backendForCliProfile(selected, backend),
+      };
     }
 
     if (profileId && !selected) {
       return { backend };
     }
 
-    if (isCliVendor(backend)) {
-      const serverConfiguredId = serverConfiguredCliProfileId(backend);
+    const vendor = cliVendorForBackend(backend);
+    if (vendor) {
+      const serverConfiguredId = serverConfiguredCliProfileId(vendor);
       const legacyProfile = profiles.find((profile) => profile.id === serverConfiguredId && !profile.disabled)
-        || profiles.find((profile) => profile.vendor === backend && !profile.disabled);
+        || profiles.find((profile) => profile.vendor === vendor && !profile.disabled);
       if (legacyProfile) {
-        return { profileId: legacyProfile.id, backend: legacyProfile.vendor };
+        return { profileId: legacyProfile.id, backend };
       }
     }
 
     return { backend };
   }
 
-  private _normalizeCliProfile(profile: CliProfile, now: string): CliProfile | null {
+  private _normalizeCliProfile(profile: CliProfile, now: string, defaultBackend?: string): CliProfile | null {
     if (!profile || !isCliVendor(profile.vendor)) return null;
 
     const id = String(profile.id || '').trim();
@@ -236,6 +255,9 @@ export class SettingsService {
       id,
       name: String(profile.name || '').trim() || id,
       vendor,
+      ...(vendor === 'claude-code'
+        ? { protocol: profile.protocol === 'interactive' ? 'interactive' : profile.protocol === 'standard' ? 'standard' : cliProtocolForBackend(defaultBackend, vendor) || 'standard' }
+        : {}),
       authMode: vendor === 'kiro'
         ? 'server-configured'
         : profile.authMode === 'account' ? 'account' : 'server-configured',

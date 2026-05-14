@@ -33,8 +33,8 @@ export { sanitizeSystemPrompt, isApiError, shortenPath, extractToolDetails, extr
 
 // ── Icon ────────────────────────────────────────────────────────────────────
 
-const CLAUDE_CODE_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" rx="128" fill="#D37D5B"/><path d="M256 220L285 85L305 92L275 225L380 145L395 165L285 245L440 265L435 290L285 275L390 380L365 400L265 295L295 440L265 445L245 295L180 420L155 405L230 280L100 340L90 315L225 260L70 250L75 225L225 235L110 145L130 130L235 215L170 85L195 80L245 210L256 220Z" fill="#F9EDE6"/></svg>';
-const CLAUDE_GOAL_SUPPORTED_ACTIONS = { clear: true, stopTurn: true, pause: false, resume: false };
+export const CLAUDE_CODE_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" rx="128" fill="#D37D5B"/><path d="M256 220L285 85L305 92L275 225L380 145L395 165L285 245L440 265L435 290L285 275L390 380L365 400L265 295L295 440L265 445L245 295L180 420L155 405L230 280L100 340L90 315L225 260L70 250L75 225L225 235L110 145L130 130L235 215L170 85L195 80L245 210L256 220Z" fill="#F9EDE6"/></svg>';
+export const CLAUDE_GOAL_SUPPORTED_ACTIONS = { clear: true, stopTurn: true, pause: false, resume: false };
 
 function filterStdinWarning(stderr: string): string {
   return String(stderr || '')
@@ -799,26 +799,45 @@ export function resolveClaudeProjectDir(workspacePath: string, configDir?: strin
   return resolveClaudeProjectDirCandidates(workspacePath, configDir)[0] || null;
 }
 
-function resolveClaudeProjectDirCandidates(workspacePath: string, configDir?: string): string[] {
+export function resolveClaudeProjectDirCandidates(workspacePath: string, configDir?: string): string[] {
   const home = process.env.HOME || os.homedir();
   const projectsDir = path.join(configDir || path.join(home, '.claude'), 'projects');
-  const sanitized = workspacePath.replace(/[^a-zA-Z0-9]/g, '-');
-  const direct = path.join(projectsDir, sanitized);
-  if (sanitized.length <= 200) return [direct];
+  const workspacePaths = [workspacePath];
+  try {
+    const realWorkspacePath = fs.realpathSync(workspacePath);
+    if (realWorkspacePath !== workspacePath) workspacePaths.push(realWorkspacePath);
+  } catch {
+    // Best effort: the lexical path remains the primary candidate.
+  }
+
+  const directCandidates: string[] = [];
+  const longSanitizedPrefixes: string[] = [];
+  for (const candidatePath of workspacePaths) {
+    const sanitized = candidatePath.replace(/[^a-zA-Z0-9]/g, '-');
+    if (sanitized.length <= 200) {
+      directCandidates.push(path.join(projectsDir, sanitized));
+    } else {
+      longSanitizedPrefixes.push(sanitized.slice(0, Math.min(sanitized.length, 200)));
+    }
+  }
+  if (longSanitizedPrefixes.length === 0) return uniqueStrings(directCandidates);
 
   let entries: string[];
   try {
     entries = fs.readdirSync(projectsDir);
   } catch {
-    return [];
+    return uniqueStrings(directCandidates);
   }
 
-  const prefix = sanitized.slice(0, Math.min(sanitized.length, 200));
   const candidates = entries
-    .filter(entry => entry === sanitized || entry.startsWith(prefix + '-') || entry.startsWith(prefix))
+    .filter(entry => longSanitizedPrefixes.some(prefix => entry.startsWith(prefix + '-') || entry.startsWith(prefix)))
     .map(entry => path.join(projectsDir, entry));
   candidates.sort((a, b) => a.length - b.length);
-  return candidates;
+  return uniqueStrings([...directCandidates, ...candidates]);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 /**
@@ -907,7 +926,11 @@ interface ClaudeTranscriptEntry {
   };
 }
 
-export function parseClaudeGoalFromJsonl(content: string, sessionId?: string | null): ThreadGoal | null {
+export function parseClaudeGoalFromJsonl(
+  content: string,
+  sessionId?: string | null,
+  backend: ThreadGoal['backend'] = 'claude-code',
+): ThreadGoal | null {
   let latestGoal: { goal: ThreadGoal; line: number } | null = null;
   let latestClearLine = -1;
   const lines = String(content || '').split('\n');
@@ -936,7 +959,7 @@ export function parseClaudeGoalFromJsonl(content: string, sessionId?: string | n
     latestGoal = {
       line: i,
       goal: {
-        backend: 'claude-code',
+        backend,
         sessionId: sessionId || null,
         objective,
         status,

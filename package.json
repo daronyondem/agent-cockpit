@@ -10,6 +10,10 @@
     "start": "tsx server.ts",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "e2e:claude-interactive": "CLAUDE_INTERACTIVE_E2E=1 npm test -- test/claudeCodeInteractive.e2e.test.ts --runInBand --forceExit",
+    "e2e:claude-interactive:report": "tsx scripts/run-claude-interactive-compat.ts",
+    "e2e:claude-interactive-ui": "CLAUDE_INTERACTIVE_UI_E2E=1 playwright test test/e2e/claudeCodeInteractive.ui.pw.ts --config playwright.config.ts --project chromium",
+    "e2e:claude-interactive-ui:report": "tsx scripts/run-claude-interactive-ui-e2e.ts",
     "web:build": "vite build --config web/AgentCockpitWeb/vite.config.ts",
     "web:budget": "node scripts/check-web-bundle-size.js",
     "web:typecheck": "tsc -p web/AgentCockpitWeb/tsconfig.json --noEmit",
@@ -42,6 +46,7 @@
     "highlight.js": "^11.11.1",
     "marked": "^18.0.3",
     "multer": "^2.1.1",
+    "node-pty": "^1.1.0",
     "on-headers": "^1.0.2",
     "passport": "^0.7.0",
     "passport-github2": "^0.1.12",
@@ -54,6 +59,7 @@
     "ws": "^8.20.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/adm-zip": "^0.5.8",
     "@types/better-sqlite3": "^7.6.13",
     "@types/cookie": "^0.6.0",

@@ -5,10 +5,10 @@ import crypto from 'crypto';
 import type { BackendRegistry } from './backends/registry';
 import { SettingsService } from './settingsService';
 import {
+  cliVendorForBackend,
   cliProfileIdForBackend,
   type CliProfileRuntime,
   ensureServerConfiguredCliProfiles,
-  isCliVendor,
   resolveCliProfileRuntime,
   serverConfiguredCliProfileId,
 } from './cliProfiles';
@@ -413,10 +413,11 @@ export class ChatService {
 
       let changed = false;
       for (const conv of index.conversations) {
-        if (!isCliVendor(conv.backend)) continue;
-        usedVendors.add(conv.backend);
+        const vendor = cliVendorForBackend(conv.backend);
+        if (!vendor) continue;
+        usedVendors.add(vendor);
         if (!conv.cliProfileId) {
-          conv.cliProfileId = serverConfiguredCliProfileId(conv.backend);
+          conv.cliProfileId = serverConfiguredCliProfileId(vendor);
           changed = true;
         }
       }
@@ -442,7 +443,11 @@ export class ChatService {
     fallbackBackend?: string | null,
   ): Promise<CliProfileRuntime> {
     const settings = await this._settingsService.getSettings();
-    const resolved = resolveCliProfileRuntime(settings, cliProfileId, fallbackBackend || settings.defaultBackend || 'claude-code');
+    const resolved = resolveCliProfileRuntime(
+      settings,
+      cliProfileId,
+      fallbackBackend || (!cliProfileId ? settings.defaultBackend || 'claude-code' : undefined),
+    );
     if (resolved.error || !resolved.runtime) {
       throw new Error(resolved.error || 'Unable to resolve CLI profile');
     }
@@ -583,10 +588,11 @@ export class ChatService {
     const defaultBackend = this._backendRegistry?.getDefault()?.metadata.id || 'claude-code';
     const settings = await this._settingsService.getSettings();
     const requestedCliProfileId = cliProfileId || (!backend ? settings.defaultCliProfileId : undefined);
+    const fallbackBackend = backend || (!requestedCliProfileId ? settings.defaultBackend || defaultBackend : undefined);
     const resolved = resolveCliProfileRuntime(
       settings,
       requestedCliProfileId,
-      backend || settings.defaultBackend || defaultBackend,
+      fallbackBackend,
     );
     if (resolved.error || !resolved.runtime) {
       throw new Error(resolved.error || 'Unable to resolve CLI profile');
@@ -594,7 +600,7 @@ export class ChatService {
     const runtime = resolved.runtime;
     const resolvedBackend = runtime.backendId;
     if (backend && backend !== resolvedBackend) {
-      throw new Error(`CLI profile vendor ${resolvedBackend} does not match backend ${backend}`);
+      throw new Error(`CLI profile backend ${resolvedBackend} does not match requested backend ${backend}`);
     }
     const resolvedCliProfileId = runtime.cliProfileId || cliProfileIdForBackend(resolvedBackend);
     if (!runtime.cliProfileId && resolvedCliProfileId) {
@@ -893,10 +899,11 @@ export class ChatService {
     });
   }
 
-  async updateConversationCliProfile(convId: string, cliProfileId: string): Promise<void> {
+  async updateConversationCliProfile(convId: string, cliProfileId: string, requestedBackend?: string | null): Promise<void> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return;
-    const runtime = await this.resolveCliProfileRuntime(cliProfileId);
+    const current = await this._getConvFromIndex(convId);
+    const runtime = await this.resolveCliProfileRuntime(cliProfileId, requestedBackend || current?.convEntry.backend);
 
     await this._indexLock.run(hash, async () => {
       const result = await this._getConvFromIndex(convId);

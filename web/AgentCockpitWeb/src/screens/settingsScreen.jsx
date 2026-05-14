@@ -32,6 +32,21 @@ const CLI_VENDOR_OPTIONS = [
   { id: 'kiro', label: 'Kiro' },
 ];
 
+function cliVendorForBackend(backendId){
+  return backendId === 'claude-code-interactive' ? 'claude-code' : backendId;
+}
+
+function backendIdForProfile(profile){
+  if (!profile) return null;
+  if (profile.vendor === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
+  return profile.vendor;
+}
+
+function protocolLabel(profile){
+  if (!profile || profile.vendor !== 'claude-code') return null;
+  return profile.protocol === 'interactive' ? 'Interactive' : 'Standard';
+}
+
 function cliVendorLabel(vendor){
   const opt = CLI_VENDOR_OPTIONS.find(o => o.id === vendor);
   return opt ? opt.label : (vendor || 'CLI');
@@ -43,6 +58,11 @@ function isServerConfiguredProfile(profile){
 
 function normalizeUiProfile(profile){
   const next = { ...profile };
+  if (next.vendor === 'claude-code') {
+    next.protocol = next.protocol === 'interactive' ? 'interactive' : 'standard';
+  } else {
+    delete next.protocol;
+  }
   if (next.authMode !== 'account') {
     delete next.configDir;
     delete next.env;
@@ -141,7 +161,7 @@ function backendIconFor(backends, backendId){
 function backendForProfile(backends, profileBackends, profile){
   if (!profile) return null;
   return (profileBackends && profileBackends[profile.id])
-    || (backends || []).find(b => b.id === profile.vendor)
+    || (backends || []).find(b => b.id === backendIdForProfile(profile))
     || null;
 }
 function modelsForProfile(backends, profileBackends, profile){
@@ -161,8 +181,10 @@ function activeCliProfiles(settings){
 }
 function profileForBackend(profiles, backendId){
   if (!backendId) return null;
-  return profiles.find(p => p.id === 'server-configured-' + backendId)
-    || profiles.find(p => p.vendor === backendId)
+  const vendor = cliVendorForBackend(backendId);
+  return profiles.find(p => backendIdForProfile(p) === backendId)
+    || profiles.find(p => p.id === 'server-configured-' + vendor)
+    || profiles.find(p => p.vendor === vendor)
     || null;
 }
 function profileForSetting(profiles, profileId, backendId, fallbackBackend){
@@ -194,7 +216,7 @@ function memoryProcessorStatusClass(status){
 function memoryProcessorStatusMatches(status, selectedProfile, fallbackBackend){
   if (!status) return false;
   if (status.profileId) return !!(selectedProfile && selectedProfile.id === status.profileId);
-  if (status.backendId) return status.backendId === ((selectedProfile && selectedProfile.vendor) || fallbackBackend);
+  if (status.backendId) return status.backendId === ((selectedProfile && backendIdForProfile(selectedProfile)) || fallbackBackend);
   return true;
 }
 
@@ -367,9 +389,12 @@ export function SettingsScreen({ onClose, initialTab }){
 function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
   const profiles = activeCliProfiles(settings);
   const selectedProfile = profiles.find(p => p.id === settings.defaultCliProfileId)
-    || profiles.find(p => p.vendor === settings.defaultBackend)
+    || profiles.find(p => p.vendor === cliVendorForBackend(settings.defaultBackend))
     || null;
-  const backendId = (selectedProfile && selectedProfile.vendor) || settings.defaultBackend || (backends[0] && backends[0].id) || '';
+  const backendId = settings.defaultBackend
+    || (selectedProfile && backendIdForProfile(selectedProfile))
+    || (backends[0] && backends[0].id)
+    || '';
   React.useEffect(() => {
     if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
   }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
@@ -382,26 +407,31 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
     : effortLevelsForModel(backends, backendId, modelId);
   const effort = settings.defaultEffort || defaultEffortFor(efforts) || '';
 
-  /* Switching profile/backend resets model + effort to that vendor's defaults
+  /* Switching profile/backend resets model + effort to that backend's defaults
      so we never carry a model id into a backend that doesn't support it. */
   function onProfileChange(v){
     const profile = profiles.find(p => p.id === v);
     if (!profile) return;
+    const nextBackend = backendIdForProfile(profile);
     const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
     const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
     onPatch({
       defaultCliProfileId: profile.id,
-      defaultBackend: profile.vendor,
+      defaultBackend: nextBackend,
       defaultModel: newModel,
       defaultEffort: defaultEffortFor(e),
-      defaultServiceTier: profile.vendor === 'codex' && settings.defaultServiceTier === 'fast' ? 'fast' : undefined,
+      defaultServiceTier: nextBackend === 'codex' && settings.defaultServiceTier === 'fast' ? 'fast' : undefined,
     });
   }
   function onBackendChange(v){
-    const m = modelsForBackend(backends, v);
+    const m = selectedProfile
+      ? modelsForProfile(backends, profileBackends, selectedProfile)
+      : modelsForBackend(backends, v);
     const newModel = defaultModelId(m);
-    const e = effortLevelsForModel(backends, v, newModel);
+    const e = selectedProfile
+      ? effortLevelsForProfile(backends, profileBackends, selectedProfile, newModel)
+      : effortLevelsForModel(backends, v, newModel);
     onPatch({
       defaultCliProfileId: undefined,
       defaultBackend: v,
@@ -441,12 +471,14 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
         />
       </Field>
       {profiles.length ? (
-        <Field label="Default CLI profile">
-          <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
-            {!selectedProfile ? <option value="">Select a profile</option> : null}
-            {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-          </select>
-        </Field>
+        <>
+          <Field label="Default CLI profile">
+            <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
+              {!selectedProfile ? <option value="">Select a profile</option> : null}
+              {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </Field>
+        </>
       ) : (
         <Field label="Default backend">
           <select value={backendId} onChange={(e) => onBackendChange(e.target.value)}>
@@ -577,6 +609,14 @@ function CliUpdatesPanel(){
                     <span className="sep">·</span>
                     <span>{item.profileNames && item.profileNames.length ? item.profileNames.join(', ') : item.command}</span>
                   </div>
+                  {item.updateCaution ? <div className="cli-update-error">{item.updateCaution}</div> : null}
+                  {!item.updateCaution && Array.isArray(item.interactiveCompatibility) ? item.interactiveCompatibility.map(status => (
+                    status && status.message ? (
+                      <div className="cli-update-error" key={status.providerId}>
+                        {status.message}
+                      </div>
+                    ) : null
+                  )) : null}
                   {item.lastError ? <div className="cli-update-error">{item.lastError}</div> : null}
                 </div>
                 <div className="cli-update-side">
@@ -661,7 +701,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
       });
       const next = { cliProfiles: nextProfiles };
       if (prev.defaultCliProfileId === id && changedProfile) {
-        next.defaultBackend = changedProfile.vendor;
+        next.defaultBackend = backendIdForProfile(changedProfile);
         if (changedProfile.disabled) next.defaultCliProfileId = undefined;
       }
       return next;
@@ -676,6 +716,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
       id,
       name: `${cliVendorLabel(vendor)} Profile`,
       vendor,
+      protocol: 'standard',
       authMode: 'server-configured',
       createdAt: now,
       updatedAt: now,
@@ -714,6 +755,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
     patchProfile(profile.id, current => {
       const next = {
         vendor,
+        protocol: vendor === 'claude-code' ? (current.protocol || 'standard') : undefined,
         authMode: vendor === 'kiro' ? 'server-configured' : current.authMode,
       };
       if (vendor === 'kiro') {
@@ -872,7 +914,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
           const isKiro = profile.vendor === 'kiro';
           const isServerProfile = isServerConfiguredProfile(profile);
           const isAccount = !isKiro && profile.authMode === 'account';
-          const vendorIcon = backendIconFor(backends, profile.vendor);
+          const vendorIcon = backendIconFor(backends, backendIdForProfile(profile));
           const expanded = expandedProfileId === profile.id;
           const setupLabel = isAccount ? 'Account profile' : 'Self-configured';
           const envError = envErrorsById[profile.id];
@@ -880,6 +922,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
           const authBusy = !!authBusyById[profile.id];
           const authRunning = !!(authState && authState.job && authState.job.status === 'running');
           const authText = authStateText(authState);
+          const protocol = protocolLabel(profile);
           return (
             <div className={`cli-card ${expanded ? 'is-open' : ''} ${profile.disabled ? 'is-off' : ''}`} key={profile.id}>
               <div
@@ -898,6 +941,12 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
                   </div>
                   <div className="cli-card-meta u-mono">
                     <span>{cliVendorLabel(profile.vendor)}</span>
+                    {protocol ? (
+                      <>
+                        <span className="sep">·</span>
+                        <span>{protocol}</span>
+                      </>
+                    ) : null}
                     <span className="sep">·</span>
                     <span>{setupLabel}</span>
                     {profile.command ? (
@@ -952,6 +1001,20 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
                         {Ico.chevD(12)}
                       </div>
                     </Field>
+                    {profile.vendor === 'claude-code' ? (
+                      <Field label="Protocol" hint="Choose how Agent Cockpit talks to the Claude Code CLI.">
+                        <div className="settings-select-wrap">
+                          <select
+                            value={profile.protocol === 'interactive' ? 'interactive' : 'standard'}
+                            onChange={(e) => patchProfile(profile.id, { protocol: e.target.value })}
+                          >
+                            <option value="standard">Standard</option>
+                            <option value="interactive">Interactive</option>
+                          </select>
+                          {Ico.chevD(12)}
+                        </div>
+                      </Field>
+                    ) : null}
                   </div>
                   <div className="cli-profile-grid">
                     <Field label="Setup mode" hint={isKiro ? 'Kiro is self-configured only for now.' : undefined}>
@@ -1056,7 +1119,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
         <button type="button" className="cli-add" onClick={addProfile}>
           {Ico.plus(14)}
           <span>Add CLI profile</span>
-          <span className="u-mono u-dim cli-add-hint">name · vendor · setup mode</span>
+          <span className="u-mono u-dim cli-add-hint">name · vendor · protocol · setup mode</span>
         </button>
       </div>
 
@@ -1110,7 +1173,7 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
     const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
     patchMem({
       cliProfileId: profile.id,
-      cliBackend: profile.vendor,
+      cliBackend: backendIdForProfile(profile),
       cliModel: newModel,
       cliEffort: defaultEffortFor(e),
     });
@@ -1253,7 +1316,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
     const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
     const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
-    patchKb({ ingestionCliProfileId: profile.id, ingestionCliBackend: profile.vendor, ingestionCliModel: newModel, ingestionCliEffort: defaultEffortFor(e) });
+    patchKb({ ingestionCliProfileId: profile.id, ingestionCliBackend: backendIdForProfile(profile), ingestionCliModel: newModel, ingestionCliEffort: defaultEffortFor(e) });
   }
   function onIgModel(v){
     const e = igProfile ? effortLevelsForProfile(backends, profileBackends, igProfile, v) : [];
@@ -1265,7 +1328,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
     const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
     const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
-    patchKb({ digestionCliProfileId: profile.id, digestionCliBackend: profile.vendor, digestionCliModel: newModel, digestionCliEffort: defaultEffortFor(e) });
+    patchKb({ digestionCliProfileId: profile.id, digestionCliBackend: backendIdForProfile(profile), digestionCliModel: newModel, digestionCliEffort: defaultEffortFor(e) });
   }
   function onDgModel(v){
     const e = dgProfile ? effortLevelsForProfile(backends, profileBackends, dgProfile, v) : effortLevelsForModel(backends, fallbackBackend, v);
@@ -1277,7 +1340,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
     const m = modelsForProfile(backends, profileBackends, profile);
     const newModel = defaultModelId(m);
     const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
-    patchKb({ dreamingCliProfileId: profile.id, dreamingCliBackend: profile.vendor, dreamingCliModel: newModel, dreamingCliEffort: defaultEffortFor(e) });
+    patchKb({ dreamingCliProfileId: profile.id, dreamingCliBackend: backendIdForProfile(profile), dreamingCliModel: newModel, dreamingCliEffort: defaultEffortFor(e) });
   }
   function onDrModel(v){
     const e = drProfile ? effortLevelsForProfile(backends, profileBackends, drProfile, v) : effortLevelsForModel(backends, fallbackBackend, v);
@@ -1469,7 +1532,7 @@ function SettingsContextMapTab({ settings, backends, profileBackends, loadProfil
     const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
     patchContext({
       cliProfileId: profile.id,
-      cliBackend: profile.vendor,
+      cliBackend: backendIdForProfile(profile),
       cliModel: newModel,
       cliEffort: defaultEffortFor(e),
     });

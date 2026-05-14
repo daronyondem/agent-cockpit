@@ -3,6 +3,10 @@ import crypto from 'crypto';
 import fsp from 'fs/promises';
 import path from 'path';
 import { resolveClaudeCliRuntime } from './backends/claudeCode';
+import {
+  buildClaudeInteractiveCompatibilityStatus,
+  CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION,
+} from './backends/claudeInteractiveCompatibility';
 import { resolveCodexCliRuntime } from './backends/codex';
 import { serverConfiguredCliProfileId } from './cliProfiles';
 import type {
@@ -253,6 +257,16 @@ export class CliUpdateService {
       const probe = await this._detectInstallMethod(target, resolvedPath);
       const updateCommand = this._updateCommand(target, probe.installMethod);
       const latestVersion = await this._latestVersion(target, probe.installMethod);
+      const interactiveCompatibility = target.vendor === 'claude-code'
+        ? [buildClaudeInteractiveCompatibilityStatus(target.command, currentVersion)]
+        : undefined;
+      const compatibilityMessage = interactiveCompatibility?.find((item) => item.severity === 'warning' || item.severity === 'error')?.message || null;
+      const updateWouldExceedInteractiveTested = target.vendor === 'claude-code'
+        && isNewerVersion(latestVersion, CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION);
+      const updateCaution = compatibilityMessage
+        || (updateWouldExceedInteractiveTested
+          ? 'Updating Claude Code may install a CLI version newer than the version tested with Claude Code Interactive. The standard Claude Code provider can still be updated, but the interactive provider may show broken streaming, missing tool cards, failed question handling, or stuck sessions until Agent Cockpit adds support for that CLI version.'
+          : null);
       return {
         ...base,
         resolvedPath: probe.resolvedPath,
@@ -264,14 +278,20 @@ export class CliUpdateService {
         updateCommand,
         lastCheckAt: new Date().toISOString(),
         lastError: currentVersion ? null : 'Could not parse CLI version from output',
+        ...(interactiveCompatibility ? { interactiveCompatibility, blocksAutoUpdate: false, updateCaution } : {}),
       };
     } catch (err: unknown) {
       const message = (err as Error).message || String(err);
+      const interactiveCompatibility = target.vendor === 'claude-code'
+        ? [buildClaudeInteractiveCompatibilityStatus(target.command, null, message)]
+        : undefined;
+      const updateCaution = interactiveCompatibility?.find((item) => item.severity === 'warning' || item.severity === 'error')?.message || null;
       return {
         ...base,
         installMethod: message.includes('ENOENT') || message.includes('not found') ? 'missing' : 'unknown',
         lastCheckAt: new Date().toISOString(),
         lastError: message,
+        ...(interactiveCompatibility ? { interactiveCompatibility, blocksAutoUpdate: false, updateCaution } : {}),
       };
     }
   }

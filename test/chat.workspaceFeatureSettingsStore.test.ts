@@ -36,6 +36,23 @@ describe('WorkspaceFeatureSettingsStore', () => {
       cliEffort: 'xhigh',
       scanIntervalMinutes: 7,
     });
+
+    expect(normalizeContextMapWorkspaceSettings({
+      processorMode: 'override',
+      cliProfileId: 'claude-interactive-work',
+    }, [{
+      id: 'claude-interactive-work',
+      name: 'Claude Interactive Work',
+      vendor: 'claude-code',
+      protocol: 'interactive',
+      authMode: 'account',
+      createdAt: '2026-05-01T00:00:00.000Z',
+      updatedAt: '2026-05-01T00:00:00.000Z',
+    }])).toEqual({
+      processorMode: 'override',
+      cliProfileId: 'claude-interactive-work',
+      cliBackend: 'claude-code-interactive',
+    });
   });
 
   test('persists KB and Context Map workspace flags through the shared index boundary', async () => {

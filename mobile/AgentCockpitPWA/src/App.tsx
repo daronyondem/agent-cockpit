@@ -64,6 +64,7 @@ import type {
 const LIST_AUTO_REFRESH_MS = 15_000;
 const STREAM_RECONNECT_BASE_MS = 1_000;
 const STREAM_RECONNECT_MAX_MS = 15_000;
+const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
 
 type Screen = 'list' | 'chat';
 type SessionViewerState = { session: SessionHistoryItem; messages: Message[] };
@@ -75,6 +76,16 @@ type GoalCapability = {
   resume: boolean;
   status: 'native' | 'transcript' | 'none';
 };
+
+function backendIdForProfile(profile?: { vendor: string; protocol?: string } | null): string | undefined {
+  if (!profile) return undefined;
+  if (profile.vendor === 'claude-code' && profile.protocol === 'interactive') return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+  return profile.vendor;
+}
+
+function isClaudeBackend(backendID?: string | null): boolean {
+  return backendID === 'claude-code' || backendID === CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+}
 
 function normalizeGoalCapability(capability: GoalCapabilityMetadata | undefined, backendID?: string): GoalCapability {
   if (capability === true) {
@@ -90,7 +101,7 @@ function normalizeGoalCapability(capability: GoalCapabilityMetadata | undefined,
     };
   }
   if (backendID === 'codex') return { set: true, clear: true, pause: true, resume: true, status: 'native' };
-  if (backendID === 'claude-code') return { set: true, clear: true, pause: false, resume: false, status: 'transcript' };
+  if (isClaudeBackend(backendID)) return { set: true, clear: true, pause: false, resume: false, status: 'transcript' };
   return { set: false, clear: false, pause: false, resume: false, status: 'none' };
 }
 
@@ -104,7 +115,7 @@ function goalCapabilityForBackend(
 }
 
 function goalActionUnsupportedMessage(action: 'pause' | 'resume' | 'clear', backendID?: string | null): string {
-  const backendName = backendID === 'claude-code' ? 'Claude Code' : backendID === 'codex' ? 'Codex' : 'this backend';
+  const backendName = isClaudeBackend(backendID) ? 'Claude Code' : backendID === 'codex' ? 'Codex' : 'this backend';
   return `Goal ${action} is not supported by ${backendName}.`;
 }
 
@@ -207,18 +218,34 @@ export default function App() {
     () => availableProfiles.find((profile) => profile.id === selectedCliProfileId),
     [availableProfiles, selectedCliProfileId],
   );
+  const profileSelectionLocked = (activeConversation?.messages.length || 0) > 0;
+  const selectedProfileBackendID = selectedProfile ? backendIdForProfile(selectedProfile) : undefined;
   const selectedBackendMetadata = useMemo(() => {
+    if (selectedProfile) {
+      const profileBackendID = profileSelectionLocked ? selectedBackend : selectedProfileBackendID;
+      const providerMetadata = backends.find((backend) => backend.id === profileBackendID);
+      const selectedProfileMetadata = profileMetadata[selectedCliProfileId || ''];
+      if (providerMetadata && selectedProfileMetadata && providerMetadata.id !== selectedProfileMetadata.id) {
+        return {
+          ...providerMetadata,
+          models: selectedProfileMetadata.models || providerMetadata.models,
+        };
+      }
+      return selectedProfileMetadata || providerMetadata;
+    }
     if (selectedCliProfileId && profileMetadata[selectedCliProfileId]) {
       return profileMetadata[selectedCliProfileId];
     }
     return backends.find((backend) => backend.id === selectedBackend);
-  }, [backends, profileMetadata, selectedBackend, selectedCliProfileId]);
+  }, [backends, profileMetadata, profileSelectionLocked, selectedBackend, selectedCliProfileId, selectedProfile, selectedProfileBackendID]);
   const selectedModelMetadata = useMemo(
     () => selectedBackendMetadata?.models?.find((model) => model.id === selectedModel),
     [selectedBackendMetadata, selectedModel],
   );
   const supportedEfforts = selectedModelMetadata?.supportedEffortLevels || [];
-  const selectedBackendID = selectedProfile?.vendor || selectedBackendMetadata?.id || selectedBackend;
+  const selectedBackendID = selectedProfile
+    ? (profileSelectionLocked ? selectedBackend : selectedProfileBackendID)
+    : selectedBackendMetadata?.id || selectedBackend;
   const selectedGoalCapability = useMemo(
     () => goalCapabilityForBackend(backends, selectedBackendID, selectedBackendMetadata),
     [backends, selectedBackendID, selectedBackendMetadata],
@@ -226,7 +253,12 @@ export default function App() {
   const goalCapable = selectedGoalCapability.set === true;
   const serviceTierEnabled = selectedBackendID === 'codex';
   const hasUploadingAttachments = pendingAttachments.some((attachment) => attachment.status === 'uploading');
-  const profileSelectionLocked = (activeConversation?.messages.length || 0) > 0;
+
+  useEffect(() => {
+    if (!profileSelectionLocked && selectedProfileBackendID && selectedBackend !== selectedProfileBackendID) {
+      setSelectedBackend(selectedProfileBackendID);
+    }
+  }, [profileSelectionLocked, selectedBackend, selectedProfileBackendID]);
 
   useEffect(() => {
     void loadDashboard();
@@ -348,9 +380,10 @@ export default function App() {
   function hydrateSelectionDefaults(loadedSettings: Settings, loadedBackends: BackendMetadata[]) {
     const profiles = (loadedSettings.cliProfiles || []).filter((profile) => profile.disabled !== true);
     const profileID = loadedSettings.defaultCliProfileId || profiles[0]?.id;
-    const backendID = profileID ? undefined : loadedSettings.defaultBackend || loadedBackends[0]?.id;
+    const profile = profiles.find((item) => item.id === profileID);
+    const backendID = loadedSettings.defaultBackend || loadedBackends[0]?.id;
     setSelectedCliProfileId(profileID);
-    setSelectedBackend(backendID);
+    setSelectedBackend(backendIdForProfile(profile) || backendID);
     setSelectedModel(loadedSettings.defaultModel);
     setSelectedEffort(loadedSettings.defaultEffort);
     setSelectedServiceTier(loadedSettings.defaultBackend === 'codex' ? loadedSettings.defaultServiceTier : undefined);
@@ -517,7 +550,7 @@ export default function App() {
 
   function hydrateSelectionFromConversation(conversation: Conversation) {
     setSelectedCliProfileId(conversation.cliProfileId || settings?.defaultCliProfileId);
-    setSelectedBackend(conversation.cliProfileId ? undefined : conversation.backend || settings?.defaultBackend);
+    setSelectedBackend(conversation.backend || settings?.defaultBackend);
     setSelectedModel(conversation.model || settings?.defaultModel);
     setSelectedEffort(conversation.effort || settings?.defaultEffort);
     setSelectedServiceTier(conversation.backend === 'codex' ? (conversation.serviceTier || 'default') : undefined);
@@ -679,7 +712,9 @@ export default function App() {
     const previousGoal = goalStateRef.current.conversationID === conversation.id ? goalStateRef.current.goal : null;
     const previousGoalUpdatedAtMs = goalStateRef.current.conversationID === conversation.id ? goalStateRef.current.updatedAtMs : null;
     const goalStartedAtMs = Date.now();
-    const optimisticBackend = selectedBackendID === 'codex' || selectedBackendID === 'claude-code' ? selectedBackendID : undefined;
+    const optimisticBackend = selectedBackendID === 'codex' || isClaudeBackend(selectedBackendID)
+      ? selectedBackendID as ThreadGoal['backend']
+      : undefined;
     const optimisticGoal: ThreadGoal = {
       backend: optimisticBackend,
       objective,
@@ -794,7 +829,7 @@ export default function App() {
       setErrorMessage(goalActionUnsupportedMessage('clear', goal.backend || conversation.backend));
       return;
     }
-    if (goal.backend === 'claude-code' && isStreaming) {
+    if (isClaudeBackend(goal.backend) && isStreaming) {
       setErrorMessage('Wait for the current stream to finish before clearing this Claude Code goal.');
       return;
     }
@@ -1769,7 +1804,7 @@ export default function App() {
     }
     const profile = availableProfiles.find((item) => item.id === profileID);
     setSelectedCliProfileId(profileID);
-    setSelectedBackend(undefined);
+    setSelectedBackend(backendIdForProfile(profile));
     setSelectedModel(undefined);
     setSelectedEffort(undefined);
     setSelectedServiceTier(profile?.vendor === 'codex' ? (selectedServiceTier || settings?.defaultServiceTier) : undefined);
@@ -2395,7 +2430,7 @@ function GoalStrip(props: {
   const canPause = props.goal.status === 'active' && goalSupportsAction(props.goal, 'pause');
   const canResume = props.goal.status === 'paused' && !props.isStreaming && goalSupportsAction(props.goal, 'resume');
   const canClear = goalSupportsAction(props.goal, 'clear');
-  const clearDisabled = props.goal.backend === 'claude-code' && props.isStreaming;
+  const clearDisabled = isClaudeBackend(props.goal.backend) && props.isStreaming;
   return (
     <div className={`goal-strip ${props.goal.status}`} aria-live="polite">
       <div className="goal-strip-main">

@@ -30,8 +30,10 @@ describe('extractToolDetails', () => {
   });
 
   test('Write with plan file path sets isPlanFile', () => {
-    const result = extractToolDetails({ name: 'Write', input: { file_path: '/home/user/.claude/plans/my-plan.md' } } as any);
+    const result = extractToolDetails({ name: 'Write', input: { file_path: '/home/user/.claude/plans/my-plan.md', content: '# Plan' } } as any);
     expect(result.isPlanFile).toBe(true);
+    expect(result.planFilePath).toBe('/home/user/.claude/plans/my-plan.md');
+    expect(result.planContent).toBe('# Plan');
   });
 
   test('Write without plan path does not set isPlanFile', () => {
@@ -145,10 +147,12 @@ describe('extractToolDetails', () => {
     expect(result.description).toBe('Entering plan mode');
   });
 
-  test('ExitPlanMode sets isPlanMode and planAction=exit', () => {
-    const result = extractToolDetails({ name: 'ExitPlanMode', input: {} } as any);
+  test('ExitPlanMode sets isPlanMode, planAction=exit, and plan content', () => {
+    const result = extractToolDetails({ name: 'ExitPlanMode', input: { plan: '# Plan', planFilePath: '/home/user/.claude/plans/my-plan.md' } } as any);
     expect(result.isPlanMode).toBe(true);
     expect(result.planAction).toBe('exit');
+    expect(result.planContent).toBe('# Plan');
+    expect(result.planFilePath).toBe('/home/user/.claude/plans/my-plan.md');
     expect(result.description).toBe('Plan ready for approval');
   });
 

@@ -286,14 +286,14 @@ export function cleanGoalObjectiveText(value: unknown): string {
       strippedPrefix = true;
     }
     const withoutEventPrefix = text.replace(
-      /^Goal\s*(?:set(?=\s|:|codex|claude-code|$)|resumed(?=\s|:|codex|claude-code|$)|paused(?=\s|:|codex|claude-code|$)|achieved(?=\s|:|codex|claude-code|$)|budget\s*limited(?=\s|:|codex|claude-code|$)|cleared(?=\s|:|codex|claude-code|$)|updated(?=\s|:|codex|claude-code|$))\s*:?\s*/i,
+      /^Goal\s*(?:set(?=\s|:|codex|claude-code|claude-code-interactive|$)|resumed(?=\s|:|codex|claude-code|claude-code-interactive|$)|paused(?=\s|:|codex|claude-code|claude-code-interactive|$)|achieved(?=\s|:|codex|claude-code|claude-code-interactive|$)|budget\s*limited(?=\s|:|codex|claude-code|claude-code-interactive|$)|cleared(?=\s|:|codex|claude-code|claude-code-interactive|$)|updated(?=\s|:|codex|claude-code|claude-code-interactive|$))\s*:?\s*/i,
       '',
     ).trim();
     if (withoutEventPrefix !== text) {
       text = withoutEventPrefix;
       strippedPrefix = true;
     }
-    if (strippedPrefix) text = text.replace(/^(?:codex|claude-code)\s*/i, '').trim();
+    if (strippedPrefix) text = text.replace(/^(?:codex|claude-code|claude-code-interactive)\s*/i, '').trim();
     if (text === before) break;
   }
   return text;

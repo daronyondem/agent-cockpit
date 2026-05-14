@@ -148,6 +148,44 @@ class ClaudeGoalMockBackend extends MockBackendAdapter {
   }
 }
 
+class ClaudeInteractiveGoalMockBackend extends ClaudeGoalMockBackend {
+  get metadata(): BackendMetadata {
+    return {
+      ...super.metadata,
+      id: 'claude-code-interactive',
+      label: 'Claude Code Interactive',
+    };
+  }
+
+  setGoalObjective(objective: string, options?: SendMessageOptions): SendMessageResult {
+    this.lastGoalObjective = objective;
+    this._lastOptions = options || null;
+    this.goal = {
+      backend: 'claude-code-interactive',
+      threadId: 'mock-claude-interactive-session',
+      sessionId: 'mock-claude-interactive-session',
+      objective,
+      status: 'active',
+      supportedActions: { clear: true, stopTurn: true, pause: false, resume: false },
+      tokenBudget: null,
+      tokensUsed: 0,
+      timeUsedSeconds: 0,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const goal = this.goal;
+    return {
+      stream: (async function*() {
+        yield { type: 'goal_updated', goal } as StreamEvent;
+        yield { type: 'text', content: 'interactive goal output', streaming: true } as StreamEvent;
+        yield { type: 'done' } as StreamEvent;
+      })(),
+      abort: () => {},
+      sendInput: () => {},
+    };
+  }
+}
+
 async function startPendingMessage(content = 'first') {
   const conv = await env.chatService.createConversation('Pending Send Guard');
   let releaseUserAdd!: () => void;
@@ -600,6 +638,43 @@ describe('Codex goal endpoints', () => {
     expect(loaded?.messages.some(m => m.role === 'user')).toBe(false);
     expect(loaded?.messages.find(m => m.goalEvent?.kind === 'set')?.content).toBe('Goal set: npm test exits 0');
     expect(loaded?.messages.find(m => m.role === 'assistant')?.content).toBe('claude goal output');
+  });
+
+  test('starts a Claude Code Interactive goal through the shared Claude Code profile', async () => {
+    const interactiveBackend = new ClaudeInteractiveGoalMockBackend();
+    env.backendRegistry.register(interactiveBackend);
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: 'server-configured-claude-code',
+      cliProfiles: (settings.cliProfiles || []).map(profile => (
+        profile.id === 'server-configured-claude-code'
+          ? { ...profile, protocol: 'interactive' }
+          : profile
+      )),
+    });
+    const conv = await env.chatService.createConversation('Claude Interactive Goal Test');
+
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/goal`, {
+      objective: 'Ship interactive goals',
+      cliProfileId: 'server-configured-claude-code',
+    });
+    const events = await eventsPromise;
+
+    expect(res.status).toBe(200);
+    expect(res.body.streamReady).toBe(true);
+    expect(res.body.goal).toMatchObject({ objective: 'Ship interactive goals', status: 'active' });
+    expect(interactiveBackend.lastGoalObjective).toBe('Ship interactive goals');
+    expect(interactiveBackend._lastOptions?.cliProfileId).toBe('server-configured-claude-code');
+    expect(events.find(e => e.type === 'goal_updated')?.goal).toMatchObject({
+      objective: 'Ship interactive goals',
+    });
+
+    const loaded = await env.chatService.getConversation(conv.id);
+    expect(loaded?.backend).toBe('claude-code-interactive');
+    expect(loaded?.cliProfileId).toBe('server-configured-claude-code');
   });
 
   test('rejects unsupported Claude Code goal pause and resume actions', async () => {

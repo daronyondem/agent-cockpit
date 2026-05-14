@@ -3,6 +3,8 @@ import type {
   ToolOutcomeResult,
   UsageEvent,
   CliToolUseBlock,
+  ToolQuestion,
+  ToolQuestionOption,
 } from '../../types';
 
 // ── System Prompt ──────────────────────────────────────────────────────────
@@ -132,6 +134,7 @@ export function extractToolDetails(block: CliToolUseBlock): ToolDetail {
       detail.isPlanFile = !!(input.file_path && (input.file_path as string).includes('.claude/plans/'));
       if (detail.isPlanFile && input.content) {
         detail.planContent = input.content as string;
+        detail.planFilePath = input.file_path as string;
       }
       break;
     case 'Edit':
@@ -188,17 +191,76 @@ export function extractToolDetails(block: CliToolUseBlock): ToolDetail {
       detail.description = 'Plan ready for approval';
       detail.isPlanMode = true;
       detail.planAction = 'exit';
+      if (typeof input.plan === 'string' && input.plan.trim()) {
+        detail.planContent = input.plan;
+      } else if (typeof input.content === 'string' && input.content.trim()) {
+        detail.planContent = input.content;
+      }
+      detail.planFilePath = firstString(input.planFilePath, input.plan_file_path, input.filePath, input.file_path) || undefined;
       break;
     case 'AskUserQuestion':
       detail.description = 'Asking a question';
       detail.isQuestion = true;
-      detail.questions = (input.questions as string[]) || [];
+      detail.questions = normalizeAskUserQuestions(input.questions);
       break;
     default:
       detail.description = `Using ${name}`;
   }
 
   return detail;
+}
+
+function firstString(...values: unknown[]): string | null {
+  for (const value of values) {
+    if (typeof value === 'string' && value.trim()) return value;
+  }
+  return null;
+}
+
+function normalizeAskUserQuestions(value: unknown): ToolQuestion[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((question): ToolQuestion | null => {
+      if (typeof question === 'string') {
+        const text = question.trim();
+        return text ? { question: text } : null;
+      }
+      if (!question || typeof question !== 'object' || Array.isArray(question)) return null;
+      const record = question as Record<string, unknown>;
+      const text = typeof record.question === 'string'
+        ? record.question.trim()
+        : (typeof record.header === 'string' ? record.header.trim() : '');
+      const options = normalizeAskUserQuestionOptions(record.options);
+      if (!text && options.length === 0) return null;
+      return {
+        question: text || 'Input needed',
+        ...(options.length > 0 ? { options } : {}),
+      };
+    })
+    .filter((question): question is ToolQuestion => question !== null);
+}
+
+function normalizeAskUserQuestionOptions(value: unknown): ToolQuestionOption[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((option): ToolQuestionOption | null => {
+      if (typeof option === 'string') {
+        const label = option.trim();
+        return label ? { label } : null;
+      }
+      if (!option || typeof option !== 'object' || Array.isArray(option)) return null;
+      const record = option as Record<string, unknown>;
+      const label = typeof record.label === 'string'
+        ? record.label.trim()
+        : (typeof record.value === 'string' ? record.value.trim() : '');
+      if (!label) return null;
+      const description = typeof record.description === 'string' ? record.description.trim() : '';
+      return {
+        label,
+        ...(description ? { description } : {}),
+      };
+    })
+    .filter((option): option is ToolQuestionOption => option !== null);
 }
 
 // ── Usage Extraction ───────────────────────────────────────────────────────

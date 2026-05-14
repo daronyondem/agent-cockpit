@@ -178,7 +178,7 @@ describe('createConversation', () => {
 
     await expect(
       service.createConversation('Mismatch', undefined, 'claude-code', undefined, undefined, profile.id),
-    ).rejects.toThrow('CLI profile vendor kiro does not match backend claude-code');
+    ).rejects.toThrow('CLI profile backend kiro does not match requested backend claude-code');
   });
 
   test('backend defaults to claude-code when not specified', async () => {

@@ -61,6 +61,21 @@ const SessionsModal = React.lazy(() => import('./sessionsModal.jsx').then(mod =>
 /* Legacy fallback: for tool activities persisted before the server started
    tagging `batchIndex`, we approximate parallel grouping by startTime proximity. */
 const PARALLEL_THRESHOLD_MS = 500;
+const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
+
+function cliVendorForBackend(backendId){
+  return backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID ? 'claude-code' : backendId;
+}
+
+function backendIdForProfile(profile){
+  if (!profile) return null;
+  if (profile.vendor === 'claude-code' && profile.protocol === 'interactive') return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+  return profile.vendor;
+}
+
+function backendSupportsGoals(backendId){
+  return backendId === 'codex' || backendId === 'claude-code' || backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+}
 
 /* Cross-message subagent linkage. Because a subagent's Agent tool_use and its
    internal children can be persisted on different messages (the Agent's
@@ -802,7 +817,7 @@ function normalizeGoalCapability(capability, backendId){
     };
   }
   if (backendId === 'codex') return { set: true, clear: true, pause: true, resume: true, status: 'native' };
-  if (backendId === 'claude-code') return { set: true, clear: true, pause: false, resume: false, status: 'transcript' };
+  if (backendId === 'claude-code' || backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID) return { set: true, clear: true, pause: false, resume: false, status: 'transcript' };
   return { set: false, clear: false, pause: false, resume: false, status: 'none' };
 }
 
@@ -817,7 +832,8 @@ function GoalStrip({ convId, goal, streaming, sending }){
   const canPause = status === 'active' && goalSupportsAction(goal, 'pause');
   const canResume = status === 'paused' && !streaming && goalSupportsAction(goal, 'resume');
   const canClear = goalSupportsAction(goal, 'clear');
-  const clearDisabled = sending || (goal.backend === 'claude-code' && streaming);
+  const claudeGoal = goal.backend === 'claude-code' || goal.backend === CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+  const clearDisabled = sending || (claudeGoal && streaming);
   const [nowMs, setNowMs] = React.useState(() => Date.now());
   React.useEffect(() => {
     if (!goal) return undefined;
@@ -856,7 +872,7 @@ function GoalStrip({ convId, goal, streaming, sending }){
             type="button"
             onClick={() => StreamStore.clearGoal(convId)}
             disabled={clearDisabled}
-            title={clearDisabled && goal.backend === 'claude-code' ? 'Claude Code goals can be cleared after the active turn finishes' : 'Clear goal'}
+            title={clearDisabled && claudeGoal ? 'Claude Code goals can be cleared after the active turn finishes' : 'Clear goal'}
           >Clear</button>
         ) : null}
       </div>
@@ -1085,8 +1101,11 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const topbarProfile = topbarCliProfileId
     ? cliProfiles.find(profile => profile && profile.id === topbarCliProfileId)
     : null;
+  const topbarBackendCandidate = profileLocked
+    ? conv.backend
+    : (state.composerBackend || conv.backend);
   const topbarBackendId = topbarProfile
-    ? topbarProfile.vendor
+    ? (profileLocked ? topbarBackendCandidate : backendIdForProfile(topbarProfile))
     : profileLocked
       ? conv.backend
       : (state.composerBackend || conv.backend);
@@ -2831,7 +2850,7 @@ function ContextChip({ backendId, cliProfileId, usage }){
      the latest cached snapshot. Each store is a singleton; the server
      fronts it with a 10-min throttle so refresh-on-mount is cheap and
      safe. */
-  const store = backendId === 'claude-code' ? PlanUsageStore
+  const store = (backendId === 'claude-code' || backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID) ? PlanUsageStore
     : backendId === 'kiro'        ? KiroPlanUsageStore
     : backendId === 'codex'       ? CodexPlanUsageStore
     : null;
@@ -2901,9 +2920,11 @@ function formatMsgElapsed(ms){
 function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, composerServiceTier, profileLocked, disabled }){
   const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled) : [];
   const selectedProfile = activeProfiles.find(p => p.id === composerCliProfileId)
-    || (composerBackend ? activeProfiles.find(p => p.vendor === composerBackend) : null)
+    || (composerBackend ? activeProfiles.find(p => p.vendor === cliVendorForBackend(composerBackend)) : null)
     || null;
-  const effectiveBackendId = selectedProfile ? selectedProfile.vendor : composerBackend;
+  const effectiveBackendId = selectedProfile
+    ? backendIdForProfile(selectedProfile)
+    : composerBackend;
   const [profileBackend, setProfileBackend] = React.useState(null);
 
   React.useEffect(() => {
@@ -2922,8 +2943,14 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
       });
     return () => { cancelled = true; };
   }, [selectedProfile && selectedProfile.id]);
+  React.useEffect(() => {
+    if (profileLocked || !selectedProfile || !effectiveBackendId) return;
+    if (composerCliProfileId !== selectedProfile.id || composerBackend !== effectiveBackendId) {
+      StreamStore.setComposerCliProfile(convId, selectedProfile.id, effectiveBackendId);
+    }
+  }, [convId, profileLocked, selectedProfile && selectedProfile.id, effectiveBackendId, composerCliProfileId, composerBackend]);
 
-  const backend = (selectedProfile && profileBackend && profileBackend.id === selectedProfile.vendor)
+  const backend = (selectedProfile && profileBackend && profileBackend.id === effectiveBackendId)
     ? profileBackend
     : (backends.find(b => b.id === effectiveBackendId) || null);
   const backendModels = (backend && Array.isArray(backend.models)) ? backend.models : [];
@@ -2962,10 +2989,13 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
           disabled={disabled || profileLocked}
           options={activeProfiles.map(p => ({ value: p.id, label: p.name }))}
           currentValue={selectedProfile ? selectedProfile.id : ''}
-          icon={selectedProfile ? <BackendInlineIcon backends={backends} backendId={selectedProfile.vendor}/> : null}
+          icon={selectedProfile ? <BackendInlineIcon backends={backends} backendId={effectiveBackendId}/> : null}
           onChange={v => {
             const profile = activeProfiles.find(p => p.id === v);
-            if (profile) StreamStore.setComposerCliProfile(convId, profile.id, profile.vendor);
+            if (profile) {
+              const nextBackend = backendIdForProfile(profile);
+              StreamStore.setComposerCliProfile(convId, profile.id, nextBackend);
+            }
           }}
           title={profileLocked ? 'CLI profile locked for this session' : 'CLI Profile'}
         />
@@ -3344,6 +3374,10 @@ function ComposerCliUpdateIcon({ cliProfileId, backendId, onOpenSettings }){
   const [busy, setBusy] = React.useState(false);
   const [error, setError] = React.useState(null);
   const item = CliUpdateStore.findForSelection(cliProfileId, backendId);
+  const interactiveCompatibility = item && Array.isArray(item.interactiveCompatibility)
+    ? item.interactiveCompatibility.find(status => status && status.providerId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID && status.severity && status.severity !== 'none')
+    : null;
+  const showCompatibilityWarning = backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID && !!interactiveCompatibility;
   const pos = useFixedPopoverPosition(buttonRef, panelRef, open);
 
   React.useEffect(() => {
@@ -3368,12 +3402,15 @@ function ComposerCliUpdateIcon({ cliProfileId, backendId, onOpenSettings }){
   }, [open]);
 
   React.useEffect(() => {
-    if (!item || !item.updateAvailable) setOpen(false);
-  }, [item && item.id, item && item.updateAvailable]);
+    if (!item || (!item.updateAvailable && !showCompatibilityWarning)) setOpen(false);
+  }, [item && item.id, item && item.updateAvailable, showCompatibilityWarning]);
 
-  if (!item || !item.updateAvailable) return null;
+  if (!item || (!item.updateAvailable && !showCompatibilityWarning)) return null;
 
-  const title = item.label + ' update available';
+  const title = showCompatibilityWarning
+    ? 'Claude Code Interactive compatibility warning'
+    : item.label + ' update available';
+  const showUpdateAction = item.updateAvailable === true;
   const profileLabel = item.profileNames && item.profileNames.length
     ? item.profileNames.slice(0, 2).join(', ') + (item.profileNames.length > 2 ? ' +' + (item.profileNames.length - 2) : '')
     : 'Current profile';
@@ -3433,23 +3470,38 @@ function ComposerCliUpdateIcon({ cliProfileId, backendId, onOpenSettings }){
           <div className="tt-section">
             <div className="tt-rows">
               <div className="tt-kv"><span>Current</span><b>{item.currentVersion || 'unknown'}</b></div>
-              <div className="tt-kv"><span>Available</span><b>{item.latestVersion || 'unknown'}</b></div>
+              <div className="tt-kv"><span>{showCompatibilityWarning ? 'Tested' : 'Available'}</span><b>{showCompatibilityWarning ? interactiveCompatibility.testedVersion : (item.latestVersion || 'unknown')}</b></div>
               <div className="tt-kv"><span>Install</span><b>{formatInstallMethod(item.installMethod)}</b></div>
               <div className="tt-kv"><span>Profile</span><b title={profileLabel}>{profileLabel}</b></div>
             </div>
           </div>
+          {showCompatibilityWarning ? (
+            <div className="tt-section">
+              <div className="tt-error-text">{interactiveCompatibility.message}</div>
+            </div>
+          ) : item.updateCaution ? (
+            <div className="tt-section">
+              <div className="tt-error-text">{item.updateCaution}</div>
+            </div>
+          ) : null}
           {error ? (
             <div className="tt-section">
               <div className="tt-error-text">{error}</div>
             </div>
           ) : null}
           <div className="tt-foot">
-            <span className="hint">{item.updateSupported ? 'No active stream can be running.' : 'Open settings for update details.'}</span>
+            <span className="hint">
+              {showUpdateAction
+                ? (item.updateSupported ? 'No active stream can be running.' : 'Open settings for update details.')
+                : 'Open settings for compatibility details.'}
+            </span>
             <span className="spacer"/>
             <button type="button" className="tt-btn" onClick={() => onOpenSettings && onOpenSettings('cli')}>CLI settings</button>
-            <button type="button" className="tt-btn primary" disabled={busy || !item.updateSupported} onClick={doUpdate}>
-              {busy ? 'Updating…' : 'Update now'}
-            </button>
+            {showUpdateAction ? (
+              <button type="button" className="tt-btn primary" disabled={busy || !item.updateSupported} onClick={doUpdate}>
+                {busy ? 'Updating…' : 'Update now'}
+              </button>
+            ) : null}
           </div>
         </div>
       ) : null}

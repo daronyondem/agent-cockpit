@@ -75,6 +75,9 @@ export async function processStream(
   let thinkingText = '';
   let resultText: string | null = null;
   let pendingPlanContent = '';
+  let pendingPlanFileToolId: string | null = null;
+  let planModeActive = false;
+  let planApprovalEmitted = false;
   let titleUpdateTriggered = false;
   let titleUpdatePromise: Promise<void> | null = null;
   let toolActivityAccumulator: Array<{
@@ -184,7 +187,18 @@ export async function processStream(
   let terminalErrorPersisted = false;
   let terminalErrorSeen = false;
   let doneEmitted = false;
+  let cleanupDone = false;
   const persistedGoalEventKeys = new Set<string>();
+
+  async function runOnDoneIfNeeded(): Promise<void> {
+    if (cleanupDone) return;
+    cleanupDone = true;
+    if (entry.pendingPlanApprovalTimer) {
+      clearTimeout(entry.pendingPlanApprovalTimer);
+      entry.pendingPlanApprovalTimer = null;
+    }
+    await onDone();
+  }
 
   async function markJobFinalizing(message: string, source: StreamErrorSource): Promise<void> {
     if (!deps.streamSupervisor || !deps.jobId) return;
@@ -218,6 +232,7 @@ export async function processStream(
     if (doneEmitted) return;
     if (titleUpdatePromise) await titleUpdatePromise;
     await deleteJobBeforeDone();
+    await runOnDoneIfNeeded();
     doneEmitted = true;
     emit({ type: 'done' });
   }
@@ -285,6 +300,36 @@ export async function processStream(
       { goalEvent },
     );
     if (goalMsg && !isClosed()) emit({ type: 'assistant_message', message: goalMsg });
+  }
+
+  function emitPlanApprovalFromPlanFile(): void {
+    if (!planModeActive || planApprovalEmitted || !pendingPlanContent) return;
+    planApprovalEmitted = true;
+    entry.deferPlanApprovalInput = true;
+    emit({
+      type: 'tool_activity',
+      tool: 'ExitPlanMode',
+      id: pendingPlanFileToolId ? `${pendingPlanFileToolId}:plan` : null,
+      description: 'Plan ready for approval',
+      isPlanMode: true,
+      planAction: 'exit',
+      planContent: pendingPlanContent,
+    });
+  }
+
+  function flushDeferredPlanApprovalInput(delayMs = 300): void {
+    const pending = entry.pendingPlanApprovalInput;
+    if (!pending) return;
+    if (entry.pendingPlanApprovalTimer) {
+      clearTimeout(entry.pendingPlanApprovalTimer);
+      entry.pendingPlanApprovalTimer = null;
+    }
+    entry.pendingPlanApprovalInput = null;
+    entry.deferPlanApprovalInput = false;
+    const timer = setTimeout(() => {
+      entry.sendInput?.(pending);
+    }, delayMs);
+    timer.unref?.();
   }
 
   async function finalizeTerminalError(message: string, source: StreamErrorSource, forceEmit = false): Promise<void> {
@@ -366,6 +411,10 @@ export async function processStream(
             match.status = outcome.status || undefined;
           }
           patchToolBlock(outcome.toolUseId, outcome.outcome || undefined, outcome.status || undefined);
+          if (outcome.toolUseId === pendingPlanFileToolId) {
+            if (!outcome.isError) emitPlanApprovalFromPlanFile();
+            pendingPlanFileToolId = null;
+          }
         }
         emit({ type: 'tool_outcomes', outcomes: event.outcomes });
       } else if (event.type === 'artifact') {
@@ -409,17 +458,27 @@ export async function processStream(
       } else if (event.type === 'tool_activity') {
         if (event.isPlanFile && event.planContent) {
           pendingPlanContent = event.planContent;
+          pendingPlanFileToolId = event.id || null;
         }
         const { type: _t, planContent: _pc, ...rest } = event;
         const restAny = rest as Record<string, unknown>;
         if (restAny.isPlanMode && restAny.planAction === 'exit') {
-          const fallbackPlanContent = pendingPlanContent
+          const duplicatePlanApproval = planApprovalEmitted;
+          planModeActive = false;
+          planApprovalEmitted = true;
+          flushDeferredPlanApprovalInput();
+          if (duplicatePlanApproval) continue;
+          const fallbackPlanContent = _pc
+            || pendingPlanContent
             || fullResponse.trim()
             || resultText?.trim()
             || '';
           if (fallbackPlanContent) {
             restAny.planContent = fallbackPlanContent;
           }
+        } else if (restAny.isPlanMode && restAny.planAction === 'enter') {
+          planModeActive = true;
+          planApprovalEmitted = false;
         }
         if (restAny.isAgent && restAny.id) {
           log.debug('Agent tool activity detected', { id: restAny.id, parentAgentId: restAny.parentAgentId || null });
@@ -560,7 +619,7 @@ export async function processStream(
       await finalizeTerminalError((err as Error).message, 'server');
     }
   } finally {
-    await onDone();
+    await runOnDoneIfNeeded();
   }
 }
 
@@ -1214,7 +1273,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
           }
           memoryWatcher.unwatch(convId);
           memoryFingerprints.delete(convId);
-          if (backendId === 'claude-code') {
+          if (backendId === 'claude-code' || backendId === 'claude-code-interactive') {
             claudePlanUsageService.maybeRefresh('turn-done', runtime.profile);
           } else if (backendId === 'kiro') {
             kiroPlanUsageService.maybeRefresh('turn-done');
