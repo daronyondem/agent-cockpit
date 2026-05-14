@@ -107,6 +107,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
         dataDir: path.join(tmpDir, 'data'),
         installedAt: null,
         welcomeCompletedAt: null,
+        nodeRuntime: null,
         stateSource: 'inferred',
         stateError: null,
       }),

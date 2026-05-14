@@ -2,9 +2,11 @@ import { execFile, spawn } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import type { InstallStatus, UpdateStatus, UpdateResult, UpdateStep } from '../types';
+import type { InstallNodeRuntime, InstallStatus, UpdateStatus, UpdateResult, UpdateStep } from '../types';
 import { WebBuildService, type WebBuildStatus } from './webBuildService';
 import { MobileBuildService, type MobileBuildStatus } from './mobileBuildService';
+
+const DEFAULT_REQUIRED_NODE_MAJOR = 22;
 
 interface UpdateServiceOptions {
   webBuildService?: UpdateWebBuildService;
@@ -30,6 +32,12 @@ interface ReleaseManifest {
   version: string;
   packageRoot: string;
   artifacts: ReleaseManifestArtifact[];
+  requiredRuntime?: {
+    node?: {
+      engine?: string | null;
+      minimumMajor?: number | null;
+    };
+  };
 }
 
 interface UpdateWebBuildService {
@@ -265,6 +273,7 @@ export class UpdateService {
       }
 
       const finalAppDir = await this._extractRelease(release.tarballPath, release.manifest.packageRoot, releasesDir, steps);
+      const nodeRuntime = await this._ensureProductionNodeRuntime(installStatus, release.manifest, finalAppDir, steps);
 
       try {
         const out = await this._exec('npm', ['ci'], 120000, finalAppDir);
@@ -288,7 +297,7 @@ export class UpdateService {
         return { success: false, steps, error: (err as Error).message };
       }
 
-      this._copyRuntimeConfig(previousAppDir, finalAppDir);
+      this._copyRuntimeConfig(previousAppDir, finalAppDir, nodeRuntime);
       steps.push({ name: 'copy runtime config', success: true, output: '.env and ecosystem.config.js copied' });
 
       this._switchCurrentSymlink(currentLink, finalAppDir);
@@ -305,6 +314,7 @@ export class UpdateService {
           installDir: installStatus.installDir,
           appDir: currentLink,
           dataDir: installStatus.dataDir,
+          nodeRuntime,
         });
         steps.push({ name: 'write install manifest', success: true, output: `version ${release.manifest.version}` });
       }
@@ -440,6 +450,205 @@ export class UpdateService {
     return `https://github.com/${installStatus.repo}/releases/latest/download`;
   }
 
+  private async _ensureProductionNodeRuntime(
+    installStatus: InstallStatus,
+    manifest: ReleaseManifest,
+    appDir: string,
+    steps: UpdateStep[],
+  ): Promise<InstallNodeRuntime | null> {
+    const required = this._requiredNodeRuntime(manifest, appDir);
+    const current = await this._readCurrentNodeRuntime(installStatus, required.minimumMajor);
+    if (this._nodeMajor(current.version) >= required.minimumMajor) {
+      if (current.source === 'private' && current.binDir) this._prependPath(current.binDir);
+      const verified = { ...current, requiredMajor: required.minimumMajor };
+      steps.push({
+        name: 'verify Node.js runtime',
+        success: true,
+        output: `Node.js ${current.version || 'unknown'} satisfies ${required.engine || `>=${required.minimumMajor}`}`,
+      });
+      return verified;
+    }
+
+    steps.push({
+      name: 'verify Node.js runtime',
+      success: false,
+      output: `Node.js ${current.version || 'unknown'} does not satisfy ${required.engine || `>=${required.minimumMajor}`}; installing a private runtime`,
+    });
+    const updated = await this._installPrivateNodeRuntime(installStatus, required.minimumMajor, steps);
+    this._prependPath(updated.binDir || '');
+    return updated;
+  }
+
+  private _requiredNodeRuntime(manifest: ReleaseManifest, appDir: string): { engine: string | null; minimumMajor: number } {
+    const manifestNode = manifest.requiredRuntime?.node;
+    if (manifestNode && typeof manifestNode.minimumMajor === 'number' && Number.isFinite(manifestNode.minimumMajor)) {
+      return {
+        engine: typeof manifestNode.engine === 'string' ? manifestNode.engine : null,
+        minimumMajor: manifestNode.minimumMajor,
+      };
+    }
+
+    try {
+      const parsed = JSON.parse(fs.readFileSync(path.join(appDir, 'package.json'), 'utf8'));
+      const engine = typeof parsed.engines?.node === 'string' ? parsed.engines.node : null;
+      return {
+        engine,
+        minimumMajor: this._parseMinimumNodeMajor(engine) || DEFAULT_REQUIRED_NODE_MAJOR,
+      };
+    } catch {
+      return { engine: null, minimumMajor: DEFAULT_REQUIRED_NODE_MAJOR };
+    }
+  }
+
+  private _parseMinimumNodeMajor(engine: string | null): number | null {
+    if (!engine) return null;
+    const match = engine.match(/>=\s*(\d+)/);
+    return match ? Number(match[1]) : null;
+  }
+
+  private async _readCurrentNodeRuntime(installStatus: InstallStatus, requiredMajor: number): Promise<InstallNodeRuntime> {
+    const privateRuntime = this._privateNodeRuntime(installStatus);
+    const stored = installStatus.nodeRuntime;
+    if (stored?.source === 'private' || fs.existsSync(privateRuntime.nodePath)) {
+      let version = stored?.version || null;
+      if (!version && fs.existsSync(privateRuntime.nodePath)) {
+        try {
+          version = (await this._exec(privateRuntime.nodePath, ['-p', 'process.versions.node'], 5000)).trim();
+        } catch {
+          version = null;
+        }
+      }
+      return {
+        source: 'private',
+        version,
+        npmVersion: stored?.npmVersion || null,
+        binDir: stored?.binDir || privateRuntime.binDir,
+        runtimeDir: stored?.runtimeDir || privateRuntime.runtimeDir,
+        requiredMajor,
+        updatedAt: stored?.updatedAt || null,
+      };
+    }
+
+    return {
+      source: stored?.source === 'unknown' ? 'unknown' : 'system',
+      version: process.versions.node || stored?.version || null,
+      npmVersion: stored?.npmVersion || null,
+      binDir: stored?.binDir || path.dirname(process.execPath),
+      runtimeDir: stored?.runtimeDir || null,
+      requiredMajor,
+      updatedAt: stored?.updatedAt || null,
+    };
+  }
+
+  private _privateNodeRuntime(installStatus: InstallStatus): { runtimeRoot: string; runtimeDir: string; binDir: string; nodePath: string } {
+    const installDir = installStatus.installDir || path.dirname(this._appRoot);
+    const runtimeRoot = path.join(installDir, 'runtime');
+    const runtimeDir = path.join(runtimeRoot, 'node');
+    const binDir = path.join(runtimeDir, 'bin');
+    return {
+      runtimeRoot,
+      runtimeDir,
+      binDir,
+      nodePath: path.join(binDir, 'node'),
+    };
+  }
+
+  private async _installPrivateNodeRuntime(installStatus: InstallStatus, requiredMajor: number, steps: UpdateStep[]): Promise<InstallNodeRuntime> {
+    if (!installStatus.installDir) {
+      throw new Error('Production install manifest is missing installDir; cannot update private Node.js runtime.');
+    }
+    if (process.platform !== 'darwin') {
+      throw new Error('Private Node.js runtime updates are currently supported on macOS only.');
+    }
+
+    const nodeArch = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'x64' : null;
+    if (!nodeArch) throw new Error(`Unsupported macOS CPU architecture for Node.js runtime update: ${process.arch}`);
+
+    const runtime = this._privateNodeRuntime(installStatus);
+    const downloadDir = fs.mkdtempSync(path.join(this._dataRoot, 'node-runtime-download-'));
+    try {
+      const base = `https://nodejs.org/dist/latest-v${requiredMajor}.x`;
+      const checksumsRaw = await this._exec('curl', ['-fsSL', `${base}/SHASUMS256.txt`], 30000);
+      const tarballName = this._findNodeTarballName(checksumsRaw, requiredMajor, nodeArch);
+      const tarballPath = path.join(downloadDir, tarballName);
+      const tarballBytes = await this._execBuffer('curl', ['-fsSL', `${base}/${tarballName}`], 120000);
+      fs.writeFileSync(tarballPath, tarballBytes);
+      this._verifyChecksum(tarballPath, tarballName, checksumsRaw);
+
+      const version = tarballName.replace(/^node-v/, '').replace(new RegExp(`-darwin-${nodeArch}[.]tar[.]gz$`), '');
+      fs.mkdirSync(runtime.runtimeRoot, { recursive: true });
+      const stagingParent = fs.mkdtempSync(path.join(runtime.runtimeRoot, '.node-extract-'));
+      try {
+        await this._exec('tar', ['-xzf', tarballPath, '-C', stagingParent], 120000);
+        const extractedDir = path.join(stagingParent, `node-v${version}-darwin-${nodeArch}`);
+        const finalDir = path.join(runtime.runtimeRoot, `node-v${version}`);
+        fs.rmSync(finalDir, { recursive: true, force: true });
+        fs.renameSync(extractedDir, finalDir);
+        if (fs.existsSync(runtime.runtimeDir) && !fs.lstatSync(runtime.runtimeDir).isSymbolicLink()) {
+          throw new Error(`${runtime.runtimeDir} exists and is not a symlink.`);
+        }
+        fs.rmSync(runtime.runtimeDir, { force: true });
+        fs.symlinkSync(finalDir, runtime.runtimeDir);
+      } finally {
+        fs.rmSync(stagingParent, { recursive: true, force: true });
+      }
+
+      const npmVersion = await this._readPrivateNpmVersion(runtime.runtimeDir, runtime.binDir);
+      const result: InstallNodeRuntime = {
+        source: 'private',
+        version,
+        npmVersion,
+        binDir: runtime.binDir,
+        runtimeDir: runtime.runtimeDir,
+        requiredMajor,
+        updatedAt: new Date().toISOString(),
+      };
+      steps.push({
+        name: 'install Node.js runtime',
+        success: true,
+        output: `Installed private Node.js v${version} for required runtime >=${requiredMajor}`,
+      });
+      return result;
+    } catch (err: unknown) {
+      steps.push({ name: 'install Node.js runtime', success: false, output: (err as Error).message });
+      throw err;
+    } finally {
+      fs.rmSync(downloadDir, { recursive: true, force: true });
+    }
+  }
+
+  private _findNodeTarballName(checksumsRaw: string, requiredMajor: number, nodeArch: string): string {
+    const pattern = new RegExp(`^node-v${requiredMajor}[.][0-9]+[.][0-9]+-darwin-${nodeArch}[.]tar[.]gz$`);
+    for (const line of checksumsRaw.split(/\r?\n/)) {
+      const [, name] = line.trim().split(/\s+/);
+      if (name && pattern.test(name)) return name;
+    }
+    throw new Error(`Could not find a macOS ${nodeArch} Node.js ${requiredMajor} tarball in SHASUMS256.txt.`);
+  }
+
+  private _nodeMajor(version: string | null): number {
+    if (!version) return 0;
+    const major = Number(version.replace(/^v/, '').split('.')[0]);
+    return Number.isFinite(major) ? major : 0;
+  }
+
+  private _prependPath(binDir: string): void {
+    if (!binDir) return;
+    const parts = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+    process.env.PATH = [binDir, ...parts.filter(part => part !== binDir)].join(path.delimiter);
+  }
+
+  private async _readPrivateNpmVersion(runtimeDir: string, binDir: string): Promise<string | null> {
+    const nodePath = path.join(binDir, 'node');
+    const npmCliPath = path.join(runtimeDir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    if (!fs.existsSync(nodePath) || !fs.existsSync(npmCliPath)) return null;
+    try {
+      return (await this._exec(nodePath, [npmCliPath, '--version'], 5000)).trim() || null;
+    } catch {
+      return null;
+    }
+  }
+
   private async _downloadReleaseManifest(installStatus: InstallStatus): Promise<ReleaseManifest> {
     const raw = await this._exec('curl', ['-fsSL', `${this._releaseDownloadBase(installStatus)}/release-manifest.json`], 30000);
     return this._parseReleaseManifest(raw);
@@ -556,7 +765,7 @@ export class UpdateService {
     steps.push({ name: 'verify release assets', success: true, output: 'Found public/v2-built and public/mobile-built' });
   }
 
-  private _copyRuntimeConfig(fromDir: string, toDir: string): void {
+  private _copyRuntimeConfig(fromDir: string, toDir: string, nodeRuntime: InstallNodeRuntime | null): void {
     for (const filename of ['.env', 'ecosystem.config.js']) {
       const source = path.join(fromDir, filename);
       if (!fs.existsSync(source)) {
@@ -564,6 +773,40 @@ export class UpdateService {
       }
       fs.copyFileSync(source, path.join(toDir, filename));
     }
+    if (nodeRuntime?.source === 'private' && nodeRuntime.binDir) {
+      this._persistPrivateRuntimePath(toDir, nodeRuntime.binDir);
+    }
+  }
+
+  private _persistPrivateRuntimePath(appDir: string, binDir: string): void {
+    const runtimePath = this._runtimePath(binDir);
+    const envPath = path.join(appDir, '.env');
+    const envRaw = fs.readFileSync(envPath, 'utf8');
+    const envLine = `PATH="${this._escapeEnvValue(runtimePath)}"`;
+    const envNext = /^PATH=.*$/m.test(envRaw)
+      ? envRaw.replace(/^PATH=.*$/m, envLine)
+      : `${envRaw.replace(/\s*$/, '')}\n${envLine}\n`;
+    fs.writeFileSync(envPath, envNext);
+
+    const ecosystemPath = path.join(appDir, 'ecosystem.config.js');
+    const source = fs.readFileSync(ecosystemPath, 'utf8');
+    const mod: { exports: unknown } = { exports: {} };
+    new Function('module', 'exports', '__dirname', source)(mod, mod.exports, appDir);
+    const config = mod.exports as { apps?: Array<{ env?: Record<string, unknown> }> };
+    if (!config || !Array.isArray(config.apps) || !config.apps[0]) {
+      throw new Error('Current ecosystem.config.js does not export an app config.');
+    }
+    config.apps[0].env = { ...(config.apps[0].env || {}), PATH: runtimePath };
+    fs.writeFileSync(ecosystemPath, `module.exports = ${JSON.stringify(config, null, 2)};\n`);
+  }
+
+  private _runtimePath(binDir: string): string {
+    const parts = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+    return [binDir, ...parts.filter(part => part !== binDir)].join(path.delimiter);
+  }
+
+  private _escapeEnvValue(value: string): string {
+    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
   }
 
   private _switchCurrentSymlink(currentLink: string, target: string): void {

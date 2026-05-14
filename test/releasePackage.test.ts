@@ -15,7 +15,7 @@ function writeFile(root: string, relPath: string, content = '') {
 
 function makeFixtureRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-release-root-'));
-  writeFile(root, 'package.json', JSON.stringify({ name: 'agent-cockpit', version: '1.2.3' }));
+  writeFile(root, 'package.json', JSON.stringify({ name: 'agent-cockpit', version: '1.2.3', engines: { node: '>=23' } }));
   writeFile(root, 'package-lock.json', '{}');
   writeFile(root, 'tsconfig.json', '{}');
   writeFile(root, 'server.ts', 'export {};\n');
@@ -113,6 +113,12 @@ describe('release package script', () => {
       requiredBuilds: {
         web: 'public/v2-built/index.html',
         mobile: 'public/mobile-built/index.html',
+      },
+      requiredRuntime: {
+        node: {
+          engine: '>=23',
+          minimumMajor: 23,
+        },
       },
     });
     expect(manifest.artifacts).toEqual(expect.arrayContaining([

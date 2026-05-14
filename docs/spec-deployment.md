@@ -139,12 +139,13 @@ directories such as `public/.v2-built-*` and `public/.mobile-built-*`.
 
 `release-manifest.json` is an external installer/updater manifest with
 `schemaVersion: 1`, `channel: "production"`, `source: "github-release"`,
-`version`, `sourceRef`, `sourceCommit`, `packageRoot`, required build paths,
-the tarball and macOS installer artifact names/sizes/SHA256 hashes, and per-file
-paths, sizes, and SHA256 hashes for the packaged tree. `SHA256SUMS` contains
-checksums for the tarball, release manifest, and external `install-macos.sh`
-asset. The manifest is not embedded in the tarball, so its tarball hash can be
-verified before extraction.
+`version`, `sourceRef`, `sourceCommit`, `packageRoot`, required runtime metadata
+from root `package.json` `engines.node`, required build paths, the tarball and
+macOS installer artifact names/sizes/SHA256 hashes, and per-file paths, sizes,
+and SHA256 hashes for the packaged tree. `SHA256SUMS` contains checksums for the
+tarball, release manifest, and external `install-macos.sh` asset. The manifest is
+not embedded in the tarball, so its tarball hash can be verified before
+extraction.
 
 The automatic `.github/workflows/version-bump.yml` workflow remains a dev/main
 version bookkeeping workflow. It bumps the patch version on pushes to `main`,
@@ -164,15 +165,29 @@ scripts/install-macos.sh --channel dev
 
 Supported options are `--channel production|dev`, `--version <version>`,
 `--repo <owner/name>`, `--install-dir <path>`, `--dev-dir <path>`,
-`--port <port>`, `--install-node`, and `--skip-open`. The default install root
-is `~/Library/Application Support/Agent Cockpit`; production releases are
-extracted under `releases/agent-cockpit-v<version>`, and `current` is a symlink
-to the active release. Mutable runtime data lives under `<install-root>/data`.
+`--port <port>`, `--install-node`, `--no-install-node`, and `--skip-open`. The
+default install root is `~/Library/Application Support/Agent Cockpit`;
+production releases are extracted under `releases/agent-cockpit-v<version>`,
+and `current` is a symlink to the active release. Mutable runtime data lives
+under `<install-root>/data`.
 
 The installer exits unless `uname -s` is `Darwin`, the CPU is `arm64` or
-`x86_64`, Node.js 22+ and npm are available, and `curl`, `tar`, and `shasum` are
-available. If Node 22+ is missing it prints Homebrew/nodejs.org guidance; it only
-runs `brew install node` when the user explicitly supplies `--install-node`.
+`x86_64`, and `curl`, `tar`, and `shasum` are available. When Node.js 22+ and
+npm are already available on `PATH`, the installer uses them. Otherwise it
+downloads the latest official Node.js 22 macOS tarball for the detected
+architecture from `https://nodejs.org/dist/latest-v22.x/`, downloads
+`SHASUMS256.txt`, verifies the tarball with `shasum -a 256`, extracts it under
+`<install-root>/runtime/node-v<version>`, and points
+`<install-root>/runtime/node` at that runtime. It prepends the private
+`runtime/node/bin` directory for install-time `node`, `npm`, and `npx` commands
+and persists that `PATH` in generated `.env` and `ecosystem.config.js` so the
+PM2-managed server and restart/update scripts continue to use the private
+runtime. The installer records `nodeRuntime` ownership/version metadata in
+`install.json` so later production updates know whether Agent Cockpit may update
+that runtime. `--install-node` keeps this default behavior explicit;
+`--no-install-node` makes missing/old Node.js a hard error for users who want to
+manage Node themselves. [ADR-0059](adr/0059-install-private-node-runtime-on-macos.md)
+captures the private-runtime and update decision.
 
 Production installs download `release-manifest.json`, `SHA256SUMS`, and the
 manifest-designated `app-tarball` from
@@ -194,7 +209,9 @@ Both channels generate `.env`, `ecosystem.config.js`, and
 `<AGENT_COCKPIT_DATA_DIR>/install.json`. Generated runtime config sets `PORT`,
 secure random `SESSION_SECRET`, secure random `AUTH_SETUP_TOKEN`,
 `AGENT_COCKPIT_DATA_DIR`, `WEB_BUILD_MODE=auto`, and
-`AUTH_ENABLE_LEGACY_OAUTH=false`. The PM2 ecosystem file uses the local
+`AUTH_ENABLE_LEGACY_OAUTH=false`. When the installer had to install the private
+Node.js runtime, generated config also persists `PATH` with that runtime's
+`bin` directory first. The PM2 ecosystem file uses the local
 `./node_modules/.bin/tsx` interpreter, `cwd` set to the selected app directory,
 and app name `agent-cockpit`. The install manifest records production as
 `channel: "production", source: "github-release"` and dev as
@@ -233,7 +250,7 @@ npm run mobile:build
 
 `WEB_BUILD_MODE=skip` disables both main V2 web and mobile startup preflights for tests or unusual deployments that provision assets out of band. If no previous build exists and the build fails, startup fails. If a previous build exists and a rebuild fails, the server logs the error and serves the previous build.
 
-Dev self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. Production self-update runs root/mobile `npm ci` inside the extracted release, then runs the V2/mobile build preflight there only when markers or assets require it. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md), [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md), and [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md).
+Dev self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. Production self-update checks the release manifest's required Node runtime before dependency installation. When a release raises the required Node major, the updater installs or refreshes a checksum-verified private Node runtime from Node.org under the Agent Cockpit install root before running `npm ci`; installs that previously used system Node migrate to this private runtime instead of mutating global Node. Production then runs root/mobile `npm ci` inside the extracted release, then runs the V2/mobile build preflight there only when markers or assets require it. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md), [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md), [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md), and [ADR-0059](adr/0059-install-private-node-runtime-on-macos.md).
 
 **Remote access via ngrok:**
 ```bash

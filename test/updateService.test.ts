@@ -97,6 +97,17 @@ function writeText(filePath: string, value: string) {
   originalWriteFileSync(filePath, value);
 }
 
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+function mockProcessPlatform(platform: NodeJS.Platform): () => void {
+  Object.defineProperty(process, 'platform', { value: platform });
+  return () => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  };
+}
+
 function makeProductionInstall(rootPrefix = 'agent-cockpit-install-') {
   const installDir = fs.mkdtempSync(path.join(os.tmpdir(), rootPrefix));
   const releasesDir = path.join(installDir, 'releases');
@@ -122,6 +133,7 @@ function makeProductionInstall(rootPrefix = 'agent-cockpit-install-') {
     dataDir,
     installedAt: '2026-05-11T00:00:00.000Z',
     welcomeCompletedAt: null,
+    nodeRuntime: null,
     stateSource: 'stored' as const,
     stateError: null,
   };
@@ -129,7 +141,7 @@ function makeProductionInstall(rootPrefix = 'agent-cockpit-install-') {
   return { installDir, releasesDir, previousDir, currentLink, dataDir, status };
 }
 
-function makeReleaseFixture(version = '1.1.0') {
+function makeReleaseFixture(version = '1.1.0', minimumNodeMajor = 22) {
   const tarballName = `agent-cockpit-v${version}.tar.gz`;
   const tarballBytes = Buffer.from(`release tarball ${version}`);
   const tarballSha = crypto.createHash('sha256').update(tarballBytes).digest('hex');
@@ -137,6 +149,12 @@ function makeReleaseFixture(version = '1.1.0') {
     schemaVersion: 1,
     version,
     packageRoot: `agent-cockpit-v${version}`,
+    requiredRuntime: {
+      node: {
+        engine: `>=${minimumNodeMajor}`,
+        minimumMajor: minimumNodeMajor,
+      },
+    },
     artifacts: [
       {
         name: tarballName,
@@ -270,6 +288,7 @@ describe('UpdateService', () => {
             dataDir: path.join(appRoot, 'data'),
             installedAt: null,
             welcomeCompletedAt: null,
+            nodeRuntime: null,
             stateSource: 'stored',
             stateError: null,
           }),
@@ -735,6 +754,7 @@ describe('UpdateService', () => {
           'download release manifest',
           'download release tarball',
           'extract release',
+          'verify Node.js runtime',
           'npm ci',
           'npm --prefix mobile/AgentCockpitPWA ci',
           'npm run web:build',
@@ -751,6 +771,10 @@ describe('UpdateService', () => {
           version: '1.1.0',
           appDir: install.currentLink,
           dataDir: install.dataDir,
+          nodeRuntime: expect.objectContaining({
+            source: expect.any(String),
+            requiredMajor: 22,
+          }),
         }));
         expect(fs.realpathSync(install.currentLink)).toBe(fs.realpathSync(path.join(install.releasesDir, 'agent-cockpit-v1.1.0')));
         expect(originalExistsSync(path.join(fs.realpathSync(install.currentLink), '.env'))).toBe(true);
@@ -768,6 +792,225 @@ describe('UpdateService', () => {
           stdio: 'ignore',
         }));
       } finally {
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('updates a private Node.js runtime before production dependency install when required major increases', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('darwin');
+      const install = makeProductionInstall('agent-cockpit-prod-node-update-');
+      const nodeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
+      const nodeVersion = '23.9.0';
+      (install.status as any).nodeRuntime = {
+        source: 'private',
+        version: '22.22.3',
+        npmVersion: '10.9.8',
+        binDir: path.join(install.installDir, 'runtime', 'node', 'bin'),
+        runtimeDir: path.join(install.installDir, 'runtime', 'node'),
+        requiredMajor: 22,
+        updatedAt: '2026-05-11T00:00:00.000Z',
+      };
+      const release = makeReleaseFixture('1.1.0', 23);
+      const nodeTarballName = `node-v${nodeVersion}-darwin-${nodeArch}.tar.gz`;
+      const nodeTarballBytes = Buffer.from('node runtime tarball');
+      const nodeTarballSha = crypto.createHash('sha256').update(nodeTarballBytes).digest('hex');
+      const nodeChecksums = `${nodeTarballSha}  ${nodeTarballName}\n`;
+      const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
+      try {
+        service = new UpdateService(install.currentLink, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+            writeState,
+          },
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          const url = typeof args[1] === 'string' ? args[1] : '';
+          if (cmd === 'curl' && url.endsWith('/release-manifest.json')) {
+            cb(null, release.manifestRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && url.endsWith('/SHA256SUMS')) {
+            cb(null, release.checksumsRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && url.endsWith(`/${release.tarballName}`)) {
+            cb(null, release.tarballBytes, Buffer.alloc(0));
+            return;
+          }
+          if (cmd === 'curl' && url.endsWith('/SHASUMS256.txt')) {
+            cb(null, nodeChecksums, '');
+            return;
+          }
+          if (cmd === 'curl' && url.endsWith(`/${nodeTarballName}`)) {
+            cb(null, nodeTarballBytes, Buffer.alloc(0));
+            return;
+          }
+          if (cmd === 'tar') {
+            const extractDir = String(args[args.indexOf('-C') + 1]);
+            if (extractDir.includes('.node-extract-')) {
+              writeText(path.join(extractDir, `node-v${nodeVersion}-darwin-${nodeArch}`, 'bin/node'), 'node\n');
+              writeText(path.join(extractDir, `node-v${nodeVersion}-darwin-${nodeArch}`, 'bin/npm'), 'npm\n');
+              cb(null, 'node extracted\n', '');
+              return;
+            }
+            const packageDir = path.join(extractDir, release.manifest.packageRoot);
+            writeText(path.join(packageDir, 'server.ts'), 'console.log("server");\n');
+            writeJson(path.join(packageDir, 'package.json'), { version: '1.1.0', engines: { node: '>=23' } });
+            writeText(path.join(packageDir, 'public/v2-built/index.html'), '<!doctype html>\n');
+            writeText(path.join(packageDir, 'public/mobile-built/index.html'), '<!doctype html>\n');
+            cb(null, 'extracted\n', '');
+            return;
+          }
+          if (cmd === 'git' && args[0] === 'rev-parse') {
+            cb(null, 'abc123\n', '');
+            return;
+          }
+          if (cmd === 'npm') {
+            const outDirIndex = args.indexOf('--outDir');
+            if (outDirIndex >= 0) {
+              writeText(path.join(String(args[outDirIndex + 1]), 'index.html'), '<!doctype html>\n');
+              cb(null, 'built\n', '');
+              return;
+            }
+            cb(null, 'ok\n', '');
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+        expect(result.success).toBe(true);
+        expect(result.steps.map(step => step.name)).toEqual(expect.arrayContaining([
+          'install Node.js runtime',
+          'npm ci',
+        ]));
+        expect(result.steps.find(step => step.name === 'install Node.js runtime')?.output)
+          .toContain(`v${nodeVersion}`);
+        expect(writeState).toHaveBeenCalledWith(expect.objectContaining({
+          nodeRuntime: expect.objectContaining({
+            source: 'private',
+            version: nodeVersion,
+            requiredMajor: 23,
+            binDir: path.join(install.installDir, 'runtime', 'node', 'bin'),
+          }),
+        }));
+        expect(fs.realpathSync(path.join(install.installDir, 'runtime', 'node')))
+          .toBe(fs.realpathSync(path.join(install.installDir, 'runtime', `node-v${nodeVersion}`)));
+      } finally {
+        restorePlatform();
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('migrates a system Node production install to a private runtime when required major increases', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('darwin');
+      const install = makeProductionInstall('agent-cockpit-prod-node-system-');
+      const nodeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
+      const nodeVersion = '99.1.0';
+      const release = makeReleaseFixture('1.1.0', 99);
+      const nodeTarballName = `node-v${nodeVersion}-darwin-${nodeArch}.tar.gz`;
+      const nodeTarballBytes = Buffer.from('node runtime tarball');
+      const nodeTarballSha = crypto.createHash('sha256').update(nodeTarballBytes).digest('hex');
+      const nodeChecksums = `${nodeTarballSha}  ${nodeTarballName}\n`;
+      const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
+      try {
+        service = new UpdateService(install.currentLink, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+            writeState,
+          },
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'curl' && args[1].endsWith('/release-manifest.json')) {
+            cb(null, release.manifestRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith('/SHA256SUMS')) {
+            cb(null, release.checksumsRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith(`/${release.tarballName}`)) {
+            cb(null, release.tarballBytes, Buffer.alloc(0));
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith('/SHASUMS256.txt')) {
+            cb(null, nodeChecksums, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith(`/${nodeTarballName}`)) {
+            cb(null, nodeTarballBytes, Buffer.alloc(0));
+            return;
+          }
+          if (cmd === 'tar') {
+            const extractDir = String(args[args.indexOf('-C') + 1]);
+            if (extractDir.includes('.node-extract-')) {
+              writeText(path.join(extractDir, `node-v${nodeVersion}-darwin-${nodeArch}`, 'bin/node'), 'node\n');
+              writeText(path.join(extractDir, `node-v${nodeVersion}-darwin-${nodeArch}`, 'lib/node_modules/npm/bin/npm-cli.js'), 'npm cli\n');
+              cb(null, 'node extracted\n', '');
+              return;
+            }
+            const packageDir = path.join(extractDir, release.manifest.packageRoot);
+            writeText(path.join(packageDir, 'server.ts'), 'console.log("server");\n');
+            writeJson(path.join(packageDir, 'package.json'), { version: '1.1.0', engines: { node: '>=99' } });
+            writeText(path.join(packageDir, 'public/v2-built/index.html'), '<!doctype html>\n');
+            writeText(path.join(packageDir, 'public/mobile-built/index.html'), '<!doctype html>\n');
+            cb(null, 'extracted\n', '');
+            return;
+          }
+          if (String(cmd).endsWith('/bin/node')) {
+            cb(null, '12.9.0\n', '');
+            return;
+          }
+          if (cmd === 'git' && args[0] === 'rev-parse') {
+            cb(null, 'abc123\n', '');
+            return;
+          }
+          if (cmd === 'npm') {
+            const outDirIndex = args.indexOf('--outDir');
+            if (outDirIndex >= 0) {
+              writeText(path.join(String(args[outDirIndex + 1]), 'index.html'), '<!doctype html>\n');
+              cb(null, 'built\n', '');
+              return;
+            }
+            cb(null, 'ok\n', '');
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+        expect(result.success).toBe(true);
+        expect(result.steps.find(step => step.name === 'verify Node.js runtime')).toEqual(expect.objectContaining({
+          success: false,
+        }));
+        expect(result.steps.find(step => step.name === 'install Node.js runtime')?.output)
+          .toContain(`v${nodeVersion}`);
+        expect(writeState).toHaveBeenCalledWith(expect.objectContaining({
+          nodeRuntime: expect.objectContaining({
+            source: 'private',
+            version: nodeVersion,
+            npmVersion: '12.9.0',
+            requiredMajor: 99,
+          }),
+        }));
+        expect(mockExecFileFn.mock.calls.some(call => call[0] === 'npm')).toBe(true);
+        expect(fs.realpathSync(install.currentLink)).toBe(fs.realpathSync(path.join(install.releasesDir, 'agent-cockpit-v1.1.0')));
+        const finalEnv = originalReadFileSync(path.join(fs.realpathSync(install.currentLink), '.env'), 'utf8');
+        const finalEcosystem = originalReadFileSync(path.join(fs.realpathSync(install.currentLink), 'ecosystem.config.js'), 'utf8');
+        expect(finalEnv).toContain(`PATH="${path.join(install.installDir, 'runtime', 'node', 'bin')}`);
+        expect(finalEcosystem).toContain(`"PATH": "${path.join(install.installDir, 'runtime', 'node', 'bin')}`);
+      } finally {
+        restorePlatform();
         fs.rmSync(install.installDir, { recursive: true, force: true });
       }
     });

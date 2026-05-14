@@ -68,7 +68,7 @@ export function UpdateModal({ open, localVersion, remoteVersion, onClose, onRest
             <span className="um-value um-value-accent">v{remoteVersion || '?'}</span>
           </div>
           <div className="um-note">
-            This will pull the latest code from <code>main</code>, install dependencies,
+            This will apply the available update, install dependencies, refresh managed runtime tools if required,
             rebuild served assets, and restart the server. The page will reload automatically.
           </div>
 

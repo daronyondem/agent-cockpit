@@ -1823,6 +1823,17 @@ declare module 'express-session' {
 export type InstallChannel = 'production' | 'dev';
 export type InstallSource = 'github-release' | 'git-main' | 'unknown';
 export type InstallStateSource = 'stored' | 'inferred' | 'legacy' | 'corrupt';
+export type InstallNodeRuntimeSource = 'private' | 'system' | 'unknown';
+
+export interface InstallNodeRuntime {
+  source: InstallNodeRuntimeSource;
+  version: string | null;
+  npmVersion: string | null;
+  binDir: string | null;
+  runtimeDir: string | null;
+  requiredMajor: number | null;
+  updatedAt: string | null;
+}
 
 export interface InstallStatus {
   schemaVersion: 1;
@@ -1836,6 +1847,7 @@ export interface InstallStatus {
   dataDir: string;
   installedAt: string | null;
   welcomeCompletedAt: string | null;
+  nodeRuntime: InstallNodeRuntime | null;
   stateSource: InstallStateSource;
   stateError: string | null;
 }

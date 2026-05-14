@@ -111,6 +111,25 @@ function normalizeVersion(value) {
   return version;
 }
 
+function parseMinimumNodeMajor(engine) {
+  if (typeof engine !== 'string') return null;
+  const match = engine.match(/>=\s*(\d+)/);
+  return match ? Number(match[1]) : null;
+}
+
+function readRequiredRuntime(root) {
+  const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+  const nodeEngine = packageJson.engines && typeof packageJson.engines.node === 'string'
+    ? packageJson.engines.node
+    : null;
+  return {
+    node: {
+      engine: nodeEngine,
+      minimumMajor: parseMinimumNodeMajor(nodeEngine) || 22,
+    },
+  };
+}
+
 function relativePath(root, target) {
   return path.relative(root, target).split(path.sep).join('/');
 }
@@ -310,6 +329,7 @@ function makeReleasePackage(options) {
       sourceCommit: resolveGitCommit(root, options.commit),
       generatedAt: new Date().toISOString(),
       packageRoot: packageRootName,
+      requiredRuntime: readRequiredRuntime(root),
       requiredBuilds: {
         web: 'public/v2-built/index.html',
         mobile: 'public/mobile-built/index.html',
@@ -367,5 +387,6 @@ module.exports = {
   isExcluded,
   makeReleasePackage,
   normalizeVersion,
+  parseMinimumNodeMajor,
   sha256File,
 };
