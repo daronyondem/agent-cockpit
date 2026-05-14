@@ -32,6 +32,13 @@
     return qs ? `${base}?${qs}` : base;
   }
 
+  function chatQueryPath(path, params){
+    const qs = params ? new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v != null && v !== '')
+    ).toString() : '';
+    return qs ? `${path}?${qs}` : path;
+  }
+
   function chatWsUrl(convId){
     const u = new URL('chat/conversations/' + encodeURIComponent(convId) + '/ws', API_BASE);
     u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -485,6 +492,13 @@
         run();
       }
     }),
+  };
+
+  const GitApi = {
+    status: (hash) => chatFetch('workspaces/' + encodeURIComponent(hash) + '/git/status')
+      .then(r => r.json()),
+    diff: (hash, relPath) => chatFetch(chatQueryPath('workspaces/' + encodeURIComponent(hash) + '/git/diff', { path: relPath }))
+      .then(r => r.json()),
   };
 
   const KbApi = {
@@ -1031,6 +1045,7 @@ export const AgentApi = {
     invalidateCsrfToken: () => { state.csrfToken = null; },
     kb: KbApi,
     explorer: ExplorerApi,
+    git: GitApi,
     settings: SettingsApi,
     auth: AuthApi,
     workspace: WorkspaceApi,

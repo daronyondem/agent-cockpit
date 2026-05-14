@@ -128,6 +128,7 @@ The PWA intentionally does not yet cover:
 - Memory and Knowledge Base mobile panels/live update bubbles.
 - Cross-CLI instruction compatibility notifications and pointer creation.
 - CLI update notifications and update actions. This is an intentional web-only parity decision because CLI binary updates are server-administration controls; see [parity-decisions.md](parity-decisions.md) and [ADR-0027](adr/0027-manage-cli-updates-from-web-cockpit.md).
+- Workspace Git Changes status/diff view. This is currently a deliberate desktop-web-only slice because the shipped UI is a side-by-side code review surface that needs wide panes; see [parity-decisions.md](parity-decisions.md), [API spec](spec-api-endpoints.md#313-workspace-git-changes), and [Frontend spec](spec-frontend.md).
 - Service worker offline caching. The app is server-backed and currently requires network access to the Agent Cockpit host.
 - True remote push notifications. Browser notification support only works while the PWA/browser context is alive enough to receive WebSocket events.
 - Reuse of desktop V2 settings, Memory, KB, and usage management screens.
