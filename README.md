@@ -210,8 +210,8 @@ npm start
 | `BASE_PATH` | No | `''` | URL base path for reverse proxy deployments |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
 | `CODEX_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing the Codex `app-server` process |
-| `CODEX_APPROVAL_POLICY` | No | `on-request` | Codex approval policy for interactive threads (`untrusted`, `on-failure`, `on-request`, `never`) |
-| `CODEX_SANDBOX_MODE` | No | `workspace-write` | Codex sandbox mode for interactive threads (`read-only`, `workspace-write`, `danger-full-access`). Use `CODEX_APPROVAL_POLICY=never` with `CODEX_SANDBOX_MODE=danger-full-access` to run Codex with full elevated permissions. |
+| `CODEX_APPROVAL_POLICY` | No | `never` | Codex approval policy for interactive threads (`untrusted`, `on-failure`, `on-request`, `never`). The default treats Agent Cockpit as a trusted local agent and does not ask before Codex runs tools. |
+| `CODEX_SANDBOX_MODE` | No | `danger-full-access` | Codex sandbox mode for interactive threads (`read-only`, `workspace-write`, `danger-full-access`). The default gives Codex full local filesystem/tool access through Agent Cockpit; set this and `CODEX_APPROVAL_POLICY` to stricter values for restricted deployments. |
 | `LOG_LEVEL` | No | `info` | Server log threshold: `error`, `warn`, `info`, or `debug`. Structured logger metadata redacts secret-like keys before writing to stdout/stderr. |
 
 ## Authentication Setup
@@ -334,28 +334,6 @@ CI runs tests automatically on every pull request against `main` via GitHub Acti
 
 ## Backend-Specific Notes
 
-### Claude Code CLI
-
-Agent Cockpit spawns Claude Code CLI processes on your behalf. To get the best experience, consider adding these settings to your `~/.claude/settings.json`:
-
-```json
-{
-  "attribution": {
-    "gitCommit": "",
-    "pullRequest": ""
-  },
-  "permissions": {
-    "allow": [
-      "Edit(**)"
-    ]
-  }
-}
-```
-
-- **`attribution.gitCommit: ""`** removes the `Co-Authored-By: Claude` trailer from git commits.
-- **`attribution.pullRequest: ""`** removes the Claude attribution from pull request descriptions.
-- **`permissions.allow: ["Edit(**)"]`** gives Claude Code permission to edit any file without prompting, useful since Agent Cockpit has no interactive terminal for approvals.
-
 ### Kiro CLI
 
 Kiro connects via ACP (Agent Client Protocol) — JSON-RPC 2.0 over stdin/stdout. The adapter handles:
@@ -377,13 +355,7 @@ Codex connects via the Codex App Server protocol — JSON-RPC 2.0 over stdin/std
 - MCP server injection via `-c mcp_servers.<name>.{command,args,env}=…` overrides at spawn time, so your real `~/.codex/` is used unchanged for auth, sessions, and config
 - Per-turn token usage tracking via `thread/tokenUsage/updated`
 - Permission auto-approval for all tool calls and patches
-
-To run Codex with full elevated permissions, set these in `.env` or your PM2 `ecosystem.config.js`:
-
-```bash
-CODEX_APPROVAL_POLICY=never
-CODEX_SANDBOX_MODE=danger-full-access
-```
+- Full local filesystem/tool access by default through `CODEX_APPROVAL_POLICY=never` and `CODEX_SANDBOX_MODE=danger-full-access`
 
 Ensure `codex` is installed (`npm install -g @openai/codex`) and authenticated (`codex login` or `OPENAI_API_KEY`) before selecting Codex as a backend.
 

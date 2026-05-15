@@ -1,10 +1,10 @@
 ---
 id: 0014
 title: Make Codex execution policy configurable
-status: Accepted
+status: Superseded
 date: 2026-04-28
 supersedes: []
-superseded-by: null
+superseded-by: 0062
 tags: [codex, configuration, security]
 affects:
   - server.ts

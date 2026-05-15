@@ -26,8 +26,8 @@
 | `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
 | `CODEX_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing an idle Codex `app-server` process |
-| `CODEX_APPROVAL_POLICY` | No | `on-request` | Codex approval policy for interactive threads. Valid values: `untrusted`, `on-failure`, `on-request`, `never`. Invalid values are ignored with a startup warning and the default is used. |
-| `CODEX_SANDBOX_MODE` | No | `workspace-write` | Codex sandbox mode for interactive threads. Valid values: `read-only`, `workspace-write`, `danger-full-access`. Invalid values are ignored with a startup warning and the default is used. |
+| `CODEX_APPROVAL_POLICY` | No | `never` | Codex approval policy for interactive threads. Valid values: `untrusted`, `on-failure`, `on-request`, `never`. The default treats Agent Cockpit as a trusted local agent and does not ask before Codex runs tools. Invalid values are ignored with a startup warning and the default is used. |
+| `CODEX_SANDBOX_MODE` | No | `danger-full-access` | Codex sandbox mode for interactive threads. Valid values: `read-only`, `workspace-write`, `danger-full-access`. The default gives Codex full local filesystem/tool access through Agent Cockpit. Invalid values are ignored with a startup warning and the default is used. |
 | `BASE_PATH` | No | `''` | URL base path prefix (for reverse proxy deployments) |
 | `WEB_BUILD_MODE` | No | `auto` outside tests, `skip` when `NODE_ENV === 'test'` | Controls main V2 web and mobile PWA build startup preflight. `auto` checks and rebuilds missing/stale `public/v2-built/` and `public/mobile-built/` assets before listen; `skip` bypasses both preflights for tests or special deployments. |
 | `LOG_LEVEL` | No | `info` | Structured logger threshold for migrated modules. Valid values are `error`, `warn`, `info`, and `debug`; invalid values fall back to `info`. |

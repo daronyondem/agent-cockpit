@@ -87,17 +87,17 @@ function codexUsage(totalTokens: number, outputTokens = 1) {
 // ── CodexAdapter metadata ───────────────────────────────────────────────────
 
 describe('CodexAdapter', () => {
-  test('buildCodexThreadSecurityParams defaults to the interactive sandbox policy', () => {
+  test('buildCodexThreadSecurityParams defaults to full local access', () => {
     expect(buildCodexThreadSecurityParams()).toEqual({
-      approvalPolicy: 'on-request',
-      sandbox: 'workspace-write',
+      approvalPolicy: 'never',
+      sandbox: 'danger-full-access',
     });
   });
 
-  test('buildCodexThreadSecurityParams supports full access policy', () => {
-    expect(buildCodexThreadSecurityParams('never', 'danger-full-access')).toEqual({
-      approvalPolicy: 'never',
-      sandbox: 'danger-full-access',
+  test('buildCodexThreadSecurityParams supports restricted policy overrides', () => {
+    expect(buildCodexThreadSecurityParams('on-request', 'workspace-write')).toEqual({
+      approvalPolicy: 'on-request',
+      sandbox: 'workspace-write',
     });
   });
 
@@ -1819,7 +1819,7 @@ describe('CodexAdapter generateTitle', () => {
 // drive the callback synchronously.
 
 describe('CodexAdapter.runOneShot', () => {
-  test('uses existing full-auto exec mode by default', async () => {
+  test('uses full bypass exec mode by default', async () => {
     let capturedArgs: string[] | null = null;
     let resultPromise!: Promise<string>;
 
@@ -1847,11 +1847,11 @@ describe('CodexAdapter.runOneShot', () => {
 
     await resultPromise;
     expect(capturedArgs).not.toBeNull();
-    expect(capturedArgs).toContain('--full-auto');
-    expect(capturedArgs).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(capturedArgs).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(capturedArgs).not.toContain('--full-auto');
   });
 
-  test('uses full bypass exec mode when configured for full access', async () => {
+  test('uses explicit policy flags when configured for restricted access', async () => {
     let capturedArgs: string[] | null = null;
     let resultPromise!: Promise<string>;
 
@@ -1875,15 +1875,16 @@ describe('CodexAdapter.runOneShot', () => {
       const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
       const adapter = new IsolatedAdapter({
         workingDir: '/tmp',
-        approvalPolicy: 'never',
-        sandbox: 'danger-full-access',
+        approvalPolicy: 'on-request',
+        sandbox: 'workspace-write',
       });
       resultPromise = adapter.runOneShot('p', { workingDir: '/tmp' });
     });
 
     await resultPromise;
     expect(capturedArgs).not.toBeNull();
-    expect(capturedArgs).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(capturedArgs).toEqual(expect.arrayContaining(['--ask-for-approval', 'on-request', '--sandbox', 'workspace-write']));
+    expect(capturedArgs).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(capturedArgs).not.toContain('--full-auto');
   });
 
