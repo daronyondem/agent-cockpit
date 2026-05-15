@@ -138,9 +138,11 @@ export async function runPandoc(
  * Test-only: clear the cache so detection runs again on next call.
  * Not exported from the package index.
  */
-export function _resetPandocCacheForTests(): void {
+export function resetPandocDetection(): void {
   cached = null;
 }
+
+export const _resetPandocCacheForTests = resetPandocDetection;
 
 /**
  * Test-only: inject a fake status for unit tests that don't want to

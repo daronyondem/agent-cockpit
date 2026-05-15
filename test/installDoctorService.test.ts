@@ -102,6 +102,7 @@ describe('InstallDoctorService', () => {
         if (['claude', 'codex', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
         return { ok: true, stdout: '1.0.0', stderr: '' };
       },
+      detectHomebrew: async () => false,
       detectPandoc: async () => ({ available: false, binaryPath: null, version: null, checkedAt: '2026-05-12T00:00:00.000Z' }),
       detectLibreOffice: async () => ({ available: false, binaryPath: null, checkedAt: '2026-05-12T00:00:00.000Z' }),
     });
@@ -113,12 +114,82 @@ describe('InstallDoctorService', () => {
       expect.objectContaining({ id: 'npm', status: 'error', required: true }),
       expect.objectContaining({ id: 'data-dir', status: 'error', required: true }),
       expect.objectContaining({ id: 'web-build', status: 'error', required: true }),
-      expect.objectContaining({ id: 'claude-cli', status: 'warning', required: false, remediation: expect.stringContaining('claude.ai/install.sh') }),
+      expect.objectContaining({ id: 'claude-cli', status: 'warning', required: false, remediation: expect.stringContaining('@anthropic-ai/claude-code') }),
       expect.objectContaining({ id: 'codex-cli', status: 'warning', required: false, remediation: expect.stringContaining('@openai/codex') }),
       expect.objectContaining({ id: 'kiro-cli', status: 'warning', required: false, remediation: expect.stringContaining('cli.kiro.dev/install') }),
-      expect.objectContaining({ id: 'pandoc', status: 'warning', required: false, remediation: expect.stringContaining('brew install pandoc') }),
-      expect.objectContaining({ id: 'libreoffice', status: 'warning', required: false, remediation: expect.stringContaining('brew install --cask libreoffice') }),
+      expect.objectContaining({ id: 'pandoc', status: 'warning', required: false, remediation: expect.stringContaining('If Homebrew is already installed') }),
+      expect.objectContaining({ id: 'pandoc', status: 'warning', required: false, remediation: expect.stringContaining('pandoc.org/installing.html') }),
+      expect.objectContaining({ id: 'libreoffice', status: 'warning', required: false, remediation: expect.stringContaining('If Homebrew is already installed') }),
+      expect.objectContaining({ id: 'libreoffice', status: 'warning', required: false, remediation: expect.stringContaining('libreoffice.org/download') }),
       expect.objectContaining({ id: 'update-channel', status: 'warning', required: false }),
     ]));
+    const pandoc = status.checks.find(item => item.id === 'pandoc');
+    const libreOffice = status.checks.find(item => item.id === 'libreoffice');
+    expect(pandoc?.installActions).toEqual([
+      expect.objectContaining({ kind: 'link', label: 'Open installer', href: expect.stringContaining('pandoc.org') }),
+    ]);
+    expect(libreOffice?.installActions).toEqual([
+      expect.objectContaining({ kind: 'link', label: 'Open download', href: expect.stringContaining('libreoffice.org') }),
+    ]);
+  });
+
+  test('runs allowlisted install actions and refreshes optional detection', async () => {
+    const root = makeRoot();
+    roots.push(root);
+    const installed = new Set<string>();
+    const resetPandocDetection = jest.fn();
+    const service = new InstallDoctorService({
+      appRoot: root,
+      dataRoot: path.join(root, 'data'),
+      installStateService: makeInstallState(root),
+      commandRunner: async () => ({ ok: true, stdout: '1.0.0', stderr: '' }),
+      installRunner: async (command, args) => {
+        expect(command).toBe('brew');
+        expect(args).toEqual(['install', 'pandoc']);
+        installed.add('pandoc');
+        return { ok: true, stdout: 'installed pandoc', stderr: '' };
+      },
+      detectHomebrew: async () => true,
+      detectPandoc: async () => installed.has('pandoc')
+        ? { available: true, binaryPath: '/opt/homebrew/bin/pandoc', version: '3.1.1', checkedAt: '2026-05-12T00:00:00.000Z' }
+        : { available: false, binaryPath: null, version: null, checkedAt: '2026-05-12T00:00:00.000Z' },
+      detectLibreOffice: async () => ({ available: true, binaryPath: '/usr/local/bin/soffice', checkedAt: '2026-05-12T00:00:00.000Z' }),
+      resetPandocDetection,
+    });
+
+    const before = await service.getStatus();
+    expect(before.checks.find(item => item.id === 'pandoc')?.installActions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'pandoc:brew-install', kind: 'command', command: ['brew', 'install', 'pandoc'] }),
+      expect.objectContaining({ id: 'pandoc:official-download', kind: 'link' }),
+    ]));
+
+    const result = await service.runInstallAction('pandoc:brew-install');
+
+    expect(result.success).toBe(true);
+    expect(result.steps[0]).toEqual(expect.objectContaining({ name: 'brew install pandoc', success: true, output: 'installed pandoc' }));
+    expect(resetPandocDetection).toHaveBeenCalledTimes(1);
+    expect(result.doctor?.checks.find(item => item.id === 'pandoc')).toEqual(expect.objectContaining({ status: 'ok' }));
+  });
+
+  test('rejects links and active-stream installs', async () => {
+    const root = makeRoot();
+    roots.push(root);
+    const service = new InstallDoctorService({
+      appRoot: root,
+      dataRoot: path.join(root, 'data'),
+      installStateService: makeInstallState(root),
+      commandRunner: async () => ({ ok: true, stdout: '1.0.0', stderr: '' }),
+      detectPandoc: async () => ({ available: false, binaryPath: null, version: null, checkedAt: '2026-05-12T00:00:00.000Z' }),
+      detectLibreOffice: async () => ({ available: true, binaryPath: '/usr/local/bin/soffice', checkedAt: '2026-05-12T00:00:00.000Z' }),
+    });
+
+    await expect(service.runInstallAction('pandoc:official-download')).resolves.toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('download page'),
+    }));
+    await expect(service.runInstallAction('pandoc:brew-install', { hasActiveStreams: () => true })).resolves.toEqual(expect.objectContaining({
+      success: false,
+      error: expect.stringContaining('actively running'),
+    }));
   });
 });

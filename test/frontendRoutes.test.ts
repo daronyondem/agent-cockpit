@@ -110,12 +110,21 @@ describe('frontend routes', () => {
 
     expect(apiSrc).toContain("chatFetch('install/doctor')");
     expect(apiSrc).toContain("chatFetch('install/welcome-complete', { method: 'POST'");
+    expect(apiSrc).toContain("chatFetch('install/actions/' + encodeURIComponent(actionId) + '/run'");
+    expect(apiSrc).toContain("chatFetch(\n      'cli-profiles/setup-auth/' + encodeURIComponent(vendor) + '/start'");
     expect(apiSrc).toContain('getInstallDoctor');
     expect(apiSrc).toContain('completeWelcome');
+    expect(apiSrc).toContain('runInstallAction');
+    expect(apiSrc).toContain('startSetupCliAuth');
+    expect(apiSrc).toContain('testSetupCliAuth');
     expect(shellSrc).toContain("new URLSearchParams(window.location.search).get('welcome') === '1'");
     expect(shellSrc).toContain('function WelcomeScreen');
     expect(shellSrc).toContain('AgentApi.getInstallDoctor()');
     expect(shellSrc).toContain('AgentApi.completeWelcome()');
+    expect(shellSrc).toContain('AgentApi.runInstallAction(action.id)');
+    expect(shellSrc).toContain('AgentApi.settings.startSetupCliAuth(vendor)');
+    expect(shellSrc).toContain('AgentApi.settings.testSetupCliAuth(vendor)');
+    expect(shellSrc).toContain('function WelcomeCliAuth');
     expect(shellSrc).toContain('setInstallStatus(nextInstallStatus)');
     expect(shellSrc).toContain("'welcomeCompletedAt' in nextInstallStatus");
     expect(shellSrc).toContain('onClick={() => onDone(null)}');
@@ -125,12 +134,18 @@ describe('frontend routes', () => {
     expect(shellSrc).toContain("onOpenSettings('security')");
     expect(shellSrc).toContain("onOpenSettings('cli')");
     expect(shellSrc).toContain('Install only the backend CLIs you plan to use.');
+    expect(shellSrc).toContain('item.installActions');
+    expect(shellSrc).toContain('welcome-install-actions');
+    expect(shellSrc).toContain('welcome-install-result');
+    expect(shellSrc).toContain('welcome-cli-auth');
     expect(primitivesSrc).toContain('Welcome!');
     expect(primitivesSrc).toContain('showWelcomeAction');
     expect(shellSrc).toContain('/mobile/');
     expect(cssSrc).toContain('.main-welcome');
     expect(cssSrc).toContain('.welcome-grid');
     expect(cssSrc).toContain('.sb-welcome-toggle');
+    expect(cssSrc).toContain('.welcome-install-actions');
+    expect(cssSrc).toContain('.welcome-cli-auth');
   });
 
   test('mobile PWA treats stream socket loss as reconnectable', () => {

@@ -1854,6 +1854,17 @@ export interface InstallStatus {
 
 export type InstallDoctorCheckStatus = 'ok' | 'warning' | 'error';
 
+export type InstallDoctorActionKind = 'command' | 'link';
+
+export interface InstallDoctorAction {
+  id: string;
+  kind: InstallDoctorActionKind;
+  label: string;
+  description?: string;
+  command?: string[];
+  href?: string;
+}
+
 export interface InstallDoctorCheck {
   id: string;
   label: string;
@@ -1862,6 +1873,7 @@ export interface InstallDoctorCheck {
   summary: string;
   detail?: string;
   remediation?: string;
+  installActions?: InstallDoctorAction[];
 }
 
 export interface InstallDoctorStatus {
@@ -1869,6 +1881,14 @@ export interface InstallDoctorStatus {
   overallStatus: InstallDoctorCheckStatus;
   install: InstallStatus;
   checks: InstallDoctorCheck[];
+}
+
+export interface InstallDoctorActionResult {
+  success: boolean;
+  action?: InstallDoctorAction;
+  steps: UpdateStep[];
+  doctor?: InstallDoctorStatus;
+  error?: string;
 }
 
 export interface UpdateStatus {

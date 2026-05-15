@@ -88,6 +88,22 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
     }
   });
 
+  router.post('/install/actions/:id/run', csrfGuard, async (req: Request, res: Response) => {
+    if (!installDoctorService) return res.status(501).json({ error: 'Install doctor service not available' });
+    try {
+      const result = await installDoctorService.runInstallAction(param(req, 'id'), {
+        hasActiveStreams: hasAnyInFlightTurn,
+      });
+      if (result.success) {
+        res.json(result);
+      } else {
+        res.status(result.error && result.error.includes('actively running') ? 409 : 400).json(result);
+      }
+    } catch (err: unknown) {
+      sendError(res, 500, err);
+    }
+  });
+
   router.post('/check-version', csrfGuard, async (_req: Request, res: Response) => {
     if (!updateService) return res.status(501).json({ error: 'Update service not available' });
     try {

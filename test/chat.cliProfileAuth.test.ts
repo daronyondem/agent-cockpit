@@ -123,6 +123,72 @@ describe('CLI profile auth endpoints', () => {
     expect(res.body.error).toContain('Remote authentication is not supported for Kiro');
   });
 
+  test('setup auth creates an account profile and promotes the default vendor profile', async () => {
+    const originalPath = process.env.PATH;
+    writeExecutable('claude', [
+      '#!/bin/sh',
+      'echo "CONFIG=$CLAUDE_CONFIG_DIR"',
+      'exit 0',
+      '',
+    ].join('\n'));
+    process.env.PATH = `${env.tmpDir}${path.delimiter}${originalPath || ''}`;
+    try {
+      const res = await env.request('POST', '/api/chat/cli-profiles/setup-auth/claude-code/test', {});
+
+      expect(res.status).toBe(200);
+      expect(res.body.profile).toEqual(expect.objectContaining({
+        id: 'setup-claude-code-account',
+        vendor: 'claude-code',
+        authMode: 'account',
+      }));
+      expect(res.body.profile.configDir).toContain('setup-claude-code-account');
+      expect(fs.existsSync(res.body.profile.configDir)).toBe(true);
+      expect(res.body.settings.defaultCliProfileId).toBe('setup-claude-code-account');
+      expect(res.body.result.output).toContain(`CONFIG=${res.body.profile.configDir}`);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  test('setup auth reuses an existing account profile for login jobs', async () => {
+    const command = writeExecutable('fake-codex-setup-auth.sh', [
+      '#!/bin/sh',
+      'if [ "$1" = "login" ] && [ "$2" = "--device-auth" ]; then',
+      '  echo "Open https://example.test/codex and enter SETUP-CODE"',
+      '  exit 0',
+      'fi',
+      'echo "logged in"',
+      'exit 0',
+      '',
+    ].join('\n'));
+    await addProfile({
+      id: 'existing-codex-account',
+      name: 'Existing Codex Account',
+      vendor: 'codex',
+      authMode: 'account',
+      command,
+      createdAt: '2026-04-30T00:00:00.000Z',
+      updatedAt: '2026-04-30T00:00:00.000Z',
+    });
+
+    const start = await env.request('POST', '/api/chat/cli-profiles/setup-auth/codex/start', {});
+    expect(start.status).toBe(200);
+    expect(start.body.profile.id).toBe('existing-codex-account');
+
+    const job = await waitForJob(start.body.job.id);
+    expect(job.status).toBe('succeeded');
+    const output = job.events.map((event: any) => event.text).join('\n');
+    expect(output).toContain('https://example.test/codex');
+    expect(output).toContain('SETUP-CODE');
+  });
+
+  test('setup auth keeps Kiro explicitly self-configured', async () => {
+    const res = await env.request('POST', '/api/chat/cli-profiles/setup-auth/kiro/start', {});
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Remote authentication is not supported for Kiro');
+  });
+
   test('cancels a running auth job', async () => {
     const command = writeExecutable('fake-codex-slow-auth.sh', [
       '#!/bin/sh',

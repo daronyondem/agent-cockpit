@@ -88,6 +88,8 @@ Chat API route registration is split by domain. `src/routes/chat.ts` owns depend
 
 `src/services/cliProfileAuthService.ts` owns remote account-auth jobs for CLI profiles. It supports Codex and Claude Code account profiles only; self-configured profiles are treated as already managed on the server, and Kiro remains unsupported until it has a safe dedicated profile/config directory. `profileWithAuthDefaults(settings, profileId)` looks up the profile and, when an account profile has no `configDir`, assigns a deterministic directory under `data/cli-profiles/<slug>-<sha1>/` so future runtime spawns and the auth job use the same isolated home. `checkProfile(profile)` runs the vendor status command (`codex login status` or `claude auth status --json`) with the profile command/env/config directory and returns availability/authentication status plus redacted output; the route-level `/cli-profiles/:id/test` wrapper also asks the registered vendor adapter for `getMetadata({ cliProfile })` so the profile-specific model catalog is warmed/read during the check. `startAuth(profile)` starts one in-memory job per profile using `codex login --device-auth` or `claude auth login --claudeai`, captures redacted stdout/stderr/info/exit events, and leaves recent job snapshots pollable by ID. A running auth job has a 15-minute timeout; timeout marks it `failed`, records an actionable message, and sends `SIGTERM` to the login process. When the login process exits successfully, the service polls the vendor status command before marking the job `succeeded`; status timeout or nonzero status leaves the job `failed` with the last redacted status output. `cancelJob(jobId)` marks a running job cancelled and sends `SIGTERM`; `shutdown()` cancels any running jobs during server shutdown.
 
+`src/routes/chat/cliProfileRoutes.ts` also exposes Welcome/setup auth wrappers at `/cli-profiles/setup-auth/:vendor/test` and `/cli-profiles/setup-auth/:vendor/start` ([ADR-0060](adr/0060-use-cli-profile-auth-for-setup-login.md)). These routes are intentionally thin: for `codex` and `claude-code`, they reuse the first enabled account profile for the vendor or create a first-run account profile (`setup-codex-account` / `setup-claude-code-account`), call `profileWithAuthDefaults()` so the isolated auth/config directory is persisted, and then delegate to `checkProfile()` or `startAuth()`. If the current default profile is that vendor's server-configured profile, the created setup account profile becomes the default so the completed login is used by new conversations. `kiro` remains a `400` response because Kiro has no dedicated safe config-home override.
+
 All methods are `async` except `getWorkspaceContext()`. `getWorkspaceMemoryPointer()` is `async` so it can `mkdir -p` the memory dir on first access.
 
 ### LocalAuthStore
@@ -1121,6 +1123,14 @@ does not execute real local CLIs.
     summary: string,
     detail?: string,
     remediation?: string,
+    installActions?: Array<{
+      id: string,
+      kind: 'command' | 'link',
+      label: string,
+      description?: string,
+      command?: string[],
+      href?: string,
+    }>,
   }>,
 }
 ```
@@ -1133,16 +1143,39 @@ Claude Code CLI, Codex CLI, Kiro CLI, Pandoc, LibreOffice, and install/update
 channel metadata. Missing CLI warnings are optional and tell the user to install
 only the backend they plan to use; Claude Code remediation includes
 `curl -fsSL https://claude.ai/install.sh | bash` and
-`brew install --cask claude-code`, Codex remediation includes
-`npm i -g @openai/codex` and `brew install --cask codex`, and Kiro remediation
-includes `curl -fsSL https://cli.kiro.dev/install | bash` plus
-`kiro-cli login`. Pandoc and LibreOffice warning remediations include macOS
-Homebrew commands (`brew install pandoc` and `brew install --cask libreoffice`),
-official download URLs, and a restart reminder because these optional binaries
-are detected at server startup. A corrupt install manifest downgrades the
+`npm i -g @anthropic-ai/claude-code`, Codex remediation includes
+`npm i -g @openai/codex`, and Kiro remediation includes
+`curl -fsSL https://cli.kiro.dev/install | bash` plus `kiro-cli login`.
+Pandoc and LibreOffice warnings must not assume Homebrew exists on a fresh Mac:
+they mention `brew install pandoc` and `brew install --cask libreoffice` only as
+options when Homebrew is already installed, include official installer/download
+URLs, and include a restart reminder because these optional binaries are
+detected at server startup. A corrupt install manifest downgrades the
 update-channel check to warning while still returning inferred install metadata.
 `overallStatus` is `error` when any required check errors, `warning` when any
 check warns/errors but required checks are usable, and `ok` otherwise.
+
+Missing optional dependency checks can also include install actions. Command
+actions are fixed server-side allowlist entries; the browser receives the
+command array for transparency but can only execute it by POSTing the action id
+to `/api/chat/install/actions/:id/run`. The service never accepts arbitrary
+command text from the browser, refuses duplicate action runs, and refuses all
+install commands while any conversation turn is active or pending. Supported
+command actions are:
+
+- `claude-cli:npm-install` -> `npm i -g @anthropic-ai/claude-code@latest`
+- `codex-cli:npm-install` -> `npm i -g @openai/codex@latest`
+- `kiro-cli:official-install` -> `sh -c "curl -fsSL https://cli.kiro.dev/install | bash"`
+- `pandoc:brew-install` -> `brew install pandoc`, exposed only when Homebrew is detected
+- `libreoffice:brew-install` -> `brew install --cask libreoffice`, exposed only when Homebrew is detected
+
+Link actions open official documentation/download pages and are not runnable on
+the server. Pandoc and LibreOffice always expose official download link actions
+when missing so fresh Macs without Homebrew still have a first-class path.
+Successful command actions return the captured step output and a refreshed
+install-doctor payload. Pandoc/LibreOffice command actions clear their cached
+binary detection before refreshing so newly installed binaries can be detected
+without a server restart.
 
 ## 4.3.3 WebBuildService
 
