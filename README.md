@@ -10,6 +10,24 @@
   <em>Built for command-line AI agents like Claude Code, OpenAI Codex, and Kiro.</em>
 </p>
 
+<p align="center">
+  <a href="https://github.com/daronyondem/agent-cockpit/actions/workflows/test.yml">
+    <img alt="Tests" src="https://img.shields.io/github/actions/workflow/status/daronyondem/agent-cockpit/test.yml?label=tests&logo=githubactions&logoColor=white" />
+  </a>
+  <a href="https://github.com/daronyondem/agent-cockpit/releases/latest">
+    <img alt="Latest release" src="https://img.shields.io/github/v/release/daronyondem/agent-cockpit?sort=semver&display_name=tag&label=release&logo=github" />
+  </a>
+  <a href="https://github.com/daronyondem/agent-cockpit/blob/main/LICENSE">
+    <img alt="License" src="https://img.shields.io/github/license/daronyondem/agent-cockpit?label=license" />
+  </a>
+  <a href="#prerequisites">
+    <img alt="Node >=22" src="https://img.shields.io/badge/node-%3E%3D22-339933?logo=nodedotjs&logoColor=white" />
+  </a>
+  <a href="https://github.com/daronyondem/agent-cockpit/releases">
+    <img alt="Release downloads" src="https://img.shields.io/github/downloads/daronyondem/agent-cockpit/total?label=release%20downloads&logo=github" />
+  </a>
+</p>
+
 ---
 
 ## Why Agent Cockpit?
