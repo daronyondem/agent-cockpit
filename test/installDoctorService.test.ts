@@ -268,4 +268,61 @@ describe('InstallDoctorService', () => {
       restorePlatform();
     }
   });
+
+  test('uses installer-recorded Windows Node runtime for npm and PM2 checks', async () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = makeRoot();
+    roots.push(root);
+    const runtimeBinDir = path.join(root, 'runtime', 'node v22 win x64');
+    const commands: string[] = [];
+    try {
+      const service = new InstallDoctorService({
+        appRoot: root,
+        dataRoot: path.join(root, 'data'),
+        installStateService: makeInstallState(root, {
+          nodeRuntime: {
+            source: 'private',
+            version: '22.22.3',
+            npmVersion: '10.9.8',
+            binDir: runtimeBinDir,
+            runtimeDir: runtimeBinDir,
+            requiredMajor: 22,
+            updatedAt: '2026-05-15T00:00:00.000Z',
+          },
+        }),
+        commandRunner: async (command) => {
+          commands.push(command);
+          if (command === 'npm.cmd' || command === 'npx.cmd') {
+            return { ok: false, stdout: '', stderr: '', error: 'plain PATH command should not be used' };
+          }
+          if (command === path.join(runtimeBinDir, 'npm.cmd')) return { ok: true, stdout: '10.9.8', stderr: '' };
+          if (command === path.join(runtimeBinDir, 'npx.cmd')) return { ok: true, stdout: '7.0.1', stderr: '' };
+          if (['claude', 'codex', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
+          if (command === 'schtasks.exe') return { ok: true, stdout: '1.0.0', stderr: '' };
+          return { ok: true, stdout: '1.0.0', stderr: '' };
+        },
+        detectHomebrew: async () => false,
+        detectPandoc: async () => ({ available: true, binaryPath: 'C:\\Tools\\pandoc.exe', version: '3.1.1', checkedAt: '2026-05-15T00:00:00.000Z' }),
+        detectLibreOffice: async () => ({ available: true, binaryPath: 'C:\\Tools\\soffice.exe', checkedAt: '2026-05-15T00:00:00.000Z' }),
+      });
+
+      const status = await service.getStatus();
+
+      expect(commands).toEqual(expect.arrayContaining([
+        path.join(runtimeBinDir, 'npm.cmd'),
+        path.join(runtimeBinDir, 'npx.cmd'),
+      ]));
+      expect(commands).not.toEqual(expect.arrayContaining(['npm.cmd', 'npx.cmd']));
+      expect(status.checks.find(item => item.id === 'npm')).toEqual(expect.objectContaining({ status: 'ok' }));
+      expect(status.checks.find(item => item.id === 'pm2')).toEqual(expect.objectContaining({ status: 'ok' }));
+      expect(status.checks.find(item => item.id === 'claude-cli')?.installActions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'claude-cli:npm-install', command: [path.join(runtimeBinDir, 'npm.cmd'), 'i', '-g', '@anthropic-ai/claude-code@latest'] }),
+      ]));
+      expect(status.checks.find(item => item.id === 'codex-cli')?.installActions).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id: 'codex-cli:npm-install', command: [path.join(runtimeBinDir, 'npm.cmd'), 'i', '-g', '@openai/codex@latest'] }),
+      ]));
+    } finally {
+      restorePlatform();
+    }
+  });
 });

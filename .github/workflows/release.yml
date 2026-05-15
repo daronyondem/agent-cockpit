@@ -82,6 +82,13 @@ jobs:
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             schtasks.exe /Query /TN AgentCockpit /FO LIST
             Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri "http://127.0.0.1:$port/auth/setup" | Out-Null
+            $doctor = Invoke-RestMethod -TimeoutSec 5 -Uri "http://127.0.0.1:$port/api/chat/install/doctor"
+            foreach ($checkId in @('node', 'npm', 'pm2')) {
+              $check = $doctor.checks | Where-Object { $_.id -eq $checkId } | Select-Object -First 1
+              if (-not $check -or $check.status -ne 'ok') {
+                throw "Install doctor required check failed: $checkId"
+              }
+            }
           } finally {
             $stopScript = Join-Path $installDir "bin\stop-agent-cockpit.ps1"
             if (Test-Path $stopScript) {

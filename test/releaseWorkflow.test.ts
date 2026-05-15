@@ -26,6 +26,9 @@ describe('release workflow', () => {
     expect(source).toContain('-Channel dev -DevDir $devDir -InstallDir $installDir -InstallNode -SkipOpen -Port $port');
     expect(source).toContain('schtasks.exe /Query /TN AgentCockpit');
     expect(source).toContain('Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri "http://127.0.0.1:$port/auth/setup"');
+    expect(source).toContain('Invoke-RestMethod -TimeoutSec 5 -Uri "http://127.0.0.1:$port/api/chat/install/doctor"');
+    expect(source).toContain("foreach ($checkId in @('node', 'npm', 'pm2'))");
+    expect(source).toContain('Install doctor required check failed');
   });
 
   test('builds Windows smoke release assets before packaging', () => {

@@ -31,8 +31,10 @@ function libreOfficeRemediation(): string {
     : 'Install LibreOffice for PPTX slide-image conversion. If Homebrew is already installed, macOS can run `brew install --cask libreoffice`; otherwise download LibreOffice from https://www.libreoffice.org/download/download-libreoffice/. Restart Agent Cockpit after installing.';
 }
 
-function platformCommand(command: 'npm' | 'npx'): string {
-  return process.platform === 'win32' ? `${command}.cmd` : command;
+function platformCommand(command: 'npm' | 'npx', install?: InstallStatus): string {
+  const executable = process.platform === 'win32' ? `${command}.cmd` : command;
+  const runtimeBinDir = install?.nodeRuntime?.binDir;
+  return runtimeBinDir ? path.join(runtimeBinDir, executable) : executable;
 }
 
 interface CommandResult {
@@ -145,8 +147,8 @@ export class InstallDoctorService {
   async getStatus(): Promise<InstallDoctorStatus> {
     const install = this.installStateService.getStatus();
     const checks: InstallDoctorCheck[] = [];
-    const npmCommand = platformCommand('npm');
-    const npxCommand = platformCommand('npx');
+    const npmCommand = platformCommand('npm', install);
+    const npxCommand = platformCommand('npx', install);
 
     checks.push(this.checkNode());
     checks.push(await this.checkCommand('npm', 'npm', [npmCommand, '--version'], true, 'npm is available.', NODE_REMEDIATION));
@@ -158,9 +160,9 @@ export class InstallDoctorService {
     checks.push(this.checkBuildAsset('web-build', 'Desktop web build', 'public/v2-built/index.html', true));
     checks.push(this.checkBuildAsset('mobile-build', 'Mobile PWA build', 'public/mobile-built/index.html', false));
     const homebrewAvailable = await this.homebrewDetector();
-    checks.push(await this.checkCommand('claude-cli', 'Claude Code CLI', ['claude', '--version'], false, 'Claude Code CLI responded.', CLAUDE_CLI_REMEDIATION, this.actionsForCheck('claude-cli', homebrewAvailable)));
-    checks.push(await this.checkCommand('codex-cli', 'Codex CLI', ['codex', '--version'], false, 'Codex CLI responded.', CODEX_CLI_REMEDIATION, this.actionsForCheck('codex-cli', homebrewAvailable)));
-    checks.push(await this.checkCommand('kiro-cli', 'Kiro CLI', ['kiro-cli', '--version'], false, 'Kiro CLI responded.', kiroCliRemediation(), this.actionsForCheck('kiro-cli', homebrewAvailable)));
+    checks.push(await this.checkCommand('claude-cli', 'Claude Code CLI', ['claude', '--version'], false, 'Claude Code CLI responded.', CLAUDE_CLI_REMEDIATION, this.actionsForCheck('claude-cli', homebrewAvailable, install)));
+    checks.push(await this.checkCommand('codex-cli', 'Codex CLI', ['codex', '--version'], false, 'Codex CLI responded.', CODEX_CLI_REMEDIATION, this.actionsForCheck('codex-cli', homebrewAvailable, install)));
+    checks.push(await this.checkCommand('kiro-cli', 'Kiro CLI', ['kiro-cli', '--version'], false, 'Kiro CLI responded.', kiroCliRemediation(), this.actionsForCheck('kiro-cli', homebrewAvailable, install)));
     checks.push(await this.checkPandoc(homebrewAvailable));
     checks.push(await this.checkLibreOffice(homebrewAvailable));
     checks.push(this.checkUpdateChannel(install));
@@ -334,11 +336,11 @@ export class InstallDoctorService {
 
   private async installActionDefinition(actionId: string): Promise<InstallActionDefinition | null> {
     const homebrewAvailable = await this.homebrewDetector();
-    return this.actionDefinitions(homebrewAvailable).get(actionId) || null;
+    return this.actionDefinitions(homebrewAvailable, this.installStateService.getStatus()).get(actionId) || null;
   }
 
-  private actionsForCheck(checkId: string, homebrewAvailable: boolean): InstallDoctorAction[] {
-    return [...this.actionDefinitions(homebrewAvailable).values()]
+  private actionsForCheck(checkId: string, homebrewAvailable: boolean, install?: InstallStatus): InstallDoctorAction[] {
+    return [...this.actionDefinitions(homebrewAvailable, install).values()]
       .filter((definition) => definition.action.id.startsWith(`${checkId}:`))
       .map((definition) => definition.action)
       .sort((a, b) => {
@@ -347,8 +349,8 @@ export class InstallDoctorService {
       });
   }
 
-  private actionDefinitions(homebrewAvailable: boolean): Map<string, InstallActionDefinition> {
-    const npmCommand = platformCommand('npm');
+  private actionDefinitions(homebrewAvailable: boolean, install?: InstallStatus): Map<string, InstallActionDefinition> {
+    const npmCommand = platformCommand('npm', install);
     const definitions: InstallActionDefinition[] = [
       {
         action: { id: 'claude-cli:npm-install', kind: 'command', label: 'Install Claude Code', description: 'Installs the Claude Code CLI with npm.', command: [npmCommand, 'i', '-g', '@anthropic-ai/claude-code@latest'] },

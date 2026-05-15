@@ -117,8 +117,9 @@ installer artifacts. It then creates a temporary Git origin whose `main` branch
 points at the selected `source_ref`, runs `scripts/install-windows.ps1 -Channel
 dev` against a temporary checkout with `-InstallNode`, an install path containing
 spaces, `-SkipOpen`, and a fixed high port, verifies the `AgentCockpit` ONLOGON
-scheduled task is queryable, probes `/auth/setup`, and runs the generated stop
-script before the publish job starts.
+scheduled task is queryable, probes `/auth/setup`, verifies `/api/chat/install/doctor`
+reports `node`, `npm`, and `pm2` as `ok`, and runs the generated stop script
+before the publish job starts.
 
 When `smoke_only` is false, the Ubuntu publish job then runs the release gate in
 this order:

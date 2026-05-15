@@ -74,8 +74,9 @@ verify the Windows ZIP and installer manifest entries before assets are uploaded
 It also runs
 `install-windows.ps1` in dev mode against a temporary checkout, forces a private
 Node runtime, uses an install path containing spaces, confirms the ONLOGON
-scheduled task exists, probes `/auth/setup`, and stops PM2 before the publish job
-can start.
+scheduled task exists, probes `/auth/setup`, confirms Install Doctor reports
+`node`, `npm`, and `pm2` as ready, and stops PM2 before the publish job can
+start.
 
 ## Post-Release Checks
 
