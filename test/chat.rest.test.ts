@@ -2034,6 +2034,34 @@ describe('install doctor and welcome completion routes', () => {
     expect(res.body.install.welcomeCompletedAt).toBe('2026-05-12T00:00:00.000Z');
     expect(markWelcomeCompleted).toHaveBeenCalledTimes(1);
   });
+
+  test('runs install doctor actions with active-stream guard', async () => {
+    await destroyChatRouterEnv(env);
+    const runInstallAction = jest.fn(async (_id: string, opts: { hasActiveStreams?: () => boolean }) => (
+      opts.hasActiveStreams?.()
+        ? { success: false, steps: [], error: 'Cannot install a dependency while conversations are actively running.' }
+        : { success: true, steps: [{ name: 'npm i -g @openai/codex@latest', success: true, output: 'installed' }] }
+    ));
+    env = await createChatRouterEnv({
+      installDoctorService: {
+        getStatus: jest.fn(),
+        runInstallAction,
+      },
+    });
+    const pending = await startPendingMessage('block install action');
+
+    const res = await env.request('POST', '/api/chat/install/actions/codex-cli%3Anpm-install/run', {});
+
+    expect(res.status).toBe(409);
+    expect(res.body.success).toBe(false);
+    expect(runInstallAction).toHaveBeenCalledWith('codex-cli:npm-install', expect.objectContaining({
+      hasActiveStreams: expect.any(Function),
+    }));
+
+    pending.releaseUserAdd();
+    const send = await pending.sendPromise;
+    expect(send.status).toBe(200);
+  });
 });
 
 // ── Usage event forwarding ───────────────────────────────────────────────────

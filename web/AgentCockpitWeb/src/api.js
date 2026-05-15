@@ -259,6 +259,11 @@
     return res.json();
   }
 
+  async function runInstallAction(actionId){
+    const res = await chatFetch('install/actions/' + encodeURIComponent(actionId) + '/run', { method: 'POST', body: {} });
+    return res.json();
+  }
+
   async function checkVersion(){
     const res = await chatFetch('check-version', { method: 'POST' });
     return res.json();
@@ -870,6 +875,28 @@
       }
       return data;
     }),
+    testSetupCliAuth: (vendor) => chatFetch(
+      'cli-profiles/setup-auth/' + encodeURIComponent(vendor) + '/test',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()).then(data => {
+      if (data && data.settings) {
+        state._settingsCache = data.settings;
+        clearProfileMetadataCache();
+        window.dispatchEvent(new CustomEvent('agent-cockpit-settings-saved', { detail: state._settingsCache }));
+      }
+      return data;
+    }),
+    startSetupCliAuth: (vendor) => chatFetch(
+      'cli-profiles/setup-auth/' + encodeURIComponent(vendor) + '/start',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()).then(data => {
+      if (data && data.settings) {
+        state._settingsCache = data.settings;
+        clearProfileMetadataCache();
+        window.dispatchEvent(new CustomEvent('agent-cockpit-settings-saved', { detail: state._settingsCache }));
+      }
+      return data;
+    }),
     getCliProfileAuthJob: (jobId) => chatFetch(
       'cli-profiles/auth-jobs/' + encodeURIComponent(jobId),
     ).then(r => r.json()),
@@ -1024,6 +1051,7 @@ export const AgentApi = {
     getInstallStatus,
     getInstallDoctor,
     completeWelcome,
+    runInstallAction,
     checkVersion,
     triggerUpdate,
     getCliUpdates,

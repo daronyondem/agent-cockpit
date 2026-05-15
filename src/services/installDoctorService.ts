@@ -2,19 +2,20 @@ import fs from 'fs';
 import path from 'path';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import type { InstallDoctorCheck, InstallDoctorCheckStatus, InstallDoctorStatus, InstallStatus, UpdateStatus } from '../types';
+import type { InstallDoctorAction, InstallDoctorActionResult, InstallDoctorCheck, InstallDoctorCheckStatus, InstallDoctorStatus, InstallStatus, UpdateStatus } from '../types';
 import type { InstallStateService } from './installStateService';
 import type { UpdateService } from './updateService';
-import { detectLibreOffice, type LibreOfficeStatus } from './knowledgeBase/libreOffice';
-import { detectPandoc, type PandocStatus } from './knowledgeBase/pandoc';
+import { detectLibreOffice, resetLibreOfficeDetection, type LibreOfficeStatus } from './knowledgeBase/libreOffice';
+import { detectPandoc, resetPandocDetection, type PandocStatus } from './knowledgeBase/pandoc';
 
 const execFileAsync = promisify(execFile);
+const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
 const NODE_REMEDIATION = 'Install Node.js 22+ from nodejs.org, or rerun the macOS installer without --no-install-node so it can install a private runtime.';
-const CLAUDE_CLI_REMEDIATION = 'Install Claude Code only if you want to use that backend. macOS: run `curl -fsSL https://claude.ai/install.sh | bash` or `brew install --cask claude-code`, then run `claude` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
-const CODEX_CLI_REMEDIATION = 'Install Codex only if you want to use that backend. Run `npm i -g @openai/codex` or, on macOS, `brew install --cask codex`; then run `codex` and sign in with ChatGPT or an API key. Restart Agent Cockpit if the command is still not detected.';
+const CLAUDE_CLI_REMEDIATION = 'Install Claude Code only if you want to use that backend. macOS/Linux: run `curl -fsSL https://claude.ai/install.sh | bash`; or run `npm i -g @anthropic-ai/claude-code` when npm is available. Then run `claude` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
+const CODEX_CLI_REMEDIATION = 'Install Codex only if you want to use that backend. Run `npm i -g @openai/codex`, then run `codex` and sign in with ChatGPT or an API key. Restart Agent Cockpit if the command is still not detected.';
 const KIRO_CLI_REMEDIATION = 'Install Kiro only if you want to use that backend. macOS: run `curl -fsSL https://cli.kiro.dev/install | bash`, then run `kiro-cli login` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
-const PANDOC_REMEDIATION = 'Install Pandoc for DOCX knowledge-base ingestion. macOS: run `brew install pandoc`, or use the installer from https://pandoc.org/installing.html, then restart Agent Cockpit.';
-const LIBREOFFICE_REMEDIATION = 'Install LibreOffice for PPTX slide-image conversion. macOS: run `brew install --cask libreoffice`, or download it from https://www.libreoffice.org/download/download-libreoffice/, then restart Agent Cockpit.';
+const PANDOC_REMEDIATION = 'Install Pandoc for DOCX knowledge-base ingestion. If Homebrew is already installed, macOS can run `brew install pandoc`; otherwise use the official installer from https://pandoc.org/installing.html. Restart Agent Cockpit after installing.';
+const LIBREOFFICE_REMEDIATION = 'Install LibreOffice for PPTX slide-image conversion. If Homebrew is already installed, macOS can run `brew install --cask libreoffice`; otherwise download LibreOffice from https://www.libreoffice.org/download/download-libreoffice/. Restart Agent Cockpit after installing.';
 
 interface CommandResult {
   ok: boolean;
@@ -25,14 +26,23 @@ interface CommandResult {
 
 type CommandRunner = (command: string, args: string[], options?: { cwd?: string; timeoutMs?: number }) => Promise<CommandResult>;
 
+interface InstallActionDefinition {
+  action: InstallDoctorAction;
+  command?: string[];
+}
+
 interface InstallDoctorServiceOptions {
   appRoot: string;
   dataRoot: string;
   installStateService: InstallStateService;
   updateService?: UpdateService | null;
   commandRunner?: CommandRunner;
+  installRunner?: CommandRunner;
+  detectHomebrew?: () => Promise<boolean>;
   detectPandoc?: () => Promise<PandocStatus>;
   detectLibreOffice?: () => Promise<LibreOfficeStatus>;
+  resetPandocDetection?: () => void;
+  resetLibreOfficeDetection?: () => void;
 }
 
 async function defaultCommandRunner(command: string, args: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<CommandResult> {
@@ -63,10 +73,11 @@ function firstLine(value: string | undefined): string | undefined {
   return value ? value.split(/\r?\n/).find(Boolean) : undefined;
 }
 
-function check(id: string, label: string, status: InstallDoctorCheckStatus, required: boolean, summary: string, detail?: string, remediation?: string): InstallDoctorCheck {
+function check(id: string, label: string, status: InstallDoctorCheckStatus, required: boolean, summary: string, detail?: string, remediation?: string, installActions?: InstallDoctorAction[]): InstallDoctorCheck {
   const result: InstallDoctorCheck = { id, label, status, required, summary };
   if (detail) result.detail = detail;
   if (remediation) result.remediation = remediation;
+  if (installActions && installActions.length > 0) result.installActions = installActions;
   return result;
 }
 
@@ -76,8 +87,13 @@ export class InstallDoctorService {
   private readonly installStateService: InstallStateService;
   private readonly updateService: UpdateService | null;
   private readonly commandRunner: CommandRunner;
+  private readonly installRunner: CommandRunner;
+  private readonly homebrewDetector: () => Promise<boolean>;
   private readonly pandocDetector: () => Promise<PandocStatus>;
   private readonly libreOfficeDetector: () => Promise<LibreOfficeStatus>;
+  private readonly resetPandocDetector: () => void;
+  private readonly resetLibreOfficeDetector: () => void;
+  private readonly installInProgress = new Set<string>();
 
   constructor(options: InstallDoctorServiceOptions) {
     this.appRoot = options.appRoot;
@@ -85,8 +101,12 @@ export class InstallDoctorService {
     this.installStateService = options.installStateService;
     this.updateService = options.updateService ?? null;
     this.commandRunner = options.commandRunner ?? defaultCommandRunner;
+    this.installRunner = options.installRunner ?? this.commandRunner;
+    this.homebrewDetector = options.detectHomebrew ?? (() => this.defaultHasHomebrew());
     this.pandocDetector = options.detectPandoc ?? detectPandoc;
     this.libreOfficeDetector = options.detectLibreOffice ?? detectLibreOffice;
+    this.resetPandocDetector = options.resetPandocDetection ?? resetPandocDetection;
+    this.resetLibreOfficeDetector = options.resetLibreOfficeDetection ?? resetLibreOfficeDetection;
   }
 
   async getStatus(): Promise<InstallDoctorStatus> {
@@ -100,11 +120,12 @@ export class InstallDoctorService {
     checks.push(this.checkAppDir());
     checks.push(this.checkBuildAsset('web-build', 'Desktop web build', 'public/v2-built/index.html', true));
     checks.push(this.checkBuildAsset('mobile-build', 'Mobile PWA build', 'public/mobile-built/index.html', false));
-    checks.push(await this.checkCommand('claude-cli', 'Claude Code CLI', ['claude', '--version'], false, 'Claude Code CLI responded.', CLAUDE_CLI_REMEDIATION));
-    checks.push(await this.checkCommand('codex-cli', 'Codex CLI', ['codex', '--version'], false, 'Codex CLI responded.', CODEX_CLI_REMEDIATION));
-    checks.push(await this.checkCommand('kiro-cli', 'Kiro CLI', ['kiro-cli', '--version'], false, 'Kiro CLI responded.', KIRO_CLI_REMEDIATION));
-    checks.push(await this.checkPandoc());
-    checks.push(await this.checkLibreOffice());
+    const homebrewAvailable = await this.homebrewDetector();
+    checks.push(await this.checkCommand('claude-cli', 'Claude Code CLI', ['claude', '--version'], false, 'Claude Code CLI responded.', CLAUDE_CLI_REMEDIATION, this.actionsForCheck('claude-cli', homebrewAvailable)));
+    checks.push(await this.checkCommand('codex-cli', 'Codex CLI', ['codex', '--version'], false, 'Codex CLI responded.', CODEX_CLI_REMEDIATION, this.actionsForCheck('codex-cli', homebrewAvailable)));
+    checks.push(await this.checkCommand('kiro-cli', 'Kiro CLI', ['kiro-cli', '--version'], false, 'Kiro CLI responded.', KIRO_CLI_REMEDIATION, this.actionsForCheck('kiro-cli', homebrewAvailable)));
+    checks.push(await this.checkPandoc(homebrewAvailable));
+    checks.push(await this.checkLibreOffice(homebrewAvailable));
     checks.push(this.checkUpdateChannel(install));
 
     return {
@@ -113,6 +134,54 @@ export class InstallDoctorService {
       install,
       checks,
     };
+  }
+
+  async runInstallAction(actionId: string, opts: { hasActiveStreams?: () => boolean } = {}): Promise<InstallDoctorActionResult> {
+    if (this.installInProgress.size > 0) {
+      return { success: false, steps: [], error: 'Install action already in progress.' };
+    }
+    if (opts.hasActiveStreams && opts.hasActiveStreams()) {
+      return {
+        success: false,
+        steps: [],
+        error: 'Cannot install a dependency while conversations are actively running. Please wait for them to complete or abort them first.',
+      };
+    }
+
+    const definition = await this.installActionDefinition(actionId);
+    if (!definition) {
+      return { success: false, steps: [], error: 'Install action not found.' };
+    }
+    if (definition.action.kind !== 'command' || !definition.command || definition.command.length === 0) {
+      return { success: false, action: definition.action, steps: [], error: 'This install action opens a download page instead of running on the server.' };
+    }
+
+    this.installInProgress.add(actionId);
+    const steps = [];
+    try {
+      const [command, ...args] = definition.command;
+      const result = await this.installRunner(command, args, { cwd: this.appRoot, timeoutMs: INSTALL_TIMEOUT_MS });
+      const output = commandOutput(result);
+      steps.push({ name: definition.command.join(' '), success: result.ok, output });
+      if (!result.ok) {
+        return {
+          success: false,
+          action: definition.action,
+          steps,
+          error: result.error || firstLine(result.stderr) || firstLine(result.stdout) || 'Install command failed.',
+        };
+      }
+
+      this.invalidateDetectionForAction(actionId);
+      return {
+        success: true,
+        action: definition.action,
+        steps,
+        doctor: await this.getStatus(),
+      };
+    } finally {
+      this.installInProgress.delete(actionId);
+    }
   }
 
   private checkNode(): InstallDoctorCheck {
@@ -124,7 +193,7 @@ export class InstallDoctorService {
     return check('node', 'Node.js', 'error', true, `Node.js ${version} is too old.`, undefined, NODE_REMEDIATION);
   }
 
-  private async checkCommand(id: string, label: string, commandAndArgs: string[], required: boolean, okSummary: string, remediation: string): Promise<InstallDoctorCheck> {
+  private async checkCommand(id: string, label: string, commandAndArgs: string[], required: boolean, okSummary: string, remediation: string, installActions?: InstallDoctorAction[]): Promise<InstallDoctorCheck> {
     const [command, ...args] = commandAndArgs;
     const result = await this.commandRunner(command, args, { cwd: this.appRoot, timeoutMs: 5_000 });
     if (result.ok) {
@@ -138,6 +207,7 @@ export class InstallDoctorService {
       `${label} is not ready.`,
       result.error || firstLine(result.stderr) || firstLine(result.stdout),
       remediation,
+      installActions,
     );
   }
 
@@ -172,20 +242,20 @@ export class InstallDoctorService {
     return check(id, label, required ? 'error' : 'warning', required, `${label} is missing.`, relPath, `Run ${id === 'web-build' ? 'npm run web:build' : 'npm run mobile:build'}.`);
   }
 
-  private async checkPandoc(): Promise<InstallDoctorCheck> {
+  private async checkPandoc(homebrewAvailable: boolean): Promise<InstallDoctorCheck> {
     const status = await this.pandocDetector();
     if (status.available) {
       return check('pandoc', 'Pandoc', 'ok', false, status.version ? `Pandoc ${status.version} is available.` : 'Pandoc is available.', status.binaryPath || undefined);
     }
-    return check('pandoc', 'Pandoc', 'warning', false, 'Pandoc is not installed.', undefined, PANDOC_REMEDIATION);
+    return check('pandoc', 'Pandoc', 'warning', false, 'Pandoc is not installed.', undefined, PANDOC_REMEDIATION, this.actionsForCheck('pandoc', homebrewAvailable));
   }
 
-  private async checkLibreOffice(): Promise<InstallDoctorCheck> {
+  private async checkLibreOffice(homebrewAvailable: boolean): Promise<InstallDoctorCheck> {
     const status = await this.libreOfficeDetector();
     if (status.available) {
       return check('libreoffice', 'LibreOffice', 'ok', false, 'LibreOffice is available.', status.binaryPath || undefined);
     }
-    return check('libreoffice', 'LibreOffice', 'warning', false, 'LibreOffice is not installed.', undefined, LIBREOFFICE_REMEDIATION);
+    return check('libreoffice', 'LibreOffice', 'warning', false, 'LibreOffice is not installed.', undefined, LIBREOFFICE_REMEDIATION, this.actionsForCheck('libreoffice', homebrewAvailable));
   }
 
   private checkUpdateChannel(install: InstallStatus): InstallDoctorCheck {
@@ -205,4 +275,71 @@ export class InstallDoctorService {
     if (checks.some(item => item.status === 'warning' || item.status === 'error')) return 'warning';
     return 'ok';
   }
+
+  private async defaultHasHomebrew(): Promise<boolean> {
+    if (process.platform !== 'darwin') return false;
+    const result = await this.commandRunner('brew', ['--version'], { cwd: this.appRoot, timeoutMs: 5_000 });
+    return result.ok;
+  }
+
+  private async installActionDefinition(actionId: string): Promise<InstallActionDefinition | null> {
+    const homebrewAvailable = await this.homebrewDetector();
+    return this.actionDefinitions(homebrewAvailable).get(actionId) || null;
+  }
+
+  private actionsForCheck(checkId: string, homebrewAvailable: boolean): InstallDoctorAction[] {
+    return [...this.actionDefinitions(homebrewAvailable).values()]
+      .filter((definition) => definition.action.id.startsWith(`${checkId}:`))
+      .map((definition) => definition.action)
+      .sort((a, b) => {
+        if (a.kind === b.kind) return 0;
+        return a.kind === 'command' ? -1 : 1;
+      });
+  }
+
+  private actionDefinitions(homebrewAvailable: boolean): Map<string, InstallActionDefinition> {
+    const definitions: InstallActionDefinition[] = [
+      {
+        action: { id: 'claude-cli:npm-install', kind: 'command', label: 'Install Claude Code', description: 'Installs the Claude Code CLI with npm.', command: ['npm', 'i', '-g', '@anthropic-ai/claude-code@latest'] },
+        command: ['npm', 'i', '-g', '@anthropic-ai/claude-code@latest'],
+      },
+      { action: { id: 'claude-cli:docs', kind: 'link', label: 'Open docs', href: 'https://code.claude.com/docs/en/setup' } },
+      {
+        action: { id: 'codex-cli:npm-install', kind: 'command', label: 'Install Codex', description: 'Installs the Codex CLI with npm.', command: ['npm', 'i', '-g', '@openai/codex@latest'] },
+        command: ['npm', 'i', '-g', '@openai/codex@latest'],
+      },
+      { action: { id: 'codex-cli:docs', kind: 'link', label: 'Open docs', href: 'https://github.com/openai/codex' } },
+      {
+        action: { id: 'kiro-cli:official-install', kind: 'command', label: 'Install Kiro', description: 'Runs the official Kiro CLI installer.', command: ['sh', '-c', 'curl -fsSL https://cli.kiro.dev/install | bash'] },
+        command: ['sh', '-c', 'curl -fsSL https://cli.kiro.dev/install | bash'],
+      },
+      { action: { id: 'kiro-cli:docs', kind: 'link', label: 'Open docs', href: 'https://kiro.dev/docs/cli/installation/' } },
+      { action: { id: 'pandoc:official-download', kind: 'link', label: 'Open installer', href: 'https://pandoc.org/installing.html' } },
+      { action: { id: 'libreoffice:official-download', kind: 'link', label: 'Open download', href: 'https://www.libreoffice.org/download/download-libreoffice/' } },
+    ];
+
+    if (homebrewAvailable) {
+      definitions.push({
+        action: { id: 'pandoc:brew-install', kind: 'command', label: 'Install with Homebrew', description: 'Installs Pandoc using the existing Homebrew installation.', command: ['brew', 'install', 'pandoc'] },
+        command: ['brew', 'install', 'pandoc'],
+      });
+      definitions.push({
+        action: { id: 'libreoffice:brew-install', kind: 'command', label: 'Install with Homebrew', description: 'Installs LibreOffice using the existing Homebrew installation.', command: ['brew', 'install', '--cask', 'libreoffice'] },
+        command: ['brew', 'install', '--cask', 'libreoffice'],
+      });
+    }
+
+    return new Map(definitions.map((definition) => [definition.action.id, definition]));
+  }
+
+  private invalidateDetectionForAction(actionId: string): void {
+    if (actionId.startsWith('pandoc:')) this.resetPandocDetector();
+    if (actionId.startsWith('libreoffice:')) this.resetLibreOfficeDetector();
+  }
+}
+
+function commandOutput(result: CommandResult): string {
+  const parts = [result.stdout, result.stderr, result.error].filter(Boolean);
+  const output = parts.join('\n').trim();
+  return output.length > 12_000 ? `${output.slice(0, 12_000)}\n...` : output;
 }

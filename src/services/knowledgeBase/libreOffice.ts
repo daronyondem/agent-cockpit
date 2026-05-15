@@ -77,6 +77,8 @@ export function getLibreOfficeStatus(): LibreOfficeStatus | null {
  * Test-only: clear the cache so detection runs again on next call.
  * Not exported from the package index.
  */
-export function _resetLibreOfficeCacheForTests(): void {
+export function resetLibreOfficeDetection(): void {
   cached = null;
 }
+
+export const _resetLibreOfficeCacheForTests = resetLibreOfficeDetection;
