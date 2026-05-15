@@ -27,6 +27,13 @@ describe('Windows installer script', () => {
     expect(source).toContain('Release manifest does not include a Windows app ZIP artifact');
   });
 
+  test('generates setup secrets with Windows PowerShell 5.1-compatible crypto APIs', () => {
+    expect(source).toContain('[System.Security.Cryptography.RandomNumberGenerator]::Create()');
+    expect(source).toContain('$rng.GetBytes($buffer)');
+    expect(source).toContain('$rng.Dispose()');
+    expect(source).not.toContain('[System.Security.Cryptography.RandomNumberGenerator]::Fill(');
+  });
+
   test('installs production releases from GitHub Release ZIP assets', () => {
     expect(source).toContain('/releases/latest/download');
     expect(source).toContain('/releases/download/v');

@@ -326,8 +326,11 @@ environment includes `PORT`, `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
 `AUTH_ENABLE_LEGACY_OAUTH=false`, `PM2_HOME=<install-root>\pm2`, and a private
 runtime `PATH` prefix when applicable. Windows path-valued `.env` entries use
 backtick quoting so dotenv does not interpret `\r` or `\n` inside paths such as
-`runtime\node-v...`. Repair or reinstall runs read the existing app `.env` and
-install manifest before replacing a same-version release directory so
+`runtime\node-v...`. Fresh `SESSION_SECRET` and `AUTH_SETUP_TOKEN` values are
+generated with `RandomNumberGenerator.Create().GetBytes(...)` so the installer
+works in Windows PowerShell 5.1 as well as newer PowerShell runtimes. Repair or
+reinstall runs read the existing app `.env` and install manifest before
+replacing a same-version release directory so
 `SESSION_SECRET`, `AUTH_SETUP_TOKEN`, `installedAt`, and `welcomeCompletedAt`
 remain stable while mutable `data\` content is preserved outside the app
 directory.

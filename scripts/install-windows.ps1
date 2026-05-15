@@ -121,7 +121,12 @@ function Write-JsonFile {
 function New-RandomHex {
   param([int] $Bytes)
   $buffer = [byte[]]::new($Bytes)
-  [System.Security.Cryptography.RandomNumberGenerator]::Fill($buffer)
+  $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+  try {
+    $rng.GetBytes($buffer)
+  } finally {
+    $rng.Dispose()
+  }
   return -join ($buffer | ForEach-Object { $_.ToString('x2') })
 }
 
