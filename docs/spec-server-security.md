@@ -41,7 +41,9 @@ PM2 ecosystem configuration, writes install-channel metadata, then launches the
 same server initialization flow documented below. First-run owner creation
 begins at `/auth/setup`; successful owner creation redirects to
 `/v2/?welcome=1` so the authenticated welcome flow can show install diagnostics
-and mark setup complete.
+and mark setup complete. Local password setup and password login explicitly save
+the file-backed session before redirecting so the next browser request can use
+the newly issued `connect.sid` immediately after a fresh install.
 
 Server logging is migrating to `src/utils/logger.ts`. The logger writes one structured line per event, applies `LOG_LEVEL` filtering, redacts metadata keys that look like credentials, cookies, session ids, tokens, or passwords before emitting, and serializes cyclic/rich metadata safely (`Error`, `Date`, `Map`, `Set`, `bigint`, functions, symbols, bounded arrays/objects/strings). WebSocket diagnostics, `MemoryWatcher`, `StreamJobSupervisor`, chat stream orchestration, upload OCR failures, `ChatService` maintenance paths, and Context Map processor update-emission failures use this path for migrated slices and avoid logging stdin message content; debug logs record only lengths and operational identifiers.
 
@@ -186,6 +188,12 @@ base-uri: 'self'
 frame-ancestors: 'none'
 form-action: 'self'
 ```
+
+The CSP intentionally omits Helmet's default `upgrade-insecure-requests`
+directive because the supported macOS install serves first-run setup and the
+main app over local plain HTTP. Keeping that directive would make WebKit/Safari
+upgrade localhost form submissions and local asset requests to HTTPS even though
+the PM2 server is not serving TLS.
 
 The V2 runtime bundles React, ReactDOM, marked, DOMPurify, and highlight.js through Vite, so no third-party script or connect source is required for the main web app. `cdnjs.cloudflare.com` remains in `style-src` for the current highlight.js theme stylesheet, and `fonts.googleapis.com` / `api.fontshare.com` (style) plus `fonts.gstatic.com` / `api.fontshare.com` / `cdn.fontshare.com` (font) are allowlisted for JetBrains Mono, Instrument Serif, and General Sans.
 

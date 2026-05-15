@@ -194,11 +194,16 @@ manifest-designated `app-tarball` from
 `https://github.com/<repo>/releases/latest/download/` by default, or from
 `/releases/download/v<version>/` when `--version` is supplied. The script
 verifies SHA256 for both the manifest and tarball before extraction. After
-extraction it runs root `npm ci`, runs
-`npm --prefix mobile/AgentCockpitPWA ci`, verifies that
-`public/v2-built/index.html` and `public/mobile-built/index.html` exist, and
-runs the corresponding build command only if an expected prebuilt shell is
-missing.
+extraction it exports `NPM_CONFIG_AUDIT=false`, `NPM_CONFIG_FUND=false`,
+`NPM_CONFIG_LOGLEVEL=error`, and `NPM_CONFIG_UPDATE_NOTIFIER=false`, runs root
+`npm ci --no-audit --no-fund --loglevel=error`, runs
+`npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund --loglevel=error`, verifies
+that `public/v2-built/index.html` and `public/mobile-built/index.html` exist,
+and runs the corresponding build command only if an expected prebuilt shell is
+missing. These npm settings keep install-time audit/funding/update-notifier
+prompts, dependency deprecation warnings, and package-count chatter out of the
+fresh-Mac user path while the repository lockfile and release gate remain
+responsible for dependency hygiene.
 
 Dev installs clone `https://github.com/<repo>.git` into `--dev-dir` when missing
 or update an existing checkout with `fetch origin main`, `checkout main`, and
@@ -224,8 +229,15 @@ npx pm2 startOrRestart ecosystem.config.js --update-env
 npx pm2 save
 ```
 
-It does not require global PM2. After startup it prints the first-run setup token
-and opens `http://localhost:<port>/auth/setup` unless `--skip-open` is set.
+It does not require global PM2. After PM2 starts, the installer polls
+`http://127.0.0.1:<port>/auth/setup` for up to 90 seconds before opening the
+browser. If the server does not answer, the installer fails with a local
+PM2 logs command. When the installer is using a private Node.js runtime, that
+printed command prepends the private runtime `bin` directory and calls the
+private runtime's `npx` so it still works from a fresh user shell that has no
+global Node.js on `PATH`. Once the setup endpoint is ready, it prints the
+first-run setup token and opens
+`http://localhost:<port>/auth/setup` unless `--skip-open` is set.
 Successful owner creation redirects to `/v2/?welcome=1`, where the authenticated
 welcome flow reads install/doctor status, links to Security and CLI Settings,
 offers workspace selection, and calls `POST /api/chat/install/welcome-complete`
