@@ -15,7 +15,8 @@ export function applySecurity(app: Express): void {
         objectSrc: ["'none'"],
         baseUri: ["'self'"],
         frameAncestors: ["'none'"],
-        formAction: ["'self'"]
+        formAction: ["'self'"],
+        upgradeInsecureRequests: null,
       }
     },
     crossOriginEmbedderPolicy: false

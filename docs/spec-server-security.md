@@ -189,6 +189,12 @@ frame-ancestors: 'none'
 form-action: 'self'
 ```
 
+The CSP intentionally omits Helmet's default `upgrade-insecure-requests`
+directive because the supported macOS install serves first-run setup and the
+main app over local plain HTTP. Keeping that directive would make WebKit/Safari
+upgrade localhost form submissions and local asset requests to HTTPS even though
+the PM2 server is not serving TLS.
+
 The V2 runtime bundles React, ReactDOM, marked, DOMPurify, and highlight.js through Vite, so no third-party script or connect source is required for the main web app. `cdnjs.cloudflare.com` remains in `style-src` for the current highlight.js theme stylesheet, and `fonts.googleapis.com` / `api.fontshare.com` (style) plus `fonts.gstatic.com` / `api.fontshare.com` / `cdn.fontshare.com` (font) are allowlisted for JetBrains Mono, Instrument Serif, and General Sans.
 
 Cross-Origin Embedder Policy: disabled.
