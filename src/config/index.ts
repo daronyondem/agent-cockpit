@@ -32,8 +32,8 @@ const config: AppConfig = {
   AUTH_ENABLE_LEGACY_OAUTH: process.env.AUTH_ENABLE_LEGACY_OAUTH === 'true',
   DEFAULT_WORKSPACE: process.env.DEFAULT_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`,
   BASE_PATH: process.env.BASE_PATH || '',
-  CODEX_APPROVAL_POLICY: parseEnum(process.env.CODEX_APPROVAL_POLICY, CODEX_APPROVAL_POLICIES, 'on-request', 'CODEX_APPROVAL_POLICY'),
-  CODEX_SANDBOX_MODE: parseEnum(process.env.CODEX_SANDBOX_MODE, CODEX_SANDBOX_MODES, 'workspace-write', 'CODEX_SANDBOX_MODE'),
+  CODEX_APPROVAL_POLICY: parseEnum(process.env.CODEX_APPROVAL_POLICY, CODEX_APPROVAL_POLICIES, 'never', 'CODEX_APPROVAL_POLICY'),
+  CODEX_SANDBOX_MODE: parseEnum(process.env.CODEX_SANDBOX_MODE, CODEX_SANDBOX_MODES, 'danger-full-access', 'CODEX_SANDBOX_MODE'),
   WEB_BUILD_MODE: parseEnum(
     process.env.WEB_BUILD_MODE,
     WEB_BUILD_MODES,

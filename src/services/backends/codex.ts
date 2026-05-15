@@ -33,8 +33,8 @@ const CODEX_ICON = '<svg width="28" height="28" viewBox="0 0 24 24" fill="none" 
 // ── Configuration ────────────────────────────────────���──────────────────────
 
 const CODEX_IDLE_TIMEOUT_MS = parseInt(process.env.CODEX_IDLE_TIMEOUT_MS || '', 10) || 600_000;
-const DEFAULT_CODEX_APPROVAL_POLICY: CodexApprovalPolicy = 'on-request';
-const DEFAULT_CODEX_SANDBOX_MODE: CodexSandboxMode = 'workspace-write';
+const DEFAULT_CODEX_APPROVAL_POLICY: CodexApprovalPolicy = 'never';
+const DEFAULT_CODEX_SANDBOX_MODE: CodexSandboxMode = 'danger-full-access';
 const CODEX_SUPPORTED_EFFORTS: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 const CODEX_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh'];
 const CODEX_APP_SERVER_ARGS = ['app-server', '--enable', 'goals'];
@@ -2545,8 +2545,6 @@ export class CodexAdapter extends BaseBackendAdapter {
     const args = ['exec'];
     if (codexUsesFullAccess(this.approvalPolicy, this.sandbox)) {
       args.push('--dangerously-bypass-approvals-and-sandbox');
-    } else if (this.approvalPolicy === DEFAULT_CODEX_APPROVAL_POLICY && this.sandbox === DEFAULT_CODEX_SANDBOX_MODE) {
-      args.push('--full-auto');
     } else {
       args.push('--ask-for-approval', this.approvalPolicy, '--sandbox', this.sandbox);
     }
