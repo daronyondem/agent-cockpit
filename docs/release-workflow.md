@@ -26,8 +26,9 @@ The document must include non-empty `## Shipped For Users` and
 bullet and must describe end-user value, not only internal implementation work.
 
 The GitHub Release description is rendered from this source-controlled document
-by `npm run release:notes`. The published description includes the
-user-facing shipped list and a link back to the full developer detail document.
+by `npm run release:notes`. The published description includes the user-facing
+shipped bullet list without section headings and a link back to the full
+developer detail document.
 
 ## Agent Prep Steps
 
@@ -80,7 +81,7 @@ can start.
 
 After the workflow succeeds:
 
-1. Open the GitHub Release and confirm the **Shipped For Users** list is readable.
+1. Open the GitHub Release and confirm the shipped user-facing bullet list is readable.
 2. Confirm the developer-details link resolves to
    `docs/releases/v<version>.md` at the release tag.
 3. Confirm release assets are present: tarball, Windows ZIP,

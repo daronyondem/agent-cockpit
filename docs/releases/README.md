@@ -5,8 +5,8 @@ production releases.
 
 The release-prep agent creates `v<version>.md` before the GitHub Actions release
 workflow runs. The workflow renders the GitHub Release body from that document,
-publishing only the end-user **Shipped For Users** section plus a link back to
-the full document.
+publishing the end-user shipped bullet list without section headings plus a link
+back to the full document.
 
 Required sections:
 

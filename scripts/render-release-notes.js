@@ -84,13 +84,9 @@ function renderReleaseNotes(options) {
   return [
     `Agent Cockpit production release v${version}.`,
     '',
-    '## Shipped For Users',
-    '',
     shipped,
     '',
-    '## Developer Details',
-    '',
-    `See [${docRelPath}](${docUrl}) for implementation details, verification, and source links.`,
+    `Full details: [${docRelPath}](${docUrl}).`,
     '',
   ].join('\n');
 }

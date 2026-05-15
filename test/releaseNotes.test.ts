@@ -68,12 +68,13 @@ describe('release notes renderer', () => {
     });
 
     expect(notes).toContain('Agent Cockpit production release v1.2.3.');
-    expect(notes).toContain('## Shipped For Users');
     expect(notes).toContain('Improved setup');
-    expect(notes).toContain('## Developer Details');
+    expect(notes).not.toContain('## Shipped For Users');
+    expect(notes).not.toContain('## Developer Details');
     expect(notes).toContain(
       'https://github.com/example/agent-cockpit/blob/v1.2.3/docs/releases/v1.2.3.md',
     );
+    expect(notes).toContain('Full details:');
     expect(notes).not.toContain('Updated the release workflow');
   });
 
