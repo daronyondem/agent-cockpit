@@ -25,6 +25,7 @@
     "mobile:typecheck": "npm --prefix mobile/AgentCockpitPWA run typecheck",
     "mobile:visual:capture": "npm --prefix mobile/AgentCockpitPWA run visual:capture",
     "release:package": "node scripts/package-release.js",
+    "release:notes": "node scripts/render-release-notes.js",
     "maintainability:check": "node scripts/check-maintainability.js",
     "spec:drift": "node scripts/check-spec-drift.js",
     "adr:new": "node scripts/adr-new.js",
