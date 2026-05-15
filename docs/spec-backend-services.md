@@ -1043,7 +1043,9 @@ Production-channel sequence:
 11. Copy `.env` from the previous current release into the new release. macOS
     also copies `ecosystem.config.js`; Windows regenerates `ecosystem.config.js`
     with an explicit Node interpreter and `node_modules/tsx/dist/cli.mjs`
-    script so the config points at the new versioned app directory.
+    script so the config points at the new versioned app directory. The Windows
+    config sets `windowsHide: true` so PM2-managed Node processes do not open a
+    desktop console window.
 12. Activate the release. macOS switches `<installDir>/current` to the new
     release; the path must either be absent or a symlink, and a non-symlink
     current path is refused. Windows records the new versioned release path as
@@ -1065,7 +1067,8 @@ Production-channel sequence:
   Windows it writes `<dataRoot>/restart.ps1`, sets install-local `PM2_HOME`,
   prepends the private runtime path when present, restarts the app through
   a checked native-command wrapper that throws on failed `pm2 startOrRestart`
-  or `pm2 save`, and launches the script detached with `windowsHide: true`.
+  or `pm2 save`, and launches the script detached with PowerShell
+  `-WindowStyle Hidden` and Node `windowsHide: true`.
   Output is logged to `<dataRoot>/update-restart.log`. Shared by
   `triggerUpdate()` and `restart()`. Production callers also pass a health URL
   and rollback target; the script probes the health URL for up to 20 seconds and

@@ -522,7 +522,7 @@ export class UpdateService {
     );
     fs.mkdirSync(this._dataRoot, { recursive: true });
     fs.writeFileSync(scriptFile, scriptLines.join('\r\n'));
-    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptFile], {
+    const child = spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File', scriptFile], {
       cwd: appRoot,
       detached: true,
       stdio: 'ignore',
@@ -1024,6 +1024,7 @@ export class UpdateService {
         args: 'server.ts',
         interpreter: nodePath,
         cwd: appDir,
+        windowsHide: true,
         env: {
           PORT: Number(this._readEnvValue(envPath, 'PORT')) || 3334,
           SESSION_SECRET: this._readEnvValue(envPath, 'SESSION_SECRET') || '',

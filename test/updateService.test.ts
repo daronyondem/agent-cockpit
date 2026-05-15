@@ -1257,7 +1257,7 @@ describe('UpdateService', () => {
         expect(restartScript).toContain('[System.IO.File]::WriteAllText');
         expect(restartScript).toContain('System.Text.UTF8Encoding($false)');
         expect(restartScript).toContain(path.join(install.previousDir, 'ecosystem.config.js'));
-        expect(mockSpawnFn).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining(['-File', restartPath]), expect.objectContaining({
+        expect(mockSpawnFn).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining(['-WindowStyle', 'Hidden', '-File', restartPath]), expect.objectContaining({
           cwd: finalDir,
           detached: true,
           stdio: 'ignore',
@@ -1383,7 +1383,7 @@ describe('UpdateService', () => {
         expect(restartScript).toContain(path.join(oldRuntimeDir, 'npx.cmd'));
         expect(restartScript).toContain(`$env:Path = '${oldRuntimeDir}' + ';' + $env:Path`);
         expect(restartScript).toContain(`Invoke-CheckedNative '${path.join(oldRuntimeDir, 'npx.cmd')}' @('pm2', 'save')`);
-        expect(mockSpawnFn).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining(['-File', restartPath]), expect.objectContaining({
+        expect(mockSpawnFn).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining(['-WindowStyle', 'Hidden', '-File', restartPath]), expect.objectContaining({
           cwd: nextDir,
           detached: true,
           stdio: 'ignore',
@@ -1436,6 +1436,7 @@ describe('UpdateService', () => {
           args: 'server.ts',
           interpreter: path.join(runtimeDir, 'node.exe'),
           cwd: appDir,
+          windowsHide: true,
         }));
         expect(app.env).toEqual(expect.objectContaining({
           PORT: 4455,

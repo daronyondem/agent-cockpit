@@ -65,6 +65,7 @@ describe('Windows installer script', () => {
     expect(source).toContain("script = 'node_modules/tsx/dist/cli.mjs'");
     expect(source).toContain("args = 'server.ts'");
     expect(source).toContain('interpreter = $NodeExe');
+    expect(source).toContain('windowsHide = $true');
     expect(source).toContain('PM2_HOME');
     expect(source).toContain('start-agent-cockpit.ps1');
     expect(source).toContain('logs-agent-cockpit.ps1');
@@ -75,6 +76,7 @@ describe('Windows installer script', () => {
     expect(source).toContain('New-ScheduledTaskTrigger -AtLogOn -User $currentUser');
     expect(source).toContain('New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited');
     expect(source).toContain('Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal');
+    expect(source).toContain('-WindowStyle Hidden');
     expect(source).toContain('schtasks.exe /Create /TN $TaskName /SC ONLOGON /RU $currentUser /TR $taskRun /RL LIMITED /F');
     expect(source).toContain('Failed to register current-user logon task with schtasks.exe');
     expect(source).toContain('npx.cmd');

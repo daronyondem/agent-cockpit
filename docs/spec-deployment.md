@@ -320,8 +320,10 @@ force both builds.
 Both Windows channels generate `.env`, `ecosystem.config.js`, helper scripts
 under `<install-root>\bin\`, and `<data-dir>\install.json`. The ecosystem config
 uses an explicit Node interpreter and runs `node_modules/tsx/dist/cli.mjs` with
-`server.ts` as its argument so it does not depend on shell shim behavior. Runtime
-environment includes `PORT`, `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
+`server.ts` as its argument so it does not depend on shell shim behavior. It also
+sets PM2 `windowsHide: true` so the managed Node process stays background-only
+and does not leave a console window on the user's desktop. Runtime environment
+includes `PORT`, `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
 `AGENT_COCKPIT_DATA_DIR`, `WEB_BUILD_MODE=auto`,
 `AUTH_ENABLE_LEGACY_OAUTH=false`, `PM2_HOME=<install-root>\pm2`, and a private
 runtime `PATH` prefix when applicable. Windows path-valued `.env` entries use
@@ -340,9 +342,10 @@ then saves PM2 state. The generated start/stop helpers invoke PM2 through a
 checked native-command wrapper so failed `pm2 startOrRestart` and `pm2 save`
 commands surface through the task/script exit status. Unless `-NoAutoStart` is
 supplied, it registers a current-user `AgentCockpit` ONLOGON Scheduled Task
-that runs `bin\start-agent-cockpit.ps1`. The scheduled-task cmdlet path uses the current
-Windows identity as an `Interactive` limited principal; the `schtasks.exe`
-fallback passes `/RU <current-user>` with limited run level. This is
+that runs `bin\start-agent-cockpit.ps1` through `powershell.exe -WindowStyle
+Hidden`. The scheduled-task cmdlet path uses the current Windows identity as an
+`Interactive` limited principal; the `schtasks.exe` fallback passes `/RU
+<current-user>` with limited run level. This is
 intentionally user-logon startup, not a Windows Service and not "run whether
 user is logged on or not". If the server does not answer `/auth/setup` within
 90 seconds, the installer prints the helper logs command.

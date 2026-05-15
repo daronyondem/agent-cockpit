@@ -323,6 +323,7 @@ function Write-EcosystemConfig {
         args = 'server.ts'
         interpreter = $NodeExe
         cwd = $AppDir
+        windowsHide = $true
         env = [ordered]@{
           PORT = $Port
           SESSION_SECRET = $SessionSecret
@@ -453,7 +454,7 @@ function Register-LogonTask {
     return
   }
   $startScript = Join-Path $InstallDir 'bin\start-agent-cockpit.ps1'
-  $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$startScript`""
+  $arguments = "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$startScript`""
   $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
   Write-Log "Registering current-user logon task $TaskName."
   try {

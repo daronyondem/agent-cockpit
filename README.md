@@ -171,6 +171,7 @@ The supported Windows production path is a per-user PowerShell installer. It
 installs under `%LOCALAPPDATA%\Agent Cockpit`, verifies GitHub Release
 checksums, installs a private Node.js runtime when needed, uses install-local
 PM2 state, registers a current-user logon scheduled task, starts Agent Cockpit,
+runs the managed Node process in the background without a visible console window,
 and opens first-run owner setup in the browser.
 
 ```powershell
