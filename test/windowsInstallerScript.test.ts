@@ -51,6 +51,7 @@ describe('Windows installer script', () => {
     expect(source).toContain("$script:PreservedWelcomeCompletedAt = [string]$install.welcomeCompletedAt");
     expect(source).toContain('installedAt = if ($script:PreservedInstalledAt)');
     expect(source).toContain('welcomeCompletedAt = if ($script:PreservedWelcomeCompletedAt)');
+    expect(source).toContain('[System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))');
     expect(source).toContain('function Env-Quote');
     expect(source).toContain('"PATH=$(Env-Quote (Runtime-Path))"');
     expect(source).toContain('ecosystem.config.js');
@@ -68,6 +69,7 @@ describe('Windows installer script', () => {
     expect(source).toContain('New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Limited');
     expect(source).toContain('Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal');
     expect(source).toContain('schtasks.exe /Create /TN $TaskName /SC ONLOGON /RU $currentUser /TR $taskRun /RL LIMITED /F');
+    expect(source).toContain('Failed to register current-user logon task with schtasks.exe');
     expect(source).toContain('npx.cmd');
     expect(source).toContain("@('pm2', 'startOrRestart', 'ecosystem.config.js', '--update-env')");
     expect(source).toContain('http://127.0.0.1:$Port/auth/setup');

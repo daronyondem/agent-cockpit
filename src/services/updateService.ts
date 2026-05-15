@@ -1029,8 +1029,8 @@ export class UpdateService {
           SESSION_SECRET: this._readEnvValue(envPath, 'SESSION_SECRET') || '',
           AUTH_SETUP_TOKEN: this._readEnvValue(envPath, 'AUTH_SETUP_TOKEN') || '',
           AGENT_COCKPIT_DATA_DIR: dataDir,
-          WEB_BUILD_MODE: 'auto',
-          AUTH_ENABLE_LEGACY_OAUTH: 'false',
+          WEB_BUILD_MODE: this._readEnvValue(envPath, 'WEB_BUILD_MODE') || 'auto',
+          AUTH_ENABLE_LEGACY_OAUTH: this._readEnvValue(envPath, 'AUTH_ENABLE_LEGACY_OAUTH') || 'false',
           PM2_HOME: pm2Home,
           PATH: nodeRuntime?.binDir ? this._runtimePath(nodeRuntime.binDir) : process.env.PATH || '',
         },
@@ -1114,7 +1114,7 @@ export class UpdateService {
   }
 
   private _psWriteFileCommand(filePath: string, content: string): string {
-    return `Set-Content -Path ${this._psQuote(filePath)} -Encoding UTF8 -Value ${this._psQuote(content)}`;
+    return `[System.IO.File]::WriteAllText(${this._psQuote(filePath)}, ${this._psQuote(content)}, (New-Object System.Text.UTF8Encoding($false)))`;
   }
 
   private _persistedInstallStatus(status: InstallStatus): Record<string, unknown> {

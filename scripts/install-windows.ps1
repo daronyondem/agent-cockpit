@@ -114,7 +114,8 @@ function Read-JsonFile {
 function Write-JsonFile {
   param([string] $Path, [object] $Value)
   Ensure-Directory ([System.IO.Path]::GetDirectoryName($Path))
-  $Value | ConvertTo-Json -Depth 20 | Set-Content -Path $Path -Encoding UTF8
+  $json = $Value | ConvertTo-Json -Depth 20
+  [System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))
 }
 
 function New-RandomHex {
@@ -458,6 +459,9 @@ function Register-LogonTask {
   } catch {
     $taskRun = "powershell.exe $arguments"
     schtasks.exe /Create /TN $TaskName /SC ONLOGON /RU $currentUser /TR $taskRun /RL LIMITED /F | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+      Fail "Failed to register current-user logon task with schtasks.exe (exit code $LASTEXITCODE)."
+    }
   }
 }
 

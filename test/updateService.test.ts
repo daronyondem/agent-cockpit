@@ -1254,7 +1254,8 @@ describe('UpdateService', () => {
         const restartPath = path.join(install.dataDir, 'restart.ps1');
         const restartScript = originalReadFileSync(restartPath, 'utf8');
         expect(restartScript).toContain('Invoke-WebRequest -UseBasicParsing');
-        expect(restartScript).toContain('Set-Content -Path');
+        expect(restartScript).toContain('[System.IO.File]::WriteAllText');
+        expect(restartScript).toContain('System.Text.UTF8Encoding($false)');
         expect(restartScript).toContain(path.join(install.previousDir, 'ecosystem.config.js'));
         expect(mockSpawnFn).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining(['-File', restartPath]), expect.objectContaining({
           cwd: finalDir,
@@ -1403,7 +1404,14 @@ describe('UpdateService', () => {
       const runtimeDir = path.join(installDir, 'runtime', 'node v22 win x64');
       try {
         writeJson(path.join(appDir, 'package.json'), { version: '1.1.0' });
-        writeText(path.join(appDir, '.env'), 'PORT=4455\nSESSION_SECRET=secret with spaces\nAUTH_SETUP_TOKEN=token with spaces\n');
+        writeText(path.join(appDir, '.env'), [
+          'PORT=4455',
+          'SESSION_SECRET=secret with spaces',
+          'AUTH_SETUP_TOKEN=token with spaces',
+          'WEB_BUILD_MODE=skip',
+          'AUTH_ENABLE_LEGACY_OAUTH=true',
+          '',
+        ].join('\n'));
         service = new UpdateService(appDir, {
           dataRoot: dataDir,
         });
@@ -1434,6 +1442,8 @@ describe('UpdateService', () => {
           SESSION_SECRET: 'secret with spaces',
           AUTH_SETUP_TOKEN: 'token with spaces',
           AGENT_COCKPIT_DATA_DIR: dataDir,
+          WEB_BUILD_MODE: 'skip',
+          AUTH_ENABLE_LEGACY_OAUTH: 'true',
           PM2_HOME: path.join(installDir, 'pm2'),
         }));
         expect(app.env.PATH.startsWith(`${runtimeDir};`)).toBe(true);
