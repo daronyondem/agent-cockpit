@@ -10,6 +10,11 @@ import { detectPandoc, type PandocStatus } from './knowledgeBase/pandoc';
 
 const execFileAsync = promisify(execFile);
 const NODE_REMEDIATION = 'Install Node.js 22+ from nodejs.org, or rerun the macOS installer without --no-install-node so it can install a private runtime.';
+const CLAUDE_CLI_REMEDIATION = 'Install Claude Code only if you want to use that backend. macOS: run `curl -fsSL https://claude.ai/install.sh | bash` or `brew install --cask claude-code`, then run `claude` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
+const CODEX_CLI_REMEDIATION = 'Install Codex only if you want to use that backend. Run `npm i -g @openai/codex` or, on macOS, `brew install --cask codex`; then run `codex` and sign in with ChatGPT or an API key. Restart Agent Cockpit if the command is still not detected.';
+const KIRO_CLI_REMEDIATION = 'Install Kiro only if you want to use that backend. macOS: run `curl -fsSL https://cli.kiro.dev/install | bash`, then run `kiro-cli login` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
+const PANDOC_REMEDIATION = 'Install Pandoc for DOCX knowledge-base ingestion. macOS: run `brew install pandoc`, or use the installer from https://pandoc.org/installing.html, then restart Agent Cockpit.';
+const LIBREOFFICE_REMEDIATION = 'Install LibreOffice for PPTX slide-image conversion. macOS: run `brew install --cask libreoffice`, or download it from https://www.libreoffice.org/download/download-libreoffice/, then restart Agent Cockpit.';
 
 interface CommandResult {
   ok: boolean;
@@ -95,12 +100,11 @@ export class InstallDoctorService {
     checks.push(this.checkAppDir());
     checks.push(this.checkBuildAsset('web-build', 'Desktop web build', 'public/v2-built/index.html', true));
     checks.push(this.checkBuildAsset('mobile-build', 'Mobile PWA build', 'public/mobile-built/index.html', false));
-    checks.push(await this.checkCommand('claude-cli', 'Claude Code CLI', ['claude', '--version'], false, 'Claude Code CLI responded.', 'Install Claude Code and sign in before selecting it as a backend.'));
-    checks.push(await this.checkCommand('codex-cli', 'Codex CLI', ['codex', '--version'], false, 'Codex CLI responded.', 'Install Codex and sign in before selecting it as a backend.'));
-    checks.push(await this.checkCommand('kiro-cli', 'Kiro CLI', ['kiro-cli', '--version'], false, 'Kiro CLI responded.', 'Install Kiro CLI and sign in before selecting it as a backend.'));
+    checks.push(await this.checkCommand('claude-cli', 'Claude Code CLI', ['claude', '--version'], false, 'Claude Code CLI responded.', CLAUDE_CLI_REMEDIATION));
+    checks.push(await this.checkCommand('codex-cli', 'Codex CLI', ['codex', '--version'], false, 'Codex CLI responded.', CODEX_CLI_REMEDIATION));
+    checks.push(await this.checkCommand('kiro-cli', 'Kiro CLI', ['kiro-cli', '--version'], false, 'Kiro CLI responded.', KIRO_CLI_REMEDIATION));
     checks.push(await this.checkPandoc());
     checks.push(await this.checkLibreOffice());
-    checks.push(await this.checkCommand('cloudflared', 'cloudflared', ['cloudflared', '--version'], false, 'cloudflared responded.', 'Install cloudflared only if you want tunnel access.'));
     checks.push(this.checkUpdateChannel(install));
 
     return {
@@ -173,7 +177,7 @@ export class InstallDoctorService {
     if (status.available) {
       return check('pandoc', 'Pandoc', 'ok', false, status.version ? `Pandoc ${status.version} is available.` : 'Pandoc is available.', status.binaryPath || undefined);
     }
-    return check('pandoc', 'Pandoc', 'warning', false, 'Pandoc is not installed.', undefined, 'Install Pandoc for DOCX knowledge-base ingestion.');
+    return check('pandoc', 'Pandoc', 'warning', false, 'Pandoc is not installed.', undefined, PANDOC_REMEDIATION);
   }
 
   private async checkLibreOffice(): Promise<InstallDoctorCheck> {
@@ -181,7 +185,7 @@ export class InstallDoctorService {
     if (status.available) {
       return check('libreoffice', 'LibreOffice', 'ok', false, 'LibreOffice is available.', status.binaryPath || undefined);
     }
-    return check('libreoffice', 'LibreOffice', 'warning', false, 'LibreOffice is not installed.', undefined, 'Install LibreOffice for PPTX slide-image conversion.');
+    return check('libreoffice', 'LibreOffice', 'warning', false, 'LibreOffice is not installed.', undefined, LIBREOFFICE_REMEDIATION);
   }
 
   private checkUpdateChannel(install: InstallStatus): InstallDoctorCheck {

@@ -105,6 +105,7 @@ describe('frontend routes', () => {
   test('welcome flow calls install doctor and completion APIs', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
     const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const primitivesSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/primitives.jsx'), 'utf8');
     const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(apiSrc).toContain("chatFetch('install/doctor')");
@@ -115,11 +116,21 @@ describe('frontend routes', () => {
     expect(shellSrc).toContain('function WelcomeScreen');
     expect(shellSrc).toContain('AgentApi.getInstallDoctor()');
     expect(shellSrc).toContain('AgentApi.completeWelcome()');
+    expect(shellSrc).toContain('setInstallStatus(nextInstallStatus)');
+    expect(shellSrc).toContain("'welcomeCompletedAt' in nextInstallStatus");
+    expect(shellSrc).toContain('onClick={() => onDone(null)}');
+    expect(shellSrc).toContain('showWelcomeAction={Boolean(installStatus && !installStatus.welcomeCompletedAt && !welcomeOpen)}');
+    expect(shellSrc).toContain("['pandoc', 'libreoffice', 'mobile-build']");
+    expect(shellSrc).not.toContain(['cloud', 'flared'].join(''));
     expect(shellSrc).toContain("onOpenSettings('security')");
     expect(shellSrc).toContain("onOpenSettings('cli')");
+    expect(shellSrc).toContain('Install only the backend CLIs you plan to use.');
+    expect(primitivesSrc).toContain('Welcome!');
+    expect(primitivesSrc).toContain('showWelcomeAction');
     expect(shellSrc).toContain('/mobile/');
     expect(cssSrc).toContain('.main-welcome');
     expect(cssSrc).toContain('.welcome-grid');
+    expect(cssSrc).toContain('.sb-welcome-toggle');
   });
 
   test('mobile PWA treats stream socket loss as reconnectable', () => {
