@@ -829,15 +829,22 @@ export class ContextMapService {
   ): Promise<ResolvedContextMapProcessor> {
     const mode = workspaceSettings.processorMode === 'override' ? 'override' : 'global';
     const global = settings.contextMap || {};
-    const cliProfileId = mode === 'override'
+    const configuredCliProfileId = mode === 'override'
       ? workspaceSettings.cliProfileId ?? global.cliProfileId
       : global.cliProfileId;
-    const fallbackBackend = mode === 'override'
-      ? workspaceSettings.cliBackend || global.cliBackend || settings.defaultBackend || 'claude-code'
-      : global.cliBackend || settings.defaultBackend || 'claude-code';
-    const runtime = this.chatService.resolveCliProfileRuntime
-      ? await this.chatService.resolveCliProfileRuntime(cliProfileId, fallbackBackend)
-      : { backendId: fallbackBackend };
+    const configuredBackend = mode === 'override'
+      ? workspaceSettings.cliBackend || global.cliBackend
+      : global.cliBackend;
+    const cliProfileId = configuredCliProfileId || (!configuredBackend ? settings.defaultCliProfileId : undefined);
+    const fallbackBackend = configuredBackend || (!cliProfileId ? settings.defaultBackend : undefined);
+    let runtime: CliProfileRuntime;
+    if (this.chatService.resolveCliProfileRuntime) {
+      runtime = await this.chatService.resolveCliProfileRuntime(cliProfileId, fallbackBackend);
+    } else if (fallbackBackend) {
+      runtime = { backendId: fallbackBackend };
+    } else {
+      throw new Error('CLI profile is required. Configure a Default CLI profile in Global Settings before running Context Map.');
+    }
 
     return {
       runtime,

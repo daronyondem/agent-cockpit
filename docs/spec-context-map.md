@@ -321,6 +321,8 @@ Global settings are stored under `Settings.contextMap`:
 | `extractionConcurrency` | `3` | Rounded and clamped to `1..6`. | Process-wide extraction and extraction-repair `runOneShot()` cap. |
 | `synthesisConcurrency` | `3` | Rounded and clamped to `1..6`. | Process-wide synthesis, final arbiter, and synthesis-repair `runOneShot()` cap. |
 
+If no Context Map-specific `cliProfileId` or legacy `cliBackend` is configured, processor resolution falls back to `Settings.defaultCliProfileId`, then legacy `Settings.defaultBackend`. If none of those exist, the run fails with a CLI-profile-required error and does not assume Claude Code or another provider.
+
 Workspace settings are stored under `WorkspaceIndex.contextMap`:
 
 | Field | Default | Normalization | Purpose |

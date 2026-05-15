@@ -374,7 +374,7 @@ export default function App() {
       setActiveStreamIDs(streamIDs);
       setConversations(loadedConversations);
       setListArchived(archived);
-      hydrateSelectionDefaults(loadedSettings, loadedBackends);
+      hydrateSelectionDefaults(loadedSettings);
     } catch (error) {
       handleError(error);
     } finally {
@@ -382,11 +382,11 @@ export default function App() {
     }
   }
 
-  function hydrateSelectionDefaults(loadedSettings: Settings, loadedBackends: BackendMetadata[]) {
+  function hydrateSelectionDefaults(loadedSettings: Settings) {
     const profiles = (loadedSettings.cliProfiles || []).filter((profile) => profile.disabled !== true);
-    const profileID = loadedSettings.defaultCliProfileId || profiles[0]?.id;
+    const profileID = loadedSettings.defaultCliProfileId;
     const profile = profiles.find((item) => item.id === profileID);
-    const backendID = loadedSettings.defaultBackend || loadedBackends[0]?.id;
+    const backendID = loadedSettings.defaultBackend;
     setSelectedCliProfileId(profileID);
     setSelectedBackend(backendIdForProfile(profile) || backendID);
     setSelectedModel(loadedSettings.defaultModel);

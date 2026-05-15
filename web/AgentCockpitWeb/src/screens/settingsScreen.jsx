@@ -389,11 +389,9 @@ export function SettingsScreen({ onClose, initialTab }){
 function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
   const profiles = activeCliProfiles(settings);
   const selectedProfile = profiles.find(p => p.id === settings.defaultCliProfileId)
-    || profiles.find(p => p.vendor === cliVendorForBackend(settings.defaultBackend))
     || null;
-  const backendId = settings.defaultBackend
-    || (selectedProfile && backendIdForProfile(selectedProfile))
-    || (backends[0] && backends[0].id)
+  const backendId = (selectedProfile && backendIdForProfile(selectedProfile))
+    || settings.defaultBackend
     || '';
   React.useEffect(() => {
     if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
@@ -422,22 +420,6 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
       defaultModel: newModel,
       defaultEffort: defaultEffortFor(e),
       defaultServiceTier: nextBackend === 'codex' && settings.defaultServiceTier === 'fast' ? 'fast' : undefined,
-    });
-  }
-  function onBackendChange(v){
-    const m = selectedProfile
-      ? modelsForProfile(backends, profileBackends, selectedProfile)
-      : modelsForBackend(backends, v);
-    const newModel = defaultModelId(m);
-    const e = selectedProfile
-      ? effortLevelsForProfile(backends, profileBackends, selectedProfile, newModel)
-      : effortLevelsForModel(backends, v, newModel);
-    onPatch({
-      defaultCliProfileId: undefined,
-      defaultBackend: v,
-      defaultModel: newModel,
-      defaultEffort: defaultEffortFor(e),
-      defaultServiceTier: v === 'codex' && settings.defaultServiceTier === 'fast' ? 'fast' : undefined,
     });
   }
   function onModelChange(v){
@@ -471,19 +453,16 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
         />
       </Field>
       {profiles.length ? (
-        <>
-          <Field label="Default CLI profile">
-            <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
-              {!selectedProfile ? <option value="">Select a profile</option> : null}
-              {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </Field>
-        </>
+        <Field label="Default CLI profile">
+          <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
+            {!selectedProfile ? <option value="">Select a profile</option> : null}
+            {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </Field>
       ) : (
-        <Field label="Default backend">
-          <select value={backendId} onChange={(e) => onBackendChange(e.target.value)}>
-            {backends.length === 0 ? <option value="">No backends available</option> : null}
-            {backends.map(b => <option key={b.id} value={b.id}>{b.label || b.id}</option>)}
+        <Field label="Default CLI profile" hint="Install and sign in to a CLI from Welcome or the CLI Profiles tab.">
+          <select value="" disabled>
+            <option value="">No CLI profiles configured</option>
           </select>
         </Field>
       )}
@@ -1138,7 +1117,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
 function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
   const mem = settings.memory || {};
   const profiles = activeCliProfiles(settings);
-  const fallbackBackend = settings.defaultBackend || (backends[0] && backends[0].id) || '';
+  const fallbackBackend = settings.defaultBackend || '';
   const selectedProfile = profiles.find(p => p.id === mem.cliProfileId)
     || profileForBackend(profiles, mem.cliBackend)
     || profiles.find(p => p.id === settings.defaultCliProfileId)
@@ -1247,7 +1226,7 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
 function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
   const kb = settings.knowledgeBase || {};
   const profiles = activeCliProfiles(settings);
-  const fallbackBackend = settings.defaultBackend || (backends[0] && backends[0].id) || '';
+  const fallbackBackend = settings.defaultBackend || '';
 
   // Ingestion picks (vision-capable CLI for AI-assisted page/slide/image conversion)
   const igProfile = (kb.ingestionCliProfileId || kb.ingestionCliBackend)
@@ -1500,7 +1479,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
 function SettingsContextMapTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
   const contextMap = settings.contextMap || {};
   const profiles = activeCliProfiles(settings);
-  const fallbackBackend = settings.defaultBackend || (backends[0] && backends[0].id) || '';
+  const fallbackBackend = settings.defaultBackend || '';
   const selectedProfile = profileForSetting(profiles, contextMap.cliProfileId, contextMap.cliBackend, fallbackBackend);
   React.useEffect(() => {
     if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);

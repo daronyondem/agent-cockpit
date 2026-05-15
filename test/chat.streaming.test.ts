@@ -1478,7 +1478,11 @@ describe('Workspace context injection', () => {
 describe('System prompt passthrough', () => {
   test('passes systemPrompt to backend on new session', async () => {
     // Save a system prompt to settings
-    await env.chatService.saveSettings({ theme: 'system', systemPrompt: 'You are a pirate' } as any);
+    await env.chatService.saveSettings({
+      ...(await env.chatService.getSettings()),
+      theme: 'system',
+      systemPrompt: 'You are a pirate',
+    } as any);
 
     const conv = await env.chatService.createConversation('Test');
     env.mockBackend.setMockEvents([
@@ -1511,7 +1515,11 @@ describe('System prompt passthrough', () => {
   });
 
   test('does not pass systemPrompt on subsequent messages', async () => {
-    await env.chatService.saveSettings({ theme: 'system', systemPrompt: 'You are a pirate' } as any);
+    await env.chatService.saveSettings({
+      ...(await env.chatService.getSettings()),
+      theme: 'system',
+      systemPrompt: 'You are a pirate',
+    } as any);
 
     const conv = await env.chatService.createConversation('Test');
     await env.chatService.addMessage(conv.id, 'user', 'First msg', 'claude-code');

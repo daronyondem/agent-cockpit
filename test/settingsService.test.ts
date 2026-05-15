@@ -25,16 +25,9 @@ describe('settings', () => {
     const settings = await service.getSettings();
     expect(settings.theme).toBe('system');
     expect(settings.sendBehavior).toBe('enter');
-    expect(settings.defaultBackend).toBe('claude-code');
-    expect(settings.defaultCliProfileId).toBe(serverConfiguredCliProfileId('claude-code'));
-    expect(settings.cliProfiles).toEqual([
-      expect.objectContaining({
-        id: serverConfiguredCliProfileId('claude-code'),
-        name: 'Claude Code (Server Configured)',
-        vendor: 'claude-code',
-        authMode: 'server-configured',
-      }),
-    ]);
+    expect(settings.defaultBackend).toBeUndefined();
+    expect(settings.defaultCliProfileId).toBeUndefined();
+    expect(settings.cliProfiles).toEqual([]);
     expect(settings.systemPrompt).toBe('');
     expect(settings.contextMap).toEqual({
       scanIntervalMinutes: 5,
@@ -165,16 +158,69 @@ describe('settings', () => {
     expect(saved.defaultCliProfileId).toBe(profile.id);
   });
 
+  test('saving the first enabled CLI profile promotes it as the default', async () => {
+    const settings = await service.getSettings();
+    const profile = {
+      id: 'profile-codex-first',
+      name: 'Codex First',
+      vendor: 'codex',
+      authMode: 'account',
+      configDir: '/tmp/codex-first',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+
+    const saved = await service.saveSettings({
+      ...settings,
+      cliProfiles: [profile],
+    } as any);
+
+    expect(saved.defaultCliProfileId).toBe(profile.id);
+    expect(saved.defaultBackend).toBe('codex');
+  });
+
+  test('defaultServiceTier is validated after default profile promotion', async () => {
+    const settings = await service.getSettings();
+    const profile = {
+      id: 'profile-claude-first',
+      name: 'Claude First',
+      vendor: 'claude-code',
+      authMode: 'account',
+      configDir: '/tmp/claude-first',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+
+    const saved = await service.saveSettings({
+      ...settings,
+      defaultBackend: 'codex',
+      defaultServiceTier: 'fast',
+      cliProfiles: [profile],
+    } as any);
+
+    expect(saved.defaultCliProfileId).toBe(profile.id);
+    expect(saved.defaultBackend).toBe('claude-code');
+    expect(saved.defaultServiceTier).toBeUndefined();
+  });
+
   test('saving a disabled default CLI profile clears the default profile', async () => {
     const settings = await service.getSettings();
     const defaultProfileId = serverConfiguredCliProfileId('claude-code');
+    const now = '2026-04-29T00:00:00.000Z';
 
     const saved = await service.saveSettings({
       ...settings,
       defaultCliProfileId: defaultProfileId,
-      cliProfiles: (settings.cliProfiles || []).map((profile) => (
-        profile.id === defaultProfileId ? { ...profile, disabled: true } : profile
-      )),
+      defaultBackend: 'claude-code',
+      cliProfiles: [{
+        id: defaultProfileId,
+        name: 'Claude Code (Server Configured)',
+        vendor: 'claude-code',
+        authMode: 'server-configured',
+        createdAt: now,
+        updatedAt: now,
+        disabled: true,
+      }],
     } as any);
 
     expect(saved.defaultCliProfileId).toBeUndefined();

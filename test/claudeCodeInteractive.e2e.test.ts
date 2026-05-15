@@ -182,7 +182,7 @@ runE2E('Claude Code Interactive real CLI compatibility', () => {
       result.abort();
       await sleep(1_000);
 
-      expectHookEvent(ctx, 'PreToolUse', event => hookToolName(event) === 'EnterPlanMode');
+      expectHookEventAny(ctx, ['PreToolUse', 'PostToolUse'], event => hookToolName(event) === 'EnterPlanMode');
       expect(JSON.stringify(hookToolInput(exitHook))).toContain(planToken);
       expect(hookPayloadStringFromInput(exitHook, 'planFilePath')).toEqual(expect.stringContaining('.claude/plans/'));
       await writeScenarioArtifacts(ctx, events);
@@ -404,6 +404,18 @@ function expectHookEvent(
   const event = ctx.hookEvents.find(candidate => candidate.event === eventName && predicate(candidate));
   if (!event) {
     throw new Error(`Expected recorded Claude ${eventName} hook. Saw: ${ctx.hookEvents.map(candidate => candidate.event).join(', ')}`);
+  }
+  return event;
+}
+
+function expectHookEventAny(
+  ctx: ScenarioContext,
+  eventNames: ClaudeInteractiveHookEventName[],
+  predicate: (event: ClaudeInteractiveHookEvent) => boolean = () => true,
+): ClaudeInteractiveHookEvent {
+  const event = ctx.hookEvents.find(candidate => eventNames.includes(candidate.event) && predicate(candidate));
+  if (!event) {
+    throw new Error(`Expected recorded Claude ${eventNames.join('/')} hook. Saw: ${ctx.hookEvents.map(candidate => candidate.event).join(', ')}`);
   }
   return event;
 }

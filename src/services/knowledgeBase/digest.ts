@@ -756,15 +756,17 @@ export class KbDigestionService {
     const firstLoc = locations[0] ?? { folderPath: '', filename: 'unknown' };
 
     const settings = await this.chatService.getSettings();
-    const cliProfileId = settings.knowledgeBase?.digestionCliProfileId;
-    const cliBackend = settings.knowledgeBase?.digestionCliBackend;
+    const configuredCliProfileId = settings.knowledgeBase?.digestionCliProfileId;
+    const configuredCliBackend = settings.knowledgeBase?.digestionCliBackend;
+    const cliProfileId = configuredCliProfileId || (!configuredCliBackend ? settings.defaultCliProfileId : undefined);
+    const cliBackend = configuredCliBackend || (!cliProfileId ? settings.defaultBackend : undefined);
     const cliModel = settings.knowledgeBase?.digestionCliModel;
     const cliEffort = settings.knowledgeBase?.digestionCliEffort;
     const gleaningEnabled = Boolean(settings.knowledgeBase?.kbGleaningEnabled);
 
     if (!cliProfileId && !cliBackend) {
       return this._failRaw(hash, rawId, db, 'unknown',
-        'No Digestion CLI profile is configured. Set one under Settings → Knowledge Base.');
+        'No Digestion CLI profile is configured. Set a Default CLI profile in Global Settings or choose one under Settings → Knowledge Base.');
     }
     let runtime: CliProfileRuntime;
     try {

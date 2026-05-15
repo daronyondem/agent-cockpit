@@ -621,18 +621,30 @@ function profileContextFromRuntime(runtime: {
 
 function configuredMemoryProfileContext(settings: Settings): MemoryProfileContext {
   const memory = settings.memory || {};
-  const profile = memory.cliProfileId
-    ? settings.cliProfiles?.find((candidate) => candidate.id === memory.cliProfileId)
+  const profileId = memory.cliProfileId || (!memory.cliBackend ? settings.defaultCliProfileId : undefined);
+  const profile = profileId
+    ? settings.cliProfiles?.find((candidate) => candidate.id === profileId)
     : undefined;
   const backendId = profile
     ? backendForCliProfile(profile, memory.cliBackend || settings.defaultBackend)
-    : memory.cliBackend || settings.defaultBackend || 'claude-code';
-  const profileId = profile?.id || memory.cliProfileId;
-  const profileName = profile?.name || profileId || backendId;
+    : memory.cliBackend || settings.defaultBackend;
+  const resolvedProfileId = profile?.id || profileId;
+  const profileName = profile?.name || resolvedProfileId || backendId || 'No CLI profile';
   return {
-    backendId,
-    ...(profileId ? { profileId } : {}),
-    profileName: sanitizeProfileLabel(profileName, backendId),
+    ...(backendId ? { backendId } : {}),
+    ...(resolvedProfileId ? { profileId: resolvedProfileId } : {}),
+    profileName: sanitizeProfileLabel(profileName, backendId || 'No CLI profile'),
+  };
+}
+
+function memoryCliSelection(settings: Settings): { cliProfileId?: string; backend?: string } {
+  const memory = settings.memory || {};
+  const cliProfileId = memory.cliProfileId || (!memory.cliBackend ? settings.defaultCliProfileId : undefined);
+  return {
+    ...(cliProfileId ? { cliProfileId } : {}),
+    ...(memory.cliBackend || (!cliProfileId && settings.defaultBackend)
+      ? { backend: memory.cliBackend || settings.defaultBackend }
+      : {}),
   };
 }
 
@@ -1472,9 +1484,10 @@ export function createMemoryMcpServer({
       const activeChatProfile = session.activeChatProfile;
       let memoryRuntime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
       try {
+        const memoryCli = memoryCliSelection(settings);
         memoryRuntime = await chatService.resolveCliProfileRuntime(
-          settings.memory?.cliProfileId,
-          settings.memory?.cliBackend || settings.defaultBackend || 'claude-code',
+          memoryCli.cliProfileId,
+          memoryCli.backend,
         );
       } catch (err: unknown) {
         return await sendMemoryProcessorFailure(
@@ -1735,9 +1748,10 @@ export function createMemoryMcpServer({
 
       // Resolve the Memory CLI.
       const settings = await chatService.getSettings();
+      const memoryCli = memoryCliSelection(settings);
       const memoryRuntime = await chatService.resolveCliProfileRuntime(
-        settings.memory?.cliProfileId,
-        settings.memory?.cliBackend || settings.defaultBackend || 'claude-code',
+        memoryCli.cliProfileId,
+        memoryCli.backend,
       );
       const cliId = memoryRuntime.backendId;
       const adapter = backendRegistry.get(cliId);
@@ -1839,9 +1853,10 @@ export function createMemoryMcpServer({
     }
 
     const settings = await chatService.getSettings();
+    const memoryCli = memoryCliSelection(settings);
     const memoryRuntime = await chatService.resolveCliProfileRuntime(
-      settings.memory?.cliProfileId,
-      settings.memory?.cliBackend || settings.defaultBackend || 'claude-code',
+      memoryCli.cliProfileId,
+      memoryCli.backend,
     );
     const cliId = memoryRuntime.backendId;
     const adapter = backendRegistry.get(cliId);
@@ -1905,9 +1920,10 @@ export function createMemoryMcpServer({
     }
 
     const settings = await chatService.getSettings();
+    const memoryCli = memoryCliSelection(settings);
     const memoryRuntime = await chatService.resolveCliProfileRuntime(
-      settings.memory?.cliProfileId,
-      settings.memory?.cliBackend || settings.defaultBackend || 'claude-code',
+      memoryCli.cliProfileId,
+      memoryCli.backend,
     );
     const cliId = memoryRuntime.backendId;
     const adapter = backendRegistry.get(cliId);

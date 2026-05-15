@@ -26,7 +26,6 @@ export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
   sendBehavior: 'enter',
   systemPrompt: '',
-  defaultBackend: 'claude-code',
   workingDirectory: '',
   contextMap: {
     scanIntervalMinutes: DEFAULT_CONTEXT_MAP_SCAN_INTERVAL_MINUTES,
@@ -70,26 +69,57 @@ export class SettingsService {
         kb.cliConcurrency = kb.dreamingConcurrency;
       }
 
-      return this._withDefaultCliProfile(this._withContextMapDefaults(settings));
+      return this._normalizeSettings(this._withLegacyDefaultCliProfile(this._withContextMapDefaults(settings)));
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return this._withDefaultCliProfile(this._withContextMapDefaults({ ...DEFAULT_SETTINGS }));
+        return this._normalizeSettings(this._withContextMapDefaults({ ...DEFAULT_SETTINGS }));
       }
       throw err;
     }
   }
 
   async saveSettings(settings: Settings): Promise<Settings> {
-    const normalized = this._withDefaultCliProfile(this._normalizeCliProfiles(this._withContextMapDefaults(settings)));
+    const normalized = this._normalizeSettings(this._withContextMapDefaults(settings));
     await atomicWriteFile(this._settingsFile, JSON.stringify(normalized, null, 2));
     return normalized;
   }
 
-  private _withDefaultCliProfile(settings: Settings): Settings {
-    return ensureServerConfiguredCliProfiles(
-      settings,
-      [settings.defaultBackend || DEFAULT_SETTINGS.defaultBackend],
-    ).settings;
+  private _normalizeSettings(settings: Settings): Settings {
+    return this._withValidDefaultServiceTier(this._withFirstAvailableCliProfileDefault(this._normalizeCliProfiles(settings)));
+  }
+
+  private _withLegacyDefaultCliProfile(settings: Settings): Settings {
+    if (settings.defaultCliProfileId || !settings.defaultBackend) return settings;
+    return ensureServerConfiguredCliProfiles(settings, [settings.defaultBackend]).settings;
+  }
+
+  private _withFirstAvailableCliProfileDefault(settings: Settings): Settings {
+    const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles.filter((profile) => !profile.disabled) : [];
+    if (profiles.length === 0) return settings;
+
+    const current = settings.defaultCliProfileId
+      ? profiles.find((profile) => profile.id === settings.defaultCliProfileId)
+      : undefined;
+    const defaultVendor = cliVendorForBackend(settings.defaultBackend);
+    const selected = current
+      || (defaultVendor ? profiles.find((profile) => profile.vendor === defaultVendor) : undefined)
+      || profiles[0];
+    if (!selected) return settings;
+
+    return {
+      ...settings,
+      defaultCliProfileId: selected.id,
+      defaultBackend: backendForCliProfile(selected, settings.defaultBackend),
+    };
+  }
+
+  private _withValidDefaultServiceTier(settings: Settings): Settings {
+    if (settings.defaultBackend === 'codex' && settings.defaultServiceTier === 'fast') {
+      return settings;
+    }
+    const next = { ...settings };
+    delete next.defaultServiceTier;
+    return next;
   }
 
   private _withContextMapDefaults(settings: Settings): Settings {
@@ -132,9 +162,6 @@ export class SettingsService {
           }
         : {}),
     };
-    if (next.defaultBackend !== 'codex' || next.defaultServiceTier !== 'fast') {
-      delete next.defaultServiceTier;
-    }
     if (settings.memory) {
       next.memory = this._normalizeMemorySettings(settings.memory, profiles);
     }

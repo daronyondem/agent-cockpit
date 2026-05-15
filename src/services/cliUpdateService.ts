@@ -189,8 +189,8 @@ export class CliUpdateService {
   private _targetsFromSettings(settings: Settings): CliRuntimeTarget[] {
     const now = new Date().toISOString();
     const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
-    const defaultVendor = isCliVendorValue(settings.defaultBackend) ? settings.defaultBackend : 'claude-code';
-    const withDefault = profiles.some((profile) => profile.id === serverConfiguredCliProfileId(defaultVendor))
+    const defaultVendor = isCliVendorValue(settings.defaultBackend) ? settings.defaultBackend : null;
+    const withDefault = !defaultVendor || profiles.some((profile) => profile.id === serverConfiguredCliProfileId(defaultVendor))
       ? profiles
       : [
         ...profiles,
@@ -265,7 +265,7 @@ export class CliUpdateService {
         && isNewerVersion(latestVersion, CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION);
       const updateCaution = compatibilityMessage
         || (updateWouldExceedInteractiveTested
-          ? 'Updating Claude Code may install a CLI version newer than the version tested with Claude Code Interactive. The standard Claude Code provider can still be updated, but the interactive provider may show broken streaming, missing tool cards, failed question handling, or stuck sessions until Agent Cockpit adds support for that CLI version.'
+          ? 'Updating Claude Code may install a CLI version newer than the version Agent Cockpit currently supports for Claude Code Interactive. Interactive mode may still work, but you could run into compatibility issues. Standard mode is fully supported and ready to use. Standard mode uses your monthly credits, while Interactive mode uses your Claude usage limits. Agent Cockpit will add support for newer Claude Code CLI versions as soon as possible. Learn more: https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan'
           : null);
       return {
         ...base,

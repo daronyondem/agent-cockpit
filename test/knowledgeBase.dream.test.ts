@@ -894,7 +894,7 @@ describe('KbDreamService', () => {
     const result = await service.dream('ws-hash');
 
     expect(result.errors.length).toBeGreaterThan(0);
-    expect(result.errors[0]).toContain('No Dreaming CLI backend configured');
+    expect(result.errors[0]).toContain('No Dreaming CLI profile is configured');
   });
 
   // ── dream: unregistered backend ───────────────────────────────────────

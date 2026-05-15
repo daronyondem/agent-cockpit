@@ -1383,6 +1383,20 @@ describe('Codex service tier request handling', () => {
     expect(res.status).toBe(400);
     expect(res.body.error).toBe('serviceTier must be "fast" or "default"');
   });
+
+  test('rejects conversation create when no CLI profile or default backend is configured', async () => {
+    const freshEnv = await createChatRouterEnv({ configureDefaultCli: false });
+    try {
+      const res = await freshEnv.request('POST', '/api/chat/conversations', {
+        title: 'No CLI',
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('CLI profile is required');
+    } finally {
+      await destroyChatRouterEnv(freshEnv);
+    }
+  });
 });
 
 // ── DELETE /conversations/:id/upload/:filename ─────────────────────────────��──
@@ -1837,7 +1851,11 @@ describe('Workspace instruction compatibility API', () => {
 
 describe('Workspace instructions in system prompt', () => {
   test('combines global system prompt with workspace instructions on new session', async () => {
-    await env.chatService.saveSettings({ theme: 'system', systemPrompt: 'Global prompt' } as any);
+    await env.chatService.saveSettings({
+      ...(await env.chatService.getSettings()),
+      theme: 'system',
+      systemPrompt: 'Global prompt',
+    } as any);
 
     const conv = await env.chatService.createConversation('Test', '/tmp/ws-combo');
     const hash = env.chatService.getWorkspaceHashForConv(conv.id)!;

@@ -1,0 +1,32 @@
+name: Claude Interactive Version
+
+on:
+  schedule:
+    - cron: "0 */12 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Check Claude Code Interactive release support
+        env:
+          GH_TOKEN: ${{ secrets.GH_ISSUE_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "GH_ISSUE_TOKEN is required so filed issues use the configured repository account." >&2
+            exit 1
+          fi
+
+          node scripts/check-claude-interactive-release.js

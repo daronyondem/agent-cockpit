@@ -52,6 +52,10 @@ beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kb-folders-'));
   chatService = new ChatService(tmpDir, { defaultWorkspace: WORKSPACE_PATH });
   await chatService.initialize();
+  await chatService.saveSettings({
+    ...(await chatService.getSettings()),
+    defaultBackend: 'claude-code',
+  });
   emitted = [];
   ingestion = new KbIngestionService({
     chatService,

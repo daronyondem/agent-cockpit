@@ -40,7 +40,7 @@ export function backendForCliProfile(
   profile: Pick<CliProfile, 'vendor' | 'protocol'> | undefined | null,
   fallbackBackend?: string | null,
 ): string {
-  if (!profile) return fallbackBackend || 'claude-code';
+  if (!profile) return fallbackBackend || '';
   if (profile.vendor !== 'claude-code') return profile.vendor;
   if (profile.protocol === CLAUDE_CODE_INTERACTIVE_PROTOCOL) return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
   if (profile.protocol === CLAUDE_CODE_STANDARD_PROTOCOL) return 'claude-code';
@@ -83,16 +83,18 @@ export function resolveCliProfileRuntime(
   cliProfileId: string | undefined | null,
   fallbackBackend: string | undefined | null,
 ): { runtime?: CliProfileRuntime; error?: string } {
-  if (cliProfileId) {
-    const profile = settings.cliProfiles?.find((candidate) => candidate.id === cliProfileId);
+  const requestedProfileId = cliProfileId || (!fallbackBackend ? settings.defaultCliProfileId : undefined);
+
+  if (requestedProfileId) {
+    const profile = settings.cliProfiles?.find((candidate) => candidate.id === requestedProfileId);
     if (!profile) {
-      return { error: `CLI profile not found: ${cliProfileId}` };
+      return { error: `CLI profile not found: ${requestedProfileId}` };
     }
     if (profile.disabled) {
       return { error: `CLI profile is disabled: ${profile.name}` };
     }
     const legacyDefaultBackend = !fallbackBackend
-      && cliProfileId === settings.defaultCliProfileId
+      && requestedProfileId === settings.defaultCliProfileId
       && backendUsesCliVendor(settings.defaultBackend, profile.vendor)
       ? settings.defaultBackend
       : undefined;
@@ -109,9 +111,15 @@ export function resolveCliProfileRuntime(
   const fallbackProfile = fallbackProfileId
     ? settings.cliProfiles?.find((candidate) => candidate.id === fallbackProfileId && !candidate.disabled)
     : undefined;
+  const backendId = fallbackBackend || settings.defaultBackend;
+  if (!backendId) {
+    return {
+      error: 'CLI profile is required. Configure a Default CLI profile in Global Settings before starting CLI-powered work.',
+    };
+  }
   return {
     runtime: {
-      backendId: fallbackBackend || settings.defaultBackend || 'claude-code',
+      backendId,
       ...(fallbackProfile ? { cliProfileId: fallbackProfile.id, profile: fallbackProfile } : {}),
     },
   };
