@@ -55,6 +55,7 @@ export interface CreateChatRouterEnvOpts {
   installStateService?: any;
   installDoctorService?: any;
   cliUpdateService?: any;
+  configureDefaultCli?: boolean;
 }
 
 /** Build an isolated Express + WebSocket test server with a fresh ChatService,
@@ -67,6 +68,13 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
   backendRegistry.register(mockBackend);
   const chatService = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE, backendRegistry });
   await chatService.initialize();
+  if (opts.configureDefaultCli !== false) {
+    const settings = await chatService.getSettings();
+    await chatService.saveSettings({
+      ...settings,
+      defaultBackend: 'claude-code',
+    });
+  }
 
   const app = express();
   app.use(express.json());

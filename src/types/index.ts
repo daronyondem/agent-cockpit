@@ -508,7 +508,7 @@ export interface Settings {
   theme: 'light' | 'dark' | 'system';
   sendBehavior: 'enter' | 'ctrlEnter';
   systemPrompt: string;
-  defaultBackend: string;
+  defaultBackend?: string;
   /** Runtime CLI profiles available for conversations and background CLI tasks. */
   cliProfiles?: CliProfile[];
   /** Default profile for new conversations once the UI switches from raw backend selection to profile selection. */

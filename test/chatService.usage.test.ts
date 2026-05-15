@@ -16,6 +16,10 @@ beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-'));
   service = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
   await service.initialize();
+  await service.saveSettings({
+    ...(await service.getSettings()),
+    defaultBackend: 'claude-code',
+  });
 });
 
 afterEach(() => {
@@ -336,4 +340,3 @@ describe('usage stats ledger', () => {
 });
 
 // ── Workspace Memory ─────────────────────────────────────────────────────────
-

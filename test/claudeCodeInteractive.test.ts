@@ -892,7 +892,9 @@ describe('Claude interactive helpers', () => {
       status: 'newer',
       severity: 'warning',
     });
-    expect(status.message).toContain('newer than the version tested');
+    expect(status.message).toContain('newer than the version Agent Cockpit currently supports');
+    expect(status.message).toContain('Standard mode is fully supported');
+    expect(status.message).toContain('https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan');
   });
 
   test('resolves Claude Code Interactive backend through the shared Claude CLI profile', () => {

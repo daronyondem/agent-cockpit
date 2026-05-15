@@ -1060,12 +1060,35 @@ Second body.`;
     );
   });
 
-  test('returns error when no Digestion CLI is configured', async () => {
+  test('uses the global default CLI when no Digestion CLI is configured', async () => {
     await chatService.saveSettings({
       theme: 'system',
       sendBehavior: 'enter',
       systemPrompt: '',
       defaultBackend: STUB_BACKEND_ID,
+      workingDirectory: '',
+      knowledgeBase: {},
+    });
+    backend.runOneShotImpl = async () => `---
+title: Global Default Entry
+slug: global-default-entry
+summary: Uses the global default CLI.
+tags: [default]
+---
+Uses the global default CLI.`;
+
+    const rawId = await seedRaw('content', 'global-default.md');
+    const result = await digestion.enqueueDigest(hash, rawId);
+
+    expect(result.error).toBeUndefined();
+    expect(result.entryIds).toHaveLength(1);
+  });
+
+  test('returns error when no Digestion CLI is configured', async () => {
+    await chatService.saveSettings({
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
       workingDirectory: '',
       knowledgeBase: {}, // no digestionCliBackend
     });

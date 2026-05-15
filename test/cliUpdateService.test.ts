@@ -69,6 +69,22 @@ describe('CliUpdateService', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  test('returns no update targets for fresh settings with no configured CLI', async () => {
+    const service = new CliUpdateService(tmpDir);
+    settings = {
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
+      cliProfiles: [],
+    } as Settings;
+    mockExecFile(() => new Error('unexpected command'));
+
+    const status = await service.checkNow(async () => settings);
+
+    expect(status.items).toEqual([]);
+    expect(mockExecFileFn).not.toHaveBeenCalled();
+  });
+
   test('checks a global npm Codex installation and marks updates available', async () => {
     const service = new CliUpdateService(tmpDir);
     mockExecFile((cmd, args) => {
@@ -112,10 +128,10 @@ describe('CliUpdateService', () => {
 
     const service = new CliUpdateService(tmpDir);
     mockExecFile((cmd, args) => {
-      if (cmd === 'claude' && args.join(' ') === '--version') return 'Claude Code 2.1.141';
+      if (cmd === 'claude' && args.join(' ') === '--version') return 'Claude Code 2.1.142';
       if (cmd === 'which' && args[0] === 'claude') return claudeBin;
       if (cmd === 'npm' && args.join(' ') === 'root -g') return npmRoot;
-      if (cmd === 'npm' && args.join(' ') === 'view @anthropic-ai/claude-code version') return '2.1.142';
+      if (cmd === 'npm' && args.join(' ') === 'view @anthropic-ai/claude-code version') return '2.1.143';
       return new Error(`unexpected command: ${cmd} ${args.join(' ')}`);
     });
 
@@ -123,16 +139,18 @@ describe('CliUpdateService', () => {
     expect(status.items).toHaveLength(1);
     expect(status.items[0]).toMatchObject({
       vendor: 'claude-code',
-      currentVersion: '2.1.141',
-      latestVersion: '2.1.142',
+      currentVersion: '2.1.142',
+      latestVersion: '2.1.143',
       interactiveCompatibility: [expect.objectContaining({
         providerId: 'claude-code-interactive',
-        testedVersion: '2.1.141',
+        testedVersion: '2.1.142',
         status: 'supported',
       })],
       blocksAutoUpdate: false,
     });
-    expect(status.items[0].updateCaution).toMatch(/newer than the version tested/);
+    expect(status.items[0].updateCaution).toMatch(/newer than the version Agent Cockpit currently supports/);
+    expect(status.items[0].updateCaution).toMatch(/Standard mode is fully supported/);
+    expect(status.items[0].updateCaution).toMatch(/use-the-claude-agent-sdk-with-your-claude-plan/);
   });
 
   test('triggerUpdate runs the supported updater and refreshes status', async () => {

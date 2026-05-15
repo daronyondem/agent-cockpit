@@ -446,7 +446,7 @@ export class ChatService {
     const resolved = resolveCliProfileRuntime(
       settings,
       cliProfileId,
-      fallbackBackend || (!cliProfileId ? settings.defaultBackend || 'claude-code' : undefined),
+      fallbackBackend,
     );
     if (resolved.error || !resolved.runtime) {
       throw new Error(resolved.error || 'Unable to resolve CLI profile');
@@ -562,7 +562,7 @@ export class ChatService {
     runtime?: CliProfileRuntime,
   ): Promise<string> {
     if (!messages || messages.length === 0) return fallback || 'Empty session';
-    const adapter = this._backendRegistry?.get(runtime?.backendId || 'claude-code');
+    const adapter = runtime?.backendId ? this._backendRegistry?.get(runtime.backendId) : undefined;
     if (adapter) {
       return adapter.generateSummary(messages, fallback, { cliProfile: runtime?.profile });
     }
@@ -585,10 +585,9 @@ export class ChatService {
     const sessionId = this._newId();
     const workspacePath = workingDir || this._defaultWorkspace;
     const hash = this._workspaceHash(workspacePath);
-    const defaultBackend = this._backendRegistry?.getDefault()?.metadata.id || 'claude-code';
     const settings = await this._settingsService.getSettings();
     const requestedCliProfileId = cliProfileId || (!backend ? settings.defaultCliProfileId : undefined);
-    const fallbackBackend = backend || (!requestedCliProfileId ? settings.defaultBackend || defaultBackend : undefined);
+    const fallbackBackend = backend || (!requestedCliProfileId ? settings.defaultBackend : undefined);
     const resolved = resolveCliProfileRuntime(
       settings,
       requestedCliProfileId,

@@ -1403,11 +1403,13 @@ export class KbDreamService {
   }
 
   private async _resolveCli(settings: Settings): Promise<{ adapter: BaseBackendAdapter; runtime: CliProfileRuntime }> {
-    const cliProfileId = settings.knowledgeBase?.dreamingCliProfileId;
-    const backendId = settings.knowledgeBase?.dreamingCliBackend;
+    const configuredCliProfileId = settings.knowledgeBase?.dreamingCliProfileId;
+    const configuredBackendId = settings.knowledgeBase?.dreamingCliBackend;
+    const cliProfileId = configuredCliProfileId || (!configuredBackendId ? settings.defaultCliProfileId : undefined);
+    const backendId = configuredBackendId || (!cliProfileId ? settings.defaultBackend : undefined);
     if (!cliProfileId && !backendId) {
       throw new Error(
-        'No Dreaming CLI backend configured. Set a profile in Knowledge Base settings.',
+        'No Dreaming CLI profile is configured. Set a Default CLI profile in Global Settings or choose one in Knowledge Base settings.',
       );
     }
     const runtime = this.chatService.resolveCliProfileRuntime

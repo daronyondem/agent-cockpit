@@ -84,7 +84,7 @@ Do not parse terminal escape output into chat events except for coarse state-mac
 Create a single source of truth for the interactive adapter's tested CLI version:
 
 ```ts
-export const CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION = '2.1.141';
+export const CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION = '2.1.142';
 ```
 
 Place it near the adapter implementation, likely in `src/services/backends/claudeCodeInteractive.ts` or a focused `src/services/backends/claudeInteractiveCompatibility.ts`.
@@ -117,7 +117,7 @@ interface CliCompatibilityStatus {
 
 Use direct copy like:
 
-> Your installed Claude Code CLI version is newer than the version tested with Claude Code Interactive. This provider depends on Claude Code's interactive transcript and terminal behavior, which may change between CLI releases. You may see broken streaming, missing tool cards, failed question handling, or stuck sessions until Agent Cockpit adds support for this CLI version.
+> Your installed Claude Code CLI is newer than the version Agent Cockpit currently supports for Claude Code Interactive. Interactive mode may still work, but you could run into compatibility issues. Standard mode is fully supported and ready to use. Standard mode uses your monthly credits, while Interactive mode uses your Claude usage limits. Agent Cockpit will add support for newer Claude Code CLI versions as soon as possible. Learn more: https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan
 
 ### Update Behavior
 

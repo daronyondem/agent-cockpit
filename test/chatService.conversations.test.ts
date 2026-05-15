@@ -25,11 +25,20 @@ beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-'));
   service = new ChatService(tmpDir, { defaultWorkspace: DEFAULT_WORKSPACE });
   await service.initialize();
+  await configureDefaultClaude(service);
 });
 
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
+
+async function configureDefaultClaude(target: ChatService): Promise<void> {
+  const settings = await target.getSettings();
+  await target.saveSettings({
+    ...settings,
+    defaultBackend: 'claude-code',
+  });
+}
 
 describe('createConversation', () => {
   test('creates with default title', async () => {
@@ -76,6 +85,7 @@ describe('createConversation', () => {
         dataRoot,
       });
       await customService.initialize();
+      await configureDefaultClaude(customService);
 
       const conv = await customService.createConversation('Custom Data Root', '/tmp/work');
       const hash = workspaceHash('/tmp/work');
@@ -181,10 +191,21 @@ describe('createConversation', () => {
     ).rejects.toThrow('CLI profile backend kiro does not match requested backend claude-code');
   });
 
-  test('backend defaults to claude-code when not specified', async () => {
+  test('uses configured legacy default backend when no profile is specified', async () => {
     const conv = await service.createConversation('Default Backend');
     expect(conv.backend).toBe('claude-code');
     expect(conv.cliProfileId).toBe(serverConfiguredCliProfileId('claude-code'));
+  });
+
+  test('rejects create without a configured CLI profile or default backend', async () => {
+    const freshRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-fresh-'));
+    try {
+      const freshService = new ChatService(freshRoot, { defaultWorkspace: DEFAULT_WORKSPACE });
+      await freshService.initialize();
+      await expect(freshService.createConversation('No CLI')).rejects.toThrow('CLI profile is required');
+    } finally {
+      fs.rmSync(freshRoot, { recursive: true, force: true });
+    }
   });
 
   test('uses defaultCliProfileId when creating without explicit backend/profile', async () => {
@@ -210,6 +231,31 @@ describe('createConversation', () => {
     expect(conv.cliProfileId).toBe(profile.id);
   });
 
+  test('resolveCliProfileRuntime without arguments uses the configured default profile', async () => {
+    const settings = await service.getSettings();
+    const profile: CliProfile = {
+      id: 'profile-codex-runtime-default',
+      name: 'Codex Runtime Default',
+      vendor: 'codex',
+      authMode: 'account',
+      configDir: '/tmp/codex-runtime-default',
+      createdAt: '2026-04-29T00:00:00.000Z',
+      updatedAt: '2026-04-29T00:00:00.000Z',
+    };
+    await service.saveSettings({
+      ...settings,
+      defaultCliProfileId: profile.id,
+      defaultBackend: 'codex',
+      cliProfiles: [...(settings.cliProfiles || []), profile],
+    });
+
+    const runtime = await service.resolveCliProfileRuntime(undefined);
+
+    expect(runtime.backendId).toBe('codex');
+    expect(runtime.cliProfileId).toBe(profile.id);
+    expect(runtime.profile).toEqual(expect.objectContaining({ id: profile.id }));
+  });
+
   test('stores Codex Fast service tier and exposes it on get/list', async () => {
     const conv = await service.createConversation(
       'Fast Codex',
@@ -228,14 +274,27 @@ describe('createConversation', () => {
 
   test('applies defaultServiceTier only to Codex conversations and allows explicit default override', async () => {
     const settings = await service.getSettings();
+    const now = '2026-04-29T00:00:00.000Z';
+    const codexProfile = {
+      id: serverConfiguredCliProfileId('codex'),
+      name: 'Codex (Server Configured)',
+      vendor: 'codex' as const,
+      authMode: 'server-configured' as const,
+      createdAt: now,
+      updatedAt: now,
+    };
     await service.saveSettings({
       ...settings,
+      cliProfiles: [
+        ...(settings.cliProfiles || []).filter((profile) => profile.id !== codexProfile.id),
+        codexProfile,
+      ],
       defaultBackend: 'codex',
-      defaultCliProfileId: undefined,
+      defaultCliProfileId: codexProfile.id,
       defaultServiceTier: 'fast',
     });
 
-    const codexDefault = await service.createConversation('Default Fast', '/tmp/default-fast', 'codex');
+    const codexDefault = await service.createConversation('Default Fast', '/tmp/default-fast');
     const codexExplicitDefault = await service.createConversation(
       'Explicit Default',
       '/tmp/explicit-default',

@@ -6,6 +6,7 @@ TASK.md
 .DS_Store
 .claude/
 coverage/
+test-results/
 public/v2-built/
 public/.v2-built-*/
 public/mobile/*

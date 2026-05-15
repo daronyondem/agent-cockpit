@@ -1979,7 +1979,7 @@ function ContextMapTab({
   const ctx = settings || { processorMode: 'global' };
   const globalContext = (globalSettings && globalSettings.contextMap) || {};
   const profiles = activeWorkspaceCliProfiles(globalSettings);
-  const fallbackBackend = globalContext.cliBackend || (globalSettings && globalSettings.defaultBackend) || (backends[0] && backends[0].id) || '';
+  const fallbackBackend = globalContext.cliBackend || (globalSettings && globalSettings.defaultBackend) || '';
   const mode = ctx.processorMode === 'override' ? 'override' : 'global';
   const globalProfile = workspaceProfileForSetting(profiles, globalContext.cliProfileId, globalContext.cliBackend, fallbackBackend);
   const selectedProfile = mode === 'override'

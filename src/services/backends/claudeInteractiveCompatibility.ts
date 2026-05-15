@@ -3,7 +3,7 @@ import { CLAUDE_CODE_INTERACTIVE_BACKEND_ID } from '../cliProfiles';
 import type { CliCompatibilityStatus } from '../../types';
 import type { ClaudeCliRuntime } from './claudeCode';
 
-export const CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION = '2.1.141';
+export const CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION = '2.1.142';
 
 const EXEC_TIMEOUT_MS = 15_000;
 const MAX_BUFFER = 256 * 1024;
@@ -67,7 +67,7 @@ export function buildClaudeInteractiveCompatibilityStatus(
       testedVersion: CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION,
       status: 'newer',
       severity: 'warning',
-      message: 'Your installed Claude Code CLI version is newer than the version tested with Claude Code Interactive. This provider depends on Claude Code interactive transcript and terminal behavior, which may change between CLI releases. You may see broken streaming, missing tool cards, failed question handling, or stuck sessions until Agent Cockpit adds support for this CLI version.',
+      message: 'Your installed Claude Code CLI is newer than the version Agent Cockpit currently supports for Claude Code Interactive. Interactive mode may still work, but you could run into compatibility issues. Standard mode is fully supported and ready to use. Standard mode uses your monthly credits, while Interactive mode uses your Claude usage limits. Agent Cockpit will add support for newer Claude Code CLI versions as soon as possible. Learn more: https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan',
     };
   }
 

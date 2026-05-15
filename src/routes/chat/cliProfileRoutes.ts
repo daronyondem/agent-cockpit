@@ -210,7 +210,8 @@ function maybePromoteSetupProfile(
     ? profiles.find(candidate => candidate.id === settings.defaultCliProfileId)
     : undefined;
   const defaultVendor = cliVendorForBackend(settings.defaultBackend);
-  const shouldMakeDefault = defaultVendor === vendor && (!defaultProfile || defaultProfile.authMode === 'server-configured');
+  const shouldMakeDefault = !settings.defaultCliProfileId
+    || (defaultVendor === vendor && (!defaultProfile || defaultProfile.authMode === 'server-configured'));
   if (!shouldMakeDefault) return null;
   return {
     ...settings,
