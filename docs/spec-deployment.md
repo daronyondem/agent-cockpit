@@ -115,15 +115,27 @@ npm run mobile:build
 npm test
 npm run adr:lint
 npm run release:package -- --version <version> --source-ref <source_ref> --commit <commit> --out-dir dist/release
+npm run release:notes -- --version <version> --repo <owner/repo> --out dist/release/github-release-notes.md
 ```
 
 The final step creates GitHub Release `v<version>` with title
-`Agent Cockpit v<version>` and uploads:
+`Agent Cockpit v<version>`, uses
+`dist/release/github-release-notes.md` as the release description, and uploads:
 
 - `agent-cockpit-v<version>.tar.gz`
 - `release-manifest.json`
 - `SHA256SUMS`
 - `install-macos.sh`
+
+`npm run release:notes` executes `scripts/render-release-notes.js`. The script
+requires `docs/releases/v<version>.md` to exist in the checked-out source ref.
+That source-controlled release document is produced during release preparation
+using `docs/release-notes-prompt.md` and reviewed before the manual workflow is
+triggered. The renderer validates that the document has non-empty
+`## Shipped For Users` and `## Developer Details` sections, rejects TODO/TBD
+placeholder text, requires at least one shipped-user bullet, and writes a GitHub
+Release body that includes the user-facing shipped list plus a link to
+`docs/releases/v<version>.md` at the release tag.
 
 `npm run release:package` executes `scripts/package-release.js`. The script
 requires `public/v2-built/index.html` and `public/mobile-built/index.html`, so a

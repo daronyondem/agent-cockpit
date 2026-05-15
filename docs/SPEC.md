@@ -41,6 +41,16 @@ Engineering notes that capture empirical findings — not proposals or specs, bu
 | [notes-kiro-bedrock-parity.md](notes-kiro-bedrock-parity.md) | Differences observed between Kiro (AWS Bedrock-routed) and Claude Code (direct Anthropic API) for Opus 4.7 — image format/dimension caps, ACP stream termination, JSON-RPC error extraction, etc. |
 | [parity-decisions.md](parity-decisions.md) | Intentional parity decisions between the desktop web UI and the mobile PWA, especially features that are deliberately web-only. |
 
+### Operational Documents
+
+Procedures and prompts for recurring project operations:
+
+| Document | Description |
+|----------|-------------|
+| [release-workflow.md](release-workflow.md) | Agent-owned production release preparation procedure before the manual GitHub Actions release workflow runs. |
+| [release-notes-prompt.md](release-notes-prompt.md) | Prompt contract for generating source-controlled per-release documents from commits, PRs, closed issues, and code changes between release versions. |
+| [releases/README.md](releases/README.md) | Directory contract for per-release developer detail documents consumed by the release workflow. |
+
 ### Architecture Decision Records
 
 ADRs capture *why* the system is shaped the way it is — the decision made, the alternatives considered, and the tradeoffs accepted. The SPEC documents above describe *what is true now*; ADRs describe *why we chose this and what we rejected*. SPEC sections should cross-link to the ADRs that shaped them, and vice versa, but should not duplicate the rationale.

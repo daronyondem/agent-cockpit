@@ -112,6 +112,13 @@ Always use pm2:
   5. Update the spec docs to reflect all changes (endpoints, methods, UI behavior, test file list).
   6. Evaluate whether `AGENTS.md` needs updates. If the change introduces or changes a recurring architecture convention, ownership boundary, verification command, or agent workflow, update `AGENTS.md` in the same PR.
 
+# Releases
+
+- Before triggering the production release workflow, follow [`docs/release-workflow.md`](docs/release-workflow.md).
+- Release preparation is agent-owned: generate `docs/releases/v<version>.md` from commits, merged PRs, closed issues, and code changes between release versions, then share it with the human for review.
+- Use [`docs/release-notes-prompt.md`](docs/release-notes-prompt.md) when generating the per-release document. Do not ask the human to draft release notes from scratch.
+- Validate the GitHub Release body with `npm run release:notes -- --version <version> --out /tmp/agent-cockpit-release-notes.md` before triggering `.github/workflows/release.yml`.
+
 # Specification Documents
 
 The project specification lives under `docs/` as a wiki-style collection of markdown files. Start at [`docs/SPEC.md`](docs/SPEC.md) for the index and overview.
