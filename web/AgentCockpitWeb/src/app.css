@@ -511,6 +511,25 @@ body{
 .sb-archive-toggle:hover{ color: var(--text); background: var(--surface); }
 .sb-archive-toggle.active{ color: var(--accent); }
 
+.sb-welcome-toggle{
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: color-mix(in oklch, var(--accent), transparent 94%);
+  padding: 10px 14px;
+  display: flex; align-items: center; gap: 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+.sb-welcome-toggle:hover{
+  background: color-mix(in oklch, var(--accent), transparent 88%);
+  color: var(--accent-ink, var(--accent));
+}
+
 .sb-row-restore{
   border: none; background: transparent;
   width: 22px; height: 22px; border-radius: 4px;

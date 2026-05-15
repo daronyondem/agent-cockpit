@@ -150,6 +150,7 @@ function App(){
     try { return new URLSearchParams(window.location.search).get('welcome') === '1'; }
     catch { return false; }
   });
+  const [installStatus, setInstallStatus] = React.useState(null);
   const [sbOpen, setSbOpen] = React.useState(false); // mobile-only sidebar overlay; ignored on desktop
   const [user, setUser] = React.useState(null); // { displayName, email, provider } | null
   const convStates = useConvStates();
@@ -160,6 +161,14 @@ function App(){
     AgentApi.getMe()
       .then(me => { if (!cancelled) setUser(me); })
       .catch(() => { /* silent — session-expired handler covers 401s */ });
+    return () => { cancelled = true; };
+  }, []);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    AgentApi.getInstallStatus()
+      .then(status => { if (!cancelled) setInstallStatus(status); })
+      .catch(() => { /* non-fatal; welcome screen can still load status */ });
     return () => { cancelled = true; };
   }, []);
 
@@ -419,6 +428,23 @@ function App(){
     setSbOpen(false);
   }, []);
 
+  const onOpenWelcome = React.useCallback(() => {
+    setWelcomeOpen(true);
+    setKbView(null);
+    setFilesView(null);
+    setSettingsView(null);
+    setWorkspaceSettings(null);
+    setMemoryUpdateView(null);
+    setMemoryReviewView(null);
+    setViewingArchive(false);
+    setSbOpen(false);
+    try {
+      const url = new URL(window.location.href);
+      url.searchParams.set('welcome', '1');
+      window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+    } catch {}
+  }, []);
+
   const onViewAllMemoryItems = React.useCallback(() => {
     if (!memoryUpdateView) return;
     setWorkspaceSettings({
@@ -475,7 +501,10 @@ function App(){
     }
   }, [creatingConv, dialog]);
 
-  const onWelcomeDone = React.useCallback(() => {
+  const onWelcomeDone = React.useCallback((nextInstallStatus) => {
+    if (nextInstallStatus && typeof nextInstallStatus === 'object' && 'welcomeCompletedAt' in nextInstallStatus) {
+      setInstallStatus(nextInstallStatus);
+    }
     setWelcomeOpen(false);
     try {
       const url = new URL(window.location.href);
@@ -502,6 +531,8 @@ function App(){
         onSignOut={onSignOut}
         onShowUpdate={onShowUpdate}
         user={user}
+        showWelcomeAction={Boolean(installStatus && !installStatus.welcomeCompletedAt && !welcomeOpen)}
+        onOpenWelcome={onOpenWelcome}
       />
       <div className="sb-backdrop" onClick={() => setSbOpen(false)} aria-hidden="true"/>
       <button
@@ -660,8 +691,8 @@ function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
     setFinishing(true);
     setError(null);
     try {
-      await AgentApi.completeWelcome();
-      onDone();
+      const result = await AgentApi.completeWelcome();
+      onDone(result && result.install ? result.install : null);
     } catch (err) {
       setError(err.message || String(err));
     } finally {
@@ -672,7 +703,7 @@ function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
   const checks = doctor && Array.isArray(doctor.checks) ? doctor.checks : [];
   const requiredChecks = checks.filter(item => item.required);
   const cliChecks = checks.filter(item => ['claude-cli', 'codex-cli', 'kiro-cli'].includes(item.id));
-  const optionalChecks = checks.filter(item => ['pandoc', 'libreoffice', 'cloudflared', 'mobile-build'].includes(item.id));
+  const optionalChecks = checks.filter(item => ['pandoc', 'libreoffice', 'mobile-build'].includes(item.id));
   const installLine = install
     ? `${install.channel || 'dev'} channel · ${install.source || 'unknown'} · ${install.version || 'unversioned'}`
     : 'Install status unavailable';
@@ -686,7 +717,7 @@ function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
             <h1>Agent Cockpit</h1>
             <p>{installLine}</p>
           </div>
-          <button className="btn ghost" type="button" onClick={onDone}>Skip</button>
+          <button className="btn ghost" type="button" onClick={() => onDone(null)}>Skip</button>
         </div>
 
         {error ? (
@@ -728,6 +759,7 @@ function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
 
             <WelcomePanel title="CLI Backends" tone={cliChecks.some(item => item.status === 'ok') ? 'ok' : 'warning'}>
               {cliChecks.map(item => <WelcomeDoctorLine key={item.id} item={item}/>)}
+              <p className="welcome-note">Install only the backend CLIs you plan to use. Unused backends can stay uninstalled.</p>
               <div className="welcome-actions">
                 <button className="btn" type="button" onClick={() => onOpenSettings('cli')}>{Ico.terminal(14)} CLI Profiles</button>
               </div>

@@ -1129,8 +1129,17 @@ Required checks currently cover Node.js 22+, npm, local PM2 through
 `npx --no-install pm2 --version`, writable `<AGENT_COCKPIT_DATA_DIR>`, and the
 desktop V2 build shell at `public/v2-built/index.html`. Optional/warning checks
 cover app-directory writability for future updates, the mobile PWA build shell,
-Claude Code CLI, Codex CLI, Kiro CLI, Pandoc, LibreOffice, cloudflared, and
-install/update channel metadata. A corrupt install manifest downgrades the
+Claude Code CLI, Codex CLI, Kiro CLI, Pandoc, LibreOffice, and install/update
+channel metadata. Missing CLI warnings are optional and tell the user to install
+only the backend they plan to use; Claude Code remediation includes
+`curl -fsSL https://claude.ai/install.sh | bash` and
+`brew install --cask claude-code`, Codex remediation includes
+`npm i -g @openai/codex` and `brew install --cask codex`, and Kiro remediation
+includes `curl -fsSL https://cli.kiro.dev/install | bash` plus
+`kiro-cli login`. Pandoc and LibreOffice warning remediations include macOS
+Homebrew commands (`brew install pandoc` and `brew install --cask libreoffice`),
+official download URLs, and a restart reminder because these optional binaries
+are detected at server startup. A corrupt install manifest downgrades the
 update-channel check to warning while still returning inferred install metadata.
 `overallStatus` is `error` when any required check errors, `warning` when any
 check warns/errors but required checks are usable, and `ok` otherwise.

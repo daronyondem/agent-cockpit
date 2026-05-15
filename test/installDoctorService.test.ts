@@ -84,6 +84,7 @@ describe('InstallDoctorService', () => {
       expect.objectContaining({ id: 'libreoffice', status: 'ok' }),
       expect.objectContaining({ id: 'update-channel', status: 'ok', detail: expect.stringContaining('remote=1.2.4') }),
     ]));
+    expect(status.checks.map(item => item.id)).not.toContain(['cloud', 'flared'].join(''));
   });
 
   test('surfaces required errors and optional warnings', async () => {
@@ -98,6 +99,7 @@ describe('InstallDoctorService', () => {
       installStateService: makeInstallState(root, { stateSource: 'corrupt', stateError: 'bad json' }),
       commandRunner: async (command) => {
         if (command === 'npm') return { ok: false, stdout: '', stderr: '', error: 'missing npm' };
+        if (['claude', 'codex', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
         return { ok: true, stdout: '1.0.0', stderr: '' };
       },
       detectPandoc: async () => ({ available: false, binaryPath: null, version: null, checkedAt: '2026-05-12T00:00:00.000Z' }),
@@ -111,8 +113,11 @@ describe('InstallDoctorService', () => {
       expect.objectContaining({ id: 'npm', status: 'error', required: true }),
       expect.objectContaining({ id: 'data-dir', status: 'error', required: true }),
       expect.objectContaining({ id: 'web-build', status: 'error', required: true }),
-      expect.objectContaining({ id: 'pandoc', status: 'warning', required: false }),
-      expect.objectContaining({ id: 'libreoffice', status: 'warning', required: false }),
+      expect.objectContaining({ id: 'claude-cli', status: 'warning', required: false, remediation: expect.stringContaining('claude.ai/install.sh') }),
+      expect.objectContaining({ id: 'codex-cli', status: 'warning', required: false, remediation: expect.stringContaining('@openai/codex') }),
+      expect.objectContaining({ id: 'kiro-cli', status: 'warning', required: false, remediation: expect.stringContaining('cli.kiro.dev/install') }),
+      expect.objectContaining({ id: 'pandoc', status: 'warning', required: false, remediation: expect.stringContaining('brew install pandoc') }),
+      expect.objectContaining({ id: 'libreoffice', status: 'warning', required: false, remediation: expect.stringContaining('brew install --cask libreoffice') }),
       expect.objectContaining({ id: 'update-channel', status: 'warning', required: false }),
     ]));
   });

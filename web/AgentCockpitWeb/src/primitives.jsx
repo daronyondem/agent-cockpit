@@ -213,7 +213,7 @@ function SidebarUser({ user }){
 }
 
 /* ---------- Sidebar (shared across screens) ---------- */
-export function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convStates = null, onOpenKb = null, onOpenFiles = null, onOpenSettings = null, onOpenWorkspaceSettings = null, onNewConversation = null, viewingArchive = false, onToggleArchive = null, onRestore = null, onSignOut = null, onShowUpdate = null, user = null }){
+export function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null, convStates = null, onOpenKb = null, onOpenFiles = null, onOpenSettings = null, onOpenWorkspaceSettings = null, onNewConversation = null, viewingArchive = false, onToggleArchive = null, onRestore = null, onSignOut = null, onShowUpdate = null, user = null, showWelcomeAction = false, onOpenWelcome = null }){
   /* Conv list is owned by StreamStore — we only subscribe here. That way
      `title_updated`, archive, rename, delete, create all flow into the
      sidebar without React-prop refresh tokens. */
@@ -563,6 +563,15 @@ export function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null,
           ) : (
             <>{Ico.archive(12)} Archive</>
           )}
+        </button>
+      ) : null}
+      {showWelcomeAction && onOpenWelcome ? (
+        <button
+          type="button"
+          className="sb-welcome-toggle"
+          onClick={onOpenWelcome}
+        >
+          {Ico.sparkNode(12)} Welcome!
         </button>
       ) : null}
 
