@@ -5,6 +5,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { execFileSync } = require('child_process');
+const AdmZip = require('adm-zip');
 
 const ROOT_FILES = [
   '.env.example',
@@ -32,6 +33,8 @@ const ROOT_DIRECTORIES = [
 
 const INSTALLER_ASSET_PATH = 'scripts/install-macos.sh';
 const INSTALLER_ASSET_NAME = 'install-macos.sh';
+const WINDOWS_INSTALLER_ASSET_PATH = 'scripts/install-windows.ps1';
+const WINDOWS_INSTALLER_ASSET_NAME = 'install-windows.ps1';
 
 const EXCLUDED_SEGMENTS = new Set([
   '.git',
@@ -262,10 +265,13 @@ function makeReleasePackage(options) {
   const version = normalizeVersion(options.version);
   const packageRootName = `agent-cockpit-v${version}`;
   const tarballName = `${packageRootName}.tar.gz`;
+  const zipName = `${packageRootName}.zip`;
   const installerAssetPath = path.join(outDir, INSTALLER_ASSET_NAME);
+  const windowsInstallerAssetPath = path.join(outDir, WINDOWS_INSTALLER_ASSET_NAME);
   const manifestName = 'release-manifest.json';
   const checksumsName = 'SHA256SUMS';
   const tarballPath = path.join(outDir, tarballName);
+  const zipPath = path.join(outDir, zipName);
   const manifestPath = path.join(outDir, manifestName);
   const checksumsPath = path.join(outDir, checksumsName);
   const stagingParent = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-release-'));
@@ -295,15 +301,30 @@ function makeReleasePackage(options) {
     execFileSync('tar', ['-czf', tarballPath, '-C', stagingParent, packageRootName], {
       stdio: 'pipe',
     });
+    const zip = new AdmZip();
+    zip.addLocalFolder(stagingRoot, packageRootName);
+    zip.writeZip(zipPath);
 
     const tarballStat = fs.statSync(tarballPath);
     const tarballSha256 = sha256File(tarballPath);
+    const zipStat = fs.statSync(zipPath);
+    const zipSha256 = sha256File(zipPath);
     const artifacts = [
       {
         name: tarballName,
         role: 'app-tarball',
+        platform: 'darwin',
+        format: 'tar.gz',
         size: tarballStat.size,
         sha256: tarballSha256,
+      },
+      {
+        name: zipName,
+        role: 'app-zip',
+        platform: 'win32',
+        format: 'zip',
+        size: zipStat.size,
+        sha256: zipSha256,
       },
     ];
 
@@ -314,8 +335,20 @@ function makeReleasePackage(options) {
       artifacts.push({
         name: INSTALLER_ASSET_NAME,
         role: 'macos-installer',
+        platform: 'darwin',
         size: installerStat.size,
         sha256: sha256File(installerAssetPath),
+      });
+    }
+    if (fs.existsSync(path.join(root, WINDOWS_INSTALLER_ASSET_PATH))) {
+      fs.copyFileSync(path.join(root, WINDOWS_INSTALLER_ASSET_PATH), windowsInstallerAssetPath);
+      const windowsInstallerStat = fs.statSync(windowsInstallerAssetPath);
+      artifacts.push({
+        name: WINDOWS_INSTALLER_ASSET_NAME,
+        role: 'windows-installer',
+        platform: 'win32',
+        size: windowsInstallerStat.size,
+        sha256: sha256File(windowsInstallerAssetPath),
       });
     }
 
@@ -342,16 +375,21 @@ function makeReleasePackage(options) {
     const manifestSha256 = sha256File(manifestPath);
     const checksumLines = [
       `${tarballSha256}  ${tarballName}`,
+      `${zipSha256}  ${zipName}`,
       `${manifestSha256}  ${manifestName}`,
     ];
     if (fs.existsSync(installerAssetPath)) {
       checksumLines.push(`${sha256File(installerAssetPath)}  ${INSTALLER_ASSET_NAME}`);
+    }
+    if (fs.existsSync(windowsInstallerAssetPath)) {
+      checksumLines.push(`${sha256File(windowsInstallerAssetPath)}  ${WINDOWS_INSTALLER_ASSET_NAME}`);
     }
     fs.writeFileSync(checksumsPath, `${checksumLines.join('\n')}\n`);
 
     return {
       outDir,
       tarballPath,
+      zipPath,
       manifestPath,
       checksumsPath,
       manifest,
@@ -370,6 +408,7 @@ function main() {
 
   const result = makeReleasePackage(args);
   console.log(`Release tarball: ${result.tarballPath}`);
+  console.log(`Release zip: ${result.zipPath}`);
   console.log(`Release manifest: ${result.manifestPath}`);
   console.log(`Release checksums: ${result.checksumsPath}`);
 }

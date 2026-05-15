@@ -47,12 +47,12 @@ See [ADR-0025](adr/0025-use-mobile-pwa-as-sole-mobile-client.md).
 
 Production GitHub Release artifacts include `public/mobile-built/index.html` and
 the generated mobile asset tree. `scripts/package-release.js` refuses to create
-a release tarball when the mobile build shell is missing, the manual release
+a release archive when the mobile build shell is missing, the manual release
 workflow runs `npm run mobile:typecheck` and `npm run mobile:build`, and the
-macOS installer verifies the packaged mobile shell before startup. Production
-updates run `npm --prefix mobile/AgentCockpitPWA ci` inside the extracted
+macOS/Windows installers verify the packaged mobile shell before startup.
+Production updates run `npm --prefix mobile/AgentCockpitPWA ci` inside the extracted
 release and then run `MobileBuildService` for that release when build markers or
-assets are missing or stale before switching the `current` symlink. Dev updates
+assets are missing or stale before activating the release. Dev updates
 continue to force `npm --prefix mobile/AgentCockpitPWA install` plus
 `npm run mobile:build` before PM2 restart.
 

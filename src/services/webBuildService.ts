@@ -337,7 +337,8 @@ async function pathExists(filePath: string): Promise<boolean> {
 
 function execFileText(cmd: string, args: string[], cwd: string, timeout: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(cmd, args, { cwd, timeout, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
+    const command = resolveExecCommand(cmd, args);
+    execFile(command.cmd, command.args, { cwd, timeout, maxBuffer: 10 * 1024 * 1024 }, (err, stdout, stderr) => {
       if (err) {
         reject(new Error(stderr || stdout || err.message));
       } else {
@@ -345,4 +346,18 @@ function execFileText(cmd: string, args: string[], cwd: string, timeout: number)
       }
     });
   });
+}
+
+function resolveExecCommand(cmd: string, args: string[]): { cmd: string; args: string[] } {
+  if (process.platform !== 'win32' || !/[.](?:cmd|bat)$/i.test(cmd)) {
+    return { cmd, args };
+  }
+  return {
+    cmd: 'cmd.exe',
+    args: ['/d', '/s', '/c', [cmd, ...args].map(windowsCmdQuote).join(' ')],
+  };
+}
+
+function windowsCmdQuote(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`;
 }

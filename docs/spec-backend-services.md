@@ -965,13 +965,16 @@ reported by `InstallStateService`. Dev installs (`channel: "dev",
 source: "git-main"`) compare local `package.json` against
 `origin/main:package.json`, pull `main`, install dependencies, rebuild generated
 assets, verify PM2 configuration, and restart. Production installs
-(`channel: "production", source: "github-release"`) check the external
-GitHub Release manifest, download and verify the release tarball, stage the new
-release under the Mac install root, run dependency/build preflight work there,
-switch the `current` symlink, then restart through PM2 with a health-check
-rollback script. [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md)
-records the channel decision. Production updates also enforce release-declared
-Node runtime requirements from `release-manifest.json`; private
+(`channel: "production", source: "github-release"`) check the external GitHub
+Release manifest, download and verify the platform app archive, stage the new
+release under the install root, run dependency/build preflight work there,
+activate the release, then restart through PM2 with a health-check rollback
+script. macOS activates by switching the `current` symlink. Windows activates by
+recording the active versioned release directory in `install.json`.
+[ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md) records the
+channel decision and [ADR-0063](adr/0063-adopt-per-user-windows-installer.md)
+records the Windows install/update decision. Production updates also enforce
+release-declared Node runtime requirements from `release-manifest.json`; private
 installer-managed runtimes are refreshed before dependency installation when a
 release raises the required Node major.
 
@@ -992,55 +995,85 @@ Dev-channel sequence:
 5. `npm --prefix mobile/AgentCockpitPWA install` (120s timeout) so the mobile app's separate lockfile is installed before its production build.
 6. Force V2 web build via `WebBuildService.ensureBuilt({ force:true })`, reported as an `npm run web:build` update step. A build failure returns a failed update result and does not restart, even when a previous V2 build exists.
 7. Force mobile PWA build via `MobileBuildService.ensureBuilt({ force:true })`, reported as an `npm run mobile:build` update step. A build failure returns a failed update result and does not restart, even when a previous mobile build exists.
-8. Verify interpreter — reads `ecosystem.config.js` fresh from disk (via `fs.readFileSync`, not `require`, to avoid stale cache), checks the configured interpreter exists. Path-based interpreters (starting with `.` or `/`) are checked on disk; bare commands (e.g. `npx`, `node`) are resolved via `which` on PATH
+8. Verify interpreter — reads `ecosystem.config.js` fresh from disk (via `fs.readFileSync`, not `require`, to avoid stale cache), checks the configured interpreter exists. Path-based interpreters (starting with `.` or `/`) are checked on disk; bare commands (e.g. `npx`, `node`) are resolved via `which` on POSIX or `where` on Windows.
 9. Delegates to `_launchRestartScript()` (shared with `restart()` below)
 
 Production-channel sequence:
 
-1. Require stored `installDir` and `appDir`; resolve the current symlink target as
-   the rollback target.
+1. Require stored `installDir` and `appDir`; on macOS resolve the current symlink
+   target as the rollback target, and on Windows use the stored versioned
+   `appDir` as the rollback target.
 2. Download `release-manifest.json` and `SHA256SUMS` from
    `https://github.com/<repo>/releases/latest/download/`.
 3. Verify the manifest checksum against `SHA256SUMS`.
-4. Parse the manifest, find the artifact with `role: "app-tarball"`, download it,
-   verify its `SHA256SUMS` entry, and verify its manifest `sha256`.
+4. Parse the manifest, find the platform archive artifact (`role:
+   "app-tarball"` on macOS, `role: "app-zip"` or `platform: "win32",
+   format: "zip"` on Windows), download it, verify its `SHA256SUMS` entry, and
+   verify its manifest `sha256`.
 5. Refuse when the manifest version is not newer than the running package
    version.
-6. Extract the tarball into a staging directory under `<installDir>/releases`,
-   require `server.ts`, then atomically rename it to the manifest `packageRoot`.
+6. Extract the archive into a staging directory under `<installDir>/releases`
+   (`tar -xzf` on macOS, PowerShell `Expand-Archive` on Windows), require
+   `server.ts`, then atomically rename it to the manifest `packageRoot`.
 7. Resolve the release-required Node major from
    `manifest.requiredRuntime.node.minimumMajor`, falling back to the extracted
    release's `package.json` `engines.node`, then to Node 22. If the current
    runtime already satisfies the major, record a `verify Node.js runtime` step.
-   Otherwise download the latest official Node tarball for that major from
-   Node.org, verify it against `SHASUMS256.txt`, extract it under
-   `<installDir>/runtime/node-v<version>`, repoint `<installDir>/runtime/node`,
-   prepend its `bin` directory to the updater process `PATH`, persist that PATH
-   into the copied `.env` and `ecosystem.config.js`, record the bundled npm
-   version when it can be observed, and report an `install Node.js runtime`
-   step. This migrates system-Node production installs to an installer-owned
-   private runtime without mutating global Node.
+   Otherwise download the latest official Node archive for that major from
+   Node.org, verify it against `SHASUMS256.txt`, install it under the install
+   root, prepend it to the updater process `PATH`, persist that PATH into the
+   copied `.env` and `ecosystem.config.js`, record the bundled npm version when
+   it can be observed, and report an `install Node.js runtime` step. macOS uses
+   the Darwin tarball, extracts to `<installDir>/runtime/node-v<version>`, and
+   repoints `<installDir>/runtime/node`. Windows uses the Windows ZIP and keeps
+   the versioned runtime directory directly, without a symlink or junction. This
+   migrates system-Node production installs to an installer-owned private
+   runtime without mutating global Node.
 8. Run root `npm ci` and mobile `npm --prefix mobile/AgentCockpitPWA ci` inside
-   the extracted release.
+   the extracted release, resolving the command as `npm.cmd` on Windows and as
+   the private runtime's `npm.cmd` when a Windows private Node runtime is active.
+   Because Node's `execFile` does not execute Windows `.cmd`/`.bat` shims
+   directly, the updater invokes those shims through `cmd.exe /d /s /c`.
 9. Run V2 and mobile build preflight services for the extracted release. Fresh
    markers skip builds; missing/stale markers or missing assets run the
-   corresponding build. Any build error fails the update before the symlink
-   changes.
+   corresponding build with the same platform-specific npm command resolution.
+   Any build error fails the update before the symlink changes.
 10. Confirm `public/v2-built/index.html` and `public/mobile-built/index.html`
    exist.
-11. Copy `.env` and `ecosystem.config.js` from the previous current release into
-    the new release.
-12. Switch `<installDir>/current` to the new release. The path must either be
-    absent or a symlink; a non-symlink current path is refused.
+11. Copy `.env` from the previous current release into the new release. macOS
+    also copies `ecosystem.config.js`; Windows regenerates `ecosystem.config.js`
+    with an explicit Node interpreter and `node_modules/tsx/dist/cli.mjs`
+    script so the config points at the new versioned app directory.
+12. Activate the release. macOS switches `<installDir>/current` to the new
+    release; the path must either be absent or a symlink, and a non-symlink
+    current path is refused. Windows records the new versioned release path as
+    `appDir` in `install.json`.
 13. Update `install.json` through `InstallStateService.writeState()` when the
     service is available, including the current `nodeRuntime` metadata and the
     release version.
-14. Launch `_launchRestartScript({ appRoot: current, healthUrl, currentLink,
-    rollbackTarget })`. The health URL is derived from the new release `.env`
-    `PORT` value and defaults to `3334`.
+14. Launch `_launchRestartScript({ appRoot, healthUrl, rollbackTarget })`. The
+    health URL is derived from the new release `.env` `PORT` value and defaults
+    to `3334`. Windows also passes the previous install status so the generated
+    PowerShell rollback script can restore `install.json` before restarting the
+    old app.
 
 - `restart({ hasActiveStreams })` — plain server restart (no git pull / npm install / interpreter verification). Applies the same concurrent + active/pending turn guards as `triggerUpdate()`, then calls `_launchRestartScript()`. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. The guard delegates to the stream supervisor's in-flight check and still treats accepted/preparing sends as active even though they now have durable stream jobs; planned/manual restarts should be blocked before work is interrupted.
-- `_launchRestartScript()` (private) — writes `<dataRoot>/restart.sh` (sets PATH to `node_modules/.bin`, sleeps 2s, `pm2 delete` + `pm2 start` against `ecosystem.config.js`), then launches it via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. Output logged to `<dataRoot>/update-restart.log`. Shared by `triggerUpdate()` and `restart()`. Production callers also pass a health URL plus `currentLink`/`rollbackTarget`; the script probes the health URL for up to 20 seconds and, on failure, relinks `current` to the rollback target and restarts PM2 again. `dataRoot` defaults to `<appRoot>/data`; `server.ts` passes `config.AGENT_COCKPIT_DATA_DIR`.
+- `_launchRestartScript()` (private) — on POSIX writes
+  `<dataRoot>/restart.sh` (sets PATH to `node_modules/.bin`, sleeps 2s,
+  `pm2 delete` + `pm2 start` against `ecosystem.config.js`), then launches it
+  via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. On
+  Windows it writes `<dataRoot>/restart.ps1`, sets install-local `PM2_HOME`,
+  prepends the private runtime path when present, restarts the app through
+  a checked native-command wrapper that throws on failed `pm2 startOrRestart`
+  or `pm2 save`, and launches the script detached with `windowsHide: true`.
+  Output is logged to `<dataRoot>/update-restart.log`. Shared by
+  `triggerUpdate()` and `restart()`. Production callers also pass a health URL
+  and rollback target; the script probes the health URL for up to 20 seconds and
+  rolls back (relinking `current` on macOS, restoring the previous install
+  manifest and starting the old versioned app on Windows) before exiting with
+  failure. Windows rollback switches the script PATH and PM2 CLI invocation back
+  to the previous install runtime when that runtime was recorded, then saves PM2
+  state after restarting the old ecosystem config.
 
 Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
 
@@ -1057,8 +1090,8 @@ Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, succes
 manifest that records whether this install is production (`github-release`) or
 dev (`git-main`). It provides stable status data to the update service,
 `/api/chat/install/status`, `/api/chat/install/doctor`, and the welcome flow.
-The macOS installer writes production/dev metadata, and the welcome flow marks
-`welcomeCompletedAt` through this service.
+The macOS and Windows installers write production/dev metadata, and the welcome
+flow marks `welcomeCompletedAt` through this service.
 
 Constructor: `new InstallStateService({ appRoot, dataRoot, repo?, branch?, version? })`.
 `repo` defaults to `daronyondem/agent-cockpit`, `branch` defaults to `main`, and
@@ -1093,6 +1126,8 @@ Status shape:
   dataDir: string,
   installedAt: string | null,
   welcomeCompletedAt: string | null,
+  nodeRuntime: InstallNodeRuntime | null,
+  startup?: { kind: 'scheduled-task' | 'manual' | 'unknown', name: string | null, scope: 'current-user' | 'unknown' } | null,
   stateSource: 'stored' | 'inferred' | 'legacy' | 'corrupt',
   stateError: string | null,
 }
@@ -1138,19 +1173,24 @@ does not execute real local CLIs.
 Required checks currently cover Node.js 22+, npm, local PM2 through
 `npx --no-install pm2 --version`, writable `<AGENT_COCKPIT_DATA_DIR>`, and the
 desktop V2 build shell at `public/v2-built/index.html`. Optional/warning checks
-cover app-directory writability for future updates, the mobile PWA build shell,
-Claude Code CLI, Codex CLI, Kiro CLI, Pandoc, LibreOffice, and install/update
-channel metadata. Missing CLI warnings are optional and tell the user to install
-only the backend they plan to use; Claude Code remediation includes
-`curl -fsSL https://claude.ai/install.sh | bash` and
+cover app-directory writability for future updates, Windows logon startup when
+running on Windows, the mobile PWA build shell, Claude Code CLI, Codex CLI, Kiro
+CLI, Pandoc, LibreOffice, and install/update channel metadata. The Windows
+runtime probes use `npm.cmd` and `npx.cmd`; the default command runner launches
+those Windows command shims through `cmd.exe /d /s /c` rather than executing the
+`.cmd` files directly. The Windows
+logon startup check queries the `AgentCockpit` scheduled task unless
+`install.startup.kind` is `manual`, in which case the disabled startup state is
+reported as intentional. Missing CLI warnings are optional and tell the user to
+install only the backend they plan to use; Claude Code remediation includes
 `npm i -g @anthropic-ai/claude-code`, Codex remediation includes
-`npm i -g @openai/codex`, and Kiro remediation includes
-`curl -fsSL https://cli.kiro.dev/install | bash` plus `kiro-cli login`.
-Pandoc and LibreOffice warnings must not assume Homebrew exists on a fresh Mac:
-they mention `brew install pandoc` and `brew install --cask libreoffice` only as
-options when Homebrew is already installed, include official installer/download
-URLs, and include a restart reminder because these optional binaries are
-detected at server startup. A corrupt install manifest downgrades the
+`npm i -g @openai/codex`, and Kiro remediation uses the official docs on
+Windows while retaining the official shell installer action on POSIX. Pandoc and
+LibreOffice warnings are platform-aware: macOS mentions Homebrew only as an
+already-installed option and Windows points at the official Windows
+installer/download pages. All optional-tool warnings include a restart reminder
+because these binaries are detected at server startup. A corrupt install
+manifest downgrades the
 update-channel check to warning while still returning inferred install metadata.
 `overallStatus` is `error` when any required check errors, `warning` when any
 check warns/errors but required checks are usable, and `ok` otherwise.
@@ -1164,8 +1204,10 @@ install commands while any conversation turn is active or pending. Supported
 command actions are:
 
 - `claude-cli:npm-install` -> `npm i -g @anthropic-ai/claude-code@latest`
+  (`npm.cmd` on Windows)
 - `codex-cli:npm-install` -> `npm i -g @openai/codex@latest`
-- `kiro-cli:official-install` -> `sh -c "curl -fsSL https://cli.kiro.dev/install | bash"`
+  (`npm.cmd` on Windows)
+- `kiro-cli:official-install` -> `sh -c "curl -fsSL https://cli.kiro.dev/install | bash"`, exposed only outside Windows
 - `pandoc:brew-install` -> `brew install pandoc`, exposed only when Homebrew is detected
 - `libreoffice:brew-install` -> `brew install --cask libreoffice`, exposed only when Homebrew is detected
 

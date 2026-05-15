@@ -59,10 +59,22 @@ After review, trigger `.github/workflows/release.yml` with:
 - `version`: semantic version, with or without a leading `v`
 - `source_ref`: the reviewed commit, branch, or tag to package
 - `prerelease`: whether the GitHub Release should be marked as a prerelease
+- `smoke_only`: when true, run pre-publish validation and skip GitHub Release
+  creation; default false
 
-The workflow validates that `docs/releases/v<version>.md` exists in the selected
-source ref, renders `dist/release/github-release-notes.md`, and passes that file
-to `gh release create --notes-file`.
+The workflow always runs a Windows smoke job before publishing. For real
+releases, it also validates that `docs/releases/v<version>.md` exists in the
+selected source ref, renders `dist/release/github-release-notes.md`, and passes
+that file to `gh release create --notes-file`. The Windows smoke job parses
+`install-windows.ps1`, runs Windows-focused installer/doctor/install-state tests
+plus the Windows-named update-service tests, builds the web and mobile assets
+required by release packaging, and packages the release on `windows-latest` to
+verify the Windows ZIP and installer manifest entries before assets are uploaded.
+It also runs
+`install-windows.ps1` in dev mode against a temporary checkout, forces a private
+Node runtime, uses an install path containing spaces, confirms the ONLOGON
+scheduled task exists, probes `/auth/setup`, and stops PM2 before the publish job
+can start.
 
 ## Post-Release Checks
 
@@ -71,6 +83,7 @@ After the workflow succeeds:
 1. Open the GitHub Release and confirm the **Shipped For Users** list is readable.
 2. Confirm the developer-details link resolves to
    `docs/releases/v<version>.md` at the release tag.
-3. Confirm release assets are present: tarball, `release-manifest.json`,
-   `SHA256SUMS`, and `install-macos.sh`.
+3. Confirm release assets are present: tarball, Windows ZIP,
+   `release-manifest.json`, `SHA256SUMS`, `install-macos.sh`, and
+   `install-windows.ps1`.
 4. Confirm the README release badge points at the new version.

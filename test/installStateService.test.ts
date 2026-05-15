@@ -85,6 +85,11 @@ describe('InstallStateService', () => {
         requiredMajor: 22,
         updatedAt: '2026-05-11T00:00:00.000Z',
       },
+      startup: {
+        kind: 'scheduled-task',
+        name: 'AgentCockpit',
+        scope: 'current-user',
+      },
     });
 
     let status = service.getStatus();
@@ -96,6 +101,11 @@ describe('InstallStateService', () => {
       version: '22.22.3',
       requiredMajor: 22,
     }));
+    expect(status.startup).toEqual({
+      kind: 'scheduled-task',
+      name: 'AgentCockpit',
+      scope: 'current-user',
+    });
     expect(status.welcomeCompletedAt).toBeNull();
 
     status = await service.markWelcomeCompleted('2026-05-12T00:00:00.000Z');

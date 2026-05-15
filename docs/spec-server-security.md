@@ -36,10 +36,12 @@
 
 [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md) keeps this
 PM2-managed server startup path as the first supported macOS production install
-model. `scripts/install-macos.sh` generates the required runtime secrets and
-PM2 ecosystem configuration, writes install-channel metadata, then launches the
-same server initialization flow documented below. First-run owner creation
-begins at `/auth/setup`; successful owner creation redirects to
+model, and [ADR-0063](adr/0063-adopt-per-user-windows-installer.md) extends it
+to per-user Windows installs. `scripts/install-macos.sh` and
+`scripts/install-windows.ps1` generate the required runtime secrets and PM2
+ecosystem configuration, write install-channel metadata, then launch the same
+server initialization flow documented below. First-run owner creation begins at
+`/auth/setup`; successful owner creation redirects to
 `/v2/?welcome=1` so the authenticated welcome flow can show install diagnostics
 and mark setup complete. Local password setup and password login explicitly save
 the file-backed session before redirecting so the next browser request can use

@@ -10,12 +10,30 @@ import { detectPandoc, resetPandocDetection, type PandocStatus } from './knowled
 
 const execFileAsync = promisify(execFile);
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
-const NODE_REMEDIATION = 'Install Node.js 22+ from nodejs.org, or rerun the macOS installer without --no-install-node so it can install a private runtime.';
-const CLAUDE_CLI_REMEDIATION = 'Install Claude Code only if you want to use that backend. macOS/Linux: run `curl -fsSL https://claude.ai/install.sh | bash`; or run `npm i -g @anthropic-ai/claude-code` when npm is available. Then run `claude` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
+const NODE_REMEDIATION = 'Install Node.js 22+ from nodejs.org, or rerun the platform installer without the no-install-node option so it can install a private runtime.';
+const CLAUDE_CLI_REMEDIATION = 'Install Claude Code only if you want to use that backend. Run `npm i -g @anthropic-ai/claude-code` when npm is available, then run `claude` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
 const CODEX_CLI_REMEDIATION = 'Install Codex only if you want to use that backend. Run `npm i -g @openai/codex`, then run `codex` and sign in with ChatGPT or an API key. Restart Agent Cockpit if the command is still not detected.';
-const KIRO_CLI_REMEDIATION = 'Install Kiro only if you want to use that backend. macOS: run `curl -fsSL https://cli.kiro.dev/install | bash`, then run `kiro-cli login` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
-const PANDOC_REMEDIATION = 'Install Pandoc for DOCX knowledge-base ingestion. If Homebrew is already installed, macOS can run `brew install pandoc`; otherwise use the official installer from https://pandoc.org/installing.html. Restart Agent Cockpit after installing.';
-const LIBREOFFICE_REMEDIATION = 'Install LibreOffice for PPTX slide-image conversion. If Homebrew is already installed, macOS can run `brew install --cask libreoffice`; otherwise download LibreOffice from https://www.libreoffice.org/download/download-libreoffice/. Restart Agent Cockpit after installing.';
+function kiroCliRemediation(): string {
+  return process.platform === 'win32'
+    ? 'Install Kiro only if you want to use that backend. Follow the official Windows guidance, then run `kiro-cli login` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.'
+    : 'Install Kiro only if you want to use that backend. macOS/Linux: run `curl -fsSL https://cli.kiro.dev/install | bash`, then run `kiro-cli login` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
+}
+
+function pandocRemediation(): string {
+  return process.platform === 'win32'
+    ? 'Install Pandoc for DOCX knowledge-base ingestion with the official Windows installer from https://pandoc.org/installing.html. Restart Agent Cockpit after installing.'
+    : 'Install Pandoc for DOCX knowledge-base ingestion. If Homebrew is already installed, macOS can run `brew install pandoc`; otherwise use the official installer from https://pandoc.org/installing.html. Restart Agent Cockpit after installing.';
+}
+
+function libreOfficeRemediation(): string {
+  return process.platform === 'win32'
+    ? 'Install LibreOffice for PPTX slide-image conversion with the official Windows download from https://www.libreoffice.org/download/download-libreoffice/. Restart Agent Cockpit after installing.'
+    : 'Install LibreOffice for PPTX slide-image conversion. If Homebrew is already installed, macOS can run `brew install --cask libreoffice`; otherwise download LibreOffice from https://www.libreoffice.org/download/download-libreoffice/. Restart Agent Cockpit after installing.';
+}
+
+function platformCommand(command: 'npm' | 'npx'): string {
+  return process.platform === 'win32' ? `${command}.cmd` : command;
+}
 
 interface CommandResult {
   ok: boolean;
@@ -47,7 +65,8 @@ interface InstallDoctorServiceOptions {
 
 async function defaultCommandRunner(command: string, args: string[], options: { cwd?: string; timeoutMs?: number } = {}): Promise<CommandResult> {
   try {
-    const result = await execFileAsync(command, args, {
+    const resolved = resolveExecCommand(command, args);
+    const result = await execFileAsync(resolved.command, resolved.args, {
       cwd: options.cwd,
       timeout: options.timeoutMs ?? 5_000,
       maxBuffer: 256 * 1024,
@@ -67,6 +86,20 @@ async function defaultCommandRunner(command: string, args: string[], options: { 
       error: e.code === 'ENOENT' ? 'not found' : (e.message || 'command failed'),
     };
   }
+}
+
+function resolveExecCommand(command: string, args: string[]): { command: string; args: string[] } {
+  if (process.platform !== 'win32' || !/[.](?:cmd|bat)$/i.test(command)) {
+    return { command, args };
+  }
+  return {
+    command: 'cmd.exe',
+    args: ['/d', '/s', '/c', [command, ...args].map(windowsCmdQuote).join(' ')],
+  };
+}
+
+function windowsCmdQuote(value: string): string {
+  return `"${value.replace(/"/g, '\\"')}"`;
 }
 
 function firstLine(value: string | undefined): string | undefined {
@@ -112,18 +145,22 @@ export class InstallDoctorService {
   async getStatus(): Promise<InstallDoctorStatus> {
     const install = this.installStateService.getStatus();
     const checks: InstallDoctorCheck[] = [];
+    const npmCommand = platformCommand('npm');
+    const npxCommand = platformCommand('npx');
 
     checks.push(this.checkNode());
-    checks.push(await this.checkCommand('npm', 'npm', ['npm', '--version'], true, 'npm is available.', NODE_REMEDIATION));
-    checks.push(await this.checkCommand('pm2', 'PM2', ['npx', '--no-install', 'pm2', '--version'], true, 'Local PM2 is available through npx.', 'Run npm ci in the app directory, then retry.'));
+    checks.push(await this.checkCommand('npm', 'npm', [npmCommand, '--version'], true, 'npm is available.', NODE_REMEDIATION));
+    checks.push(await this.checkCommand('pm2', 'PM2', [npxCommand, '--no-install', 'pm2', '--version'], true, 'Local PM2 is available through npx.', 'Run npm ci in the app directory, then retry.'));
     checks.push(await this.checkDataDir());
     checks.push(this.checkAppDir());
+    const startupCheck = await this.checkWindowsStartup(install);
+    if (startupCheck) checks.push(startupCheck);
     checks.push(this.checkBuildAsset('web-build', 'Desktop web build', 'public/v2-built/index.html', true));
     checks.push(this.checkBuildAsset('mobile-build', 'Mobile PWA build', 'public/mobile-built/index.html', false));
     const homebrewAvailable = await this.homebrewDetector();
     checks.push(await this.checkCommand('claude-cli', 'Claude Code CLI', ['claude', '--version'], false, 'Claude Code CLI responded.', CLAUDE_CLI_REMEDIATION, this.actionsForCheck('claude-cli', homebrewAvailable)));
     checks.push(await this.checkCommand('codex-cli', 'Codex CLI', ['codex', '--version'], false, 'Codex CLI responded.', CODEX_CLI_REMEDIATION, this.actionsForCheck('codex-cli', homebrewAvailable)));
-    checks.push(await this.checkCommand('kiro-cli', 'Kiro CLI', ['kiro-cli', '--version'], false, 'Kiro CLI responded.', KIRO_CLI_REMEDIATION, this.actionsForCheck('kiro-cli', homebrewAvailable)));
+    checks.push(await this.checkCommand('kiro-cli', 'Kiro CLI', ['kiro-cli', '--version'], false, 'Kiro CLI responded.', kiroCliRemediation(), this.actionsForCheck('kiro-cli', homebrewAvailable)));
     checks.push(await this.checkPandoc(homebrewAvailable));
     checks.push(await this.checkLibreOffice(homebrewAvailable));
     checks.push(this.checkUpdateChannel(install));
@@ -232,6 +269,19 @@ export class InstallDoctorService {
     }
   }
 
+  private async checkWindowsStartup(install: InstallStatus): Promise<InstallDoctorCheck | null> {
+    if (process.platform !== 'win32') return null;
+    if (install.startup?.kind === 'manual') {
+      return check('windows-logon-startup', 'Windows logon startup', 'ok', false, 'Logon startup is disabled for this install.', undefined, 'Rerun the Windows installer without -NoAutoStart to enable startup on login.');
+    }
+    const taskName = install.startup?.name || 'AgentCockpit';
+    const result = await this.commandRunner('schtasks.exe', ['/Query', '/TN', taskName], { cwd: this.appRoot, timeoutMs: 5_000 });
+    if (result.ok) {
+      return check('windows-logon-startup', 'Windows logon startup', 'ok', false, 'Agent Cockpit is registered to start when this Windows user logs in.', firstLine(result.stdout) || taskName);
+    }
+    return check('windows-logon-startup', 'Windows logon startup', 'warning', false, 'Agent Cockpit is not registered to start on Windows login.', result.error || firstLine(result.stderr) || firstLine(result.stdout), 'Rerun the Windows installer to repair the current-user ONLOGON scheduled task.');
+  }
+
   private checkBuildAsset(id: string, label: string, relPath: string, required: boolean): InstallDoctorCheck {
     const assetPath = path.join(this.appRoot, relPath);
     if (fs.existsSync(assetPath)) {
@@ -247,7 +297,7 @@ export class InstallDoctorService {
     if (status.available) {
       return check('pandoc', 'Pandoc', 'ok', false, status.version ? `Pandoc ${status.version} is available.` : 'Pandoc is available.', status.binaryPath || undefined);
     }
-    return check('pandoc', 'Pandoc', 'warning', false, 'Pandoc is not installed.', undefined, PANDOC_REMEDIATION, this.actionsForCheck('pandoc', homebrewAvailable));
+    return check('pandoc', 'Pandoc', 'warning', false, 'Pandoc is not installed.', undefined, pandocRemediation(), this.actionsForCheck('pandoc', homebrewAvailable));
   }
 
   private async checkLibreOffice(homebrewAvailable: boolean): Promise<InstallDoctorCheck> {
@@ -255,7 +305,7 @@ export class InstallDoctorService {
     if (status.available) {
       return check('libreoffice', 'LibreOffice', 'ok', false, 'LibreOffice is available.', status.binaryPath || undefined);
     }
-    return check('libreoffice', 'LibreOffice', 'warning', false, 'LibreOffice is not installed.', undefined, LIBREOFFICE_REMEDIATION, this.actionsForCheck('libreoffice', homebrewAvailable));
+    return check('libreoffice', 'LibreOffice', 'warning', false, 'LibreOffice is not installed.', undefined, libreOfficeRemediation(), this.actionsForCheck('libreoffice', homebrewAvailable));
   }
 
   private checkUpdateChannel(install: InstallStatus): InstallDoctorCheck {
@@ -298,25 +348,29 @@ export class InstallDoctorService {
   }
 
   private actionDefinitions(homebrewAvailable: boolean): Map<string, InstallActionDefinition> {
+    const npmCommand = platformCommand('npm');
     const definitions: InstallActionDefinition[] = [
       {
-        action: { id: 'claude-cli:npm-install', kind: 'command', label: 'Install Claude Code', description: 'Installs the Claude Code CLI with npm.', command: ['npm', 'i', '-g', '@anthropic-ai/claude-code@latest'] },
-        command: ['npm', 'i', '-g', '@anthropic-ai/claude-code@latest'],
+        action: { id: 'claude-cli:npm-install', kind: 'command', label: 'Install Claude Code', description: 'Installs the Claude Code CLI with npm.', command: [npmCommand, 'i', '-g', '@anthropic-ai/claude-code@latest'] },
+        command: [npmCommand, 'i', '-g', '@anthropic-ai/claude-code@latest'],
       },
       { action: { id: 'claude-cli:docs', kind: 'link', label: 'Open docs', href: 'https://code.claude.com/docs/en/setup' } },
       {
-        action: { id: 'codex-cli:npm-install', kind: 'command', label: 'Install Codex', description: 'Installs the Codex CLI with npm.', command: ['npm', 'i', '-g', '@openai/codex@latest'] },
-        command: ['npm', 'i', '-g', '@openai/codex@latest'],
+        action: { id: 'codex-cli:npm-install', kind: 'command', label: 'Install Codex', description: 'Installs the Codex CLI with npm.', command: [npmCommand, 'i', '-g', '@openai/codex@latest'] },
+        command: [npmCommand, 'i', '-g', '@openai/codex@latest'],
       },
       { action: { id: 'codex-cli:docs', kind: 'link', label: 'Open docs', href: 'https://github.com/openai/codex' } },
-      {
-        action: { id: 'kiro-cli:official-install', kind: 'command', label: 'Install Kiro', description: 'Runs the official Kiro CLI installer.', command: ['sh', '-c', 'curl -fsSL https://cli.kiro.dev/install | bash'] },
-        command: ['sh', '-c', 'curl -fsSL https://cli.kiro.dev/install | bash'],
-      },
       { action: { id: 'kiro-cli:docs', kind: 'link', label: 'Open docs', href: 'https://kiro.dev/docs/cli/installation/' } },
       { action: { id: 'pandoc:official-download', kind: 'link', label: 'Open installer', href: 'https://pandoc.org/installing.html' } },
       { action: { id: 'libreoffice:official-download', kind: 'link', label: 'Open download', href: 'https://www.libreoffice.org/download/download-libreoffice/' } },
     ];
+
+    if (process.platform !== 'win32') {
+      definitions.push({
+        action: { id: 'kiro-cli:official-install', kind: 'command', label: 'Install Kiro', description: 'Runs the official Kiro CLI installer.', command: ['sh', '-c', 'curl -fsSL https://cli.kiro.dev/install | bash'] },
+        command: ['sh', '-c', 'curl -fsSL https://cli.kiro.dev/install | bash'],
+      });
+    }
 
     if (homebrewAvailable) {
       definitions.push({

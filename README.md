@@ -137,9 +137,9 @@ Beyond the core, Agent Cockpit also ships with:
 
 ## Prerequisites
 
-- Node.js 22+ (declared in `engines`) for manual development installs. The macOS
-  release installer can install a private Node.js runtime automatically when
-  Node/npm are missing.
+- Node.js 22+ (declared in `engines`) for manual development installs. The
+  macOS and Windows release installers can install a private Node.js runtime
+  automatically when Node/npm are missing.
 - At least one CLI backend installed and authenticated on the same machine:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code) (`claude`)
   - [Kiro CLI](https://kiro.dev) (`kiro-cli`)
@@ -164,6 +164,27 @@ Production installs update from GitHub Releases. Dev installs track `main`:
 ```bash
 bash /tmp/install-agent-cockpit.sh --channel dev
 ```
+
+## Windows Install
+
+The supported Windows production path is a per-user PowerShell installer. It
+installs under `%LOCALAPPDATA%\Agent Cockpit`, verifies GitHub Release
+checksums, installs a private Node.js runtime when needed, uses install-local
+PM2 state, registers a current-user logon scheduled task, starts Agent Cockpit,
+and opens first-run owner setup in the browser.
+
+```powershell
+powershell -ExecutionPolicy Bypass -NoProfile -Command "iwr https://github.com/daronyondem/agent-cockpit/releases/latest/download/install-windows.ps1 -OutFile $env:TEMP\install-agent-cockpit.ps1; & $env:TEMP\install-agent-cockpit.ps1 -Channel production"
+```
+
+Dev installs track `main`:
+
+```powershell
+& $env:TEMP\install-agent-cockpit.ps1 -Channel dev
+```
+
+The Windows installer is intentionally user-logon based. It does not install a
+Windows Service and does not run before any Windows user has logged in.
 
 ## Developer Quick Start
 

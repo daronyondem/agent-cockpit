@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import crypto from 'crypto';
+import dotenv from 'dotenv';
 
 // ── Mock child_process.execFile ─────────────────────────────────────────────
 
@@ -108,6 +109,16 @@ function mockProcessPlatform(platform: NodeJS.Platform): () => void {
   };
 }
 
+function isCmdShimCall(cmd: string, args: string[], shim: string): boolean {
+  return cmd === 'cmd.exe' && args.includes('/c') && String(args[args.length - 1]).includes(shim);
+}
+
+function cmdShimOutDir(cmd: string, args: string[]): string | null {
+  if (cmd !== 'cmd.exe') return null;
+  const match = String(args[args.length - 1]).match(/"--outDir"\s+"([^"]+)"/);
+  return match?.[1] || null;
+}
+
 function makeProductionInstall(rootPrefix = 'agent-cockpit-install-') {
   const installDir = fs.mkdtempSync(path.join(os.tmpdir(), rootPrefix));
   const releasesDir = path.join(installDir, 'releases');
@@ -168,6 +179,69 @@ function makeReleaseFixture(version = '1.1.0', minimumNodeMajor = 22) {
   const manifestSha = crypto.createHash('sha256').update(manifestRaw).digest('hex');
   const checksumsRaw = `${manifestSha}  release-manifest.json\n${tarballSha}  ${tarballName}\n`;
   return { manifest, manifestRaw, manifestSha, tarballName, tarballBytes, tarballSha, checksumsRaw };
+}
+
+function makeWindowsProductionInstall(rootPrefix = 'agent-cockpit-win-install-') {
+  const installDir = fs.mkdtempSync(path.join(os.tmpdir(), rootPrefix));
+  const releasesDir = path.join(installDir, 'releases');
+  const previousDir = path.join(releasesDir, 'agent-cockpit-v1.0.0');
+  const dataDir = path.join(installDir, 'data');
+
+  writeJson(path.join(previousDir, 'package.json'), { version: '1.0.0' });
+  writeText(path.join(previousDir, '.env'), 'PORT=4444\nSESSION_SECRET=old-secret\nAUTH_SETUP_TOKEN=old-token\n');
+  writeText(path.join(previousDir, 'ecosystem.config.js'), "module.exports = { apps: [{ name: 'agent-cockpit' }] };\n");
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  const status = {
+    schemaVersion: 1 as const,
+    channel: 'production' as const,
+    source: 'github-release' as const,
+    repo: 'daronyondem/agent-cockpit',
+    version: '1.0.0',
+    branch: null,
+    installDir,
+    appDir: previousDir,
+    dataDir,
+    installedAt: '2026-05-15T00:00:00.000Z',
+    welcomeCompletedAt: null,
+    nodeRuntime: null,
+    startup: { kind: 'scheduled-task' as const, name: 'AgentCockpit', scope: 'current-user' as const },
+    stateSource: 'stored' as const,
+    stateError: null,
+  };
+
+  return { installDir, releasesDir, previousDir, dataDir, status };
+}
+
+function makeWindowsReleaseFixture(version = '1.1.0', minimumNodeMajor = 22) {
+  const zipName = `agent-cockpit-v${version}.zip`;
+  const zipBytes = Buffer.from(`release zip ${version}`);
+  const zipSha = crypto.createHash('sha256').update(zipBytes).digest('hex');
+  const manifest = {
+    schemaVersion: 1,
+    version,
+    packageRoot: `agent-cockpit-v${version}`,
+    requiredRuntime: {
+      node: {
+        engine: `>=${minimumNodeMajor}`,
+        minimumMajor: minimumNodeMajor,
+      },
+    },
+    artifacts: [
+      {
+        name: zipName,
+        role: 'app-zip',
+        platform: 'win32',
+        format: 'zip',
+        size: zipBytes.length,
+        sha256: zipSha,
+      },
+    ],
+  };
+  const manifestRaw = JSON.stringify(manifest);
+  const manifestSha = crypto.createHash('sha256').update(manifestRaw).digest('hex');
+  const checksumsRaw = `${manifestSha}  release-manifest.json\n${zipSha}  ${zipName}\n`;
+  return { manifest, manifestRaw, manifestSha, zipName, zipBytes, zipSha, checksumsRaw };
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -248,6 +322,25 @@ describe('UpdateService', () => {
     test('handles different segment counts', () => {
       expect((service as any)._isNewer('0.1.5.1', '0.1.5')).toBe(true);
       expect((service as any)._isNewer('0.1.5', '0.1.5.1')).toBe(false);
+    });
+  });
+
+  describe('Windows command shims', () => {
+    test('runs .cmd files through cmd.exe for execFile compatibility', async () => {
+      const restorePlatform = mockProcessPlatform('win32');
+      try {
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          expect(cmd).toBe('cmd.exe');
+          expect(args.slice(0, 3)).toEqual(['/d', '/s', '/c']);
+          expect(args[3]).toContain('"C:\\Program Files\\node\\npm.cmd"');
+          expect(args[3]).toContain('"mobile/AgentCockpitPWA"');
+          cb(null, 'ok\n', '');
+        });
+
+        await expect((service as any)._exec('C:\\Program Files\\node\\npm.cmd', ['--prefix', 'mobile/AgentCockpitPWA', 'ci'])).resolves.toBe('ok\n');
+      } finally {
+        restorePlatform();
+      }
     });
   });
 
@@ -1007,7 +1100,7 @@ describe('UpdateService', () => {
         expect(fs.realpathSync(install.currentLink)).toBe(fs.realpathSync(path.join(install.releasesDir, 'agent-cockpit-v1.1.0')));
         const finalEnv = originalReadFileSync(path.join(fs.realpathSync(install.currentLink), '.env'), 'utf8');
         const finalEcosystem = originalReadFileSync(path.join(fs.realpathSync(install.currentLink), 'ecosystem.config.js'), 'utf8');
-        expect(finalEnv).toContain(`PATH="${path.join(install.installDir, 'runtime', 'node', 'bin')}`);
+        expect(finalEnv).toContain('PATH=`' + path.join(install.installDir, 'runtime', 'node', 'bin'));
         expect(finalEcosystem).toContain(`"PATH": "${path.join(install.installDir, 'runtime', 'node', 'bin')}`);
       } finally {
         restorePlatform();
@@ -1056,6 +1149,324 @@ describe('UpdateService', () => {
         expect(mockSpawnFn).not.toHaveBeenCalled();
       } finally {
         fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('applies a Windows production update with ZIP activation and PowerShell rollback script', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('win32');
+      const install = makeWindowsProductionInstall();
+      const release = makeWindowsReleaseFixture('1.1.0');
+      const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
+      try {
+        service = new UpdateService(install.previousDir, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+            writeState,
+          },
+        });
+        jest.spyOn(service as any, '_downloadToFile').mockImplementation(async (...args: unknown[]) => {
+          const [url, dest] = args as [string, string];
+          if (url.endsWith('/release-manifest.json')) {
+            writeText(dest, release.manifestRaw);
+            return;
+          }
+          if (url.endsWith('/SHA256SUMS')) {
+            writeText(dest, release.checksumsRaw);
+            return;
+          }
+          if (url.endsWith(`/${release.zipName}`)) {
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            originalWriteFileSync(dest, release.zipBytes);
+            return;
+          }
+          throw new Error(`unexpected download ${url}`);
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'powershell.exe' && String(args).includes('Expand-Archive')) {
+            const command = String(args[args.length - 1]);
+            const match = command.match(/-DestinationPath '([^']+)'/);
+            const extractDir = match ? match[1] : '';
+            const packageDir = path.join(extractDir, release.manifest.packageRoot);
+            writeText(path.join(packageDir, 'server.ts'), 'console.log("server");\n');
+            writeJson(path.join(packageDir, 'package.json'), { version: '1.1.0' });
+            writeText(path.join(packageDir, 'public/v2-built/index.html'), '<!doctype html>\n');
+            writeText(path.join(packageDir, 'public/mobile-built/index.html'), '<!doctype html>\n');
+            cb(null, 'expanded\n', '');
+            return;
+          }
+          if (cmd === 'git' && args[0] === 'rev-parse') {
+            cb(null, 'abc123\n', '');
+            return;
+          }
+          if (cmd === 'npm' || isCmdShimCall(cmd, args, 'npm.cmd')) {
+            const outDirIndex = args.indexOf('--outDir');
+            if (outDirIndex >= 0) {
+              writeText(path.join(String(args[outDirIndex + 1]), 'index.html'), '<!doctype html>\n');
+              cb(null, 'built\n', '');
+              return;
+            }
+            const outDir = cmdShimOutDir(cmd, args);
+            if (outDir) {
+              writeText(path.join(outDir, 'index.html'), '<!doctype html>\n');
+              cb(null, 'built\n', '');
+              return;
+            }
+            cb(null, 'ok\n', '');
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+        expect(result.success).toBe(true);
+        expect(mockExecFileFn.mock.calls.some(([cmd, args]) => isCmdShimCall(String(cmd), args as string[], 'npm.cmd'))).toBe(true);
+        expect(result.steps.map(step => step.name)).toEqual([
+          'download release manifest',
+          'download release zip',
+          'extract release zip',
+          'verify Node.js runtime',
+          'npm ci',
+          'npm --prefix mobile/AgentCockpitPWA ci',
+          'npm run web:build',
+          'npm run mobile:build',
+          'verify release assets',
+          'copy runtime config',
+          'activate release',
+          'write install manifest',
+          'pm2 restart',
+        ]);
+        const finalDir = path.join(install.releasesDir, 'agent-cockpit-v1.1.0');
+        expect(writeState).toHaveBeenCalledWith(expect.objectContaining({
+          channel: 'production',
+          source: 'github-release',
+          version: '1.1.0',
+          appDir: finalDir,
+          startup: install.status.startup,
+        }));
+        const finalEcosystem = originalReadFileSync(path.join(finalDir, 'ecosystem.config.js'), 'utf8');
+        expect(finalEcosystem).toContain('node_modules/tsx/dist/cli.mjs');
+        expect(finalEcosystem).toContain('"args": "server.ts"');
+        const restartPath = path.join(install.dataDir, 'restart.ps1');
+        const restartScript = originalReadFileSync(restartPath, 'utf8');
+        expect(restartScript).toContain('Invoke-WebRequest -UseBasicParsing');
+        expect(restartScript).toContain('Set-Content -Path');
+        expect(restartScript).toContain(path.join(install.previousDir, 'ecosystem.config.js'));
+        expect(mockSpawnFn).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining(['-File', restartPath]), expect.objectContaining({
+          cwd: finalDir,
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+        }));
+      } finally {
+        restorePlatform();
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('installs a private Windows Node.js ZIP runtime when a production release requires it', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('win32');
+      const install = makeWindowsProductionInstall('agent-cockpit-win-node-');
+      const nodeVersion = '23.7.0';
+      const nodeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
+      const nodeArchiveName = `node-v${nodeVersion}-win-${nodeArch}.zip`;
+      const nodeBytes = Buffer.from('node zip');
+      const nodeSha = crypto.createHash('sha256').update(nodeBytes).digest('hex');
+      const checksumsRaw = `${nodeSha}  ${nodeArchiveName}\n`;
+      try {
+        service = new UpdateService(install.previousDir, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+          },
+        });
+        jest.spyOn(service as any, '_downloadText').mockResolvedValue(checksumsRaw);
+        jest.spyOn(service as any, '_downloadToFile').mockImplementation(async (...args: unknown[]) => {
+          const [, dest] = args as [string, string];
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          originalWriteFileSync(dest, nodeBytes);
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'powershell.exe' && String(args).includes('Expand-Archive')) {
+            const command = String(args[args.length - 1]);
+            const match = command.match(/-DestinationPath '([^']+)'/);
+            const extractDir = match ? match[1] : '';
+            writeText(path.join(extractDir, `node-v${nodeVersion}-win-${nodeArch}`, 'node.exe'), 'node\n');
+            writeText(path.join(extractDir, `node-v${nodeVersion}-win-${nodeArch}`, 'npm.cmd'), 'npm\n');
+            writeText(path.join(extractDir, `node-v${nodeVersion}-win-${nodeArch}`, 'npx.cmd'), 'npx\n');
+            cb(null, 'expanded node\n', '');
+            return;
+          }
+          if (isCmdShimCall(cmd, args, 'npm.cmd')) {
+            cb(null, '11.0.0\n', '');
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const steps: any[] = [];
+        const runtime = await (service as any)._installPrivateNodeRuntime(install.status, 23, steps);
+
+        expect(runtime).toEqual(expect.objectContaining({
+          source: 'private',
+          version: nodeVersion,
+          npmVersion: '11.0.0',
+          binDir: path.join(install.installDir, 'runtime', `node-v${nodeVersion}-win-${nodeArch}`),
+          runtimeDir: path.join(install.installDir, 'runtime', `node-v${nodeVersion}-win-${nodeArch}`),
+          requiredMajor: 23,
+        }));
+        expect(steps).toEqual(expect.arrayContaining([
+          expect.objectContaining({ name: 'install Node.js runtime', success: true }),
+        ]));
+      } finally {
+        restorePlatform();
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('uses the previous Windows runtime when rollback restarts the old release', () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('win32');
+      const install = makeWindowsProductionInstall('agent-cockpit-win-rollback-');
+      const nextDir = path.join(install.releasesDir, 'agent-cockpit-v1.1.0');
+      const oldRuntimeDir = path.join(install.installDir, 'runtime', 'node-v22.22.2-win-x64');
+      const newRuntimeDir = path.join(install.installDir, 'runtime', 'node-v23.7.0-win-x64');
+      writeText(path.join(nextDir, 'ecosystem.config.js'), "module.exports = { apps: [] };\n");
+      try {
+        service = new UpdateService(install.previousDir, {
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+          },
+        });
+
+        (service as any)._launchWindowsRestartScript({
+          appRoot: nextDir,
+          healthUrl: 'http://127.0.0.1:4444/api/chat/version',
+          rollbackTarget: install.previousDir,
+          rollbackInstallStatus: {
+            ...install.status,
+            nodeRuntime: {
+              source: 'private',
+              version: '22.22.2',
+              npmVersion: '10.9.0',
+              binDir: oldRuntimeDir,
+              runtimeDir: oldRuntimeDir,
+              requiredMajor: 22,
+              updatedAt: '2026-05-15T00:00:00.000Z',
+            },
+          },
+          nodeRuntime: {
+            source: 'private',
+            version: '23.7.0',
+            npmVersion: '11.0.0',
+            binDir: newRuntimeDir,
+            runtimeDir: newRuntimeDir,
+            requiredMajor: 23,
+            updatedAt: '2026-05-15T00:00:00.000Z',
+          },
+        });
+
+        const restartPath = path.join(install.dataDir, 'restart.ps1');
+        const restartScript = originalReadFileSync(restartPath, 'utf8');
+        expect(restartScript).toContain('function Invoke-CheckedNative');
+        expect(restartScript).toContain('$LASTEXITCODE');
+        expect(restartScript).toContain(path.join(newRuntimeDir, 'npx.cmd'));
+        expect(restartScript).toContain(path.join(oldRuntimeDir, 'npx.cmd'));
+        expect(restartScript).toContain(`$env:Path = '${oldRuntimeDir}' + ';' + $env:Path`);
+        expect(restartScript).toContain(`Invoke-CheckedNative '${path.join(oldRuntimeDir, 'npx.cmd')}' @('pm2', 'save')`);
+        expect(mockSpawnFn).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining(['-File', restartPath]), expect.objectContaining({
+          cwd: nextDir,
+          detached: true,
+          stdio: 'ignore',
+          windowsHide: true,
+        }));
+      } finally {
+        restorePlatform();
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('writes parseable Windows PM2 config with paths containing spaces', () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('win32');
+      const installDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent cockpit win config '));
+      const appDir = path.join(installDir, 'releases', 'agent cockpit v1.1.0');
+      const dataDir = path.join(installDir, 'data dir');
+      const runtimeDir = path.join(installDir, 'runtime', 'node v22 win x64');
+      try {
+        writeJson(path.join(appDir, 'package.json'), { version: '1.1.0' });
+        writeText(path.join(appDir, '.env'), 'PORT=4455\nSESSION_SECRET=secret with spaces\nAUTH_SETUP_TOKEN=token with spaces\n');
+        service = new UpdateService(appDir, {
+          dataRoot: dataDir,
+        });
+
+        (service as any)._writeWindowsEcosystemConfig(appDir, {
+          source: 'private',
+          version: '22.22.2',
+          npmVersion: '10.9.0',
+          binDir: runtimeDir,
+          runtimeDir,
+          requiredMajor: 22,
+          updatedAt: '2026-05-15T00:00:00.000Z',
+        }, { dataDir });
+
+        const source = originalReadFileSync(path.join(appDir, 'ecosystem.config.js'), 'utf8');
+        const mod: { exports: any } = { exports: {} };
+        new Function('module', 'exports', '__dirname', source)(mod, mod.exports, appDir);
+        const app = mod.exports.apps[0];
+        expect(app).toEqual(expect.objectContaining({
+          name: 'agent-cockpit',
+          script: 'node_modules/tsx/dist/cli.mjs',
+          args: 'server.ts',
+          interpreter: path.join(runtimeDir, 'node.exe'),
+          cwd: appDir,
+        }));
+        expect(app.env).toEqual(expect.objectContaining({
+          PORT: 4455,
+          SESSION_SECRET: 'secret with spaces',
+          AUTH_SETUP_TOKEN: 'token with spaces',
+          AGENT_COCKPIT_DATA_DIR: dataDir,
+          PM2_HOME: path.join(installDir, 'pm2'),
+        }));
+        expect(app.env.PATH.startsWith(`${runtimeDir};`)).toBe(true);
+      } finally {
+        restorePlatform();
+        fs.rmSync(installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('persists Windows private runtime PATH without dotenv escape corruption', () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('win32');
+      const appDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-win-dotenv-'));
+      const runtimeDir = String.raw`C:\Users\Name\AppData\Local\Agent Cockpit\runtime\node-v22.22.2-win-x64`;
+      try {
+        writeJson(path.join(appDir, 'package.json'), { version: '1.1.0' });
+        writeText(path.join(appDir, '.env'), `${String.raw`PORT=4455
+AGENT_COCKPIT_DATA_DIR='C:\Users\Name\AppData\Local\Agent Cockpit\data'`}
+`);
+        writeText(path.join(appDir, 'ecosystem.config.js'), 'module.exports = { apps: [{ name: "agent-cockpit", env: {} }] };\n');
+        service = new UpdateService(appDir, {
+          dataRoot: String.raw`C:\Users\Name\AppData\Local\Agent Cockpit\data`,
+        });
+
+        (service as any)._persistPrivateRuntimePath(appDir, runtimeDir);
+
+        const parsed = dotenv.parse(originalReadFileSync(path.join(appDir, '.env'), 'utf8'));
+        expect(parsed.PATH.startsWith(`${runtimeDir};`)).toBe(true);
+        expect(parsed.PATH).not.toContain('\r');
+        expect(parsed.PATH).not.toContain('\n');
+      } finally {
+        restorePlatform();
+        fs.rmSync(appDir, { recursive: true, force: true });
       }
     });
   });

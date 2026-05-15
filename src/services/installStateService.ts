@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { atomicWriteFile } from '../utils/atomicWrite';
-import type { InstallChannel, InstallNodeRuntime, InstallSource, InstallStateSource, InstallStatus } from '../types';
+import type { InstallChannel, InstallNodeRuntime, InstallSource, InstallStartup, InstallStateSource, InstallStatus } from '../types';
 
 const SCHEMA_VERSION = 1;
 const DEFAULT_REPO = 'daronyondem/agent-cockpit';
@@ -56,6 +56,16 @@ function normalizeNodeRuntime(value: unknown): InstallNodeRuntime | null {
     runtimeDir: stringOrNull(raw.runtimeDir),
     requiredMajor: numberOrNull(raw.requiredMajor),
     updatedAt: stringOrNull(raw.updatedAt),
+  };
+}
+
+function normalizeStartup(value: unknown): InstallStartup | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Partial<InstallStartup>;
+  return {
+    kind: raw.kind === 'scheduled-task' || raw.kind === 'manual' || raw.kind === 'unknown' ? raw.kind : 'unknown',
+    name: stringOrNull(raw.name),
+    scope: raw.scope === 'current-user' || raw.scope === 'unknown' ? raw.scope : 'unknown',
   };
 }
 
@@ -117,6 +127,7 @@ export class InstallStateService {
       installedAt: normalized.installedAt,
       welcomeCompletedAt: normalized.welcomeCompletedAt,
       nodeRuntime: normalized.nodeRuntime,
+      startup: normalized.startup,
     };
     await fs.promises.mkdir(path.dirname(this._manifestPath), { recursive: true });
     await atomicWriteFile(this._manifestPath, JSON.stringify(persisted, null, 2) + '\n');
@@ -145,6 +156,7 @@ export class InstallStateService {
       installedAt: stringOrNull(parsed.installedAt),
       welcomeCompletedAt: stringOrNull(parsed.welcomeCompletedAt),
       nodeRuntime: normalizeNodeRuntime(parsed.nodeRuntime),
+      startup: normalizeStartup(parsed.startup),
       stateSource: legacy ? 'legacy' : 'stored',
       stateError: null,
     };
@@ -164,6 +176,7 @@ export class InstallStateService {
       installedAt: null,
       welcomeCompletedAt: null,
       nodeRuntime: null,
+      startup: null,
       stateSource,
       stateError,
     };

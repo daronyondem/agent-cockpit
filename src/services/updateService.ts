@@ -23,6 +23,8 @@ interface UpdateInstallStateService {
 interface ReleaseManifestArtifact {
   name: string;
   role: string;
+  platform?: string;
+  format?: string;
   size?: number;
   sha256: string;
 }
@@ -65,8 +67,8 @@ export class UpdateService {
     this._appRoot = appRoot;
     this._dataRoot = opts.dataRoot || path.join(appRoot, 'data');
     this._installStateService = opts.installStateService || null;
-    this._webBuildService = opts.webBuildService || new WebBuildService(appRoot, { mode: 'auto' });
-    this._mobileBuildService = opts.mobileBuildService || new MobileBuildService(appRoot, { mode: 'auto' });
+    this._webBuildService = opts.webBuildService || this._createWebBuildService(appRoot, null);
+    this._mobileBuildService = opts.mobileBuildService || this._createMobileBuildService(appRoot, null);
     this._localVersion = require(path.join(appRoot, 'package.json')).version;
   }
 
@@ -128,6 +130,7 @@ export class UpdateService {
   }
 
   private async _triggerDevUpdate(steps: UpdateStep[]): Promise<UpdateResult> {
+      const npmCmd = this._npmCommand(this._installStateService?.getStatus().nodeRuntime || null);
       const statusOut = await this._exec('git', ['status', '--porcelain']);
       const significantChanges = statusOut.trim().split('\n').filter(line => {
         if (!line.trim()) return false;
@@ -170,7 +173,7 @@ export class UpdateService {
       }
 
       try {
-        const out = await this._exec('npm', ['install'], 120000);
+        const out = await this._exec(npmCmd, ['install'], 120000);
         steps.push({ name: 'npm install', success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: 'npm install', success: false, output: (err as Error).message });
@@ -178,7 +181,7 @@ export class UpdateService {
       }
 
       try {
-        const out = await this._exec('npm', ['--prefix', 'mobile/AgentCockpitPWA', 'install'], 120000);
+        const out = await this._exec(npmCmd, ['--prefix', 'mobile/AgentCockpitPWA', 'install'], 120000);
         steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA install', success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA install', success: false, output: (err as Error).message });
@@ -237,7 +240,7 @@ export class UpdateService {
             steps.push({ name: 'verify interpreter', success: true, output: `Found: ${interpreterPath}` });
           } else {
             try {
-              const resolved = await this._exec('which', [app.interpreter], 5000);
+              const resolved = await this._exec(process.platform === 'win32' ? 'where' : 'which', [app.interpreter], 5000);
               steps.push({ name: 'verify interpreter', success: true, output: `Found on PATH: ${resolved.trim()}` });
             } catch {
               steps.push({ name: 'verify interpreter', success: false, output: `Interpreter not found on PATH: ${app.interpreter}` });
@@ -261,7 +264,8 @@ export class UpdateService {
       return { success: false, steps, error: 'Production install manifest is missing installDir or appDir.' };
     }
 
-    const previousAppDir = fs.realpathSync(installStatus.appDir);
+    const isWindows = process.platform === 'win32';
+    const previousAppDir = isWindows ? installStatus.appDir : fs.realpathSync(installStatus.appDir);
     const currentLink = installStatus.appDir;
     const releasesDir = path.join(installStatus.installDir, 'releases');
     let switched = false;
@@ -274,9 +278,10 @@ export class UpdateService {
 
       const finalAppDir = await this._extractRelease(release.tarballPath, release.manifest.packageRoot, releasesDir, steps);
       const nodeRuntime = await this._ensureProductionNodeRuntime(installStatus, release.manifest, finalAppDir, steps);
+      const npmCmd = this._npmCommand(nodeRuntime);
 
       try {
-        const out = await this._exec('npm', ['ci'], 120000, finalAppDir);
+        const out = await this._exec(npmCmd, ['ci'], 120000, finalAppDir);
         steps.push({ name: 'npm ci', success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: 'npm ci', success: false, output: (err as Error).message });
@@ -284,7 +289,7 @@ export class UpdateService {
       }
 
       try {
-        const out = await this._exec('npm', ['--prefix', 'mobile/AgentCockpitPWA', 'ci'], 120000, finalAppDir);
+        const out = await this._exec(npmCmd, ['--prefix', 'mobile/AgentCockpitPWA', 'ci'], 120000, finalAppDir);
         steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA ci', success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA ci', success: false, output: (err as Error).message });
@@ -292,17 +297,23 @@ export class UpdateService {
       }
 
       try {
-        await this._ensureProductionBuilds(finalAppDir, steps);
+        await this._ensureProductionBuilds(finalAppDir, steps, nodeRuntime);
       } catch (err: unknown) {
         return { success: false, steps, error: (err as Error).message };
       }
 
-      this._copyRuntimeConfig(previousAppDir, finalAppDir, nodeRuntime);
+      this._copyRuntimeConfig(previousAppDir, finalAppDir, nodeRuntime, installStatus);
       steps.push({ name: 'copy runtime config', success: true, output: '.env and ecosystem.config.js copied' });
 
-      this._switchCurrentSymlink(currentLink, finalAppDir);
-      switched = true;
-      steps.push({ name: 'switch current release', success: true, output: `${currentLink} -> ${finalAppDir}` });
+      const nextAppDir = isWindows ? finalAppDir : currentLink;
+      if (isWindows) {
+        switched = true;
+        steps.push({ name: 'activate release', success: true, output: finalAppDir });
+      } else {
+        this._switchCurrentSymlink(currentLink, finalAppDir);
+        switched = true;
+        steps.push({ name: 'switch current release', success: true, output: `${currentLink} -> ${finalAppDir}` });
+      }
 
       if (this._installStateService?.writeState) {
         await this._installStateService.writeState({
@@ -312,25 +323,28 @@ export class UpdateService {
           version: release.manifest.version,
           branch: null,
           installDir: installStatus.installDir,
-          appDir: currentLink,
+          appDir: nextAppDir,
           dataDir: installStatus.dataDir,
           nodeRuntime,
+          startup: installStatus.startup,
         });
         steps.push({ name: 'write install manifest', success: true, output: `version ${release.manifest.version}` });
       }
 
       this._localVersion = release.manifest.version;
       this._launchRestartScript({
-        appRoot: currentLink,
+        appRoot: nextAppDir,
         healthUrl: this._healthUrl(finalAppDir),
-        currentLink,
+        currentLink: isWindows ? undefined : currentLink,
         rollbackTarget: previousAppDir,
+        rollbackInstallStatus: installStatus,
+        nodeRuntime,
       });
       steps.push({ name: 'pm2 restart', success: true, output: 'Restart script written and launched with health-check rollback' });
 
       return { success: true, steps };
     } catch (err: unknown) {
-      if (switched) {
+      if (switched && !isWindows) {
         try {
           this._switchCurrentSymlink(currentLink, previousAppDir);
         } catch {
@@ -381,7 +395,14 @@ export class UpdateService {
     healthUrl?: string;
     currentLink?: string;
     rollbackTarget?: string;
+    rollbackInstallStatus?: InstallStatus;
+    nodeRuntime?: InstallNodeRuntime | null;
   } = {}): void {
+    if (process.platform === 'win32') {
+      this._launchWindowsRestartScript(options);
+      return;
+    }
+
     const appRoot = options.appRoot || this._appRoot;
     const ecosystemPath = path.join(appRoot, 'ecosystem.config.js');
     const binDir = path.join(appRoot, 'node_modules', '.bin');
@@ -424,6 +445,94 @@ export class UpdateService {
       cwd: appRoot,
       stdio: 'ignore',
     });
+  }
+
+  private _launchWindowsRestartScript(options: {
+    appRoot?: string;
+    healthUrl?: string;
+    rollbackTarget?: string;
+    rollbackInstallStatus?: InstallStatus;
+    nodeRuntime?: InstallNodeRuntime | null;
+  } = {}): void {
+    const appRoot = options.appRoot || this._appRoot;
+    const ecosystemPath = path.join(appRoot, 'ecosystem.config.js');
+    const logFile = path.join(this._dataRoot, 'update-restart.log');
+    const scriptFile = path.join(this._dataRoot, 'restart.ps1');
+    const installJsonPath = path.join(this._dataRoot, 'install.json');
+    const nodeRuntime = options.nodeRuntime || this._installStateService?.getStatus().nodeRuntime || null;
+    const nodeBin = nodeRuntime?.binDir || path.join(appRoot, 'node_modules', '.bin');
+    const pm2Home = path.join(path.dirname(this._dataRoot), 'pm2');
+    const npxPath = this._windowsNpxCommand(nodeRuntime);
+    const scriptLines = [
+      'Set-StrictMode -Version Latest',
+      "$ErrorActionPreference = 'Stop'",
+      `Start-Transcript -Path ${this._psQuote(logFile)} -Append | Out-Null`,
+      'try {',
+      '  function Invoke-CheckedNative {',
+      '    param([string] $FilePath, [string[]] $Arguments, [switch] $AllowFailure)',
+      '    & $FilePath @Arguments',
+      '    $code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }',
+      '    if ($code -ne 0 -and -not $AllowFailure) {',
+      '      throw ("Command failed with exit code {0}: {1} {2}" -f $code, $FilePath, ($Arguments -join " "))',
+      '    }',
+      '    $global:LASTEXITCODE = 0',
+      '  }',
+      '  Start-Sleep -Seconds 2',
+      `  $env:PM2_HOME = ${this._psQuote(pm2Home)}`,
+      `  $env:Path = ${this._psQuote(nodeBin)} + ';' + $env:Path`,
+      `  Invoke-CheckedNative ${this._psQuote(npxPath)} @('pm2', 'delete', 'agent-cockpit') -AllowFailure`,
+      `  Invoke-CheckedNative ${this._psQuote(npxPath)} @('pm2', 'startOrRestart', ${this._psQuote(ecosystemPath)}, '--update-env')`,
+    ];
+    if (options.healthUrl) {
+      scriptLines.push(
+        '  $ok = $false',
+        '  for ($i = 0; $i -lt 20; $i++) {',
+        '    try {',
+        `      Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri ${this._psQuote(options.healthUrl)} | Out-Null`,
+        '      $ok = $true',
+        '      break',
+        '    } catch {',
+        '      Start-Sleep -Seconds 1',
+        '    }',
+        '  }',
+        '  if (-not $ok) {',
+      );
+      if (options.rollbackInstallStatus && options.rollbackTarget) {
+        const rollbackNodeRuntime = options.rollbackInstallStatus.nodeRuntime || null;
+        const rollbackNodeBin = rollbackNodeRuntime?.binDir || path.join(options.rollbackTarget, 'node_modules', '.bin');
+        const rollbackNpxPath = this._windowsNpxCommand(rollbackNodeRuntime);
+        scriptLines.push(
+          `    ${this._psWriteFileCommand(installJsonPath, JSON.stringify(this._persistedInstallStatus(options.rollbackInstallStatus), null, 2) + '\n')}`,
+          `    $env:Path = ${this._psQuote(rollbackNodeBin)} + ';' + $env:Path`,
+          `    Invoke-CheckedNative ${this._psQuote(rollbackNpxPath)} @('pm2', 'delete', 'agent-cockpit') -AllowFailure`,
+          `    Invoke-CheckedNative ${this._psQuote(rollbackNpxPath)} @('pm2', 'startOrRestart', ${this._psQuote(path.join(options.rollbackTarget, 'ecosystem.config.js'))}, '--update-env')`,
+          `    Invoke-CheckedNative ${this._psQuote(rollbackNpxPath)} @('pm2', 'save')`,
+        );
+      }
+      scriptLines.push(
+        '    exit 1',
+        '  }',
+      );
+    }
+    scriptLines.push(
+      `  Invoke-CheckedNative ${this._psQuote(npxPath)} @('pm2', 'save')`,
+      '} finally {',
+      '  Stop-Transcript | Out-Null',
+      '}',
+    );
+    fs.mkdirSync(this._dataRoot, { recursive: true });
+    fs.writeFileSync(scriptFile, scriptLines.join('\r\n'));
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptFile], {
+      cwd: appRoot,
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: true,
+    });
+    child.unref();
+  }
+
+  private _windowsNpxCommand(nodeRuntime: InstallNodeRuntime | null): string {
+    return nodeRuntime?.binDir ? path.join(nodeRuntime.binDir, 'npx.cmd') : 'npx.cmd';
   }
 
   private async _checkRemoteVersion(): Promise<void> {
@@ -543,13 +652,23 @@ export class UpdateService {
   private _privateNodeRuntime(installStatus: InstallStatus): { runtimeRoot: string; runtimeDir: string; binDir: string; nodePath: string } {
     const installDir = installStatus.installDir || path.dirname(this._appRoot);
     const runtimeRoot = path.join(installDir, 'runtime');
+    if (process.platform === 'win32' && installStatus.nodeRuntime?.source === 'private' && installStatus.nodeRuntime.runtimeDir) {
+      const runtimeDir = installStatus.nodeRuntime.runtimeDir;
+      const binDir = installStatus.nodeRuntime.binDir || runtimeDir;
+      return {
+        runtimeRoot,
+        runtimeDir,
+        binDir,
+        nodePath: path.join(binDir, 'node.exe'),
+      };
+    }
     const runtimeDir = path.join(runtimeRoot, 'node');
-    const binDir = path.join(runtimeDir, 'bin');
+    const binDir = process.platform === 'win32' ? runtimeDir : path.join(runtimeDir, 'bin');
     return {
       runtimeRoot,
       runtimeDir,
       binDir,
-      nodePath: path.join(binDir, 'node'),
+      nodePath: path.join(binDir, process.platform === 'win32' ? 'node.exe' : 'node'),
     };
   }
 
@@ -557,38 +676,54 @@ export class UpdateService {
     if (!installStatus.installDir) {
       throw new Error('Production install manifest is missing installDir; cannot update private Node.js runtime.');
     }
-    if (process.platform !== 'darwin') {
-      throw new Error('Private Node.js runtime updates are currently supported on macOS only.');
+    if (process.platform !== 'darwin' && process.platform !== 'win32') {
+      throw new Error('Private Node.js runtime updates are currently supported on macOS and Windows only.');
     }
 
     const nodeArch = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'x64' : null;
-    if (!nodeArch) throw new Error(`Unsupported macOS CPU architecture for Node.js runtime update: ${process.arch}`);
+    if (!nodeArch) throw new Error(`Unsupported CPU architecture for Node.js runtime update: ${process.arch}`);
 
     const runtime = this._privateNodeRuntime(installStatus);
     const downloadDir = fs.mkdtempSync(path.join(this._dataRoot, 'node-runtime-download-'));
     try {
       const base = `https://nodejs.org/dist/latest-v${requiredMajor}.x`;
-      const checksumsRaw = await this._exec('curl', ['-fsSL', `${base}/SHASUMS256.txt`], 30000);
-      const tarballName = this._findNodeTarballName(checksumsRaw, requiredMajor, nodeArch);
+      const checksumsRaw = await this._downloadText(`${base}/SHASUMS256.txt`, 30000);
+      const tarballName = this._findNodeRuntimeArchiveName(checksumsRaw, requiredMajor, nodeArch);
       const tarballPath = path.join(downloadDir, tarballName);
-      const tarballBytes = await this._execBuffer('curl', ['-fsSL', `${base}/${tarballName}`], 120000);
-      fs.writeFileSync(tarballPath, tarballBytes);
+      await this._downloadToFile(`${base}/${tarballName}`, tarballPath, 120000);
       this._verifyChecksum(tarballPath, tarballName, checksumsRaw);
 
-      const version = tarballName.replace(/^node-v/, '').replace(new RegExp(`-darwin-${nodeArch}[.]tar[.]gz$`), '');
+      const version = tarballName.replace(/^node-v/, '')
+        .replace(new RegExp(`-${process.platform === 'win32' ? 'win' : 'darwin'}-${nodeArch}[.](?:tar[.]gz|zip)$`), '');
       fs.mkdirSync(runtime.runtimeRoot, { recursive: true });
       const stagingParent = fs.mkdtempSync(path.join(runtime.runtimeRoot, '.node-extract-'));
       try {
-        await this._exec('tar', ['-xzf', tarballPath, '-C', stagingParent], 120000);
-        const extractedDir = path.join(stagingParent, `node-v${version}-darwin-${nodeArch}`);
-        const finalDir = path.join(runtime.runtimeRoot, `node-v${version}`);
+        if (process.platform === 'win32') {
+          await this._exec('powershell.exe', [
+            '-NoProfile',
+            '-ExecutionPolicy',
+            'Bypass',
+            '-Command',
+            `Expand-Archive -Path ${this._psQuote(tarballPath)} -DestinationPath ${this._psQuote(stagingParent)} -Force`,
+          ], 120000);
+        } else {
+          await this._exec('tar', ['-xzf', tarballPath, '-C', stagingParent], 120000);
+        }
+        const extractedDir = path.join(stagingParent, `node-v${version}-${process.platform === 'win32' ? 'win' : 'darwin'}-${nodeArch}`);
+        const finalDir = path.join(runtime.runtimeRoot, process.platform === 'win32' ? `node-v${version}-win-${nodeArch}` : `node-v${version}`);
         fs.rmSync(finalDir, { recursive: true, force: true });
         fs.renameSync(extractedDir, finalDir);
-        if (fs.existsSync(runtime.runtimeDir) && !fs.lstatSync(runtime.runtimeDir).isSymbolicLink()) {
-          throw new Error(`${runtime.runtimeDir} exists and is not a symlink.`);
+        if (process.platform === 'win32') {
+          runtime.runtimeDir = finalDir;
+          runtime.binDir = finalDir;
+          runtime.nodePath = path.join(finalDir, 'node.exe');
+        } else {
+          if (fs.existsSync(runtime.runtimeDir) && !fs.lstatSync(runtime.runtimeDir).isSymbolicLink()) {
+            throw new Error(`${runtime.runtimeDir} exists and is not a symlink.`);
+          }
+          fs.rmSync(runtime.runtimeDir, { force: true });
+          fs.symlinkSync(finalDir, runtime.runtimeDir);
         }
-        fs.rmSync(runtime.runtimeDir, { force: true });
-        fs.symlinkSync(finalDir, runtime.runtimeDir);
       } finally {
         fs.rmSync(stagingParent, { recursive: true, force: true });
       }
@@ -617,13 +752,15 @@ export class UpdateService {
     }
   }
 
-  private _findNodeTarballName(checksumsRaw: string, requiredMajor: number, nodeArch: string): string {
-    const pattern = new RegExp(`^node-v${requiredMajor}[.][0-9]+[.][0-9]+-darwin-${nodeArch}[.]tar[.]gz$`);
+  private _findNodeRuntimeArchiveName(checksumsRaw: string, requiredMajor: number, nodeArch: string): string {
+    const platform = process.platform === 'win32' ? 'win' : 'darwin';
+    const extension = process.platform === 'win32' ? 'zip' : 'tar[.]gz';
+    const pattern = new RegExp(`^node-v${requiredMajor}[.][0-9]+[.][0-9]+-${platform}-${nodeArch}[.]${extension}$`);
     for (const line of checksumsRaw.split(/\r?\n/)) {
       const [, name] = line.trim().split(/\s+/);
       if (name && pattern.test(name)) return name;
     }
-    throw new Error(`Could not find a macOS ${nodeArch} Node.js ${requiredMajor} tarball in SHASUMS256.txt.`);
+    throw new Error(`Could not find a ${process.platform === 'win32' ? 'Windows' : 'macOS'} ${nodeArch} Node.js ${requiredMajor} archive in SHASUMS256.txt.`);
   }
 
   private _nodeMajor(version: string | null): number {
@@ -639,6 +776,15 @@ export class UpdateService {
   }
 
   private async _readPrivateNpmVersion(runtimeDir: string, binDir: string): Promise<string | null> {
+    if (process.platform === 'win32') {
+      const npmPath = path.join(binDir, 'npm.cmd');
+      if (!fs.existsSync(npmPath)) return null;
+      try {
+        return (await this._exec(npmPath, ['--version'], 5000)).trim() || null;
+      } catch {
+        return null;
+      }
+    }
     const nodePath = path.join(binDir, 'node');
     const npmCliPath = path.join(runtimeDir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js');
     if (!fs.existsSync(nodePath) || !fs.existsSync(npmCliPath)) return null;
@@ -650,7 +796,7 @@ export class UpdateService {
   }
 
   private async _downloadReleaseManifest(installStatus: InstallStatus): Promise<ReleaseManifest> {
-    const raw = await this._exec('curl', ['-fsSL', `${this._releaseDownloadBase(installStatus)}/release-manifest.json`], 30000);
+    const raw = await this._downloadText(`${this._releaseDownloadBase(installStatus)}/release-manifest.json`, 30000);
     return this._parseReleaseManifest(raw);
   }
 
@@ -662,26 +808,25 @@ export class UpdateService {
     const checksumsPath = path.join(downloadDir, 'SHA256SUMS');
     fs.mkdirSync(downloadDir, { recursive: true });
 
-    const manifestRaw = await this._exec('curl', ['-fsSL', `${base}/release-manifest.json`], 30000);
-    fs.writeFileSync(manifestPath, manifestRaw);
-    const checksumsRaw = await this._exec('curl', ['-fsSL', `${base}/SHA256SUMS`], 30000);
-    fs.writeFileSync(checksumsPath, checksumsRaw);
+    await this._downloadToFile(`${base}/release-manifest.json`, manifestPath, 30000);
+    const manifestRaw = fs.readFileSync(manifestPath, 'utf8');
+    await this._downloadToFile(`${base}/SHA256SUMS`, checksumsPath, 30000);
+    const checksumsRaw = fs.readFileSync(checksumsPath, 'utf8');
     this._verifyChecksum(manifestPath, 'release-manifest.json', checksumsRaw);
     const manifest = this._parseReleaseManifest(manifestRaw);
     steps.push({ name: 'download release manifest', success: true, output: `version ${manifest.version}` });
 
-    const tarball = manifest.artifacts.find(artifact => artifact.role === 'app-tarball');
-    if (!tarball) throw new Error('Release manifest does not include an app-tarball artifact.');
+    const tarball = this._selectReleaseArchive(manifest);
+    if (!tarball) throw new Error(`Release manifest does not include a ${process.platform === 'win32' ? 'Windows app ZIP' : 'macOS app tarball'} artifact.`);
 
     const tarballPath = path.join(downloadDir, tarball.name);
-    const tarballBytes = await this._execBuffer('curl', ['-fsSL', `${base}/${tarball.name}`], 120000);
-    fs.writeFileSync(tarballPath, tarballBytes);
+    await this._downloadToFile(`${base}/${tarball.name}`, tarballPath, 120000);
     this._verifyChecksum(tarballPath, tarball.name, checksumsRaw);
     const actualSha = this._sha256File(tarballPath);
     if (tarball.sha256 && actualSha !== tarball.sha256) {
       throw new Error(`Release manifest checksum mismatch for ${tarball.name}`);
     }
-    steps.push({ name: 'download release tarball', success: true, output: tarball.name });
+    steps.push({ name: process.platform === 'win32' ? 'download release zip' : 'download release tarball', success: true, output: tarball.name });
     return { manifest, tarballPath };
   }
 
@@ -691,6 +836,45 @@ export class UpdateService {
       throw new Error('Invalid release manifest.');
     }
     return parsed as ReleaseManifest;
+  }
+
+  private _selectReleaseArchive(manifest: ReleaseManifest): ReleaseManifestArtifact | undefined {
+    if (process.platform === 'win32') {
+      return manifest.artifacts.find(artifact =>
+        artifact.role === 'app-zip'
+        || (artifact.platform === 'win32' && artifact.format === 'zip')
+      );
+    }
+    return manifest.artifacts.find(artifact => artifact.role === 'app-tarball');
+  }
+
+  private async _downloadText(url: string, timeout = 30000): Promise<string> {
+    if (process.platform !== 'win32') {
+      return this._exec('curl', ['-fsSL', url], timeout);
+    }
+    fs.mkdirSync(this._dataRoot, { recursive: true });
+    const tempFile = path.join(this._dataRoot, `download-${crypto.randomBytes(8).toString('hex')}.txt`);
+    try {
+      await this._downloadToFile(url, tempFile, timeout);
+      return fs.readFileSync(tempFile, 'utf8');
+    } finally {
+      fs.rmSync(tempFile, { force: true });
+    }
+  }
+
+  private async _downloadToFile(url: string, dest: string, timeout = 30000): Promise<void> {
+    if (process.platform === 'win32') {
+      await this._exec('powershell.exe', [
+        '-NoProfile',
+        '-ExecutionPolicy',
+        'Bypass',
+        '-Command',
+        `Invoke-WebRequest -UseBasicParsing -Uri ${this._psQuote(url)} -OutFile ${this._psQuote(dest)}`,
+      ], timeout);
+      return;
+    }
+    const bytes = await this._execBuffer('curl', ['-fsSL', url], timeout);
+    fs.writeFileSync(dest, bytes);
   }
 
   private _verifyChecksum(filePath: string, fileName: string, checksums: string): void {
@@ -710,7 +894,17 @@ export class UpdateService {
     fs.mkdirSync(releasesDir, { recursive: true });
     const stagingParent = fs.mkdtempSync(path.join(releasesDir, '.extract-'));
     try {
-      await this._exec('tar', ['-xzf', tarballPath, '-C', stagingParent], 120000);
+      if (process.platform === 'win32') {
+        await this._exec('powershell.exe', [
+          '-NoProfile',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-Command',
+          `Expand-Archive -Path ${this._psQuote(tarballPath)} -DestinationPath ${this._psQuote(stagingParent)} -Force`,
+        ], 120000);
+      } else {
+        await this._exec('tar', ['-xzf', tarballPath, '-C', stagingParent], 120000);
+      }
       const extractedDir = path.join(stagingParent, packageRoot);
       if (!fs.existsSync(path.join(extractedDir, 'server.ts'))) {
         throw new Error('Extracted release is missing server.ts.');
@@ -718,7 +912,7 @@ export class UpdateService {
       const finalDir = path.join(releasesDir, packageRoot);
       fs.rmSync(finalDir, { recursive: true, force: true });
       fs.renameSync(extractedDir, finalDir);
-      steps.push({ name: 'extract release', success: true, output: finalDir });
+      steps.push({ name: process.platform === 'win32' ? 'extract release zip' : 'extract release', success: true, output: finalDir });
       return finalDir;
     } finally {
       fs.rmSync(stagingParent, { recursive: true, force: true });
@@ -733,9 +927,9 @@ export class UpdateService {
     }
   }
 
-  private async _ensureProductionBuilds(appDir: string, steps: UpdateStep[]): Promise<void> {
-    const webBuildService = new WebBuildService(appDir, { mode: 'auto' });
-    const mobileBuildService = new MobileBuildService(appDir, { mode: 'auto' });
+  private async _ensureProductionBuilds(appDir: string, steps: UpdateStep[], nodeRuntime: InstallNodeRuntime | null): Promise<void> {
+    const webBuildService = this._createWebBuildService(appDir, nodeRuntime);
+    const mobileBuildService = this._createMobileBuildService(appDir, nodeRuntime);
 
     const webBuild = await webBuildService.ensureBuilt();
     if (webBuild.error) {
@@ -765,16 +959,93 @@ export class UpdateService {
     steps.push({ name: 'verify release assets', success: true, output: 'Found public/v2-built and public/mobile-built' });
   }
 
-  private _copyRuntimeConfig(fromDir: string, toDir: string, nodeRuntime: InstallNodeRuntime | null): void {
-    for (const filename of ['.env', 'ecosystem.config.js']) {
-      const source = path.join(fromDir, filename);
-      if (!fs.existsSync(source)) {
-        throw new Error(`Current runtime config is missing ${filename}.`);
+  private _createWebBuildService(appRoot: string, nodeRuntime: InstallNodeRuntime | null): WebBuildService {
+    return new WebBuildService(appRoot, {
+      mode: 'auto',
+      buildCommand: (stagingDir: string) => ({
+        cmd: this._npmCommand(nodeRuntime),
+        args: ['run', 'web:build', '--', '--outDir', stagingDir],
+        cwd: appRoot,
+        timeout: 120000,
+      }),
+    });
+  }
+
+  private _createMobileBuildService(appRoot: string, nodeRuntime: InstallNodeRuntime | null): MobileBuildService {
+    return new MobileBuildService(appRoot, {
+      mode: 'auto',
+      buildCommand: (stagingDir: string) => ({
+        cmd: this._npmCommand(nodeRuntime),
+        args: ['--prefix', 'mobile/AgentCockpitPWA', 'run', 'build', '--', '--outDir', stagingDir],
+        cwd: appRoot,
+        timeout: 120000,
+      }),
+    });
+  }
+
+  private _npmCommand(nodeRuntime: InstallNodeRuntime | null = null): string {
+    if (process.platform !== 'win32') return 'npm';
+    if (nodeRuntime?.binDir) return path.join(nodeRuntime.binDir, 'npm.cmd');
+    return 'npm.cmd';
+  }
+
+  private _copyRuntimeConfig(fromDir: string, toDir: string, nodeRuntime: InstallNodeRuntime | null, installStatus?: InstallStatus): void {
+    const envSource = path.join(fromDir, '.env');
+    if (!fs.existsSync(envSource)) {
+      throw new Error('Current runtime config is missing .env.');
+    }
+    fs.copyFileSync(envSource, path.join(toDir, '.env'));
+
+    if (process.platform === 'win32') {
+      this._writeWindowsEcosystemConfig(toDir, nodeRuntime, installStatus);
+    } else {
+      const ecosystemSource = path.join(fromDir, 'ecosystem.config.js');
+      if (!fs.existsSync(ecosystemSource)) {
+        throw new Error('Current runtime config is missing ecosystem.config.js.');
       }
-      fs.copyFileSync(source, path.join(toDir, filename));
+      fs.copyFileSync(ecosystemSource, path.join(toDir, 'ecosystem.config.js'));
     }
     if (nodeRuntime?.source === 'private' && nodeRuntime.binDir) {
       this._persistPrivateRuntimePath(toDir, nodeRuntime.binDir);
+    }
+  }
+
+  private _writeWindowsEcosystemConfig(appDir: string, nodeRuntime: InstallNodeRuntime | null, installStatus?: InstallStatus): void {
+    const envPath = path.join(appDir, '.env');
+    const nodePath = nodeRuntime?.source === 'private' && nodeRuntime.binDir
+      ? path.join(nodeRuntime.binDir, 'node.exe')
+      : process.execPath;
+    const dataDir = installStatus?.dataDir || this._dataRoot;
+    const pm2Home = path.join(path.dirname(dataDir), 'pm2');
+    const config = {
+      apps: [{
+        name: 'agent-cockpit',
+        script: 'node_modules/tsx/dist/cli.mjs',
+        args: 'server.ts',
+        interpreter: nodePath,
+        cwd: appDir,
+        env: {
+          PORT: Number(this._readEnvValue(envPath, 'PORT')) || 3334,
+          SESSION_SECRET: this._readEnvValue(envPath, 'SESSION_SECRET') || '',
+          AUTH_SETUP_TOKEN: this._readEnvValue(envPath, 'AUTH_SETUP_TOKEN') || '',
+          AGENT_COCKPIT_DATA_DIR: dataDir,
+          WEB_BUILD_MODE: 'auto',
+          AUTH_ENABLE_LEGACY_OAUTH: 'false',
+          PM2_HOME: pm2Home,
+          PATH: nodeRuntime?.binDir ? this._runtimePath(nodeRuntime.binDir) : process.env.PATH || '',
+        },
+      }],
+    };
+    fs.writeFileSync(path.join(appDir, 'ecosystem.config.js'), `module.exports = ${JSON.stringify(config, null, 2)};\n`);
+  }
+
+  private _readEnvValue(envPath: string, name: string): string | null {
+    try {
+      const raw = fs.readFileSync(envPath, 'utf8');
+      const match = raw.match(new RegExp(`^${name}=(.+)$`, 'm'));
+      return match?.[1]?.trim().replace(/^['"]|['"]$/g, '') || null;
+    } catch {
+      return null;
     }
   }
 
@@ -782,7 +1053,7 @@ export class UpdateService {
     const runtimePath = this._runtimePath(binDir);
     const envPath = path.join(appDir, '.env');
     const envRaw = fs.readFileSync(envPath, 'utf8');
-    const envLine = `PATH="${this._escapeEnvValue(runtimePath)}"`;
+    const envLine = `PATH=${this._dotenvQuote(runtimePath)}`;
     const envNext = /^PATH=.*$/m.test(envRaw)
       ? envRaw.replace(/^PATH=.*$/m, envLine)
       : `${envRaw.replace(/\s*$/, '')}\n${envLine}\n`;
@@ -801,12 +1072,13 @@ export class UpdateService {
   }
 
   private _runtimePath(binDir: string): string {
-    const parts = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
-    return [binDir, ...parts.filter(part => part !== binDir)].join(path.delimiter);
+    const delimiter = process.platform === 'win32' ? ';' : path.delimiter;
+    const parts = (process.env.PATH || '').split(delimiter).filter(Boolean);
+    return [binDir, ...parts.filter(part => part !== binDir)].join(delimiter);
   }
 
-  private _escapeEnvValue(value: string): string {
-    return value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  private _dotenvQuote(value: string): string {
+    return `\`${value.replace(/`/g, '\\`')}\``;
   }
 
   private _switchCurrentSymlink(currentLink: string, target: string): void {
@@ -837,9 +1109,36 @@ export class UpdateService {
     return `http://127.0.0.1:${port}/api/chat/version`;
   }
 
+  private _psQuote(value: string): string {
+    return `'${value.replace(/'/g, "''")}'`;
+  }
+
+  private _psWriteFileCommand(filePath: string, content: string): string {
+    return `Set-Content -Path ${this._psQuote(filePath)} -Encoding UTF8 -Value ${this._psQuote(content)}`;
+  }
+
+  private _persistedInstallStatus(status: InstallStatus): Record<string, unknown> {
+    return {
+      schemaVersion: 1,
+      channel: status.channel,
+      source: status.source,
+      repo: status.repo,
+      version: status.version,
+      branch: status.branch,
+      installDir: status.installDir,
+      appDir: status.appDir,
+      dataDir: status.dataDir,
+      installedAt: status.installedAt,
+      welcomeCompletedAt: status.welcomeCompletedAt,
+      nodeRuntime: status.nodeRuntime,
+      startup: status.startup,
+    };
+  }
+
   private _exec(cmd: string, args: string[], timeout = 30000, cwd = this._appRoot): Promise<string> {
     return new Promise((resolve, reject) => {
-      execFile(cmd, args, { cwd, timeout, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
+      const command = this._resolveExecCommand(cmd, args);
+      execFile(command.cmd, command.args, { cwd, timeout, maxBuffer: 5 * 1024 * 1024 }, (err, stdout, stderr) => {
         if (err) {
           reject(new Error(stderr || err.message));
         } else {
@@ -851,7 +1150,8 @@ export class UpdateService {
 
   private _execBuffer(cmd: string, args: string[], timeout = 30000, cwd = this._appRoot): Promise<Buffer> {
     return new Promise((resolve, reject) => {
-      execFile(cmd, args, { cwd, timeout, maxBuffer: 100 * 1024 * 1024, encoding: 'buffer' }, (err, stdout, stderr) => {
+      const command = this._resolveExecCommand(cmd, args);
+      execFile(command.cmd, command.args, { cwd, timeout, maxBuffer: 100 * 1024 * 1024, encoding: 'buffer' }, (err, stdout, stderr) => {
         if (err) {
           reject(new Error(stderr?.toString() || err.message));
         } else {
@@ -859,6 +1159,20 @@ export class UpdateService {
         }
       });
     });
+  }
+
+  private _resolveExecCommand(cmd: string, args: string[]): { cmd: string; args: string[] } {
+    if (process.platform !== 'win32' || !/[.](?:cmd|bat)$/i.test(cmd)) {
+      return { cmd, args };
+    }
+    return {
+      cmd: 'cmd.exe',
+      args: ['/d', '/s', '/c', [cmd, ...args].map(this._windowsCmdQuote).join(' ')],
+    };
+  }
+
+  private _windowsCmdQuote(value: string): string {
+    return `"${value.replace(/"/g, '\\"')}"`;
   }
 
   private _isNewer(remote: string | null, local: string): boolean {

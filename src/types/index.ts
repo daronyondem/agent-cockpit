@@ -1835,6 +1835,12 @@ export interface InstallNodeRuntime {
   updatedAt: string | null;
 }
 
+export interface InstallStartup {
+  kind: 'scheduled-task' | 'manual' | 'unknown';
+  name: string | null;
+  scope: 'current-user' | 'unknown';
+}
+
 export interface InstallStatus {
   schemaVersion: 1;
   channel: InstallChannel;
@@ -1848,6 +1854,7 @@ export interface InstallStatus {
   installedAt: string | null;
   welcomeCompletedAt: string | null;
   nodeRuntime: InstallNodeRuntime | null;
+  startup?: InstallStartup | null;
   stateSource: InstallStateSource;
   stateError: string | null;
 }

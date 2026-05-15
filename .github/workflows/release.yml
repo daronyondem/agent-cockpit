@@ -17,9 +17,82 @@ on:
         required: true
         default: false
         type: boolean
+      smoke_only:
+        description: Run pre-publish validation without creating a GitHub Release.
+        required: true
+        default: false
+        type: boolean
 
 jobs:
+  windows-smoke:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm --prefix mobile/AgentCockpitPWA ci
+      - run: npm run typecheck
+      - run: npm run web:typecheck
+      - run: npm run web:build
+      - run: npm run web:budget
+      - run: npm run mobile:typecheck
+      - run: npm run mobile:build
+      - run: npm test -- --runInBand test/windowsInstallerScript.test.ts test/installDoctorService.test.ts test/installStateService.test.ts
+      - run: npm test -- --runInBand test/updateService.test.ts -t Windows
+
+      - name: Parse Windows installer
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path "scripts/install-windows.ps1"), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error ("{0}:{1} {2}" -f $_.Extent.StartLineNumber, $_.Extent.StartColumnNumber, $_.Message) }
+            exit 1
+          }
+
+      - name: Package release on Windows
+        shell: pwsh
+        run: |
+          npm run release:package -- --version 0.0.0-windows-smoke --source-ref "${{ inputs.source_ref }}" --commit local --out-dir dist/windows-smoke
+          node -e "const m=require('./dist/windows-smoke/release-manifest.json'); const wanted=[['app-tarball','darwin','tar.gz'],['app-zip','win32','zip'],['windows-installer','win32',undefined]]; for (const [role, platform, format] of wanted) { if (!m.artifacts.some(a => a.role === role && (!platform || a.platform === platform) && (!format || a.format === format))) throw new Error('missing artifact '+[role,platform,format].filter(Boolean).join(':')); }"
+
+      - name: Exercise Windows installer
+        shell: pwsh
+        run: |
+          $installDir = Join-Path $env:RUNNER_TEMP "Agent Cockpit Windows Smoke"
+          $origin = Join-Path $env:RUNNER_TEMP "agent-cockpit-windows-smoke-origin.git"
+          $devDir = Join-Path $env:RUNNER_TEMP "Agent Cockpit Windows Smoke Source"
+          $port = 38334
+          git init --bare $origin
+          git -C (Get-Location) push $origin HEAD:refs/heads/main
+          git clone $origin $devDir
+          try {
+            & .\scripts\install-windows.ps1 -Channel dev -DevDir $devDir -InstallDir $installDir -InstallNode -SkipOpen -Port $port
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            schtasks.exe /Query /TN AgentCockpit /FO LIST
+            Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Uri "http://127.0.0.1:$port/auth/setup" | Out-Null
+          } finally {
+            $stopScript = Join-Path $installDir "bin\stop-agent-cockpit.ps1"
+            if (Test-Path $stopScript) {
+              powershell.exe -NoProfile -ExecutionPolicy Bypass -File $stopScript
+            }
+            schtasks.exe /Delete /TN AgentCockpit /F 2>$null
+          }
+
   release:
+    needs: windows-smoke
+    if: ${{ !inputs.smoke_only }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -102,6 +175,8 @@ jobs:
             --notes-file "dist/release/github-release-notes.md" \
             "${PRERELEASE_ARGS[@]}" \
             "dist/release/agent-cockpit-v$VERSION.tar.gz" \
+            "dist/release/agent-cockpit-v$VERSION.zip" \
             "dist/release/release-manifest.json" \
             "dist/release/SHA256SUMS" \
-            "dist/release/install-macos.sh"
+            "dist/release/install-macos.sh" \
+            "dist/release/install-windows.ps1"
