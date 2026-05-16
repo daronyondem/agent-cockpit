@@ -1253,10 +1253,10 @@ describe('UpdateService', () => {
         const finalEcosystem = originalReadFileSync(path.join(finalDir, 'ecosystem.config.js'), 'utf8');
         expect(finalEcosystem).toContain('run-agent-cockpit.ps1');
         expect(finalEcosystem).toContain('"interpreter": "powershell.exe"');
-        expect(finalEcosystem).toContain('"-WindowStyle"');
-        expect(finalEcosystem).toContain('"Hidden"');
+        expect(finalEcosystem).toContain('"-ExecutionPolicy"');
         const runnerScript = originalReadFileSync(path.join(install.installDir, 'bin', 'run-agent-cockpit.ps1'), 'utf8');
-        expect(runnerScript).toContain("& $Node '--import' 'tsx' 'server.ts'");
+        expect(runnerScript).toContain("$startInfo.Arguments = '--import tsx server.ts'");
+        expect(runnerScript).toContain('$startInfo.CreateNoWindow = $true');
         const restartPath = path.join(install.dataDir, 'restart.ps1');
         const restartScript = originalReadFileSync(restartPath, 'utf8');
         expect(restartScript).toContain('Invoke-WebRequest -UseBasicParsing');
@@ -1440,7 +1440,7 @@ describe('UpdateService', () => {
           name: 'agent-cockpit',
           script: path.join(installDir, 'bin', 'run-agent-cockpit.ps1'),
           interpreter: 'powershell.exe',
-          node_args: ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File'],
+          node_args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'],
           cwd: appDir,
           windowsHide: true,
         }));
@@ -1456,7 +1456,8 @@ describe('UpdateService', () => {
         expect(app.env.PATH.startsWith(`${runtimeDir};`)).toBe(true);
         const runnerScript = originalReadFileSync(path.join(installDir, 'bin', 'run-agent-cockpit.ps1'), 'utf8');
         expect(runnerScript).toContain(`$InstallDir = '${installDir.replace(/'/g, "''")}'`);
-        expect(runnerScript).toContain("& $Node '--import' 'tsx' 'server.ts'");
+        expect(runnerScript).toContain("$startInfo.Arguments = '--import tsx server.ts'");
+        expect(runnerScript).toContain('$startInfo.CreateNoWindow = $true');
       } finally {
         restorePlatform();
         fs.rmSync(installDir, { recursive: true, force: true });

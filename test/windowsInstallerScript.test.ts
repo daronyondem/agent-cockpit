@@ -79,8 +79,9 @@ describe('Windows installer script', () => {
     expect(source).toContain('run-agent-cockpit.ps1');
     expect(source).toContain("script = $runnerScript");
     expect(source).toContain("interpreter = 'powershell.exe'");
-    expect(source).toContain("node_args = @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File')");
-    expect(source).toContain("& `$Node '--import' 'tsx' 'server.ts'");
+    expect(source).toContain("node_args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')");
+    expect(source).toContain('$startInfo.CreateNoWindow = `$true');
+    expect(source).toContain("$startInfo.Arguments = '--import tsx server.ts'");
     expect(source).toContain('Agent Cockpit did not answer before timeout; collecting PM2 diagnostics.');
     expect(source).toContain("Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'logs', $AppName, '--lines', '80', '--nostream')");
     expect(source).toContain('windowsHide = $true');
@@ -89,6 +90,7 @@ describe('Windows installer script', () => {
     expect(source).toContain('logs-agent-cockpit.ps1');
     expect(source).toContain('function Invoke-CheckedNative');
     expect(source).toContain('$LASTEXITCODE');
+    expect(source).toContain("Invoke-CheckedNative `$Npx @('pm2', 'delete', 'agent-cockpit') -AllowFailure");
     expect(source).toContain("Invoke-CheckedNative `$Npx @('pm2', 'startOrRestart', (Join-Path `$AppDir 'ecosystem.config.js'), '--update-env')");
     expect(source).toContain('[System.Security.Principal.WindowsIdentity]::GetCurrent().Name');
     expect(source).toContain('New-ScheduledTaskTrigger -AtLogOn -User $currentUser');
@@ -99,7 +101,7 @@ describe('Windows installer script', () => {
     expect(source).toContain('Failed to register current-user logon task with schtasks.exe');
     expect(source).toContain('function Stop-ExistingAppForReplacement');
     expect(source).toContain('Stopping existing Agent Cockpit process before replacing app files.');
-    expect(source).toContain("Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'stop', $AppName)");
+    expect(source).toContain("Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'delete', $AppName)");
     expect(source).toContain('npx.cmd');
     expect(source).toContain("@('pm2', 'startOrRestart', 'ecosystem.config.js', '--update-env')");
     expect(source).toContain('http://127.0.0.1:$Port/auth/setup');

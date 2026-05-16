@@ -372,9 +372,33 @@ function Resolve-NodeExe {
   Set-Content -Path (Join-Path $binDir 'run-agent-cockpit.ps1') -Encoding UTF8 -Value ($common + @"
 `$Node = Resolve-NodeExe
 Set-Location `$AppDir
-& `$Node '--import' 'tsx' 'server.ts'
-`$code = if (`$null -eq `$LASTEXITCODE) { 0 } else { `$LASTEXITCODE }
-exit `$code
+`$startInfo = New-Object System.Diagnostics.ProcessStartInfo
+`$startInfo.FileName = `$Node
+`$startInfo.Arguments = '--import tsx server.ts'
+`$startInfo.WorkingDirectory = `$AppDir
+`$startInfo.UseShellExecute = `$false
+`$startInfo.CreateNoWindow = `$true
+`$startInfo.RedirectStandardOutput = `$true
+`$startInfo.RedirectStandardError = `$true
+`$process = New-Object System.Diagnostics.Process
+`$process.StartInfo = `$startInfo
+`$stdoutHandler = [System.Diagnostics.DataReceivedEventHandler]{
+  param(`$sender, `$event)
+  if (`$null -ne `$event.Data) { [Console]::Out.WriteLine(`$event.Data) }
+}
+`$stderrHandler = [System.Diagnostics.DataReceivedEventHandler]{
+  param(`$sender, `$event)
+  if (`$null -ne `$event.Data) { [Console]::Error.WriteLine(`$event.Data) }
+}
+`$process.add_OutputDataReceived(`$stdoutHandler)
+`$process.add_ErrorDataReceived(`$stderrHandler)
+if (-not `$process.Start()) {
+  exit 1
+}
+`$process.BeginOutputReadLine()
+`$process.BeginErrorReadLine()
+`$process.WaitForExit()
+exit `$process.ExitCode
 "@)
 }
 
@@ -405,7 +429,7 @@ function Write-EcosystemConfig {
         name = $AppName
         script = $runnerScript
         interpreter = 'powershell.exe'
-        node_args = @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File')
+        node_args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')
         cwd = $AppDir
         windowsHide = $true
         env = [ordered]@{
@@ -519,6 +543,7 @@ function Invoke-CheckedNative {
 "@
   Set-Content -Path (Join-Path $binDir 'start-agent-cockpit.ps1') -Encoding UTF8 -Value ($common + @"
 `$Npx = Resolve-Npx
+Invoke-CheckedNative `$Npx @('pm2', 'delete', 'agent-cockpit') -AllowFailure
 Invoke-CheckedNative `$Npx @('pm2', 'startOrRestart', (Join-Path `$AppDir 'ecosystem.config.js'), '--update-env')
 Invoke-CheckedNative `$Npx @('pm2', 'save')
 "@)
@@ -587,7 +612,7 @@ function Stop-ExistingAppForReplacement {
     return
   }
   Write-Log 'Stopping existing Agent Cockpit process before replacing app files.'
-  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'stop', $AppName)
+  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'delete', $AppName)
 }
 
 function Start-Pm2 {
@@ -597,6 +622,7 @@ function Start-Pm2 {
     $env:Path = "$NodeRuntimeBinDir;$env:Path"
   }
   Write-Log 'Starting Agent Cockpit with local PM2.'
+  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'delete', $AppName)
   Invoke-Quiet $NpxCmd @('pm2', 'startOrRestart', 'ecosystem.config.js', '--update-env') $AppDir
   Invoke-Quiet $NpxCmd @('pm2', 'save') $AppDir
 }
