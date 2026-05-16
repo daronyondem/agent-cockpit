@@ -91,6 +91,11 @@ tool is unavailable.
 - Windows production self-update should also repair the current user's `Path`
   for `<installDir>\cli-tools` so existing installs gain terminal CLI access
   after updating without rerunning the full installer.
+- Windows Agent Cockpit-managed Codex terminal wrappers should call the recorded
+  private `node.exe` plus `<installDir>\cli-tools\node_modules\@openai\codex\bin\codex.js`
+  directly. Do not depend on a global `node.exe`, and do not add the private
+  runtime directory to the user's Windows `Path` unless that product decision
+  changes.
 - Windows production self-update must not accept generic HTTP liveness as
   success. The generated PowerShell restart script must use the target release's
   app-local `pm2.cmd`, require `/api/chat/version.version` to match the target
@@ -135,6 +140,11 @@ tool is unavailable.
   may remain isolated.
 - Claude Code auth verification must parse `claude auth status --json` and
   require `loggedIn: true`; exit code `0` alone is not enough.
+- On Windows, `claude auth status --json` can report `loggedIn: true` while
+  plain terminal `claude` still shows Claude Code's first-run login selection.
+  For setup/system-home Claude auth, Agent Cockpit should complete the
+  terminal onboarding marker in `%USERPROFILE%\.claude.json` after credentials
+  verify. Do not do this for isolated profiles using `CLAUDE_CONFIG_DIR`.
 
 ## Context Map, Memory, And Knowledge Base
 

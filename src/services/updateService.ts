@@ -6,6 +6,7 @@ import type { InstallNodeRuntime, InstallStatus, UpdateStatus, UpdateResult, Upd
 import { WebBuildService, type WebBuildStatus } from './webBuildService';
 import { MobileBuildService, type MobileBuildStatus } from './mobileBuildService';
 import { persistWindowsUserPathEntry } from './windowsUserPath';
+import { ensureWindowsCliToolWrappers } from './windowsCliToolWrappers';
 
 const DEFAULT_REQUIRED_NODE_MAJOR = 22;
 
@@ -309,6 +310,7 @@ export class UpdateService {
 
       this._copyRuntimeConfig(previousAppDir, finalAppDir, nodeRuntime, installStatus);
       steps.push({ name: 'copy runtime config', success: true, output: '.env and ecosystem.config.js copied' });
+      this._repairWindowsCliToolWrappers(installStatus.installDir, nodeRuntime, steps);
       await this._persistWindowsCliToolsUserPath(installStatus.installDir, steps);
 
       const nextAppDir = isWindows ? finalAppDir : currentLink;
@@ -1318,6 +1320,29 @@ export class UpdateService {
       output: result.ok
         ? (result.stdout || `Added ${cliToolsDir} to the current user PATH.`)
         : `Warning: ${result.error || result.stderr || result.stdout || 'could not update current user PATH'}`,
+    });
+  }
+
+  private _repairWindowsCliToolWrappers(
+    installDir: string,
+    nodeRuntime: InstallNodeRuntime | null,
+    steps: UpdateStep[],
+  ): void {
+    if (process.platform !== 'win32') return;
+    const nodeExe = nodeRuntime?.binDir ? this._joinForPlatform(nodeRuntime.binDir, 'node.exe') : null;
+    const result = ensureWindowsCliToolWrappers({
+      cliToolsDir: this._joinForPlatform(installDir, 'cli-tools'),
+      nodeExe,
+    });
+    if (result.updated.length === 0 && result.ok) return;
+    steps.push({
+      name: 'repair Windows CLI wrappers',
+      success: true,
+      output: [
+        result.updated.length > 0 ? `Updated: ${result.updated.join(', ')}` : '',
+        result.skipped.length > 0 ? `Skipped: ${result.skipped.join(', ')}` : '',
+        result.ok ? '' : `Warning: ${result.error || 'could not repair Windows CLI wrappers'}`,
+      ].filter(Boolean).join('\n'),
     });
   }
 

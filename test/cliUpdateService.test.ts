@@ -256,6 +256,15 @@ describe('CliUpdateService', () => {
       expect(result.success).toBe(true);
       expect(updateCalled).toBe(true);
       expect(result.item?.currentVersion).toBe('0.128.0');
+      expect(result.steps).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'repair Windows CLI wrapper',
+          success: true,
+          output: expect.stringContaining('codex'),
+        }),
+      ]));
+      expect(fs.readFileSync(path.join(cliToolsDir, 'codex.ps1'), 'utf8')).toContain(process.execPath);
+      expect(fs.readFileSync(path.join(cliToolsDir, 'codex.ps1'), 'utf8')).toContain(codexJs);
     } finally {
       if (originalDataDir === undefined) {
         delete process.env.AGENT_COCKPIT_DATA_DIR;

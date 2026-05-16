@@ -11,6 +11,7 @@ import {
 import { resolveCodexCliRuntime } from './backends/codex';
 import { buildCliCommandInvocation, windowsCmdCommandLine, type CliCommandResolution } from './cliCommandResolver';
 import { serverConfiguredCliProfileId } from './cliProfiles';
+import { ensureWindowsCliToolWrappers } from './windowsCliToolWrappers';
 import type {
   CliInstallMethod,
   CliProfile,
@@ -172,6 +173,8 @@ export class CliUpdateService {
         return { success: false, steps, error: (err as Error).message, item: current };
       }
 
+      const wrapperStep = this._repairWindowsCliToolWrapper(target, current);
+      if (wrapperStep) steps.push(wrapperStep);
       opts.onUpdated?.();
       const refreshed = await this._probeTarget(target);
       this._items.set(itemId, refreshed);
@@ -425,6 +428,32 @@ export class CliUpdateService {
       });
     });
   }
+
+  private _repairWindowsCliToolWrapper(target: CliRuntimeTarget, current: CliUpdateStatus): UpdateStep | null {
+    if (process.platform !== 'win32') return null;
+    if (target.vendor !== 'codex' && target.vendor !== 'claude-code') return null;
+    const npmPackage = VENDOR_NPM_PACKAGES[target.vendor];
+    if (!npmPackage || !current.resolvedPath) return null;
+    const npmPrefix = inferNpmPrefixFromPackagePath(current.resolvedPath, npmPackage);
+    const expectedPrefix = windowsCliToolsDirFromEnv(target.env);
+    const expectedReal = expectedPrefix ? safeRealpathSync(expectedPrefix) || expectedPrefix : null;
+    if (!npmPrefix || !expectedPrefix || !expectedReal || pathKey(npmPrefix) !== pathKey(expectedReal)) return null;
+    const result = ensureWindowsCliToolWrappers({
+      cliToolsDir: expectedPrefix,
+      nodeExe: process.execPath,
+      vendors: [target.vendor],
+    });
+    if (result.updated.length === 0 && result.skipped.length === 0 && result.ok) return null;
+    return {
+      name: 'repair Windows CLI wrapper',
+      success: true,
+      output: [
+        result.updated.length > 0 ? `Updated: ${result.updated.join(', ')}` : '',
+        result.skipped.length > 0 ? `Skipped: ${result.skipped.join(', ')}` : '',
+        result.ok ? '' : `Warning: ${result.error || 'could not repair Windows CLI wrapper'}`,
+      ].filter(Boolean).join('\n'),
+    };
+  }
 }
 
 function isCliVendorValue(value: unknown): value is CliVendor {
@@ -438,6 +467,27 @@ function inferNpmPrefixFromPackagePath(resolvedPath: string, npmPackage: string)
   const markerIndex = normalized.toLowerCase().indexOf(packageMarker.toLowerCase());
   if (markerIndex < 0) return null;
   return resolvedPath.slice(0, markerIndex);
+}
+
+function windowsCliToolsDirFromEnv(env: NodeJS.ProcessEnv): string | null {
+  const dataDir = env.AGENT_COCKPIT_DATA_DIR;
+  if (!dataDir) return null;
+  const normalized = dataDir.replace(/[\\/]+$/, '');
+  const lastSep = Math.max(normalized.lastIndexOf('/'), normalized.lastIndexOf('\\'));
+  if (lastSep <= 0 || normalized.slice(lastSep + 1).toLowerCase() !== 'data') return null;
+  return path.join(normalized.slice(0, lastSep), 'cli-tools');
+}
+
+function pathKey(value: string): string {
+  return value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+}
+
+function safeRealpathSync(value: string): string | null {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return null;
+  }
 }
 
 function windowsNpmCommand(): string[] {

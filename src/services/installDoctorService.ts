@@ -6,6 +6,7 @@ import type { InstallDoctorAction, InstallDoctorActionResult, InstallDoctorCheck
 import type { InstallStateService } from './installStateService';
 import type { UpdateService } from './updateService';
 import { windowsCliCommandCandidates, windowsCmdCommandLine } from './cliCommandResolver';
+import { ensureWindowsCliToolWrappersForInstall } from './windowsCliToolWrappers';
 import { persistWindowsUserPathEntry } from './windowsUserPath';
 import { detectLibreOffice, resetLibreOfficeDetection, type LibreOfficeStatus } from './knowledgeBase/libreOffice';
 import { detectPandoc, resetPandocDetection, type PandocStatus } from './knowledgeBase/pandoc';
@@ -301,6 +302,24 @@ export class InstallDoctorService {
         }
       }
 
+      const wrapperResult = this.repairWindowsCliToolWrappers(actionId);
+      if (wrapperResult) {
+        const output = [
+          wrapperResult.updated.length > 0 ? `Updated: ${wrapperResult.updated.join(', ')}` : '',
+          wrapperResult.skipped.length > 0 ? `Skipped: ${wrapperResult.skipped.join(', ')}` : '',
+          wrapperResult.error || '',
+        ].filter(Boolean).join('\n');
+        steps.push({ name: 'Repair Agent Cockpit CLI wrappers', success: wrapperResult.ok, output });
+        if (!wrapperResult.ok) {
+          return {
+            success: false,
+            action: definition.action,
+            steps,
+            error: wrapperResult.error || 'Failed to repair Agent Cockpit CLI wrappers.',
+          };
+        }
+      }
+
       this.invalidateDetectionForAction(actionId);
       return {
         success: true,
@@ -501,6 +520,21 @@ export class InstallDoctorService {
     if (!dir) return null;
     fs.mkdirSync(dir, { recursive: true });
     return persistWindowsUserPathEntry(dir, this.commandRunner);
+  }
+
+  private repairWindowsCliToolWrappers(actionId: string) {
+    if (process.platform !== 'win32') return null;
+    const vendor = actionId.startsWith('claude-cli:')
+      ? 'claude-code'
+      : actionId.startsWith('codex-cli:')
+        ? 'codex'
+        : null;
+    if (!vendor) return null;
+    return ensureWindowsCliToolWrappersForInstall(
+      this.installStateService.getStatus(),
+      [vendor],
+      true,
+    );
   }
 }
 

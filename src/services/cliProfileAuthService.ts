@@ -137,6 +137,24 @@ export class CliProfileAuthService {
       const rawOutput = [result.stdout, result.stderr].filter(Boolean).join('\n');
       const output = redactCliAuthText(rawOutput);
       const status = interpretCliAuthStatus(profile, result.code, rawOutput);
+      let onboardingOutput = '';
+      if (status.authenticated) {
+        try {
+          onboardingOutput = await ensureClaudeCodeWindowsOnboarding(profile, runtime, rawOutput) || '';
+        } catch (err: unknown) {
+          return {
+            profileId: profile.id,
+            vendor: profile.vendor,
+            command: runtime.displayCommand || runtime.command,
+            available: result.spawned,
+            authenticated: false,
+            status: 'error',
+            output,
+            error: (err as Error).message || 'Failed to complete Claude Code terminal onboarding state.',
+            exitCode: result.code,
+          };
+        }
+      }
       return {
         profileId: profile.id,
         vendor: profile.vendor,
@@ -144,7 +162,7 @@ export class CliProfileAuthService {
         available: result.spawned,
         authenticated: status.authenticated,
         status: status.authenticated ? 'ok' : 'not-authenticated',
-        output,
+        output: [output, onboardingOutput].filter(Boolean).join('\n'),
         exitCode: result.code,
         ...(status.authenticated ? {} : { error: output || status.error || 'CLI status check reported that this profile is not authenticated.' }),
       };
@@ -392,6 +410,8 @@ export class CliProfileAuthService {
       const status = interpretCliAuthStatus(profile, result.code, rawOutput);
       if (status.authenticated) {
         if (output) this._addEvent(snapshot, 'info', output);
+        const onboardingOutput = await ensureClaudeCodeWindowsOnboarding(profile, runtime, rawOutput);
+        if (onboardingOutput) this._addEvent(snapshot, 'info', onboardingOutput);
         return;
       }
       lastOutput = output || status.error || `${this._vendorLabel(profile)} status exited with code ${result.code ?? 'unknown'}.`;
@@ -531,7 +551,11 @@ function interpretCliAuthStatus(
   return { authenticated: false, error: 'Claude Code status output did not include loggedIn=true.' };
 }
 
-function parseClaudeAuthStatusJson(rawOutput: string): { loggedIn?: boolean } | null {
+interface ClaudeAuthStatusJson {
+  loggedIn?: boolean;
+}
+
+function parseClaudeAuthStatusJson(rawOutput: string): ClaudeAuthStatusJson | null {
   const text = String(rawOutput || '').trim();
   if (!text) return null;
   const candidates = [text];
@@ -545,4 +569,51 @@ function parseClaudeAuthStatusJson(rawOutput: string): { loggedIn?: boolean } | 
     } catch {}
   }
   return null;
+}
+
+async function ensureClaudeCodeWindowsOnboarding(
+  profile: CliProfile,
+  runtime: CliAuthRuntime,
+  rawOutput: string,
+): Promise<string | null> {
+  if (process.platform !== 'win32') return null;
+  if (profile.vendor !== 'claude-code') return null;
+  if (runtime.configDir || envHasValue(runtime.env, 'CLAUDE_CONFIG_DIR')) return null;
+  const status = parseClaudeAuthStatusJson(rawOutput);
+  if (status?.loggedIn !== true) return null;
+  const configPath = windowsClaudeCodeGlobalConfigPath(runtime.env);
+  if (!configPath) return null;
+
+  let existing: Record<string, unknown> = {};
+  try {
+    const raw = await fsp.readFile(configPath, 'utf8');
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      existing = parsed as Record<string, unknown>;
+    }
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error(`Claude Code authenticated, but ${configPath} could not be read: ${(err as Error).message}`);
+    }
+  }
+
+  if (existing.hasCompletedOnboarding === true) return null;
+  await fsp.mkdir(path.dirname(configPath), { recursive: true });
+  await fsp.writeFile(configPath, `${JSON.stringify({ ...existing, hasCompletedOnboarding: true }, null, 2)}\n`, 'utf8');
+  return `Updated ${configPath} so terminal Claude Code skips first-run onboarding.`;
+}
+
+function windowsClaudeCodeGlobalConfigPath(env: NodeJS.ProcessEnv): string | null {
+  const userProfile = env.USERPROFILE || process.env.USERPROFILE;
+  if (userProfile) return path.join(userProfile, '.claude.json');
+  const homeDrive = env.HOMEDRIVE || process.env.HOMEDRIVE;
+  const homePath = env.HOMEPATH || process.env.HOMEPATH;
+  if (homeDrive && homePath) return path.join(`${homeDrive}${homePath}`, '.claude.json');
+  return null;
+}
+
+function envHasValue(env: NodeJS.ProcessEnv, key: string): boolean {
+  return Object.entries(env).some(([name, value]) =>
+    name.toUpperCase() === key && String(value || '').trim().length > 0,
+  );
 }

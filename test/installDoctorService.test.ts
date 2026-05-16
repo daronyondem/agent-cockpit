@@ -473,6 +473,17 @@ describe('InstallDoctorService', () => {
       }));
       expect(pathPersistCommands[0].args[pathPersistCommands[0].args.length - 1]).toContain(cliToolsDir);
       expect(process.env.PATH?.split(';')[0]).toBe(cliToolsDir);
+      expect(codexResult.steps).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'Repair Agent Cockpit CLI wrappers',
+          success: true,
+          output: expect.stringContaining('codex'),
+        }),
+      ]));
+      expect(fs.readFileSync(path.join(cliToolsDir, 'codex.ps1'), 'utf8')).toContain(nodeExe);
+      expect(fs.readFileSync(path.join(cliToolsDir, 'codex.ps1'), 'utf8')).toContain(codexJs);
+      expect(fs.readFileSync(path.join(cliToolsDir, 'codex.cmd'), 'utf8')).toContain(`SET "NODE_EXE=${nodeExe}"`);
+      expect(fs.readFileSync(path.join(cliToolsDir, 'claude.ps1'), 'utf8')).toContain(claudeExe);
     } finally {
       process.env.PATH = originalPath;
       if (originalLocalAppData === undefined) {

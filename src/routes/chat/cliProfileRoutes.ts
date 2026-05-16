@@ -168,11 +168,11 @@ function setupAuthProfile(settings: Settings, vendor: SetupAuthVendor): { settin
     profile.vendor === vendor
     && profile.authMode === 'account'
     && !profile.disabled
-    && (!profile.configDir || profile.id.startsWith(setupIdPrefix))
+    && (!hasSetupAuthHome(profile, vendor) || profile.id.startsWith(setupIdPrefix))
   );
   if (existingAccount) {
-    const profile = existingAccount.configDir && existingAccount.id.startsWith(setupIdPrefix)
-      ? { ...existingAccount, configDir: undefined, updatedAt: new Date().toISOString() }
+    const profile = existingAccount.id.startsWith(setupIdPrefix)
+      ? setupProfileWithoutAuthHome(existingAccount, vendor)
       : existingAccount;
     const nextProfiles = profile === existingAccount
       ? profiles
@@ -236,4 +236,43 @@ function uniqueSetupProfileId(profiles: CliProfile[], baseId: string): string {
     if (!ids.has(candidate)) return candidate;
   }
   return `${baseId}-${Date.now().toString(36)}`;
+}
+
+function setupProfileWithoutAuthHome(profile: CliProfile, vendor: SetupAuthVendor): CliProfile {
+  const { configDir: _configDir, env, ...rest } = profile;
+  const nextEnv = stripSetupAuthHomeEnv(vendor, env);
+  const changed = Boolean(profile.configDir || nextEnv !== env);
+  if (!changed) return profile;
+  return {
+    ...rest,
+    ...(nextEnv && Object.keys(nextEnv).length > 0 ? { env: nextEnv } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function hasSetupAuthHome(profile: CliProfile, vendor: SetupAuthVendor): boolean {
+  if (profile.configDir) return true;
+  const key = vendor === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
+  return Boolean(Object.entries(profile.env || {}).some(([name, value]) =>
+    name.toUpperCase() === key && String(value || '').trim().length > 0,
+  ));
+}
+
+function stripSetupAuthHomeEnv(
+  vendor: SetupAuthVendor,
+  env: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (!env) return env;
+  const key = vendor === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
+  const stripped: Record<string, string> = {};
+  let changed = false;
+  for (const [name, value] of Object.entries(env)) {
+    if (name.toUpperCase() === key) {
+      changed = true;
+      continue;
+    }
+    stripped[name] = value;
+  }
+  if (!changed) return env;
+  return Object.keys(stripped).length > 0 ? stripped : undefined;
 }

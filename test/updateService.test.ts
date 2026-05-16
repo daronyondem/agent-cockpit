@@ -363,6 +363,44 @@ describe('UpdateService', () => {
         restorePlatform();
       }
     });
+
+    test('repairs installer-managed Windows CLI wrappers with the private runtime', () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('win32');
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-win-cli-wrapper-'));
+      try {
+        const cliToolsDir = path.join(root, 'cli-tools');
+        const runtimeBinDir = path.join(root, 'runtime', 'node-v22.22.3-win-x64');
+        const nodeExe = path.join(runtimeBinDir, 'node.exe');
+        const codexJs = path.join(cliToolsDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+        writeText(nodeExe, 'node\n');
+        writeText(codexJs, '#!/usr/bin/env node\n');
+        const steps: any[] = [];
+
+        (service as any)._repairWindowsCliToolWrappers(root, {
+          source: 'private',
+          version: '22.22.3',
+          npmVersion: '10.9.8',
+          binDir: runtimeBinDir,
+          runtimeDir: runtimeBinDir,
+          requiredMajor: 22,
+          updatedAt: '2026-05-15T00:00:00.000Z',
+        }, steps);
+
+        expect(steps).toEqual([
+          expect.objectContaining({
+            name: 'repair Windows CLI wrappers',
+            success: true,
+            output: expect.stringContaining('codex'),
+          }),
+        ]);
+        expect(originalReadFileSync(path.join(cliToolsDir, 'codex.ps1'), 'utf8')).toContain(nodeExe);
+        expect(originalReadFileSync(path.join(cliToolsDir, 'codex.cmd'), 'utf8')).toContain(`SET "NODE_EXE=${nodeExe}"`);
+      } finally {
+        restorePlatform();
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 
   // ── getStatus ──────────────────────────────────────────────────────────

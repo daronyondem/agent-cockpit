@@ -238,6 +238,50 @@ describe('CLI profile auth endpoints', () => {
     }
   });
 
+  test('Windows setup auth marks Claude Code terminal onboarding complete after credentials verify', async () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const originalUserProfile = process.env.USERPROFILE;
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    const installRoot = path.join(env.tmpDir, 'Agent Cockpit');
+    const claudeExe = path.join(installRoot, 'cli-tools', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+    process.env.USERPROFILE = env.tmpDir;
+    process.env.AGENT_COCKPIT_DATA_DIR = path.join(installRoot, 'data');
+    fs.mkdirSync(path.dirname(claudeExe), { recursive: true });
+    fs.writeFileSync(claudeExe, [
+      '#!/bin/sh',
+      'if [ -n "$CLAUDE_CONFIG_DIR" ]; then',
+      '  echo "CONFIG=$CLAUDE_CONFIG_DIR"',
+      '  exit 1',
+      'fi',
+      'echo \'{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}\'',
+      'exit 0',
+      '',
+    ].join('\n'));
+    fs.chmodSync(claudeExe, 0o755);
+    try {
+      const res = await env.request('POST', '/api/chat/cli-profiles/setup-auth/claude-code/test', {});
+
+      expect(res.status).toBe(200);
+      expect(res.body.result.authenticated).toBe(true);
+      expect(res.body.result.output).toContain('skips first-run onboarding');
+      const globalConfig = JSON.parse(fs.readFileSync(path.join(env.tmpDir, '.claude.json'), 'utf8'));
+      expect(globalConfig.hasCompletedOnboarding).toBe(true);
+      expect(res.body.settings.cliProfiles.find((profile: any) => profile.id === 'setup-claude-code-account').configDir).toBeUndefined();
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
+      if (originalUserProfile === undefined) {
+        delete process.env.USERPROFILE;
+      } else {
+        process.env.USERPROFILE = originalUserProfile;
+      }
+      restorePlatform();
+    }
+  });
+
   test('setup auth migrates old setup profiles back to system CLI auth', async () => {
     const originalPath = process.env.PATH;
     const oldConfigDir = path.join(env.tmpDir, 'old-setup-claude-config');
@@ -257,6 +301,7 @@ describe('CLI profile auth endpoints', () => {
       name: 'Claude Code Account',
       vendor: 'claude-code',
       authMode: 'account',
+      env: { CLAUDE_CONFIG_DIR: oldConfigDir },
       configDir: oldConfigDir,
       createdAt: '2026-04-30T00:00:00.000Z',
       updatedAt: '2026-04-30T00:00:00.000Z',
@@ -268,8 +313,11 @@ describe('CLI profile auth endpoints', () => {
       expect(res.status).toBe(200);
       expect(res.body.profile.id).toBe('setup-claude-code-account');
       expect(res.body.profile.configDir).toBeUndefined();
+      expect(res.body.profile.env).toBeUndefined();
       expect(res.body.result.output).toContain('"config":"system"');
-      expect(res.body.settings.cliProfiles.find((profile: any) => profile.id === 'setup-claude-code-account').configDir).toBeUndefined();
+      const savedProfile = res.body.settings.cliProfiles.find((profile: any) => profile.id === 'setup-claude-code-account');
+      expect(savedProfile.configDir).toBeUndefined();
+      expect(savedProfile.env).toBeUndefined();
     } finally {
       process.env.PATH = originalPath;
     }
