@@ -8,17 +8,52 @@ export function ScreenLoading({ label = 'Loading...' }){
   return <div className="u-dim" style={{padding:'16px'}}>{label}</div>;
 }
 
-/* Subscribe to a single conversation's state in the StreamStore. Returns
-   the current ConvState snapshot (or null when no convId is selected). */
-export function useConversationState(convId){
+export function shallowEqual(a, b){
+  if (Object.is(a, b)) return true;
+  if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+  const aKeys = Object.keys(a);
+  const bKeys = Object.keys(b);
+  if (aKeys.length !== bKeys.length) return false;
+  for (const key of aKeys) {
+    if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
+    if (!Object.is(a[key], b[key])) return false;
+  }
+  return true;
+}
+
+export function useConversationSelector(convId, selector, isEqual = Object.is){
   const [, tick] = React.useReducer(x => x + 1, 0);
+  const selectorRef = React.useRef(selector);
+  const isEqualRef = React.useRef(isEqual);
+  const selectedRef = React.useRef(undefined);
+  selectorRef.current = selector;
+  isEqualRef.current = isEqual;
+
+  const selected = convId ? selector(StreamStore.getState(convId)) : null;
+  if (!isEqualRef.current(selectedRef.current, selected)) {
+    selectedRef.current = selected;
+  }
+
   React.useEffect(() => {
     if (!convId) return;
     StreamStore.load(convId);
     StreamStore.ensureWsOpen(convId).catch(() => {});
-    return StreamStore.subscribe(convId, tick);
+    const notify = () => {
+      const next = selectorRef.current(StreamStore.getState(convId));
+      if (isEqualRef.current(selectedRef.current, next)) return;
+      selectedRef.current = next;
+      tick();
+    };
+    notify();
+    return StreamStore.subscribe(convId, notify);
   }, [convId]);
-  return convId ? StreamStore.getState(convId) : null;
+  return selectedRef.current;
+}
+
+/* Subscribe to a single conversation's state in the StreamStore. Returns
+   the current ConvState snapshot (or null when no convId is selected). */
+export function useConversationState(convId){
+  return useConversationSelector(convId, s => s);
 }
 
 /* Subscribe to the global per-conv uiState map used by the sidebar to light

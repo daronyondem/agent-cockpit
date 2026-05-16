@@ -65,6 +65,26 @@ describe('frontend routes', () => {
     expect(serverSrc).not.toContain("res.redirect('/index.html')");
   });
 
+  test('desktop chat keeps composer typing out of the transcript render path', () => {
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const shellStateSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shellState.jsx'), 'utf8');
+
+    expect(shellStateSrc).toContain('export function useConversationSelector');
+    expect(shellStateSrc).toContain('export function shallowEqual');
+    expect(shellSrc).toContain('const state = useConversationSelector(convId, selectChatLiveState, shallowEqual);');
+    expect(shellSrc).toContain('const ChatComposer = React.memo(function ChatComposer');
+    expect(shellSrc).toContain('const state = useConversationSelector(convId, selectChatComposerState, shallowEqual);');
+    expect(shellSrc).toContain('input: s.input');
+    expect(shellSrc).not.toMatch(/function selectChatLiveState[\s\S]*input: s\.input[\s\S]*function selectChatComposerState/);
+    expect(shellSrc).toContain('const messageFeedEntries = React.useMemo(');
+    expect(shellSrc).toContain('() => collapseProgressRuns(feedMessages)');
+    expect(shellSrc).toContain('const MessageBubble = React.memo(function MessageBubble');
+    expect(shellSrc).toContain('setMessageRef={setMessageRef}');
+    expect(shellSrc).toContain('const TextSegment = React.memo(function TextSegment');
+    expect(shellSrc).toContain('const html = React.useMemo(() => renderMarkdown(cleaned), [cleaned]);');
+    expect(shellSrc).toContain('dangerouslySetInnerHTML={{ __html: html }}');
+  });
+
   test('mobile PWA keeps iOS viewport and modal sheet content reachable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
     const viewportHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useViewportHeightVar.ts'), 'utf8');
