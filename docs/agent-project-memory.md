@@ -120,8 +120,10 @@ tool is unavailable.
   no default exists or when replacing that vendor's server-configured default.
 - Welcome setup auth for Claude/Codex should use the user's normal system CLI
   auth home, not a generated profile `configDir`, so terminal commands and
-  Agent Cockpit share login state. Explicit account profiles may remain
-  isolated.
+  Agent Cockpit share login state. Setup profiles must not retain `configDir`,
+  `CLAUDE_CONFIG_DIR`, or `CODEX_HOME`; settings/profile-auth normalization
+  strips stale values from older installs. Explicit non-setup account profiles
+  may remain isolated.
 - Claude Code auth verification must parse `claude auth status --json` and
   require `loggedIn: true`; exit code `0` alone is not enough.
 

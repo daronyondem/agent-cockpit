@@ -7,6 +7,7 @@ import {
   cliProtocolForBackend,
   cliVendorForBackend,
   ensureServerConfiguredCliProfiles,
+  isSetupAccountCliProfile,
   isCliVendor,
   serverConfiguredCliProfileId,
 } from './cliProfiles';
@@ -67,6 +68,11 @@ export class SettingsService {
         kb.cliConcurrency === undefined
       ) {
         kb.cliConcurrency = kb.dreamingConcurrency;
+      }
+
+      const setupAuthHomeMigration = this._stripSetupProfileAuthHomes(settings);
+      if (setupAuthHomeMigration.changed) {
+        return this.saveSettings(setupAuthHomeMigration.settings);
       }
 
       return this._normalizeSettings(this._withLegacyDefaultCliProfile(this._withContextMapDefaults(settings)));
@@ -175,6 +181,38 @@ export class SettingsService {
       delete next.defaultCliProfileId;
     }
     return next;
+  }
+
+  private _stripSetupProfileAuthHomes(settings: Settings): { settings: Settings; changed: boolean } {
+    if (!Array.isArray(settings.cliProfiles)) return { settings, changed: false };
+    let changed = false;
+    const cliProfiles = settings.cliProfiles.map((profile) => {
+      if (!profile || !isSetupAccountCliProfile(profile)) return profile;
+      let next = profile;
+      if (typeof profile.configDir === 'string' && profile.configDir.trim()) {
+        const { configDir: _configDir, ...rest } = next;
+        next = rest;
+        changed = true;
+      }
+      if (next.env) {
+        const env: Record<string, string> = {};
+        let envChanged = false;
+        for (const [key, value] of Object.entries(next.env)) {
+          if (isCliAuthHomeEnvKey(next.vendor, key)) {
+            envChanged = true;
+            continue;
+          }
+          env[key] = value;
+        }
+        if (envChanged) {
+          const { env: _env, ...rest } = next;
+          next = Object.keys(env).length > 0 ? { ...rest, env } : rest;
+          changed = true;
+        }
+      }
+      return next;
+    });
+    return changed ? { settings: { ...settings, cliProfiles }, changed } : { settings, changed: false };
   }
 
   private _normalizeMemorySettings(memory: NonNullable<Settings['memory']>, profiles: CliProfile[]): NonNullable<Settings['memory']> {
@@ -295,13 +333,15 @@ export class SettingsService {
     const command = profile.command?.trim();
     if (command && vendor !== 'kiro') normalized.command = command;
 
+    const isSetupAccount = isSetupAccountCliProfile(normalized);
     const configDir = profile.configDir?.trim();
-    if (configDir && vendor !== 'kiro') normalized.configDir = configDir;
+    if (configDir && vendor !== 'kiro' && !isSetupAccount) normalized.configDir = configDir;
 
     if (profile.env && vendor !== 'kiro') {
       const env: Record<string, string> = {};
       for (const [key, value] of Object.entries(profile.env)) {
         if (!key || typeof value !== 'string') continue;
+        if (isSetupAccount && isCliAuthHomeEnvKey(vendor, key)) continue;
         env[key] = value;
       }
       if (Object.keys(env).length > 0) normalized.env = env;
@@ -310,4 +350,10 @@ export class SettingsService {
     if (profile.disabled) normalized.disabled = true;
     return normalized;
   }
+}
+
+function isCliAuthHomeEnvKey(vendor: CliProfile['vendor'], key: string): boolean {
+  const normalized = key.toUpperCase();
+  return (vendor === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
+    || (vendor === 'codex' && normalized === 'CODEX_HOME');
 }

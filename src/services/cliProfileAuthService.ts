@@ -6,6 +6,7 @@ import type { CliProfile, Settings } from '../types';
 import { resolveClaudeCliRuntime } from './backends/claudeCode';
 import { resolveCodexCliRuntime } from './backends/codex';
 import { buildCliCommandInvocation, type CliCommandResolution } from './cliCommandResolver';
+import { isSetupAccountCliProfile } from './cliProfiles';
 
 export type CliAuthJobStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type CliAuthEventType = 'info' | 'stdout' | 'stderr' | 'error' | 'exit';
@@ -97,6 +98,19 @@ export class CliProfileAuthService {
     const profile = profiles.find(candidate => candidate.id === profileId);
     if (!profile) throw new Error(`CLI profile not found: ${profileId}`);
     this._assertCanAuth(profile);
+
+    if (isSetupAccountCliProfile(profile)) {
+      const nextProfile = withoutSetupAuthHome(profile);
+      if (nextProfile === profile) {
+        return { settings, profile, changed: false };
+      }
+      const nextProfiles = profiles.map(candidate => candidate.id === profile.id ? nextProfile : candidate);
+      return {
+        settings: { ...settings, cliProfiles: nextProfiles },
+        profile: nextProfile,
+        changed: true,
+      };
+    }
 
     if (profile.configDir) {
       return { settings, profile, changed: false };
@@ -449,6 +463,41 @@ export class CliProfileAuthService {
       });
     });
   }
+}
+
+function withoutSetupAuthHome(profile: CliProfile): CliProfile {
+  if (!isSetupAccountCliProfile(profile)) return profile;
+  const { configDir: _configDir, env, ...rest } = profile;
+  const nextEnv = stripSetupAuthHomeEnv(profile.vendor, env);
+  const changed = Boolean(configDirWasPresent(profile) || nextEnv !== env);
+  if (!changed) return profile;
+  return {
+    ...rest,
+    ...(nextEnv && Object.keys(nextEnv).length > 0 ? { env: nextEnv } : {}),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+function configDirWasPresent(profile: CliProfile): boolean {
+  return typeof profile.configDir === 'string' && profile.configDir.trim().length > 0;
+}
+
+function stripSetupAuthHomeEnv(vendor: CliProfile['vendor'], env: Record<string, string> | undefined): Record<string, string> | undefined {
+  if (!env) return env;
+  const stripped: Record<string, string> = {};
+  let changed = false;
+  for (const [key, value] of Object.entries(env)) {
+    const normalized = key.toUpperCase();
+    const remove = (vendor === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
+      || (vendor === 'codex' && normalized === 'CODEX_HOME');
+    if (remove) {
+      changed = true;
+      continue;
+    }
+    stripped[key] = value;
+  }
+  if (!changed) return env;
+  return Object.keys(stripped).length > 0 ? stripped : undefined;
 }
 
 export function redactCliAuthText(input: string): string {

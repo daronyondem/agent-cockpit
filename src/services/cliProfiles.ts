@@ -51,6 +51,13 @@ export function serverConfiguredCliProfileId(vendor: CliVendor): string {
   return `${SERVER_CONFIGURED_PREFIX}-${vendor}`;
 }
 
+export function isSetupAccountCliProfile(profile: Pick<CliProfile, 'id' | 'vendor' | 'authMode'>): boolean {
+  if (profile.authMode !== 'account') return false;
+  if (profile.vendor !== 'claude-code' && profile.vendor !== 'codex') return false;
+  return profile.id === `setup-${profile.vendor}-account`
+    || profile.id.startsWith(`setup-${profile.vendor}-account-`);
+}
+
 export function cliProfileIdForBackend(backend: string | undefined | null): string | undefined {
   const vendor = cliVendorForBackend(backend);
   return vendor ? serverConfiguredCliProfileId(vendor) : undefined;

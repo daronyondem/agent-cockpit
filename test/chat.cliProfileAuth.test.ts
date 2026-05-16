@@ -275,6 +275,60 @@ describe('CLI profile auth endpoints', () => {
     }
   });
 
+  test('direct setup profile check does not restore isolated configDir', async () => {
+    const originalPath = process.env.PATH;
+    const oldConfigDir = path.join(env.tmpDir, 'old-direct-setup-claude-config');
+    writeExecutable('claude', [
+      '#!/bin/sh',
+      'if [ -n "$CLAUDE_CONFIG_DIR" ]; then',
+      '  echo "CONFIG=$CLAUDE_CONFIG_DIR"',
+      '  exit 1',
+      'fi',
+      'echo \'{"loggedIn":true,"config":"system"}\'',
+      'exit 0',
+      '',
+    ].join('\n'));
+    const settingsFile = path.join(env.tmpDir, 'data', 'chat', 'settings.json');
+    fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
+    fs.writeFileSync(settingsFile, JSON.stringify({
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
+      defaultBackend: 'claude-code',
+      defaultCliProfileId: 'setup-claude-code-account',
+      cliProfiles: [{
+        id: 'setup-claude-code-account',
+        name: 'Claude Code Account',
+        vendor: 'claude-code',
+        authMode: 'account',
+        protocol: 'standard',
+        configDir: oldConfigDir,
+        env: { CLAUDE_CONFIG_DIR: oldConfigDir },
+        createdAt: '2026-04-30T00:00:00.000Z',
+        updatedAt: '2026-04-30T00:00:00.000Z',
+      }],
+    }, null, 2));
+    process.env.PATH = `${env.tmpDir}${path.delimiter}${originalPath || ''}`;
+    try {
+      const res = await env.request('POST', '/api/chat/cli-profiles/setup-claude-code-account/test', {});
+
+      expect(res.status).toBe(200);
+      expect(res.body.profile.id).toBe('setup-claude-code-account');
+      expect(res.body.profile.configDir).toBeUndefined();
+      expect(res.body.profile.env).toBeUndefined();
+      expect(res.body.result.output).toContain('"config":"system"');
+      const loaded = await env.chatService.getSettings();
+      const loadedProfile = loaded.cliProfiles!.find((profile: any) => profile.id === 'setup-claude-code-account')!;
+      expect(loadedProfile.configDir).toBeUndefined();
+      expect(loadedProfile.env).toBeUndefined();
+      const persisted = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
+      expect(persisted.cliProfiles[0].configDir).toBeUndefined();
+      expect(persisted.cliProfiles[0].env).toBeUndefined();
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
   test('setup auth reuses an existing account profile for login jobs', async () => {
     const command = writeExecutable('fake-codex-setup-auth.sh', [
       '#!/bin/sh',

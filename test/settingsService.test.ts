@@ -253,6 +253,70 @@ describe('settings', () => {
     expect(profile.env).toBeUndefined();
   });
 
+  test('saving setup account profiles strips isolated auth homes', async () => {
+    const settings = await service.getSettings();
+    const saved = await service.saveSettings({
+      ...settings,
+      defaultCliProfileId: 'setup-claude-code-account',
+      defaultBackend: 'claude-code',
+      cliProfiles: [{
+        id: 'setup-claude-code-account',
+        name: 'Claude Code Account',
+        vendor: 'claude-code',
+        authMode: 'account',
+        protocol: 'standard',
+        configDir: '/tmp/agent-cockpit-private-claude',
+        env: {
+          CLAUDE_CONFIG_DIR: '/tmp/agent-cockpit-private-claude',
+          ANTHROPIC_BASE_URL: 'https://example.test',
+        },
+        createdAt: '2026-04-29T00:00:00.000Z',
+        updatedAt: '2026-04-29T00:00:00.000Z',
+      }],
+    } as any);
+
+    const profile = saved.cliProfiles![0];
+    expect(profile.configDir).toBeUndefined();
+    expect(profile.env).toEqual({ ANTHROPIC_BASE_URL: 'https://example.test' });
+    expect(saved.defaultCliProfileId).toBe('setup-claude-code-account');
+    expect(saved.defaultBackend).toBe('claude-code');
+  });
+
+  test('reading persisted setup account profiles strips isolated auth homes in memory', async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'settings.json'), JSON.stringify({
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
+      defaultCliProfileId: 'setup-codex-account',
+      defaultBackend: 'codex',
+      cliProfiles: [{
+        id: 'setup-codex-account',
+        name: 'Codex Account',
+        vendor: 'codex',
+        authMode: 'account',
+        configDir: '/tmp/agent-cockpit-private-codex',
+        env: {
+          CODEX_HOME: '/tmp/agent-cockpit-private-codex',
+          OPENAI_BASE_URL: 'https://example.test',
+        },
+        createdAt: '2026-04-29T00:00:00.000Z',
+        updatedAt: '2026-04-29T00:00:00.000Z',
+      }],
+    }, null, 2));
+
+    const loaded = await service.getSettings();
+    const profile = loaded.cliProfiles![0];
+    expect(profile.configDir).toBeUndefined();
+    expect(profile.env).toEqual({ OPENAI_BASE_URL: 'https://example.test' });
+    expect(loaded.defaultCliProfileId).toBe('setup-codex-account');
+    expect(loaded.defaultBackend).toBe('codex');
+
+    const persisted = JSON.parse(fs.readFileSync(path.join(tmpDir, 'settings.json'), 'utf8'));
+    expect(persisted.cliProfiles[0].configDir).toBeUndefined();
+    expect(persisted.cliProfiles[0].env).toEqual({ OPENAI_BASE_URL: 'https://example.test' });
+  });
+
   test('saving Memory, KB, and Context Map CLI profile selections keeps legacy backend fields aligned', async () => {
     const settings = await service.getSettings();
     const profile = {
