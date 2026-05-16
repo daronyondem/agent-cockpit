@@ -29,6 +29,11 @@ describe('Windows installer script', () => {
 
   test('reuses existing private Node runtimes during repair reruns', () => {
     expect(source).toContain('function Use-PrivateNodeRuntime');
+    expect(source).toContain('function Invoke-NativeOutput');
+    expect(source).toContain('$code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }');
+    expect(source).toContain("$npmCli = Join-Path $RuntimeDir 'node_modules\\npm\\bin\\npm-cli.js'");
+    expect(source).toContain("$npmPrefix = Join-Path $RuntimeDir 'node_modules\\npm\\bin\\npm-prefix.js'");
+    expect(source).toContain('$npmVersion = Invoke-NativeOutput $nodeExe @($npmCli, \'--version\')');
     expect(source).toContain('Reusing private Node.js');
     expect(source).toContain('if (Use-PrivateNodeRuntime $finalDir $nodeVersion $true)');
     expect(source).toContain('Existing private Node.js runtime at $finalDir is not reusable; installing a fresh copy at $repairDir.');

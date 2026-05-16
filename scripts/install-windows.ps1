@@ -192,6 +192,18 @@ function Invoke-Quiet {
   }
 }
 
+function Invoke-NativeOutput {
+  param([string] $FilePath, [string[]] $Arguments)
+  $output = & $FilePath @Arguments 2>&1
+  $code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+  $global:LASTEXITCODE = 0
+  if ($code -ne 0) {
+    $text = (($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine).Trim()
+    throw "Command failed with exit code $code`: $FilePath $($Arguments -join ' ') $text"
+  }
+  return (($output | ForEach-Object { $_.ToString() }) -join [Environment]::NewLine).Trim()
+}
+
 function Resolve-Node {
   $script:NodeExe = ''
   $script:NpmCmd = ''
@@ -203,14 +215,14 @@ function Resolve-Node {
     $systemNpx = Command-Path 'npx.cmd'
     if ($systemNode -and $systemNpm -and $systemNpx) {
       try {
-        $major = & $systemNode -p "process.versions.node.split('.')[0]"
+        $major = Invoke-NativeOutput $systemNode @('-p', "process.versions.node.split('.')[0]")
         if ([int]$major -ge $NodeMajor) {
           $script:NodeExe = $systemNode
           $script:NpmCmd = $systemNpm
           $script:NpxCmd = $systemNpx
           $script:NodeRuntimeSource = 'system'
-          $script:NodeRuntimeVersion = (& $systemNode -p "process.versions.node").Trim()
-          $script:NodeRuntimeNpmVersion = (& $systemNpm -v).Trim()
+          $script:NodeRuntimeVersion = Invoke-NativeOutput $systemNode @('-p', 'process.versions.node')
+          $script:NodeRuntimeNpmVersion = Invoke-NativeOutput $systemNpm @('-v')
           $script:NodeRuntimeBinDir = Split-Path -Parent $systemNode
           $script:NodeRuntimeDir = ''
           Write-Log "Found Node.js v$NodeRuntimeVersion and npm $NodeRuntimeNpmVersion."
@@ -234,20 +246,25 @@ function Use-PrivateNodeRuntime {
   $nodeExe = Join-Path $RuntimeDir 'node.exe'
   $npmCmd = Join-Path $RuntimeDir 'npm.cmd'
   $npxCmd = Join-Path $RuntimeDir 'npx.cmd'
-  if (-not ((Test-Path $nodeExe) -and (Test-Path $npmCmd) -and (Test-Path $npxCmd))) {
+  $npmCli = Join-Path $RuntimeDir 'node_modules\npm\bin\npm-cli.js'
+  $npxCli = Join-Path $RuntimeDir 'node_modules\npm\bin\npx-cli.js'
+  $npmPrefix = Join-Path $RuntimeDir 'node_modules\npm\bin\npm-prefix.js'
+  if (-not ((Test-Path $nodeExe) -and (Test-Path $npmCmd) -and (Test-Path $npxCmd) -and (Test-Path $npmCli) -and (Test-Path $npxCli) -and (Test-Path $npmPrefix))) {
     return $false
   }
   try {
-    $actualVersion = (& $nodeExe -p "process.versions.node").Trim()
+    $actualVersion = Invoke-NativeOutput $nodeExe @('-p', 'process.versions.node')
     if ($ExpectedVersion -and $actualVersion -ne $ExpectedVersion) {
       return $false
     }
-    $actualMajor = [int]((& $nodeExe -p "process.versions.node.split('.')[0]").Trim())
+    $actualMajor = [int](Invoke-NativeOutput $nodeExe @('-p', "process.versions.node.split('.')[0]"))
     if ($actualMajor -lt $NodeMajor) {
       return $false
     }
-    $npmVersion = (& $npmCmd -v).Trim()
+    $npmVersion = Invoke-NativeOutput $nodeExe @($npmCli, '--version')
+    Invoke-NativeOutput $nodeExe @($npxCli, '--version') | Out-Null
   } catch {
+    $global:LASTEXITCODE = 0
     return $false
   }
 

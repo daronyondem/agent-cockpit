@@ -308,13 +308,16 @@ them unless `-InstallNode` is supplied. Otherwise it downloads the latest
 official Node.js 22 Windows ZIP from `https://nodejs.org/dist/latest-v22.x/`,
 downloads `SHASUMS256.txt`, verifies the ZIP with `Get-FileHash -Algorithm
 SHA256`, expands it under the install root, and records private runtime metadata
-in `install.json`. Repair or reinstall runs first reuse an existing verified
-private runtime at the target version instead of deleting it, because the
-currently running Agent Cockpit or PM2 daemon may still have `node.exe` open. If
-the target runtime directory exists but cannot be verified, the installer
-extracts a fresh sibling runtime directory and records that path in
-`install.json`; it does not remove the possibly locked runtime. It does not
-modify the user's global PATH.
+in `install.json`. Repair or reinstall runs first reuse an existing private
+runtime at the target version only after verifying `node.exe`, `npm.cmd`,
+`npx.cmd`, and npm's `npm-cli.js`, `npx-cli.js`, and `npm-prefix.js` entrypoints,
+and after checking native command exit codes explicitly. This prevents a
+partially deleted runtime from being treated as healthy. The installer does not
+delete the target runtime directory because the currently running Agent Cockpit
+or PM2 daemon may still have `node.exe` open. If the target runtime directory
+exists but cannot be verified, the installer extracts a fresh sibling runtime
+directory and records that path in `install.json`; it does not remove the
+possibly locked runtime. It does not modify the user's global PATH.
 
 Production installs download `release-manifest.json`, `SHA256SUMS`, and the
 manifest-designated Windows `app-zip` from GitHub Releases. They verify SHA256,
