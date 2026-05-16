@@ -355,6 +355,44 @@ function Runtime-Path {
   return ($parts -join ';')
 }
 
+function Normalize-PathEntry {
+  param([string] $Value)
+  if ([string]::IsNullOrWhiteSpace($Value)) { return '' }
+  return $Value.Trim().TrimEnd('\', '/').ToLowerInvariant()
+}
+
+function Notify-EnvironmentChanged {
+  try {
+    $signature = @'
+[DllImport("user32.dll", SetLastError=true, CharSet=CharSet.Auto)]
+public static extern IntPtr SendMessageTimeout(IntPtr hWnd, UInt32 Msg, UIntPtr wParam, string lParam, UInt32 fuFlags, UInt32 uTimeout, out UIntPtr lpdwResult);
+'@
+    $type = Add-Type -MemberDefinition $signature -Name NativeMethods -Namespace AgentCockpit -PassThru
+    $result = [UIntPtr]::Zero
+    [void]$type::SendMessageTimeout([IntPtr]0xffff, 0x1A, [UIntPtr]::Zero, 'Environment', 2, 5000, [ref]$result)
+  } catch {
+    Write-Log "Updated user PATH but could not broadcast environment change: $($_.Exception.Message)"
+  }
+}
+
+function Ensure-UserPathEntry {
+  param([string] $Entry)
+  if ([string]::IsNullOrWhiteSpace($Entry)) { return }
+  $current = [Environment]::GetEnvironmentVariable('Path', 'User')
+  $parts = @()
+  if ($current) {
+    $parts = @($current -split ';' | Where-Object { -not [string]::IsNullOrWhiteSpace($_) })
+  }
+  $key = Normalize-PathEntry $Entry
+  $filtered = @($parts | Where-Object { (Normalize-PathEntry $_) -ne $key })
+  $next = [string]::Join(';', (@($Entry) + $filtered))
+  if ($next -ne $current) {
+    [Environment]::SetEnvironmentVariable('Path', $next, 'User')
+    Notify-EnvironmentChanged
+    Write-Log "Added $Entry to the current user PATH."
+  }
+}
+
 function Env-Quote {
   param([string] $Value)
   return '`' + $Value.Replace('`', '\`') + '`'
@@ -398,7 +436,9 @@ End Function
 function Write-EnvFile {
   param([string] $AppDir, [string] $DataDir, [string] $SessionSecret, [string] $SetupToken)
   $envPath = Join-Path $AppDir '.env'
-  Ensure-Directory (Join-Path $InstallDir 'cli-tools')
+  $cliToolsDir = Join-Path $InstallDir 'cli-tools'
+  Ensure-Directory $cliToolsDir
+  Ensure-UserPathEntry $cliToolsDir
   $lines = @(
     "PORT=$Port",
     "SESSION_SECRET=$SessionSecret",

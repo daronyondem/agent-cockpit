@@ -189,7 +189,11 @@ Windows Service and does not run before any Windows user has logged in.
 When the welcome screen installs Claude Code or Codex on Windows, it installs
 the CLI into Agent Cockpit's per-user `cli-tools` prefix and Agent Cockpit runs
 the installed package entrypoint directly before falling back to npm command
-shims. No global Node/npm/PM2 install is required.
+shims. Agent Cockpit also adds that `cli-tools` prefix to the current user's
+Windows `Path`, so new PowerShell or terminal windows can run `claude` and
+`codex`. No global Node/npm/PM2 install is required. If Claude Code or Codex was
+already installed outside Agent Cockpit, the Windows resolver still detects the
+user's existing PATH command.
 
 ## Developer Quick Start
 

@@ -6,6 +6,7 @@ import type { InstallDoctorAction, InstallDoctorActionResult, InstallDoctorCheck
 import type { InstallStateService } from './installStateService';
 import type { UpdateService } from './updateService';
 import { windowsCliCommandCandidates, windowsCmdCommandLine } from './cliCommandResolver';
+import { persistWindowsUserPathEntry } from './windowsUserPath';
 import { detectLibreOffice, resetLibreOfficeDetection, type LibreOfficeStatus } from './knowledgeBase/libreOffice';
 import { detectPandoc, resetPandocDetection, type PandocStatus } from './knowledgeBase/pandoc';
 
@@ -286,8 +287,21 @@ export class InstallDoctorService {
         };
       }
 
+      const pathResult = await this.persistWindowsCliToolsPath(actionId);
+      if (pathResult) {
+        const pathOutput = commandOutput(pathResult);
+        steps.push({ name: 'Add Agent Cockpit CLI tools to user PATH', success: pathResult.ok, output: pathOutput });
+        if (!pathResult.ok) {
+          return {
+            success: false,
+            action: definition.action,
+            steps,
+            error: pathResult.error || firstLine(pathResult.stderr) || firstLine(pathResult.stdout) || 'Failed to update the current user PATH.',
+          };
+        }
+      }
+
       this.invalidateDetectionForAction(actionId);
-      this.refreshWindowsCliToolsPath(actionId);
       return {
         success: true,
         action: definition.action,
@@ -479,17 +493,14 @@ export class InstallDoctorService {
     if (actionId.startsWith('libreoffice:')) this.resetLibreOfficeDetector();
   }
 
-  private refreshWindowsCliToolsPath(actionId: string): void {
-    if (process.platform !== 'win32') return;
-    if (!actionId.startsWith('claude-cli:') && !actionId.startsWith('codex-cli:')) return;
+  private async persistWindowsCliToolsPath(actionId: string): Promise<CommandResult | null> {
+    if (process.platform !== 'win32') return null;
+    if (!actionId.startsWith('claude-cli:') && !actionId.startsWith('codex-cli:')) return null;
     const install = this.installStateService.getStatus();
     const dir = windowsCliToolsDir(install);
-    if (!dir) return;
+    if (!dir) return null;
     fs.mkdirSync(dir, { recursive: true });
-    const delimiter = ';';
-    const parts = (process.env.PATH || '').split(delimiter).filter(Boolean);
-    const key = dir.toLowerCase();
-    process.env.PATH = [dir, ...parts.filter(part => part.toLowerCase() !== key)].join(delimiter);
+    return persistWindowsUserPathEntry(dir, this.commandRunner);
   }
 }
 

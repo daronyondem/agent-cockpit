@@ -192,6 +192,35 @@ describe('CodexAdapter', () => {
     }
   });
 
+  test('resolveCodexCliRuntime detects self-installed Windows Codex from PATH', () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-runtime-path-win-'));
+    const userBin = path.join(root, 'bin');
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
+      process.env.PATH = userBin;
+      fs.mkdirSync(userBin, { recursive: true });
+      fs.writeFileSync(path.join(userBin, 'codex.cmd'), '');
+
+      const runtime = resolveCodexCliRuntime();
+
+      expect(runtime.command).toBe('codex.cmd');
+      expect(runtime.argsPrefix).toBeUndefined();
+      expect(runtime.windowsCmdShim).toBe(true);
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
+      process.env.PATH = originalPath;
+      fs.rmSync(root, { recursive: true, force: true });
+      restorePlatform();
+    }
+  });
+
   test('resolveCodexCliRuntime rejects non-Codex profiles', () => {
     expect(() => resolveCodexCliRuntime({
       id: 'profile-claude',

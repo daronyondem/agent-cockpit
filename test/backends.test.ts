@@ -282,6 +282,35 @@ describe('ClaudeCodeAdapter', () => {
     }
   });
 
+  test('resolveClaudeCliRuntime detects self-installed Windows Claude from PATH', () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-runtime-path-win-'));
+    const userBin = path.join(root, 'bin');
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
+      process.env.PATH = userBin;
+      fs.mkdirSync(userBin, { recursive: true });
+      fs.writeFileSync(path.join(userBin, 'claude.exe'), '');
+
+      const runtime = resolveClaudeCliRuntime();
+
+      expect(runtime.command).toBe('claude.exe');
+      expect(runtime.argsPrefix).toBeUndefined();
+      expect(runtime.windowsCmdShim).toBeUndefined();
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
+      process.env.PATH = originalPath;
+      fs.rmSync(root, { recursive: true, force: true });
+      restorePlatform();
+    }
+  });
+
   test('resolveClaudeCliRuntime rejects non-Claude profiles', () => {
     expect(() => resolveClaudeCliRuntime({
       id: 'profile-codex',

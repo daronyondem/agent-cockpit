@@ -344,13 +344,17 @@ environment includes
 `AUTH_ENABLE_LEGACY_OAUTH=false`, `PM2_HOME=<install-root>\pm2`, and `PATH`
 with `<install-root>\cli-tools` first, the private runtime directory second when
 present, `%APPDATA%\npm` when available, and then the inherited user PATH. The
-installer creates `<install-root>\cli-tools` so welcome-screen Claude/Codex npm
-actions can install into an Agent Cockpit-owned per-user prefix. On Windows the
-server-side CLI resolver prefers the package entrypoints npm puts under that
-prefix (`@anthropic-ai\claude-code\bin\claude.exe` directly and
+installer creates `<install-root>\cli-tools`, prepends it to the current user's
+Windows `Path`, and broadcasts an environment change so new user terminals can
+run CLIs that Agent Cockpit installs there. Welcome-screen Claude/Codex npm
+actions also persist the same user `Path` entry after successful installs. On
+Windows the server-side CLI resolver prefers the package entrypoints npm puts
+under that prefix (`@anthropic-ai\claude-code\bin\claude.exe` directly and
 `@openai\codex\bin\codex.js` through `node.exe`) before falling back to npm
-`.cmd` shims through `cmd.exe`; Claude/Codex chat, auth, doctor, usage, and CLI
-update flows use that shared resolution path. Windows
+`.cmd` shims through `cmd.exe`; it also recognizes self-installed
+`claude.exe`/`claude.cmd` and `codex.exe`/`codex.cmd` commands already available
+on the user's PATH. Claude/Codex chat, auth, doctor, usage, and CLI update flows
+use that shared resolution path. Windows
 path-valued `.env` entries use backtick quoting so dotenv does not interpret
 `\r` or `\n` inside paths such as `runtime\node-v...`. Fresh `SESSION_SECRET`
 and `AUTH_SETUP_TOKEN` values are generated with

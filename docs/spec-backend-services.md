@@ -1204,12 +1204,17 @@ path. Windows Claude/Codex welcome actions run npm with
 `--prefix <installDir>\cli-tools` so the CLIs land in an Agent Cockpit-owned
 per-user prefix instead of depending on npm's global Windows prefix. After a
 successful Claude/Codex install action, the service prepends
-`<installDir>\cli-tools` to the current server `PATH` before returning the
-refreshed doctor result so immediate authentication and profile checks can find
-the installed CLIs. Windows Claude/Codex probes share the backend resolver:
+`<installDir>\cli-tools` to the current server `PATH`, persists the same entry
+to the current user's Windows `Path`, and broadcasts an environment change
+before returning the refreshed doctor result. That makes immediate
+authentication/profile checks work and makes `claude`/`codex` available to new
+PowerShell or terminal sessions. Windows Claude/Codex probes share the backend resolver:
 `@anthropic-ai\claude-code\bin\claude.exe` is executed directly,
 `@openai\codex\bin\codex.js` is executed through `node.exe`, and npm-created
-`claude.cmd`/`codex.cmd` shims in installer/user prefixes remain fallbacks. The
+`claude.cmd`/`codex.cmd` shims in installer/user prefixes remain fallbacks. If
+the CLIs were installed outside Agent Cockpit, the resolver also probes bare
+`claude.exe`/`claude.cmd` and `codex.exe`/`codex.cmd` commands from the user's
+Windows PATH. The
 fallback Windows command runner still launches
 `.cmd` shims through `cmd.exe /d /s /c` and wraps the full command line in outer
 quotes so absolute runtime paths under `Agent Cockpit` directories survive

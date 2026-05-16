@@ -40,7 +40,7 @@ export function resolveCliCommandForRuntime(
 
   const defaultCommand = VENDOR_COMMANDS[vendor] || command;
   const candidates = windowsCliCommandCandidates(vendor, defaultCommand, env);
-  const existing = candidates.find(candidateExists);
+  const existing = candidates.find(candidate => candidateExists(candidate, env));
   if (existing) return existing;
 
   return {
@@ -61,7 +61,7 @@ export function windowsCliCommandCandidates(
   const candidates: CliCommandResolution[] = [];
   for (const prefix of windowsCliPrefixes(env, extraPrefixes)) {
     const packageCandidate = windowsPackageCandidate(vendor, prefix, env);
-    if (packageCandidate && candidateExists(packageCandidate)) candidates.push(packageCandidate);
+    if (packageCandidate && candidateExists(packageCandidate, env)) candidates.push(packageCandidate);
     const exe = joinForBase(prefix, `${defaultCommand}.exe`);
     if (fs.existsSync(exe)) {
       candidates.push({
@@ -75,6 +75,10 @@ export function windowsCliCommandCandidates(
       displayCommand: joinForBase(prefix, `${defaultCommand}.cmd`),
     });
   }
+  candidates.push({
+    command: `${defaultCommand}.exe`,
+    displayCommand: `${defaultCommand}.exe`,
+  });
   candidates.push({
     command: `${defaultCommand}.cmd`,
     windowsCmdShim: true,
@@ -141,14 +145,14 @@ function windowsPackageCandidate(vendor: CliVendor, prefix: string, env: NodeJS.
   return { command: target, displayCommand: target };
 }
 
-function candidateExists(candidate: CliCommandResolution): boolean {
+function candidateExists(candidate: CliCommandResolution, env: NodeJS.ProcessEnv): boolean {
   if (candidate.argsPrefix && candidate.argsPrefix.length > 0) {
-    return fs.existsSync(candidate.command) && fs.existsSync(candidate.argsPrefix[0]);
+    return commandExists(candidate.command, env) && fs.existsSync(candidate.argsPrefix[0]);
   }
   if (candidate.command.includes('/') || candidate.command.includes('\\')) {
     return fs.existsSync(candidate.command);
   }
-  return false;
+  return commandExists(candidate.command, env);
 }
 
 function windowsNodeCommand(env: NodeJS.ProcessEnv): string {
@@ -203,6 +207,19 @@ function uniqueDirs(values: Array<string | null | undefined>): string[] {
     result.push(value);
   }
   return result;
+}
+
+function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {
+  if (command.includes('/') || command.includes('\\')) {
+    return fs.existsSync(command);
+  }
+  const pathValue = env.PATH || env.Path || '';
+  const dirs = pathValue.split(';').filter(Boolean);
+  for (const dir of dirs) {
+    const cleanDir = dir.replace(/^"+|"+$/g, '');
+    if (fs.existsSync(joinForBase(cleanDir, command))) return true;
+  }
+  return false;
 }
 
 function dedupeCandidates(values: CliCommandResolution[]): CliCommandResolution[] {
