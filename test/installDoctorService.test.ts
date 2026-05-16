@@ -215,7 +215,9 @@ describe('InstallDoctorService', () => {
     roots.push(root);
     const commands: string[] = [];
     const originalAppData = process.env.APPDATA;
+    const originalLocalAppData = process.env.LOCALAPPDATA;
     delete process.env.APPDATA;
+    delete process.env.LOCALAPPDATA;
     try {
       const service = new InstallDoctorService({
         appRoot: root,
@@ -273,6 +275,11 @@ describe('InstallDoctorService', () => {
       } else {
         process.env.APPDATA = originalAppData;
       }
+      if (originalLocalAppData === undefined) {
+        delete process.env.LOCALAPPDATA;
+      } else {
+        process.env.LOCALAPPDATA = originalLocalAppData;
+      }
       restorePlatform();
     }
   });
@@ -284,7 +291,9 @@ describe('InstallDoctorService', () => {
     const runtimeBinDir = path.join(root, 'runtime', 'node v22 win x64');
     const cliToolsDir = path.join(root, 'cli-tools');
     const originalAppData = process.env.APPDATA;
+    const originalLocalAppData = process.env.LOCALAPPDATA;
     delete process.env.APPDATA;
+    delete process.env.LOCALAPPDATA;
     const npmCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
     const npxCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npx-cli.js');
     const nodeExe = path.join(runtimeBinDir, 'node.exe');
@@ -360,6 +369,11 @@ describe('InstallDoctorService', () => {
       } else {
         process.env.APPDATA = originalAppData;
       }
+      if (originalLocalAppData === undefined) {
+        delete process.env.LOCALAPPDATA;
+      } else {
+        process.env.LOCALAPPDATA = originalLocalAppData;
+      }
       restorePlatform();
     }
   });
@@ -381,6 +395,8 @@ describe('InstallDoctorService', () => {
     fs.writeFileSync(npxCli, '');
     const installCommands: Array<{ command: string; args: string[] }> = [];
     const originalPath = process.env.PATH;
+    const originalLocalAppData = process.env.LOCALAPPDATA;
+    delete process.env.LOCALAPPDATA;
     try {
       const service = new InstallDoctorService({
         appRoot: root,
@@ -446,6 +462,11 @@ describe('InstallDoctorService', () => {
       expect(process.env.PATH?.split(';')[0]).toBe(cliToolsDir);
     } finally {
       process.env.PATH = originalPath;
+      if (originalLocalAppData === undefined) {
+        delete process.env.LOCALAPPDATA;
+      } else {
+        process.env.LOCALAPPDATA = originalLocalAppData;
+      }
       restorePlatform();
     }
   });
@@ -458,7 +479,9 @@ describe('InstallDoctorService', () => {
     const userNpmDir = path.join(appData, 'npm');
     const cliToolsDir = path.join(root, 'cli-tools');
     const originalAppData = process.env.APPDATA;
+    const originalLocalAppData = process.env.LOCALAPPDATA;
     process.env.APPDATA = appData;
+    delete process.env.LOCALAPPDATA;
     const commands: string[] = [];
     try {
       const service = new InstallDoctorService({
@@ -493,6 +516,11 @@ describe('InstallDoctorService', () => {
         delete process.env.APPDATA;
       } else {
         process.env.APPDATA = originalAppData;
+      }
+      if (originalLocalAppData === undefined) {
+        delete process.env.LOCALAPPDATA;
+      } else {
+        process.env.LOCALAPPDATA = originalLocalAppData;
       }
       restorePlatform();
     }
