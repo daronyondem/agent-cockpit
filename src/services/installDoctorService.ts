@@ -31,10 +31,18 @@ function libreOfficeRemediation(): string {
     : 'Install LibreOffice for PPTX slide-image conversion. If Homebrew is already installed, macOS can run `brew install --cask libreoffice`; otherwise download LibreOffice from https://www.libreoffice.org/download/download-libreoffice/. Restart Agent Cockpit after installing.';
 }
 
-function platformCommand(command: 'npm' | 'npx', install?: InstallStatus): string {
-  const executable = process.platform === 'win32' ? `${command}.cmd` : command;
+function platformCommand(command: 'npm' | 'npx', install?: InstallStatus): string[] {
   const runtimeBinDir = install?.nodeRuntime?.binDir;
-  return runtimeBinDir ? path.join(runtimeBinDir, executable) : executable;
+  if (process.platform === 'win32' && runtimeBinDir) {
+    const runtimeDir = install.nodeRuntime?.runtimeDir || runtimeBinDir;
+    const nodeExe = path.join(runtimeBinDir, 'node.exe');
+    const npmCli = path.join(runtimeDir, 'node_modules', 'npm', 'bin', command === 'npm' ? 'npm-cli.js' : 'npx-cli.js');
+    if (fs.existsSync(nodeExe) && fs.existsSync(npmCli)) {
+      return [nodeExe, npmCli];
+    }
+  }
+  const executable = process.platform === 'win32' ? `${command}.cmd` : command;
+  return [runtimeBinDir ? path.join(runtimeBinDir, executable) : executable];
 }
 
 interface CommandResult {
@@ -155,8 +163,8 @@ export class InstallDoctorService {
     const npxCommand = platformCommand('npx', install);
 
     checks.push(this.checkNode());
-    checks.push(await this.checkCommand('npm', 'npm', [npmCommand, '--version'], true, 'npm is available.', NODE_REMEDIATION));
-    checks.push(await this.checkCommand('pm2', 'PM2', [npxCommand, '--no-install', 'pm2', '--version'], true, 'Local PM2 is available through npx.', 'Run npm ci in the app directory, then retry.'));
+    checks.push(await this.checkCommand('npm', 'npm', [...npmCommand, '--version'], true, 'npm is available.', NODE_REMEDIATION));
+    checks.push(await this.checkCommand('pm2', 'PM2', [...npxCommand, '--no-install', 'pm2', '--version'], true, 'Local PM2 is available through npx.', 'Run npm ci in the app directory, then retry.'));
     checks.push(await this.checkDataDir());
     checks.push(this.checkAppDir());
     const startupCheck = await this.checkWindowsStartup(install);
@@ -357,13 +365,13 @@ export class InstallDoctorService {
     const npmCommand = platformCommand('npm', install);
     const definitions: InstallActionDefinition[] = [
       {
-        action: { id: 'claude-cli:npm-install', kind: 'command', label: 'Install Claude Code', description: 'Installs the Claude Code CLI with npm.', command: [npmCommand, 'i', '-g', '@anthropic-ai/claude-code@latest'] },
-        command: [npmCommand, 'i', '-g', '@anthropic-ai/claude-code@latest'],
+        action: { id: 'claude-cli:npm-install', kind: 'command', label: 'Install Claude Code', description: 'Installs the Claude Code CLI with npm.', command: [...npmCommand, 'i', '-g', '@anthropic-ai/claude-code@latest'] },
+        command: [...npmCommand, 'i', '-g', '@anthropic-ai/claude-code@latest'],
       },
       { action: { id: 'claude-cli:docs', kind: 'link', label: 'Open docs', href: 'https://code.claude.com/docs/en/setup' } },
       {
-        action: { id: 'codex-cli:npm-install', kind: 'command', label: 'Install Codex', description: 'Installs the Codex CLI with npm.', command: [npmCommand, 'i', '-g', '@openai/codex@latest'] },
-        command: [npmCommand, 'i', '-g', '@openai/codex@latest'],
+        action: { id: 'codex-cli:npm-install', kind: 'command', label: 'Install Codex', description: 'Installs the Codex CLI with npm.', command: [...npmCommand, 'i', '-g', '@openai/codex@latest'] },
+        command: [...npmCommand, 'i', '-g', '@openai/codex@latest'],
       },
       { action: { id: 'codex-cli:docs', kind: 'link', label: 'Open docs', href: 'https://github.com/openai/codex' } },
       { action: { id: 'kiro-cli:docs', kind: 'link', label: 'Open docs', href: 'https://kiro.dev/docs/cli/installation/' } },

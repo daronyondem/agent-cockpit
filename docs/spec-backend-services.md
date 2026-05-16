@@ -1181,12 +1181,15 @@ running on Windows, the mobile PWA build shell, Claude Code CLI, Codex CLI, Kiro
 CLI, Pandoc, LibreOffice, and install/update channel metadata. npm and PM2
 probes resolve `npm`/`npx` from `install.nodeRuntime.binDir` when the installer
 recorded a private or system runtime, so Windows private-Node installs do not
-depend on the inherited process `PATH` for the welcome checks. The Windows
-runtime probes use `npm.cmd` and `npx.cmd`; the default command runner launches
-those Windows command shims through `cmd.exe /d /s /c` rather than executing the
-`.cmd` files directly, and wraps the full command line in outer quotes so
-absolute runtime paths under `Agent Cockpit` directories survive `cmd.exe /s`
-quote stripping. The Windows
+depend on the inherited process `PATH` for the welcome checks. When the recorded
+Windows runtime contains the npm CLI JavaScript entrypoints, Install Doctor uses
+`node.exe node_modules/npm/bin/npm-cli.js` and
+`node.exe node_modules/npm/bin/npx-cli.js` for npm/PM2 probes and npm-backed
+install actions. That avoids `npm.cmd`/`npx.cmd` shim quoting entirely for the
+installer-managed path. The fallback Windows command runner still launches
+`.cmd` shims through `cmd.exe /d /s /c` and wraps the full command line in outer
+quotes so absolute runtime paths under `Agent Cockpit` directories survive
+`cmd.exe /s` quote stripping. The Windows
 logon startup check queries the `AgentCockpit` scheduled task unless
 `install.startup.kind` is `manual`, in which case the disabled startup state is
 reported as intentional. Missing CLI warnings are optional and tell the user to

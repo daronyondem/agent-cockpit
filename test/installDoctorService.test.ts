@@ -274,7 +274,14 @@ describe('InstallDoctorService', () => {
     const root = makeRoot();
     roots.push(root);
     const runtimeBinDir = path.join(root, 'runtime', 'node v22 win x64');
-    const commands: string[] = [];
+    const npmCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    const npxCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npx-cli.js');
+    const nodeExe = path.join(runtimeBinDir, 'node.exe');
+    fs.mkdirSync(path.dirname(npmCli), { recursive: true });
+    fs.writeFileSync(nodeExe, '');
+    fs.writeFileSync(npmCli, '');
+    fs.writeFileSync(npxCli, '');
+    const commands: Array<{ command: string; args: string[] }> = [];
     try {
       const service = new InstallDoctorService({
         appRoot: root,
@@ -290,13 +297,16 @@ describe('InstallDoctorService', () => {
             updatedAt: '2026-05-15T00:00:00.000Z',
           },
         }),
-        commandRunner: async (command) => {
-          commands.push(command);
+        commandRunner: async (command, args) => {
+          commands.push({ command, args });
           if (command === 'npm.cmd' || command === 'npx.cmd') {
             return { ok: false, stdout: '', stderr: '', error: 'plain PATH command should not be used' };
           }
-          if (command === path.join(runtimeBinDir, 'npm.cmd')) return { ok: true, stdout: '10.9.8', stderr: '' };
-          if (command === path.join(runtimeBinDir, 'npx.cmd')) return { ok: true, stdout: '7.0.1', stderr: '' };
+          if (command === path.join(runtimeBinDir, 'npm.cmd') || command === path.join(runtimeBinDir, 'npx.cmd')) {
+            return { ok: false, stdout: '', stderr: '', error: 'runtime command shim should not be used' };
+          }
+          if (command === nodeExe && args[0] === npmCli) return { ok: true, stdout: '10.9.8', stderr: '' };
+          if (command === nodeExe && args[0] === npxCli) return { ok: true, stdout: '7.0.1', stderr: '' };
           if (['claude', 'codex', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
           if (command === 'schtasks.exe') return { ok: true, stdout: '1.0.0', stderr: '' };
           return { ok: true, stdout: '1.0.0', stderr: '' };
@@ -309,17 +319,17 @@ describe('InstallDoctorService', () => {
       const status = await service.getStatus();
 
       expect(commands).toEqual(expect.arrayContaining([
-        path.join(runtimeBinDir, 'npm.cmd'),
-        path.join(runtimeBinDir, 'npx.cmd'),
+        { command: nodeExe, args: [npmCli, '--version'] },
+        { command: nodeExe, args: [npxCli, '--no-install', 'pm2', '--version'] },
       ]));
-      expect(commands).not.toEqual(expect.arrayContaining(['npm.cmd', 'npx.cmd']));
+      expect(commands.map(call => call.command)).not.toEqual(expect.arrayContaining(['npm.cmd', 'npx.cmd', path.join(runtimeBinDir, 'npm.cmd'), path.join(runtimeBinDir, 'npx.cmd')]));
       expect(status.checks.find(item => item.id === 'npm')).toEqual(expect.objectContaining({ status: 'ok' }));
       expect(status.checks.find(item => item.id === 'pm2')).toEqual(expect.objectContaining({ status: 'ok' }));
       expect(status.checks.find(item => item.id === 'claude-cli')?.installActions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'claude-cli:npm-install', command: [path.join(runtimeBinDir, 'npm.cmd'), 'i', '-g', '@anthropic-ai/claude-code@latest'] }),
+        expect.objectContaining({ id: 'claude-cli:npm-install', command: [nodeExe, npmCli, 'i', '-g', '@anthropic-ai/claude-code@latest'] }),
       ]));
       expect(status.checks.find(item => item.id === 'codex-cli')?.installActions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'codex-cli:npm-install', command: [path.join(runtimeBinDir, 'npm.cmd'), 'i', '-g', '@openai/codex@latest'] }),
+        expect.objectContaining({ id: 'codex-cli:npm-install', command: [nodeExe, npmCli, 'i', '-g', '@openai/codex@latest'] }),
       ]));
     } finally {
       restorePlatform();
