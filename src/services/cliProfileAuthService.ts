@@ -120,18 +120,19 @@ export class CliProfileAuthService {
       const { args } = this._statusCommand(profile);
       const invocation = buildCliCommandInvocation(runtime, args);
       const result = await this._runCommand(invocation.command, invocation.args, runtime.env, 15_000);
-      const output = redactCliAuthText([result.stdout, result.stderr].filter(Boolean).join('\n'));
-      const authenticated = result.code === 0;
+      const rawOutput = [result.stdout, result.stderr].filter(Boolean).join('\n');
+      const output = redactCliAuthText(rawOutput);
+      const status = interpretCliAuthStatus(profile, result.code, rawOutput);
       return {
         profileId: profile.id,
         vendor: profile.vendor,
         command: runtime.displayCommand || runtime.command,
         available: result.spawned,
-        authenticated,
-        status: authenticated ? 'ok' : 'not-authenticated',
+        authenticated: status.authenticated,
+        status: status.authenticated ? 'ok' : 'not-authenticated',
         output,
         exitCode: result.code,
-        ...(authenticated ? {} : { error: output || 'CLI status check reported that this profile is not authenticated.' }),
+        ...(status.authenticated ? {} : { error: output || status.error || 'CLI status check reported that this profile is not authenticated.' }),
       };
     } catch (err: unknown) {
       const message = (err as Error).message || String(err);
@@ -372,12 +373,14 @@ export class CliProfileAuthService {
         runtime.env,
         Math.min(15_000, Math.max(1_000, this._statusPollTimeoutMs)),
       );
-      const output = redactCliAuthText([result.stdout, result.stderr].filter(Boolean).join('\n')).trim();
-      if (result.code === 0) {
+      const rawOutput = [result.stdout, result.stderr].filter(Boolean).join('\n');
+      const output = redactCliAuthText(rawOutput).trim();
+      const status = interpretCliAuthStatus(profile, result.code, rawOutput);
+      if (status.authenticated) {
         if (output) this._addEvent(snapshot, 'info', output);
         return;
       }
-      lastOutput = output || `${this._vendorLabel(profile)} status exited with code ${result.code ?? 'unknown'}.`;
+      lastOutput = output || status.error || `${this._vendorLabel(profile)} status exited with code ${result.code ?? 'unknown'}.`;
       await this._sleep(this._statusPollIntervalMs);
     }
     throw new Error(
@@ -458,4 +461,39 @@ export function redactCliAuthText(input: string): string {
     .replace(/(refresh[_-]?token["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
     .replace(/(api[_-]?key["']?\s*[:=]\s*["']?)[A-Za-z0-9._~+/-]+=*/gi, '$1[REDACTED]')
     .replace(/(sk-[A-Za-z0-9]{8})[A-Za-z0-9_-]+/g, '$1[REDACTED]');
+}
+
+function interpretCliAuthStatus(
+  profile: CliProfile,
+  exitCode: number | null,
+  rawOutput: string,
+): { authenticated: boolean; error?: string } {
+  if (profile.vendor !== 'claude-code') {
+    return exitCode === 0
+      ? { authenticated: true }
+      : { authenticated: false, error: `CLI status exited with code ${exitCode ?? 'unknown'}.` };
+  }
+  if (exitCode !== 0) {
+    return { authenticated: false, error: `Claude Code status exited with code ${exitCode ?? 'unknown'}.` };
+  }
+  const status = parseClaudeAuthStatusJson(rawOutput);
+  if (status?.loggedIn === true) return { authenticated: true };
+  if (status?.loggedIn === false) return { authenticated: false, error: 'Claude Code status reported loggedIn=false.' };
+  return { authenticated: false, error: 'Claude Code status output did not include loggedIn=true.' };
+}
+
+function parseClaudeAuthStatusJson(rawOutput: string): { loggedIn?: boolean } | null {
+  const text = String(rawOutput || '').trim();
+  if (!text) return null;
+  const candidates = [text];
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start >= 0 && end > start) candidates.push(text.slice(start, end + 1));
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate) as { loggedIn?: unknown };
+      return typeof parsed?.loggedIn === 'boolean' ? { loggedIn: parsed.loggedIn } : {};
+    } catch {}
+  }
+  return null;
 }

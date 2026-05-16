@@ -122,6 +122,8 @@ tool is unavailable.
   auth home, not a generated profile `configDir`, so terminal commands and
   Agent Cockpit share login state. Explicit account profiles may remain
   isolated.
+- Claude Code auth verification must parse `claude auth status --json` and
+  require `loggedIn: true`; exit code `0` alone is not enough.
 
 ## Context Map, Memory, And Knowledge Base
 

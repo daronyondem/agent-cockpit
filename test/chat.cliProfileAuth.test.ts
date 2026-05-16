@@ -61,7 +61,7 @@ describe('CLI profile auth endpoints', () => {
   test('checks an account profile and creates a default config directory', async () => {
     const command = writeExecutable('fake-claude-status.sh', [
       '#!/bin/sh',
-      'echo "CONFIG=$CLAUDE_CONFIG_DIR"',
+      'printf \'{"loggedIn":true,"config":"%s"}\\n\' "$CLAUDE_CONFIG_DIR"',
       'exit 0',
       '',
     ].join('\n'));
@@ -83,8 +83,34 @@ describe('CLI profile auth endpoints', () => {
     expect(res.body.result.modelsAvailable).toBe(true);
     expect(res.body.result.modelCount).toBe(3);
     expect(res.body.profile.configDir).toContain('profile-claude-auth');
-    expect(res.body.result.output).toContain(`CONFIG=${res.body.profile.configDir}`);
+    expect(res.body.result.output).toContain(res.body.profile.configDir);
     expect(fs.existsSync(res.body.profile.configDir)).toBe(true);
+  });
+
+  test('does not verify Claude auth when status JSON reports logged out with exit zero', async () => {
+    const command = writeExecutable('fake-claude-status-logged-out.sh', [
+      '#!/bin/sh',
+      'echo \'{"loggedIn":false,"authMethod":null}\'',
+      'exit 0',
+      '',
+    ].join('\n'));
+    await addProfile({
+      id: 'profile-claude-logged-out',
+      name: 'Claude Logged Out',
+      vendor: 'claude-code',
+      authMode: 'account',
+      command,
+      createdAt: '2026-04-30T00:00:00.000Z',
+      updatedAt: '2026-04-30T00:00:00.000Z',
+    });
+
+    const res = await env.request('POST', '/api/chat/cli-profiles/profile-claude-logged-out/test', {});
+
+    expect(res.status).toBe(200);
+    expect(res.body.result.available).toBe(true);
+    expect(res.body.result.authenticated).toBe(false);
+    expect(res.body.result.status).toBe('not-authenticated');
+    expect(res.body.result.output).toContain('"loggedIn":false');
   });
 
   test('starts an auth job and exposes emitted login text for polling', async () => {
@@ -190,7 +216,7 @@ describe('CLI profile auth endpoints', () => {
       '  echo "CONFIG=$CLAUDE_CONFIG_DIR"',
       '  exit 1',
       'fi',
-      'echo "CONFIG=system"',
+      'echo \'{"loggedIn":true,"config":"system"}\'',
       'exit 0',
       '',
     ].join('\n'));
@@ -206,7 +232,7 @@ describe('CLI profile auth endpoints', () => {
       }));
       expect(res.body.profile.configDir).toBeUndefined();
       expect(res.body.settings.defaultCliProfileId).toBe('setup-claude-code-account');
-      expect(res.body.result.output).toContain('CONFIG=system');
+      expect(res.body.result.output).toContain('"config":"system"');
     } finally {
       process.env.PATH = originalPath;
     }
@@ -222,7 +248,7 @@ describe('CLI profile auth endpoints', () => {
       '  echo "CONFIG=$CLAUDE_CONFIG_DIR"',
       '  exit 1',
       'fi',
-      'echo "CONFIG=system"',
+      'echo \'{"loggedIn":true,"config":"system"}\'',
       'exit 0',
       '',
     ].join('\n'));
@@ -242,7 +268,7 @@ describe('CLI profile auth endpoints', () => {
       expect(res.status).toBe(200);
       expect(res.body.profile.id).toBe('setup-claude-code-account');
       expect(res.body.profile.configDir).toBeUndefined();
-      expect(res.body.result.output).toContain('CONFIG=system');
+      expect(res.body.result.output).toContain('"config":"system"');
       expect(res.body.settings.cliProfiles.find((profile: any) => profile.id === 'setup-claude-code-account').configDir).toBeUndefined();
     } finally {
       process.env.PATH = originalPath;
@@ -375,6 +401,41 @@ describe('CLI profile auth endpoints', () => {
     expect(job.status).toBe('failed');
     expect(job.error).toContain('did not verify before timeout');
     expect(job.error).toContain('not logged in');
+    service.shutdown();
+  });
+
+  test('fails a Claude auth job when final status JSON still reports logged out', async () => {
+    const command = writeExecutable('fake-claude-auth-status-false.sh', [
+      '#!/bin/sh',
+      'if [ "$1" = "auth" ] && [ "$2" = "login" ]; then',
+      '  echo "login flow exited"',
+      '  exit 0',
+      'fi',
+      'echo \'{"loggedIn":false}\'',
+      'exit 0',
+      '',
+    ].join('\n'));
+    const service = new CliProfileAuthService(env.tmpDir, {
+      statusPollTimeoutMs: 75,
+      statusPollIntervalMs: 10,
+    });
+
+    const started = await service.startAuth({
+      id: 'profile-claude-status-false',
+      name: 'Claude Status False',
+      vendor: 'claude-code',
+      authMode: 'account',
+      command,
+      configDir: path.join(env.tmpDir, 'claude-status-false'),
+      createdAt: '2026-04-30T00:00:00.000Z',
+      updatedAt: '2026-04-30T00:00:00.000Z',
+    } as any);
+
+    const job = await waitForServiceJob(service, started.id);
+
+    expect(job.status).toBe('failed');
+    expect(job.error).toContain('did not verify before timeout');
+    expect(job.error).toContain('"loggedIn":false');
     service.shutdown();
   });
 
