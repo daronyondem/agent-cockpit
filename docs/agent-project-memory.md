@@ -166,6 +166,8 @@ tool is unavailable.
 - Memory consolidation should precede vector/embedding work where applicable.
 - KB/media work should preserve current generated media if it already exists and
   avoid unnecessary churn.
+- Welcome, Install Doctor, Settings, and KB upload checks should detect newly
+  installed Pandoc/LibreOffice without requiring an Agent Cockpit restart.
 
 ## UI And Product Direction
 

@@ -5,14 +5,20 @@
 //
 // Pandoc is an external binary (~100 MB Haskell install) that cannot be
 // bundled via npm. Users install it via their platform package manager
-// (brew / apt / choco) or from pandoc.org. Detection runs once at startup
-// and caches the result for the process lifetime. When pandoc is missing,
-// DOCX uploads are rejected at the route level with install instructions.
+// (brew / apt / choco) or from pandoc.org. Status checks can force a fresh
+// probe so newly installed tools are detected without restarting the server.
+// When pandoc is missing, DOCX uploads are rejected at the route level with
+// install instructions.
 
-import { spawn, execFile } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { detectionEnv, resolveCommandOnPath, windowsPath } from './externalToolDetection';
 
 const execFileAsync = promisify(execFile);
+
+export interface PandocDetectionOptions {
+  refresh?: boolean;
+}
 
 export interface PandocStatus {
   /** True iff `which pandoc` (or `where` on Windows) succeeded. */
@@ -34,27 +40,16 @@ let cached: PandocStatus | null = null;
  * (b) the version string is useful in the Settings UI status line.
  */
 async function whichPandoc(): Promise<string | null> {
-  const cmd = process.platform === 'win32' ? 'where' : 'which';
-  return new Promise((resolve) => {
-    // We must spread `process.env` explicitly instead of relying on spawn's
-    // default "inherit parent env" behavior. Jest's node environment swaps
-    // out `process.env` for a proxy, so mutations made inside a test (e.g.
-    // clearing PATH) don't reach the child via the C-level environ pointer
-    // spawn uses by default. Passing `env: { ...process.env }` reads Jest's
-    // proxied value and forwards the current state to the child.
-    const child = spawn(cmd, ['pandoc'], {
-      stdio: ['ignore', 'pipe', 'ignore'],
-      env: { ...process.env },
-    });
-    let stdout = '';
-    child.stdout.on('data', (chunk) => (stdout += chunk.toString('utf8')));
-    child.on('error', () => resolve(null));
-    child.on('exit', (code) => {
-      if (code !== 0) return resolve(null);
-      const line = stdout.split(/\r?\n/)[0]?.trim();
-      resolve(line || null);
-    });
-  });
+  return resolveCommandOnPath('pandoc', windowsPandocFallbacks());
+}
+
+function windowsPandocFallbacks(): string[] {
+  return [
+    windowsPath(process.env.LOCALAPPDATA, 'Pandoc', 'pandoc.exe'),
+    windowsPath(process.env.LOCALAPPDATA, 'Programs', 'Pandoc', 'pandoc.exe'),
+    windowsPath(process.env.ProgramFiles, 'Pandoc', 'pandoc.exe'),
+    windowsPath(process.env['ProgramFiles(x86)'], 'Pandoc', 'pandoc.exe'),
+  ].filter((item): item is string => !!item);
 }
 
 /**
@@ -67,6 +62,8 @@ async function probePandocVersion(binaryPath: string): Promise<string | null> {
     const { stdout } = await execFileAsync(binaryPath, ['--version'], {
       timeout: 5_000,
       maxBuffer: 64 * 1024,
+      env: await detectionEnv(),
+      windowsHide: true,
     });
     const firstLine = stdout.split(/\r?\n/)[0] || '';
     const match = firstLine.match(/pandoc\s+([0-9.]+)/i);
@@ -77,12 +74,12 @@ async function probePandocVersion(binaryPath: string): Promise<string | null> {
 }
 
 /**
- * Detect Pandoc availability and cache the result. Safe to call
- * repeatedly — subsequent calls return the cached value without
- * re-probing the filesystem.
+ * Detect Pandoc availability and cache the result. User-facing status checks
+ * pass `refresh: true` so a just-installed binary is picked up without
+ * restarting Agent Cockpit.
  */
-export async function detectPandoc(): Promise<PandocStatus> {
-  if (cached) return cached;
+export async function detectPandoc(options: PandocDetectionOptions = {}): Promise<PandocStatus> {
+  if (cached && !options.refresh) return cached;
   const binaryPath = await whichPandoc();
   const version = binaryPath ? await probePandocVersion(binaryPath) : null;
   cached = {
@@ -96,8 +93,7 @@ export async function detectPandoc(): Promise<PandocStatus> {
 
 /**
  * Return the cached Pandoc status without triggering detection. Returns
- * `null` if detection hasn't run yet — callers should call `detectPandoc()`
- * at least once at startup.
+ * `null` if detection hasn't run yet.
  */
 export function getPandocStatus(): PandocStatus | null {
   return cached;
@@ -106,16 +102,15 @@ export function getPandocStatus(): PandocStatus | null {
 /**
  * Shell out to pandoc with the given args. Thin wrapper around
  * `execFile` that enforces a timeout and surfaces stderr in the error
- * message so handler code can build useful error entries. Callers are
- * expected to have already verified `detectPandoc().available` before
- * invoking — this function throws a clear error if the binary isn't
- * found in the cached status.
+ * message so handler code can build useful error entries. This function
+ * refreshes detection before throwing if the cached status says Pandoc is
+ * missing.
  */
 export async function runPandoc(
   args: string[],
   options: { cwd?: string; timeoutMs?: number; maxBuffer?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  const status = cached ?? (await detectPandoc());
+  const status = cached?.available ? cached : await detectPandoc({ refresh: true });
   if (!status.available || !status.binaryPath) {
     throw new Error('Pandoc not available — refusing to run.');
   }

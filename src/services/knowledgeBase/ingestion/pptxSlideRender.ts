@@ -46,7 +46,7 @@ export async function rasterizeSlidesViaLibreOffice(
   filename: string,
   outDir: string,
 ): Promise<RasterizationResult> {
-  const status = await detectLibreOffice();
+  const status = await detectLibreOffice({ refresh: true });
   if (!status.available || !status.binaryPath) {
     return {
       images: [],

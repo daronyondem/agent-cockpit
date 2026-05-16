@@ -187,6 +187,45 @@ describe('InstallDoctorService', () => {
     expect(result.doctor?.checks.find(item => item.id === 'pandoc')).toEqual(expect.objectContaining({ status: 'ok' }));
   });
 
+  test('refreshes Pandoc and LibreOffice detection on each doctor status request', async () => {
+    const root = makeRoot();
+    roots.push(root);
+    let pandocInstalled = false;
+    let libreOfficeInstalled = false;
+    const detectPandoc = jest.fn(async (options?: { refresh?: boolean }) => ({
+      available: options?.refresh === true && pandocInstalled,
+      binaryPath: options?.refresh === true && pandocInstalled ? '/usr/local/bin/pandoc' : null,
+      version: options?.refresh === true && pandocInstalled ? '3.2.1' : null,
+      checkedAt: '2026-05-16T00:00:00.000Z',
+    }));
+    const detectLibreOffice = jest.fn(async (options?: { refresh?: boolean }) => ({
+      available: options?.refresh === true && libreOfficeInstalled,
+      binaryPath: options?.refresh === true && libreOfficeInstalled ? '/usr/local/bin/soffice' : null,
+      checkedAt: '2026-05-16T00:00:00.000Z',
+    }));
+    const service = new InstallDoctorService({
+      appRoot: root,
+      dataRoot: path.join(root, 'data'),
+      installStateService: makeInstallState(root),
+      commandRunner: async () => ({ ok: true, stdout: '1.0.0', stderr: '' }),
+      detectHomebrew: async () => false,
+      detectPandoc,
+      detectLibreOffice,
+    });
+
+    const before = await service.getStatus();
+    pandocInstalled = true;
+    libreOfficeInstalled = true;
+    const after = await service.getStatus();
+
+    expect(detectPandoc).toHaveBeenCalledWith({ refresh: true });
+    expect(detectLibreOffice).toHaveBeenCalledWith({ refresh: true });
+    expect(before.checks.find(item => item.id === 'pandoc')).toEqual(expect.objectContaining({ status: 'warning' }));
+    expect(before.checks.find(item => item.id === 'libreoffice')).toEqual(expect.objectContaining({ status: 'warning' }));
+    expect(after.checks.find(item => item.id === 'pandoc')).toEqual(expect.objectContaining({ status: 'ok', summary: 'Pandoc 3.2.1 is available.' }));
+    expect(after.checks.find(item => item.id === 'libreoffice')).toEqual(expect.objectContaining({ status: 'ok', detail: '/usr/local/bin/soffice' }));
+  });
+
   test('rejects links and active-stream installs', async () => {
     const root = makeRoot();
     roots.push(root);

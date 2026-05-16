@@ -18,10 +18,9 @@
 // semantic markdown, so we pay the "external binary" cost to use it.
 //
 // Contract with callers:
-//   - `detectPandoc()` MUST have been run at least once before this handler
-//     fires — `runPandoc()` will throw "Pandoc not available" otherwise, and
-//     the route layer is responsible for rejecting uploads early with a
-//     user-friendly install message when pandoc is missing.
+//   - The route layer should reject uploads early with a user-friendly install
+//     message when pandoc is missing; `runPandoc()` also refreshes detection
+//     before throwing so newly installed binaries can be picked up.
 //   - `.doc` (legacy binary format) is explicitly unsupported — the route
 //     layer returns a clear "resave as .docx" error before we ever see the
 //     file, so this handler only has to cope with `.docx`.

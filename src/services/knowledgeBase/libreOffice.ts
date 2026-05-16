@@ -7,11 +7,14 @@
 // LibreOffice is missing but the setting is on, we log a warning once and
 // fall back to text + speaker notes + embedded media only.
 //
-// Detection is done at startup and cached for the process lifetime; there
-// is no hot-reload. Users who install LibreOffice after startup must
-// restart the cockpit to pick it up.
+// Status checks can force a fresh probe so users who install LibreOffice after
+// startup can refresh the UI without restarting Agent Cockpit.
 
-import { spawn } from 'child_process';
+import { resolveCommandOnPath, windowsPath } from './externalToolDetection';
+
+export interface LibreOfficeDetectionOptions {
+  refresh?: boolean;
+}
 
 export interface LibreOfficeStatus {
   /** True iff `which soffice` (or equivalent) succeeded. */
@@ -34,27 +37,24 @@ let cached: LibreOfficeStatus | null = null;
  * is noisy and slow.
  */
 async function whichSoffice(): Promise<string | null> {
-  const cmd = process.platform === 'win32' ? 'where' : 'which';
-  return new Promise((resolve) => {
-    const child = spawn(cmd, ['soffice'], { stdio: ['ignore', 'pipe', 'ignore'] });
-    let stdout = '';
-    child.stdout.on('data', (chunk) => (stdout += chunk.toString('utf8')));
-    child.on('error', () => resolve(null));
-    child.on('exit', (code) => {
-      if (code !== 0) return resolve(null);
-      const line = stdout.split(/\r?\n/)[0]?.trim();
-      resolve(line || null);
-    });
-  });
+  return resolveCommandOnPath('soffice', windowsLibreOfficeFallbacks());
+}
+
+function windowsLibreOfficeFallbacks(): string[] {
+  return [
+    windowsPath(process.env.ProgramFiles, 'LibreOffice', 'program', 'soffice.exe'),
+    windowsPath(process.env['ProgramFiles(x86)'], 'LibreOffice', 'program', 'soffice.exe'),
+    windowsPath(process.env.LOCALAPPDATA, 'Programs', 'LibreOffice', 'program', 'soffice.exe'),
+  ].filter((item): item is string => !!item);
 }
 
 /**
- * Detect LibreOffice availability and cache the result. Safe to call
- * repeatedly — subsequent calls return the cached value without
- * re-probing the filesystem.
+ * Detect LibreOffice availability and cache the result. User-facing status
+ * checks pass `refresh: true` so a just-installed binary is picked up without
+ * restarting Agent Cockpit.
  */
-export async function detectLibreOffice(): Promise<LibreOfficeStatus> {
-  if (cached) return cached;
+export async function detectLibreOffice(options: LibreOfficeDetectionOptions = {}): Promise<LibreOfficeStatus> {
+  if (cached && !options.refresh) return cached;
   const binaryPath = await whichSoffice();
   cached = {
     available: binaryPath !== null,
@@ -66,8 +66,7 @@ export async function detectLibreOffice(): Promise<LibreOfficeStatus> {
 
 /**
  * Return the cached LibreOffice status without triggering detection.
- * Returns `null` if detection hasn't run yet — callers should call
- * `detectLibreOffice()` at least once at startup.
+ * Returns `null` if detection hasn't run yet.
  */
 export function getLibreOfficeStatus(): LibreOfficeStatus | null {
   return cached;

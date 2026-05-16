@@ -216,7 +216,7 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
 
   router.get('/kb/libreoffice-status', async (_req: Request, res: Response) => {
     try {
-      const status = await detectLibreOffice();
+      const status = await detectLibreOffice({ refresh: true });
       res.json(status);
     } catch (err: unknown) {
       sendError(res, 500, err);
@@ -225,7 +225,7 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
 
   router.get('/kb/pandoc-status', async (_req: Request, res: Response) => {
     try {
-      const status = await detectPandoc();
+      const status = await detectPandoc({ refresh: true });
       res.json(status);
     } catch (err: unknown) {
       sendError(res, 500, err);

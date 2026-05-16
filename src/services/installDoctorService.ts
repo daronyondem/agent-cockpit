@@ -25,14 +25,14 @@ function kiroCliRemediation(): string {
 
 function pandocRemediation(): string {
   return process.platform === 'win32'
-    ? 'Install Pandoc for DOCX knowledge-base ingestion with the official Windows installer from https://pandoc.org/installing.html. Restart Agent Cockpit after installing.'
-    : 'Install Pandoc for DOCX knowledge-base ingestion. If Homebrew is already installed, macOS can run `brew install pandoc`; otherwise use the official installer from https://pandoc.org/installing.html. Restart Agent Cockpit after installing.';
+    ? 'Install Pandoc for DOCX knowledge-base ingestion with the official Windows installer from https://pandoc.org/installing.html, then refresh checks.'
+    : 'Install Pandoc for DOCX knowledge-base ingestion. If Homebrew is already installed, macOS can run `brew install pandoc`; otherwise use the official installer from https://pandoc.org/installing.html. Refresh checks after installing.';
 }
 
 function libreOfficeRemediation(): string {
   return process.platform === 'win32'
-    ? 'Install LibreOffice for PPTX slide-image conversion with the official Windows download from https://www.libreoffice.org/download/download-libreoffice/. Restart Agent Cockpit after installing.'
-    : 'Install LibreOffice for PPTX slide-image conversion. If Homebrew is already installed, macOS can run `brew install --cask libreoffice`; otherwise download LibreOffice from https://www.libreoffice.org/download/download-libreoffice/. Restart Agent Cockpit after installing.';
+    ? 'Install LibreOffice for PPTX slide-image conversion with the official Windows download from https://www.libreoffice.org/download/download-libreoffice/, then refresh checks.'
+    : 'Install LibreOffice for PPTX slide-image conversion. If Homebrew is already installed, macOS can run `brew install --cask libreoffice`; otherwise download LibreOffice from https://www.libreoffice.org/download/download-libreoffice/. Refresh checks after installing.';
 }
 
 function platformCommand(command: 'npm' | 'npx', install?: InstallStatus): string[] {
@@ -140,8 +140,8 @@ interface InstallDoctorServiceOptions {
   commandRunner?: CommandRunner;
   installRunner?: CommandRunner;
   detectHomebrew?: () => Promise<boolean>;
-  detectPandoc?: () => Promise<PandocStatus>;
-  detectLibreOffice?: () => Promise<LibreOfficeStatus>;
+  detectPandoc?: (options?: { refresh?: boolean }) => Promise<PandocStatus>;
+  detectLibreOffice?: (options?: { refresh?: boolean }) => Promise<LibreOfficeStatus>;
   resetPandocDetection?: () => void;
   resetLibreOfficeDetection?: () => void;
 }
@@ -201,8 +201,8 @@ export class InstallDoctorService {
   private readonly commandRunner: CommandRunner;
   private readonly installRunner: CommandRunner;
   private readonly homebrewDetector: () => Promise<boolean>;
-  private readonly pandocDetector: () => Promise<PandocStatus>;
-  private readonly libreOfficeDetector: () => Promise<LibreOfficeStatus>;
+  private readonly pandocDetector: (options?: { refresh?: boolean }) => Promise<PandocStatus>;
+  private readonly libreOfficeDetector: (options?: { refresh?: boolean }) => Promise<LibreOfficeStatus>;
   private readonly resetPandocDetector: () => void;
   private readonly resetLibreOfficeDetector: () => void;
   private readonly installInProgress = new Set<string>();
@@ -413,7 +413,7 @@ export class InstallDoctorService {
   }
 
   private async checkPandoc(homebrewAvailable: boolean): Promise<InstallDoctorCheck> {
-    const status = await this.pandocDetector();
+    const status = await this.pandocDetector({ refresh: true });
     if (status.available) {
       return check('pandoc', 'Pandoc', 'ok', false, status.version ? `Pandoc ${status.version} is available.` : 'Pandoc is available.', status.binaryPath || undefined);
     }
@@ -421,7 +421,7 @@ export class InstallDoctorService {
   }
 
   private async checkLibreOffice(homebrewAvailable: boolean): Promise<InstallDoctorCheck> {
-    const status = await this.libreOfficeDetector();
+    const status = await this.libreOfficeDetector({ refresh: true });
     if (status.available) {
       return check('libreoffice', 'LibreOffice', 'ok', false, 'LibreOffice is available.', status.binaryPath || undefined);
     }

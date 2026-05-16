@@ -239,7 +239,7 @@ chatService.initialize().then(async () => {
     if (status.available) {
       console.log(`[kb] LibreOffice detected at ${status.binaryPath}`);
     } else {
-      console.log('[kb] LibreOffice not found on PATH (optional — required only for PPTX slide-to-image conversion)');
+      console.log('[kb] LibreOffice not found (optional — required only for PPTX slide-to-image conversion)');
     }
   }).catch((err: unknown) => {
     console.warn('[kb] LibreOffice detection failed:', (err as Error).message);
@@ -254,7 +254,7 @@ chatService.initialize().then(async () => {
     if (status.available) {
       console.log(`[kb] Pandoc detected at ${status.binaryPath}${status.version ? ` (v${status.version})` : ''}`);
     } else {
-      console.log('[kb] Pandoc not found on PATH — DOCX uploads will be rejected until pandoc is installed (https://pandoc.org/installing.html)');
+      console.log('[kb] Pandoc not found — DOCX uploads will be rejected until pandoc is installed (https://pandoc.org/installing.html)');
     }
   }).catch((err: unknown) => {
     console.warn('[kb] Pandoc detection failed:', (err as Error).message);

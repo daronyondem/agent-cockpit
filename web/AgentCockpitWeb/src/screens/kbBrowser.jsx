@@ -2773,7 +2773,7 @@ function KbRawTab({ hash, kbState, onStateUpdate }){
       ) : null}
       {pandoc && pandoc.available === false ? (
         <div className="kb-banner kb-banner-warn">
-          <strong>Pandoc not installed.</strong> DOCX uploads will be rejected until you install pandoc and restart Agent Cockpit. PDF, PPTX, text, and image uploads are unaffected.
+          <strong>Pandoc not installed.</strong> DOCX uploads will be rejected until you install pandoc and refresh this page. PDF, PPTX, text, and image uploads are unaffected.
         </div>
       ) : null}
 

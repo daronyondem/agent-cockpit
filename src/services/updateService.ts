@@ -367,8 +367,7 @@ export class UpdateService {
   // Plain server restart — same pm2 double-fork mechanism as triggerUpdate()
   // but without the git pull / npm install / interpreter verification steps.
   // Used by the "Restart Server" button in Global Settings so users can pick
-  // up side-effects of external changes that are only read at startup (e.g.
-  // installing pandoc, whose detection result is cached per process).
+  // up side-effects of external changes that are only read at startup.
   async restart(opts: { hasActiveStreams?: () => boolean } = {}): Promise<UpdateResult> {
     if (this._updateInProgress) {
       return { success: false, steps: [], error: 'Update or restart already in progress' };

@@ -190,12 +190,12 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
           });
         }
         if (lowerName.endsWith('.docx')) {
-          const pandocStatus = await detectPandoc();
+          const pandocStatus = await detectPandoc({ refresh: true });
           if (!pandocStatus.available) {
             return res.status(400).json({
               error:
                 'DOCX ingestion requires Pandoc, which was not found on the server PATH. ' +
-                'Install it from https://pandoc.org/installing.html (or via your package manager: `brew install pandoc`, `apt install pandoc`, `choco install pandoc`) and restart Agent Cockpit.',
+                'Install it from https://pandoc.org/installing.html (or via your package manager: `brew install pandoc`, `apt install pandoc`, `choco install pandoc`) and refresh the Knowledge Base page.',
             });
           }
         }
