@@ -63,6 +63,10 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
    *   convId: string,
    *   conv: object | null,
    *   messages: object[],
+   *   messageWindow: object | null,
+   *   pinnedMessages: object[],
+   *   loadingOlder: boolean,
+   *   loadingAround: boolean,
    *   input: string,
    *   sending: boolean,
    *   streaming: boolean,
@@ -133,6 +137,11 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
   const RECONNECT_BASE_MS = 1000;
   const RECONNECT_MAX_MS = 10000;
   const RECONCILE_AFTER_OPEN_MS = 150;
+  const CHAT_WINDOW_TAIL_LIMIT = 160;
+  const CHAT_WINDOW_PAGE_LIMIT = 80;
+  const CHAT_WINDOW_AROUND_BEFORE = 80;
+  const CHAT_WINDOW_AROUND_AFTER = 80;
+  const CHAT_WINDOW_MAX_MESSAGES = 320;
   const draftSaveTimers = new Map();
   const queuePersistStates = new Map();
 
@@ -222,6 +231,10 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       convId,
       conv: null,
       messages: [],
+      messageWindow: null,
+      pinnedMessages: [],
+      loadingOlder: false,
+      loadingAround: false,
       input: '',
       sending: false,
       streaming: false,
@@ -540,13 +553,95 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     return null;
   }
 
+  function normalizeMessageWindow(data, messages){
+    const window = data && data.messageWindow && typeof data.messageWindow === 'object'
+      ? data.messageWindow
+      : null;
+    if (window) {
+      return {
+        messages,
+        total: Number.isFinite(window.total) ? window.total : messages.length,
+        startIndex: Number.isFinite(window.startIndex) ? window.startIndex : 0,
+        endIndex: Number.isFinite(window.endIndex) ? window.endIndex : messages.length,
+        hasOlder: !!window.hasOlder,
+        hasNewer: !!window.hasNewer,
+      };
+    }
+    return {
+      messages,
+      total: messages.length,
+      startIndex: 0,
+      endIndex: messages.length,
+      hasOlder: false,
+      hasNewer: false,
+    };
+  }
+
+  function normalizePinnedMessages(data, fallbackMessages){
+    if (data && Array.isArray(data.pinnedMessages)) {
+      return data.pinnedMessages
+        .filter(entry => entry && entry.message && entry.message.id)
+        .map(entry => ({
+          index: Number.isFinite(entry.index) ? entry.index : -1,
+          message: entry.message,
+        }));
+    }
+    return (fallbackMessages || [])
+      .map((message, index) => message && message.pinned ? { index, message } : null)
+      .filter(Boolean);
+  }
+
+  function mergeMessagePages(prefix, current){
+    const seen = new Set();
+    const merged = [];
+    for (const message of prefix || []) {
+      if (!message || !message.id || seen.has(message.id)) continue;
+      seen.add(message.id);
+      merged.push(message);
+    }
+    for (const message of current || []) {
+      if (!message || !message.id || seen.has(message.id)) continue;
+      seen.add(message.id);
+      merged.push(message);
+    }
+    return merged;
+  }
+
+  function readWindowMessages(data){
+    return Array.isArray(data && data.messages) ? data.messages : [];
+  }
+
+  async function fetchConversationTail(convId){
+    if (AgentApi.conv && AgentApi.conv.getConversation) {
+      return AgentApi.conv.getConversation(convId, {
+        messageWindow: 'tail',
+        limit: CHAT_WINDOW_TAIL_LIMIT,
+      });
+    }
+    const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId));
+    return res.json();
+  }
+
+  async function fetchMessageWindow(convId, params){
+    if (AgentApi.conv && AgentApi.conv.getMessageWindow) {
+      return AgentApi.conv.getMessageWindow(convId, params);
+    }
+    const query = new URLSearchParams(
+      Object.entries(params || {}).filter(([, value]) => value != null && value !== '')
+    ).toString();
+    const path = 'conversations/' + encodeURIComponent(convId) + '/messages' + (query ? '?' + query : '');
+    const res = await AgentApi.fetch(path);
+    return res.json();
+  }
+
   async function load(convId){
     const s = ensureState(convId);
     if (s.loaded || s.loadError) return;
     try {
-      const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId));
-      const data = await res.json();
-      const messages = Array.isArray(data.messages) ? data.messages : [];
+      const data = await fetchConversationTail(convId);
+      const messages = readWindowMessages(data);
+      const messageWindow = normalizeMessageWindow(data, messages);
+      const pinnedMessages = normalizePinnedMessages(data, messages);
       const persistedStreamError = activeStreamErrorFromMessages(messages);
       const restoredQueue = Array.isArray(data.messageQueue) ? data.messageQueue : [];
       /* Tab-crash draft rehydration — only restore if the in-memory composer
@@ -563,6 +658,10 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
         ...cur,
         conv: data,
         messages,
+        messageWindow,
+        pinnedMessages,
+        loadingOlder: false,
+        loadingAround: false,
         usage: data.sessionUsage || null,
         queue: restoredQueue,
         streamError: persistedStreamError ? persistedStreamError.message : null,
@@ -684,9 +783,10 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
   }
 
   async function refreshConversationFromServer(convId, opts){
-    const res = await AgentApi.fetch('conversations/' + encodeURIComponent(convId));
-    const data = await res.json();
-    const messages = Array.isArray(data.messages) ? data.messages : [];
+    const data = await fetchConversationTail(convId);
+    const messages = readWindowMessages(data);
+    const messageWindow = normalizeMessageWindow(data, messages);
+    const pinnedMessages = normalizePinnedMessages(data, messages);
     const persistedStreamError = activeStreamErrorFromMessages(messages);
     const fallbackStreamError = opts && typeof opts.streamError === 'string'
       ? { message: opts.streamError, source: typeof opts.streamErrorSource === 'string' ? opts.streamErrorSource : null }
@@ -697,6 +797,10 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       ...next,
       conv: data,
       messages,
+      messageWindow,
+      pinnedMessages,
+      loadingOlder: false,
+      loadingAround: false,
       usage: data.sessionUsage || null,
       queue: Array.isArray(data.messageQueue) ? data.messageQueue : next.queue,
       streaming: false,
@@ -711,6 +815,115 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       uiState: streamError ? 'error' : null,
     }));
     if (!streamError) drainQueueIfReady(convId);
+  }
+
+  async function loadTailMessages(convId){
+    const data = await fetchConversationTail(convId);
+    const messages = readWindowMessages(data);
+    const messageWindow = normalizeMessageWindow(data, messages);
+    const pinnedMessages = normalizePinnedMessages(data, messages);
+    const persistedStreamError = activeStreamErrorFromMessages(messages);
+    update(convId, cur => ({
+      ...cur,
+      conv: data,
+      messages,
+      messageWindow,
+      pinnedMessages,
+      loadingOlder: false,
+      loadingAround: false,
+      usage: data.sessionUsage || cur.usage || null,
+      queue: Array.isArray(data.messageQueue) ? data.messageQueue : cur.queue,
+      streamError: persistedStreamError ? persistedStreamError.message : null,
+      streamErrorSource: persistedStreamError ? persistedStreamError.source : null,
+      uiState: persistedStreamError ? 'error' : (cur.uiState === 'error' ? null : cur.uiState),
+    }));
+    return data;
+  }
+
+  async function loadOlderMessages(convId){
+    const cur = states.get(convId);
+    if (!cur || cur.loadingOlder) return null;
+    const first = (cur.messages || []).find(message => message && message.id);
+    if (!first) return null;
+    const currentWindow = cur.messageWindow || null;
+    if (currentWindow && currentWindow.hasOlder === false) return null;
+
+    update(convId, { loadingOlder: true });
+    try {
+      const data = await fetchMessageWindow(convId, {
+        before: first.id,
+        limit: CHAT_WINDOW_PAGE_LIMIT,
+      });
+      const olderMessages = readWindowMessages(data);
+      const pageWindow = normalizeMessageWindow(data, olderMessages);
+      const pinnedMessages = normalizePinnedMessages(data, cur.messages);
+      update(convId, next => {
+        const merged = mergeMessagePages(olderMessages, next.messages);
+        const pruned = merged.length > CHAT_WINDOW_MAX_MESSAGES;
+        const messages = pruned ? merged.slice(0, CHAT_WINDOW_MAX_MESSAGES) : merged;
+        const startIndex = Number.isFinite(pageWindow.startIndex)
+          ? pageWindow.startIndex
+          : Math.max(0, (next.messageWindow && next.messageWindow.startIndex || 0) - olderMessages.length);
+        const total = Number.isFinite(pageWindow.total)
+          ? pageWindow.total
+          : (next.messageWindow && next.messageWindow.total) || messages.length;
+        const endIndex = startIndex + messages.length;
+        const messageWindow = {
+          messages,
+          total,
+          startIndex,
+          endIndex,
+          hasOlder: !!pageWindow.hasOlder,
+          hasNewer: pruned || endIndex < total,
+        };
+        const nextConv = next.conv ? { ...next.conv, messages, messageWindow, pinnedMessages } : next.conv;
+        return {
+          ...next,
+          conv: nextConv,
+          messages,
+          messageWindow,
+          pinnedMessages,
+          loadingOlder: false,
+        };
+      });
+      return data;
+    } catch (err) {
+      update(convId, { loadingOlder: false });
+      throw err;
+    }
+  }
+
+  async function loadAroundMessage(convId, messageId){
+    if (!messageId) return null;
+    const cur = states.get(convId);
+    if (cur && cur.loadingAround) return null;
+    update(convId, { loadingAround: true });
+    try {
+      const data = await fetchMessageWindow(convId, {
+        around: messageId,
+        beforeCount: CHAT_WINDOW_AROUND_BEFORE,
+        afterCount: CHAT_WINDOW_AROUND_AFTER,
+      });
+      const messages = readWindowMessages(data);
+      const messageWindow = normalizeMessageWindow(data, messages);
+      const pinnedMessages = normalizePinnedMessages(data, messages);
+      update(convId, next => {
+        const nextConv = next.conv ? { ...next.conv, messages, messageWindow, pinnedMessages } : next.conv;
+        return {
+          ...next,
+          conv: nextConv,
+          messages,
+          messageWindow,
+          pinnedMessages,
+          loadingOlder: false,
+          loadingAround: false,
+        };
+      });
+      return data;
+    } catch (err) {
+      update(convId, { loadingAround: false });
+      throw err;
+    }
   }
 
   function scheduleReconcileActiveStream(convId, ws){
@@ -2220,12 +2433,18 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     update(convId, { resetting: true });
     try {
       await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/reset', { method: 'POST', body: {} });
-      const r = await AgentApi.fetch('conversations/' + encodeURIComponent(convId));
-      const data = await r.json();
+      const data = await fetchConversationTail(convId);
+      const messages = readWindowMessages(data);
+      const messageWindow = normalizeMessageWindow(data, messages);
+      const pinnedMessages = normalizePinnedMessages(data, messages);
       update(convId, cur => ({
         ...cur,
         conv: data,
-        messages: Array.isArray(data.messages) ? data.messages : [],
+        messages,
+        messageWindow,
+        pinnedMessages,
+        loadingOlder: false,
+        loadingAround: false,
         queue: Array.isArray(data.messageQueue) ? data.messageQueue : [],
         usage: data.sessionUsage || null,
         streamError: null,
@@ -2311,10 +2530,28 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
         return next;
       });
       const nextMessages = patchList(cur.messages);
+      const changedIndex = nextMessages.findIndex(m => m && m.id === messageId);
+      const changedMessage = changedIndex >= 0 ? nextMessages[changedIndex] : null;
+      let nextPinnedMessages = (cur.pinnedMessages || []).map(entry => {
+        if (!entry || !entry.message || entry.message.id !== messageId) return entry;
+        const nextMessage = { ...entry.message };
+        if (pinned) nextMessage.pinned = true;
+        else delete nextMessage.pinned;
+        return { ...entry, message: nextMessage };
+      }).filter(entry => entry && entry.message && entry.message.pinned);
+      if (pinned && changedMessage && !nextPinnedMessages.some(entry => entry.message.id === messageId)) {
+        const baseIndex = cur.messageWindow && Number.isFinite(cur.messageWindow.startIndex)
+          ? cur.messageWindow.startIndex
+          : 0;
+        nextPinnedMessages = [
+          ...nextPinnedMessages,
+          { index: baseIndex + changedIndex, message: changedMessage },
+        ].sort((a, b) => (a.index || 0) - (b.index || 0));
+      }
       const nextConv = cur.conv && Array.isArray(cur.conv.messages)
-        ? { ...cur.conv, messages: patchList(cur.conv.messages) }
+        ? { ...cur.conv, messages: patchList(cur.conv.messages), pinnedMessages: nextPinnedMessages }
         : cur.conv;
-      return { ...cur, messages: nextMessages, conv: nextConv };
+      return { ...cur, messages: nextMessages, pinnedMessages: nextPinnedMessages, conv: nextConv };
     });
   }
 
@@ -2463,6 +2700,9 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
 export const StreamStore = {
     getState,
     load,
+    loadOlderMessages,
+    loadAroundMessage,
+    loadTailMessages,
     ensureWsOpen,
     send,
     setGoal,

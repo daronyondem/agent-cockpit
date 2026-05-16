@@ -106,6 +106,9 @@ function selectChatLiveState(s){
   return {
     conv: s.conv,
     messages: s.messages,
+    messageWindow: s.messageWindow,
+    pinnedMessages: s.pinnedMessages,
+    loadingOlder: !!s.loadingOlder,
     sending: s.sending,
     streaming: s.streaming,
     loadError: s.loadError,
@@ -1236,6 +1239,10 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const feedRef = React.useRef(null);
   const feedAutoFollowRef = React.useRef(true);
   const feedStreamingRef = React.useRef(false);
+  const messageWindowRef = React.useRef(null);
+  const loadingOlderRef = React.useRef(false);
+  const scrollRestoreRef = React.useRef(null);
+  const forceBackToEndRef = React.useRef(false);
   const dragCounterRef = React.useRef(0);
   const [dragOver, setDragOver] = React.useState(false);
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
@@ -1271,6 +1278,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   }, [editingTitle]);
 
   const messages = state ? state.messages : [];
+  const messageWindow = state ? state.messageWindow : null;
+  const loadingOlder = !!(state && state.loadingOlder);
   const activeStreamError = state ? state.streamError : null;
   const activeStreamErrorSource = state ? state.streamErrorSource : null;
   const conv = state ? state.conv : null;
@@ -1285,6 +1294,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const resetting = !!(state && state.resetting);
   const planModeActive = !!(state && state.planModeActive);
   feedStreamingRef.current = streaming;
+  messageWindowRef.current = messageWindow;
+  loadingOlderRef.current = loadingOlder;
   const streamingMsgIdRef = React.useRef(streamingMsgId);
   streamingMsgIdRef.current = streamingMsgId;
   const profileLocked = messages.length > 0;
@@ -1303,13 +1314,20 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     () => collapseProgressRuns(feedMessages),
     [feedMessages]
   );
-  const pinnedMessages = React.useMemo(
-    () => feedMessages.filter(m => m && m.pinned && (m.role === 'user' || m.role === 'assistant' || m.role === 'system')),
-    [feedMessages]
-  );
+  const pinnedMessages = React.useMemo(() => {
+    const entries = state && Array.isArray(state.pinnedMessages) ? state.pinnedMessages : [];
+    const fromServer = entries
+      .map(entry => entry && entry.message)
+      .filter(m => m && m.pinned && (m.role === 'user' || m.role === 'assistant' || m.role === 'system'));
+    if (fromServer.length) return fromServer;
+    return feedMessages.filter(m => m && m.pinned && (m.role === 'user' || m.role === 'assistant' || m.role === 'system'));
+  }, [state && state.pinnedMessages, feedMessages]);
   const messageRefs = React.useRef(new Map());
+  const pendingPinJumpRef = React.useRef(null);
+  const pinJumpSerialRef = React.useRef(0);
   const pinFocusTimerRef = React.useRef(null);
   const [pinStripIndex, setPinStripIndex] = React.useState(0);
+  const [pinJumpToken, setPinJumpToken] = React.useState(0);
   const [focusedPinId, setFocusedPinId] = React.useState(null);
   const setMessageRef = React.useCallback((id, node) => {
     if (!id) return;
@@ -1318,6 +1336,10 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   }, []);
 
   React.useEffect(() => {
+    messageRefs.current.clear();
+    pendingPinJumpRef.current = null;
+    forceBackToEndRef.current = false;
+    pinJumpSerialRef.current += 1;
     setPinStripIndex(0);
     setFocusedPinId(null);
     if (pinFocusTimerRef.current) {
@@ -1334,11 +1356,19 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     setPinStripIndex(index => Math.min(index, Math.max(pinnedMessages.length - 1, 0)));
   }, [pinnedMessages.length]);
 
-  const jumpToPinnedMessage = React.useCallback((messageId, index) => {
-    if (typeof index === 'number') setPinStripIndex(index);
+  const focusPinnedMessage = React.useCallback((messageId, behavior = 'smooth') => {
+    const feed = feedRef.current;
     const node = messageRefs.current.get(messageId);
-    if (node && typeof node.scrollIntoView === 'function') {
-      node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (!feed || !node || !feed.contains(node)) return false;
+    const feedRect = feed.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    const targetTop = feed.scrollTop
+      + (nodeRect.top - feedRect.top)
+      - Math.max(24, (feed.clientHeight - nodeRect.height) / 2);
+    if (typeof feed.scrollTo === 'function') {
+      feed.scrollTo({ top: Math.max(0, targetTop), behavior });
+    } else {
+      feed.scrollTop = Math.max(0, targetTop);
     }
     setFocusedPinId(messageId);
     if (pinFocusTimerRef.current) clearTimeout(pinFocusTimerRef.current);
@@ -1346,7 +1376,58 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
       setFocusedPinId(null);
       pinFocusTimerRef.current = null;
     }, 1600);
+    return true;
   }, []);
+
+  React.useLayoutEffect(() => {
+    const pending = pendingPinJumpRef.current;
+    if (!pending || !pending.messageId) return;
+    feedAutoFollowRef.current = false;
+    forceBackToEndRef.current = true;
+    if (focusPinnedMessage(pending.messageId, pending.behavior || 'smooth')) {
+      pendingPinJumpRef.current = null;
+    }
+    setShowFeedBackToEnd(true);
+  }, [
+    pinJumpToken,
+    messages.length,
+    messageWindow && messageWindow.startIndex,
+    messageWindow && messageWindow.endIndex,
+    focusPinnedMessage,
+  ]);
+
+  const jumpToPinnedMessage = React.useCallback(async (messageId, index) => {
+    if (typeof index === 'number') setPinStripIndex(index);
+    feedAutoFollowRef.current = false;
+    forceBackToEndRef.current = true;
+    setShowFeedBackToEnd(true);
+    const serial = pinJumpSerialRef.current + 1;
+    pinJumpSerialRef.current = serial;
+    pendingPinJumpRef.current = { messageId, behavior: 'smooth' };
+    if (focusPinnedMessage(messageId)) {
+      pendingPinJumpRef.current = null;
+      requestAnimationFrame(() => setShowFeedBackToEnd(true));
+      return;
+    }
+    pendingPinJumpRef.current = { messageId, behavior: 'auto' };
+    const feed = feedRef.current;
+    const node = messageRefs.current.get(messageId);
+    const targetMounted = !!(feed && node && feed.contains(node));
+    if (!targetMounted) {
+      try {
+        await StreamStore.loadAroundMessage(convId, messageId);
+      } catch (err) {
+        if (pinJumpSerialRef.current === serial) pendingPinJumpRef.current = null;
+        toast.error({
+          title: 'Pinned message unavailable',
+          message: (err && err.message) || 'The pinned message could not be loaded.',
+        });
+        return;
+      }
+    }
+    if (pinJumpSerialRef.current !== serial) return;
+    setPinJumpToken(token => token + 1);
+  }, [convId, focusPinnedMessage, toast]);
 
   const toggleMessagePin = React.useCallback(async (message) => {
     if (!message || !message.id || message.id === streamingMsgIdRef.current) return;
@@ -1384,28 +1465,73 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const handleFeedScroll = React.useCallback(() => {
     const el = feedRef.current;
     if (!el) return;
-    if (isChatScrolledToEnd(el)) {
+    const currentWindow = messageWindowRef.current;
+    const hasNewer = !!(currentWindow && currentWindow.hasNewer);
+    if (el.scrollTop <= 120 && currentWindow && currentWindow.hasOlder && !loadingOlderRef.current) {
+      scrollRestoreRef.current = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight };
+      loadingOlderRef.current = true;
+      feedAutoFollowRef.current = false;
+      StreamStore.loadOlderMessages(convId).catch(err => {
+        scrollRestoreRef.current = null;
+        loadingOlderRef.current = false;
+        toast.error({
+          title: 'Could not load earlier messages',
+          message: (err && err.message) || 'The earlier transcript page could not be loaded.',
+        });
+      });
+    }
+    if (isChatScrolledToEnd(el) && !hasNewer && !forceBackToEndRef.current) {
       feedAutoFollowRef.current = true;
       setShowFeedBackToEnd(false);
       return;
     }
     feedAutoFollowRef.current = false;
-    if (feedStreamingRef.current) setShowFeedBackToEnd(true);
-  }, []);
+    if (forceBackToEndRef.current || feedStreamingRef.current || hasNewer) setShowFeedBackToEnd(true);
+  }, [convId, toast]);
 
-  const scrollFeedToEnd = React.useCallback((behavior = 'auto') => {
+  React.useLayoutEffect(() => {
+    const restore = scrollRestoreRef.current;
     const el = feedRef.current;
-    if (!el) return;
-    feedAutoFollowRef.current = true;
-    setShowFeedBackToEnd(false);
-    if (typeof el.scrollTo === 'function') {
-      el.scrollTo({ top: el.scrollHeight, behavior });
-    } else {
-      el.scrollTop = el.scrollHeight;
+    if (!restore || !el) return;
+    scrollRestoreRef.current = null;
+    loadingOlderRef.current = false;
+    el.scrollTop = restore.scrollTop + Math.max(0, el.scrollHeight - restore.scrollHeight);
+  }, [messages.length, loadingOlder, messageWindow && messageWindow.startIndex]);
+
+  const scrollFeedToEnd = React.useCallback(async (behavior = 'auto') => {
+    const doScroll = () => {
+      const el = feedRef.current;
+      if (!el) return;
+      forceBackToEndRef.current = false;
+      pendingPinJumpRef.current = null;
+      feedAutoFollowRef.current = true;
+      setShowFeedBackToEnd(false);
+      if (typeof el.scrollTo === 'function') {
+        el.scrollTo({ top: el.scrollHeight, behavior });
+      } else {
+        el.scrollTop = el.scrollHeight;
+      }
+    };
+    const currentWindow = messageWindowRef.current;
+    if (currentWindow && currentWindow.hasNewer) {
+      try {
+        await StreamStore.loadTailMessages(convId);
+      } catch (err) {
+        toast.error({
+          title: 'Could not load latest messages',
+          message: (err && err.message) || 'The latest transcript page could not be loaded.',
+        });
+        return;
+      }
+      requestAnimationFrame(doScroll);
+      return;
     }
-  }, []);
+    doScroll();
+  }, [convId, toast]);
 
   React.useEffect(() => {
+    forceBackToEndRef.current = false;
+    pendingPinJumpRef.current = null;
     feedAutoFollowRef.current = true;
     setShowFeedBackToEnd(false);
   }, [convId]);
@@ -1423,7 +1549,13 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   React.useEffect(() => {
     const el = feedRef.current;
     if (!el) return;
-    if (feedAutoFollowRef.current) {
+    const currentWindow = messageWindowRef.current;
+    if (forceBackToEndRef.current) {
+      feedAutoFollowRef.current = false;
+      setShowFeedBackToEnd(true);
+      return;
+    }
+    if (feedAutoFollowRef.current && !(currentWindow && currentWindow.hasNewer)) {
       el.scrollTop = el.scrollHeight;
       setShowFeedBackToEnd(false);
     } else {
@@ -1765,7 +1897,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
             open={true}
             convId={convId}
             currentSessionNumber={conv.sessionNumber || null}
-            currentMessages={messages}
+            currentMessages={messageWindow && (messageWindow.hasOlder || messageWindow.hasNewer) ? null : messages}
             onClose={() => setSessionsOpen(false)}
           />
         </React.Suspense>
@@ -2344,13 +2476,14 @@ function PinStrip({ messages, currentIndex, onSelect }){
   };
   const prevIndex = (safeIndex - 1 + messages.length) % messages.length;
   const nextIndex = (safeIndex + 1) % messages.length;
+  const jumpIndex = messages.length > 1 ? nextIndex : safeIndex;
   return (
     <div className="pin-strip" aria-label="Pinned messages">
       <button
         type="button"
         className="pin-strip-label"
-        onClick={() => go(safeIndex)}
-        title="Jump to pinned message"
+        onClick={() => go(jumpIndex)}
+        title={messages.length > 1 ? 'Jump to next pinned message' : 'Jump to pinned message'}
       >
         <span className="pin-strip-icon">{Ico.pin(13)}</span>
         <span>PINNED</span>
@@ -2359,8 +2492,8 @@ function PinStrip({ messages, currentIndex, onSelect }){
       <button
         type="button"
         className="pin-strip-item"
-        onClick={() => go(safeIndex)}
-        title="Jump to pinned message"
+        onClick={() => go(jumpIndex)}
+        title={messages.length > 1 ? 'Jump to next pinned message' : 'Jump to pinned message'}
       >
         <span className="pin-strip-src">{pinMessageSource(active)}</span>
         <span>{pinMessagePreview(active)}</span>

@@ -92,6 +92,20 @@ export interface Message {
   pinned?: boolean;
 }
 
+export interface ConversationMessageWindow {
+  messages: Message[];
+  total: number;
+  startIndex: number;
+  endIndex: number;
+  hasOlder: boolean;
+  hasNewer: boolean;
+}
+
+export interface ConversationPinnedMessage {
+  index: number;
+  message: Message;
+}
+
 export interface ConversationListItem {
   id: string;
   title: string;
@@ -124,6 +138,8 @@ export interface Conversation {
   currentSessionId: string;
   sessionNumber: number;
   messages: Message[];
+  messageWindow?: ConversationMessageWindow;
+  pinnedMessages?: ConversationPinnedMessage[];
   usage?: Usage;
   sessionUsage?: Usage;
   externalSessionId?: string;

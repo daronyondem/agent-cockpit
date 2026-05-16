@@ -356,6 +356,74 @@ describe('PATCH /conversations/:id/messages/:messageId/pin', () => {
   });
 });
 
+// ── GET /conversations/:id message windows ──────────────────────────────────
+
+describe('GET /conversations/:id message windows', () => {
+  test('returns a tail window without dropping pinned messages outside the window', async () => {
+    const conv = await env.chatService.createConversation('Windowed');
+    const saved = [];
+    for (let i = 0; i < 6; i++) {
+      saved.push(await env.chatService.addMessage(conv.id, 'user', `msg-${i}`, 'claude-code'));
+    }
+    await env.chatService.setMessagePinned(conv.id, saved[1]!.id, true);
+
+    const res = await env.request('GET', `/api/chat/conversations/${conv.id}?messageWindow=tail&limit=3`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.messages.map((m: any) => m.content)).toEqual(['msg-3', 'msg-4', 'msg-5']);
+    expect(res.body.messageWindow).toMatchObject({
+      total: 6,
+      startIndex: 3,
+      endIndex: 6,
+      hasOlder: true,
+      hasNewer: false,
+    });
+    expect(res.body.pinnedMessages).toHaveLength(1);
+    expect(res.body.pinnedMessages[0].index).toBe(1);
+    expect(res.body.pinnedMessages[0].message.content).toBe('msg-1');
+  });
+
+  test('returns older and around-message windows for the active session', async () => {
+    const conv = await env.chatService.createConversation('Window pages');
+    const saved = [];
+    for (let i = 0; i < 6; i++) {
+      saved.push(await env.chatService.addMessage(conv.id, 'assistant', `answer-${i}`, 'claude-code'));
+    }
+
+    const older = await env.request('GET', `/api/chat/conversations/${conv.id}/messages?before=${saved[3]!.id}&limit=2`);
+    expect(older.status).toBe(200);
+    expect(older.body.messages.map((m: any) => m.content)).toEqual(['answer-1', 'answer-2']);
+    expect(older.body.messageWindow).toMatchObject({
+      total: 6,
+      startIndex: 1,
+      endIndex: 3,
+      hasOlder: true,
+      hasNewer: true,
+    });
+
+    const around = await env.request('GET', `/api/chat/conversations/${conv.id}/messages?around=${saved[3]!.id}&beforeCount=1&afterCount=1`);
+    expect(around.status).toBe(200);
+    expect(around.body.messages.map((m: any) => m.content)).toEqual(['answer-2', 'answer-3', 'answer-4']);
+    expect(around.body.messageWindow).toMatchObject({
+      total: 6,
+      startIndex: 2,
+      endIndex: 5,
+      hasOlder: true,
+      hasNewer: true,
+    });
+  });
+
+  test('returns 404 for a missing message anchor', async () => {
+    const conv = await env.chatService.createConversation('Window missing');
+    await env.chatService.addMessage(conv.id, 'user', 'hello', 'claude-code');
+
+    const res = await env.request('GET', `/api/chat/conversations/${conv.id}/messages?around=nope`);
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Conversation or message not found');
+  });
+});
+
 // ── GET /conversations?archived=true ──────��─────────────────────────────────
 
 describe('GET /conversations?archived=true', () => {

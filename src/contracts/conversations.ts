@@ -1,4 +1,11 @@
-import type { Conversation, ConversationListItem, Message, SessionHistoryItem } from './responses';
+import type {
+  Conversation,
+  ConversationListItem,
+  ConversationMessageWindow,
+  ConversationPinnedMessage,
+  Message,
+  SessionHistoryItem,
+} from './responses';
 import { parseServiceTierInput, type ContractServiceTier, type ServiceTierInput } from './serviceTier';
 import { asRecord, optionalBoolean, optionalString, optionalStringEnum, requiredBoolean, requiredNonEmptyString } from './validation';
 
@@ -44,6 +51,12 @@ export interface ConversationSessionsResponse {
 
 export interface ConversationSessionMessagesResponse {
   messages: Message[];
+}
+
+export interface ConversationMessagesResponse {
+  messages: Message[];
+  messageWindow: ConversationMessageWindow;
+  pinnedMessages: ConversationPinnedMessage[];
 }
 
 export interface ConversationDeleteResponse {

@@ -25,6 +25,8 @@ import type {
   ConversationEntry,
   WorkspaceIndex,
   Conversation,
+  ConversationMessageWindow,
+  ConversationPinnedMessage,
   ConversationListItem,
   Settings,
   MemorySnapshot,
@@ -297,6 +299,28 @@ interface EditMessageResult {
   conversation: Conversation;
   message: Message;
 }
+
+type MessageWindowMode = 'tail' | 'before' | 'around';
+
+interface MessageWindowOptions {
+  mode?: MessageWindowMode;
+  limit?: number;
+  beforeMessageId?: string;
+  aroundMessageId?: string;
+  beforeCount?: number;
+  afterCount?: number;
+}
+
+interface ConversationMessagesWindowResult {
+  messages: Message[];
+  messageWindow: ConversationMessageWindow;
+  pinnedMessages: ConversationPinnedMessage[];
+}
+
+const DEFAULT_MESSAGE_WINDOW_LIMIT = 160;
+const DEFAULT_AROUND_MESSAGE_BEFORE = 80;
+const DEFAULT_AROUND_MESSAGE_AFTER = 80;
+const MAX_MESSAGE_WINDOW_LIMIT = 500;
 
 interface ChatServiceOptions {
   defaultWorkspace?: string;
@@ -689,6 +713,71 @@ export class ChatService {
     return requested === 'fast' ? 'fast' : undefined;
   }
 
+  private _messageWindowLimit(value: number | undefined, fallback = DEFAULT_MESSAGE_WINDOW_LIMIT): number {
+    if (!Number.isFinite(value) || !value) return fallback;
+    return Math.max(1, Math.min(MAX_MESSAGE_WINDOW_LIMIT, Math.floor(value)));
+  }
+
+  private _pinnedMessages(messages: Message[]): ConversationPinnedMessage[] {
+    return messages
+      .map((message, index) => message.pinned ? { index, message } : null)
+      .filter((item): item is ConversationPinnedMessage => item !== null);
+  }
+
+  private _messageWindow(messages: Message[], opts?: MessageWindowOptions): ConversationMessageWindow | null {
+    const total = messages.length;
+    if (total === 0) {
+      return {
+        messages: [],
+        total: 0,
+        startIndex: 0,
+        endIndex: 0,
+        hasOlder: false,
+        hasNewer: false,
+      };
+    }
+
+    const mode = opts?.mode || 'tail';
+    let startIndex = 0;
+    let endIndex = total;
+
+    if (mode === 'before') {
+      const anchorIndex = messages.findIndex(message => message.id === opts?.beforeMessageId);
+      if (anchorIndex < 0) return null;
+      const limit = this._messageWindowLimit(opts?.limit);
+      endIndex = anchorIndex;
+      startIndex = Math.max(0, endIndex - limit);
+    } else if (mode === 'around') {
+      const anchorIndex = messages.findIndex(message => message.id === opts?.aroundMessageId);
+      if (anchorIndex < 0) return null;
+      let beforeCount = this._messageWindowLimit(opts?.beforeCount, DEFAULT_AROUND_MESSAGE_BEFORE);
+      let afterCount = this._messageWindowLimit(opts?.afterCount, DEFAULT_AROUND_MESSAGE_AFTER);
+      const requested = beforeCount + afterCount + 1;
+      if (requested > MAX_MESSAGE_WINDOW_LIMIT) {
+        let overflow = requested - MAX_MESSAGE_WINDOW_LIMIT;
+        const trimAfter = Math.min(afterCount, overflow);
+        afterCount -= trimAfter;
+        overflow -= trimAfter;
+        beforeCount = Math.max(0, beforeCount - overflow);
+      }
+      startIndex = Math.max(0, anchorIndex - beforeCount);
+      endIndex = Math.min(total, anchorIndex + afterCount + 1);
+    } else {
+      const limit = this._messageWindowLimit(opts?.limit);
+      endIndex = total;
+      startIndex = Math.max(0, endIndex - limit);
+    }
+
+    return {
+      messages: messages.slice(startIndex, endIndex),
+      total,
+      startIndex,
+      endIndex,
+      hasOlder: startIndex > 0,
+      hasNewer: endIndex < total,
+    };
+  }
+
   async getConversation(id: string): Promise<Conversation | null> {
     const result = await this._getConvFromIndex(id);
     if (!result) return null;
@@ -728,6 +817,31 @@ export class ChatService {
       externalSessionId: activeSession?.externalSessionId || null,
       messageQueue: normalizedQueue.length ? normalizedQueue : undefined,
       archived: convEntry.archived,
+    };
+  }
+
+  async getConversationWithMessageWindow(id: string, opts?: MessageWindowOptions): Promise<Conversation | null> {
+    const conv = await this.getConversation(id);
+    if (!conv) return null;
+    const messageWindow = this._messageWindow(conv.messages, opts);
+    if (!messageWindow) return null;
+    return {
+      ...conv,
+      messages: messageWindow.messages,
+      messageWindow,
+      pinnedMessages: this._pinnedMessages(conv.messages),
+    };
+  }
+
+  async getConversationMessages(id: string, opts?: MessageWindowOptions): Promise<ConversationMessagesWindowResult | null> {
+    const conv = await this.getConversation(id);
+    if (!conv) return null;
+    const messageWindow = this._messageWindow(conv.messages, opts);
+    if (!messageWindow) return null;
+    return {
+      messages: messageWindow.messages,
+      messageWindow,
+      pinnedMessages: this._pinnedMessages(conv.messages),
     };
   }
 

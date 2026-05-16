@@ -1077,6 +1077,18 @@ Flat object assembled from workspace index + active session file:
   currentSessionId: string,
   sessionNumber: number,        // Active session number
   messages: Message[],          // Active session messages
+  messageWindow?: {             // Present when GET /conversations/:id is called with messageWindow=tail, or on GET /conversations/:id/messages
+    messages: Message[],        // Same page as the top-level messages field
+    total: number,              // Full active-session message count
+    startIndex: number,         // Inclusive zero-based index in the active session
+    endIndex: number,           // Exclusive zero-based index in the active session
+    hasOlder: boolean,          // true when messages before startIndex exist
+    hasNewer: boolean           // true when messages at/after endIndex exist
+  },
+  pinnedMessages?: Array<{      // Present with message windows; includes all pinned active-session messages, even outside the returned page
+    index: number,
+    message: Message
+  }>,
   usage: Usage,                 // Cumulative token/cost totals (zeroed if no usage yet)
   sessionUsage: Usage,          // Active session token/cost totals (zeroed if no usage yet)
   externalSessionId: string|null, // Backend-managed session ID (for resume after server restart)
@@ -1084,6 +1096,12 @@ Flat object assembled from workspace index + active session file:
   unread?: boolean              // Mirror of `ConversationEntry.unread`. Lets the v2 sidebar render an unread dot on initial paint without a second round-trip per conversation.
 }
 ```
+
+`GET /conversations/:id/messages` returns the message-window subset directly as
+`{ messages, messageWindow, pinnedMessages }`. Window indexes are always
+relative to the active session, not the currently mounted client page. The
+default `GET /conversations/:id` response remains full-transcript for
+backwards compatibility unless `messageWindow=tail` is requested.
 
 ## Usage Ledger (`data/chat/usage-ledger.json`)
 

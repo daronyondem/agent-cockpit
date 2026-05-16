@@ -211,6 +211,35 @@ describe('frontend routes', () => {
     expect(mobileCssSrc).toContain('.mobile-back-to-end');
   });
 
+  test('desktop transcript paging uses internal message windows without a virtualizer dependency', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const packageSrc = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8');
+    const packageLockSrc = fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8');
+
+    expect(apiSrc).toContain('getConversation: (convId, params)');
+    expect(apiSrc).toContain('getMessageWindow: (convId, params)');
+    expect(storeSrc).toContain('CHAT_WINDOW_TAIL_LIMIT = 160');
+    expect(storeSrc).toContain('CHAT_WINDOW_PAGE_LIMIT = 80');
+    expect(storeSrc).toContain('loadOlderMessages');
+    expect(storeSrc).toContain('loadAroundMessage');
+    expect(storeSrc).toContain('loadTailMessages');
+    expect(shellSrc).toContain('StreamStore.loadOlderMessages(convId)');
+    expect(shellSrc).toContain('restore.scrollTop + Math.max(0, el.scrollHeight - restore.scrollHeight)');
+    expect(shellSrc).toContain('StreamStore.loadAroundMessage(convId, messageId)');
+    expect(shellSrc).toContain('pendingPinJumpRef');
+    expect(shellSrc).toContain('if (!feed || !node || !feed.contains(node)) return false;');
+    expect(shellSrc).toContain('forceBackToEndRef.current = true');
+    expect(shellSrc).toContain('setPinJumpToken(token => token + 1)');
+    expect(shellSrc).toContain('feed.scrollTo({ top: Math.max(0, targetTop), behavior })');
+    expect(shellSrc).toContain('requestAnimationFrame(() => setShowFeedBackToEnd(true))');
+    expect(shellSrc).toContain('const jumpIndex = messages.length > 1 ? nextIndex : safeIndex');
+    expect(shellSrc).toContain('StreamStore.loadTailMessages(convId)');
+    expect(shellSrc).toContain('currentMessages={messageWindow && (messageWindow.hasOlder || messageWindow.hasNewer) ? null : messages}');
+    expect(`${packageSrc}\n${packageLockSrc}`).not.toMatch(/react-virtuoso|@tanstack\/react-virtual|react-window/);
+  });
+
   test('mobile PWA exposes backend-neutral goal controls through the composer shell', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
     const apiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');

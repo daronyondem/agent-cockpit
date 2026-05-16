@@ -20,6 +20,11 @@ import type { Request, Response } from '../../types';
 import { isCliProfileResolutionError, param } from './routeUtils';
 
 type CliRuntime = Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>> | null;
+type MessageWindowQuery = Parameters<ChatService['getConversationMessages']>[1];
+
+const DEFAULT_TAIL_MESSAGE_LIMIT = 160;
+const DEFAULT_OLDER_MESSAGE_LIMIT = 80;
+const MAX_MESSAGE_WINDOW_LIMIT = 500;
 
 export interface ConversationRoutesOptions {
   chatService: ChatService;
@@ -37,6 +42,47 @@ export interface ConversationRoutesOptions {
   enqueueSessionSummaryFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, runtime: CliRuntime) => Promise<void>;
   enqueueMemoryFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, runtime: CliRuntime) => Promise<void>;
   enqueueContextMapFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, source: 'session_reset' | 'archive') => Promise<void>;
+}
+
+function queryString(value: unknown): string | undefined {
+  if (Array.isArray(value)) return queryString(value[0]);
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return trimmed || undefined;
+}
+
+function queryInt(value: unknown, fallback: number): number {
+  const raw = queryString(value);
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(1, Math.min(MAX_MESSAGE_WINDOW_LIMIT, Math.floor(parsed)));
+}
+
+function parseMessageWindowQuery(query: Request['query']): MessageWindowQuery {
+  const around = queryString(query.around);
+  if (around) {
+    return {
+      mode: 'around',
+      aroundMessageId: around,
+      beforeCount: queryInt(query.beforeCount, DEFAULT_OLDER_MESSAGE_LIMIT),
+      afterCount: queryInt(query.afterCount, DEFAULT_OLDER_MESSAGE_LIMIT),
+    };
+  }
+
+  const before = queryString(query.before);
+  if (before) {
+    return {
+      mode: 'before',
+      beforeMessageId: before,
+      limit: queryInt(query.limit, DEFAULT_OLDER_MESSAGE_LIMIT),
+    };
+  }
+
+  return {
+    mode: 'tail',
+    limit: queryInt(query.limit, DEFAULT_TAIL_MESSAGE_LIMIT),
+  };
 }
 
 export function createConversationRouter(opts: ConversationRoutesOptions): express.Router {
@@ -58,6 +104,36 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
     enqueueContextMapFinalizer,
   } = opts;
   const router = express.Router();
+
+  async function augmentConversationResponse(conv: NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>): Promise<void> {
+    // Augment with KB status so the frontend's composer KB status icon
+    // can render without a separate round-trip to GET /kb.
+    const kbEnabled = await chatService.getWorkspaceKbEnabled(conv.workspaceHash);
+    if (kbEnabled) {
+      const db = chatService.getKbDb(conv.workspaceHash);
+      if (db) {
+        const snapshot = db.getSynthesisSnapshot();
+        const counters = db.getCounters();
+        const autoDigest = await chatService.getWorkspaceKbAutoDigest(conv.workspaceHash);
+        (conv as unknown as Record<string, unknown>).kb = {
+          enabled: true,
+          dreamingNeeded: snapshot.needsSynthesisCount > 0,
+          pendingEntries: snapshot.needsSynthesisCount,
+          pendingDigestions: counters.pendingCount,
+          autoDigest,
+          dreamingStatus: kbDreaming.isRunning(conv.workspaceHash) ? 'running' : snapshot.status,
+          dreamingStopping: kbDreaming.isStopRequested(conv.workspaceHash),
+          failedItems: counters.rawByStatus.failed,
+        };
+      }
+    }
+    if (await chatService.getWorkspaceMemoryEnabled(conv.workspaceHash)) {
+      (conv as unknown as Record<string, unknown>).memoryReview = await chatService.getMemoryReviewStatus(conv.workspaceHash);
+    }
+    if (await chatService.getWorkspaceContextMapEnabled(conv.workspaceHash)) {
+      (conv as unknown as Record<string, unknown>).contextMap = await chatService.getContextMapStatus(conv.workspaceHash);
+    }
+  }
 
   router.get('/conversations/:id/queue', async (req: Request, res: Response) => {
     try {
@@ -109,39 +185,27 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
     }
   });
 
+  // ── Get active-session message window ─────────────────────────────────────
+  router.get('/conversations/:id/messages', async (req: Request, res: Response) => {
+    try {
+      const result = await chatService.getConversationMessages(param(req, 'id'), parseMessageWindowQuery(req.query));
+      if (!result) return res.status(404).json({ error: 'Conversation or message not found' });
+      res.json(result);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   // ── Get single conversation ────────────────────────────────────────────────
   router.get('/conversations/:id', async (req: Request, res: Response) => {
     try {
-      const conv = await chatService.getConversation(param(req, 'id'));
+      const messageWindow = queryString(req.query.messageWindow);
+      const conv = messageWindow
+        ? await chatService.getConversationWithMessageWindow(param(req, 'id'), parseMessageWindowQuery(req.query))
+        : await chatService.getConversation(param(req, 'id'));
       if (!conv) return res.status(404).json({ error: 'Conversation not found' });
 
-      // Augment with KB status so the frontend's composer KB status icon
-      // can render without a separate round-trip to GET /kb.
-      const kbEnabled = await chatService.getWorkspaceKbEnabled(conv.workspaceHash);
-      if (kbEnabled) {
-        const db = chatService.getKbDb(conv.workspaceHash);
-        if (db) {
-          const snapshot = db.getSynthesisSnapshot();
-          const counters = db.getCounters();
-          const autoDigest = await chatService.getWorkspaceKbAutoDigest(conv.workspaceHash);
-          (conv as unknown as Record<string, unknown>).kb = {
-            enabled: true,
-            dreamingNeeded: snapshot.needsSynthesisCount > 0,
-            pendingEntries: snapshot.needsSynthesisCount,
-            pendingDigestions: counters.pendingCount,
-            autoDigest,
-            dreamingStatus: kbDreaming.isRunning(conv.workspaceHash) ? 'running' : snapshot.status,
-            dreamingStopping: kbDreaming.isStopRequested(conv.workspaceHash),
-            failedItems: counters.rawByStatus.failed,
-          };
-        }
-      }
-      if (await chatService.getWorkspaceMemoryEnabled(conv.workspaceHash)) {
-        (conv as unknown as Record<string, unknown>).memoryReview = await chatService.getMemoryReviewStatus(conv.workspaceHash);
-      }
-      if (await chatService.getWorkspaceContextMapEnabled(conv.workspaceHash)) {
-        (conv as unknown as Record<string, unknown>).contextMap = await chatService.getContextMapStatus(conv.workspaceHash);
-      }
+      await augmentConversationResponse(conv);
 
       res.json(conv);
     } catch (err: unknown) {
