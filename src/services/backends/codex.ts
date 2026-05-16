@@ -935,6 +935,11 @@ class CodexAppServerClient {
 
   constructor(proc: ChildProcess) {
     this.proc = proc;
+    if (typeof proc.stdin?.on === 'function') {
+      proc.stdin.on('error', (err: Error) => {
+        this.closeWithError(new Error(`Codex app-server stdin failed: ${err.message}`));
+      });
+    }
 
     proc.stdout!.on('data', (chunk: Buffer) => {
       this.buffer += chunk.toString();
@@ -972,15 +977,7 @@ class CodexAppServerClient {
     });
 
     proc.on('close', () => {
-      this.closed = true;
-      for (const [, pending] of this.pendingRequests) {
-        pending.reject(new Error('Codex app-server closed'));
-      }
-      this.pendingRequests.clear();
-      if (this.notificationResolve) {
-        this.notificationResolve();
-        this.notificationResolve = null;
-      }
+      this.closeWithError(new Error('Codex app-server closed'));
     });
   }
 
@@ -996,26 +993,53 @@ class CodexAppServerClient {
 
     return new Promise((resolve, reject) => {
       this.pendingRequests.set(id, { resolve, reject });
-      this.proc.stdin!.write(JSON.stringify(msg) + '\n');
+      this.writeJson(msg);
     });
   }
 
   notify(method: string, params?: Record<string, unknown>): void {
     if (this.closed) return;
     const msg = { jsonrpc: '2.0', method, ...(params !== undefined ? { params } : {}) };
-    this.proc.stdin!.write(JSON.stringify(msg) + '\n');
+    this.writeJson(msg);
   }
 
   respond(id: number, result: unknown): void {
     if (this.closed) return;
     const msg = { jsonrpc: '2.0', id, result };
-    this.proc.stdin!.write(JSON.stringify(msg) + '\n');
+    this.writeJson(msg);
   }
 
   respondError(id: number, code: number, message: string): void {
     if (this.closed) return;
     const msg = { jsonrpc: '2.0', id, error: { code, message } };
-    this.proc.stdin!.write(JSON.stringify(msg) + '\n');
+    this.writeJson(msg);
+  }
+
+  private writeJson(msg: object): void {
+    if (this.closed) return;
+    const stdin = this.proc.stdin;
+    if (!stdin || stdin.destroyed === true || stdin.writable === false) {
+      this.closeWithError(new Error('Codex app-server stdin is closed'));
+      return;
+    }
+    try {
+      stdin.write(JSON.stringify(msg) + '\n');
+    } catch (err: unknown) {
+      this.closeWithError(new Error(`Codex app-server stdin failed: ${(err as Error).message}`));
+    }
+  }
+
+  private closeWithError(err: Error): void {
+    if (this.closed) return;
+    this.closed = true;
+    for (const [, pending] of this.pendingRequests) {
+      pending.reject(err);
+    }
+    this.pendingRequests.clear();
+    if (this.notificationResolve) {
+      this.notificationResolve();
+      this.notificationResolve = null;
+    }
   }
 
   stopNotifications(): void {
