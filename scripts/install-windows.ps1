@@ -371,9 +371,8 @@ function Resolve-NodeExe {
 "@
   Set-Content -Path (Join-Path $binDir 'run-agent-cockpit.ps1') -Encoding UTF8 -Value ($common + @"
 `$Node = Resolve-NodeExe
-`$TsxCli = Join-Path `$AppDir 'node_modules\tsx\dist\cli.mjs'
 Set-Location `$AppDir
-& `$Node `$TsxCli 'server.ts'
+& `$Node '--import' 'tsx' 'server.ts'
 `$code = if (`$null -eq `$LASTEXITCODE) { 0 } else { `$LASTEXITCODE }
 exit `$code
 "@)
@@ -614,6 +613,9 @@ function Wait-ForServer {
       Start-Sleep -Seconds 1
     }
   }
+  Write-Log 'Agent Cockpit did not answer before timeout; collecting PM2 diagnostics.'
+  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'describe', $AppName)
+  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'logs', $AppName, '--lines', '80', '--nostream')
   $logs = Join-Path $InstallDir 'bin\logs-agent-cockpit.ps1'
   Fail "Agent Cockpit did not answer at $url. Check logs with: powershell -NoProfile -ExecutionPolicy Bypass -File `"$logs`""
 }

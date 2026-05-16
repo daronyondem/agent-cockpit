@@ -80,8 +80,9 @@ describe('Windows installer script', () => {
     expect(source).toContain("script = $runnerScript");
     expect(source).toContain("interpreter = 'powershell.exe'");
     expect(source).toContain("node_args = @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File')");
-    expect(source).toContain("`$TsxCli = Join-Path `$AppDir 'node_modules\\tsx\\dist\\cli.mjs'");
-    expect(source).toContain("& `$Node `$TsxCli 'server.ts'");
+    expect(source).toContain("& `$Node '--import' 'tsx' 'server.ts'");
+    expect(source).toContain('Agent Cockpit did not answer before timeout; collecting PM2 diagnostics.');
+    expect(source).toContain("Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'logs', $AppName, '--lines', '80', '--nostream')");
     expect(source).toContain('windowsHide = $true');
     expect(source).toContain('PM2_HOME');
     expect(source).toContain('start-agent-cockpit.ps1');

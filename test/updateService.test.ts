@@ -1256,8 +1256,7 @@ describe('UpdateService', () => {
         expect(finalEcosystem).toContain('"-WindowStyle"');
         expect(finalEcosystem).toContain('"Hidden"');
         const runnerScript = originalReadFileSync(path.join(install.installDir, 'bin', 'run-agent-cockpit.ps1'), 'utf8');
-        expect(runnerScript).toContain("Join-Path $AppDir 'node_modules\\tsx\\dist\\cli.mjs'");
-        expect(runnerScript).toContain("& $Node $TsxCli 'server.ts'");
+        expect(runnerScript).toContain("& $Node '--import' 'tsx' 'server.ts'");
         const restartPath = path.join(install.dataDir, 'restart.ps1');
         const restartScript = originalReadFileSync(restartPath, 'utf8');
         expect(restartScript).toContain('Invoke-WebRequest -UseBasicParsing');
@@ -1457,8 +1456,7 @@ describe('UpdateService', () => {
         expect(app.env.PATH.startsWith(`${runtimeDir};`)).toBe(true);
         const runnerScript = originalReadFileSync(path.join(installDir, 'bin', 'run-agent-cockpit.ps1'), 'utf8');
         expect(runnerScript).toContain(`$InstallDir = '${installDir.replace(/'/g, "''")}'`);
-        expect(runnerScript).toContain("Join-Path $AppDir 'node_modules\\tsx\\dist\\cli.mjs'");
-        expect(runnerScript).toContain("& $Node $TsxCli 'server.ts'");
+        expect(runnerScript).toContain("& $Node '--import' 'tsx' 'server.ts'");
       } finally {
         restorePlatform();
         fs.rmSync(installDir, { recursive: true, force: true });

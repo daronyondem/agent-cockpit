@@ -333,9 +333,10 @@ sets PM2 `windowsHide: true` and has PM2 monitor
 `bin\run-agent-cockpit.ps1` through `powershell.exe -WindowStyle Hidden` instead
 of spawning `node.exe` directly. The runner reads `install.json`, prepends the
 recorded private or system Node `binDir` to `PATH`, resolves `node.exe`, then
-executes `node_modules\tsx\dist\cli.mjs server.ts` from the active `appDir`.
-This keeps the PM2-managed server background-only and prevents a Node console
-window from being left on the user's desktop. Runtime environment includes
+executes `node --import tsx server.ts` from the active `appDir`. This keeps the
+PM2-managed server background-only, avoids an extra `tsx` CLI process layer, and
+prevents a Node console window from being left on the user's desktop. Runtime
+environment includes
 `PORT`, `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
 `AGENT_COCKPIT_DATA_DIR`, `WEB_BUILD_MODE=auto`,
 `AUTH_ENABLE_LEGACY_OAUTH=false`, `PM2_HOME=<install-root>\pm2`, and a private
@@ -353,7 +354,9 @@ best-effort basis before deleting active app files, and keep `SESSION_SECRET`,
 The installer starts Agent Cockpit with local PM2 and install-local `PM2_HOME`,
 then saves PM2 state. The generated start/stop helpers invoke PM2 through a
 checked native-command wrapper so failed `pm2 startOrRestart` and `pm2 save`
-commands surface through the task/script exit status. Unless `-NoAutoStart` is
+commands surface through the task/script exit status. If readiness times out,
+the installer prints PM2 `describe` output and the last PM2 log lines before
+failing with the generated logs helper command. Unless `-NoAutoStart` is
 supplied, it registers a current-user `AgentCockpit` ONLOGON Scheduled Task
 that runs `bin\start-agent-cockpit.ps1` through `powershell.exe -WindowStyle
 Hidden`. The scheduled-task cmdlet path uses the current Windows identity as an
