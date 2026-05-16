@@ -1251,12 +1251,13 @@ describe('UpdateService', () => {
           startup: install.status.startup,
         }));
         const finalEcosystem = originalReadFileSync(path.join(finalDir, 'ecosystem.config.js'), 'utf8');
-        expect(finalEcosystem).toContain('run-agent-cockpit.ps1');
-        expect(finalEcosystem).toContain('"interpreter": "powershell.exe"');
-        expect(finalEcosystem).toContain('"-ExecutionPolicy"');
-        const runnerScript = originalReadFileSync(path.join(install.installDir, 'bin', 'run-agent-cockpit.ps1'), 'utf8');
-        expect(runnerScript).toContain("$startInfo.Arguments = '--import tsx server.ts'");
-        expect(runnerScript).toContain('$startInfo.CreateNoWindow = $true');
+        expect(finalEcosystem).toContain('run-agent-cockpit.vbs');
+        expect(finalEcosystem).toContain('"interpreter": "wscript.exe"');
+        expect(finalEcosystem).toContain('"//NoLogo"');
+        const runnerScript = originalReadFileSync(path.join(install.installDir, 'bin', 'run-agent-cockpit.vbs'), 'utf8');
+        expect(runnerScript).toContain('shell.Run(cmd, 0, True)');
+        expect(runnerScript).toContain('--import tsx server.ts');
+        expect(runnerScript).toContain('agent-cockpit-runner-error.log');
         const restartPath = path.join(install.dataDir, 'restart.ps1');
         const restartScript = originalReadFileSync(restartPath, 'utf8');
         expect(restartScript).toContain('Invoke-WebRequest -UseBasicParsing');
@@ -1438,9 +1439,9 @@ describe('UpdateService', () => {
         const app = mod.exports.apps[0];
         expect(app).toEqual(expect.objectContaining({
           name: 'agent-cockpit',
-          script: path.join(installDir, 'bin', 'run-agent-cockpit.ps1'),
-          interpreter: 'powershell.exe',
-          node_args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'],
+          script: path.join(installDir, 'bin', 'run-agent-cockpit.vbs'),
+          interpreter: 'wscript.exe',
+          node_args: ['//B', '//NoLogo'],
           cwd: appDir,
           windowsHide: true,
         }));
@@ -1454,10 +1455,10 @@ describe('UpdateService', () => {
           PM2_HOME: path.join(installDir, 'pm2'),
         }));
         expect(app.env.PATH.startsWith(`${runtimeDir};`)).toBe(true);
-        const runnerScript = originalReadFileSync(path.join(installDir, 'bin', 'run-agent-cockpit.ps1'), 'utf8');
-        expect(runnerScript).toContain(`$InstallDir = '${installDir.replace(/'/g, "''")}'`);
-        expect(runnerScript).toContain("$startInfo.Arguments = '--import tsx server.ts'");
-        expect(runnerScript).toContain('$startInfo.CreateNoWindow = $true');
+        const runnerScript = originalReadFileSync(path.join(installDir, 'bin', 'run-agent-cockpit.vbs'), 'utf8');
+        expect(runnerScript).toContain(`nodeExe = "${path.join(runtimeDir, 'node.exe').replace(/"/g, '""')}"`);
+        expect(runnerScript).toContain(`appDir = "${appDir.replace(/"/g, '""')}"`);
+        expect(runnerScript).toContain('shell.Run(cmd, 0, True)');
       } finally {
         restorePlatform();
         fs.rmSync(installDir, { recursive: true, force: true });

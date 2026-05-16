@@ -1042,12 +1042,13 @@ Production-channel sequence:
    exist.
 11. Copy `.env` from the previous current release into the new release. macOS
     also copies `ecosystem.config.js`; Windows regenerates `ecosystem.config.js`
-    so PM2 monitors `<installDir>\bin\run-agent-cockpit.ps1` through
-    `powershell.exe` and the config points at the new versioned app directory.
-    The Windows runner launches `node --import tsx server.ts` with
-    `System.Diagnostics.ProcessStartInfo.CreateNoWindow=true`, redirects
-    stdout/stderr back to PM2 logs, and the config sets `windowsHide: true` so
-    PM2-managed Node processes do not open a desktop console window.
+    so PM2 monitors `<installDir>\bin\run-agent-cockpit.vbs` through
+    `wscript.exe //B //NoLogo` and the config points at the new versioned app
+    directory. The Windows runner launches `node --import tsx server.ts` hidden
+    through `%ComSpec% /d /s /c`, redirects stdout/stderr to
+    `<installDir>\pm2\logs\agent-cockpit-runner-*.log`, and the config sets
+    `windowsHide: true` so PM2-managed Node processes do not open a desktop
+    console window.
 12. Activate the release. macOS switches `<installDir>/current` to the new
     release; the path must either be absent or a symlink, and a non-symlink
     current path is refused. Windows records the new versioned release path as

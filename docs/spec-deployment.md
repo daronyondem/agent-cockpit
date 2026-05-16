@@ -330,14 +330,14 @@ force both builds.
 Both Windows channels generate `.env`, `ecosystem.config.js`, helper scripts
 under `<install-root>\bin\`, and `<data-dir>\install.json`. The ecosystem config
 sets PM2 `windowsHide: true` and has PM2 monitor
-`bin\run-agent-cockpit.ps1` through `powershell.exe` instead of spawning
-`node.exe` directly. The runner reads `install.json`, prepends the recorded
-private or system Node `binDir` to `PATH`, resolves `node.exe`, then starts
-`node --import tsx server.ts` from the active `appDir` with
-`System.Diagnostics.ProcessStartInfo.CreateNoWindow=true` and redirects
-stdout/stderr back to PM2 logs. This keeps the PM2-managed server
-background-only, avoids an extra `tsx` CLI process layer, and prevents a Node
-console window from being left on the user's desktop. Runtime
+`bin\run-agent-cockpit.vbs` through `wscript.exe //B //NoLogo` instead of
+spawning `node.exe` directly. The generated Windows Script Host runner contains
+the active `appDir`, resolved `node.exe`, and runner log paths, then starts
+`node --import tsx server.ts` hidden through `%ComSpec% /d /s /c` with stdout
+and stderr redirected to `<install-root>\pm2\logs\agent-cockpit-runner-*.log`.
+This keeps the PM2-managed server background-only, avoids an extra `tsx` CLI
+process layer, and prevents a Node console window from being left on the user's
+desktop. Runtime
 environment includes
 `PORT`, `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
 `AGENT_COCKPIT_DATA_DIR`, `WEB_BUILD_MODE=auto`,
@@ -360,8 +360,8 @@ runs replace stale process metadata with the regenerated hidden runner config.
 The generated start/stop helpers invoke PM2 through a checked native-command
 wrapper so failed `pm2 startOrRestart` and `pm2 save` commands surface through
 the task/script exit status. If readiness times out, the installer prints PM2
-`describe` output and the last PM2 log lines before failing with the generated
-logs helper command. Unless `-NoAutoStart` is
+`describe` output, the last PM2 log lines, and the runner stdout/stderr logs
+before failing with the generated logs helper command. Unless `-NoAutoStart` is
 supplied, it registers a current-user `AgentCockpit` ONLOGON Scheduled Task
 that runs `bin\start-agent-cockpit.ps1` through `powershell.exe -WindowStyle
 Hidden`. The scheduled-task cmdlet path uses the current Windows identity as an

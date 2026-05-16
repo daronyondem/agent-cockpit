@@ -350,56 +350,39 @@ function Env-Quote {
   return '`' + $Value.Replace('`', '\`') + '`'
 }
 
+function Vbs-Quote {
+  param([string] $Value)
+  return '"' + $Value.Replace('"', '""') + '"'
+}
+
 function Write-WindowsRunnerScript {
+  param([string] $AppDir)
   $binDir = Join-Path $InstallDir 'bin'
+  $logDir = Join-Path $InstallDir 'pm2\logs'
   Ensure-Directory $binDir
-  $common = @"
-Set-StrictMode -Version Latest
-`$ErrorActionPreference = 'Stop'
-`$InstallDir = '$($InstallDir.Replace("'", "''"))'
-`$Install = Get-Content -Raw -Path (Join-Path `$InstallDir 'data\install.json') | ConvertFrom-Json
-`$AppDir = `$Install.appDir
-`$NodeBin = if (`$Install.nodeRuntime -and `$Install.nodeRuntime.binDir) { `$Install.nodeRuntime.binDir } else { '' }
-if (`$NodeBin) { `$env:Path = "`$NodeBin;`$env:Path" }
-function Resolve-NodeExe {
-  if (`$NodeBin) {
-    `$candidate = Join-Path `$NodeBin 'node.exe'
-    if (Test-Path `$candidate) { return `$candidate }
-  }
-  return 'node.exe'
-}
+  Ensure-Directory $logDir
+  $nodeForRunner = if ($NodeExe) { $NodeExe } else { 'node.exe' }
+  $outLog = Join-Path $logDir 'agent-cockpit-runner-out.log'
+  $errLog = Join-Path $logDir 'agent-cockpit-runner-error.log'
+  $script = @"
+Option Explicit
+Dim shell, nodeExe, appDir, outLog, errLog, comspec, cmd, exitCode
+Set shell = CreateObject("WScript.Shell")
+nodeExe = $(Vbs-Quote $nodeForRunner)
+appDir = $(Vbs-Quote $AppDir)
+outLog = $(Vbs-Quote $outLog)
+errLog = $(Vbs-Quote $errLog)
+shell.CurrentDirectory = appDir
+comspec = shell.ExpandEnvironmentStrings("%ComSpec%")
+cmd = Q(comspec) & " /d /s /c " & Q(Q(nodeExe) & " --import tsx server.ts >> " & Q(outLog) & " 2>> " & Q(errLog))
+exitCode = shell.Run(cmd, 0, True)
+WScript.Quit exitCode
+
+Function Q(value)
+  Q = Chr(34) & value & Chr(34)
+End Function
 "@
-  Set-Content -Path (Join-Path $binDir 'run-agent-cockpit.ps1') -Encoding UTF8 -Value ($common + @"
-`$Node = Resolve-NodeExe
-Set-Location `$AppDir
-`$startInfo = New-Object System.Diagnostics.ProcessStartInfo
-`$startInfo.FileName = `$Node
-`$startInfo.Arguments = '--import tsx server.ts'
-`$startInfo.WorkingDirectory = `$AppDir
-`$startInfo.UseShellExecute = `$false
-`$startInfo.CreateNoWindow = `$true
-`$startInfo.RedirectStandardOutput = `$true
-`$startInfo.RedirectStandardError = `$true
-`$process = New-Object System.Diagnostics.Process
-`$process.StartInfo = `$startInfo
-`$stdoutHandler = [System.Diagnostics.DataReceivedEventHandler]{
-  param(`$sender, `$event)
-  if (`$null -ne `$event.Data) { [Console]::Out.WriteLine(`$event.Data) }
-}
-`$stderrHandler = [System.Diagnostics.DataReceivedEventHandler]{
-  param(`$sender, `$event)
-  if (`$null -ne `$event.Data) { [Console]::Error.WriteLine(`$event.Data) }
-}
-`$process.add_OutputDataReceived(`$stdoutHandler)
-`$process.add_ErrorDataReceived(`$stderrHandler)
-if (-not `$process.Start()) {
-  exit 1
-}
-`$process.BeginOutputReadLine()
-`$process.BeginErrorReadLine()
-`$process.WaitForExit()
-exit `$process.ExitCode
-"@)
+  Set-Content -Path (Join-Path $binDir 'run-agent-cockpit.vbs') -Encoding ASCII -Value $script
 }
 
 function Write-EnvFile {
@@ -422,14 +405,14 @@ function Write-EnvFile {
 
 function Write-EcosystemConfig {
   param([string] $AppDir, [string] $DataDir, [string] $SessionSecret, [string] $SetupToken)
-  $runnerScript = Join-Path $InstallDir 'bin\run-agent-cockpit.ps1'
+  $runnerScript = Join-Path $InstallDir 'bin\run-agent-cockpit.vbs'
   $config = [ordered]@{
     apps = @(
       [ordered]@{
         name = $AppName
         script = $runnerScript
-        interpreter = 'powershell.exe'
-        node_args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')
+        interpreter = 'wscript.exe'
+        node_args = @('//B', '//NoLogo')
         cwd = $AppDir
         windowsHide = $true
         env = [ordered]@{
@@ -511,9 +494,10 @@ function Ensure-BuiltAssets {
 }
 
 function Write-HelperScripts {
+  param([string] $AppDir)
   $binDir = Join-Path $InstallDir 'bin'
   Ensure-Directory $binDir
-  Write-WindowsRunnerScript
+  Write-WindowsRunnerScript $AppDir
   $common = @"
 Set-StrictMode -Version Latest
 `$ErrorActionPreference = 'Stop'
@@ -554,6 +538,14 @@ Invoke-CheckedNative `$Npx @('pm2', 'save')
 "@)
   Set-Content -Path (Join-Path $binDir 'logs-agent-cockpit.ps1') -Encoding UTF8 -Value ($common + @"
 `$Npx = Resolve-Npx
+`$runnerOut = Join-Path `$Pm2Home 'logs\agent-cockpit-runner-out.log'
+`$runnerErr = Join-Path `$Pm2Home 'logs\agent-cockpit-runner-error.log'
+foreach (`$logPath in @(`$runnerOut, `$runnerErr)) {
+  if (Test-Path `$logPath) {
+    Write-Host "=== `$logPath ==="
+    Get-Content -Path `$logPath -Tail 100
+  }
+}
 & `$Npx pm2 logs agent-cockpit --lines 100
 "@)
 }
@@ -642,6 +634,13 @@ function Wait-ForServer {
   Write-Log 'Agent Cockpit did not answer before timeout; collecting PM2 diagnostics.'
   Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'describe', $AppName)
   Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'logs', $AppName, '--lines', '80', '--nostream')
+  foreach ($logName in @('agent-cockpit-runner-out.log', 'agent-cockpit-runner-error.log')) {
+    $logPath = Join-Path (Join-Path $InstallDir 'pm2\logs') $logName
+    if (Test-Path $logPath) {
+      Write-Log "Last lines from $logPath"
+      Get-Content -Path $logPath -Tail 80
+    }
+  }
   $logs = Join-Path $InstallDir 'bin\logs-agent-cockpit.ps1'
   Fail "Agent Cockpit did not answer at $url. Check logs with: powershell -NoProfile -ExecutionPolicy Bypass -File `"$logs`""
 }
@@ -681,7 +680,7 @@ function Configure-App {
   Write-EnvFile $AppDir $DataDir $sessionSecret $setupToken
   Write-EcosystemConfig $AppDir $DataDir $sessionSecret $setupToken
   Write-InstallManifest $DataDir $AppDir $InstallVersion $InstallSource $Branch
-  Write-HelperScripts
+  Write-HelperScripts $AppDir
   Register-LogonTask
   Start-Pm2 $AppDir
   Wait-ForServer $AppDir

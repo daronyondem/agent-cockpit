@@ -1018,13 +1018,13 @@ export class UpdateService {
     const dataDir = installStatus?.dataDir || this._dataRoot;
     const installDir = path.dirname(dataDir);
     const pm2Home = path.join(path.dirname(dataDir), 'pm2');
-    const runnerScript = this._writeWindowsRunnerScript(installDir);
+    const runnerScript = this._writeWindowsRunnerScript(installDir, appDir, nodeRuntime);
     const config = {
       apps: [{
         name: 'agent-cockpit',
         script: runnerScript,
-        interpreter: 'powershell.exe',
-        node_args: ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File'],
+        interpreter: 'wscript.exe',
+        node_args: ['//B', '//NoLogo'],
         cwd: appDir,
         windowsHide: true,
         env: {
@@ -1042,58 +1042,40 @@ export class UpdateService {
     fs.writeFileSync(path.join(appDir, 'ecosystem.config.js'), `module.exports = ${JSON.stringify(config, null, 2)};\n`);
   }
 
-  private _writeWindowsRunnerScript(installDir: string): string {
+  private _writeWindowsRunnerScript(installDir: string, appDir: string, nodeRuntime: InstallNodeRuntime | null): string {
     const binDir = path.join(installDir, 'bin');
-    const runnerScript = path.join(binDir, 'run-agent-cockpit.ps1');
+    const runnerScript = path.join(binDir, 'run-agent-cockpit.vbs');
+    const logDir = path.join(installDir, 'pm2', 'logs');
+    const nodeExe = nodeRuntime?.binDir ? path.join(nodeRuntime.binDir, 'node.exe') : 'node.exe';
+    const outLog = path.join(logDir, 'agent-cockpit-runner-out.log');
+    const errLog = path.join(logDir, 'agent-cockpit-runner-error.log');
     fs.mkdirSync(binDir, { recursive: true });
+    fs.mkdirSync(logDir, { recursive: true });
     const script = [
-      'Set-StrictMode -Version Latest',
-      "$ErrorActionPreference = 'Stop'",
-      `$InstallDir = ${this._psQuote(installDir)}`,
-      "$Install = Get-Content -Raw -Path (Join-Path $InstallDir 'data\\install.json') | ConvertFrom-Json",
-      '$AppDir = $Install.appDir',
-      "$NodeBin = if ($Install.nodeRuntime -and $Install.nodeRuntime.binDir) { $Install.nodeRuntime.binDir } else { '' }",
-      'if ($NodeBin) { $env:Path = "$NodeBin;$env:Path" }',
-      'function Resolve-NodeExe {',
-      '  if ($NodeBin) {',
-      "    $candidate = Join-Path $NodeBin 'node.exe'",
-      '    if (Test-Path $candidate) { return $candidate }',
-      '  }',
-      "  return 'node.exe'",
-      '}',
-      '$Node = Resolve-NodeExe',
-      'Set-Location $AppDir',
-      '$startInfo = New-Object System.Diagnostics.ProcessStartInfo',
-      '$startInfo.FileName = $Node',
-      "$startInfo.Arguments = '--import tsx server.ts'",
-      '$startInfo.WorkingDirectory = $AppDir',
-      '$startInfo.UseShellExecute = $false',
-      '$startInfo.CreateNoWindow = $true',
-      '$startInfo.RedirectStandardOutput = $true',
-      '$startInfo.RedirectStandardError = $true',
-      '$process = New-Object System.Diagnostics.Process',
-      '$process.StartInfo = $startInfo',
-      '$stdoutHandler = [System.Diagnostics.DataReceivedEventHandler]{',
-      '  param($sender, $event)',
-      '  if ($null -ne $event.Data) { [Console]::Out.WriteLine($event.Data) }',
-      '}',
-      '$stderrHandler = [System.Diagnostics.DataReceivedEventHandler]{',
-      '  param($sender, $event)',
-      '  if ($null -ne $event.Data) { [Console]::Error.WriteLine($event.Data) }',
-      '}',
-      '$process.add_OutputDataReceived($stdoutHandler)',
-      '$process.add_ErrorDataReceived($stderrHandler)',
-      'if (-not $process.Start()) {',
-      '  exit 1',
-      '}',
-      '$process.BeginOutputReadLine()',
-      '$process.BeginErrorReadLine()',
-      '$process.WaitForExit()',
-      'exit $process.ExitCode',
+      'Option Explicit',
+      'Dim shell, nodeExe, appDir, outLog, errLog, comspec, cmd, exitCode',
+      'Set shell = CreateObject("WScript.Shell")',
+      `nodeExe = ${this._vbsQuote(nodeExe)}`,
+      `appDir = ${this._vbsQuote(appDir)}`,
+      `outLog = ${this._vbsQuote(outLog)}`,
+      `errLog = ${this._vbsQuote(errLog)}`,
+      'shell.CurrentDirectory = appDir',
+      'comspec = shell.ExpandEnvironmentStrings("%ComSpec%")',
+      'cmd = Q(comspec) & " /d /s /c " & Q(Q(nodeExe) & " --import tsx server.ts >> " & Q(outLog) & " 2>> " & Q(errLog))',
+      'exitCode = shell.Run(cmd, 0, True)',
+      'WScript.Quit exitCode',
+      '',
+      'Function Q(value)',
+      '  Q = Chr(34) & value & Chr(34)',
+      'End Function',
       '',
     ].join('\r\n');
     fs.writeFileSync(runnerScript, script);
     return runnerScript;
+  }
+
+  private _vbsQuote(value: string): string {
+    return `"${value.replace(/"/g, '""')}"`;
   }
 
   private _readEnvValue(envPath: string, name: string): string | null {
