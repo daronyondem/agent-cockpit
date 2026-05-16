@@ -214,6 +214,8 @@ describe('InstallDoctorService', () => {
     const root = makeRoot();
     roots.push(root);
     const commands: string[] = [];
+    const originalAppData = process.env.APPDATA;
+    delete process.env.APPDATA;
     try {
       const service = new InstallDoctorService({
         appRoot: root,
@@ -266,6 +268,11 @@ describe('InstallDoctorService', () => {
         expect.objectContaining({ id: 'codex-cli:npm-install', command: ['npm.cmd', '--prefix', path.join(root, 'cli-tools'), 'i', '-g', '@openai/codex@latest'] }),
       ]));
     } finally {
+      if (originalAppData === undefined) {
+        delete process.env.APPDATA;
+      } else {
+        process.env.APPDATA = originalAppData;
+      }
       restorePlatform();
     }
   });
@@ -276,6 +283,8 @@ describe('InstallDoctorService', () => {
     roots.push(root);
     const runtimeBinDir = path.join(root, 'runtime', 'node v22 win x64');
     const cliToolsDir = path.join(root, 'cli-tools');
+    const originalAppData = process.env.APPDATA;
+    delete process.env.APPDATA;
     const npmCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
     const npxCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npx-cli.js');
     const nodeExe = path.join(runtimeBinDir, 'node.exe');
@@ -346,6 +355,11 @@ describe('InstallDoctorService', () => {
         expect.objectContaining({ id: 'codex-cli:npm-install', command: [nodeExe, npmCli, '--prefix', cliToolsDir, 'i', '-g', '@openai/codex@latest'] }),
       ]));
     } finally {
+      if (originalAppData === undefined) {
+        delete process.env.APPDATA;
+      } else {
+        process.env.APPDATA = originalAppData;
+      }
       restorePlatform();
     }
   });
