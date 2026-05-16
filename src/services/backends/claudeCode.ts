@@ -27,6 +27,7 @@ import type {
   CliProfile,
   ThreadGoal,
 } from '../../types';
+import { buildCliCommandInvocation, resolveCliCommandForRuntime, type CliCommandResolution } from '../cliCommandResolver';
 
 // Re-export shared helpers for backwards compatibility with existing imports
 export { sanitizeSystemPrompt, isApiError, shortenPath, extractToolDetails, extractToolOutcome, extractUsage } from './toolUtils';
@@ -44,7 +45,7 @@ function filterStdinWarning(stderr: string): string {
     .trim();
 }
 
-export interface ClaudeCliRuntime {
+export interface ClaudeCliRuntime extends CliCommandResolution {
   command: string;
   env: NodeJS.ProcessEnv;
   configDir?: string;
@@ -55,7 +56,7 @@ export function resolveClaudeCliRuntime(profile?: CliProfile): ClaudeCliRuntime 
   if (profile && profile.vendor !== 'claude-code') {
     throw new Error(`CLI profile vendor ${profile.vendor} is not claude-code`);
   }
-  const command = profile?.command?.trim() || 'claude';
+  const requestedCommand = profile?.command?.trim() || 'claude';
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (profile?.env) {
     for (const [key, value] of Object.entries(profile.env)) {
@@ -70,13 +71,14 @@ export function resolveClaudeCliRuntime(profile?: CliProfile): ClaudeCliRuntime 
 
   const hash = crypto.createHash('sha1').update(JSON.stringify({
     id: profile?.id || null,
-    command,
+    command: requestedCommand,
     configDir: configDir || null,
     env: profile?.env || {},
   })).digest('hex').slice(0, 12);
+  const commandResolution = resolveCliCommandForRuntime('claude-code', requestedCommand, env);
 
   return {
-    command,
+    ...commandResolution,
     env,
     ...(configDir ? { configDir } : {}),
     profileKey: profile ? `${profile.id}:${hash}` : `server-configured:${hash}`,
@@ -353,9 +355,10 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       }
     }
     return await new Promise<string>((resolve, reject) => {
+      const invocation = buildCliCommandInvocation(runtime, args);
       const child = execFile(
-        runtime.command,
-        args,
+        invocation.command,
+        invocation.args,
         { timeout: timeoutMs, signal: abortSignal, maxBuffer: 4 * 1024 * 1024, cwd: workingDir || undefined, env: runtime.env },
         (err, stdout, stderr) => {
           if (err) {
@@ -456,8 +459,9 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
 
     try {
       const cwd = workingDir || this.workingDir || undefined;
-      console.log(`[claudeCode] spawning ${runtime.command}, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} systemPromptLen=${(systemPrompt || '').length} cwd=${cwd}`);
-      const proc = spawn(runtime.command, args, {
+      const invocation = buildCliCommandInvocation(runtime, args);
+      console.log(`[claudeCode] spawning ${runtime.displayCommand || runtime.command}, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} systemPromptLen=${(systemPrompt || '').length} cwd=${cwd}`);
+      const proc = spawn(invocation.command, invocation.args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
         env: runtime.env,

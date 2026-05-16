@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import crypto from 'crypto';
+import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import { resolveClaudeCliRuntime } from './backends/claudeCode';
@@ -8,6 +9,7 @@ import {
   CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION,
 } from './backends/claudeInteractiveCompatibility';
 import { resolveCodexCliRuntime } from './backends/codex';
+import { buildCliCommandInvocation, windowsCmdCommandLine, type CliCommandResolution } from './cliCommandResolver';
 import { serverConfiguredCliProfileId } from './cliProfiles';
 import type {
   CliInstallMethod,
@@ -42,7 +44,7 @@ const VENDOR_NPM_PACKAGES: Partial<Record<CliVendor, string>> = {
   codex: '@openai/codex',
 };
 
-interface CliRuntimeTarget {
+interface CliRuntimeTarget extends CliCommandResolution {
   id: string;
   vendor: CliVendor;
   command: string;
@@ -54,6 +56,7 @@ interface CliRuntimeTarget {
 interface ProbeResult {
   installMethod: CliInstallMethod;
   resolvedPath: string | null;
+  npmPrefix?: string | null;
 }
 
 export class CliUpdateService {
@@ -208,13 +211,16 @@ export class CliUpdateService {
     for (const profile of withDefault) {
       if (!profile || profile.disabled || !isCliVendorValue(profile.vendor)) continue;
       const runtime = this._runtimeForProfile(profile);
-      const key = this._targetKey(profile.vendor, runtime.command, runtime.env);
+      const key = this._targetKey(profile.vendor, runtime);
       let target = grouped.get(key);
       if (!target) {
         target = {
           id: key,
           vendor: profile.vendor,
           command: runtime.command,
+          ...(runtime.argsPrefix ? { argsPrefix: runtime.argsPrefix } : {}),
+          ...(runtime.windowsCmdShim ? { windowsCmdShim: runtime.windowsCmdShim } : {}),
+          ...(runtime.displayCommand ? { displayCommand: runtime.displayCommand } : {}),
           env: runtime.env,
           profileIds: [],
           profileNames: [],
@@ -230,7 +236,7 @@ export class CliUpdateService {
     });
   }
 
-  private _runtimeForProfile(profile: CliProfile): { command: string; env: NodeJS.ProcessEnv } {
+  private _runtimeForProfile(profile: CliProfile): CliCommandResolution & { command: string; env: NodeJS.ProcessEnv } {
     if (profile.vendor === 'codex') return resolveCodexCliRuntime(profile);
     if (profile.vendor === 'claude-code') return resolveClaudeCliRuntime(profile);
     return {
@@ -239,11 +245,13 @@ export class CliUpdateService {
     };
   }
 
-  private _targetKey(vendor: CliVendor, command: string, env: NodeJS.ProcessEnv): string {
+  private _targetKey(vendor: CliVendor, runtime: CliCommandResolution & { command: string; env: NodeJS.ProcessEnv }): string {
     const hash = crypto.createHash('sha1').update(JSON.stringify({
       vendor,
-      command,
-      PATH: env.PATH || '',
+      command: runtime.command,
+      argsPrefix: runtime.argsPrefix || [],
+      windowsCmdShim: !!runtime.windowsCmdShim,
+      PATH: runtime.env.PATH || '',
     })).digest('hex').slice(0, 12);
     return `${vendor}:${hash}`;
   }
@@ -251,14 +259,14 @@ export class CliUpdateService {
   private async _probeTarget(target: CliRuntimeTarget): Promise<CliUpdateStatus> {
     const base = this._emptyStatus(target);
     try {
-      const versionOut = await this._exec(target.command, this._versionArgs(target.vendor), target.env, EXEC_TIMEOUT_MS);
+      const versionOut = await this._execTarget(target, this._versionArgs(target.vendor), EXEC_TIMEOUT_MS);
       const currentVersion = parseVersion(versionOut);
-      const resolvedPath = await this._resolveCommand(target.command, target.env);
+      const resolvedPath = await this._resolveCommand(target);
       const probe = await this._detectInstallMethod(target, resolvedPath);
-      const updateCommand = this._updateCommand(target, probe.installMethod);
+      const updateCommand = this._updateCommand(target, probe);
       const latestVersion = await this._latestVersion(target, probe.installMethod);
       const interactiveCompatibility = target.vendor === 'claude-code'
-        ? [buildClaudeInteractiveCompatibilityStatus(target.command, currentVersion)]
+        ? [buildClaudeInteractiveCompatibilityStatus(target.displayCommand || target.command, currentVersion)]
         : undefined;
       const compatibilityMessage = interactiveCompatibility?.find((item) => item.severity === 'warning' || item.severity === 'error')?.message || null;
       const updateWouldExceedInteractiveTested = target.vendor === 'claude-code'
@@ -283,7 +291,7 @@ export class CliUpdateService {
     } catch (err: unknown) {
       const message = (err as Error).message || String(err);
       const interactiveCompatibility = target.vendor === 'claude-code'
-        ? [buildClaudeInteractiveCompatibilityStatus(target.command, null, message)]
+        ? [buildClaudeInteractiveCompatibilityStatus(target.displayCommand || target.command, null, message)]
         : undefined;
       const updateCaution = interactiveCompatibility?.find((item) => item.severity === 'warning' || item.severity === 'error')?.message || null;
       return {
@@ -301,7 +309,7 @@ export class CliUpdateService {
       id: target.id,
       vendor: target.vendor,
       label: VENDOR_LABELS[target.vendor],
-      command: target.command,
+      command: target.displayCommand || target.command,
       resolvedPath: null,
       profileIds: target.profileIds,
       profileNames: target.profileNames,
@@ -325,12 +333,16 @@ export class CliUpdateService {
     const npmPackage = VENDOR_NPM_PACKAGES[target.vendor];
     if (npmPackage && resolvedPath) {
       const realResolved = await safeRealpath(resolvedPath);
+      const inferredPrefix = inferNpmPrefixFromPackagePath(realResolved || resolvedPath, npmPackage);
+      if (inferredPrefix) {
+        return { installMethod: 'npm-global', resolvedPath: realResolved || resolvedPath, npmPrefix: inferredPrefix };
+      }
       const npmRoot = (await this._exec('npm', ['root', '-g'], target.env, EXEC_TIMEOUT_MS).catch(() => '')).trim();
       if (npmRoot) {
         const packageDir = path.join(npmRoot, npmPackage);
         const realPackageDir = await safeRealpath(packageDir);
         if (realResolved && realPackageDir && isSubpath(realResolved, realPackageDir)) {
-          return { installMethod: 'npm-global', resolvedPath: realResolved };
+          return { installMethod: 'npm-global', resolvedPath: realResolved, npmPrefix: path.dirname(npmRoot) };
         }
       }
     }
@@ -344,24 +356,37 @@ export class CliUpdateService {
     if (installMethod !== 'npm-global') return null;
     const npmPackage = VENDOR_NPM_PACKAGES[target.vendor];
     if (!npmPackage) return null;
-    const out = await this._exec('npm', ['view', npmPackage, 'version'], target.env, EXEC_TIMEOUT_MS);
+    const npmCommand = process.platform === 'win32' ? windowsNpmCommand() : ['npm'];
+    const out = await this._exec(npmCommand[0], [...npmCommand.slice(1), 'view', npmPackage, 'version'], target.env, EXEC_TIMEOUT_MS);
     return parseVersion(out);
   }
 
-  private _updateCommand(target: CliRuntimeTarget, installMethod: CliInstallMethod): string[] | null {
-    if (installMethod === 'npm-global') {
+  private _updateCommand(target: CliRuntimeTarget, probe: ProbeResult): string[] | null {
+    if (probe.installMethod === 'npm-global') {
       const npmPackage = VENDOR_NPM_PACKAGES[target.vendor];
-      return npmPackage ? ['npm', 'i', '-g', `${npmPackage}@latest`] : null;
+      if (!npmPackage) return null;
+      if (process.platform === 'win32' && probe.npmPrefix) {
+        return [...windowsNpmCommand(), '--prefix', probe.npmPrefix, 'i', '-g', `${npmPackage}@latest`];
+      }
+      return ['npm', 'i', '-g', `${npmPackage}@latest`];
     }
-    if (target.vendor === 'kiro' && installMethod === 'self-update') {
+    if (target.vendor === 'kiro' && probe.installMethod === 'self-update') {
       return [target.command, 'update', '--non-interactive'];
     }
     return null;
   }
 
-  private async _resolveCommand(command: string, env: NodeJS.ProcessEnv): Promise<string | null> {
-    if (command.includes('/') || command.includes('\\')) {
-      const resolved = path.isAbsolute(command) ? command : path.resolve(this._appRoot, command);
+  private async _resolveCommand(target: CliRuntimeTarget): Promise<string | null> {
+    if (target.argsPrefix?.[0] && (target.argsPrefix[0].includes('/') || target.argsPrefix[0].includes('\\'))) {
+      try {
+        await fsp.access(target.argsPrefix[0]);
+        return target.argsPrefix[0];
+      } catch {
+        return null;
+      }
+    }
+    if (target.command.includes('/') || target.command.includes('\\')) {
+      const resolved = path.isAbsolute(target.command) ? target.command : path.resolve(this._appRoot, target.command);
       try {
         await fsp.access(resolved);
         return resolved;
@@ -370,14 +395,23 @@ export class CliUpdateService {
       }
     }
     const resolver = process.platform === 'win32' ? 'where' : 'which';
-    const out = await this._exec(resolver, [command], env, EXEC_TIMEOUT_MS).catch(() => '');
+    const command = target.displayCommand || target.command;
+    const out = await this._exec(resolver, [command], target.env, EXEC_TIMEOUT_MS).catch(() => '');
     const first = out.trim().split(/\r?\n/).find(Boolean);
     return first || null;
   }
 
+  private _execTarget(target: CliRuntimeTarget, args: string[], timeout: number): Promise<string> {
+    const invocation = buildCliCommandInvocation(target, args);
+    return this._exec(invocation.command, invocation.args, target.env, timeout);
+  }
+
   private _exec(cmd: string, args: string[], env: NodeJS.ProcessEnv, timeout: number): Promise<string> {
     return new Promise((resolve, reject) => {
-      execFile(cmd, args, {
+      const invocation = process.platform === 'win32' && /[.](?:cmd|bat)$/i.test(cmd)
+        ? { cmd: 'cmd.exe', args: ['/d', '/s', '/c', windowsCmdCommandLine(cmd, args)] }
+        : { cmd, args };
+      execFile(invocation.cmd, invocation.args, {
         cwd: this._appRoot,
         env,
         timeout,
@@ -395,6 +429,31 @@ export class CliUpdateService {
 
 function isCliVendorValue(value: unknown): value is CliVendor {
   return value === 'codex' || value === 'claude-code' || value === 'kiro';
+}
+
+function inferNpmPrefixFromPackagePath(resolvedPath: string, npmPackage: string): string | null {
+  const normalized = resolvedPath.replace(/\\/g, '/');
+  const packageParts = npmPackage.split('/');
+  const packageMarker = `/node_modules/${packageParts.join('/')}/`;
+  const markerIndex = normalized.toLowerCase().indexOf(packageMarker.toLowerCase());
+  if (markerIndex < 0) return null;
+  return resolvedPath.slice(0, markerIndex);
+}
+
+function windowsNpmCommand(): string[] {
+  const nodeExe = process.execPath || 'node.exe';
+  const runtimeDir = path.dirname(nodeExe);
+  const npmCli = path.join(runtimeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (fsExists(nodeExe) && fsExists(npmCli)) return [nodeExe, npmCli];
+  return ['npm.cmd'];
+}
+
+function fsExists(p: string): boolean {
+  try {
+    return !!p && fs.existsSync(p);
+  } catch {
+    return false;
+  }
 }
 
 async function safeRealpath(p: string): Promise<string | null> {

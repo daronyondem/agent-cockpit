@@ -373,11 +373,12 @@ describe('InstallDoctorService', () => {
     const npmCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
     const npxCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npx-cli.js');
     const nodeExe = path.join(runtimeBinDir, 'node.exe');
+    const claudeExe = path.join(cliToolsDir, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+    const codexJs = path.join(cliToolsDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
     fs.mkdirSync(path.dirname(npmCli), { recursive: true });
     fs.writeFileSync(nodeExe, '');
     fs.writeFileSync(npmCli, '');
     fs.writeFileSync(npxCli, '');
-    const installed = new Set<string>();
     const installCommands: Array<{ command: string; args: string[] }> = [];
     const originalPath = process.env.PATH;
     try {
@@ -398,28 +399,30 @@ describe('InstallDoctorService', () => {
         commandRunner: async (command, args) => {
           if (command === nodeExe && args[0] === npmCli) return { ok: true, stdout: '10.9.8', stderr: '' };
           if (command === nodeExe && args[0] === npxCli) return { ok: true, stdout: '7.0.1', stderr: '' };
-          if (command === path.join(cliToolsDir, 'claude.cmd')) {
-            return installed.has('claude')
+          if (command === claudeExe) {
+            return fs.existsSync(claudeExe)
               ? { ok: true, stdout: '1.0.0', stderr: '' }
               : { ok: false, stdout: '', stderr: '', error: 'not found' };
           }
-          if (command === path.join(cliToolsDir, 'codex.cmd')) {
-            return installed.has('codex')
+          if (command === process.execPath && args[0] === codexJs) {
+            return fs.existsSync(codexJs)
               ? { ok: true, stdout: '0.50.0', stderr: '' }
               : { ok: false, stdout: '', stderr: '', error: 'not found' };
           }
-          if (command === path.join(runtimeBinDir, 'claude.cmd') || command === path.join(runtimeBinDir, 'codex.cmd') || command === 'claude.cmd' || command === 'codex.cmd' || command === 'kiro-cli') return { ok: false, stdout: '', stderr: '', error: 'not found' };
+          if (command === path.join(cliToolsDir, 'claude.cmd') || command === path.join(cliToolsDir, 'codex.cmd') || command === path.join(runtimeBinDir, 'claude.cmd') || command === path.join(runtimeBinDir, 'codex.cmd') || command === 'claude.cmd' || command === 'codex.cmd' || command === 'kiro-cli') return { ok: false, stdout: '', stderr: '', error: 'not found' };
           if (command === 'schtasks.exe') return { ok: true, stdout: 'Ready', stderr: '' };
           return { ok: true, stdout: '1.0.0', stderr: '' };
         },
         installRunner: async (command, args) => {
           installCommands.push({ command, args });
           if (command === nodeExe && args[0] === npmCli && args.includes('@anthropic-ai/claude-code@latest')) {
-            installed.add('claude');
+            fs.mkdirSync(path.dirname(claudeExe), { recursive: true });
+            fs.writeFileSync(claudeExe, '');
             return { ok: true, stdout: 'installed claude', stderr: '' };
           }
           if (command === nodeExe && args[0] === npmCli && args.includes('@openai/codex@latest')) {
-            installed.add('codex');
+            fs.mkdirSync(path.dirname(codexJs), { recursive: true });
+            fs.writeFileSync(codexJs, '');
             return { ok: true, stdout: 'installed codex', stderr: '' };
           }
           return { ok: false, stdout: '', stderr: '', error: 'unexpected install command' };

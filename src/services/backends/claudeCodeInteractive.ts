@@ -45,6 +45,7 @@ import type {
   ThreadGoal,
 } from '../../types';
 import { logger } from '../../utils/logger';
+import { buildCliCommandInvocation } from '../cliCommandResolver';
 
 interface ClaudeCodeInteractiveAdapterOptions {
   workingDir?: string;
@@ -270,9 +271,10 @@ export class ClaudeCodeInteractiveAdapter extends BaseBackendAdapter {
     const cwd = options.workingDir || this.workingDir || process.cwd();
     const hookHarness = await this._createHookHarness();
     const args = buildInteractiveClaudeArgs(message, options, runtime, this.metadata.models, hookHarness?.settingsJson || null);
+    const invocation = buildCliCommandInvocation(runtime, args);
     const controller = new ClaudeInteractivePtyController({
-      command: runtime.command,
-      args,
+      command: invocation.command,
+      args: invocation.args,
       cwd,
       env: hookHarness ? { ...runtime.env, ...hookHarness.env } : runtime.env,
       ...(this._ptyFactory ? { factory: this._ptyFactory } : {}),

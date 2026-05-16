@@ -17,12 +17,22 @@ import {
 import type { BackendMetadata, SendMessageResult } from '../src/types';
 
 const sleep = (ms: number): Promise<void> => new Promise(r => setTimeout(r, ms));
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
 const TEST_RESUME_CAPABILITIES: BackendMetadata['resumeCapabilities'] = {
   activeTurnResume: 'unsupported',
   activeTurnResumeReason: 'Test adapter does not support active turn reattach.',
   sessionResume: 'unsupported',
   sessionResumeReason: 'Test adapter does not model session resume.',
 };
+
+function mockProcessPlatform(platform: NodeJS.Platform): () => void {
+  Object.defineProperty(process, 'platform', { value: platform });
+  return () => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  };
+}
 
 // ── BaseBackendAdapter ─────────────────────────────────────────────────────
 
@@ -244,6 +254,32 @@ describe('ClaudeCodeAdapter', () => {
     expect(runtime.env.CLAUDE_CONFIG_DIR).toBe('/tmp/claude-work-home');
     expect(runtime.configDir).toBe('/tmp/claude-work-home');
     expect(runtime.profileKey).toContain('profile-claude-work:');
+  });
+
+  test('resolveClaudeCliRuntime uses Windows installer-managed Claude package binary', () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-runtime-win-'));
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    try {
+      process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
+      const claudeExe = path.join(root, 'cli-tools', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+      fs.mkdirSync(path.dirname(claudeExe), { recursive: true });
+      fs.writeFileSync(claudeExe, '');
+
+      const runtime = resolveClaudeCliRuntime();
+
+      expect(runtime.command).toBe(claudeExe);
+      expect(runtime.argsPrefix).toBeUndefined();
+      expect(runtime.windowsCmdShim).toBeUndefined();
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+      restorePlatform();
+    }
   });
 
   test('resolveClaudeCliRuntime rejects non-Claude profiles', () => {

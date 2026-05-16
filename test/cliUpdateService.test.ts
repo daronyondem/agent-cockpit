@@ -10,6 +10,17 @@ jest.mock('child_process', () => ({
 import { CliUpdateService, isNewerVersion, parseVersion } from '../src/services/cliUpdateService';
 import type { Settings } from '../src/types';
 
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+function mockProcessPlatform(platform: NodeJS.Platform): () => void {
+  Object.defineProperty(process, 'platform', { value: platform });
+  return () => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  };
+}
+
 function mockExecFile(handler: (cmd: string, args: string[]) => string | Error) {
   mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
     const result = handler(cmd, args);
@@ -200,5 +211,58 @@ describe('CliUpdateService', () => {
 
     expect(result.success).toBe(false);
     expect(result.error).toMatch(/actively running/);
+  });
+
+  test('checks and updates Windows installer-managed Codex package without PATH shims', async () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = path.join(tmpDir, 'Agent Cockpit');
+    const cliToolsDir = path.join(root, 'cli-tools');
+    const codexJs = path.join(cliToolsDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    fs.mkdirSync(path.dirname(codexJs), { recursive: true });
+    fs.writeFileSync(codexJs, '#!/usr/bin/env node\n');
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
+    let version = '0.125.0';
+    let updateCalled = false;
+    try {
+      const service = new CliUpdateService(tmpDir);
+      const realCliToolsDir = fs.realpathSync(cliToolsDir);
+      const realCodexJs = fs.realpathSync(codexJs);
+      mockExecFile((cmd, args) => {
+        if (cmd === process.execPath && args.join(' ') === `${codexJs} --version`) return `codex-cli ${version}`;
+        if (cmd === 'cmd.exe' && args.join(' ').includes('"npm.cmd"') && args.join(' ').includes('"view"') && args.join(' ').includes('"@openai/codex"')) return '0.128.0';
+        if (cmd === 'cmd.exe' && args.join(' ').includes('"npm.cmd"') && args.join(' ').includes('"--prefix"') && args.join(' ').includes(`"${realCliToolsDir}"`) && args.join(' ').includes('"@openai/codex@latest"')) {
+          updateCalled = true;
+          version = '0.128.0';
+          return 'updated';
+        }
+        return new Error(`unexpected command: ${cmd} ${args.join(' ')}`);
+      });
+
+      const checked = await service.checkNow(async () => settings);
+      expect(checked.items[0]).toMatchObject({
+        vendor: 'codex',
+        installMethod: 'npm-global',
+        resolvedPath: realCodexJs,
+        currentVersion: '0.125.0',
+        updateCommand: ['npm.cmd', '--prefix', realCliToolsDir, 'i', '-g', '@openai/codex@latest'],
+      });
+
+      const result = await service.triggerUpdate(checked.items[0].id, {
+        loadSettings: async () => settings,
+        hasActiveStreams: () => false,
+      });
+
+      expect(result.success).toBe(true);
+      expect(updateCalled).toBe(true);
+      expect(result.item?.currentVersion).toBe('0.128.0');
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
+      restorePlatform();
+    }
   });
 });

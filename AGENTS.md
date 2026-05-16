@@ -123,6 +123,7 @@ Always use pm2:
 
 - Before triggering the production release workflow, follow [`docs/release-workflow.md`](docs/release-workflow.md).
 - Installer, release packaging, install-state, install-doctor, and self-update changes must preserve existing macOS production behavior. When a change targets Windows or another platform, explicitly verify the macOS-compatible path with focused tests such as `test/macosInstallerScript.test.ts`, `test/releasePackage.test.ts`, and relevant `test/updateService.test.ts` coverage, or document why a macOS check was unavailable.
+- Windows Claude/Codex CLI detection and launch fixes must prefer installer-managed package entrypoints under `<installDir>\cli-tools` before npm `.cmd` shim fallbacks, use the shared Windows runtime resolver across backend/auth/doctor/update paths, and keep the macOS direct-command path unchanged.
 - Release preparation is agent-owned: generate `docs/releases/v<version>.md` from commits, merged PRs, closed issues, and code changes between release versions, then share it with the human for review.
 - Use [`docs/release-notes-prompt.md`](docs/release-notes-prompt.md) when generating the per-release document. Do not ask the human to draft release notes from scratch.
 - Validate the GitHub Release body with `npm run release:notes -- --version <version> --out /tmp/agent-cockpit-release-notes.md` before triggering `.github/workflows/release.yml`.

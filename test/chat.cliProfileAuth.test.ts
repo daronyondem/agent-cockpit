@@ -2,10 +2,12 @@
 
 import fs from 'fs';
 import path from 'path';
+import { EventEmitter } from 'events';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
 import { CliProfileAuthService, redactCliAuthText } from '../src/services/cliProfileAuthService';
 
 let env: ChatRouterEnv;
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
 
 beforeEach(async () => { env = await createChatRouterEnv(); });
 afterEach(async () => { await destroyChatRouterEnv(env); });
@@ -15,6 +17,15 @@ function writeExecutable(name: string, body: string): string {
   fs.writeFileSync(file, body, 'utf8');
   fs.chmodSync(file, 0o755);
   return file;
+}
+
+function mockProcessPlatform(platform: NodeJS.Platform): () => void {
+  Object.defineProperty(process, 'platform', { value: platform });
+  return () => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  };
 }
 
 async function addProfile(profile: Record<string, any>): Promise<void> {
@@ -105,6 +116,54 @@ describe('CLI profile auth endpoints', () => {
     expect(output).toContain('ABCD-EFGH');
     expect(output).toContain(`CODEX_HOME=${start.body.profile.configDir}`);
     expect(output).not.toContain('\u001b[');
+  });
+
+  test('checks Windows installer-managed Codex package through node script', async () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = path.join(env.tmpDir, 'Agent Cockpit');
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    const codexJs = path.join(root, 'cli-tools', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    fs.mkdirSync(path.dirname(codexJs), { recursive: true });
+    fs.writeFileSync(codexJs, '');
+    process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
+    const calls: Array<{ command: string; args: string[] }> = [];
+    const spawn = ((command: string, args: string[]) => {
+      calls.push({ command, args });
+      const proc = new EventEmitter() as any;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.kill = jest.fn();
+      setImmediate(() => {
+        proc.stdout.emit('data', Buffer.from('logged in'));
+        proc.emit('close', 0);
+      });
+      return proc;
+    }) as any;
+    try {
+      const service = new CliProfileAuthService(env.tmpDir, { spawn });
+      const result = await service.checkProfile({
+        id: 'profile-codex-win-auth',
+        name: 'Codex Windows Auth',
+        vendor: 'codex',
+        authMode: 'account',
+        configDir: path.join(env.tmpDir, 'codex-win-auth'),
+        createdAt: '2026-04-30T00:00:00.000Z',
+        updatedAt: '2026-04-30T00:00:00.000Z',
+      } as any);
+
+      expect(result.status).toBe('ok');
+      expect(calls[0]).toEqual({
+        command: process.execPath,
+        args: [codexJs, 'login', 'status'],
+      });
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
+      restorePlatform();
+    }
   });
 
   test('rejects Kiro auth jobs while Kiro is self-configured only', async () => {

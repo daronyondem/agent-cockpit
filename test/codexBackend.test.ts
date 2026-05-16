@@ -26,6 +26,16 @@ import {
 
 type MockCodexEmit = (message: Record<string, unknown>) => void;
 type MockCodexWriteHandler = (req: any, emit: MockCodexEmit) => void;
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+function mockProcessPlatform(platform: NodeJS.Platform): () => void {
+  Object.defineProperty(process, 'platform', { value: platform });
+  return () => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  };
+}
 
 function installCodexAppServerMock(
   onWrite: MockCodexWriteHandler,
@@ -154,6 +164,32 @@ describe('CodexAdapter', () => {
     expect(runtime.env.OPENAI_BASE_URL).toBe('https://example.test');
     expect(runtime.env.CODEX_HOME).toBe('/tmp/codex-work-home');
     expect(runtime.profileKey).toContain('profile-codex-work:');
+  });
+
+  test('resolveCodexCliRuntime uses Windows installer-managed Codex package script through node', () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-runtime-win-'));
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    try {
+      process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
+      const codexJs = path.join(root, 'cli-tools', 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      fs.mkdirSync(path.dirname(codexJs), { recursive: true });
+      fs.writeFileSync(codexJs, '');
+
+      const runtime = resolveCodexCliRuntime();
+
+      expect(runtime.command).toBe(process.execPath);
+      expect(runtime.argsPrefix).toEqual([codexJs]);
+      expect(runtime.windowsCmdShim).toBeUndefined();
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
+      fs.rmSync(root, { recursive: true, force: true });
+      restorePlatform();
+    }
   });
 
   test('resolveCodexCliRuntime rejects non-Codex profiles', () => {

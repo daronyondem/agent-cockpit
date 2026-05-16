@@ -5,6 +5,7 @@ import { promisify } from 'util';
 import type { InstallDoctorAction, InstallDoctorActionResult, InstallDoctorCheck, InstallDoctorCheckStatus, InstallDoctorStatus, InstallStatus, UpdateStatus } from '../types';
 import type { InstallStateService } from './installStateService';
 import type { UpdateService } from './updateService';
+import { windowsCliCommandCandidates, windowsCmdCommandLine } from './cliCommandResolver';
 import { detectLibreOffice, resetLibreOfficeDetection, type LibreOfficeStatus } from './knowledgeBase/libreOffice';
 import { detectPandoc, resetPandocDetection, type PandocStatus } from './knowledgeBase/pandoc';
 
@@ -90,11 +91,11 @@ function npmInstallCommand(pkg: string, install?: InstallStatus): string[] {
 
 function platformCliCommands(command: 'claude' | 'codex', install?: InstallStatus): string[][] {
   if (process.platform !== 'win32') return [[command]];
-  const executable = `${command}.cmd`;
-  return [
-    ...windowsCliCommandDirs(install).map(dir => [path.join(dir, executable)]),
-    [executable],
-  ];
+  const vendor = command === 'claude' ? 'claude-code' : 'codex';
+  return windowsCliCommandCandidates(vendor, command, process.env, windowsCliCommandDirs(install))
+    .map(candidate => candidate.argsPrefix?.length
+      ? [candidate.command, ...candidate.argsPrefix]
+      : [candidate.command]);
 }
 
 function platformPm2Command(appRoot: string, install?: InstallStatus): { command: string[]; summary: string } {
@@ -176,14 +177,6 @@ function resolveExecCommand(command: string, args: string[]): { command: string;
     command: 'cmd.exe',
     args: ['/d', '/s', '/c', windowsCmdCommandLine(command, args)],
   };
-}
-
-function windowsCmdCommandLine(command: string, args: string[]): string {
-  return `"${[command, ...args].map(windowsCmdQuote).join(' ')}"`;
-}
-
-function windowsCmdQuote(value: string): string {
-  return `"${value.replace(/"/g, '\\"')}"`;
 }
 
 function firstLine(value: string | undefined): string | undefined {

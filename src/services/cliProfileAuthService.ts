@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import type { CliProfile, Settings } from '../types';
 import { resolveClaudeCliRuntime } from './backends/claudeCode';
 import { resolveCodexCliRuntime } from './backends/codex';
+import { buildCliCommandInvocation, type CliCommandResolution } from './cliCommandResolver';
 
 export type CliAuthJobStatus = 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type CliAuthEventType = 'info' | 'stdout' | 'stderr' | 'error' | 'exit';
@@ -48,7 +49,7 @@ export interface CliAuthCheckResult {
 
 type SpawnLike = typeof spawn;
 
-interface CliAuthRuntime {
+interface CliAuthRuntime extends CliCommandResolution {
   command: string;
   env: NodeJS.ProcessEnv;
   configDir?: string;
@@ -117,13 +118,14 @@ export class CliProfileAuthService {
       this._assertSupported(profile);
       const runtime = await this._runtimeFor(profile);
       const { args } = this._statusCommand(profile);
-      const result = await this._runCommand(runtime.command, args, runtime.env, 15_000);
+      const invocation = buildCliCommandInvocation(runtime, args);
+      const result = await this._runCommand(invocation.command, invocation.args, runtime.env, 15_000);
       const output = redactCliAuthText([result.stdout, result.stderr].filter(Boolean).join('\n'));
       const authenticated = result.code === 0;
       return {
         profileId: profile.id,
         vendor: profile.vendor,
-        command: runtime.command,
+        command: runtime.displayCommand || runtime.command,
         available: result.spawned,
         authenticated,
         status: authenticated ? 'ok' : 'not-authenticated',
@@ -167,13 +169,14 @@ export class CliProfileAuthService {
       status: 'running',
       startedAt: now,
       updatedAt: now,
-      command: runtime.command,
+      command: runtime.displayCommand || runtime.command,
       args,
       events: [],
     };
 
     this._addEvent(snapshot, 'info', `Starting ${this._vendorLabel(profile)} authentication.`);
-    const child = this._spawn(runtime.command, args, {
+    const invocation = buildCliCommandInvocation(runtime, args);
+    const child = this._spawn(invocation.command, invocation.args, {
       env: runtime.env,
       cwd: process.cwd(),
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -362,9 +365,10 @@ export class CliProfileAuthService {
     const startedAt = Date.now();
     let lastOutput = '';
     while (Date.now() - startedAt <= this._statusPollTimeoutMs) {
+      const invocation = buildCliCommandInvocation(runtime, statusArgs);
       const result = await this._runCommand(
-        runtime.command,
-        statusArgs,
+        invocation.command,
+        invocation.args,
         runtime.env,
         Math.min(15_000, Math.max(1_000, this._statusPollTimeoutMs)),
       );

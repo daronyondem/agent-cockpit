@@ -4,6 +4,7 @@ import path from 'path';
 import { atomicWriteFile } from '../utils/atomicWrite';
 import type { CliProfile } from '../types';
 import { resolveCodexCliRuntime } from './backends/codex';
+import { buildCliCommandInvocation } from './cliCommandResolver';
 
 // Codex's `app-server` exposes `account/read` and `account/rateLimits/read`
 // over JSON-RPC. Both share the OAuth credentials in `~/.codex/auth.json`,
@@ -266,11 +267,12 @@ interface FetchResult {
 
 async function fetchFromAppServer(profile?: CliProfile): Promise<FetchResult> {
   const runtime = resolveCodexCliRuntime(profile);
+  const invocation = buildCliCommandInvocation(runtime, ['app-server']);
   let proc: ChildProcess;
   try {
-    proc = spawn(runtime.command, ['app-server'], { stdio: ['pipe', 'pipe', 'pipe'], env: runtime.env });
+    proc = spawn(invocation.command, invocation.args, { stdio: ['pipe', 'pipe', 'pipe'], env: runtime.env });
   } catch (err: unknown) {
-    throw new Error(`spawn ${runtime.command} app-server failed: ${(err as Error).message}`);
+    throw new Error(`spawn ${runtime.displayCommand || runtime.command} app-server failed: ${(err as Error).message}`);
   }
 
   let spawnFailed: Error | null = null;
@@ -286,7 +288,7 @@ async function fetchFromAppServer(profile?: CliProfile): Promise<FetchResult> {
     // when `codex` isn't installed) before we try to write to stdin.
     await new Promise<void>((r) => setImmediate(r));
     if (spawnFailed) {
-      throw new Error(`${runtime.command} app-server unavailable: ${(spawnFailed as Error).message}`);
+      throw new Error(`${runtime.displayCommand || runtime.command} app-server unavailable: ${(spawnFailed as Error).message}`);
     }
 
     const client = new RpcClient(proc);

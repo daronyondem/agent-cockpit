@@ -1,5 +1,6 @@
 import { execFile } from 'child_process';
 import { CLAUDE_CODE_INTERACTIVE_BACKEND_ID } from '../cliProfiles';
+import { buildCliCommandInvocation } from '../cliCommandResolver';
 import type { CliCompatibilityStatus } from '../../types';
 import type { ClaudeCliRuntime } from './claudeCode';
 
@@ -83,14 +84,16 @@ export function buildClaudeInteractiveCompatibilityStatus(
 }
 
 export async function probeClaudeInteractiveCompatibility(
-  runtime: Pick<ClaudeCliRuntime, 'command' | 'env'>,
+  runtime: Pick<ClaudeCliRuntime, 'command' | 'env' | 'argsPrefix' | 'windowsCmdShim' | 'displayCommand'>,
 ): Promise<CliCompatibilityStatus> {
+  const invocation = buildCliCommandInvocation(runtime, ['--version']);
+  const displayCommand = runtime.displayCommand || runtime.command;
   try {
-    const output = await execFileText(runtime.command, ['--version'], runtime.env);
-    return buildClaudeInteractiveCompatibilityStatus(runtime.command, parseSemver(output));
+    const output = await execFileText(invocation.command, invocation.args, runtime.env);
+    return buildClaudeInteractiveCompatibilityStatus(displayCommand, parseSemver(output));
   } catch (err: unknown) {
     const message = (err as Error).message || String(err);
-    return buildClaudeInteractiveCompatibilityStatus(runtime.command, null, message);
+    return buildClaudeInteractiveCompatibilityStatus(displayCommand, null, message);
   }
 }
 

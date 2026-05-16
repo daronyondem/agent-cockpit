@@ -81,9 +81,11 @@ tool is unavailable.
   directories.
 - Windows Install Doctor should install Claude/Codex npm CLIs into
   `<installDir>\cli-tools` with `npm --prefix <installDir>\cli-tools i -g ...`,
-  persist that directory on the server `PATH`, and detect `claude.cmd` /
-  `codex.cmd` from `<installDir>\cli-tools`, the installer-recorded runtime,
-  `%APPDATA%\npm`, then `PATH`.
+  persist that directory on the server `PATH`, and prefer the real package
+  entrypoints npm installs under that prefix (`claude.exe`, `codex.js` through
+  `node.exe`) before falling back to `.cmd` shims. Windows backend, auth,
+  doctor, plan-usage, and CLI-update launches should share that resolver rather
+  than spawning npm shims directly.
 - Windows self-update should avoid Unix-only assumptions such as `sh`, `nohup`,
   `tar`, `shasum`, symlink `current`, or junction dependencies.
 

@@ -25,6 +25,7 @@ import type {
   CodexThreadGoalStatus,
   ThreadGoal,
 } from '../../types';
+import { buildCliCommandInvocation, resolveCliCommandForRuntime, type CliCommandResolution } from '../cliCommandResolver';
 
 // ── Icon ────────────────────────────────────────────────────────────────────
 
@@ -47,7 +48,7 @@ const CODEX_GOAL_STATUS_POLL_MS = 1_000;
 // Used as the polite-shutdown deadline before SIGKILL during process kill.
 const PROCESS_KILL_GRACE_MS = 1_000;
 
-export interface CodexCliRuntime {
+export interface CodexCliRuntime extends CliCommandResolution {
   command: string;
   env: NodeJS.ProcessEnv;
   configDir?: string;
@@ -58,7 +59,7 @@ export function resolveCodexCliRuntime(profile?: CliProfile): CodexCliRuntime {
   if (profile && profile.vendor !== 'codex') {
     throw new Error(`CLI profile vendor ${profile.vendor} is not codex`);
   }
-  const command = profile?.command?.trim() || 'codex';
+  const requestedCommand = profile?.command?.trim() || 'codex';
   const env: NodeJS.ProcessEnv = { ...process.env };
   if (profile?.env) {
     for (const [key, value] of Object.entries(profile.env)) {
@@ -72,13 +73,14 @@ export function resolveCodexCliRuntime(profile?: CliProfile): CodexCliRuntime {
 
   const hash = crypto.createHash('sha1').update(JSON.stringify({
     id: profile?.id || null,
-    command,
+    command: requestedCommand,
     configDir: configDir || null,
     env: profile?.env || {},
   })).digest('hex').slice(0, 12);
+  const commandResolution = resolveCliCommandForRuntime('codex', requestedCommand, env);
 
   return {
-    command,
+    ...commandResolution,
     env,
     ...(configDir ? { configDir } : {}),
     profileKey: profile ? `${profile.id}:${hash}` : `server-configured:${hash}`,
@@ -1420,7 +1422,8 @@ export class CodexAdapter extends BaseBackendAdapter {
 
   private async _refreshModels(profile?: CliProfile): Promise<ModelOption[]> {
     const runtime = resolveCodexCliRuntime(profile);
-    const proc = spawn(runtime.command, CODEX_APP_SERVER_ARGS, {
+    const invocation = buildCliCommandInvocation(runtime, CODEX_APP_SERVER_ARGS);
+    const proc = spawn(invocation.command, invocation.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: runtime.env,
     });
@@ -1532,7 +1535,8 @@ export class CodexAdapter extends BaseBackendAdapter {
     }
 
     console.log(`[codex] Spawning codex app-server for conv=${conversationId}`);
-    const proc = spawn(runtime.command, [...CODEX_APP_SERVER_ARGS, ...serviceTierArgs, ...configArgs], {
+    const invocation = buildCliCommandInvocation(runtime, [...CODEX_APP_SERVER_ARGS, ...serviceTierArgs, ...configArgs]);
+    const proc = spawn(invocation.command, invocation.args, {
       stdio: ['pipe', 'pipe', 'pipe'],
       env: runtime.env,
     });
@@ -2587,9 +2591,10 @@ export class CodexAdapter extends BaseBackendAdapter {
       timeoutTimer.unref?.();
       abortSignal?.addEventListener('abort', onAbort, { once: true });
 
+      const invocation = buildCliCommandInvocation(runtime, args);
       child = execFile(
-        runtime.command,
-        args,
+        invocation.command,
+        invocation.args,
         { maxBuffer: 4 * 1024 * 1024, env: runtime.env },
         (err, stdout, stderr) => {
           clearTimeout(timeoutTimer);
