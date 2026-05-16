@@ -96,8 +96,12 @@ function resolveExecCommand(command: string, args: string[]): { command: string;
   }
   return {
     command: 'cmd.exe',
-    args: ['/d', '/s', '/c', [command, ...args].map(windowsCmdQuote).join(' ')],
+    args: ['/d', '/s', '/c', windowsCmdCommandLine(command, args)],
   };
+}
+
+function windowsCmdCommandLine(command: string, args: string[]): string {
+  return `"${[command, ...args].map(windowsCmdQuote).join(' ')}"`;
 }
 
 function windowsCmdQuote(value: string): string {

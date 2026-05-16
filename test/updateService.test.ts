@@ -332,6 +332,8 @@ describe('UpdateService', () => {
         mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
           expect(cmd).toBe('cmd.exe');
           expect(args.slice(0, 3)).toEqual(['/d', '/s', '/c']);
+          expect(args[3]).toMatch(/^""C:\\Program Files\\node\\npm[.]cmd"/);
+          expect(args[3]).toMatch(/"ci"?"$/);
           expect(args[3]).toContain('"C:\\Program Files\\node\\npm.cmd"');
           expect(args[3]).toContain('"mobile/AgentCockpitPWA"');
           cb(null, 'ok\n', '');

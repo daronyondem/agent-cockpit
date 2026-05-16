@@ -1184,7 +1184,9 @@ recorded a private or system runtime, so Windows private-Node installs do not
 depend on the inherited process `PATH` for the welcome checks. The Windows
 runtime probes use `npm.cmd` and `npx.cmd`; the default command runner launches
 those Windows command shims through `cmd.exe /d /s /c` rather than executing the
-`.cmd` files directly. The Windows
+`.cmd` files directly, and wraps the full command line in outer quotes so
+absolute runtime paths under `Agent Cockpit` directories survive `cmd.exe /s`
+quote stripping. The Windows
 logon startup check queries the `AgentCockpit` scheduled task unless
 `install.startup.kind` is `manual`, in which case the disabled startup state is
 reported as intentional. Missing CLI warnings are optional and tell the user to

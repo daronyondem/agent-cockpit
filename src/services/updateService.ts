@@ -1168,8 +1168,12 @@ export class UpdateService {
     }
     return {
       cmd: 'cmd.exe',
-      args: ['/d', '/s', '/c', [cmd, ...args].map(this._windowsCmdQuote).join(' ')],
+      args: ['/d', '/s', '/c', this._windowsCmdCommandLine(cmd, args)],
     };
+  }
+
+  private _windowsCmdCommandLine(cmd: string, args: string[]): string {
+    return `"${[cmd, ...args].map(this._windowsCmdQuote).join(' ')}"`;
   }
 
   private _windowsCmdQuote(value: string): string {
