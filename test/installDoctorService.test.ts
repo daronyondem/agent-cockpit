@@ -469,8 +469,9 @@ describe('InstallDoctorService', () => {
       expect(pathPersistCommands).toHaveLength(2);
       expect(pathPersistCommands[0]).toEqual(expect.objectContaining({
         command: 'powershell.exe',
-        args: expect.arrayContaining(['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', expect.stringContaining('SetEnvironmentVariable'), cliToolsDir]),
+        args: expect.arrayContaining(['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', expect.stringContaining('SetEnvironmentVariable')]),
       }));
+      expect(pathPersistCommands[0].args[pathPersistCommands[0].args.length - 1]).toContain(cliToolsDir);
       expect(process.env.PATH?.split(';')[0]).toBe(cliToolsDir);
     } finally {
       process.env.PATH = originalPath;

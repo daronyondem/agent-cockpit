@@ -89,7 +89,7 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   router.post('/cli-profiles/setup-auth/:vendor/test', csrfGuard, async (req: Request, res: Response) => {
     try {
       const vendor = setupAuthVendor(param(req, 'vendor'));
-      const prepared = await prepareSetupAuthProfile(chatService, cliProfileAuth, vendor);
+      const prepared = await prepareSetupAuthProfile(chatService, vendor);
       const result = await cliProfileAuth.checkProfile(prepared.profile);
       try {
         const runtime = await chatService.resolveCliProfileRuntime(prepared.profile.id);
@@ -112,7 +112,7 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   router.post('/cli-profiles/setup-auth/:vendor/start', csrfGuard, async (req: Request, res: Response) => {
     try {
       const vendor = setupAuthVendor(param(req, 'vendor'));
-      const prepared = await prepareSetupAuthProfile(chatService, cliProfileAuth, vendor);
+      const prepared = await prepareSetupAuthProfile(chatService, vendor);
       const job = await cliProfileAuth.startAuth(prepared.profile);
       res.json({ job, profile: prepared.profile, settings: prepared.settings });
     } catch (err: unknown) {
@@ -150,7 +150,6 @@ function setupAuthVendor(value: string): SetupAuthVendor {
 
 async function prepareSetupAuthProfile(
   chatService: ChatService,
-  cliProfileAuth: CliProfileAuthService,
   vendor: SetupAuthVendor,
 ): Promise<{ settings: Settings; profile: CliProfile }> {
   const settings = await chatService.getSettings();
@@ -158,23 +157,32 @@ async function prepareSetupAuthProfile(
   const savedSettings = preparedProfile.changed
     ? await chatService.saveSettings(preparedProfile.settings)
     : settings;
-  const preparedAuth = cliProfileAuth.profileWithAuthDefaults(savedSettings, preparedProfile.profile.id);
-  const finalSettings = preparedAuth.changed
-    ? await chatService.saveSettings(preparedAuth.settings)
-    : savedSettings;
-  const profile = finalSettings.cliProfiles?.find(candidate => candidate.id === preparedAuth.profile.id) || preparedAuth.profile;
-  return { settings: finalSettings, profile };
+  const profile = savedSettings.cliProfiles?.find(candidate => candidate.id === preparedProfile.profile.id) || preparedProfile.profile;
+  return { settings: savedSettings, profile };
 }
 
 function setupAuthProfile(settings: Settings, vendor: SetupAuthVendor): { settings: Settings; profile: CliProfile; changed: boolean } {
   const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
-  const existingAccount = profiles.find(profile => profile.vendor === vendor && profile.authMode === 'account' && !profile.disabled);
+  const setupIdPrefix = `setup-${vendor}-account`;
+  const existingAccount = profiles.find(profile =>
+    profile.vendor === vendor
+    && profile.authMode === 'account'
+    && !profile.disabled
+    && (!profile.configDir || profile.id.startsWith(setupIdPrefix))
+  );
   if (existingAccount) {
-    const promoted = maybePromoteSetupProfile(settings, profiles, existingAccount, vendor);
+    const profile = existingAccount.configDir && existingAccount.id.startsWith(setupIdPrefix)
+      ? { ...existingAccount, configDir: undefined, updatedAt: new Date().toISOString() }
+      : existingAccount;
+    const nextProfiles = profile === existingAccount
+      ? profiles
+      : profiles.map(candidate => candidate.id === profile.id ? profile : candidate);
+    const baseSettings = nextProfiles === profiles ? settings : { ...settings, cliProfiles: nextProfiles };
+    const promoted = maybePromoteSetupProfile(baseSettings, nextProfiles, profile, vendor);
     return {
-      settings: promoted || settings,
-      profile: existingAccount,
-      changed: Boolean(promoted),
+      settings: promoted || baseSettings,
+      profile,
+      changed: Boolean(promoted) || baseSettings !== settings,
     };
   }
 

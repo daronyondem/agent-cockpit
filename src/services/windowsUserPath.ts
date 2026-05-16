@@ -17,9 +17,10 @@ export type WindowsPathCommandRunner = (
   options?: { cwd?: string; timeoutMs?: number },
 ) => Promise<WindowsPathCommandResult>;
 
-const PERSIST_USER_PATH_SCRIPT = `
+function persistUserPathScript(dir: string): string {
+  return `
 $ErrorActionPreference = 'Stop'
-$dir = $args[0]
+$dir = ${powershellSingleQuotedString(dir)}
 if ([string]::IsNullOrWhiteSpace($dir)) {
   throw 'Missing PATH entry.'
 }
@@ -56,6 +57,7 @@ if ($newPath -ne $current) {
   Write-Output "$dir is already first in the current user PATH."
 }
 `.trim();
+}
 
 export function prependProcessPathEntry(dir: string, env: NodeJS.ProcessEnv = process.env): void {
   if (!dir) return;
@@ -78,8 +80,7 @@ export async function persistWindowsUserPathEntry(
     '-ExecutionPolicy',
     'Bypass',
     '-Command',
-    PERSIST_USER_PATH_SCRIPT,
-    dir,
+    persistUserPathScript(dir),
   ], { timeoutMs: 10_000 });
 }
 
@@ -113,4 +114,8 @@ function currentPathValue(env: NodeJS.ProcessEnv): string {
 
 function pathPartKey(value: string): string {
   return value.trim().replace(/[\\/]+$/, '').toLowerCase();
+}
+
+function powershellSingleQuotedString(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
 }

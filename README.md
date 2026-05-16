@@ -191,7 +191,9 @@ the CLI into Agent Cockpit's per-user `cli-tools` prefix and Agent Cockpit runs
 the installed package entrypoint directly before falling back to npm command
 shims. Agent Cockpit also adds that `cli-tools` prefix to the current user's
 Windows `Path`, so new PowerShell or terminal windows can run `claude` and
-`codex`. No global Node/npm/PM2 install is required. If Claude Code or Codex was
+`codex`. Welcome-screen Claude/Codex login uses the same vendor CLI auth home as
+those terminal commands, so Agent Cockpit and the terminal share login state. No
+global Node/npm/PM2 install is required. If Claude Code or Codex was
 already installed outside Agent Cockpit, the Windows resolver still detects the
 user's existing PATH command.
 

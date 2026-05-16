@@ -118,6 +118,10 @@ tool is unavailable.
   compatibility work unless explicitly requested.
 - Claude/Codex install/auth flows should promote a created account profile when
   no default exists or when replacing that vendor's server-configured default.
+- Welcome setup auth for Claude/Codex should use the user's normal system CLI
+  auth home, not a generated profile `configDir`, so terminal commands and
+  Agent Cockpit share login state. Explicit account profiles may remain
+  isolated.
 
 ## Context Map, Memory, And Knowledge Base
 
