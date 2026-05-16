@@ -74,9 +74,11 @@ tool is unavailable.
   `.cmd` presence alone is not enough.
 - Windows Install Doctor should resolve npm/npx from installer-recorded
   `nodeRuntime.binDir` when present.
-- Windows PM2 cleanup, startup, and doctor checks should resolve app-local
-  `node_modules\.bin\pm2.cmd` directly instead of invoking `npx` from freshly
-  extracted or partially repaired app directories.
+- Windows PM2 cleanup and startup should resolve app-local
+  `node_modules\.bin\pm2.cmd` directly. Windows Install Doctor should probe the
+  app-local PM2 package through `node.exe node_modules\pm2\bin\pm2 --version`.
+  Do not invoke `npx` from freshly extracted or partially repaired app
+  directories.
 - Windows Install Doctor should detect Claude/Codex npm installs through
   `claude.cmd` and `codex.cmd`, preferring installer-recorded
   `nodeRuntime.binDir` before `PATH`.

@@ -1190,9 +1190,10 @@ Required checks currently cover Node.js 22+, npm, local PM2, writable
 writability for future updates, Windows logon startup when running on Windows,
 the mobile PWA build shell, Claude Code CLI, Codex CLI, Kiro CLI, Pandoc,
 LibreOffice, and install/update channel metadata. Windows PM2 probes run
-`<appRoot>\node_modules\.bin\pm2.cmd --version` directly so the welcome screen
-does not trigger npm package-resolution prompts; non-Windows PM2 probes continue
-to run `npx --no-install pm2 --version`. npm probes resolve from
+`node.exe <activeAppDir>\node_modules\pm2\bin\pm2 --version` directly, preferring
+the installer-recorded runtime and `install.appDir`, so the welcome screen does
+not trigger npm package-resolution prompts; non-Windows PM2 probes continue to
+run `npx --no-install pm2 --version`. npm probes resolve from
 `install.nodeRuntime.binDir` when the installer recorded a private or system
 runtime, so Windows private-Node installs do not depend on the inherited process
 `PATH` for the welcome checks. When the recorded Windows runtime contains the npm

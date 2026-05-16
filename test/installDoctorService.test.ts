@@ -234,7 +234,7 @@ describe('InstallDoctorService', () => {
 
       const status = await service.getStatus();
 
-      expect(commands).toEqual(expect.arrayContaining(['npm.cmd', path.join(root, 'node_modules', '.bin', 'pm2.cmd'), 'schtasks.exe', 'claude.cmd', 'codex.cmd']));
+      expect(commands).toEqual(expect.arrayContaining(['npm.cmd', 'node.exe', 'schtasks.exe', 'claude.cmd', 'codex.cmd']));
       expect(commands).not.toEqual(expect.arrayContaining(['npx.cmd']));
       expect(status.checks).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -278,13 +278,13 @@ describe('InstallDoctorService', () => {
     const npmCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
     const npxCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npx-cli.js');
     const nodeExe = path.join(runtimeBinDir, 'node.exe');
-    const pm2Cmd = path.join(root, 'node_modules', '.bin', 'pm2.cmd');
+    const pm2Bin = path.join(root, 'node_modules', 'pm2', 'bin', 'pm2');
     fs.mkdirSync(path.dirname(npmCli), { recursive: true });
-    fs.mkdirSync(path.dirname(pm2Cmd), { recursive: true });
+    fs.mkdirSync(path.dirname(pm2Bin), { recursive: true });
     fs.writeFileSync(nodeExe, '');
     fs.writeFileSync(npmCli, '');
     fs.writeFileSync(npxCli, '');
-    fs.writeFileSync(pm2Cmd, '');
+    fs.writeFileSync(pm2Bin, '');
     const commands: Array<{ command: string; args: string[] }> = [];
     try {
       const service = new InstallDoctorService({
@@ -311,7 +311,7 @@ describe('InstallDoctorService', () => {
           }
           if (command === nodeExe && args[0] === npmCli) return { ok: true, stdout: '10.9.8', stderr: '' };
           if (command === nodeExe && args[0] === npxCli) return { ok: false, stdout: '', stderr: '', error: 'npx should not be used for PM2 on Windows' };
-          if (command === pm2Cmd) return { ok: true, stdout: '7.0.1', stderr: '' };
+          if (command === nodeExe && args[0] === pm2Bin) return { ok: true, stdout: '7.0.1', stderr: '' };
           if ([path.join(runtimeBinDir, 'claude.cmd'), 'claude.cmd', path.join(runtimeBinDir, 'codex.cmd'), 'codex.cmd', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
           if (command === 'schtasks.exe') return { ok: true, stdout: '1.0.0', stderr: '' };
           return { ok: true, stdout: '1.0.0', stderr: '' };
@@ -325,7 +325,7 @@ describe('InstallDoctorService', () => {
 
       expect(commands).toEqual(expect.arrayContaining([
         { command: nodeExe, args: [npmCli, '--version'] },
-        { command: pm2Cmd, args: ['--version'] },
+        { command: nodeExe, args: [pm2Bin, '--version'] },
       ]));
       expect(commands.map(call => call.command)).not.toEqual(expect.arrayContaining(['npm.cmd', 'npx.cmd', path.join(runtimeBinDir, 'npm.cmd'), path.join(runtimeBinDir, 'npx.cmd')]));
       expect(commands.map(call => call.command)).toEqual(expect.arrayContaining([

@@ -56,8 +56,13 @@ function platformCliCommands(command: 'claude' | 'codex', install?: InstallStatu
 
 function platformPm2Command(appRoot: string, install?: InstallStatus): { command: string[]; summary: string } {
   if (process.platform === 'win32') {
+    const pm2Root = install?.appDir && fs.existsSync(install.appDir) ? install.appDir : appRoot;
+    const runtimeBinDir = install?.nodeRuntime?.binDir;
+    const nodeExe = runtimeBinDir && fs.existsSync(path.join(runtimeBinDir, 'node.exe'))
+      ? path.join(runtimeBinDir, 'node.exe')
+      : 'node.exe';
     return {
-      command: [path.join(appRoot, 'node_modules', '.bin', 'pm2.cmd'), '--version'],
+      command: [nodeExe, path.join(pm2Root, 'node_modules', 'pm2', 'bin', 'pm2'), '--version'],
       summary: 'Local PM2 command is available.',
     };
   }
