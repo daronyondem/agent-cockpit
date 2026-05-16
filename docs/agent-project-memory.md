@@ -79,9 +79,11 @@ tool is unavailable.
   app-local PM2 package through `node.exe node_modules\pm2\bin\pm2 --version`.
   Do not invoke `npx` from freshly extracted or partially repaired app
   directories.
-- Windows Install Doctor should detect Claude/Codex npm installs through
-  `claude.cmd` and `codex.cmd`, preferring installer-recorded
-  `nodeRuntime.binDir` before `PATH`.
+- Windows Install Doctor should install Claude/Codex npm CLIs into
+  `<installDir>\cli-tools` with `npm --prefix <installDir>\cli-tools i -g ...`,
+  persist that directory on the server `PATH`, and detect `claude.cmd` /
+  `codex.cmd` from `<installDir>\cli-tools`, the installer-recorded runtime,
+  `%APPDATA%\npm`, then `PATH`.
 - Windows self-update should avoid Unix-only assumptions such as `sh`, `nohup`,
   `tar`, `shasum`, symlink `current`, or junction dependencies.
 

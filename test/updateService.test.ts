@@ -1602,7 +1602,7 @@ describe('UpdateService', () => {
           AUTH_ENABLE_LEGACY_OAUTH: 'true',
           PM2_HOME: path.join(installDir, 'pm2'),
         }));
-        expect(app.env.PATH.startsWith(`${runtimeDir};`)).toBe(true);
+        expect(app.env.PATH.startsWith(`${path.join(installDir, 'cli-tools')};${runtimeDir};`)).toBe(true);
         const runnerScript = originalReadFileSync(path.join(installDir, 'bin', 'run-agent-cockpit.vbs'), 'utf8');
         expect(runnerScript).toContain(`nodeExe = "${path.join(runtimeDir, 'node.exe').replace(/"/g, '""')}"`);
         expect(runnerScript).toContain(`appDir = "${appDir.replace(/"/g, '""')}"`);
@@ -1631,7 +1631,7 @@ AGENT_COCKPIT_DATA_DIR='C:\Users\Name\AppData\Local\Agent Cockpit\data'`}
         (service as any)._persistPrivateRuntimePath(appDir, runtimeDir);
 
         const parsed = dotenv.parse(originalReadFileSync(path.join(appDir, '.env'), 'utf8'));
-        expect(parsed.PATH.startsWith(`${runtimeDir};`)).toBe(true);
+        expect(parsed.PATH.startsWith(`${String.raw`C:\Users\Name\AppData\Local\Agent Cockpit\cli-tools`};${runtimeDir};`)).toBe(true);
         expect(parsed.PATH).not.toContain('\r');
         expect(parsed.PATH).not.toContain('\n');
       } finally {

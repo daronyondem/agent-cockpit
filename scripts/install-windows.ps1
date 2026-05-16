@@ -339,10 +339,20 @@ function Install-PrivateNode {
 }
 
 function Runtime-Path {
+  $cliToolsDir = Join-Path $InstallDir 'cli-tools'
+  $parts = @($cliToolsDir)
   if ($NodeRuntimeBinDir) {
-    return "$NodeRuntimeBinDir;$env:Path"
+    $parts += $NodeRuntimeBinDir
   }
-  return $env:Path
+  if ($env:APPDATA) {
+    $parts += (Join-Path $env:APPDATA 'npm')
+  }
+  foreach ($part in ($env:Path -split ';')) {
+    if ($part -and -not ($parts -contains $part)) {
+      $parts += $part
+    }
+  }
+  return ($parts -join ';')
 }
 
 function Env-Quote {
@@ -388,6 +398,7 @@ End Function
 function Write-EnvFile {
   param([string] $AppDir, [string] $DataDir, [string] $SessionSecret, [string] $SetupToken)
   $envPath = Join-Path $AppDir '.env'
+  Ensure-Directory (Join-Path $InstallDir 'cli-tools')
   $lines = @(
     "PORT=$Port",
     "SESSION_SECRET=$SessionSecret",
@@ -395,11 +406,9 @@ function Write-EnvFile {
     "AGENT_COCKPIT_DATA_DIR=$(Env-Quote $DataDir)",
     'WEB_BUILD_MODE=auto',
     'AUTH_ENABLE_LEGACY_OAUTH=false',
-    "PM2_HOME=$(Env-Quote (Join-Path $InstallDir 'pm2'))"
+    "PM2_HOME=$(Env-Quote (Join-Path $InstallDir 'pm2'))",
+    "PATH=$(Env-Quote (Runtime-Path))"
   )
-  if ($NodeRuntimeBinDir) {
-    $lines += "PATH=$(Env-Quote (Runtime-Path))"
-  }
   Set-Content -Path $envPath -Value ($lines -join [Environment]::NewLine) -Encoding UTF8
 }
 

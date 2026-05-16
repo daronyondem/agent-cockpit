@@ -341,21 +341,26 @@ desktop. Runtime
 environment includes
 `PORT`, `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
 `AGENT_COCKPIT_DATA_DIR`, `WEB_BUILD_MODE=auto`,
-`AUTH_ENABLE_LEGACY_OAUTH=false`, `PM2_HOME=<install-root>\pm2`, and a private
-runtime `PATH` prefix when applicable. Windows path-valued `.env` entries use
-backtick quoting so dotenv does not interpret `\r` or `\n` inside paths such as
-`runtime\node-v...`. Fresh `SESSION_SECRET` and `AUTH_SETUP_TOKEN` values are
-generated with `RandomNumberGenerator.Create().GetBytes(...)` so the installer
-works in Windows PowerShell 5.1 as well as newer PowerShell runtimes. Repair or
-reinstall runs read the existing app `.env` and install manifest before
-replacing a same-version release directory, stop the existing PM2 app on a
-best-effort basis before deleting active app files, and keep `SESSION_SECRET`,
-`AUTH_SETUP_TOKEN`, `installedAt`, and `welcomeCompletedAt` stable while mutable
-`data\` content is preserved outside the app directory. The best-effort PM2
-cleanup path resolves `<appDir>\node_modules\.bin\pm2.cmd` directly and skips
-cleanup when that local command is not present yet; it must not invoke `npx` in
-a freshly extracted or partially repaired app directory because npm can try to
-resolve missing packages interactively before dependencies are installed.
+`AUTH_ENABLE_LEGACY_OAUTH=false`, `PM2_HOME=<install-root>\pm2`, and `PATH`
+with `<install-root>\cli-tools` first, the private runtime directory second when
+present, `%APPDATA%\npm` when available, and then the inherited user PATH. The
+installer creates `<install-root>\cli-tools` so welcome-screen Claude/Codex npm
+actions can install into an Agent Cockpit-owned per-user prefix and the running
+server can spawn those CLIs by their normal `claude`/`codex` names. Windows
+path-valued `.env` entries use backtick quoting so dotenv does not interpret
+`\r` or `\n` inside paths such as `runtime\node-v...`. Fresh `SESSION_SECRET`
+and `AUTH_SETUP_TOKEN` values are generated with
+`RandomNumberGenerator.Create().GetBytes(...)` so the installer works in Windows
+PowerShell 5.1 as well as newer PowerShell runtimes. Repair or reinstall runs
+read the existing app `.env` and install manifest before replacing a same-version
+release directory, stop the existing PM2 app on a best-effort basis before
+deleting active app files, and keep `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
+`installedAt`, and `welcomeCompletedAt` stable while mutable `data\` content is
+preserved outside the app directory. The best-effort PM2 cleanup path resolves
+`<appDir>\node_modules\.bin\pm2.cmd` directly and skips cleanup when that local
+command is not present yet; it must not invoke `npx` in a freshly extracted or
+partially repaired app directory because npm can try to resolve missing packages
+interactively before dependencies are installed.
 
 The installer starts Agent Cockpit with local PM2 and install-local `PM2_HOME`,
 then saves PM2 state. Before each installer or generated start-helper launch, it

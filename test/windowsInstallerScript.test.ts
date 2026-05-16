@@ -73,6 +73,9 @@ describe('Windows installer script', () => {
     expect(source).toContain('welcomeCompletedAt = if ($script:PreservedWelcomeCompletedAt)');
     expect(source).toContain('[System.IO.File]::WriteAllText($Path, $json + [Environment]::NewLine, (New-Object System.Text.UTF8Encoding($false)))');
     expect(source).toContain('function Env-Quote');
+    expect(source).toContain("$cliToolsDir = Join-Path $InstallDir 'cli-tools'");
+    expect(source).toContain("Ensure-Directory (Join-Path $InstallDir 'cli-tools')");
+    expect(source).toContain("Join-Path $env:APPDATA 'npm'");
     expect(source).toContain('"PATH=$(Env-Quote (Runtime-Path))"');
     expect(source).toContain('ecosystem.config.js');
     expect(source).toContain('function Write-WindowsRunnerScript');

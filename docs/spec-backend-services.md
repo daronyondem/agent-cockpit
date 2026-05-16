@@ -1200,14 +1200,21 @@ runtime, so Windows private-Node installs do not depend on the inherited process
 CLI JavaScript entrypoints, Install Doctor uses
 `node.exe node_modules/npm/bin/npm-cli.js` for npm probes and npm-backed install
 actions. That avoids `npm.cmd` shim quoting entirely for the installer-managed
-path. Windows Claude/Codex probes check npm-created
-`claude.cmd`/`codex.cmd` shims, preferring the installer-recorded runtime
-`binDir` and then falling back to `PATH`, so welcome-screen npm install actions
-can be reflected immediately in the refreshed doctor result. The fallback
-Windows command runner still launches `.cmd` shims through `cmd.exe /d /s /c`
-and wraps the full command line in outer quotes so absolute runtime paths under
-`Agent Cockpit` directories survive `cmd.exe /s` quote stripping. The Windows
-logon startup check queries the `AgentCockpit` scheduled task unless
+path. Windows Claude/Codex welcome actions run npm with
+`--prefix <installDir>\cli-tools` so the CLIs land in an Agent Cockpit-owned
+per-user prefix instead of depending on npm's global Windows prefix. After a
+successful Claude/Codex install action, the service prepends
+`<installDir>\cli-tools` to the current server `PATH` before returning the
+refreshed doctor result so immediate authentication and profile checks can spawn
+`claude`/`codex`. Windows Claude/Codex probes check npm-created
+`claude.cmd`/`codex.cmd` shims in `<installDir>\cli-tools`, then the
+installer-recorded runtime `binDir`, then `%APPDATA%\npm`, and finally `PATH`,
+so both new welcome installs and older npm-global installs can be reflected in
+the refreshed doctor result. The fallback Windows command runner still launches
+`.cmd` shims through `cmd.exe /d /s /c` and wraps the full command line in outer
+quotes so absolute runtime paths under `Agent Cockpit` directories survive
+`cmd.exe /s` quote stripping. The Windows logon startup check queries the
+`AgentCockpit` scheduled task unless
 `install.startup.kind` is `manual`, in which case the disabled startup state is
 reported as intentional. Missing CLI warnings are optional and tell the user to
 install only the backend they plan to use; Claude Code remediation includes
@@ -1232,9 +1239,11 @@ install commands while any conversation turn is active or pending. Supported
 command actions are:
 
 - `claude-cli:npm-install` -> `npm i -g @anthropic-ai/claude-code@latest`
-  (`npm.cmd` on Windows)
+  (Windows adds `--prefix <installDir>\cli-tools` and uses the installer
+  private runtime's npm CLI when available)
 - `codex-cli:npm-install` -> `npm i -g @openai/codex@latest`
-  (`npm.cmd` on Windows)
+  (Windows adds `--prefix <installDir>\cli-tools` and uses the installer
+  private runtime's npm CLI when available)
 - `kiro-cli:official-install` -> `sh -c "curl -fsSL https://cli.kiro.dev/install | bash"`, exposed only outside Windows
 - `pandoc:brew-install` -> `brew install pandoc`, exposed only when Homebrew is detected
 - `libreoffice:brew-install` -> `brew install --cask libreoffice`, exposed only when Homebrew is detected

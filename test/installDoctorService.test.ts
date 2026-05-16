@@ -224,7 +224,7 @@ describe('InstallDoctorService', () => {
         commandRunner: async (command) => {
           commands.push(command);
           if (command === 'schtasks.exe') return { ok: false, stdout: '', stderr: '', error: 'task not found' };
-          if (['claude.cmd', 'codex.cmd', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
+          if ([path.join(root, 'cli-tools', 'claude.cmd'), 'claude.cmd', path.join(root, 'cli-tools', 'codex.cmd'), 'codex.cmd', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
           return { ok: true, stdout: '1.0.0', stderr: '' };
         },
         detectHomebrew: async () => false,
@@ -234,7 +234,7 @@ describe('InstallDoctorService', () => {
 
       const status = await service.getStatus();
 
-      expect(commands).toEqual(expect.arrayContaining(['npm.cmd', 'node.exe', 'schtasks.exe', 'claude.cmd', 'codex.cmd']));
+      expect(commands).toEqual(expect.arrayContaining(['npm.cmd', 'node.exe', 'schtasks.exe', path.join(root, 'cli-tools', 'claude.cmd'), 'claude.cmd', path.join(root, 'cli-tools', 'codex.cmd'), 'codex.cmd']));
       expect(commands).not.toEqual(expect.arrayContaining(['npx.cmd']));
       expect(status.checks).toEqual(expect.arrayContaining([
         expect.objectContaining({
@@ -260,10 +260,10 @@ describe('InstallDoctorService', () => {
         expect.objectContaining({ id: 'kiro-cli:official-install' }),
       ]));
       expect(status.checks.find(item => item.id === 'claude-cli')?.installActions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'claude-cli:npm-install', command: ['npm.cmd', 'i', '-g', '@anthropic-ai/claude-code@latest'] }),
+        expect.objectContaining({ id: 'claude-cli:npm-install', command: ['npm.cmd', '--prefix', path.join(root, 'cli-tools'), 'i', '-g', '@anthropic-ai/claude-code@latest'] }),
       ]));
       expect(status.checks.find(item => item.id === 'codex-cli')?.installActions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'codex-cli:npm-install', command: ['npm.cmd', 'i', '-g', '@openai/codex@latest'] }),
+        expect.objectContaining({ id: 'codex-cli:npm-install', command: ['npm.cmd', '--prefix', path.join(root, 'cli-tools'), 'i', '-g', '@openai/codex@latest'] }),
       ]));
     } finally {
       restorePlatform();
@@ -275,6 +275,7 @@ describe('InstallDoctorService', () => {
     const root = makeRoot();
     roots.push(root);
     const runtimeBinDir = path.join(root, 'runtime', 'node v22 win x64');
+    const cliToolsDir = path.join(root, 'cli-tools');
     const npmCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
     const npxCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npx-cli.js');
     const nodeExe = path.join(runtimeBinDir, 'node.exe');
@@ -312,7 +313,7 @@ describe('InstallDoctorService', () => {
           if (command === nodeExe && args[0] === npmCli) return { ok: true, stdout: '10.9.8', stderr: '' };
           if (command === nodeExe && args[0] === npxCli) return { ok: false, stdout: '', stderr: '', error: 'npx should not be used for PM2 on Windows' };
           if (command === nodeExe && args[0] === pm2Bin) return { ok: true, stdout: '7.0.1', stderr: '' };
-          if ([path.join(runtimeBinDir, 'claude.cmd'), 'claude.cmd', path.join(runtimeBinDir, 'codex.cmd'), 'codex.cmd', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
+          if ([path.join(cliToolsDir, 'claude.cmd'), path.join(runtimeBinDir, 'claude.cmd'), 'claude.cmd', path.join(cliToolsDir, 'codex.cmd'), path.join(runtimeBinDir, 'codex.cmd'), 'codex.cmd', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
           if (command === 'schtasks.exe') return { ok: true, stdout: '1.0.0', stderr: '' };
           return { ok: true, stdout: '1.0.0', stderr: '' };
         },
@@ -329,7 +330,9 @@ describe('InstallDoctorService', () => {
       ]));
       expect(commands.map(call => call.command)).not.toEqual(expect.arrayContaining(['npm.cmd', 'npx.cmd', path.join(runtimeBinDir, 'npm.cmd'), path.join(runtimeBinDir, 'npx.cmd')]));
       expect(commands.map(call => call.command)).toEqual(expect.arrayContaining([
+        path.join(cliToolsDir, 'claude.cmd'),
         path.join(runtimeBinDir, 'claude.cmd'),
+        path.join(cliToolsDir, 'codex.cmd'),
         'claude.cmd',
         path.join(runtimeBinDir, 'codex.cmd'),
         'codex.cmd',
@@ -337,10 +340,10 @@ describe('InstallDoctorService', () => {
       expect(status.checks.find(item => item.id === 'npm')).toEqual(expect.objectContaining({ status: 'ok' }));
       expect(status.checks.find(item => item.id === 'pm2')).toEqual(expect.objectContaining({ status: 'ok' }));
       expect(status.checks.find(item => item.id === 'claude-cli')?.installActions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'claude-cli:npm-install', command: [nodeExe, npmCli, 'i', '-g', '@anthropic-ai/claude-code@latest'] }),
+        expect.objectContaining({ id: 'claude-cli:npm-install', command: [nodeExe, npmCli, '--prefix', cliToolsDir, 'i', '-g', '@anthropic-ai/claude-code@latest'] }),
       ]));
       expect(status.checks.find(item => item.id === 'codex-cli')?.installActions).toEqual(expect.arrayContaining([
-        expect.objectContaining({ id: 'codex-cli:npm-install', command: [nodeExe, npmCli, 'i', '-g', '@openai/codex@latest'] }),
+        expect.objectContaining({ id: 'codex-cli:npm-install', command: [nodeExe, npmCli, '--prefix', cliToolsDir, 'i', '-g', '@openai/codex@latest'] }),
       ]));
     } finally {
       restorePlatform();
@@ -352,6 +355,7 @@ describe('InstallDoctorService', () => {
     const root = makeRoot();
     roots.push(root);
     const runtimeBinDir = path.join(root, 'runtime', 'node-v22.22.3-win-x64');
+    const cliToolsDir = path.join(root, 'cli-tools');
     const npmCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
     const npxCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npx-cli.js');
     const nodeExe = path.join(runtimeBinDir, 'node.exe');
@@ -361,6 +365,7 @@ describe('InstallDoctorService', () => {
     fs.writeFileSync(npxCli, '');
     const installed = new Set<string>();
     const installCommands: Array<{ command: string; args: string[] }> = [];
+    const originalPath = process.env.PATH;
     try {
       const service = new InstallDoctorService({
         appRoot: root,
@@ -379,17 +384,17 @@ describe('InstallDoctorService', () => {
         commandRunner: async (command, args) => {
           if (command === nodeExe && args[0] === npmCli) return { ok: true, stdout: '10.9.8', stderr: '' };
           if (command === nodeExe && args[0] === npxCli) return { ok: true, stdout: '7.0.1', stderr: '' };
-          if (command === path.join(runtimeBinDir, 'claude.cmd')) {
+          if (command === path.join(cliToolsDir, 'claude.cmd')) {
             return installed.has('claude')
               ? { ok: true, stdout: '1.0.0', stderr: '' }
               : { ok: false, stdout: '', stderr: '', error: 'not found' };
           }
-          if (command === path.join(runtimeBinDir, 'codex.cmd')) {
+          if (command === path.join(cliToolsDir, 'codex.cmd')) {
             return installed.has('codex')
               ? { ok: true, stdout: '0.50.0', stderr: '' }
               : { ok: false, stdout: '', stderr: '', error: 'not found' };
           }
-          if (command === 'claude.cmd' || command === 'codex.cmd' || command === 'kiro-cli') return { ok: false, stdout: '', stderr: '', error: 'not found' };
+          if (command === path.join(runtimeBinDir, 'claude.cmd') || command === path.join(runtimeBinDir, 'codex.cmd') || command === 'claude.cmd' || command === 'codex.cmd' || command === 'kiro-cli') return { ok: false, stdout: '', stderr: '', error: 'not found' };
           if (command === 'schtasks.exe') return { ok: true, stdout: 'Ready', stderr: '' };
           return { ok: true, stdout: '1.0.0', stderr: '' };
         },
@@ -418,10 +423,60 @@ describe('InstallDoctorService', () => {
       expect(codexResult.success).toBe(true);
       expect(codexResult.doctor?.checks.find(item => item.id === 'codex-cli')).toEqual(expect.objectContaining({ status: 'ok' }));
       expect(installCommands).toEqual([
-        { command: nodeExe, args: [npmCli, 'i', '-g', '@anthropic-ai/claude-code@latest'] },
-        { command: nodeExe, args: [npmCli, 'i', '-g', '@openai/codex@latest'] },
+        { command: nodeExe, args: [npmCli, '--prefix', cliToolsDir, 'i', '-g', '@anthropic-ai/claude-code@latest'] },
+        { command: nodeExe, args: [npmCli, '--prefix', cliToolsDir, 'i', '-g', '@openai/codex@latest'] },
       ]);
+      expect(process.env.PATH?.split(';')[0]).toBe(cliToolsDir);
     } finally {
+      process.env.PATH = originalPath;
+      restorePlatform();
+    }
+  });
+
+  test('detects Claude and Codex from the Windows user npm prefix', async () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = makeRoot();
+    roots.push(root);
+    const appData = path.join(root, 'AppData', 'Roaming');
+    const userNpmDir = path.join(appData, 'npm');
+    const cliToolsDir = path.join(root, 'cli-tools');
+    const originalAppData = process.env.APPDATA;
+    process.env.APPDATA = appData;
+    const commands: string[] = [];
+    try {
+      const service = new InstallDoctorService({
+        appRoot: root,
+        dataRoot: path.join(root, 'data'),
+        installStateService: makeInstallState(root),
+        commandRunner: async (command) => {
+          commands.push(command);
+          if (command === path.join(userNpmDir, 'claude.cmd')) return { ok: true, stdout: '1.0.0', stderr: '' };
+          if (command === path.join(userNpmDir, 'codex.cmd')) return { ok: true, stdout: '0.50.0', stderr: '' };
+          if ([path.join(cliToolsDir, 'claude.cmd'), path.join(cliToolsDir, 'codex.cmd'), 'claude.cmd', 'codex.cmd', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
+          if (command === 'schtasks.exe') return { ok: true, stdout: 'Ready', stderr: '' };
+          return { ok: true, stdout: '1.0.0', stderr: '' };
+        },
+        detectHomebrew: async () => false,
+        detectPandoc: async () => ({ available: true, binaryPath: 'C:\\Tools\\pandoc.exe', version: '3.1.1', checkedAt: '2026-05-15T00:00:00.000Z' }),
+        detectLibreOffice: async () => ({ available: true, binaryPath: 'C:\\Tools\\soffice.exe', checkedAt: '2026-05-15T00:00:00.000Z' }),
+      });
+
+      const status = await service.getStatus();
+
+      expect(commands).toEqual(expect.arrayContaining([
+        path.join(cliToolsDir, 'claude.cmd'),
+        path.join(userNpmDir, 'claude.cmd'),
+        path.join(cliToolsDir, 'codex.cmd'),
+        path.join(userNpmDir, 'codex.cmd'),
+      ]));
+      expect(status.checks.find(item => item.id === 'claude-cli')).toEqual(expect.objectContaining({ status: 'ok' }));
+      expect(status.checks.find(item => item.id === 'codex-cli')).toEqual(expect.objectContaining({ status: 'ok' }));
+    } finally {
+      if (originalAppData === undefined) {
+        delete process.env.APPDATA;
+      } else {
+        process.env.APPDATA = originalAppData;
+      }
       restorePlatform();
     }
   });

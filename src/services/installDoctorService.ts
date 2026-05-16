@@ -10,6 +10,7 @@ import { detectPandoc, resetPandocDetection, type PandocStatus } from './knowled
 
 const execFileAsync = promisify(execFile);
 const INSTALL_TIMEOUT_MS = 10 * 60 * 1000;
+const WINDOWS_CLI_TOOLS_DIR = 'cli-tools';
 const NODE_REMEDIATION = 'Install Node.js 22+ from nodejs.org, or rerun the platform installer without the no-install-node option so it can install a private runtime.';
 const CLAUDE_CLI_REMEDIATION = 'Install Claude Code only if you want to use that backend. Run `npm i -g @anthropic-ai/claude-code` when npm is available, then run `claude` and finish browser sign-in. Restart Agent Cockpit if the command is still not detected.';
 const CODEX_CLI_REMEDIATION = 'Install Codex only if you want to use that backend. Run `npm i -g @openai/codex`, then run `codex` and sign in with ChatGPT or an API key. Restart Agent Cockpit if the command is still not detected.';
@@ -45,13 +46,55 @@ function platformCommand(command: 'npm' | 'npx', install?: InstallStatus): strin
   return [runtimeBinDir ? path.join(runtimeBinDir, executable) : executable];
 }
 
+function windowsCliToolsDir(install?: InstallStatus): string | null {
+  return process.platform === 'win32' && install?.installDir
+    ? path.join(install.installDir, WINDOWS_CLI_TOOLS_DIR)
+    : null;
+}
+
+function windowsUserNpmDir(): string | null {
+  return process.platform === 'win32' && process.env.APPDATA
+    ? path.join(process.env.APPDATA, 'npm')
+    : null;
+}
+
+function uniqueWindowsDirs(dirs: Array<string | null | undefined>): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const dir of dirs) {
+    if (!dir) continue;
+    const key = dir.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(dir);
+  }
+  return result;
+}
+
+function windowsCliCommandDirs(install?: InstallStatus): string[] {
+  if (process.platform !== 'win32') return [];
+  return uniqueWindowsDirs([
+    windowsCliToolsDir(install),
+    install?.nodeRuntime?.binDir,
+    windowsUserNpmDir(),
+  ]);
+}
+
+function npmInstallCommand(pkg: string, install?: InstallStatus): string[] {
+  const npmCommand = platformCommand('npm', install);
+  const cliToolsDir = windowsCliToolsDir(install);
+  return cliToolsDir
+    ? [...npmCommand, '--prefix', cliToolsDir, 'i', '-g', pkg]
+    : [...npmCommand, 'i', '-g', pkg];
+}
+
 function platformCliCommands(command: 'claude' | 'codex', install?: InstallStatus): string[][] {
   if (process.platform !== 'win32') return [[command]];
   const executable = `${command}.cmd`;
-  const runtimeBinDir = install?.nodeRuntime?.binDir;
-  return runtimeBinDir
-    ? [[path.join(runtimeBinDir, executable)], [executable]]
-    : [[executable]];
+  return [
+    ...windowsCliCommandDirs(install).map(dir => [path.join(dir, executable)]),
+    [executable],
+  ];
 }
 
 function platformPm2Command(appRoot: string, install?: InstallStatus): { command: string[]; summary: string } {
@@ -251,6 +294,7 @@ export class InstallDoctorService {
       }
 
       this.invalidateDetectionForAction(actionId);
+      this.refreshWindowsCliToolsPath(actionId);
       return {
         success: true,
         action: definition.action,
@@ -398,16 +442,17 @@ export class InstallDoctorService {
   }
 
   private actionDefinitions(homebrewAvailable: boolean, install?: InstallStatus): Map<string, InstallActionDefinition> {
-    const npmCommand = platformCommand('npm', install);
+    const claudeNpmInstall = npmInstallCommand('@anthropic-ai/claude-code@latest', install);
+    const codexNpmInstall = npmInstallCommand('@openai/codex@latest', install);
     const definitions: InstallActionDefinition[] = [
       {
-        action: { id: 'claude-cli:npm-install', kind: 'command', label: 'Install Claude Code', description: 'Installs the Claude Code CLI with npm.', command: [...npmCommand, 'i', '-g', '@anthropic-ai/claude-code@latest'] },
-        command: [...npmCommand, 'i', '-g', '@anthropic-ai/claude-code@latest'],
+        action: { id: 'claude-cli:npm-install', kind: 'command', label: 'Install Claude Code', description: 'Installs the Claude Code CLI with npm.', command: claudeNpmInstall },
+        command: claudeNpmInstall,
       },
       { action: { id: 'claude-cli:docs', kind: 'link', label: 'Open docs', href: 'https://code.claude.com/docs/en/setup' } },
       {
-        action: { id: 'codex-cli:npm-install', kind: 'command', label: 'Install Codex', description: 'Installs the Codex CLI with npm.', command: [...npmCommand, 'i', '-g', '@openai/codex@latest'] },
-        command: [...npmCommand, 'i', '-g', '@openai/codex@latest'],
+        action: { id: 'codex-cli:npm-install', kind: 'command', label: 'Install Codex', description: 'Installs the Codex CLI with npm.', command: codexNpmInstall },
+        command: codexNpmInstall,
       },
       { action: { id: 'codex-cli:docs', kind: 'link', label: 'Open docs', href: 'https://github.com/openai/codex' } },
       { action: { id: 'kiro-cli:docs', kind: 'link', label: 'Open docs', href: 'https://kiro.dev/docs/cli/installation/' } },
@@ -439,6 +484,19 @@ export class InstallDoctorService {
   private invalidateDetectionForAction(actionId: string): void {
     if (actionId.startsWith('pandoc:')) this.resetPandocDetector();
     if (actionId.startsWith('libreoffice:')) this.resetLibreOfficeDetector();
+  }
+
+  private refreshWindowsCliToolsPath(actionId: string): void {
+    if (process.platform !== 'win32') return;
+    if (!actionId.startsWith('claude-cli:') && !actionId.startsWith('codex-cli:')) return;
+    const install = this.installStateService.getStatus();
+    const dir = windowsCliToolsDir(install);
+    if (!dir) return;
+    fs.mkdirSync(dir, { recursive: true });
+    const delimiter = ';';
+    const parts = (process.env.PATH || '').split(delimiter).filter(Boolean);
+    const key = dir.toLowerCase();
+    process.env.PATH = [dir, ...parts.filter(part => part.toLowerCase() !== key)].join(delimiter);
   }
 }
 

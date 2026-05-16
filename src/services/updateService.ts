@@ -1153,8 +1153,8 @@ export class UpdateService {
   private _writeWindowsEcosystemConfig(appDir: string, nodeRuntime: InstallNodeRuntime | null, installStatus?: InstallStatus): void {
     const envPath = path.join(appDir, '.env');
     const dataDir = installStatus?.dataDir || this._dataRoot;
-    const installDir = path.dirname(dataDir);
-    const pm2Home = path.join(path.dirname(dataDir), 'pm2');
+    const installDir = this._dirnameForPlatform(dataDir);
+    const pm2Home = this._joinForPlatform(installDir, 'pm2');
     const runnerScript = this._writeWindowsRunnerScript(installDir, appDir, nodeRuntime);
     const config = {
       apps: [{
@@ -1172,7 +1172,7 @@ export class UpdateService {
           WEB_BUILD_MODE: this._readEnvValue(envPath, 'WEB_BUILD_MODE') || 'auto',
           AUTH_ENABLE_LEGACY_OAUTH: this._readEnvValue(envPath, 'AUTH_ENABLE_LEGACY_OAUTH') || 'false',
           PM2_HOME: pm2Home,
-          PATH: nodeRuntime?.binDir ? this._runtimePath(nodeRuntime.binDir) : process.env.PATH || '',
+          PATH: this._runtimePath(nodeRuntime?.binDir || null, installDir),
         },
       }],
     };
@@ -1219,15 +1219,16 @@ export class UpdateService {
     try {
       const raw = fs.readFileSync(envPath, 'utf8');
       const match = raw.match(new RegExp(`^${name}=(.+)$`, 'm'));
-      return match?.[1]?.trim().replace(/^['"]|['"]$/g, '') || null;
+      return match?.[1]?.trim().replace(/^[`'"]|[`'"]$/g, '') || null;
     } catch {
       return null;
     }
   }
 
   private _persistPrivateRuntimePath(appDir: string, binDir: string): void {
-    const runtimePath = this._runtimePath(binDir);
     const envPath = path.join(appDir, '.env');
+    const dataDir = this._readEnvValue(envPath, 'AGENT_COCKPIT_DATA_DIR') || this._dataRoot;
+    const runtimePath = this._runtimePath(binDir, process.platform === 'win32' ? this._dirnameForPlatform(dataDir) : undefined);
     const envRaw = fs.readFileSync(envPath, 'utf8');
     const envLine = `PATH=${this._dotenvQuote(runtimePath)}`;
     const envNext = /^PATH=.*$/m.test(envRaw)
@@ -1247,10 +1248,51 @@ export class UpdateService {
     fs.writeFileSync(ecosystemPath, `module.exports = ${JSON.stringify(config, null, 2)};\n`);
   }
 
-  private _runtimePath(binDir: string): string {
+  private _runtimePath(binDir?: string | null, installDir?: string): string {
     const delimiter = process.platform === 'win32' ? ';' : path.delimiter;
+    const preferred: string[] = [];
+    if (process.platform === 'win32' && installDir) {
+      preferred.push(this._joinForPlatform(installDir, 'cli-tools'));
+    }
+    if (binDir) preferred.push(binDir);
+    if (process.platform === 'win32' && process.env.APPDATA) {
+      preferred.push(this._joinForPlatform(process.env.APPDATA, 'npm'));
+    }
+    const uniquePreferred = this._uniquePathParts(preferred);
+    const preferredKeys = new Set(uniquePreferred.map(part => this._pathPartKey(part)));
     const parts = (process.env.PATH || '').split(delimiter).filter(Boolean);
-    return [binDir, ...parts.filter(part => part !== binDir)].join(delimiter);
+    return [
+      ...uniquePreferred,
+      ...parts.filter(part => !preferredKeys.has(this._pathPartKey(part))),
+    ].join(delimiter);
+  }
+
+  private _uniquePathParts(parts: string[]): string[] {
+    const seen = new Set<string>();
+    const result: string[] = [];
+    for (const part of parts) {
+      const key = this._pathPartKey(part);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(part);
+    }
+    return result;
+  }
+
+  private _pathPartKey(part: string): string {
+    return process.platform === 'win32' ? part.toLowerCase() : part;
+  }
+
+  private _dirnameForPlatform(value: string): string {
+    return process.platform === 'win32' && /^[a-zA-Z]:[\\/]/.test(value)
+      ? path.win32.dirname(value)
+      : path.dirname(value);
+  }
+
+  private _joinForPlatform(base: string, ...parts: string[]): string {
+    return process.platform === 'win32' && /^[a-zA-Z]:[\\/]/.test(base)
+      ? path.win32.join(base, ...parts)
+      : path.join(base, ...parts);
   }
 
   private _dotenvQuote(value: string): string {
