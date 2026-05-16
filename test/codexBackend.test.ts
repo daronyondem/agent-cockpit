@@ -216,6 +216,53 @@ describe('CodexAdapter', () => {
     expect(gpt55!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh']);
   });
 
+  test('getMetadata falls back when a Windows cmd shim exits before stdin writes complete', async () => {
+    let metadataPromise!: Promise<Awaited<ReturnType<CodexAdapter['getMetadata']>>>;
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        return {
+          spawn: () => {
+            const proc = new EventEmitter();
+            proc.stdout = new EventEmitter();
+            proc.stderr = new EventEmitter();
+            proc.killed = false;
+            proc.exitCode = null;
+            proc.stdin = new EventEmitter();
+            proc.stdin.destroyed = false;
+            proc.stdin.writable = true;
+            proc.stdin.write = () => {
+              setImmediate(() => {
+                proc.stdin.destroyed = true;
+                proc.stdin.writable = false;
+                proc.stdin.emit('error', new Error('write EPIPE'));
+                proc.emit('close', 1, null);
+              });
+              return false;
+            };
+            proc.kill = () => {
+              proc.killed = true;
+              proc.emit('close', 1, null);
+            };
+            return proc;
+          },
+          execFile: () => ({ stdin: { end: () => {} } }),
+        };
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      metadataPromise = adapter.getMetadata();
+    });
+
+    try {
+      const metadata = await metadataPromise;
+      expect(metadata.models?.find((model: ModelOption) => model.id === 'gpt-5.5')).toBeDefined();
+    } finally {
+      jest.dontMock('child_process');
+    }
+  });
+
   test('getMetadata discovers and caches models per Codex profile runtime', async () => {
     let capturedCommand: string | null = null;
     let capturedEnv: NodeJS.ProcessEnv | undefined;
