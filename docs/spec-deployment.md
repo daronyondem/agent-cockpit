@@ -351,15 +351,20 @@ reinstall runs read the existing app `.env` and install manifest before
 replacing a same-version release directory, stop the existing PM2 app on a
 best-effort basis before deleting active app files, and keep `SESSION_SECRET`,
 `AUTH_SETUP_TOKEN`, `installedAt`, and `welcomeCompletedAt` stable while mutable
-`data\` content is preserved outside the app directory.
+`data\` content is preserved outside the app directory. The best-effort PM2
+cleanup path resolves `<appDir>\node_modules\.bin\pm2.cmd` directly and skips
+cleanup when that local command is not present yet; it must not invoke `npx` in
+a freshly extracted or partially repaired app directory because npm can try to
+resolve missing packages interactively before dependencies are installed.
 
 The installer starts Agent Cockpit with local PM2 and install-local `PM2_HOME`,
 then saves PM2 state. Before each installer or generated start-helper launch, it
 deletes any existing `agent-cockpit` PM2 entry on a best-effort basis so repair
 runs replace stale process metadata with the regenerated hidden runner config.
-The generated start/stop helpers invoke PM2 through a checked native-command
-wrapper so failed `pm2 startOrRestart` and `pm2 save` commands surface through
-the task/script exit status. If readiness times out, the installer prints PM2
+The generated start/stop/log helpers also resolve app-local `pm2.cmd` directly
+and invoke PM2 through a checked native-command wrapper so failed
+`pm2 startOrRestart` and `pm2 save` commands surface through the task/script
+exit status without npm package-resolution prompts. If readiness times out, the installer prints PM2
 `describe` output, the last PM2 log lines, and the runner stdout/stderr logs
 before failing with the generated logs helper command. Unless `-NoAutoStart` is
 supplied, it registers a current-user `AgentCockpit` ONLOGON Scheduled Task

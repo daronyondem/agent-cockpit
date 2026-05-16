@@ -1184,20 +1184,22 @@ does not execute real local CLIs.
 }
 ```
 
-Required checks currently cover Node.js 22+, npm, local PM2 through
-`npx --no-install pm2 --version`, writable `<AGENT_COCKPIT_DATA_DIR>`, and the
-desktop V2 build shell at `public/v2-built/index.html`. Optional/warning checks
-cover app-directory writability for future updates, Windows logon startup when
-running on Windows, the mobile PWA build shell, Claude Code CLI, Codex CLI, Kiro
-CLI, Pandoc, LibreOffice, and install/update channel metadata. npm and PM2
-probes resolve `npm`/`npx` from `install.nodeRuntime.binDir` when the installer
-recorded a private or system runtime, so Windows private-Node installs do not
-depend on the inherited process `PATH` for the welcome checks. When the recorded
-Windows runtime contains the npm CLI JavaScript entrypoints, Install Doctor uses
-`node.exe node_modules/npm/bin/npm-cli.js` and
-`node.exe node_modules/npm/bin/npx-cli.js` for npm/PM2 probes and npm-backed
-install actions. That avoids `npm.cmd`/`npx.cmd` shim quoting entirely for the
-installer-managed path. Windows Claude/Codex probes check npm-created
+Required checks currently cover Node.js 22+, npm, local PM2, writable
+`<AGENT_COCKPIT_DATA_DIR>`, and the desktop V2 build shell at
+`public/v2-built/index.html`. Optional/warning checks cover app-directory
+writability for future updates, Windows logon startup when running on Windows,
+the mobile PWA build shell, Claude Code CLI, Codex CLI, Kiro CLI, Pandoc,
+LibreOffice, and install/update channel metadata. Windows PM2 probes run
+`<appRoot>\node_modules\.bin\pm2.cmd --version` directly so the welcome screen
+does not trigger npm package-resolution prompts; non-Windows PM2 probes continue
+to run `npx --no-install pm2 --version`. npm probes resolve from
+`install.nodeRuntime.binDir` when the installer recorded a private or system
+runtime, so Windows private-Node installs do not depend on the inherited process
+`PATH` for the welcome checks. When the recorded Windows runtime contains the npm
+CLI JavaScript entrypoints, Install Doctor uses
+`node.exe node_modules/npm/bin/npm-cli.js` for npm probes and npm-backed install
+actions. That avoids `npm.cmd` shim quoting entirely for the installer-managed
+path. Windows Claude/Codex probes check npm-created
 `claude.cmd`/`codex.cmd` shims, preferring the installer-recorded runtime
 `binDir` and then falling back to `PATH`, so welcome-screen npm install actions
 can be reflected immediately in the refreshed doctor result. The fallback

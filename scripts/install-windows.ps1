@@ -508,12 +508,10 @@ Set-StrictMode -Version Latest
 `$NodeBin = if (`$Install.nodeRuntime -and `$Install.nodeRuntime.binDir) { `$Install.nodeRuntime.binDir } else { '' }
 if (`$NodeBin) { `$env:Path = "`$NodeBin;`$env:Path" }
 `$env:PM2_HOME = `$Pm2Home
-function Resolve-Npx {
-  if (`$NodeBin) {
-    `$candidate = Join-Path `$NodeBin 'npx.cmd'
-    if (Test-Path `$candidate) { return `$candidate }
-  }
-  return 'npx.cmd'
+function Resolve-Pm2 {
+  `$candidate = Join-Path `$AppDir 'node_modules\.bin\pm2.cmd'
+  if (Test-Path `$candidate) { return `$candidate }
+  throw "Local PM2 command is missing at `$candidate. Run npm ci in `$AppDir, then retry."
 }
 function Invoke-CheckedNative {
   param([string] `$FilePath, [string[]] `$Arguments, [switch] `$AllowFailure)
@@ -526,18 +524,18 @@ function Invoke-CheckedNative {
 }
 "@
   Set-Content -Path (Join-Path $binDir 'start-agent-cockpit.ps1') -Encoding UTF8 -Value ($common + @"
-`$Npx = Resolve-Npx
-Invoke-CheckedNative `$Npx @('pm2', 'delete', 'agent-cockpit') -AllowFailure
-Invoke-CheckedNative `$Npx @('pm2', 'startOrRestart', (Join-Path `$AppDir 'ecosystem.config.js'), '--update-env')
-Invoke-CheckedNative `$Npx @('pm2', 'save')
+`$Pm2 = Resolve-Pm2
+Invoke-CheckedNative `$Pm2 @('delete', 'agent-cockpit') -AllowFailure
+Invoke-CheckedNative `$Pm2 @('startOrRestart', (Join-Path `$AppDir 'ecosystem.config.js'), '--update-env')
+Invoke-CheckedNative `$Pm2 @('save')
 "@)
   Set-Content -Path (Join-Path $binDir 'stop-agent-cockpit.ps1') -Encoding UTF8 -Value ($common + @"
-`$Npx = Resolve-Npx
-Invoke-CheckedNative `$Npx @('pm2', 'delete', 'agent-cockpit') -AllowFailure
-Invoke-CheckedNative `$Npx @('pm2', 'save')
+`$Pm2 = Resolve-Pm2
+Invoke-CheckedNative `$Pm2 @('delete', 'agent-cockpit') -AllowFailure
+Invoke-CheckedNative `$Pm2 @('save')
 "@)
   Set-Content -Path (Join-Path $binDir 'logs-agent-cockpit.ps1') -Encoding UTF8 -Value ($common + @"
-`$Npx = Resolve-Npx
+`$Pm2 = Resolve-Pm2
 `$runnerOut = Join-Path `$Pm2Home 'logs\agent-cockpit-runner-out.log'
 `$runnerErr = Join-Path `$Pm2Home 'logs\agent-cockpit-runner-error.log'
 foreach (`$logPath in @(`$runnerOut, `$runnerErr)) {
@@ -546,7 +544,7 @@ foreach (`$logPath in @(`$runnerOut, `$runnerErr)) {
     Get-Content -Path `$logPath -Tail 100
   }
 }
-& `$Npx pm2 logs agent-cockpit --lines 100
+& `$Pm2 logs agent-cockpit --lines 100
 "@)
 }
 
@@ -575,7 +573,12 @@ function Register-LogonTask {
 
 function Invoke-Pm2BestEffort {
   param([string] $AppDir, [string[]] $Arguments)
-  if (-not $NpxCmd -or -not (Test-Path $AppDir)) {
+  if (-not (Test-Path $AppDir)) {
+    return
+  }
+  $pm2Cmd = Join-Path $AppDir 'node_modules\.bin\pm2.cmd'
+  if (-not (Test-Path $pm2Cmd)) {
+    Write-Log "Skipping PM2 cleanup for $AppDir because local PM2 is not installed yet."
     return
   }
   $env:PM2_HOME = Join-Path $InstallDir 'pm2'
@@ -585,9 +588,9 @@ function Invoke-Pm2BestEffort {
   $previous = Get-Location
   try {
     Set-Location $AppDir
-    & $NpxCmd @Arguments
+    & $pm2Cmd @Arguments
     if ($LASTEXITCODE -ne 0) {
-      Write-Log "Ignoring PM2 cleanup exit code $LASTEXITCODE for: $NpxCmd $($Arguments -join ' ')"
+      Write-Log "Ignoring PM2 cleanup exit code $LASTEXITCODE for: $pm2Cmd $($Arguments -join ' ')"
     }
     $global:LASTEXITCODE = 0
   } catch {
@@ -604,7 +607,7 @@ function Stop-ExistingAppForReplacement {
     return
   }
   Write-Log 'Stopping existing Agent Cockpit process before replacing app files.'
-  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'delete', $AppName)
+  Invoke-Pm2BestEffort $AppDir @('delete', $AppName)
 }
 
 function Start-Pm2 {
@@ -614,9 +617,13 @@ function Start-Pm2 {
     $env:Path = "$NodeRuntimeBinDir;$env:Path"
   }
   Write-Log 'Starting Agent Cockpit with local PM2.'
-  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'delete', $AppName)
-  Invoke-Quiet $NpxCmd @('pm2', 'startOrRestart', 'ecosystem.config.js', '--update-env') $AppDir
-  Invoke-Quiet $NpxCmd @('pm2', 'save') $AppDir
+  Invoke-Pm2BestEffort $AppDir @('delete', $AppName)
+  $pm2Cmd = Join-Path $AppDir 'node_modules\.bin\pm2.cmd'
+  if (-not (Test-Path $pm2Cmd)) {
+    Fail "Local PM2 command is missing at $pm2Cmd after dependency install."
+  }
+  Invoke-Quiet $pm2Cmd @('startOrRestart', 'ecosystem.config.js', '--update-env') $AppDir
+  Invoke-Quiet $pm2Cmd @('save') $AppDir
 }
 
 function Wait-ForServer {
@@ -632,8 +639,8 @@ function Wait-ForServer {
     }
   }
   Write-Log 'Agent Cockpit did not answer before timeout; collecting PM2 diagnostics.'
-  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'describe', $AppName)
-  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'logs', $AppName, '--lines', '80', '--nostream')
+  Invoke-Pm2BestEffort $AppDir @('describe', $AppName)
+  Invoke-Pm2BestEffort $AppDir @('logs', $AppName, '--lines', '80', '--nostream')
   foreach ($logName in @('agent-cockpit-runner-out.log', 'agent-cockpit-runner-error.log')) {
     $logPath = Join-Path (Join-Path $InstallDir 'pm2\logs') $logName
     if (Test-Path $logPath) {
