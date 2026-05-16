@@ -93,9 +93,10 @@ tool is unavailable.
   after updating without rerunning the full installer.
 - Windows Agent Cockpit-managed Codex terminal wrappers should call the recorded
   private `node.exe` plus `<installDir>\cli-tools\node_modules\@openai\codex\bin\codex.js`
-  directly. Do not depend on a global `node.exe`, and do not add the private
-  runtime directory to the user's Windows `Path` unless that product decision
-  changes.
+  directly. Installer repair reruns, Install Doctor, self-update, and CLI update
+  paths should all repair stale npm-generated wrappers. Do not depend on a
+  global `node.exe`, and do not add the private runtime directory to the user's
+  Windows `Path` unless that product decision changes.
 - Windows production self-update must not accept generic HTTP liveness as
   success. The generated PowerShell restart script must use the target release's
   app-local `pm2.cmd`, require `/api/chat/version.version` to match the target
@@ -105,6 +106,9 @@ tool is unavailable.
   script's `System.IO.Compression.ZipFile` helper over `Expand-Archive` in the
   user-facing installer so PowerShell archive progress cannot pause installs in
   Windows console hosts.
+- Windows installer readiness checks should use raw .NET HTTP requests instead
+  of `Invoke-WebRequest` against `/auth/setup`, so PowerShell page parsing or
+  security prompts cannot pause the installer while waiting for the app.
 - Windows self-update should avoid Unix-only assumptions such as `sh`, `nohup`,
   `tar`, `shasum`, symlink `current`, or junction dependencies.
 

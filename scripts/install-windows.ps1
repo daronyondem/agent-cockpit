@@ -387,6 +387,17 @@ public static extern IntPtr SendMessageTimeout(IntPtr hWnd, UInt32 Msg, UIntPtr 
   }
 }
 
+function Ps-SingleQuote {
+  param([string] $Value)
+  return "'" + $Value.Replace("'", "''") + "'"
+}
+
+function Write-TextFile {
+  param([string] $Path, [string] $Value)
+  Ensure-Directory ([System.IO.Path]::GetDirectoryName($Path))
+  [System.IO.File]::WriteAllText($Path, $Value, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 function Ensure-UserPathEntry {
   param([string] $Entry)
   if ([string]::IsNullOrWhiteSpace($Entry)) { return }
@@ -408,6 +419,91 @@ function Ensure-UserPathEntry {
 function Env-Quote {
   param([string] $Value)
   return '`' + $Value.Replace('`', '\`') + '`'
+}
+
+function Repair-CliToolWrappers {
+  $cliToolsDir = Join-Path $InstallDir 'cli-tools'
+  if (-not (Test-Path $cliToolsDir)) {
+    return
+  }
+  if (-not $NodeExe -or -not (Test-Path $NodeExe)) {
+    Write-Log 'Skipping CLI wrapper repair because Node.js is not resolved.'
+    return
+  }
+
+  $updated = @()
+  $codexJs = Join-Path $cliToolsDir 'node_modules\@openai\codex\bin\codex.js'
+  if (Test-Path $codexJs) {
+    $codexPs1 = @"
+`$ErrorActionPreference = "Stop"
+`$node = $(Ps-SingleQuote $NodeExe)
+`$target = $(Ps-SingleQuote $codexJs)
+if (-not (Test-Path -LiteralPath `$node)) {
+  Write-Error "Agent Cockpit private Node.js runtime was not found. Rerun the Agent Cockpit installer or self-update."
+  exit 1
+}
+if (-not (Test-Path -LiteralPath `$target)) {
+  Write-Error "Codex CLI package entrypoint was not found. Reinstall Codex from Agent Cockpit."
+  exit 1
+}
+`$nodeDir = Split-Path -Parent `$node
+`$env:PATH = "`$nodeDir;`$env:PATH"
+& `$node `$target @args
+exit `$LASTEXITCODE
+"@
+    $codexCmd = @"
+@ECHO off
+SETLOCAL
+SET "NODE_EXE=$NodeExe"
+SET "CODEX_JS=$codexJs"
+IF NOT EXIST "%NODE_EXE%" (
+  ECHO Agent Cockpit private Node.js runtime was not found. Rerun the Agent Cockpit installer or self-update. 1>&2
+  EXIT /B 1
+)
+IF NOT EXIST "%CODEX_JS%" (
+  ECHO Codex CLI package entrypoint was not found. Reinstall Codex from Agent Cockpit. 1>&2
+  EXIT /B 1
+)
+FOR %%I IN ("%NODE_EXE%") DO SET "PATH=%%~dpI;%PATH%"
+"%NODE_EXE%" "%CODEX_JS%" %*
+EXIT /B %ERRORLEVEL%
+"@
+    Write-TextFile (Join-Path $cliToolsDir 'codex.ps1') ($codexPs1 + [Environment]::NewLine)
+    Write-TextFile (Join-Path $cliToolsDir 'codex.cmd') ($codexCmd + [Environment]::NewLine)
+    $updated += 'codex'
+  }
+
+  $claudeExe = Join-Path $cliToolsDir 'node_modules\@anthropic-ai\claude-code\bin\claude.exe'
+  if (Test-Path $claudeExe) {
+    $claudePs1 = @"
+`$ErrorActionPreference = "Stop"
+`$target = $(Ps-SingleQuote $claudeExe)
+if (-not (Test-Path -LiteralPath `$target)) {
+  Write-Error "Claude Code CLI executable was not found. Reinstall Claude Code from Agent Cockpit."
+  exit 1
+}
+& `$target @args
+exit `$LASTEXITCODE
+"@
+    $claudeCmd = @"
+@ECHO off
+SETLOCAL
+SET "TARGET=$claudeExe"
+IF NOT EXIST "%TARGET%" (
+  ECHO Claude Code CLI executable was not found. Reinstall Claude Code from Agent Cockpit. 1>&2
+  EXIT /B 1
+)
+"%TARGET%" %*
+EXIT /B %ERRORLEVEL%
+"@
+    Write-TextFile (Join-Path $cliToolsDir 'claude.ps1') ($claudePs1 + [Environment]::NewLine)
+    Write-TextFile (Join-Path $cliToolsDir 'claude.cmd') ($claudeCmd + [Environment]::NewLine)
+    $updated += 'claude'
+  }
+
+  if ($updated.Count -gt 0) {
+    Write-Log "Repaired Windows CLI wrapper(s): $($updated -join ', ')."
+  }
 }
 
 function Vbs-Quote {
@@ -692,12 +788,10 @@ function Wait-ForServer {
   $url = "http://127.0.0.1:$Port/auth/setup"
   Write-Log "Waiting for Agent Cockpit to answer at $url."
   for ($i = 0; $i -lt 90; $i++) {
-    try {
-      Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri $url | Out-Null
+    if (Test-HttpReady $url) {
       return
-    } catch {
-      Start-Sleep -Seconds 1
     }
+    Start-Sleep -Seconds 1
   }
   Write-Log 'Agent Cockpit did not answer before timeout; collecting PM2 diagnostics.'
   Invoke-Pm2BestEffort $AppDir @('describe', $AppName)
@@ -711,6 +805,35 @@ function Wait-ForServer {
   }
   $logs = Join-Path $InstallDir 'bin\logs-agent-cockpit.ps1'
   Fail "Agent Cockpit did not answer at $url. Check logs with: powershell -NoProfile -ExecutionPolicy Bypass -File `"$logs`""
+}
+
+function Test-HttpReady {
+  param([string] $Url)
+  $request = $null
+  $response = $null
+  try {
+    $request = [System.Net.HttpWebRequest]::Create($Url)
+    $request.Method = 'GET'
+    $request.Timeout = 2000
+    $request.ReadWriteTimeout = 2000
+    $request.AllowAutoRedirect = $true
+    $response = $request.GetResponse()
+    $statusCode = [int]$response.StatusCode
+    return ($statusCode -ge 200 -and $statusCode -lt 400)
+  } catch [System.Net.WebException] {
+    if ($_.Exception.Response) {
+      $response = $_.Exception.Response
+      $statusCode = [int]$response.StatusCode
+      return ($statusCode -ge 200 -and $statusCode -lt 400)
+    }
+    return $false
+  } catch {
+    return $false
+  } finally {
+    if ($response) {
+      $response.Close()
+    }
+  }
 }
 
 function Open-Setup {
@@ -749,6 +872,7 @@ function Configure-App {
   Write-EcosystemConfig $AppDir $DataDir $sessionSecret $setupToken
   Write-InstallManifest $DataDir $AppDir $InstallVersion $InstallSource $Branch
   Write-HelperScripts $AppDir
+  Repair-CliToolWrappers
   Register-LogonTask
   Start-Pm2 $AppDir
   Wait-ForServer $AppDir

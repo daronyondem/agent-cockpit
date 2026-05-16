@@ -269,9 +269,11 @@ npx pm2 startOrRestart ecosystem.config.js --update-env
 npx pm2 save
 ```
 
-It does not require global PM2. After PM2 starts, the installer polls
-`http://127.0.0.1:<port>/auth/setup` for up to 90 seconds before opening the
-browser. If the server does not answer, the installer fails with a local
+It does not require global PM2. After PM2 starts, the installer probes
+`http://127.0.0.1:<port>/auth/setup` for up to 90 seconds with a raw .NET HTTP
+request rather than `Invoke-WebRequest`, so PowerShell page parsing and security
+prompts cannot pause the install while waiting for the HTML setup page. If the
+server does not answer, the installer fails with a local
 PM2 logs command. When the installer is using a private Node.js runtime, that
 printed command prepends the private runtime `bin` directory and calls the
 private runtime's `npx` so it still works from a fresh user shell that has no
@@ -350,8 +352,10 @@ installer creates `<install-root>\cli-tools`, prepends it to the current user's
 Windows `Path`, and broadcasts an environment change so new user terminals can
 run CLIs that Agent Cockpit installs there. Welcome-screen Claude/Codex npm
 actions and Windows production self-updates also persist the same user `Path`
-entry after successful installs/updates. When Agent Cockpit installs or updates
-Codex under this prefix with a private Node runtime, it repairs the terminal
+entry after successful installs/updates. Installer repair reruns also inspect
+existing packages under this prefix and repair stale npm-generated wrappers.
+When Agent Cockpit installs or updates Codex under this prefix with a private
+Node runtime, it repairs the terminal
 `codex.ps1`/`codex.cmd` wrappers so they call the recorded private `node.exe`
 explicitly; users do not need a separate global Node install for terminal
 `codex` to start. The same repair path rewrites the Agent Cockpit-managed

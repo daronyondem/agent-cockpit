@@ -31,6 +31,16 @@ describe('Windows installer script', () => {
     expect(source).toContain('Release manifest does not include a Windows app ZIP artifact');
   });
 
+  test('uses a raw HTTP readiness probe for the setup endpoint', () => {
+    expect(source).toContain('function Test-HttpReady');
+    expect(source).toContain('[System.Net.HttpWebRequest]::Create($Url)');
+    expect(source).toContain('$request.Timeout = 2000');
+    expect(source).toContain('$request.AllowAutoRedirect = $true');
+    expect(source).toContain('return ($statusCode -ge 200 -and $statusCode -lt 400)');
+    expect(source).toContain('if (Test-HttpReady $url)');
+    expect(source).not.toContain('Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri $url');
+  });
+
   test('reuses existing private Node runtimes during repair reruns', () => {
     expect(source).toContain('function Use-PrivateNodeRuntime');
     expect(source).toContain('function Invoke-NativeOutput');
@@ -84,6 +94,14 @@ describe('Windows installer script', () => {
     expect(source).toContain('SendMessageTimeout');
     expect(source).toContain('Ensure-Directory $cliToolsDir');
     expect(source).toContain('Ensure-UserPathEntry $cliToolsDir');
+    expect(source).toContain('function Repair-CliToolWrappers');
+    expect(source).toContain("$codexJs = Join-Path $cliToolsDir 'node_modules\\@openai\\codex\\bin\\codex.js'");
+    expect(source).toContain("Write-TextFile (Join-Path $cliToolsDir 'codex.ps1')");
+    expect(source).toContain('SET "NODE_EXE=$NodeExe"');
+    expect(source).toContain('& `$node `$target @args');
+    expect(source).toContain("Write-TextFile (Join-Path $cliToolsDir 'claude.ps1')");
+    expect(source).toContain('Repaired Windows CLI wrapper(s)');
+    expect(source).toContain('Repair-CliToolWrappers');
     expect(source).toContain("Join-Path $env:APPDATA 'npm'");
     expect(source).toContain('"PATH=$(Env-Quote (Runtime-Path))"');
     expect(source).toContain('ecosystem.config.js');
