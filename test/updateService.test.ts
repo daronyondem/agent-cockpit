@@ -1251,8 +1251,13 @@ describe('UpdateService', () => {
           startup: install.status.startup,
         }));
         const finalEcosystem = originalReadFileSync(path.join(finalDir, 'ecosystem.config.js'), 'utf8');
-        expect(finalEcosystem).toContain('node_modules/tsx/dist/cli.mjs');
-        expect(finalEcosystem).toContain('"args": "server.ts"');
+        expect(finalEcosystem).toContain('run-agent-cockpit.ps1');
+        expect(finalEcosystem).toContain('"interpreter": "powershell.exe"');
+        expect(finalEcosystem).toContain('"-WindowStyle"');
+        expect(finalEcosystem).toContain('"Hidden"');
+        const runnerScript = originalReadFileSync(path.join(install.installDir, 'bin', 'run-agent-cockpit.ps1'), 'utf8');
+        expect(runnerScript).toContain("Join-Path $AppDir 'node_modules\\tsx\\dist\\cli.mjs'");
+        expect(runnerScript).toContain("& $Node $TsxCli 'server.ts'");
         const restartPath = path.join(install.dataDir, 'restart.ps1');
         const restartScript = originalReadFileSync(restartPath, 'utf8');
         expect(restartScript).toContain('Invoke-WebRequest -UseBasicParsing');
@@ -1434,9 +1439,9 @@ describe('UpdateService', () => {
         const app = mod.exports.apps[0];
         expect(app).toEqual(expect.objectContaining({
           name: 'agent-cockpit',
-          script: 'node_modules/tsx/dist/cli.mjs',
-          args: 'server.ts',
-          interpreter: path.join(runtimeDir, 'node.exe'),
+          script: path.join(installDir, 'bin', 'run-agent-cockpit.ps1'),
+          interpreter: 'powershell.exe',
+          node_args: ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File'],
           cwd: appDir,
           windowsHide: true,
         }));
@@ -1450,6 +1455,10 @@ describe('UpdateService', () => {
           PM2_HOME: path.join(installDir, 'pm2'),
         }));
         expect(app.env.PATH.startsWith(`${runtimeDir};`)).toBe(true);
+        const runnerScript = originalReadFileSync(path.join(installDir, 'bin', 'run-agent-cockpit.ps1'), 'utf8');
+        expect(runnerScript).toContain(`$InstallDir = '${installDir.replace(/'/g, "''")}'`);
+        expect(runnerScript).toContain("Join-Path $AppDir 'node_modules\\tsx\\dist\\cli.mjs'");
+        expect(runnerScript).toContain("& $Node $TsxCli 'server.ts'");
       } finally {
         restorePlatform();
         fs.rmSync(installDir, { recursive: true, force: true });

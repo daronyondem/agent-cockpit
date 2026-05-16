@@ -463,6 +463,9 @@ export class UpdateService {
     const nodeBin = nodeRuntime?.binDir || path.join(appRoot, 'node_modules', '.bin');
     const pm2Home = path.join(path.dirname(this._dataRoot), 'pm2');
     const npxPath = this._windowsNpxCommand(nodeRuntime);
+    if (options.rollbackTarget && options.rollbackInstallStatus) {
+      this._writeWindowsEcosystemConfig(options.rollbackTarget, options.rollbackInstallStatus.nodeRuntime || null, options.rollbackInstallStatus);
+    }
     const scriptLines = [
       'Set-StrictMode -Version Latest',
       "$ErrorActionPreference = 'Stop'",
@@ -1012,17 +1015,16 @@ export class UpdateService {
 
   private _writeWindowsEcosystemConfig(appDir: string, nodeRuntime: InstallNodeRuntime | null, installStatus?: InstallStatus): void {
     const envPath = path.join(appDir, '.env');
-    const nodePath = nodeRuntime?.source === 'private' && nodeRuntime.binDir
-      ? path.join(nodeRuntime.binDir, 'node.exe')
-      : process.execPath;
     const dataDir = installStatus?.dataDir || this._dataRoot;
+    const installDir = path.dirname(dataDir);
     const pm2Home = path.join(path.dirname(dataDir), 'pm2');
+    const runnerScript = this._writeWindowsRunnerScript(installDir);
     const config = {
       apps: [{
         name: 'agent-cockpit',
-        script: 'node_modules/tsx/dist/cli.mjs',
-        args: 'server.ts',
-        interpreter: nodePath,
+        script: runnerScript,
+        interpreter: 'powershell.exe',
+        node_args: ['-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File'],
         cwd: appDir,
         windowsHide: true,
         env: {
@@ -1038,6 +1040,37 @@ export class UpdateService {
       }],
     };
     fs.writeFileSync(path.join(appDir, 'ecosystem.config.js'), `module.exports = ${JSON.stringify(config, null, 2)};\n`);
+  }
+
+  private _writeWindowsRunnerScript(installDir: string): string {
+    const binDir = path.join(installDir, 'bin');
+    const runnerScript = path.join(binDir, 'run-agent-cockpit.ps1');
+    fs.mkdirSync(binDir, { recursive: true });
+    const script = [
+      'Set-StrictMode -Version Latest',
+      "$ErrorActionPreference = 'Stop'",
+      `$InstallDir = ${this._psQuote(installDir)}`,
+      "$Install = Get-Content -Raw -Path (Join-Path $InstallDir 'data\\install.json') | ConvertFrom-Json",
+      '$AppDir = $Install.appDir',
+      "$NodeBin = if ($Install.nodeRuntime -and $Install.nodeRuntime.binDir) { $Install.nodeRuntime.binDir } else { '' }",
+      'if ($NodeBin) { $env:Path = "$NodeBin;$env:Path" }',
+      'function Resolve-NodeExe {',
+      '  if ($NodeBin) {',
+      "    $candidate = Join-Path $NodeBin 'node.exe'",
+      '    if (Test-Path $candidate) { return $candidate }',
+      '  }',
+      "  return 'node.exe'",
+      '}',
+      '$Node = Resolve-NodeExe',
+      "$TsxCli = Join-Path $AppDir 'node_modules\\tsx\\dist\\cli.mjs'",
+      'Set-Location $AppDir',
+      "& $Node $TsxCli 'server.ts'",
+      '$code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }',
+      'exit $code',
+      '',
+    ].join('\r\n');
+    fs.writeFileSync(runnerScript, script);
+    return runnerScript;
   }
 
   private _readEnvValue(envPath: string, name: string): string | null {

@@ -329,11 +329,14 @@ force both builds.
 
 Both Windows channels generate `.env`, `ecosystem.config.js`, helper scripts
 under `<install-root>\bin\`, and `<data-dir>\install.json`. The ecosystem config
-uses an explicit Node interpreter and runs `node_modules/tsx/dist/cli.mjs` with
-`server.ts` as its argument so it does not depend on shell shim behavior. It also
-sets PM2 `windowsHide: true` so the managed Node process stays background-only
-and does not leave a console window on the user's desktop. Runtime environment
-includes `PORT`, `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
+sets PM2 `windowsHide: true` and has PM2 monitor
+`bin\run-agent-cockpit.ps1` through `powershell.exe -WindowStyle Hidden` instead
+of spawning `node.exe` directly. The runner reads `install.json`, prepends the
+recorded private or system Node `binDir` to `PATH`, resolves `node.exe`, then
+executes `node_modules\tsx\dist\cli.mjs server.ts` from the active `appDir`.
+This keeps the PM2-managed server background-only and prevents a Node console
+window from being left on the user's desktop. Runtime environment includes
+`PORT`, `SESSION_SECRET`, `AUTH_SETUP_TOKEN`,
 `AGENT_COCKPIT_DATA_DIR`, `WEB_BUILD_MODE=auto`,
 `AUTH_ENABLE_LEGACY_OAUTH=false`, `PM2_HOME=<install-root>\pm2`, and a private
 runtime `PATH` prefix when applicable. Windows path-valued `.env` entries use

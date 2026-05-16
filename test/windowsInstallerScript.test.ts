@@ -75,9 +75,13 @@ describe('Windows installer script', () => {
     expect(source).toContain('function Env-Quote');
     expect(source).toContain('"PATH=$(Env-Quote (Runtime-Path))"');
     expect(source).toContain('ecosystem.config.js');
-    expect(source).toContain("script = 'node_modules/tsx/dist/cli.mjs'");
-    expect(source).toContain("args = 'server.ts'");
-    expect(source).toContain('interpreter = $NodeExe');
+    expect(source).toContain('function Write-WindowsRunnerScript');
+    expect(source).toContain('run-agent-cockpit.ps1');
+    expect(source).toContain("script = $runnerScript");
+    expect(source).toContain("interpreter = 'powershell.exe'");
+    expect(source).toContain("node_args = @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File')");
+    expect(source).toContain("`$TsxCli = Join-Path `$AppDir 'node_modules\\tsx\\dist\\cli.mjs'");
+    expect(source).toContain("& `$Node `$TsxCli 'server.ts'");
     expect(source).toContain('windowsHide = $true');
     expect(source).toContain('PM2_HOME');
     expect(source).toContain('start-agent-cockpit.ps1');

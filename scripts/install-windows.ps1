@@ -350,6 +350,35 @@ function Env-Quote {
   return '`' + $Value.Replace('`', '\`') + '`'
 }
 
+function Write-WindowsRunnerScript {
+  $binDir = Join-Path $InstallDir 'bin'
+  Ensure-Directory $binDir
+  $common = @"
+Set-StrictMode -Version Latest
+`$ErrorActionPreference = 'Stop'
+`$InstallDir = '$($InstallDir.Replace("'", "''"))'
+`$Install = Get-Content -Raw -Path (Join-Path `$InstallDir 'data\install.json') | ConvertFrom-Json
+`$AppDir = `$Install.appDir
+`$NodeBin = if (`$Install.nodeRuntime -and `$Install.nodeRuntime.binDir) { `$Install.nodeRuntime.binDir } else { '' }
+if (`$NodeBin) { `$env:Path = "`$NodeBin;`$env:Path" }
+function Resolve-NodeExe {
+  if (`$NodeBin) {
+    `$candidate = Join-Path `$NodeBin 'node.exe'
+    if (Test-Path `$candidate) { return `$candidate }
+  }
+  return 'node.exe'
+}
+"@
+  Set-Content -Path (Join-Path $binDir 'run-agent-cockpit.ps1') -Encoding UTF8 -Value ($common + @"
+`$Node = Resolve-NodeExe
+`$TsxCli = Join-Path `$AppDir 'node_modules\tsx\dist\cli.mjs'
+Set-Location `$AppDir
+& `$Node `$TsxCli 'server.ts'
+`$code = if (`$null -eq `$LASTEXITCODE) { 0 } else { `$LASTEXITCODE }
+exit `$code
+"@)
+}
+
 function Write-EnvFile {
   param([string] $AppDir, [string] $DataDir, [string] $SessionSecret, [string] $SetupToken)
   $envPath = Join-Path $AppDir '.env'
@@ -370,13 +399,14 @@ function Write-EnvFile {
 
 function Write-EcosystemConfig {
   param([string] $AppDir, [string] $DataDir, [string] $SessionSecret, [string] $SetupToken)
+  $runnerScript = Join-Path $InstallDir 'bin\run-agent-cockpit.ps1'
   $config = [ordered]@{
     apps = @(
       [ordered]@{
         name = $AppName
-        script = 'node_modules/tsx/dist/cli.mjs'
-        args = 'server.ts'
-        interpreter = $NodeExe
+        script = $runnerScript
+        interpreter = 'powershell.exe'
+        node_args = @('-NoProfile', '-WindowStyle', 'Hidden', '-ExecutionPolicy', 'Bypass', '-File')
         cwd = $AppDir
         windowsHide = $true
         env = [ordered]@{
@@ -460,6 +490,7 @@ function Ensure-BuiltAssets {
 function Write-HelperScripts {
   $binDir = Join-Path $InstallDir 'bin'
   Ensure-Directory $binDir
+  Write-WindowsRunnerScript
   $common = @"
 Set-StrictMode -Version Latest
 `$ErrorActionPreference = 'Stop'
