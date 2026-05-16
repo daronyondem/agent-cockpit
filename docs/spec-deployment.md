@@ -390,6 +390,18 @@ intentionally user-logon startup, not a Windows Service and not "run whether
 user is logged on or not". If the server does not answer `/auth/setup` within
 90 seconds, the installer prints the helper logs command.
 
+Windows production self-update uses the same app-local PM2 ownership model as
+the installer helpers. The generated `restart.ps1` resolves the target release's
+`node_modules\.bin\pm2.cmd`, restarts `agent-cockpit`, then polls
+`/api/chat/version` and requires the returned `version` to match the target
+release before it treats the update as healthy. If the target restart fails, or
+if an older server process is still answering the port with a different version,
+the script restores the previous `install.json`, restarts the previous release
+with that release's app-local `pm2.cmd`, saves PM2 state, and exits with
+failure. The old running Windows process does not change its in-memory local
+version before the restart handoff, so a failed handoff continues to advertise
+the old running version rather than hiding the still-available update.
+
 `AGENT_COCKPIT_DATA_DIR` controls the mutable data root. When unset, runtime
 state stays under `<repo>/data` for compatibility with existing development
 installs. The Mac production installer sets this outside the replaceable app

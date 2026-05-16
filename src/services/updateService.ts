@@ -337,10 +337,11 @@ export class UpdateService {
         steps.push({ name: 'write install manifest', success: true, output: `version ${release.manifest.version}` });
       }
 
-      this._localVersion = release.manifest.version;
+      if (!isWindows) this._localVersion = release.manifest.version;
       this._launchRestartScript({
         appRoot: nextAppDir,
         healthUrl: this._healthUrl(finalAppDir),
+        expectedVersion: release.manifest.version,
         currentLink: isWindows ? undefined : currentLink,
         rollbackTarget: previousAppDir,
         rollbackInstallStatus: installStatus,
@@ -403,6 +404,7 @@ export class UpdateService {
     rollbackTarget?: string;
     rollbackInstallStatus?: InstallStatus;
     nodeRuntime?: InstallNodeRuntime | null;
+    expectedVersion?: string;
   } = {}): void {
     if (process.platform === 'win32') {
       this._launchWindowsRestartScript(options);
@@ -459,6 +461,7 @@ export class UpdateService {
     rollbackTarget?: string;
     rollbackInstallStatus?: InstallStatus;
     nodeRuntime?: InstallNodeRuntime | null;
+    expectedVersion?: string;
   } = {}): void {
     const appRoot = options.appRoot || this._appRoot;
     const ecosystemPath = path.join(appRoot, 'ecosystem.config.js');
@@ -468,7 +471,7 @@ export class UpdateService {
     const nodeRuntime = options.nodeRuntime || this._installStateService?.getStatus().nodeRuntime || null;
     const nodeBin = nodeRuntime?.binDir || path.join(appRoot, 'node_modules', '.bin');
     const pm2Home = path.join(path.dirname(this._dataRoot), 'pm2');
-    const npxPath = this._windowsNpxCommand(nodeRuntime);
+    const pm2Path = this._windowsPm2Command(appRoot);
     if (options.rollbackTarget && options.rollbackInstallStatus) {
       this._writeWindowsEcosystemConfig(options.rollbackTarget, options.rollbackInstallStatus.nodeRuntime || null, options.rollbackInstallStatus);
     }
@@ -486,45 +489,73 @@ export class UpdateService {
       '    }',
       '    $global:LASTEXITCODE = 0',
       '  }',
+      '  function Start-AgentCockpit {',
+      '    param([string] $Pm2Path, [string] $EcosystemPath)',
+      '    if (-not (Test-Path -LiteralPath $Pm2Path)) {',
+      '      throw ("Required PM2 command not found: {0}" -f $Pm2Path)',
+      '    }',
+      "    Invoke-CheckedNative $Pm2Path @('delete', 'agent-cockpit') -AllowFailure",
+      "    Invoke-CheckedNative $Pm2Path @('startOrRestart', $EcosystemPath, '--update-env')",
+      '  }',
       '  Start-Sleep -Seconds 2',
       `  $env:PM2_HOME = ${this._psQuote(pm2Home)}`,
       `  $env:Path = ${this._psQuote(nodeBin)} + ';' + $env:Path`,
-      `  Invoke-CheckedNative ${this._psQuote(npxPath)} @('pm2', 'delete', 'agent-cockpit') -AllowFailure`,
-      `  Invoke-CheckedNative ${this._psQuote(npxPath)} @('pm2', 'startOrRestart', ${this._psQuote(ecosystemPath)}, '--update-env')`,
     ];
     if (options.healthUrl) {
       scriptLines.push(
         '  $ok = $false',
+        '  $restartError = $null',
+        '  try {',
+        `    Start-AgentCockpit ${this._psQuote(pm2Path)} ${this._psQuote(ecosystemPath)}`,
+        '  } catch {',
+        '    $restartError = $_.Exception.Message',
+        '    Write-Output ("Target restart failed: {0}" -f $restartError)',
+        '  }',
+        '  if (-not $restartError) {',
         '  for ($i = 0; $i -lt 20; $i++) {',
         '    try {',
-        `      Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri ${this._psQuote(options.healthUrl)} | Out-Null`,
-        '      $ok = $true',
-        '      break',
+        `      $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 -Uri ${this._psQuote(options.healthUrl)}`,
+        ...(options.expectedVersion ? [
+          '      $payload = $response.Content | ConvertFrom-Json',
+          `      if ($payload.version -eq ${this._psQuote(options.expectedVersion)}) {`,
+          '        $ok = $true',
+          '        break',
+          '      }',
+          `      Write-Output ("Health check returned version {0}; waiting for ${options.expectedVersion}." -f $payload.version)`,
+        ] : [
+          '      $response | Out-Null',
+          '      $ok = $true',
+          '      break',
+        ]),
         '    } catch {',
         '      Start-Sleep -Seconds 1',
         '    }',
+        '  }',
         '  }',
         '  if (-not $ok) {',
       );
       if (options.rollbackInstallStatus && options.rollbackTarget) {
         const rollbackNodeRuntime = options.rollbackInstallStatus.nodeRuntime || null;
         const rollbackNodeBin = rollbackNodeRuntime?.binDir || path.join(options.rollbackTarget, 'node_modules', '.bin');
-        const rollbackNpxPath = this._windowsNpxCommand(rollbackNodeRuntime);
+        const rollbackPm2Path = this._windowsPm2Command(options.rollbackTarget);
         scriptLines.push(
           `    ${this._psWriteFileCommand(installJsonPath, JSON.stringify(this._persistedInstallStatus(options.rollbackInstallStatus), null, 2) + '\n')}`,
           `    $env:Path = ${this._psQuote(rollbackNodeBin)} + ';' + $env:Path`,
-          `    Invoke-CheckedNative ${this._psQuote(rollbackNpxPath)} @('pm2', 'delete', 'agent-cockpit') -AllowFailure`,
-          `    Invoke-CheckedNative ${this._psQuote(rollbackNpxPath)} @('pm2', 'startOrRestart', ${this._psQuote(path.join(options.rollbackTarget, 'ecosystem.config.js'))}, '--update-env')`,
-          `    Invoke-CheckedNative ${this._psQuote(rollbackNpxPath)} @('pm2', 'save')`,
+          `    Start-AgentCockpit ${this._psQuote(rollbackPm2Path)} ${this._psQuote(path.join(options.rollbackTarget, 'ecosystem.config.js'))}`,
+          `    Invoke-CheckedNative ${this._psQuote(rollbackPm2Path)} @('save')`,
         );
       }
       scriptLines.push(
         '    exit 1',
         '  }',
       );
+    } else {
+      scriptLines.push(
+        `  Start-AgentCockpit ${this._psQuote(pm2Path)} ${this._psQuote(ecosystemPath)}`,
+      );
     }
     scriptLines.push(
-      `  Invoke-CheckedNative ${this._psQuote(npxPath)} @('pm2', 'save')`,
+      `  Invoke-CheckedNative ${this._psQuote(pm2Path)} @('save')`,
       '} finally {',
       '  Stop-Transcript | Out-Null',
       '}',
@@ -540,8 +571,8 @@ export class UpdateService {
     child.unref();
   }
 
-  private _windowsNpxCommand(nodeRuntime: InstallNodeRuntime | null): string {
-    return nodeRuntime?.binDir ? path.join(nodeRuntime.binDir, 'npx.cmd') : 'npx.cmd';
+  private _windowsPm2Command(appRoot: string): string {
+    return path.join(appRoot, 'node_modules', '.bin', 'pm2.cmd');
   }
 
   private async _checkRemoteVersion(): Promise<void> {

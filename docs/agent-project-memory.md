@@ -91,6 +91,11 @@ tool is unavailable.
 - Windows production self-update should also repair the current user's `Path`
   for `<installDir>\cli-tools` so existing installs gain terminal CLI access
   after updating without rerunning the full installer.
+- Windows production self-update must not accept generic HTTP liveness as
+  success. The generated PowerShell restart script must use the target release's
+  app-local `pm2.cmd`, require `/api/chat/version.version` to match the target
+  release version, and use the rollback release's app-local `pm2.cmd` if it has
+  to restore the previous release.
 - Windows self-update should avoid Unix-only assumptions such as `sh`, `nohup`,
   `tar`, `shasum`, symlink `current`, or junction dependencies.
 

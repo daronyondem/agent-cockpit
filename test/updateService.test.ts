@@ -1285,9 +1285,15 @@ describe('UpdateService', () => {
         const restartPath = path.join(install.dataDir, 'restart.ps1');
         const restartScript = originalReadFileSync(restartPath, 'utf8');
         expect(restartScript).toContain('Invoke-WebRequest -UseBasicParsing');
+        expect(restartScript).toContain(path.join(finalDir, 'node_modules', '.bin', 'pm2.cmd'));
+        expect(restartScript).toContain('$payload = $response.Content | ConvertFrom-Json');
+        expect(restartScript).toContain("$payload.version -eq '1.1.0'");
+        expect(restartScript).toContain('waiting for 1.1.0');
+        expect(restartScript).not.toContain('npx.cmd');
         expect(restartScript).toContain('[System.IO.File]::WriteAllText');
         expect(restartScript).toContain('System.Text.UTF8Encoding($false)');
         expect(restartScript).toContain(path.join(install.previousDir, 'ecosystem.config.js'));
+        expect(service.getStatus().localVersion).toBe('1.0.0');
         expect(mockSpawnFn).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining(['-WindowStyle', 'Hidden', '-File', restartPath]), expect.objectContaining({
           cwd: finalDir,
           detached: true,
@@ -1519,6 +1525,7 @@ describe('UpdateService', () => {
         (service as any)._launchWindowsRestartScript({
           appRoot: nextDir,
           healthUrl: 'http://127.0.0.1:4444/api/chat/version',
+          expectedVersion: '1.1.0',
           rollbackTarget: install.previousDir,
           rollbackInstallStatus: {
             ...install.status,
@@ -1546,11 +1553,14 @@ describe('UpdateService', () => {
         const restartPath = path.join(install.dataDir, 'restart.ps1');
         const restartScript = originalReadFileSync(restartPath, 'utf8');
         expect(restartScript).toContain('function Invoke-CheckedNative');
+        expect(restartScript).toContain('function Start-AgentCockpit');
         expect(restartScript).toContain('$LASTEXITCODE');
-        expect(restartScript).toContain(path.join(newRuntimeDir, 'npx.cmd'));
-        expect(restartScript).toContain(path.join(oldRuntimeDir, 'npx.cmd'));
+        expect(restartScript).toContain(path.join(nextDir, 'node_modules', '.bin', 'pm2.cmd'));
+        expect(restartScript).toContain(path.join(install.previousDir, 'node_modules', '.bin', 'pm2.cmd'));
+        expect(restartScript).not.toContain('npx.cmd');
+        expect(restartScript).toContain("$payload.version -eq '1.1.0'");
         expect(restartScript).toContain(`$env:Path = '${oldRuntimeDir}' + ';' + $env:Path`);
-        expect(restartScript).toContain(`Invoke-CheckedNative '${path.join(oldRuntimeDir, 'npx.cmd')}' @('pm2', 'save')`);
+        expect(restartScript).toContain(`Invoke-CheckedNative '${path.join(install.previousDir, 'node_modules', '.bin', 'pm2.cmd')}' @('save')`);
         expect(mockSpawnFn).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining(['-WindowStyle', 'Hidden', '-File', restartPath]), expect.objectContaining({
           cwd: nextDir,
           detached: true,

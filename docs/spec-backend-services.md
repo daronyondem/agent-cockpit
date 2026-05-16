@@ -1065,9 +1065,12 @@ Production-channel sequence:
     release version.
 14. Launch `_launchRestartScript({ appRoot, healthUrl, rollbackTarget })`. The
     health URL is derived from the new release `.env` `PORT` value and defaults
-    to `3334`. Windows also passes the previous install status so the generated
-    PowerShell rollback script can restore `install.json` before restarting the
-    old app.
+    to `3334`. Windows also passes the target `expectedVersion` and the previous
+    install status so the generated PowerShell rollback script can require the
+    live `/api/chat/version.version` response to match the target release before
+    it accepts the update, then restore `install.json` before restarting the old
+    app if the target restart fails or a stale old process keeps answering the
+    port.
 
 - `restart({ hasActiveStreams })` — plain server restart (no git pull / npm install / interpreter verification). Applies the same concurrent + active/pending turn guards as `triggerUpdate()`, then calls `_launchRestartScript()`. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. The guard delegates to the stream supervisor's in-flight check and still treats accepted/preparing sends as active even though they now have durable stream jobs; planned/manual restarts should be blocked before work is interrupted.
 - `_launchRestartScript()` (private) — on POSIX writes
@@ -1075,9 +1078,10 @@ Production-channel sequence:
   `pm2 delete` + `pm2 start` against `ecosystem.config.js`), then launches it
   via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. On
   Windows it writes `<dataRoot>/restart.ps1`, sets install-local `PM2_HOME`,
-  prepends the private runtime path when present, restarts the app through
-  a checked native-command wrapper that deletes the existing PM2 entry before
-  `pm2 startOrRestart` and throws on failed `pm2 startOrRestart` or `pm2 save`,
+  prepends the private runtime path when present, resolves the active release's
+  app-local `node_modules\.bin\pm2.cmd`, restarts the app through a checked
+  native-command wrapper that deletes the existing PM2 entry before
+  `pm2 startOrRestart`, and throws on failed `pm2 startOrRestart` or `pm2 save`,
   and launches the script detached with PowerShell
   `-WindowStyle Hidden` and Node `windowsHide: true`.
   Output is logged to `<dataRoot>/update-restart.log`. Shared by
@@ -1085,8 +1089,11 @@ Production-channel sequence:
   and rollback target; the script probes the health URL for up to 20 seconds and
   rolls back (relinking `current` on macOS, restoring the previous install
   manifest and starting the old versioned app on Windows) before exiting with
-  failure. Windows rollback switches the script PATH and PM2 CLI invocation back
-  to the previous install runtime when that runtime was recorded, then saves PM2
+  failure. Windows production updates additionally parse the health JSON and
+  require `version` to match the target release, so an older stale server on the
+  same port cannot satisfy the health check. Windows rollback switches the script
+  PATH and PM2 CLI invocation back to the previous install runtime and previous
+  release's app-local `pm2.cmd` when that runtime was recorded, then saves PM2
   state after restarting the old ecosystem config.
 
 Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
