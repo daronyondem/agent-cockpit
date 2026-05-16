@@ -45,6 +45,15 @@ function platformCommand(command: 'npm' | 'npx', install?: InstallStatus): strin
   return [runtimeBinDir ? path.join(runtimeBinDir, executable) : executable];
 }
 
+function platformCliCommands(command: 'claude' | 'codex', install?: InstallStatus): string[][] {
+  if (process.platform !== 'win32') return [[command]];
+  const executable = `${command}.cmd`;
+  const runtimeBinDir = install?.nodeRuntime?.binDir;
+  return runtimeBinDir
+    ? [[path.join(runtimeBinDir, executable)], [executable]]
+    : [[executable]];
+}
+
 interface CommandResult {
   ok: boolean;
   stdout: string;
@@ -172,8 +181,8 @@ export class InstallDoctorService {
     checks.push(this.checkBuildAsset('web-build', 'Desktop web build', 'public/v2-built/index.html', true));
     checks.push(this.checkBuildAsset('mobile-build', 'Mobile PWA build', 'public/mobile-built/index.html', false));
     const homebrewAvailable = await this.homebrewDetector();
-    checks.push(await this.checkCommand('claude-cli', 'Claude Code CLI', ['claude', '--version'], false, 'Claude Code CLI responded.', CLAUDE_CLI_REMEDIATION, this.actionsForCheck('claude-cli', homebrewAvailable, install)));
-    checks.push(await this.checkCommand('codex-cli', 'Codex CLI', ['codex', '--version'], false, 'Codex CLI responded.', CODEX_CLI_REMEDIATION, this.actionsForCheck('codex-cli', homebrewAvailable, install)));
+    checks.push(await this.checkCommandCandidates('claude-cli', 'Claude Code CLI', platformCliCommands('claude', install).map(command => [...command, '--version']), false, 'Claude Code CLI responded.', CLAUDE_CLI_REMEDIATION, this.actionsForCheck('claude-cli', homebrewAvailable, install)));
+    checks.push(await this.checkCommandCandidates('codex-cli', 'Codex CLI', platformCliCommands('codex', install).map(command => [...command, '--version']), false, 'Codex CLI responded.', CODEX_CLI_REMEDIATION, this.actionsForCheck('codex-cli', homebrewAvailable, install)));
     checks.push(await this.checkCommand('kiro-cli', 'Kiro CLI', ['kiro-cli', '--version'], false, 'Kiro CLI responded.', kiroCliRemediation(), this.actionsForCheck('kiro-cli', homebrewAvailable, install)));
     checks.push(await this.checkPandoc(homebrewAvailable));
     checks.push(await this.checkLibreOffice(homebrewAvailable));
@@ -245,11 +254,20 @@ export class InstallDoctorService {
   }
 
   private async checkCommand(id: string, label: string, commandAndArgs: string[], required: boolean, okSummary: string, remediation: string, installActions?: InstallDoctorAction[]): Promise<InstallDoctorCheck> {
-    const [command, ...args] = commandAndArgs;
-    const result = await this.commandRunner(command, args, { cwd: this.appRoot, timeoutMs: 5_000 });
-    if (result.ok) {
-      return check(id, label, 'ok', required, okSummary, firstLine(result.stdout) || firstLine(result.stderr));
+    return this.checkCommandCandidates(id, label, [commandAndArgs], required, okSummary, remediation, installActions);
+  }
+
+  private async checkCommandCandidates(id: string, label: string, commandCandidates: string[][], required: boolean, okSummary: string, remediation: string, installActions?: InstallDoctorAction[]): Promise<InstallDoctorCheck> {
+    let lastResult: CommandResult | null = null;
+    for (const commandAndArgs of commandCandidates) {
+      const [command, ...args] = commandAndArgs;
+      const result = await this.commandRunner(command, args, { cwd: this.appRoot, timeoutMs: 5_000 });
+      if (result.ok) {
+        return check(id, label, 'ok', required, okSummary, firstLine(result.stdout) || firstLine(result.stderr));
+      }
+      lastResult = result;
     }
+    const result = lastResult || { ok: false, stdout: '', stderr: '', error: 'not found' };
     return check(
       id,
       label,

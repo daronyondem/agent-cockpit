@@ -50,6 +50,11 @@ interface UpdateMobileBuildService {
   ensureBuilt(opts?: { force?: boolean }): Promise<MobileBuildStatus>;
 }
 
+interface NativeCommand {
+  cmd: string;
+  args: string[];
+}
+
 export class UpdateService {
   private _appRoot: string;
   private _dataRoot: string;
@@ -130,7 +135,7 @@ export class UpdateService {
   }
 
   private async _triggerDevUpdate(steps: UpdateStep[]): Promise<UpdateResult> {
-      const npmCmd = this._npmCommand(this._installStateService?.getStatus().nodeRuntime || null);
+      const nodeRuntime = this._installStateService?.getStatus().nodeRuntime || null;
       const statusOut = await this._exec('git', ['status', '--porcelain']);
       const significantChanges = statusOut.trim().split('\n').filter(line => {
         if (!line.trim()) return false;
@@ -173,7 +178,7 @@ export class UpdateService {
       }
 
       try {
-        const out = await this._exec(npmCmd, ['install'], 120000);
+        const out = await this._execNpm(nodeRuntime, ['install'], 120000);
         steps.push({ name: 'npm install', success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: 'npm install', success: false, output: (err as Error).message });
@@ -181,7 +186,7 @@ export class UpdateService {
       }
 
       try {
-        const out = await this._exec(npmCmd, ['--prefix', 'mobile/AgentCockpitPWA', 'install'], 120000);
+        const out = await this._execNpm(nodeRuntime, ['--prefix', 'mobile/AgentCockpitPWA', 'install'], 120000);
         steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA install', success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA install', success: false, output: (err as Error).message });
@@ -278,10 +283,9 @@ export class UpdateService {
 
       const finalAppDir = await this._extractRelease(release.tarballPath, release.manifest.packageRoot, releasesDir, steps);
       const nodeRuntime = await this._ensureProductionNodeRuntime(installStatus, release.manifest, finalAppDir, steps);
-      const npmCmd = this._npmCommand(nodeRuntime);
 
       try {
-        const out = await this._exec(npmCmd, ['ci'], 120000, finalAppDir);
+        const out = await this._execNpm(nodeRuntime, ['ci'], 120000, finalAppDir);
         steps.push({ name: 'npm ci', success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: 'npm ci', success: false, output: (err as Error).message });
@@ -289,7 +293,7 @@ export class UpdateService {
       }
 
       try {
-        const out = await this._exec(npmCmd, ['--prefix', 'mobile/AgentCockpitPWA', 'ci'], 120000, finalAppDir);
+        const out = await this._execNpm(nodeRuntime, ['--prefix', 'mobile/AgentCockpitPWA', 'ci'], 120000, finalAppDir);
         steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA ci', success: true, output: out.trim() });
       } catch (err: unknown) {
         steps.push({ name: 'npm --prefix mobile/AgentCockpitPWA ci', success: false, output: (err as Error).message });
@@ -571,7 +575,22 @@ export class UpdateService {
     const required = this._requiredNodeRuntime(manifest, appDir);
     const current = await this._readCurrentNodeRuntime(installStatus, required.minimumMajor);
     if (this._nodeMajor(current.version) >= required.minimumMajor) {
-      if (current.source === 'private' && current.binDir) this._prependPath(current.binDir);
+      if (current.source === 'private') {
+        const validation = await this._validatePrivateNodeRuntime(current, required.minimumMajor);
+        if (!validation.ok) {
+          steps.push({
+            name: 'verify Node.js runtime',
+            success: false,
+            output: `${validation.output}; installing a private runtime`,
+          });
+          const updated = await this._installPrivateNodeRuntime(installStatus, required.minimumMajor, steps);
+          this._prependPath(updated.binDir || '');
+          return updated;
+        }
+        current.version = validation.version || current.version;
+        current.npmVersion = validation.npmVersion || current.npmVersion;
+        if (current.binDir) this._prependPath(current.binDir);
+      }
       const verified = { ...current, requiredMajor: required.minimumMajor };
       steps.push({
         name: 'verify Node.js runtime',
@@ -713,8 +732,12 @@ export class UpdateService {
           await this._exec('tar', ['-xzf', tarballPath, '-C', stagingParent], 120000);
         }
         const extractedDir = path.join(stagingParent, `node-v${version}-${process.platform === 'win32' ? 'win' : 'darwin'}-${nodeArch}`);
-        const finalDir = path.join(runtime.runtimeRoot, process.platform === 'win32' ? `node-v${version}-win-${nodeArch}` : `node-v${version}`);
-        fs.rmSync(finalDir, { recursive: true, force: true });
+        let finalDir = path.join(runtime.runtimeRoot, process.platform === 'win32' ? `node-v${version}-win-${nodeArch}` : `node-v${version}`);
+        if (process.platform === 'win32' && fs.existsSync(finalDir)) {
+          finalDir = `${finalDir}-${crypto.randomBytes(16).toString('hex')}`;
+        } else {
+          fs.rmSync(finalDir, { recursive: true, force: true });
+        }
         fs.renameSync(extractedDir, finalDir);
         if (process.platform === 'win32') {
           runtime.runtimeDir = finalDir;
@@ -731,10 +754,22 @@ export class UpdateService {
         fs.rmSync(stagingParent, { recursive: true, force: true });
       }
 
-      const npmVersion = await this._readPrivateNpmVersion(runtime.runtimeDir, runtime.binDir);
-      const result: InstallNodeRuntime = {
+      const validation = await this._validatePrivateNodeRuntime({
         source: 'private',
         version,
+        npmVersion: null,
+        binDir: runtime.binDir,
+        runtimeDir: runtime.runtimeDir,
+        requiredMajor,
+        updatedAt: null,
+      }, requiredMajor);
+      if (!validation.ok) {
+        throw new Error(validation.output);
+      }
+      const npmVersion = validation.npmVersion || await this._readPrivateNpmVersion(runtime.runtimeDir, runtime.binDir);
+      const result: InstallNodeRuntime = {
+        source: 'private',
+        version: validation.version || version,
         npmVersion,
         binDir: runtime.binDir,
         runtimeDir: runtime.runtimeDir,
@@ -778,12 +813,103 @@ export class UpdateService {
     process.env.PATH = [binDir, ...parts.filter(part => part !== binDir)].join(path.delimiter);
   }
 
+  private _windowsPrivateNodeRuntimeFiles(runtimeDir: string, binDir: string): {
+    nodePath: string;
+    npmCmdPath: string;
+    npxCmdPath: string;
+    npmCliPath: string;
+    npxCliPath: string;
+    npmPrefixPath: string;
+  } {
+    return {
+      nodePath: path.join(binDir, 'node.exe'),
+      npmCmdPath: path.join(binDir, 'npm.cmd'),
+      npxCmdPath: path.join(binDir, 'npx.cmd'),
+      npmCliPath: path.join(runtimeDir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      npxCliPath: path.join(runtimeDir, 'node_modules', 'npm', 'bin', 'npx-cli.js'),
+      npmPrefixPath: path.join(runtimeDir, 'node_modules', 'npm', 'bin', 'npm-prefix.js'),
+    };
+  }
+
+  private async _validatePrivateNodeRuntime(runtime: InstallNodeRuntime, requiredMajor: number): Promise<{
+    ok: boolean;
+    output: string;
+    version: string | null;
+    npmVersion: string | null;
+  }> {
+    if (runtime.source !== 'private') {
+      return { ok: true, output: 'Not a private Node.js runtime.', version: runtime.version || null, npmVersion: runtime.npmVersion || null };
+    }
+
+    if (process.platform !== 'win32') {
+      return { ok: true, output: 'Private Node.js runtime verified.', version: runtime.version || null, npmVersion: runtime.npmVersion || null };
+    }
+
+    const runtimeDir = runtime.runtimeDir || runtime.binDir;
+    const binDir = runtime.binDir || runtimeDir;
+    if (!runtimeDir || !binDir) {
+      return {
+        ok: false,
+        output: 'Private Node.js runtime is missing runtimeDir or binDir metadata',
+        version: runtime.version || null,
+        npmVersion: runtime.npmVersion || null,
+      };
+    }
+
+    const files = this._windowsPrivateNodeRuntimeFiles(runtimeDir, binDir);
+    const requiredFiles = [
+      ['node.exe', files.nodePath],
+      ['npm.cmd', files.npmCmdPath],
+      ['npx.cmd', files.npxCmdPath],
+      ['node_modules\\npm\\bin\\npm-cli.js', files.npmCliPath],
+      ['node_modules\\npm\\bin\\npx-cli.js', files.npxCliPath],
+      ['node_modules\\npm\\bin\\npm-prefix.js', files.npmPrefixPath],
+    ] as const;
+    const missing = requiredFiles
+      .filter(([, filePath]) => !fs.existsSync(filePath))
+      .map(([label]) => label);
+    if (missing.length > 0) {
+      return {
+        ok: false,
+        output: `Private Node.js runtime is incomplete: missing ${missing.join(', ')}`,
+        version: runtime.version || null,
+        npmVersion: runtime.npmVersion || null,
+      };
+    }
+
+    try {
+      const version = (await this._exec(files.nodePath, ['-p', 'process.versions.node'], 5000)).trim() || runtime.version || null;
+      if (this._nodeMajor(version) < requiredMajor) {
+        return {
+          ok: false,
+          output: `Node.js ${version || 'unknown'} does not satisfy >=${requiredMajor}`,
+          version,
+          npmVersion: runtime.npmVersion || null,
+        };
+      }
+      const npmVersion = (await this._exec(files.nodePath, [files.npmCliPath, '--version'], 5000)).trim() || runtime.npmVersion || null;
+      return {
+        ok: true,
+        output: `Private Node.js ${version || 'unknown'} runtime verified`,
+        version,
+        npmVersion,
+      };
+    } catch (err: unknown) {
+      return {
+        ok: false,
+        output: `Private Node.js runtime is not executable: ${(err as Error).message}`,
+        version: runtime.version || null,
+        npmVersion: runtime.npmVersion || null,
+      };
+    }
+  }
+
   private async _readPrivateNpmVersion(runtimeDir: string, binDir: string): Promise<string | null> {
     if (process.platform === 'win32') {
-      const npmPath = path.join(binDir, 'npm.cmd');
-      if (!fs.existsSync(npmPath)) return null;
+      const files = this._windowsPrivateNodeRuntimeFiles(runtimeDir, binDir);
+      if (!fs.existsSync(files.nodePath) || !fs.existsSync(files.npmCliPath)) return null;
       try {
-        return (await this._exec(npmPath, ['--version'], 5000)).trim() || null;
+        return (await this._exec(files.nodePath, [files.npmCliPath, '--version'], 5000)).trim() || null;
       } catch {
         return null;
       }
@@ -965,25 +1091,36 @@ export class UpdateService {
   private _createWebBuildService(appRoot: string, nodeRuntime: InstallNodeRuntime | null): WebBuildService {
     return new WebBuildService(appRoot, {
       mode: 'auto',
-      buildCommand: (stagingDir: string) => ({
-        cmd: this._npmCommand(nodeRuntime),
-        args: ['run', 'web:build', '--', '--outDir', stagingDir],
-        cwd: appRoot,
-        timeout: 120000,
-      }),
+      buildCommand: (stagingDir: string) => {
+        const command = this._npmInvocation(nodeRuntime, ['run', 'web:build', '--', '--outDir', stagingDir]);
+        return { ...command, cwd: appRoot, timeout: 120000 };
+      },
     });
   }
 
   private _createMobileBuildService(appRoot: string, nodeRuntime: InstallNodeRuntime | null): MobileBuildService {
     return new MobileBuildService(appRoot, {
       mode: 'auto',
-      buildCommand: (stagingDir: string) => ({
-        cmd: this._npmCommand(nodeRuntime),
-        args: ['--prefix', 'mobile/AgentCockpitPWA', 'run', 'build', '--', '--outDir', stagingDir],
-        cwd: appRoot,
-        timeout: 120000,
-      }),
+      buildCommand: (stagingDir: string) => {
+        const command = this._npmInvocation(nodeRuntime, ['--prefix', 'mobile/AgentCockpitPWA', 'run', 'build', '--', '--outDir', stagingDir]);
+        return { ...command, cwd: appRoot, timeout: 120000 };
+      },
     });
+  }
+
+  private _execNpm(nodeRuntime: InstallNodeRuntime | null, args: string[], timeout = 30000, cwd = this._appRoot): Promise<string> {
+    const command = this._npmInvocation(nodeRuntime, args);
+    return this._exec(command.cmd, command.args, timeout, cwd);
+  }
+
+  private _npmInvocation(nodeRuntime: InstallNodeRuntime | null, args: string[]): NativeCommand {
+    if (process.platform === 'win32' && nodeRuntime?.source === 'private' && nodeRuntime.runtimeDir && nodeRuntime.binDir) {
+      const files = this._windowsPrivateNodeRuntimeFiles(nodeRuntime.runtimeDir, nodeRuntime.binDir);
+      if (fs.existsSync(files.nodePath) && fs.existsSync(files.npmCliPath)) {
+        return { cmd: files.nodePath, args: [files.npmCliPath, ...args] };
+      }
+    }
+    return { cmd: this._npmCommand(nodeRuntime), args };
   }
 
   private _npmCommand(nodeRuntime: InstallNodeRuntime | null = null): string {

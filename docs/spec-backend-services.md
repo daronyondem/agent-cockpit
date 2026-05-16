@@ -1018,22 +1018,29 @@ Production-channel sequence:
 7. Resolve the release-required Node major from
    `manifest.requiredRuntime.node.minimumMajor`, falling back to the extracted
    release's `package.json` `engines.node`, then to Node 22. If the current
-   runtime already satisfies the major, record a `verify Node.js runtime` step.
-   Otherwise download the latest official Node archive for that major from
-   Node.org, verify it against `SHASUMS256.txt`, install it under the install
-   root, prepend it to the updater process `PATH`, persist that PATH into the
-   copied `.env` and `ecosystem.config.js`, record the bundled npm version when
-   it can be observed, and report an `install Node.js runtime` step. macOS uses
-   the Darwin tarball, extracts to `<installDir>/runtime/node-v<version>`, and
-   repoints `<installDir>/runtime/node`. Windows uses the Windows ZIP and keeps
-   the versioned runtime directory directly, without a symlink or junction. This
+   runtime already satisfies the major, record a `verify Node.js runtime` step;
+   installer-owned Windows runtimes must also contain `node.exe`, `npm.cmd`,
+   `npx.cmd`, and npm's `npm-cli.js`, `npx-cli.js`, and `npm-prefix.js`
+   entrypoints, and must be able to report both Node and npm versions through
+   `node.exe`. Incomplete Windows runtimes are treated as failed verification
+   and repaired before dependency installation. Otherwise download the latest
+   official Node archive for that major from Node.org, verify it against
+   `SHASUMS256.txt`, install it under the install root, prepend it to the
+   updater process `PATH`, persist that PATH into the copied `.env` and
+   `ecosystem.config.js`, record the bundled npm version when it can be
+   observed, and report an `install Node.js runtime` step. macOS uses the Darwin
+   tarball, extracts to `<installDir>/runtime/node-v<version>`, and repoints
+   `<installDir>/runtime/node`. Windows uses the Windows ZIP and keeps the
+   versioned runtime directory directly, without a symlink or junction. This
    migrates system-Node production installs to an installer-owned private
    runtime without mutating global Node.
 8. Run root `npm ci` and mobile `npm --prefix mobile/AgentCockpitPWA ci` inside
-   the extracted release, resolving the command as `npm.cmd` on Windows and as
-   the private runtime's `npm.cmd` when a Windows private Node runtime is active.
-   Because Node's `execFile` does not execute Windows `.cmd`/`.bat` shims
-   directly, the updater invokes those shims through `cmd.exe /d /s /c`.
+   the extracted release. When a Windows private Node runtime is active, npm is
+   invoked as `node.exe node_modules\npm\bin\npm-cli.js ...` so update-time
+   dependency installs and builds do not depend on global `PATH` or `.cmd` shim
+   quoting. Other Windows npm commands still resolve as `npm.cmd`; because
+   Node's `execFile` does not execute Windows `.cmd`/`.bat` shims directly, the
+   updater invokes those shims through `cmd.exe /d /s /c`.
 9. Run V2 and mobile build preflight services for the extracted release. Fresh
    markers skip builds; missing/stale markers or missing assets run the
    corresponding build with the same platform-specific npm command resolution.
@@ -1190,10 +1197,13 @@ Windows runtime contains the npm CLI JavaScript entrypoints, Install Doctor uses
 `node.exe node_modules/npm/bin/npm-cli.js` and
 `node.exe node_modules/npm/bin/npx-cli.js` for npm/PM2 probes and npm-backed
 install actions. That avoids `npm.cmd`/`npx.cmd` shim quoting entirely for the
-installer-managed path. The fallback Windows command runner still launches
-`.cmd` shims through `cmd.exe /d /s /c` and wraps the full command line in outer
-quotes so absolute runtime paths under `Agent Cockpit` directories survive
-`cmd.exe /s` quote stripping. The Windows
+installer-managed path. Windows Claude/Codex probes check npm-created
+`claude.cmd`/`codex.cmd` shims, preferring the installer-recorded runtime
+`binDir` and then falling back to `PATH`, so welcome-screen npm install actions
+can be reflected immediately in the refreshed doctor result. The fallback
+Windows command runner still launches `.cmd` shims through `cmd.exe /d /s /c`
+and wraps the full command line in outer quotes so absolute runtime paths under
+`Agent Cockpit` directories survive `cmd.exe /s` quote stripping. The Windows
 logon startup check queries the `AgentCockpit` scheduled task unless
 `install.startup.kind` is `manual`, in which case the disabled startup state is
 reported as intentional. Missing CLI warnings are optional and tell the user to

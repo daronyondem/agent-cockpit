@@ -2,6 +2,13 @@
 
 This file is the canonical project guidance for coding agents working in this repository. Keep it vendor-neutral when possible; use tool-specific files such as `CLAUDE.md` only as compatibility shims or for genuinely tool-specific notes.
 
+Project memory that should persist across agents is mirrored in
+[`docs/agent-project-memory.md`](docs/agent-project-memory.md). Read it when
+work touches installer/updater/release behavior, CLI profiles, mobile PWA,
+Context Map, Memory, KB, or cross-agent workflow. When durable memory records a
+recurring project rule, update that document and this file if the rule changes
+agent workflow.
+
 ## 1. Think Before Coding
 
 **Don't assume. Don't hide confusion. Surface tradeoffs.**
@@ -115,6 +122,7 @@ Always use pm2:
 # Releases
 
 - Before triggering the production release workflow, follow [`docs/release-workflow.md`](docs/release-workflow.md).
+- Installer, release packaging, install-state, install-doctor, and self-update changes must preserve existing macOS production behavior. When a change targets Windows or another platform, explicitly verify the macOS-compatible path with focused tests such as `test/macosInstallerScript.test.ts`, `test/releasePackage.test.ts`, and relevant `test/updateService.test.ts` coverage, or document why a macOS check was unavailable.
 - Release preparation is agent-owned: generate `docs/releases/v<version>.md` from commits, merged PRs, closed issues, and code changes between release versions, then share it with the human for review.
 - Use [`docs/release-notes-prompt.md`](docs/release-notes-prompt.md) when generating the per-release document. Do not ask the human to draft release notes from scratch.
 - Validate the GitHub Release body with `npm run release:notes -- --version <version> --out /tmp/agent-cockpit-release-notes.md` before triggering `.github/workflows/release.yml`.

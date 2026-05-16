@@ -119,6 +119,25 @@ function cmdShimOutDir(cmd: string, args: string[]): string | null {
   return match?.[1] || null;
 }
 
+function writeWindowsRuntimeFiles(runtimeDir: string) {
+  writeText(path.join(runtimeDir, 'node.exe'), 'node\n');
+  writeText(path.join(runtimeDir, 'npm.cmd'), 'npm\n');
+  writeText(path.join(runtimeDir, 'npx.cmd'), 'npx\n');
+  writeText(path.join(runtimeDir, 'node_modules/npm/bin/npm-cli.js'), 'npm cli\n');
+  writeText(path.join(runtimeDir, 'node_modules/npm/bin/npx-cli.js'), 'npx cli\n');
+  writeText(path.join(runtimeDir, 'node_modules/npm/bin/npm-prefix.js'), 'npm prefix\n');
+}
+
+function isPrivateNpmCliCall(cmd: string, args: string[]): boolean {
+  return cmd.endsWith('node.exe') && String(args[0]).endsWith(path.join('node_modules', 'npm', 'bin', 'npm-cli.js'));
+}
+
+function privateNpmCliOutDir(cmd: string, args: string[]): string | null {
+  if (!isPrivateNpmCliCall(cmd, args)) return null;
+  const outDirIndex = args.indexOf('--outDir');
+  return outDirIndex >= 0 ? String(args[outDirIndex + 1]) : null;
+}
+
 function makeProductionInstall(rootPrefix = 'agent-cockpit-install-') {
   const installDir = fs.mkdtempSync(path.join(os.tmpdir(), rootPrefix));
   const releasesDir = path.join(installDir, 'releases');
@@ -1306,13 +1325,15 @@ describe('UpdateService', () => {
             const command = String(args[args.length - 1]);
             const match = command.match(/-DestinationPath '([^']+)'/);
             const extractDir = match ? match[1] : '';
-            writeText(path.join(extractDir, `node-v${nodeVersion}-win-${nodeArch}`, 'node.exe'), 'node\n');
-            writeText(path.join(extractDir, `node-v${nodeVersion}-win-${nodeArch}`, 'npm.cmd'), 'npm\n');
-            writeText(path.join(extractDir, `node-v${nodeVersion}-win-${nodeArch}`, 'npx.cmd'), 'npx\n');
+            writeWindowsRuntimeFiles(path.join(extractDir, `node-v${nodeVersion}-win-${nodeArch}`));
             cb(null, 'expanded node\n', '');
             return;
           }
-          if (isCmdShimCall(cmd, args, 'npm.cmd')) {
+          if (String(cmd).endsWith('node.exe') && args[0] === '-p') {
+            cb(null, `${nodeVersion}\n`, '');
+            return;
+          }
+          if (isPrivateNpmCliCall(cmd, args) && args[1] === '--version') {
             cb(null, '11.0.0\n', '');
             return;
           }
@@ -1333,6 +1354,133 @@ describe('UpdateService', () => {
         expect(steps).toEqual(expect.arrayContaining([
           expect.objectContaining({ name: 'install Node.js runtime', success: true }),
         ]));
+      } finally {
+        restorePlatform();
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('repairs an incomplete recorded Windows private Node.js runtime before npm ci', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('win32');
+      const install = makeWindowsProductionInstall('agent-cockpit-win-node-repair-');
+      const brokenRuntimeDir = path.join(install.installDir, 'runtime', 'node-v22.22.3-win-x64-broken');
+      writeText(path.join(brokenRuntimeDir, 'node.exe'), 'node\n');
+      (install.status as any).nodeRuntime = {
+        source: 'private',
+        version: '22.22.3',
+        npmVersion: null,
+        binDir: brokenRuntimeDir,
+        runtimeDir: brokenRuntimeDir,
+        requiredMajor: 22,
+        updatedAt: '2026-05-15T00:00:00.000Z',
+      };
+      const release = makeWindowsReleaseFixture('1.1.0', 22);
+      const nodeVersion = '22.22.4';
+      const nodeArch = process.arch === 'arm64' ? 'arm64' : 'x64';
+      const nodeArchiveName = `node-v${nodeVersion}-win-${nodeArch}.zip`;
+      const nodeBytes = Buffer.from('node repair zip');
+      const nodeSha = crypto.createHash('sha256').update(nodeBytes).digest('hex');
+      const checksumsRaw = `${nodeSha}  ${nodeArchiveName}\n`;
+      const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
+      try {
+        service = new UpdateService(install.previousDir, {
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+            writeState,
+          },
+        });
+        jest.spyOn(service as any, '_downloadText').mockImplementation(async (...args: unknown[]) => {
+          const [url] = args as [string];
+          if (url.endsWith('/SHASUMS256.txt')) return checksumsRaw;
+          throw new Error(`unexpected text download ${url}`);
+        });
+        jest.spyOn(service as any, '_downloadToFile').mockImplementation(async (...args: unknown[]) => {
+          const [url, dest] = args as [string, string];
+          if (url.endsWith('/release-manifest.json')) {
+            writeText(dest, release.manifestRaw);
+            return;
+          }
+          if (url.endsWith('/SHA256SUMS')) {
+            writeText(dest, release.checksumsRaw);
+            return;
+          }
+          if (url.endsWith(`/${release.zipName}`)) {
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            originalWriteFileSync(dest, release.zipBytes);
+            return;
+          }
+          if (url.endsWith(`/${nodeArchiveName}`)) {
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            originalWriteFileSync(dest, nodeBytes);
+            return;
+          }
+          throw new Error(`unexpected download ${url}`);
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'powershell.exe' && String(args).includes('Expand-Archive')) {
+            const command = String(args[args.length - 1]);
+            const match = command.match(/-DestinationPath '([^']+)'/);
+            const extractDir = match ? match[1] : '';
+            if (extractDir.includes('.node-extract-')) {
+              writeWindowsRuntimeFiles(path.join(extractDir, `node-v${nodeVersion}-win-${nodeArch}`));
+              cb(null, 'expanded node\n', '');
+              return;
+            }
+            const packageDir = path.join(extractDir, release.manifest.packageRoot);
+            writeText(path.join(packageDir, 'server.ts'), 'console.log("server");\n');
+            writeJson(path.join(packageDir, 'package.json'), { version: '1.1.0', engines: { node: '>=22' } });
+            writeText(path.join(packageDir, 'public/v2-built/index.html'), '<!doctype html>\n');
+            writeText(path.join(packageDir, 'public/mobile-built/index.html'), '<!doctype html>\n');
+            cb(null, 'expanded release\n', '');
+            return;
+          }
+          if (String(cmd).endsWith('node.exe') && args[0] === '-p') {
+            cb(null, `${nodeVersion}\n`, '');
+            return;
+          }
+          if (isPrivateNpmCliCall(cmd, args)) {
+            if (args[1] === '--version') {
+              cb(null, '10.9.9\n', '');
+              return;
+            }
+            const outDir = privateNpmCliOutDir(cmd, args);
+            if (outDir) {
+              writeText(path.join(outDir, 'index.html'), '<!doctype html>\n');
+              cb(null, 'built\n', '');
+              return;
+            }
+            cb(null, 'ok\n', '');
+            return;
+          }
+          if (cmd === 'git' && args[0] === 'rev-parse') {
+            cb(null, 'abc123\n', '');
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+        expect(result.success).toBe(true);
+        expect(result.steps.find(step => step.name === 'verify Node.js runtime')).toEqual(expect.objectContaining({
+          success: false,
+          output: expect.stringContaining('missing npm.cmd'),
+        }));
+        expect(result.steps.find(step => step.name === 'install Node.js runtime')).toEqual(expect.objectContaining({
+          success: true,
+        }));
+        expect(mockExecFileFn.mock.calls.some(([cmd, args]) => isPrivateNpmCliCall(String(cmd), args as string[]))).toBe(true);
+        expect(mockExecFileFn.mock.calls.some(([cmd, args]) => isCmdShimCall(String(cmd), args as string[], 'npm.cmd'))).toBe(false);
+        expect(writeState).toHaveBeenCalledWith(expect.objectContaining({
+          nodeRuntime: expect.objectContaining({
+            source: 'private',
+            version: nodeVersion,
+            npmVersion: '10.9.9',
+            requiredMajor: 22,
+          }),
+        }));
       } finally {
         restorePlatform();
         fs.rmSync(install.installDir, { recursive: true, force: true });
