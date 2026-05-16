@@ -347,8 +347,9 @@ present, `%APPDATA%\npm` when available, and then the inherited user PATH. The
 installer creates `<install-root>\cli-tools`, prepends it to the current user's
 Windows `Path`, and broadcasts an environment change so new user terminals can
 run CLIs that Agent Cockpit installs there. Welcome-screen Claude/Codex npm
-actions also persist the same user `Path` entry after successful installs. On
-Windows the server-side CLI resolver prefers the package entrypoints npm puts
+actions and Windows production self-updates also persist the same user `Path`
+entry after successful installs/updates. On Windows the server-side CLI resolver
+prefers the package entrypoints npm puts
 under that prefix (`@anthropic-ai\claude-code\bin\claude.exe` directly and
 `@openai\codex\bin\codex.js` through `node.exe`) before falling back to npm
 `.cmd` shims through `cmd.exe`; it also recognizes self-installed

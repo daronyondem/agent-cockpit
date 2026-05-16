@@ -1207,6 +1207,10 @@ describe('UpdateService', () => {
           throw new Error(`unexpected download ${url}`);
         });
         mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'powershell.exe' && String(args).includes('SetEnvironmentVariable')) {
+            cb(null, 'Added Agent Cockpit CLI tools to PATH.\n', '');
+            return;
+          }
           if (cmd === 'powershell.exe' && String(args).includes('Expand-Archive')) {
             const command = String(args[args.length - 1]);
             const match = command.match(/-DestinationPath '([^']+)'/);
@@ -1257,6 +1261,7 @@ describe('UpdateService', () => {
           'npm run mobile:build',
           'verify release assets',
           'copy runtime config',
+          'persist user CLI PATH',
           'activate release',
           'write install manifest',
           'pm2 restart',
@@ -1321,6 +1326,10 @@ describe('UpdateService', () => {
           originalWriteFileSync(dest, nodeBytes);
         });
         mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'powershell.exe' && String(args).includes('SetEnvironmentVariable')) {
+            cb(null, 'Added Agent Cockpit CLI tools to PATH.\n', '');
+            return;
+          }
           if (cmd === 'powershell.exe' && String(args).includes('Expand-Archive')) {
             const command = String(args[args.length - 1]);
             const match = command.match(/-DestinationPath '([^']+)'/);
@@ -1419,6 +1428,10 @@ describe('UpdateService', () => {
           throw new Error(`unexpected download ${url}`);
         });
         mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'powershell.exe' && String(args).includes('SetEnvironmentVariable')) {
+            cb(null, 'Added Agent Cockpit CLI tools to PATH.\n', '');
+            return;
+          }
           if (cmd === 'powershell.exe' && String(args).includes('Expand-Archive')) {
             const command = String(args[args.length - 1]);
             const match = command.match(/-DestinationPath '([^']+)'/);

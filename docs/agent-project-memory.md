@@ -88,6 +88,9 @@ tool is unavailable.
   launches should share that resolver rather than spawning npm shims directly.
   Detection must still recognize self-installed `claude`/`codex` commands from
   the user's Windows `PATH`.
+- Windows production self-update should also repair the current user's `Path`
+  for `<installDir>\cli-tools` so existing installs gain terminal CLI access
+  after updating without rerunning the full installer.
 - Windows self-update should avoid Unix-only assumptions such as `sh`, `nohup`,
   `tar`, `shasum`, symlink `current`, or junction dependencies.
 

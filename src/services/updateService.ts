@@ -5,6 +5,7 @@ import path from 'path';
 import type { InstallNodeRuntime, InstallStatus, UpdateStatus, UpdateResult, UpdateStep } from '../types';
 import { WebBuildService, type WebBuildStatus } from './webBuildService';
 import { MobileBuildService, type MobileBuildStatus } from './mobileBuildService';
+import { persistWindowsUserPathEntry } from './windowsUserPath';
 
 const DEFAULT_REQUIRED_NODE_MAJOR = 22;
 
@@ -308,6 +309,7 @@ export class UpdateService {
 
       this._copyRuntimeConfig(previousAppDir, finalAppDir, nodeRuntime, installStatus);
       steps.push({ name: 'copy runtime config', success: true, output: '.env and ecosystem.config.js copied' });
+      await this._persistWindowsCliToolsUserPath(installStatus.installDir, steps);
 
       const nextAppDir = isWindows ? finalAppDir : currentLink;
       if (isWindows) {
@@ -1265,6 +1267,27 @@ export class UpdateService {
       ...uniquePreferred,
       ...parts.filter(part => !preferredKeys.has(this._pathPartKey(part))),
     ].join(delimiter);
+  }
+
+  private async _persistWindowsCliToolsUserPath(installDir: string, steps: UpdateStep[]): Promise<void> {
+    if (process.platform !== 'win32') return;
+    const cliToolsDir = this._joinForPlatform(installDir, 'cli-tools');
+    fs.mkdirSync(cliToolsDir, { recursive: true });
+    const result = await persistWindowsUserPathEntry(cliToolsDir, async (command, args, options) => {
+      try {
+        const stdout = await this._exec(command, args, options?.timeoutMs ?? 10_000);
+        return { ok: true, stdout: stdout.trim(), stderr: '' };
+      } catch (err: unknown) {
+        return { ok: false, stdout: '', stderr: '', error: (err as Error).message };
+      }
+    });
+    steps.push({
+      name: 'persist user CLI PATH',
+      success: true,
+      output: result.ok
+        ? (result.stdout || `Added ${cliToolsDir} to the current user PATH.`)
+        : `Warning: ${result.error || result.stderr || result.stdout || 'could not update current user PATH'}`,
+    });
   }
 
   private _uniquePathParts(parts: string[]): string[] {
