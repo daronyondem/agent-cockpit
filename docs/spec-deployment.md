@@ -321,8 +321,10 @@ possibly locked runtime. It does not modify the user's global PATH.
 
 Production installs download `release-manifest.json`, `SHA256SUMS`, and the
 manifest-designated Windows `app-zip` from GitHub Releases. They verify SHA256,
-expand the ZIP with `Expand-Archive`, install root and mobile dependencies with
-quiet npm settings, verify the prebuilt `public/v2-built/` and
+extract the ZIP with `System.IO.Compression.ZipFile` through an
+`Expand-ZipFile` helper that logs the extraction step without PowerShell archive
+progress UI, install root and mobile dependencies with quiet npm settings,
+verify the prebuilt `public/v2-built/` and
 `public/mobile-built/` shells, and build only if an expected shell is missing.
 Dev installs clone or update `main` under `-DevDir`, install dependencies, and
 force both builds.

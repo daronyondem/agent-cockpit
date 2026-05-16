@@ -106,6 +106,18 @@ function Assert-Checksum {
   Write-Log "Verified SHA256 for $FileName."
 }
 
+function Expand-ZipFile {
+  param([string] $Path, [string] $DestinationPath)
+  Ensure-Directory $DestinationPath
+  Write-Log "Extracting $Path"
+  try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem -ErrorAction Stop
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($Path, $DestinationPath)
+  } catch {
+    Fail "Failed to extract $Path`: $($_.Exception.Message)"
+  }
+}
+
 function Read-JsonFile {
   param([string] $Path)
   return Get-Content -Raw -Path $Path | ConvertFrom-Json
@@ -314,7 +326,7 @@ function Install-PrivateNode {
     $extractRoot = Join-Path $runtimeRoot ".node-extract-$([System.Guid]::NewGuid().ToString('n'))"
     Ensure-Directory $extractRoot
     try {
-      Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+      Expand-ZipFile $zipPath $extractRoot
       $extracted = Join-Path $extractRoot "node-v$nodeVersion-win-$nodeArch"
       if (Test-Path $finalDir) {
         $repairDir = Join-Path $runtimeRoot "node-v$nodeVersion-win-$nodeArch-$([System.Guid]::NewGuid().ToString('n'))"
@@ -774,7 +786,7 @@ function Install-Production {
     Ensure-Directory $releasesDir
     Ensure-Directory $dataDir
     $extractRoot = Join-Path $tmp 'extract'
-    Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
+    Expand-ZipFile $zipPath $extractRoot
     $packageRoot = $manifest.packageRoot
     $extracted = Join-Path $extractRoot $packageRoot
     if (-not (Test-Path (Join-Path $extracted 'server.ts'))) {

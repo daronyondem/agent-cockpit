@@ -20,7 +20,11 @@ describe('Windows installer script', () => {
   test('uses Windows-native download, checksum, and extraction primitives', () => {
     expect(source).toContain('Invoke-WebRequest -UseBasicParsing');
     expect(source).toContain('Get-FileHash -Algorithm SHA256');
-    expect(source).toContain('Expand-Archive');
+    expect(source).toContain('function Expand-ZipFile');
+    expect(source).toContain('System.IO.Compression.FileSystem');
+    expect(source).toContain('[System.IO.Compression.ZipFile]::ExtractToDirectory($Path, $DestinationPath)');
+    expect(source).toContain('Write-Log "Extracting $Path"');
+    expect(source).not.toContain('Expand-Archive');
     expect(source).toContain('SHASUMS256.txt');
     expect(source).toContain('node-v([0-9]+\\.[0-9]+\\.[0-9]+)-win-$nodeArch\\.zip');
     expect(source).toContain('if (-not $InstallNode)');
