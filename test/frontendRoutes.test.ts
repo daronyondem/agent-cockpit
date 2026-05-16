@@ -215,6 +215,7 @@ describe('frontend routes', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
     const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
     const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const webCssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
     const packageSrc = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8');
     const packageLockSrc = fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8');
 
@@ -227,6 +228,9 @@ describe('frontend routes', () => {
     expect(storeSrc).toContain('loadTailMessages');
     expect(shellSrc).toContain('StreamStore.loadOlderMessages(convId)');
     expect(shellSrc).toContain('restore.scrollTop + Math.max(0, el.scrollHeight - restore.scrollHeight)');
+    expect(shellSrc).toContain('chatFeedScrollPositions');
+    expect(shellSrc).toContain('saveFeedPosition');
+    expect(shellSrc).toContain('restoreSavedFeedPosition');
     expect(shellSrc).toContain('StreamStore.loadAroundMessage(convId, messageId)');
     expect(shellSrc).toContain('pendingPinJumpRef');
     expect(shellSrc).toContain('if (!feed || !node || !feed.contains(node)) return false;');
@@ -235,8 +239,12 @@ describe('frontend routes', () => {
     expect(shellSrc).toContain('feed.scrollTo({ top: Math.max(0, targetTop), behavior })');
     expect(shellSrc).toContain('requestAnimationFrame(() => setShowFeedBackToEnd(true))');
     expect(shellSrc).toContain('const jumpIndex = messages.length > 1 ? nextIndex : safeIndex');
+    expect(shellSrc).toContain('Opening pinned message...');
+    expect(shellSrc).toContain('Loading earlier messages...');
     expect(shellSrc).toContain('StreamStore.loadTailMessages(convId)');
     expect(shellSrc).toContain('currentMessages={messageWindow && (messageWindow.hasOlder || messageWindow.hasNewer) ? null : messages}');
+    expect(webCssSrc).toContain('.feed-page-status');
+    expect(webCssSrc).toContain('.feed-page-status-floating');
     expect(`${packageSrc}\n${packageLockSrc}`).not.toMatch(/react-virtuoso|@tanstack\/react-virtual|react-window/);
   });
 

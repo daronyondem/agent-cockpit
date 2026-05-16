@@ -64,9 +64,32 @@ const SessionsModal = React.lazy(() => import('./sessionsModal.jsx').then(mod =>
 const PARALLEL_THRESHOLD_MS = 500;
 const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
 const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
+const chatFeedScrollPositions = new Map();
 
 function isChatScrolledToEnd(el){
   return el.scrollHeight - el.clientHeight - el.scrollTop <= CHAT_SCROLL_BOTTOM_THRESHOLD_PX;
+}
+
+function snapshotMessageWindow(window){
+  if (!window || typeof window !== 'object') return null;
+  return {
+    total: Number.isFinite(window.total) ? window.total : null,
+    startIndex: Number.isFinite(window.startIndex) ? window.startIndex : null,
+    endIndex: Number.isFinite(window.endIndex) ? window.endIndex : null,
+    hasOlder: !!window.hasOlder,
+    hasNewer: !!window.hasNewer,
+  };
+}
+
+function messageWindowMatchesSnapshot(window, snapshot){
+  if (!window || !snapshot) return false;
+  return window.total === snapshot.total
+    && window.startIndex === snapshot.startIndex
+    && window.endIndex === snapshot.endIndex;
+}
+
+function clampFeedScrollTop(feed, top){
+  return Math.max(0, Math.min(top, Math.max(0, feed.scrollHeight - feed.clientHeight)));
 }
 
 function cliVendorForBackend(backendId){
@@ -109,6 +132,7 @@ function selectChatLiveState(s){
     messageWindow: s.messageWindow,
     pinnedMessages: s.pinnedMessages,
     loadingOlder: !!s.loadingOlder,
+    loadingAround: !!s.loadingAround,
     sending: s.sending,
     streaming: s.streaming,
     loadError: s.loadError,
@@ -1280,6 +1304,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const messages = state ? state.messages : [];
   const messageWindow = state ? state.messageWindow : null;
   const loadingOlder = !!(state && state.loadingOlder);
+  const loadingAround = !!(state && state.loadingAround);
   const activeStreamError = state ? state.streamError : null;
   const activeStreamErrorSource = state ? state.streamErrorSource : null;
   const conv = state ? state.conv : null;
@@ -1325,6 +1350,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const messageRefs = React.useRef(new Map());
   const pendingPinJumpRef = React.useRef(null);
   const pinJumpSerialRef = React.useRef(0);
+  const feedRestoreDoneRef = React.useRef(false);
   const pinFocusTimerRef = React.useRef(null);
   const [pinStripIndex, setPinStripIndex] = React.useState(0);
   const [pinJumpToken, setPinJumpToken] = React.useState(0);
@@ -1336,10 +1362,10 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   }, []);
 
   React.useEffect(() => {
-    messageRefs.current.clear();
     pendingPinJumpRef.current = null;
     forceBackToEndRef.current = false;
     pinJumpSerialRef.current += 1;
+    feedRestoreDoneRef.current = false;
     setPinStripIndex(0);
     setFocusedPinId(null);
     if (pinFocusTimerRef.current) {
@@ -1355,6 +1381,66 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   React.useEffect(() => {
     setPinStripIndex(index => Math.min(index, Math.max(pinnedMessages.length - 1, 0)));
   }, [pinnedMessages.length]);
+
+  const saveFeedPosition = React.useCallback(() => {
+    const feed = feedRef.current;
+    if (!feed) return;
+    const currentWindow = messageWindowRef.current;
+    const feedRect = feed.getBoundingClientRect();
+    let anchor = null;
+    for (const [messageId, node] of messageRefs.current) {
+      if (!node || !feed.contains(node)) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom < feedRect.top || rect.top > feedRect.bottom) continue;
+      if (anchor && rect.top >= anchor.rectTop) continue;
+      anchor = {
+        messageId,
+        offsetTop: rect.top - feedRect.top,
+        rectTop: rect.top,
+      };
+    }
+    chatFeedScrollPositions.set(convId, {
+      messageId: anchor ? anchor.messageId : null,
+      offsetTop: anchor ? anchor.offsetTop : 0,
+      scrollTop: feed.scrollTop,
+      atTail: isChatScrolledToEnd(feed) && !(currentWindow && currentWindow.hasNewer) && !forceBackToEndRef.current,
+      messageWindow: snapshotMessageWindow(currentWindow),
+      savedAt: Date.now(),
+    });
+  }, [convId]);
+
+  const restoreSavedFeedPosition = React.useCallback(() => {
+    const saved = chatFeedScrollPositions.get(convId);
+    if (!saved) return true;
+    const feed = feedRef.current;
+    if (!feed) return false;
+    const currentWindow = messageWindowRef.current;
+    if (saved.atTail && !(currentWindow && currentWindow.hasNewer)) {
+      feedAutoFollowRef.current = true;
+      forceBackToEndRef.current = false;
+      feed.scrollTop = feed.scrollHeight;
+      setShowFeedBackToEnd(false);
+      return true;
+    }
+    feedAutoFollowRef.current = false;
+    const node = saved.messageId ? messageRefs.current.get(saved.messageId) : null;
+    if (node && feed.contains(node)) {
+      const feedRect = feed.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      feed.scrollTop = clampFeedScrollTop(
+        feed,
+        feed.scrollTop + (nodeRect.top - feedRect.top) - (saved.offsetTop || 0)
+      );
+      setShowFeedBackToEnd(true);
+      return true;
+    }
+    if (messageWindowMatchesSnapshot(currentWindow, saved.messageWindow) || !saved.messageId || messages.length > 0) {
+      feed.scrollTop = clampFeedScrollTop(feed, saved.scrollTop || 0);
+      setShowFeedBackToEnd(!isChatScrolledToEnd(feed) || !!(currentWindow && currentWindow.hasNewer));
+      return true;
+    }
+    return false;
+  }, [convId, messages.length]);
 
   const focusPinnedMessage = React.useCallback((messageId, behavior = 'smooth') => {
     const feed = feedRef.current;
@@ -1376,8 +1462,9 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
       setFocusedPinId(null);
       pinFocusTimerRef.current = null;
     }, 1600);
+    requestAnimationFrame(saveFeedPosition);
     return true;
-  }, []);
+  }, [saveFeedPosition]);
 
   React.useLayoutEffect(() => {
     const pending = pendingPinJumpRef.current;
@@ -1483,11 +1570,13 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     if (isChatScrolledToEnd(el) && !hasNewer && !forceBackToEndRef.current) {
       feedAutoFollowRef.current = true;
       setShowFeedBackToEnd(false);
+      saveFeedPosition();
       return;
     }
     feedAutoFollowRef.current = false;
     if (forceBackToEndRef.current || feedStreamingRef.current || hasNewer) setShowFeedBackToEnd(true);
-  }, [convId, toast]);
+    saveFeedPosition();
+  }, [convId, saveFeedPosition, toast]);
 
   React.useLayoutEffect(() => {
     const restore = scrollRestoreRef.current;
@@ -1496,7 +1585,22 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     scrollRestoreRef.current = null;
     loadingOlderRef.current = false;
     el.scrollTop = restore.scrollTop + Math.max(0, el.scrollHeight - restore.scrollHeight);
-  }, [messages.length, loadingOlder, messageWindow && messageWindow.startIndex]);
+    saveFeedPosition();
+  }, [messages.length, loadingOlder, messageWindow && messageWindow.startIndex, saveFeedPosition]);
+
+  React.useLayoutEffect(() => {
+    if (feedRestoreDoneRef.current) return;
+    if (restoreSavedFeedPosition()) feedRestoreDoneRef.current = true;
+  }, [
+    restoreSavedFeedPosition,
+    messages.length,
+    messageWindow && messageWindow.startIndex,
+    messageWindow && messageWindow.endIndex,
+  ]);
+
+  React.useLayoutEffect(() => () => {
+    saveFeedPosition();
+  }, [saveFeedPosition]);
 
   const scrollFeedToEnd = React.useCallback(async (behavior = 'auto') => {
     const doScroll = () => {
@@ -1511,6 +1615,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
       } else {
         el.scrollTop = el.scrollHeight;
       }
+      requestAnimationFrame(saveFeedPosition);
     };
     const currentWindow = messageWindowRef.current;
     if (currentWindow && currentWindow.hasNewer) {
@@ -1527,13 +1632,15 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
       return;
     }
     doScroll();
-  }, [convId, toast]);
+  }, [convId, saveFeedPosition, toast]);
 
   React.useEffect(() => {
+    const saved = chatFeedScrollPositions.get(convId);
+    const restoreNonTail = !!(saved && !saved.atTail);
     forceBackToEndRef.current = false;
     pendingPinJumpRef.current = null;
-    feedAutoFollowRef.current = true;
-    setShowFeedBackToEnd(false);
+    feedAutoFollowRef.current = !restoreNonTail;
+    setShowFeedBackToEnd(restoreNonTail);
   }, [convId]);
 
   // Auto-follow new content until the user scrolls away from the active conv.
@@ -1791,6 +1898,12 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
             currentIndex={pinStripIndex}
             onSelect={jumpToPinnedMessage}
           />
+          {loadingOlder ? (
+            <div className="feed-page-status feed-page-status-top" role="status" aria-live="polite">
+              <span className="feed-page-spinner" aria-hidden="true"/>
+              <span>Loading earlier messages...</span>
+            </div>
+          ) : null}
           <div className="feed-inner">
             {messages.length === 0 && !streaming && (
               <div className="u-dim" style={{padding:"24px 12px",fontSize:13}}>
@@ -1880,6 +1993,12 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
             {Ico.down(14)}
             <span>Back to end</span>
           </button>
+        ) : null}
+        {loadingAround ? (
+          <div className="feed-page-status feed-page-status-floating" role="status" aria-live="polite">
+            <span className="feed-page-spinner" aria-hidden="true"/>
+            <span>Opening pinned message...</span>
+          </div>
         ) : null}
       </div>
 
