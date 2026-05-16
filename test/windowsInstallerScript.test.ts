@@ -27,6 +27,14 @@ describe('Windows installer script', () => {
     expect(source).toContain('Release manifest does not include a Windows app ZIP artifact');
   });
 
+  test('reuses existing private Node runtimes during repair reruns', () => {
+    expect(source).toContain('function Use-PrivateNodeRuntime');
+    expect(source).toContain('Reusing private Node.js');
+    expect(source).toContain('if (Use-PrivateNodeRuntime $finalDir $nodeVersion $true)');
+    expect(source).toContain('Existing private Node.js runtime at $finalDir is not reusable; installing a fresh copy at $repairDir.');
+    expect(source).not.toContain('Remove-Item -Recurse -Force $finalDir');
+  });
+
   test('generates setup secrets with Windows PowerShell 5.1-compatible crypto APIs', () => {
     expect(source).toContain('[System.Security.Cryptography.RandomNumberGenerator]::Create()');
     expect(source).toContain('$rng.GetBytes($buffer)');
@@ -79,6 +87,9 @@ describe('Windows installer script', () => {
     expect(source).toContain('-WindowStyle Hidden');
     expect(source).toContain('schtasks.exe /Create /TN $TaskName /SC ONLOGON /RU $currentUser /TR $taskRun /RL LIMITED /F');
     expect(source).toContain('Failed to register current-user logon task with schtasks.exe');
+    expect(source).toContain('function Stop-ExistingAppForReplacement');
+    expect(source).toContain('Stopping existing Agent Cockpit process before replacing app files.');
+    expect(source).toContain("Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'stop', $AppName)");
     expect(source).toContain('npx.cmd');
     expect(source).toContain("@('pm2', 'startOrRestart', 'ecosystem.config.js', '--update-env')");
     expect(source).toContain('http://127.0.0.1:$Port/auth/setup');

@@ -308,7 +308,13 @@ them unless `-InstallNode` is supplied. Otherwise it downloads the latest
 official Node.js 22 Windows ZIP from `https://nodejs.org/dist/latest-v22.x/`,
 downloads `SHASUMS256.txt`, verifies the ZIP with `Get-FileHash -Algorithm
 SHA256`, expands it under the install root, and records private runtime metadata
-in `install.json`. It does not modify the user's global PATH.
+in `install.json`. Repair or reinstall runs first reuse an existing verified
+private runtime at the target version instead of deleting it, because the
+currently running Agent Cockpit or PM2 daemon may still have `node.exe` open. If
+the target runtime directory exists but cannot be verified, the installer
+extracts a fresh sibling runtime directory and records that path in
+`install.json`; it does not remove the possibly locked runtime. It does not
+modify the user's global PATH.
 
 Production installs download `release-manifest.json`, `SHA256SUMS`, and the
 manifest-designated Windows `app-zip` from GitHub Releases. They verify SHA256,
@@ -333,10 +339,10 @@ backtick quoting so dotenv does not interpret `\r` or `\n` inside paths such as
 generated with `RandomNumberGenerator.Create().GetBytes(...)` so the installer
 works in Windows PowerShell 5.1 as well as newer PowerShell runtimes. Repair or
 reinstall runs read the existing app `.env` and install manifest before
-replacing a same-version release directory so
-`SESSION_SECRET`, `AUTH_SETUP_TOKEN`, `installedAt`, and `welcomeCompletedAt`
-remain stable while mutable `data\` content is preserved outside the app
-directory.
+replacing a same-version release directory, stop the existing PM2 app on a
+best-effort basis before deleting active app files, and keep `SESSION_SECRET`,
+`AUTH_SETUP_TOKEN`, `installedAt`, and `welcomeCompletedAt` stable while mutable
+`data\` content is preserved outside the app directory.
 
 The installer starts Agent Cockpit with local PM2 and install-local `PM2_HOME`,
 then saves PM2 state. The generated start/stop helpers invoke PM2 through a

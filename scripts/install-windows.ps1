@@ -229,6 +229,45 @@ function Resolve-Node {
   Install-PrivateNode
 }
 
+function Use-PrivateNodeRuntime {
+  param([string] $RuntimeDir, [string] $ExpectedVersion, [bool] $Reused)
+  $nodeExe = Join-Path $RuntimeDir 'node.exe'
+  $npmCmd = Join-Path $RuntimeDir 'npm.cmd'
+  $npxCmd = Join-Path $RuntimeDir 'npx.cmd'
+  if (-not ((Test-Path $nodeExe) -and (Test-Path $npmCmd) -and (Test-Path $npxCmd))) {
+    return $false
+  }
+  try {
+    $actualVersion = (& $nodeExe -p "process.versions.node").Trim()
+    if ($ExpectedVersion -and $actualVersion -ne $ExpectedVersion) {
+      return $false
+    }
+    $actualMajor = [int]((& $nodeExe -p "process.versions.node.split('.')[0]").Trim())
+    if ($actualMajor -lt $NodeMajor) {
+      return $false
+    }
+    $npmVersion = (& $npmCmd -v).Trim()
+  } catch {
+    return $false
+  }
+
+  $script:NodeRuntimeSource = 'private'
+  $script:NodeRuntimeVersion = $actualVersion
+  $script:NodeRuntimeDir = $RuntimeDir
+  $script:NodeRuntimeBinDir = $RuntimeDir
+  $script:NodeExe = $nodeExe
+  $script:NpmCmd = $npmCmd
+  $script:NpxCmd = $npxCmd
+  $script:NodeRuntimeNpmVersion = $npmVersion
+  $env:Path = "$RuntimeDir;$env:Path"
+  if ($Reused) {
+    Write-Log "Reusing private Node.js v$actualVersion and npm $npmVersion."
+  } else {
+    Write-Log "Using private Node.js v$actualVersion and npm $npmVersion."
+  }
+  return $true
+}
+
 function Install-PrivateNode {
   $nodeArch = Resolve-Architecture
   $runtimeRoot = Join-Path $InstallDir 'runtime'
@@ -245,6 +284,11 @@ function Install-PrivateNode {
     }
     $zipName = ($matchLine -split '\s+')[1]
     $nodeVersion = [regex]::Match($zipName, '^node-v(.+)-win-.+\.zip$').Groups[1].Value
+    $finalDir = Join-Path $runtimeRoot "node-v$nodeVersion-win-$nodeArch"
+    if (Use-PrivateNodeRuntime $finalDir $nodeVersion $true) {
+      return
+    }
+
     $zipPath = Join-Path $tmp $zipName
     Download-File "$baseUrl/$zipName" $zipPath
     Assert-Checksum $zipPath $zipName $checksumsPath
@@ -255,9 +299,10 @@ function Install-PrivateNode {
     try {
       Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
       $extracted = Join-Path $extractRoot "node-v$nodeVersion-win-$nodeArch"
-      $finalDir = Join-Path $runtimeRoot "node-v$nodeVersion-win-$nodeArch"
       if (Test-Path $finalDir) {
-        Remove-Item -Recurse -Force $finalDir
+        $repairDir = Join-Path $runtimeRoot "node-v$nodeVersion-win-$nodeArch-$([System.Guid]::NewGuid().ToString('n'))"
+        Write-Log "Existing private Node.js runtime at $finalDir is not reusable; installing a fresh copy at $repairDir."
+        $finalDir = $repairDir
       }
       Move-Item -Path $extracted -Destination $finalDir
     } finally {
@@ -266,16 +311,9 @@ function Install-PrivateNode {
       }
     }
 
-    $script:NodeRuntimeSource = 'private'
-    $script:NodeRuntimeVersion = $nodeVersion
-    $script:NodeRuntimeDir = $finalDir
-    $script:NodeRuntimeBinDir = $finalDir
-    $script:NodeExe = Join-Path $finalDir 'node.exe'
-    $script:NpmCmd = Join-Path $finalDir 'npm.cmd'
-    $script:NpxCmd = Join-Path $finalDir 'npx.cmd'
-    $script:NodeRuntimeNpmVersion = (& $script:NpmCmd -v).Trim()
-    $env:Path = "$finalDir;$env:Path"
-    Write-Log "Using private Node.js v$nodeVersion and npm $NodeRuntimeNpmVersion."
+    if (-not (Use-PrivateNodeRuntime $finalDir $nodeVersion $false)) {
+      Fail "Installed private Node.js runtime at $finalDir could not be verified."
+    }
   } finally {
     if (Test-Path $tmp) {
       Remove-Item -Recurse -Force $tmp
@@ -471,6 +509,40 @@ function Register-LogonTask {
   }
 }
 
+function Invoke-Pm2BestEffort {
+  param([string] $AppDir, [string[]] $Arguments)
+  if (-not $NpxCmd -or -not (Test-Path $AppDir)) {
+    return
+  }
+  $env:PM2_HOME = Join-Path $InstallDir 'pm2'
+  if ($NodeRuntimeBinDir) {
+    $env:Path = "$NodeRuntimeBinDir;$env:Path"
+  }
+  $previous = Get-Location
+  try {
+    Set-Location $AppDir
+    & $NpxCmd @Arguments
+    if ($LASTEXITCODE -ne 0) {
+      Write-Log "Ignoring PM2 cleanup exit code $LASTEXITCODE for: $NpxCmd $($Arguments -join ' ')"
+    }
+    $global:LASTEXITCODE = 0
+  } catch {
+    Write-Log "Ignoring PM2 cleanup error: $($_.Exception.Message)"
+    $global:LASTEXITCODE = 0
+  } finally {
+    Set-Location $previous
+  }
+}
+
+function Stop-ExistingAppForReplacement {
+  param([string] $AppDir)
+  if (-not (Test-Path $AppDir)) {
+    return
+  }
+  Write-Log 'Stopping existing Agent Cockpit process before replacing app files.'
+  Invoke-Pm2BestEffort $AppDir @('--no-install', 'pm2', 'stop', $AppName)
+}
+
 function Start-Pm2 {
   param([string] $AppDir)
   $env:PM2_HOME = Join-Path $InstallDir 'pm2'
@@ -580,6 +652,7 @@ function Install-Production {
     $appDir = Join-Path $releasesDir $packageRoot
     Capture-ExistingRuntimeConfig $dataDir $appDir
     if (Test-Path $appDir) {
+      Stop-ExistingAppForReplacement $appDir
       Remove-Item -Recurse -Force $appDir
     }
     Move-Item -Path $extracted -Destination $appDir
