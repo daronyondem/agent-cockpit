@@ -28,8 +28,9 @@ import {
   useBackendList,
   useCliProfileSettings,
   useCliUpdates,
-  useConversationState,
+  useConversationSelector,
   useConvStates,
+  shallowEqual,
 } from './shellState.jsx';
 import {
   extractFileDeliveries,
@@ -63,9 +64,32 @@ const SessionsModal = React.lazy(() => import('./sessionsModal.jsx').then(mod =>
 const PARALLEL_THRESHOLD_MS = 500;
 const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
 const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
+const chatFeedScrollPositions = new Map();
 
 function isChatScrolledToEnd(el){
   return el.scrollHeight - el.clientHeight - el.scrollTop <= CHAT_SCROLL_BOTTOM_THRESHOLD_PX;
+}
+
+function snapshotMessageWindow(window){
+  if (!window || typeof window !== 'object') return null;
+  return {
+    total: Number.isFinite(window.total) ? window.total : null,
+    startIndex: Number.isFinite(window.startIndex) ? window.startIndex : null,
+    endIndex: Number.isFinite(window.endIndex) ? window.endIndex : null,
+    hasOlder: !!window.hasOlder,
+    hasNewer: !!window.hasNewer,
+  };
+}
+
+function messageWindowMatchesSnapshot(window, snapshot){
+  if (!window || !snapshot) return false;
+  return window.total === snapshot.total
+    && window.startIndex === snapshot.startIndex
+    && window.endIndex === snapshot.endIndex;
+}
+
+function clampFeedScrollTop(feed, top){
+  return Math.max(0, Math.min(top, Math.max(0, feed.scrollHeight - feed.clientHeight)));
 }
 
 function cliVendorForBackend(backendId){
@@ -99,6 +123,53 @@ const FileViewerContext = React.createContext({
   openFileViewer: null,
   openLightbox: null,
 });
+
+function selectChatLiveState(s){
+  if (!s) return null;
+  return {
+    conv: s.conv,
+    messages: s.messages,
+    messageWindow: s.messageWindow,
+    pinnedMessages: s.pinnedMessages,
+    loadingOlder: !!s.loadingOlder,
+    loadingAround: !!s.loadingAround,
+    sending: s.sending,
+    streaming: s.streaming,
+    loadError: s.loadError,
+    streamError: s.streamError,
+    streamErrorSource: s.streamErrorSource,
+    usage: s.usage,
+    streamingMsgId: s.streamingMsgId,
+    pendingInteraction: s.pendingInteraction,
+    respondPending: s.respondPending,
+    composerCliProfileId: s.composerCliProfileId,
+    composerBackend: s.composerBackend,
+    planModeActive: s.planModeActive,
+    queueLength: (s.queue || []).length,
+    resetting: !!s.resetting,
+  };
+}
+
+function selectChatComposerState(s){
+  if (!s) return null;
+  return {
+    conv: s.conv,
+    input: s.input,
+    sending: s.sending,
+    streaming: s.streaming,
+    pendingInteraction: s.pendingInteraction,
+    composerCliProfileId: s.composerCliProfileId,
+    composerBackend: s.composerBackend,
+    composerModel: s.composerModel,
+    composerEffort: s.composerEffort,
+    composerServiceTier: s.composerServiceTier,
+    goal: s.goal,
+    goalMode: s.goalMode,
+    pendingAttachments: s.pendingAttachments,
+    queue: s.queue,
+    queueSuspended: s.queueSuspended,
+  };
+}
 
 /* Contains render/effect crashes inside <ChatLive> so one broken conversation
    can't take down the whole shell. The parent wraps this with
@@ -1185,16 +1256,17 @@ function GoalStrip({ convId, goal, streaming, sending }){
 }
 
 function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate, onOpenMemoryReview, onOpenWorkspaceSettings, onOpenSettings }){
-  const state = useConversationState(convId);
-  const backends = useBackendList();
+  const state = useConversationSelector(convId, selectChatLiveState, shallowEqual);
   const { profiles: cliProfiles } = useCliProfileSettings();
   const dialog = useDialog();
   const toast = useToasts();
   const feedRef = React.useRef(null);
   const feedAutoFollowRef = React.useRef(true);
   const feedStreamingRef = React.useRef(false);
-  const fileInputRef = React.useRef(null);
-  const composerTextRef = React.useRef(null);
+  const messageWindowRef = React.useRef(null);
+  const loadingOlderRef = React.useRef(false);
+  const scrollRestoreRef = React.useRef(null);
+  const forceBackToEndRef = React.useRef(false);
   const dragCounterRef = React.useRef(0);
   const [dragOver, setDragOver] = React.useState(false);
   const [sessionsOpen, setSessionsOpen] = React.useState(false);
@@ -1230,11 +1302,27 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   }, [editingTitle]);
 
   const messages = state ? state.messages : [];
+  const messageWindow = state ? state.messageWindow : null;
+  const loadingOlder = !!(state && state.loadingOlder);
+  const loadingAround = !!(state && state.loadingAround);
   const activeStreamError = state ? state.streamError : null;
   const activeStreamErrorSource = state ? state.streamErrorSource : null;
+  const conv = state ? state.conv : null;
+  const sending = state ? state.sending : false;
   const streaming = state ? state.streaming : false;
+  const streamError = state ? state.streamError : null;
+  const usage = state ? state.usage : null;
   const streamingMsgId = state ? state.streamingMsgId : null;
+  const pendingInteraction = state ? state.pendingInteraction : null;
+  const respondPending = state ? state.respondPending : false;
+  const queueLength = state ? (state.queueLength || 0) : 0;
+  const resetting = !!(state && state.resetting);
+  const planModeActive = !!(state && state.planModeActive);
   feedStreamingRef.current = streaming;
+  messageWindowRef.current = messageWindow;
+  loadingOlderRef.current = loadingOlder;
+  const streamingMsgIdRef = React.useRef(streamingMsgId);
+  streamingMsgIdRef.current = streamingMsgId;
   const profileLocked = messages.length > 0;
   const lastMessage = messages[messages.length - 1] || null;
   const hiddenStreamErrorMessageIdsSet = React.useMemo(
@@ -1247,13 +1335,25 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
       : messages,
     [messages, hiddenStreamErrorMessageIdsSet]
   );
-  const pinnedMessages = React.useMemo(
-    () => feedMessages.filter(m => m && m.pinned && (m.role === 'user' || m.role === 'assistant' || m.role === 'system')),
+  const messageFeedEntries = React.useMemo(
+    () => collapseProgressRuns(feedMessages),
     [feedMessages]
   );
+  const pinnedMessages = React.useMemo(() => {
+    const entries = state && Array.isArray(state.pinnedMessages) ? state.pinnedMessages : [];
+    const fromServer = entries
+      .map(entry => entry && entry.message)
+      .filter(m => m && m.pinned && (m.role === 'user' || m.role === 'assistant' || m.role === 'system'));
+    if (fromServer.length) return fromServer;
+    return feedMessages.filter(m => m && m.pinned && (m.role === 'user' || m.role === 'assistant' || m.role === 'system'));
+  }, [state && state.pinnedMessages, feedMessages]);
   const messageRefs = React.useRef(new Map());
+  const pendingPinJumpRef = React.useRef(null);
+  const pinJumpSerialRef = React.useRef(0);
+  const feedRestoreDoneRef = React.useRef(false);
   const pinFocusTimerRef = React.useRef(null);
   const [pinStripIndex, setPinStripIndex] = React.useState(0);
+  const [pinJumpToken, setPinJumpToken] = React.useState(0);
   const [focusedPinId, setFocusedPinId] = React.useState(null);
   const setMessageRef = React.useCallback((id, node) => {
     if (!id) return;
@@ -1262,6 +1362,10 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   }, []);
 
   React.useEffect(() => {
+    pendingPinJumpRef.current = null;
+    forceBackToEndRef.current = false;
+    pinJumpSerialRef.current += 1;
+    feedRestoreDoneRef.current = false;
     setPinStripIndex(0);
     setFocusedPinId(null);
     if (pinFocusTimerRef.current) {
@@ -1278,11 +1382,79 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     setPinStripIndex(index => Math.min(index, Math.max(pinnedMessages.length - 1, 0)));
   }, [pinnedMessages.length]);
 
-  const jumpToPinnedMessage = React.useCallback((messageId, index) => {
-    if (typeof index === 'number') setPinStripIndex(index);
+  const saveFeedPosition = React.useCallback(() => {
+    const feed = feedRef.current;
+    if (!feed) return;
+    const currentWindow = messageWindowRef.current;
+    const feedRect = feed.getBoundingClientRect();
+    let anchor = null;
+    for (const [messageId, node] of messageRefs.current) {
+      if (!node || !feed.contains(node)) continue;
+      const rect = node.getBoundingClientRect();
+      if (rect.bottom < feedRect.top || rect.top > feedRect.bottom) continue;
+      if (anchor && rect.top >= anchor.rectTop) continue;
+      anchor = {
+        messageId,
+        offsetTop: rect.top - feedRect.top,
+        rectTop: rect.top,
+      };
+    }
+    chatFeedScrollPositions.set(convId, {
+      messageId: anchor ? anchor.messageId : null,
+      offsetTop: anchor ? anchor.offsetTop : 0,
+      scrollTop: feed.scrollTop,
+      atTail: isChatScrolledToEnd(feed) && !(currentWindow && currentWindow.hasNewer) && !forceBackToEndRef.current,
+      messageWindow: snapshotMessageWindow(currentWindow),
+      savedAt: Date.now(),
+    });
+  }, [convId]);
+
+  const restoreSavedFeedPosition = React.useCallback(() => {
+    const saved = chatFeedScrollPositions.get(convId);
+    if (!saved) return true;
+    const feed = feedRef.current;
+    if (!feed) return false;
+    const currentWindow = messageWindowRef.current;
+    if (saved.atTail && !(currentWindow && currentWindow.hasNewer)) {
+      feedAutoFollowRef.current = true;
+      forceBackToEndRef.current = false;
+      feed.scrollTop = feed.scrollHeight;
+      setShowFeedBackToEnd(false);
+      return true;
+    }
+    feedAutoFollowRef.current = false;
+    const node = saved.messageId ? messageRefs.current.get(saved.messageId) : null;
+    if (node && feed.contains(node)) {
+      const feedRect = feed.getBoundingClientRect();
+      const nodeRect = node.getBoundingClientRect();
+      feed.scrollTop = clampFeedScrollTop(
+        feed,
+        feed.scrollTop + (nodeRect.top - feedRect.top) - (saved.offsetTop || 0)
+      );
+      setShowFeedBackToEnd(true);
+      return true;
+    }
+    if (messageWindowMatchesSnapshot(currentWindow, saved.messageWindow) || !saved.messageId || messages.length > 0) {
+      feed.scrollTop = clampFeedScrollTop(feed, saved.scrollTop || 0);
+      setShowFeedBackToEnd(!isChatScrolledToEnd(feed) || !!(currentWindow && currentWindow.hasNewer));
+      return true;
+    }
+    return false;
+  }, [convId, messages.length]);
+
+  const focusPinnedMessage = React.useCallback((messageId, behavior = 'smooth') => {
+    const feed = feedRef.current;
     const node = messageRefs.current.get(messageId);
-    if (node && typeof node.scrollIntoView === 'function') {
-      node.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (!feed || !node || !feed.contains(node)) return false;
+    const feedRect = feed.getBoundingClientRect();
+    const nodeRect = node.getBoundingClientRect();
+    const targetTop = feed.scrollTop
+      + (nodeRect.top - feedRect.top)
+      - Math.max(24, (feed.clientHeight - nodeRect.height) / 2);
+    if (typeof feed.scrollTo === 'function') {
+      feed.scrollTo({ top: Math.max(0, targetTop), behavior });
+    } else {
+      feed.scrollTop = Math.max(0, targetTop);
     }
     setFocusedPinId(messageId);
     if (pinFocusTimerRef.current) clearTimeout(pinFocusTimerRef.current);
@@ -1290,10 +1462,62 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
       setFocusedPinId(null);
       pinFocusTimerRef.current = null;
     }, 1600);
-  }, []);
+    requestAnimationFrame(saveFeedPosition);
+    return true;
+  }, [saveFeedPosition]);
+
+  React.useLayoutEffect(() => {
+    const pending = pendingPinJumpRef.current;
+    if (!pending || !pending.messageId) return;
+    feedAutoFollowRef.current = false;
+    forceBackToEndRef.current = true;
+    if (focusPinnedMessage(pending.messageId, pending.behavior || 'smooth')) {
+      pendingPinJumpRef.current = null;
+    }
+    setShowFeedBackToEnd(true);
+  }, [
+    pinJumpToken,
+    messages.length,
+    messageWindow && messageWindow.startIndex,
+    messageWindow && messageWindow.endIndex,
+    focusPinnedMessage,
+  ]);
+
+  const jumpToPinnedMessage = React.useCallback(async (messageId, index) => {
+    if (typeof index === 'number') setPinStripIndex(index);
+    feedAutoFollowRef.current = false;
+    forceBackToEndRef.current = true;
+    setShowFeedBackToEnd(true);
+    const serial = pinJumpSerialRef.current + 1;
+    pinJumpSerialRef.current = serial;
+    pendingPinJumpRef.current = { messageId, behavior: 'smooth' };
+    if (focusPinnedMessage(messageId)) {
+      pendingPinJumpRef.current = null;
+      requestAnimationFrame(() => setShowFeedBackToEnd(true));
+      return;
+    }
+    pendingPinJumpRef.current = { messageId, behavior: 'auto' };
+    const feed = feedRef.current;
+    const node = messageRefs.current.get(messageId);
+    const targetMounted = !!(feed && node && feed.contains(node));
+    if (!targetMounted) {
+      try {
+        await StreamStore.loadAroundMessage(convId, messageId);
+      } catch (err) {
+        if (pinJumpSerialRef.current === serial) pendingPinJumpRef.current = null;
+        toast.error({
+          title: 'Pinned message unavailable',
+          message: (err && err.message) || 'The pinned message could not be loaded.',
+        });
+        return;
+      }
+    }
+    if (pinJumpSerialRef.current !== serial) return;
+    setPinJumpToken(token => token + 1);
+  }, [convId, focusPinnedMessage, toast]);
 
   const toggleMessagePin = React.useCallback(async (message) => {
-    if (!message || !message.id || message.id === streamingMsgId) return;
+    if (!message || !message.id || message.id === streamingMsgIdRef.current) return;
     try {
       await StreamStore.setMessagePinned(convId, message.id, !message.pinned);
     } catch (err) {
@@ -1302,7 +1526,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
         message: (err && err.message) || 'The message pin could not be saved.',
       });
     }
-  }, [convId, streamingMsgId, toast]);
+  }, [convId, toast]);
 
   /* Elapsed = time since the preceding user message in the feed. Walks
      backward from each assistant message; caps at 1 h to match V1
@@ -1328,30 +1552,95 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   const handleFeedScroll = React.useCallback(() => {
     const el = feedRef.current;
     if (!el) return;
-    if (isChatScrolledToEnd(el)) {
+    const currentWindow = messageWindowRef.current;
+    const hasNewer = !!(currentWindow && currentWindow.hasNewer);
+    if (el.scrollTop <= 120 && currentWindow && currentWindow.hasOlder && !loadingOlderRef.current) {
+      scrollRestoreRef.current = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight };
+      loadingOlderRef.current = true;
+      feedAutoFollowRef.current = false;
+      StreamStore.loadOlderMessages(convId).catch(err => {
+        scrollRestoreRef.current = null;
+        loadingOlderRef.current = false;
+        toast.error({
+          title: 'Could not load earlier messages',
+          message: (err && err.message) || 'The earlier transcript page could not be loaded.',
+        });
+      });
+    }
+    if (isChatScrolledToEnd(el) && !hasNewer && !forceBackToEndRef.current) {
       feedAutoFollowRef.current = true;
       setShowFeedBackToEnd(false);
+      saveFeedPosition();
       return;
     }
     feedAutoFollowRef.current = false;
-    if (feedStreamingRef.current) setShowFeedBackToEnd(true);
-  }, []);
+    if (forceBackToEndRef.current || feedStreamingRef.current || hasNewer) setShowFeedBackToEnd(true);
+    saveFeedPosition();
+  }, [convId, saveFeedPosition, toast]);
 
-  const scrollFeedToEnd = React.useCallback((behavior = 'auto') => {
+  React.useLayoutEffect(() => {
+    const restore = scrollRestoreRef.current;
     const el = feedRef.current;
-    if (!el) return;
-    feedAutoFollowRef.current = true;
-    setShowFeedBackToEnd(false);
-    if (typeof el.scrollTo === 'function') {
-      el.scrollTo({ top: el.scrollHeight, behavior });
-    } else {
-      el.scrollTop = el.scrollHeight;
+    if (!restore || !el) return;
+    scrollRestoreRef.current = null;
+    loadingOlderRef.current = false;
+    el.scrollTop = restore.scrollTop + Math.max(0, el.scrollHeight - restore.scrollHeight);
+    saveFeedPosition();
+  }, [messages.length, loadingOlder, messageWindow && messageWindow.startIndex, saveFeedPosition]);
+
+  React.useLayoutEffect(() => {
+    if (feedRestoreDoneRef.current) return;
+    if (restoreSavedFeedPosition()) feedRestoreDoneRef.current = true;
+  }, [
+    restoreSavedFeedPosition,
+    messages.length,
+    messageWindow && messageWindow.startIndex,
+    messageWindow && messageWindow.endIndex,
+  ]);
+
+  React.useLayoutEffect(() => () => {
+    saveFeedPosition();
+  }, [saveFeedPosition]);
+
+  const scrollFeedToEnd = React.useCallback(async (behavior = 'auto') => {
+    const doScroll = () => {
+      const el = feedRef.current;
+      if (!el) return;
+      forceBackToEndRef.current = false;
+      pendingPinJumpRef.current = null;
+      feedAutoFollowRef.current = true;
+      setShowFeedBackToEnd(false);
+      if (typeof el.scrollTo === 'function') {
+        el.scrollTo({ top: el.scrollHeight, behavior });
+      } else {
+        el.scrollTop = el.scrollHeight;
+      }
+      requestAnimationFrame(saveFeedPosition);
+    };
+    const currentWindow = messageWindowRef.current;
+    if (currentWindow && currentWindow.hasNewer) {
+      try {
+        await StreamStore.loadTailMessages(convId);
+      } catch (err) {
+        toast.error({
+          title: 'Could not load latest messages',
+          message: (err && err.message) || 'The latest transcript page could not be loaded.',
+        });
+        return;
+      }
+      requestAnimationFrame(doScroll);
+      return;
     }
-  }, []);
+    doScroll();
+  }, [convId, saveFeedPosition, toast]);
 
   React.useEffect(() => {
-    feedAutoFollowRef.current = true;
-    setShowFeedBackToEnd(false);
+    const saved = chatFeedScrollPositions.get(convId);
+    const restoreNonTail = !!(saved && !saved.atTail);
+    forceBackToEndRef.current = false;
+    pendingPinJumpRef.current = null;
+    feedAutoFollowRef.current = !restoreNonTail;
+    setShowFeedBackToEnd(restoreNonTail);
   }, [convId]);
 
   // Auto-follow new content until the user scrolls away from the active conv.
@@ -1367,40 +1656,19 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
   React.useEffect(() => {
     const el = feedRef.current;
     if (!el) return;
-    if (feedAutoFollowRef.current) {
+    const currentWindow = messageWindowRef.current;
+    if (forceBackToEndRef.current) {
+      feedAutoFollowRef.current = false;
+      setShowFeedBackToEnd(true);
+      return;
+    }
+    if (feedAutoFollowRef.current && !(currentWindow && currentWindow.hasNewer)) {
       el.scrollTop = el.scrollHeight;
       setShowFeedBackToEnd(false);
     } else {
       setShowFeedBackToEnd(true);
     }
   }, [feedScrollKey]);
-
-  function onKeyDown(e){
-    if (e.key !== 'Enter' || e.shiftKey || e.altKey) return;
-    const isMeta = e.metaKey || e.ctrlKey;
-    e.preventDefault();
-    if (isMeta) {
-      /* ⌘/Ctrl+Enter always enqueues — matches the "queues behind current
-         run" composer hint. Works whether or not a stream is in flight. */
-      if (canEnqueue || canSend) doEnqueueOrSend(/* preferQueue */ true);
-      return;
-    }
-    /* Plain Enter sends when idle, enqueues when the agent is busy. */
-    if (canSend) doSend();
-    else if (canEnqueue) doEnqueue();
-  }
-
-  function doEnqueueOrSend(preferQueue){
-    if (preferQueue && hasContent && !sending && !awaiting && !hasUploadingFiles) {
-      const text = (input || '').trim();
-      const atts = pendingAttachments.filter(f => f.status === 'done').map(f => f.result).filter(Boolean);
-      StreamStore.enqueue(convId, text, atts);
-      StreamStore.setInput(convId, '');
-      StreamStore.clearPendingAttachments(convId);
-      return;
-    }
-    if (canSend) doSend();
-  }
 
   if (!state || state.loadError) {
     return (
@@ -1415,14 +1683,6 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
       </section>
     );
   }
-
-  const { conv, input, sending, streamError, usage, pendingInteraction, respondPending } = state;
-  const pendingAttachments = state.pendingAttachments || [];
-  const queue = state.queue || [];
-  const queueSuspended = !!state.queueSuspended;
-  const resetting = !!state.resetting;
-  const hasUploadingFiles = pendingAttachments.some(f => f.status === 'uploading');
-  const hasDoneFiles = pendingAttachments.some(f => f.status === 'done');
 
   if (!conv) {
     return (
@@ -1452,17 +1712,6 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     : profileLocked
       ? conv.backend
       : (state.composerBackend || conv.backend);
-  const goalCapability = goalCapabilityForBackend(backends, topbarBackendId);
-  const goalCapable = goalCapability.set === true;
-  const goalMode = goalCapable && !!state.goalMode;
-  const activeGoal = state.goal || null;
-  const hasContent = !!(input || '').trim() || hasDoneFiles;
-  const effectiveHasContent = goalMode ? !!(input || '').trim() : hasContent;
-  const canSend = effectiveHasContent && !sending && !streaming && !awaiting && !hasUploadingFiles;
-  /* While the agent is streaming, Enter enqueues instead of sending. The
-     send button turns into a stop-styled affordance; clicking it enqueues
-     whatever is in the composer so the user can stack follow-ups. */
-  const canEnqueue = hasContent && !sending && !awaiting && !hasUploadingFiles && streaming;
 
   function handleDragEnter(e){
     if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
@@ -1485,186 +1734,6 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     setDragOver(false);
     const files = Array.from((e.dataTransfer && e.dataTransfer.files) || []);
     if (files.length) StreamStore.addAttachments(convId, files);
-  }
-  function openFilePicker(){ if (fileInputRef.current) fileInputRef.current.click(); }
-  function onPickFiles(e){
-    const files = Array.from(e.target.files || []);
-    if (files.length) StreamStore.addAttachments(convId, files);
-    e.target.value = '';
-  }
-  /* Clipboard parity with V1: pasted image files become attachments (renamed
-     to avoid collisions with prior pastes), and pasted text ≥1000 chars is
-     converted into a synthesized .txt file named pasted-text-<ts>.txt so the
-     composer stays readable. Shorter text falls through to the default
-     textarea paste. */
-  function onPaste(e){
-    const items = (e.clipboardData && e.clipboardData.items) || null;
-    if (items) {
-      const files = [];
-      for (const item of items) {
-        if (item.kind === 'file') {
-          const file = item.getAsFile();
-          if (file) {
-            const ts = Date.now();
-            const ext = file.name && file.name.includes('.') ? '.' + file.name.split('.').pop() : '.png';
-            const baseName = file.name ? file.name.replace(/\.[^.]+$/, '') : 'pasted-image';
-            const uniqueName = baseName + '-' + ts + '-' + (files.length + 1) + ext;
-            files.push(new File([file], uniqueName, { type: file.type }));
-          }
-        }
-      }
-      if (files.length) {
-        e.preventDefault();
-        StreamStore.addAttachments(convId, files);
-        return;
-      }
-    }
-    const pastedText = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
-    if (pastedText && pastedText.length >= 1000) {
-      e.preventDefault();
-      const now = new Date();
-      const pad = (n) => String(n).padStart(2, '0');
-      const ts = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate())
-        + '-' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
-      const textFile = new File([pastedText], 'pasted-text-' + ts + '.txt', { type: 'text/plain' });
-      StreamStore.addAttachments(convId, [textFile]);
-    }
-  }
-
-  /* Reverse a paste-to-attachment: read the synthesized .txt blob back, splice
-     it into the composer at the current cursor, then drop the attachment. Only
-     wired for fresh pasted-text-*.txt entries that still have a Blob in memory
-     (rehydrated entries lose their Blob, so dissolve isn't offered there).
-     Confirm before inserting >50KB so a huge dump doesn't surprise the user. */
-  async function dissolveAttachment(entry){
-    if (!entry || !(entry.file instanceof Blob)) return;
-    let text = '';
-    try { text = await entry.file.text(); } catch { return; }
-    if (text.length > 50000) {
-      const ok = await dialog.confirm({
-        title: 'Inline this text into the message?',
-        body: text.length.toLocaleString() + ' characters will be inserted into the composer.',
-        confirmLabel: 'Inline',
-        cancelLabel: 'Cancel',
-      });
-      if (!ok) return;
-    }
-    insertAtComposerCursor(text);
-    StreamStore.removeAttachment(convId, entry.id);
-  }
-
-  /* Splice text into the composer at the current cursor position (or at the
-     end if the textarea isn't focused). Restores the caret after the React
-     re-render so the user can keep typing immediately. Shared by attachment
-     dissolve and OCR. */
-  function insertAtComposerCursor(text){
-    if (!text) return;
-    const ta = composerTextRef.current;
-    const current = (ta ? ta.value : (StreamStore.getState(convId) || {}).input) || '';
-    let nextValue;
-    let caret;
-    if (ta && typeof ta.selectionStart === 'number') {
-      const start = ta.selectionStart;
-      const end = ta.selectionEnd;
-      nextValue = current.slice(0, start) + text + current.slice(end);
-      caret = start + text.length;
-    } else {
-      nextValue = current + text;
-      caret = nextValue.length;
-    }
-    StreamStore.setInput(convId, nextValue);
-    requestAnimationFrame(() => {
-      const t = composerTextRef.current;
-      if (!t) return;
-      t.focus();
-      try { t.setSelectionRange(caret, caret); } catch {}
-    });
-  }
-
-  /* OCR a pasted screenshot to Markdown via a one-shot CLI call and splice
-     the result at the cursor. The original image attachment stays put — the
-     user decides whether to remove it (e.g. text-only screenshot) or keep it
-     (mixed text+diagram, where the model still benefits from seeing the
-     visual). The result is cached on the attachment so re-clicks are free. */
-  async function ocrAttachment(entry){
-    if (!entry || !entry.result || entry.result.kind !== 'image') return;
-    try {
-      const markdown = await StreamStore.ocrAttachment(convId, entry.id);
-      if (!markdown) {
-        toast.error('OCR returned no text');
-        return;
-      }
-      insertAtComposerCursor(markdown);
-    } catch (err) {
-      toast.error('OCR failed: ' + (err.message || 'unknown error'));
-    }
-  }
-
-  function doSend(){
-    if (!canSend) return;
-    const text = (input || '').trim();
-    if (handleGoalSlash(text)) return;
-    if (goalMode) {
-      StreamStore.setGoal(convId, text);
-      return;
-    }
-    StreamStore.send(convId, text);
-  }
-
-  function handleGoalSlash(text){
-    if (!text || !/^\/goal(?:\s|$)/i.test(text)) return false;
-    if (!goalCapable) {
-      const backendLabel = (backends.find(b => b && b.id === topbarBackendId) || {}).label || topbarBackendId || 'this backend';
-      toast.error('Goals are not supported by ' + backendLabel);
-      return true;
-    }
-    const arg = text.replace(/^\/goal\b/i, '').trim();
-    if (!arg) {
-      StreamStore.setInput(convId, '');
-      StreamStore.setGoalMode(convId, true);
-      return true;
-    }
-    const command = arg.toLowerCase();
-    StreamStore.setInput(convId, '');
-    if (command === 'pause') {
-      if (!goalCapability.pause) {
-        const backendLabel = (backends.find(b => b && b.id === topbarBackendId) || {}).label || topbarBackendId || 'this backend';
-        toast.error('Goal pause is not supported by ' + backendLabel);
-        return true;
-      }
-      StreamStore.pauseGoal(convId);
-      return true;
-    }
-    if (command === 'resume') {
-      if (!goalCapability.resume) {
-        const backendLabel = (backends.find(b => b && b.id === topbarBackendId) || {}).label || topbarBackendId || 'this backend';
-        toast.error('Goal resume is not supported by ' + backendLabel);
-        return true;
-      }
-      StreamStore.resumeGoal(convId);
-      return true;
-    }
-    if (command === 'clear') {
-      StreamStore.clearGoal(convId);
-      return true;
-    }
-    StreamStore.setGoal(convId, arg);
-    return true;
-  }
-  /* Enqueue the current composer contents as a QueuedMessage behind the
-     live run. Attachments detach from pendingAttachments and ride the
-     queue entry directly; the server copies already live in artifacts/. */
-  function doEnqueue(){
-    if (!canEnqueue) return;
-    const text = (input || '').trim();
-    const atts = pendingAttachments.filter(f => f.status === 'done').map(f => f.result).filter(Boolean);
-    StreamStore.enqueue(convId, text, atts);
-    StreamStore.setInput(convId, '');
-    StreamStore.clearPendingAttachments(convId);
-  }
-  function doStop(){
-    if (!streaming) return;
-    StreamStore.stopStream(convId);
   }
 
   async function handleDownload(){
@@ -1829,6 +1898,12 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
             currentIndex={pinStripIndex}
             onSelect={jumpToPinnedMessage}
           />
+          {loadingOlder ? (
+            <div className="feed-page-status feed-page-status-top" role="status" aria-live="polite">
+              <span className="feed-page-spinner" aria-hidden="true"/>
+              <span>Loading earlier messages...</span>
+            </div>
+          ) : null}
           <div className="feed-inner">
             {messages.length === 0 && !streaming && (
               <div className="u-dim" style={{padding:"24px 12px",fontSize:13}}>
@@ -1837,7 +1912,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
             )}
             <FileViewerContext.Provider value={{ wsHash: conv.workspaceHash || null, convId, workingDir: conv.workingDir || null, openFileViewer, openLightbox }}>
             <AgentIndexProvider messages={feedMessages}>
-              {collapseProgressRuns(feedMessages).map(entry => {
+              {messageFeedEntries.map(entry => {
                 if (entry.kind === 'plain') {
                   if (entry.message.role === 'memory') {
                     return (
@@ -1858,7 +1933,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                       isStreaming={streaming && streamingMsgId === entry.message.id}
                       elapsedMs={elapsedByMsgId.get(entry.message.id)}
                       onPinToggle={toggleMessagePin}
-                      messageRef={(node) => setMessageRef(entry.message.id, node)}
+                      setMessageRef={setMessageRef}
                       pinFocused={focusedPinId === entry.message.id}
                     />
                   );
@@ -1872,7 +1947,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                       attachedProgress={entry.progressRun}
                       elapsedMs={elapsedByMsgId.get(entry.message.id)}
                       onPinToggle={toggleMessagePin}
-                      messageRef={(node) => setMessageRef(entry.message.id, node)}
+                      setMessageRef={setMessageRef}
                       pinFocused={focusedPinId === entry.message.id}
                     />
                   );
@@ -1887,7 +1962,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
               })}
             </AgentIndexProvider>
             </FileViewerContext.Provider>
-            {state.planModeActive && !pendingInteraction ? <PlanModeBanner/> : null}
+            {planModeActive && !pendingInteraction ? <PlanModeBanner/> : null}
             {pendingInteraction ? (
               <InteractionCard
                 convId={convId}
@@ -1899,8 +1974,8 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
               <StreamErrorCard
                 convId={convId}
                 error={streamError}
-                source={state.streamErrorSource}
-                queueLength={queue.length}
+                source={activeStreamErrorSource}
+                queueLength={queueLength}
                 messages={messages}
               />
             )}
@@ -1919,177 +1994,29 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
             <span>Back to end</span>
           </button>
         ) : null}
+        {loadingAround ? (
+          <div className="feed-page-status feed-page-status-floating" role="status" aria-live="polite">
+            <span className="feed-page-spinner" aria-hidden="true"/>
+            <span>Opening pinned message...</span>
+          </div>
+        ) : null}
       </div>
 
-      <div className="composer">
-        <div className="composer-inner">
-          {activeGoal ? (
-            <GoalStrip
-              convId={convId}
-              goal={activeGoal}
-              streaming={streaming}
-              sending={sending}
-            />
-          ) : null}
-          <div className="composer-box">
-            <textarea
-              ref={composerTextRef}
-              rows={3}
-              placeholder={
-                awaiting
-                  ? 'Answer the prompt above to continue…'
-                  : streaming ? 'Agent is running — Enter queues behind the current run.'
-                    : goalMode ? 'Set a goal…' : 'Message Agent Cockpit…'
-              }
-              value={input || ''}
-              onChange={(e)=>StreamStore.setInput(convId, e.target.value)}
-              onKeyDown={onKeyDown}
-              onPaste={onPaste}
-              disabled={awaiting}
-              style={{
-                width:"100%",
-                border:0,
-                outline:"none",
-                background:"transparent",
-                color:"var(--text)",
-                resize:"none",
-                fontFamily:"inherit",
-                fontSize:14,
-                lineHeight:1.5,
-                padding:"12px 14px",
-                display:"block",
-              }}
-            />
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              onChange={onPickFiles}
-              style={{display:"none"}}
-            />
-            {pendingAttachments.length ? (
-              <AttTray
-                convId={convId}
-                attachments={pendingAttachments}
-                onRemove={(id) => StreamStore.removeAttachment(convId, id)}
-                onDissolve={dissolveAttachment}
-                onOcr={ocrAttachment}
-                onAdd={openFilePicker}
-              />
-            ) : null}
-            {queue.length && queueSuspended ? (
-              <SuspendedQueueBanner
-                count={queue.length}
-                onResume={() => StreamStore.resumeSuspendedQueue(convId)}
-                onClear={() => StreamStore.clearQueue(convId)}
-              />
-            ) : null}
-            {queue.length ? (
-              <QueueStack
-                convId={convId}
-                queue={queue}
-                onClear={() => StreamStore.clearQueue(convId)}
-                onRemove={(i) => StreamStore.removeFromQueue(convId, i)}
-                onMoveUp={(i) => StreamStore.reorderQueue(convId, i, i - 1)}
-                onMoveDown={(i) => StreamStore.reorderQueue(convId, i, i + 1)}
-              />
-            ) : null}
-            <div className="composer-foot">
-              <ComposerPicks
-                convId={convId}
-                backends={backends}
-                cliProfiles={cliProfiles}
-                composerCliProfileId={state.composerCliProfileId || conv.cliProfileId || null}
-                composerBackend={state.composerBackend || conv.backend || null}
-                composerModel={state.composerModel || conv.model || null}
-                composerEffort={state.composerEffort || conv.effort || null}
-                composerServiceTier={state.composerServiceTier != null ? state.composerServiceTier : (conv.serviceTier || 'default')}
-                profileLocked={profileLocked}
-                disabled={awaiting || sending}
-              />
-              <span className="attach">
-                <button
-                  type="button"
-                  className="btn ghost"
-                  onClick={openFilePicker}
-                  disabled={awaiting}
-                  title="Attach files"
-                  aria-label="Attach files"
-                  style={{padding:"4px 8px"}}
-                >
-                  {Ico.paperclip(12)}
-                  <span style={{fontSize:11.5}}>Attach…</span>
-                </button>
-              </span>
-              <ComposerNotifIcon conv={conv} convId={convId}/>
-              <ComposerMemoryReviewIcon conv={conv} workspaceLabel={wsLabel} onOpenMemoryReview={onOpenMemoryReview}/>
-              <ComposerContextMapIcon conv={conv} workspaceLabel={wsLabel} onOpenWorkspaceSettings={onOpenWorkspaceSettings}/>
-              <ComposerInstructionCompatibilityIcon
-                workspaceHash={conv.workspaceHash}
-                workspaceLabel={wsLabel}
-                onOpenWorkspaceSettings={onOpenWorkspaceSettings}
-              />
-              <ComposerCliUpdateIcon
-                cliProfileId={topbarCliProfileId}
-                backendId={topbarBackendId}
-                onOpenSettings={onOpenSettings}
-              />
-              {goalCapable ? (
-                <label className={"goal-toggle" + (goalMode ? " active" : "")}>
-                  <input
-                    type="checkbox"
-                    checked={goalMode}
-                    onChange={(e) => StreamStore.setGoalMode(convId, e.target.checked)}
-                    disabled={awaiting || sending || streaming}
-                  />
-                  <span>Goal</span>
-                </label>
-              ) : null}
-              {streaming ? (
-                hasContent ? (
-                  <button
-                    className="send"
-                    onClick={doEnqueue}
-                    disabled={!canEnqueue}
-                    title={canEnqueue ? 'Queue behind current run' : 'Agent is running'}
-                    aria-label="Queue behind current run"
-                    style={!canEnqueue ? {opacity:.5,cursor:"not-allowed"} : undefined}
-                  >
-                    {Ico.up(14)}
-                  </button>
-                ) : (
-                  <button
-                    className="send stop"
-                    onClick={doStop}
-                    title="Stop agent"
-                    aria-label="Stop agent"
-                  >
-                    {Ico.stop(14)}
-                  </button>
-                )
-              ) : (
-                <button
-                  className="send"
-                  onClick={doSend}
-                  disabled={!canSend}
-                  title={goalMode ? 'Set goal' : 'Send'}
-                  aria-label={goalMode ? 'Set goal' : 'Send'}
-                  style={!canSend ? {opacity:.4,cursor:"not-allowed"} : undefined}
-                >
-                  {Ico.up(14)}
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
-      </div>
+      <ChatComposer
+        convId={convId}
+        profileLocked={profileLocked}
+        workspaceLabel={wsLabel}
+        onOpenMemoryReview={onOpenMemoryReview}
+        onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+        onOpenSettings={onOpenSettings}
+      />
       {sessionsOpen ? (
         <React.Suspense fallback={null}>
           <SessionsModal
             open={true}
             convId={convId}
             currentSessionNumber={conv.sessionNumber || null}
-            currentMessages={messages}
+            currentMessages={messageWindow && (messageWindow.hasOlder || messageWindow.hasNewer) ? null : messages}
             onClose={() => setSessionsOpen(false)}
           />
         </React.Suspense>
@@ -2110,6 +2037,427 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     </section>
   );
 }
+
+const ChatComposer = React.memo(function ChatComposer({ convId, profileLocked, workspaceLabel, onOpenMemoryReview, onOpenWorkspaceSettings, onOpenSettings }){
+  const state = useConversationSelector(convId, selectChatComposerState, shallowEqual);
+  const backends = useBackendList();
+  const { profiles: cliProfiles } = useCliProfileSettings();
+  const dialog = useDialog();
+  const toast = useToasts();
+  const fileInputRef = React.useRef(null);
+  const composerTextRef = React.useRef(null);
+  if (!state || !state.conv) return null;
+
+  const conv = state.conv;
+  const input = state.input || '';
+  const sending = !!state.sending;
+  const streaming = !!state.streaming;
+  const pendingInteraction = state.pendingInteraction || null;
+  const pendingAttachments = state.pendingAttachments || [];
+  const queue = state.queue || [];
+  const queueSuspended = !!state.queueSuspended;
+  const awaiting = !!pendingInteraction;
+  const hasUploadingFiles = pendingAttachments.some(f => f.status === 'uploading');
+  const hasDoneFiles = pendingAttachments.some(f => f.status === 'done');
+  const topbarCliProfileId = profileLocked
+    ? (conv.cliProfileId || null)
+    : (state.composerCliProfileId || conv.cliProfileId || null);
+  const topbarProfile = topbarCliProfileId
+    ? cliProfiles.find(profile => profile && profile.id === topbarCliProfileId)
+    : null;
+  const topbarBackendCandidate = profileLocked
+    ? conv.backend
+    : (state.composerBackend || conv.backend);
+  const topbarBackendId = topbarProfile
+    ? (profileLocked ? topbarBackendCandidate : backendIdForProfile(topbarProfile))
+    : profileLocked
+      ? conv.backend
+      : (state.composerBackend || conv.backend);
+  const goalCapability = goalCapabilityForBackend(backends, topbarBackendId);
+  const goalCapable = goalCapability.set === true;
+  const goalMode = goalCapable && !!state.goalMode;
+  const activeGoal = state.goal || null;
+  const hasContent = !!input.trim() || hasDoneFiles;
+  const effectiveHasContent = goalMode ? !!input.trim() : hasContent;
+  const canSend = effectiveHasContent && !sending && !streaming && !awaiting && !hasUploadingFiles;
+  /* While the agent is streaming, Enter enqueues instead of sending. The
+     send button turns into a stop-styled affordance; clicking it enqueues
+     whatever is in the composer so the user can stack follow-ups. */
+  const canEnqueue = hasContent && !sending && !awaiting && !hasUploadingFiles && streaming;
+
+  function openFilePicker(){ if (fileInputRef.current) fileInputRef.current.click(); }
+
+  function onPickFiles(e){
+    const files = Array.from(e.target.files || []);
+    if (files.length) StreamStore.addAttachments(convId, files);
+    e.target.value = '';
+  }
+
+  /* Clipboard parity with V1: pasted image files become attachments (renamed
+     to avoid collisions with prior pastes), and pasted text >=1000 chars is
+     converted into a synthesized .txt file named pasted-text-<ts>.txt so the
+     composer stays readable. Shorter text falls through to the default
+     textarea paste. */
+  function onPaste(e){
+    const items = (e.clipboardData && e.clipboardData.items) || null;
+    if (items) {
+      const files = [];
+      for (const item of items) {
+        if (item.kind === 'file') {
+          const file = item.getAsFile();
+          if (file) {
+            const ts = Date.now();
+            const ext = file.name && file.name.includes('.') ? '.' + file.name.split('.').pop() : '.png';
+            const baseName = file.name ? file.name.replace(/\.[^.]+$/, '') : 'pasted-image';
+            const uniqueName = baseName + '-' + ts + '-' + (files.length + 1) + ext;
+            files.push(new File([file], uniqueName, { type: file.type }));
+          }
+        }
+      }
+      if (files.length) {
+        e.preventDefault();
+        StreamStore.addAttachments(convId, files);
+        return;
+      }
+    }
+    const pastedText = e.clipboardData ? e.clipboardData.getData('text/plain') : '';
+    if (pastedText && pastedText.length >= 1000) {
+      e.preventDefault();
+      const now = new Date();
+      const pad = (n) => String(n).padStart(2, '0');
+      const ts = now.getFullYear() + pad(now.getMonth() + 1) + pad(now.getDate())
+        + '-' + pad(now.getHours()) + pad(now.getMinutes()) + pad(now.getSeconds());
+      const textFile = new File([pastedText], 'pasted-text-' + ts + '.txt', { type: 'text/plain' });
+      StreamStore.addAttachments(convId, [textFile]);
+    }
+  }
+
+  /* Reverse a paste-to-attachment: read the synthesized .txt blob back, splice
+     it into the composer at the current cursor, then drop the attachment. Only
+     wired for fresh pasted-text-*.txt entries that still have a Blob in memory
+     (rehydrated entries lose their Blob, so dissolve isn't offered there).
+     Confirm before inserting >50KB so a huge dump doesn't surprise the user. */
+  async function dissolveAttachment(entry){
+    if (!entry || !(entry.file instanceof Blob)) return;
+    let text = '';
+    try { text = await entry.file.text(); } catch { return; }
+    if (text.length > 50000) {
+      const ok = await dialog.confirm({
+        title: 'Inline this text into the message?',
+        body: text.length.toLocaleString() + ' characters will be inserted into the composer.',
+        confirmLabel: 'Inline',
+        cancelLabel: 'Cancel',
+      });
+      if (!ok) return;
+    }
+    insertAtComposerCursor(text);
+    StreamStore.removeAttachment(convId, entry.id);
+  }
+
+  /* Splice text into the composer at the current cursor position (or at the
+     end if the textarea isn't focused). Restores the caret after the React
+     re-render so the user can keep typing immediately. Shared by attachment
+     dissolve and OCR. */
+  function insertAtComposerCursor(text){
+    if (!text) return;
+    const ta = composerTextRef.current;
+    const current = (ta ? ta.value : (StreamStore.getState(convId) || {}).input) || '';
+    let nextValue;
+    let caret;
+    if (ta && typeof ta.selectionStart === 'number') {
+      const start = ta.selectionStart;
+      const end = ta.selectionEnd;
+      nextValue = current.slice(0, start) + text + current.slice(end);
+      caret = start + text.length;
+    } else {
+      nextValue = current + text;
+      caret = nextValue.length;
+    }
+    StreamStore.setInput(convId, nextValue);
+    requestAnimationFrame(() => {
+      const t = composerTextRef.current;
+      if (!t) return;
+      t.focus();
+      try { t.setSelectionRange(caret, caret); } catch {}
+    });
+  }
+
+  /* OCR a pasted screenshot to Markdown via a one-shot CLI call and splice
+     the result at the cursor. The original image attachment stays put; the
+     user decides whether to remove it or keep it. */
+  async function ocrAttachment(entry){
+    if (!entry || !entry.result || entry.result.kind !== 'image') return;
+    try {
+      const markdown = await StreamStore.ocrAttachment(convId, entry.id);
+      if (!markdown) {
+        toast.error('OCR returned no text');
+        return;
+      }
+      insertAtComposerCursor(markdown);
+    } catch (err) {
+      toast.error('OCR failed: ' + (err.message || 'unknown error'));
+    }
+  }
+
+  function handleGoalSlash(text){
+    if (!text || !/^\/goal(?:\s|$)/i.test(text)) return false;
+    if (!goalCapable) {
+      const backendLabel = (backends.find(b => b && b.id === topbarBackendId) || {}).label || topbarBackendId || 'this backend';
+      toast.error('Goals are not supported by ' + backendLabel);
+      return true;
+    }
+    const arg = text.replace(/^\/goal\b/i, '').trim();
+    if (!arg) {
+      StreamStore.setInput(convId, '');
+      StreamStore.setGoalMode(convId, true);
+      return true;
+    }
+    const command = arg.toLowerCase();
+    StreamStore.setInput(convId, '');
+    if (command === 'pause') {
+      if (!goalCapability.pause) {
+        const backendLabel = (backends.find(b => b && b.id === topbarBackendId) || {}).label || topbarBackendId || 'this backend';
+        toast.error('Goal pause is not supported by ' + backendLabel);
+        return true;
+      }
+      StreamStore.pauseGoal(convId);
+      return true;
+    }
+    if (command === 'resume') {
+      if (!goalCapability.resume) {
+        const backendLabel = (backends.find(b => b && b.id === topbarBackendId) || {}).label || topbarBackendId || 'this backend';
+        toast.error('Goal resume is not supported by ' + backendLabel);
+        return true;
+      }
+      StreamStore.resumeGoal(convId);
+      return true;
+    }
+    if (command === 'clear') {
+      StreamStore.clearGoal(convId);
+      return true;
+    }
+    StreamStore.setGoal(convId, arg);
+    return true;
+  }
+
+  function doSend(){
+    if (!canSend) return;
+    const text = input.trim();
+    if (handleGoalSlash(text)) return;
+    if (goalMode) {
+      StreamStore.setGoal(convId, text);
+      return;
+    }
+    StreamStore.send(convId, text);
+  }
+
+  /* Enqueue the current composer contents as a QueuedMessage behind the
+     live run. Attachments detach from pendingAttachments and ride the
+     queue entry directly; the server copies already live in artifacts/. */
+  function doEnqueue(){
+    if (!canEnqueue) return;
+    const text = input.trim();
+    const atts = pendingAttachments.filter(f => f.status === 'done').map(f => f.result).filter(Boolean);
+    StreamStore.enqueue(convId, text, atts);
+    StreamStore.setInput(convId, '');
+    StreamStore.clearPendingAttachments(convId);
+  }
+
+  function doEnqueueOrSend(preferQueue){
+    if (preferQueue && hasContent && !sending && !awaiting && !hasUploadingFiles) {
+      const text = input.trim();
+      const atts = pendingAttachments.filter(f => f.status === 'done').map(f => f.result).filter(Boolean);
+      StreamStore.enqueue(convId, text, atts);
+      StreamStore.setInput(convId, '');
+      StreamStore.clearPendingAttachments(convId);
+      return;
+    }
+    if (canSend) doSend();
+  }
+
+  function doStop(){
+    if (!streaming) return;
+    StreamStore.stopStream(convId);
+  }
+
+  function onKeyDown(e){
+    if (e.key !== 'Enter' || e.shiftKey || e.altKey) return;
+    const isMeta = e.metaKey || e.ctrlKey;
+    e.preventDefault();
+    if (isMeta) {
+      /* Ctrl/Command+Enter always enqueues, matching the composer hint. */
+      if (canEnqueue || canSend) doEnqueueOrSend(/* preferQueue */ true);
+      return;
+    }
+    if (canSend) doSend();
+    else if (canEnqueue) doEnqueue();
+  }
+
+  return (
+    <div className="composer">
+      <div className="composer-inner">
+        {activeGoal ? (
+          <GoalStrip
+            convId={convId}
+            goal={activeGoal}
+            streaming={streaming}
+            sending={sending}
+          />
+        ) : null}
+        <div className="composer-box">
+          <textarea
+            ref={composerTextRef}
+            rows={3}
+            placeholder={
+              awaiting
+                ? 'Answer the prompt above to continue…'
+                : streaming ? 'Agent is running — Enter queues behind the current run.'
+                  : goalMode ? 'Set a goal…' : 'Message Agent Cockpit…'
+            }
+            value={input}
+            onChange={(e)=>StreamStore.setInput(convId, e.target.value)}
+            onKeyDown={onKeyDown}
+            onPaste={onPaste}
+            disabled={awaiting}
+            style={{
+              width:"100%",
+              border:0,
+              outline:"none",
+              background:"transparent",
+              color:"var(--text)",
+              resize:"none",
+              fontFamily:"inherit",
+              fontSize:14,
+              lineHeight:1.5,
+              padding:"12px 14px",
+              display:"block",
+            }}
+          />
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            onChange={onPickFiles}
+            style={{display:"none"}}
+          />
+          {pendingAttachments.length ? (
+            <AttTray
+              convId={convId}
+              attachments={pendingAttachments}
+              onRemove={(id) => StreamStore.removeAttachment(convId, id)}
+              onDissolve={dissolveAttachment}
+              onOcr={ocrAttachment}
+              onAdd={openFilePicker}
+            />
+          ) : null}
+          {queue.length && queueSuspended ? (
+            <SuspendedQueueBanner
+              count={queue.length}
+              onResume={() => StreamStore.resumeSuspendedQueue(convId)}
+              onClear={() => StreamStore.clearQueue(convId)}
+            />
+          ) : null}
+          {queue.length ? (
+            <QueueStack
+              convId={convId}
+              queue={queue}
+              onClear={() => StreamStore.clearQueue(convId)}
+              onRemove={(i) => StreamStore.removeFromQueue(convId, i)}
+              onMoveUp={(i) => StreamStore.reorderQueue(convId, i, i - 1)}
+              onMoveDown={(i) => StreamStore.reorderQueue(convId, i, i + 1)}
+            />
+          ) : null}
+          <div className="composer-foot">
+            <ComposerPicks
+              convId={convId}
+              backends={backends}
+              cliProfiles={cliProfiles}
+              composerCliProfileId={state.composerCliProfileId || conv.cliProfileId || null}
+              composerBackend={state.composerBackend || conv.backend || null}
+              composerModel={state.composerModel || conv.model || null}
+              composerEffort={state.composerEffort || conv.effort || null}
+              composerServiceTier={state.composerServiceTier != null ? state.composerServiceTier : (conv.serviceTier || 'default')}
+              profileLocked={profileLocked}
+              disabled={awaiting || sending}
+            />
+            <span className="attach">
+              <button
+                type="button"
+                className="btn ghost"
+                onClick={openFilePicker}
+                disabled={awaiting}
+                title="Attach files"
+                aria-label="Attach files"
+                style={{padding:"4px 8px"}}
+              >
+                {Ico.paperclip(12)}
+                <span style={{fontSize:11.5}}>Attach…</span>
+              </button>
+            </span>
+            <ComposerNotifIcon conv={conv} convId={convId}/>
+            <ComposerMemoryReviewIcon conv={conv} workspaceLabel={workspaceLabel} onOpenMemoryReview={onOpenMemoryReview}/>
+            <ComposerContextMapIcon conv={conv} workspaceLabel={workspaceLabel} onOpenWorkspaceSettings={onOpenWorkspaceSettings}/>
+            <ComposerInstructionCompatibilityIcon
+              workspaceHash={conv.workspaceHash}
+              workspaceLabel={workspaceLabel}
+              onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+            />
+            <ComposerCliUpdateIcon
+              cliProfileId={topbarCliProfileId}
+              backendId={topbarBackendId}
+              onOpenSettings={onOpenSettings}
+            />
+            {goalCapable ? (
+              <label className={"goal-toggle" + (goalMode ? " active" : "")}>
+                <input
+                  type="checkbox"
+                  checked={goalMode}
+                  onChange={(e) => StreamStore.setGoalMode(convId, e.target.checked)}
+                  disabled={awaiting || sending || streaming}
+                />
+                <span>Goal</span>
+              </label>
+            ) : null}
+            {streaming ? (
+              hasContent ? (
+                <button
+                  className="send"
+                  onClick={doEnqueue}
+                  disabled={!canEnqueue}
+                  title={canEnqueue ? 'Queue behind current run' : 'Agent is running'}
+                  aria-label="Queue behind current run"
+                  style={!canEnqueue ? {opacity:.5,cursor:"not-allowed"} : undefined}
+                >
+                  {Ico.up(14)}
+                </button>
+              ) : (
+                <button
+                  className="send stop"
+                  onClick={doStop}
+                  title="Stop agent"
+                  aria-label="Stop agent"
+                >
+                  {Ico.stop(14)}
+                </button>
+              )
+            ) : (
+              <button
+                className="send"
+                onClick={doSend}
+                disabled={!canSend}
+                title={goalMode ? 'Set goal' : 'Send'}
+                aria-label={goalMode ? 'Set goal' : 'Send'}
+                style={!canSend ? {opacity:.4,cursor:"not-allowed"} : undefined}
+              >
+                {Ico.up(14)}
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
 
 /* Fullscreen overlay for inline chat-message images. Clicking the backdrop
    or pressing Escape closes it. The `<img>` itself stops propagation so
@@ -2247,13 +2595,14 @@ function PinStrip({ messages, currentIndex, onSelect }){
   };
   const prevIndex = (safeIndex - 1 + messages.length) % messages.length;
   const nextIndex = (safeIndex + 1) % messages.length;
+  const jumpIndex = messages.length > 1 ? nextIndex : safeIndex;
   return (
     <div className="pin-strip" aria-label="Pinned messages">
       <button
         type="button"
         className="pin-strip-label"
-        onClick={() => go(safeIndex)}
-        title="Jump to pinned message"
+        onClick={() => go(jumpIndex)}
+        title={messages.length > 1 ? 'Jump to next pinned message' : 'Jump to pinned message'}
       >
         <span className="pin-strip-icon">{Ico.pin(13)}</span>
         <span>PINNED</span>
@@ -2262,8 +2611,8 @@ function PinStrip({ messages, currentIndex, onSelect }){
       <button
         type="button"
         className="pin-strip-item"
-        onClick={() => go(safeIndex)}
-        title="Jump to pinned message"
+        onClick={() => go(jumpIndex)}
+        title={messages.length > 1 ? 'Jump to next pinned message' : 'Jump to pinned message'}
       >
         <span className="pin-strip-src">{pinMessageSource(active)}</span>
         <span>{pinMessagePreview(active)}</span>
@@ -2337,13 +2686,16 @@ function GoalEventCard({ message }){
   );
 }
 
-function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs, onPinToggle, messageRef, pinFocused }){
+const MessageBubble = React.memo(function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs, onPinToggle, setMessageRef, pinFocused }){
   const isUser = message.role === 'user';
   const isGoalEvent = !!message.goalEvent;
   const contentRef = React.useRef(null);
   const [copied, setCopied] = React.useState(null);
   const hasContent = !!(message.content && message.content.trim());
   const isPinned = !!message.pinned;
+  const messageRef = React.useCallback((node) => {
+    if (setMessageRef) setMessageRef(message.id, node);
+  }, [message.id, setMessageRef]);
 
   function copy(mode){
     let text = '';
@@ -2442,9 +2794,9 @@ function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs, onPi
       ) : null}
     </div>
   );
-}
+});
 
-function ProgressBreadcrumbBubble({ progressRun }){
+const ProgressBreadcrumbBubble = React.memo(function ProgressBreadcrumbBubble({ progressRun }){
   const firstBackend = (progressRun && progressRun[0] && progressRun[0].backend) || null;
   return (
     <div className="msg msg-agent">
@@ -2459,7 +2811,7 @@ function ProgressBreadcrumbBubble({ progressRun }){
       </div>
     </div>
   );
-}
+});
 
 /* Transient progress bubble shown at the foot of the feed while
    StreamStore.reset is in flight. The backend archives the session,
@@ -2745,9 +3097,10 @@ function GeneratedArtifactCard({ artifact, filename, viewPath, downloadUrl, imag
   );
 }
 
-function TextSegment({ content }){
+const TextSegment = React.memo(function TextSegment({ content }){
   const { wsHash, convId, workingDir, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
   const { cleaned, files } = extractFileDeliveries(content);
+  const html = React.useMemo(() => renderMarkdown(cleaned), [cleaned]);
   const proseRef = React.useRef(null);
 
   /* After marked emits `.code-block` chrome, hljs highlights each `pre code`
@@ -2834,7 +3187,7 @@ function TextSegment({ content }){
         <div
           ref={proseRef}
           className="prose"
-          dangerouslySetInnerHTML={{ __html: renderMarkdown(cleaned) }}
+          dangerouslySetInnerHTML={{ __html: html }}
         />
       ) : null}
       {files.length ? (
@@ -2851,7 +3204,7 @@ function TextSegment({ content }){
       ) : null}
     </>
   );
-}
+});
 
 function FileDeliveryCard({ filePath, wsHash, onOpenView }){
   const filename = (filePath.split('/').pop() || filePath);

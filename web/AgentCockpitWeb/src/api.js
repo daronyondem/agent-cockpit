@@ -940,6 +940,12 @@
      server path is embedded in the next /message body as `[Uploaded files: …]`
      (wire-format stability — Claude reads the file from disk). */
   const ConvApi = {
+    getConversation: (convId, params) => chatFetch(
+      chatQueryPath('conversations/' + encodeURIComponent(convId), params)
+    ).then(r => r.json()),
+    getMessageWindow: (convId, params) => chatFetch(
+      chatQueryPath('conversations/' + encodeURIComponent(convId) + '/messages', params)
+    ).then(r => r.json()),
     /* Upload a single file to the conv's artifacts dir. Resolves with a full
        AttachmentMeta — `{name, path, size, kind, meta?}` where `kind` is one
        of image|pdf|text|code|md|folder|file and `meta` is a short human-read

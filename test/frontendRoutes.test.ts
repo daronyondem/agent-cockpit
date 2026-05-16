@@ -65,6 +65,26 @@ describe('frontend routes', () => {
     expect(serverSrc).not.toContain("res.redirect('/index.html')");
   });
 
+  test('desktop chat keeps composer typing out of the transcript render path', () => {
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const shellStateSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shellState.jsx'), 'utf8');
+
+    expect(shellStateSrc).toContain('export function useConversationSelector');
+    expect(shellStateSrc).toContain('export function shallowEqual');
+    expect(shellSrc).toContain('const state = useConversationSelector(convId, selectChatLiveState, shallowEqual);');
+    expect(shellSrc).toContain('const ChatComposer = React.memo(function ChatComposer');
+    expect(shellSrc).toContain('const state = useConversationSelector(convId, selectChatComposerState, shallowEqual);');
+    expect(shellSrc).toContain('input: s.input');
+    expect(shellSrc).not.toMatch(/function selectChatLiveState[\s\S]*input: s\.input[\s\S]*function selectChatComposerState/);
+    expect(shellSrc).toContain('const messageFeedEntries = React.useMemo(');
+    expect(shellSrc).toContain('() => collapseProgressRuns(feedMessages)');
+    expect(shellSrc).toContain('const MessageBubble = React.memo(function MessageBubble');
+    expect(shellSrc).toContain('setMessageRef={setMessageRef}');
+    expect(shellSrc).toContain('const TextSegment = React.memo(function TextSegment');
+    expect(shellSrc).toContain('const html = React.useMemo(() => renderMarkdown(cleaned), [cleaned]);');
+    expect(shellSrc).toContain('dangerouslySetInnerHTML={{ __html: html }}');
+  });
+
   test('mobile PWA keeps iOS viewport and modal sheet content reachable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
     const viewportHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useViewportHeightVar.ts'), 'utf8');
@@ -189,6 +209,43 @@ describe('frontend routes', () => {
     expect(mobileAppSrc).toContain('scrollTranscriptToEnd()');
     expect(mobileCssSrc).toContain('.transcript-wrap');
     expect(mobileCssSrc).toContain('.mobile-back-to-end');
+  });
+
+  test('desktop transcript paging uses internal message windows without a virtualizer dependency', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const webCssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const packageSrc = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8');
+    const packageLockSrc = fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8');
+
+    expect(apiSrc).toContain('getConversation: (convId, params)');
+    expect(apiSrc).toContain('getMessageWindow: (convId, params)');
+    expect(storeSrc).toContain('CHAT_WINDOW_TAIL_LIMIT = 160');
+    expect(storeSrc).toContain('CHAT_WINDOW_PAGE_LIMIT = 80');
+    expect(storeSrc).toContain('loadOlderMessages');
+    expect(storeSrc).toContain('loadAroundMessage');
+    expect(storeSrc).toContain('loadTailMessages');
+    expect(shellSrc).toContain('StreamStore.loadOlderMessages(convId)');
+    expect(shellSrc).toContain('restore.scrollTop + Math.max(0, el.scrollHeight - restore.scrollHeight)');
+    expect(shellSrc).toContain('chatFeedScrollPositions');
+    expect(shellSrc).toContain('saveFeedPosition');
+    expect(shellSrc).toContain('restoreSavedFeedPosition');
+    expect(shellSrc).toContain('StreamStore.loadAroundMessage(convId, messageId)');
+    expect(shellSrc).toContain('pendingPinJumpRef');
+    expect(shellSrc).toContain('if (!feed || !node || !feed.contains(node)) return false;');
+    expect(shellSrc).toContain('forceBackToEndRef.current = true');
+    expect(shellSrc).toContain('setPinJumpToken(token => token + 1)');
+    expect(shellSrc).toContain('feed.scrollTo({ top: Math.max(0, targetTop), behavior })');
+    expect(shellSrc).toContain('requestAnimationFrame(() => setShowFeedBackToEnd(true))');
+    expect(shellSrc).toContain('const jumpIndex = messages.length > 1 ? nextIndex : safeIndex');
+    expect(shellSrc).toContain('Opening pinned message...');
+    expect(shellSrc).toContain('Loading earlier messages...');
+    expect(shellSrc).toContain('StreamStore.loadTailMessages(convId)');
+    expect(shellSrc).toContain('currentMessages={messageWindow && (messageWindow.hasOlder || messageWindow.hasNewer) ? null : messages}');
+    expect(webCssSrc).toContain('.feed-page-status');
+    expect(webCssSrc).toContain('.feed-page-status-floating');
+    expect(`${packageSrc}\n${packageLockSrc}`).not.toMatch(/react-virtuoso|@tanstack\/react-virtual|react-window/);
   });
 
   test('mobile PWA exposes backend-neutral goal controls through the composer shell', () => {
