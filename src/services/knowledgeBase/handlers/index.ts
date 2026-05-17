@@ -12,17 +12,39 @@
 // here, export its handler, done).
 
 import path from 'path';
-import { pdfHandler } from './pdf';
-import { docxHandler } from './docx';
-import { pptxHandler } from './pptx';
-import { passthroughHandler, passthroughSupports } from './passthrough';
+import { passthroughSupports } from './passthroughSupport';
 import type { Handler, HandlerInput, HandlerResult } from './types';
+
+const PDF_HANDLER_MODULE = './pdf';
+const DOCX_HANDLER_MODULE = './docx';
+const PPTX_HANDLER_MODULE = './pptx';
+const PASSTHROUGH_HANDLER_MODULE = './passthrough';
+
+const lazyPdfHandler: Handler = async (input) => {
+  const { pdfHandler } = await import(PDF_HANDLER_MODULE) as typeof import('./pdf');
+  return pdfHandler(input);
+};
+
+const lazyDocxHandler: Handler = async (input) => {
+  const { docxHandler } = await import(DOCX_HANDLER_MODULE) as typeof import('./docx');
+  return docxHandler(input);
+};
+
+const lazyPptxHandler: Handler = async (input) => {
+  const { pptxHandler } = await import(PPTX_HANDLER_MODULE) as typeof import('./pptx');
+  return pptxHandler(input);
+};
+
+const lazyPassthroughHandler: Handler = async (input) => {
+  const { passthroughHandler } = await import(PASSTHROUGH_HANDLER_MODULE) as typeof import('./passthrough');
+  return passthroughHandler(input);
+};
 
 /** Map well-known MIME types to handlers for the extension-less case. */
 const MIME_TO_HANDLER: Record<string, Handler> = {
-  'application/pdf': pdfHandler,
-  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': docxHandler,
-  'application/vnd.openxmlformats-officedocument.presentationml.presentation': pptxHandler,
+  'application/pdf': lazyPdfHandler,
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': lazyDocxHandler,
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': lazyPptxHandler,
 };
 
 /** Error thrown when no handler can process the given file. */
@@ -41,15 +63,15 @@ export function pickHandler(filename: string, mimeType: string): Handler | null 
   const ext = path.extname(filename).toLowerCase();
   switch (ext) {
     case '.pdf':
-      return pdfHandler;
+      return lazyPdfHandler;
     case '.docx':
-      return docxHandler;
+      return lazyDocxHandler;
     case '.pptx':
-      return pptxHandler;
+      return lazyPptxHandler;
     default:
       break;
   }
-  if (passthroughSupports(filename)) return passthroughHandler;
+  if (passthroughSupports(filename)) return lazyPassthroughHandler;
   // MIME fallback — only reached when the filename has no extension or an
   // extension we don't recognize. Browsers sometimes upload with names like
   // `paste-2024-04-08` and rely on the MIME type for format detection.
@@ -71,7 +93,4 @@ export async function ingestFile(input: HandlerInput): Promise<HandlerResult> {
 }
 
 export type { Handler, HandlerInput, HandlerResult } from './types';
-export { pdfHandler } from './pdf';
-export { docxHandler } from './docx';
-export { pptxHandler } from './pptx';
-export { passthroughHandler, passthroughSupports } from './passthrough';
+export { passthroughSupports } from './passthroughSupport';

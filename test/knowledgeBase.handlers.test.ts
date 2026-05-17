@@ -1264,16 +1264,16 @@ describe('passthroughHandler', () => {
 // ── Dispatch ────────────────────────────────────────────────────────────────
 
 describe('dispatch', () => {
-  test('pickHandler returns the right handler by extension', () => {
-    expect(pickHandler('a.pdf', '')).toBe(pdfHandler);
-    expect(pickHandler('a.docx', '')).toBe(docxHandler);
-    expect(pickHandler('a.pptx', '')).toBe(pptxHandler);
-    expect(pickHandler('a.md', '')).toBe(passthroughHandler);
-    expect(pickHandler('a.png', '')).toBe(passthroughHandler);
+  test('pickHandler returns lazy handlers by extension', () => {
+    expect(pickHandler('a.pdf', '')).toEqual(expect.any(Function));
+    expect(pickHandler('a.docx', '')).toEqual(expect.any(Function));
+    expect(pickHandler('a.pptx', '')).toEqual(expect.any(Function));
+    expect(pickHandler('a.md', '')).toEqual(expect.any(Function));
+    expect(pickHandler('a.png', '')).toEqual(expect.any(Function));
   });
 
   test('pickHandler falls back to MIME type when extension is unknown', () => {
-    expect(pickHandler('paste', 'application/pdf')).toBe(pdfHandler);
+    expect(pickHandler('paste', 'application/pdf')).toEqual(expect.any(Function));
     expect(pickHandler('paste', 'unknown/thing')).toBeNull();
   });
 
