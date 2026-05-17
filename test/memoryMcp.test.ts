@@ -1609,7 +1609,7 @@ WS body.
     ]);
   });
 
-  test('emits workspace memory_update after session extraction saves entries', async () => {
+  test('emits refresh-only workspace memory_update after session extraction saves entries', async () => {
     const hash = workspaceHash('/tmp/mem-extract-ws');
     await service.createConversation('conv-extract-ws', '/tmp/mem-extract-ws');
     await service.setWorkspaceMemoryEnabled(hash, true);
@@ -1644,8 +1644,8 @@ Extracted body.
     expect(memoryUpdateCalls[0].payload).toMatchObject({
       type: 'memory_update',
       fileCount: 1,
-      sourceConversationId: 'conv-extract-ws',
-      displayInChat: true,
+      sourceConversationId: null,
+      displayInChat: false,
     });
     expect(memoryUpdateCalls[0].payload.changedFiles).toHaveLength(1);
   });
