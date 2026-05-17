@@ -1214,9 +1214,12 @@ successful Claude/Codex install action, the service prepends
 `<installDir>\cli-tools` to the current server `PATH`, persists the same entry
 to the current user's Windows `Path`, repairs Agent Cockpit-managed terminal
 wrappers, and broadcasts an environment change before returning the refreshed
-doctor result. The repaired `codex.ps1`/`codex.cmd` wrappers call the recorded
-private `node.exe` plus the installed `codex.js` entrypoint directly, so a user
-does not need a separate global Node install for terminal `codex` to start.
+doctor result. User `Path` persistence is a warning step after npm succeeds:
+if writing the current user's `Path` fails, the install action still repairs
+wrappers, refreshes detection, and can return success with the failed PATH step
+captured in `steps[]`. The repaired `codex.ps1`/`codex.cmd` wrappers call the
+recorded private `node.exe` plus the installed `codex.js` entrypoint directly,
+so a user does not need a separate global Node install for terminal `codex` to start.
 That makes immediate authentication/profile checks work and makes
 `claude`/`codex` available to new PowerShell or terminal sessions. Windows
 Claude/Codex probes share the backend resolver:

@@ -292,14 +292,6 @@ export class InstallDoctorService {
       if (pathResult) {
         const pathOutput = commandOutput(pathResult);
         steps.push({ name: 'Add Agent Cockpit CLI tools to user PATH', success: pathResult.ok, output: pathOutput });
-        if (!pathResult.ok) {
-          return {
-            success: false,
-            action: definition.action,
-            steps,
-            error: pathResult.error || firstLine(pathResult.stderr) || firstLine(pathResult.stdout) || 'Failed to update the current user PATH.',
-          };
-        }
       }
 
       const wrapperResult = this.repairWindowsCliToolWrappers(actionId);

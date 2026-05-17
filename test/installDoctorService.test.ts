@@ -534,6 +534,92 @@ describe('InstallDoctorService', () => {
     }
   });
 
+  test('continues Windows CLI install when user PATH persistence fails', async () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = makeRoot();
+    roots.push(root);
+    const runtimeBinDir = path.join(root, 'runtime', 'node-v22.22.3-win-x64');
+    const cliToolsDir = path.join(root, 'cli-tools');
+    const npmCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
+    const nodeExe = path.join(runtimeBinDir, 'node.exe');
+    const codexJs = path.join(cliToolsDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+    fs.mkdirSync(path.dirname(npmCli), { recursive: true });
+    fs.writeFileSync(nodeExe, '');
+    fs.writeFileSync(npmCli, '');
+    const originalPath = process.env.PATH;
+    const originalLocalAppData = process.env.LOCALAPPDATA;
+    delete process.env.LOCALAPPDATA;
+    try {
+      const service = new InstallDoctorService({
+        appRoot: root,
+        dataRoot: path.join(root, 'data'),
+        installStateService: makeInstallState(root, {
+          nodeRuntime: {
+            source: 'private',
+            version: '22.22.3',
+            npmVersion: '10.9.8',
+            binDir: runtimeBinDir,
+            runtimeDir: runtimeBinDir,
+            requiredMajor: 22,
+            updatedAt: '2026-05-15T00:00:00.000Z',
+          },
+        }),
+        commandRunner: async (command, args) => {
+          if (command === 'powershell.exe') {
+            return { ok: false, stdout: '', stderr: 'TrimEnd failed', error: 'Command failed' };
+          }
+          if (command === nodeExe && args[0] === npmCli) return { ok: true, stdout: '10.9.8', stderr: '' };
+          if (command === process.execPath && args[0] === codexJs) {
+            return fs.existsSync(codexJs)
+              ? { ok: true, stdout: '0.50.0', stderr: '' }
+              : { ok: false, stdout: '', stderr: '', error: 'not found' };
+          }
+          if (command === path.join(cliToolsDir, 'codex.cmd') || command === path.join(runtimeBinDir, 'codex.cmd') || command === 'codex.cmd' || command === 'kiro-cli') return { ok: false, stdout: '', stderr: '', error: 'not found' };
+          if (command === 'schtasks.exe') return { ok: true, stdout: 'Ready', stderr: '' };
+          return { ok: true, stdout: '1.0.0', stderr: '' };
+        },
+        installRunner: async (command, args) => {
+          if (command === nodeExe && args[0] === npmCli && args.includes('@openai/codex@latest')) {
+            fs.mkdirSync(path.dirname(codexJs), { recursive: true });
+            fs.writeFileSync(codexJs, '');
+            return { ok: true, stdout: 'installed codex', stderr: '' };
+          }
+          return { ok: false, stdout: '', stderr: '', error: 'unexpected install command' };
+        },
+        detectHomebrew: async () => false,
+        detectPandoc: async () => ({ available: true, binaryPath: 'C:\\Tools\\pandoc.exe', version: '3.1.1', checkedAt: '2026-05-15T00:00:00.000Z' }),
+        detectLibreOffice: async () => ({ available: true, binaryPath: 'C:\\Tools\\soffice.exe', checkedAt: '2026-05-15T00:00:00.000Z' }),
+      });
+
+      const result = await service.runInstallAction('codex-cli:npm-install');
+
+      expect(result.success).toBe(true);
+      expect(result.steps).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          name: 'Add Agent Cockpit CLI tools to user PATH',
+          success: false,
+          output: expect.stringContaining('TrimEnd failed'),
+        }),
+        expect.objectContaining({
+          name: 'Repair Agent Cockpit CLI wrappers',
+          success: true,
+          output: expect.stringContaining('codex'),
+        }),
+      ]));
+      expect(result.doctor?.checks.find(item => item.id === 'codex-cli')).toEqual(expect.objectContaining({ status: 'ok' }));
+      expect(fs.readFileSync(path.join(cliToolsDir, 'codex.ps1'), 'utf8')).toContain(nodeExe);
+      expect(fs.readFileSync(path.join(cliToolsDir, 'codex.cmd'), 'utf8')).toContain(`SET "NODE_EXE=${nodeExe}"`);
+    } finally {
+      process.env.PATH = originalPath;
+      if (originalLocalAppData === undefined) {
+        delete process.env.LOCALAPPDATA;
+      } else {
+        process.env.LOCALAPPDATA = originalLocalAppData;
+      }
+      restorePlatform();
+    }
+  });
+
   test('detects self-installed Windows Claude and Codex commands from PATH', async () => {
     const restorePlatform = mockProcessPlatform('win32');
     const root = makeRoot();
