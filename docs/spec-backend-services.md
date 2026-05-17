@@ -1466,7 +1466,7 @@ Fetches and caches the Kiro (Amazon Q Developer) account-wide plan usage snapsho
 
 **File:** `src/services/codexPlanUsageService.ts`
 
-Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Plus / Pro / Business / Enterprise / etc.), 5-hour rate-limit window utilization, weekly rate-limit window utilization, and optional credit balance — by spawning a one-shot `codex app-server` process and calling its `account/read` and `account/rateLimits/read` JSON-RPC methods over stdio. Surfaces in the V2 ContextChip tooltip for Codex conversations only. The default cache uses the server-configured Codex runtime; Codex profile caches use the selected profile's `command`, `env`, and `CODEX_HOME`.
+Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Plus / Pro / Business / Enterprise / etc.), 5-hour rate-limit window utilization, weekly rate-limit window utilization, and optional credit balance. The refresh path first tries the selected Codex home (`~/.codex` or profile `CODEX_HOME`) for `auth.json` OAuth credentials and calls ChatGPT's usage API directly. If OAuth credentials are absent, stale/unrefreshable, rejected, or the usage API fails, it falls back to spawning a one-shot `codex app-server` process and calling its `account/read` and `account/rateLimits/read` JSON-RPC methods over stdio. Surfaces in the V2 ContextChip tooltip for Codex conversations only. The default cache uses the server-configured Codex runtime; Codex profile caches use the selected profile's `command`, `env`, and `CODEX_HOME`.
 
 **Why one-shot spawn instead of the long-lived `app-server` already used by `CodexAdapter`:** the `app-server` instance owned by `CodexAdapter` is bound to a specific conversation thread; reusing it for plan-usage queries would couple two unrelated lifecycles (refresh on server start when there's no active turn, refresh on turn-done from any conversation). A throwaway process per refresh costs ~hundreds of milliseconds and runs at most once every 10 minutes, which is well below the per-turn budget. App-server *also* emits `account/updated` and `account/rateLimits/updated` notifications on long-lived sessions, but those don't help at server boot when no Codex conversation is active.
 
@@ -1474,26 +1474,38 @@ Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Pl
 - `REFRESH_MIN_INTERVAL_MS = 10 * 60 * 1000` — minimum gap between refresh attempts; matches the Claude/Kiro floor.
 - `STALE_AFTER_MS = 15 * 60 * 1000` — client-visible stale threshold.
 - `REFRESH_TIMEOUT_MS = 15_000` — hard ceiling on the spawned `codex app-server`. The two RPCs are sub-second in practice; a stuck process gets `SIGKILL`'d at this point.
+- `RPC_INITIALIZE_TIMEOUT_MS = 8_000` and `RPC_REQUEST_TIMEOUT_MS = 3_000` — per-RPC deadlines. A timed-out request kills the app-server process and fails with `codex RPC timed out waiting for <method>`.
+- `OAUTH_REQUEST_TIMEOUT_MS = 10_000` — deadline for OAuth token refresh and direct usage API calls.
+- `OAUTH_REFRESH_AFTER_MS = 8 days` — if `auth.json.last_refresh` is older than this or missing, the service refreshes the access token before calling the usage API and writes the updated token bundle back to the same `auth.json`.
 - `PROCESS_KILL_GRACE_MS = 1_000` — after the fetch finishes the service first sends `SIGTERM` and gives the process this long to exit cleanly before `SIGKILL`. The fallback timer is `.unref()`'d so it never holds the event loop open.
 
-**Constructor:** `new CodexPlanUsageService(appRoot: string, options?: { dataRoot?: string })` — stores the default on-disk cache at `<options.dataRoot || appRoot/data>/codex-plan-usage.json` and profile-specific cache files under `<options.dataRoot || appRoot/data>/codex-plan-usage/<encodeURIComponent(profile.id)>.json`.
+**Constructor:** `new CodexPlanUsageService(appRoot: string, options?: { dataRoot?: string; rpcInitializeTimeoutMs?: number; rpcRequestTimeoutMs?: number })` — stores the default on-disk cache at `<options.dataRoot || appRoot/data>/codex-plan-usage.json` and profile-specific cache files under `<options.dataRoot || appRoot/data>/codex-plan-usage/<encodeURIComponent(profile.id)>.json`. The RPC timeout overrides are internal test hooks; production uses the constants above.
 
 **Methods:**
 - `init()` — loads the default persisted snapshot and every profile snapshot off disk on server startup. Silently ignores `ENOENT`; logs any other read/parse failure and keeps the in-memory snapshot as its initial empty shape.
 - `getCached(profile?: CliProfile)` — returns `{ fetchedAt, account, rateLimits, lastError, stale }`. Does not trigger a refresh. Without a profile, or with the plain `server-configured-codex` profile that has no custom command/config/env, reads the default server-configured cache. Account/custom Codex profiles read their isolated cache. `stale` is computed as `now - fetchedAt > STALE_AFTER_MS` (or `true` when `fetchedAt` is null). This is the exact shape returned by `GET /api/chat/codex-plan-usage`.
 - `maybeRefresh(reason: string, profile?: CliProfile)` — triggers a refresh for the default runtime or selected profile if all of: no in-flight refresh for that cache key, and at least `REFRESH_MIN_INTERVAL_MS` have passed since the last attempt for that key. Returns the shared in-flight promise when a fetch is already running, or an immediately-resolved promise when the throttle is active. The `reason` string is logged alongside success/failure (`server-start`, `turn-done`).
-- `_refresh(reason, profile?)` (private) — calls `fetchFromAppServer(profile)` (see below). On success stores `{ fetchedAt: now, account, rateLimits, lastError: null }` into the default snapshot or that profile's snapshot. On failure preserves the prior `account` / `rateLimits` values and only overwrites `lastError` — the UI still renders the last-known snapshot.
+- `_refresh(reason, profile?)` (private) — calls `fetchPlanUsage(profile)` (OAuth usage API first, app-server fallback). On success stores `{ fetchedAt: now, account, rateLimits, lastError: null }` into the default snapshot or that profile's snapshot. On failure preserves the prior `account` / `rateLimits` values and only overwrites `lastError` — the UI still renders the last-known snapshot.
 - `_persist(profile?)` (private) — writes the default snapshot to `<dataRoot>/codex-plan-usage.json` or a profile snapshot to `<dataRoot>/codex-plan-usage/<encoded-profile-id>.json` via `atomicWriteFile`. Failures are logged and swallowed.
+
+**OAuth usage interaction (`fetchFromOAuthUsage`):**
+1. Resolve the same Codex runtime/profile environment used for `app-server`; profile `configDir` wins by setting `CODEX_HOME`.
+2. Read `<CODEX_HOME || ~/.codex>/auth.json`; only OAuth token bundles under `tokens` are accepted for this direct path. API-key-only auth falls through to app-server.
+3. Accept both snake_case and camelCase token keys (`access_token`/`accessToken`, `refresh_token`/`refreshToken`, `id_token`/`idToken`, `account_id`/`accountId`). Decode `id_token` JWT claims for account email and fallback plan metadata.
+4. If `last_refresh` is missing or older than 8 days, call `POST https://auth.openai.com/oauth/token` with Codex's OAuth client id, `grant_type: refresh_token`, and `scope: openid profile email`; write refreshed tokens and `last_refresh` back to the same `auth.json` with `atomicWriteFile`.
+5. Resolve the usage URL from `chatgpt_base_url` in `<CODEX_HOME || ~/.codex>/config.toml` when present. `https://chatgpt.com` and `https://chat.openai.com` bases normalize to `/backend-api/wham/usage`; non-ChatGPT bases use `/api/codex/usage`.
+6. Call the usage API with `Authorization: Bearer <access_token>`, `Accept: application/json`, `User-Agent: AgentCockpit`, and `ChatGPT-Account-Id` when the token bundle includes an account id.
+7. Normalize `plan_type`, `rate_limit.primary_window`, `rate_limit.secondary_window`, and `credits` into the same cached `CodexAccount` / `CodexRateLimits` shape used by the app-server path.
 
 **App-server interaction (`fetchFromAppServer`):**
 1. Resolve the Codex CLI runtime. Without a profile the command is `codex` and the env inherits `process.env`. With a profile, `profile.command || 'codex'` is used, `profile.env` is merged into the child env, and `profile.configDir` sets `CODEX_HOME`. On Windows, installer-managed Codex resolves to `node.exe` plus the package `codex.js` as the first argument before `.cmd` shim fallback.
-2. Build the platform invocation and spawn it with `app-server`: `spawn(invocation.command, invocation.args, { stdio: ['pipe', 'pipe', 'pipe'], env: runtime.env })`. Errors from `spawn` itself (rare — only thrown for invalid args) bubble up as `'spawn <command> app-server failed: <msg>'`.
+2. Build the platform invocation and spawn it with read-only/untrusted app-server arguments: `codex -s read-only -a untrusted app-server` (through `buildCliCommandInvocation` for platform-specific wrappers). Errors from `spawn` itself (rare — only thrown for invalid args) bubble up as `'spawn <command> app-server failed: <msg>'`.
 3. Register an `'error'` listener on the proc to capture `ENOENT` (no selected command on `PATH`).
 4. `await new Promise(r => setImmediate(r))` — yield once so the async `'error'` event has a chance to fire before any `stdin.write` (which would otherwise crash with `EPIPE` on a non-existent process).
 5. If `spawnFailed` is set at this point, throw `'codex app-server unavailable: <msg>'`.
-6. Construct an `RpcClient` (see below) bound to the proc and call `initialize` with `{ clientInfo: { name: 'agent-cockpit', title: null, version: '1.0.0' }, capabilities: null }`.
-7. Issue `account/read` (params `{ refreshToken: false }` — we don't want to trigger an OAuth refresh from a passive read) and `account/rateLimits/read` (no params) in parallel via `Promise.all`.
-8. Normalize both results (see below) and return `{ account, rateLimits }`.
+6. Construct an `RpcClient` (see below) bound to the proc and call `initialize` with `{ clientInfo: { name: 'agent-cockpit', title: null, version: '1.0.0' }, capabilities: null }` under the initialize timeout.
+7. Issue `account/read` (params `{ refreshToken: false }` — we don't want to trigger an OAuth refresh from a passive read) and `account/rateLimits/read` (no params). `account/read` failures are tolerated because the rate-limit result can still carry plan metadata. A rate-limit RPC error is recoverable when the error message contains a `body={...}` ChatGPT usage payload; this handles Codex CLI decoder drift such as a newly introduced plan type.
+8. Normalize both results (see below), preferring `account/read` identity when available and falling back to the recovered usage body identity, then return `{ account, rateLimits }`.
 9. **`finally`:** clear the 15s kill timer; if the proc isn't already killed, `SIGTERM` then schedule a `SIGKILL` after `PROCESS_KILL_GRACE_MS` (the fallback timer is `.unref()`'d).
 
 **`RpcClient` (private nested class):** minimal newline-delimited JSON-RPC over `proc.stdin` / `proc.stdout`.
@@ -1501,13 +1513,14 @@ Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Pl
 - The stdout listener buffers partial lines, splits on `\n`, and for each complete line: `JSON.parse`, then if the message has an `id` and no `method` (i.e. it's a response, not a server-to-client notification or request), look up `pending[id]` — `reject(new Error(error.message))` on RPC error, `resolve(result)` otherwise.
 - Server-to-client notifications and requests are dropped silently (the cockpit only cares about its own responses).
 - On `proc.close` the client rejects every pending promise with `'codex app-server closed'` and clears the map. Subsequent `request()` calls reject immediately with `'codex app-server is closed'`.
+- Each request has a timeout. On timeout, the pending request is removed, the app-server process is killed with `SIGKILL`, and the promise rejects with `'codex RPC timed out waiting for <method>'`.
 
 **Response normalization:** every accessor goes through `strOrNull` / `numOrNull` so missing or wrong-typed fields become `null` rather than crashing the renderer.
 - `normalizeAccount(raw)` reads `raw.account` and returns `{ type, email, planType }` (or `null` if `account` is absent).
-- `normalizeRateLimits(raw)` reads `raw.rateLimits` and returns `{ limitId, limitName, primary, secondary, credits, planType, rateLimitReachedType }` (or `null` if `rateLimits` is absent). Each `primary` / `secondary` window is normalized to `{ usedPercent, windowDurationMins, resetsAt }` — `resetsAt` is **epoch seconds** (not ISO string like Claude's `resets_at`).
+- `normalizeRateLimits(raw)` reads `raw.rateLimits` and returns `{ limitId, limitName, primary, secondary, credits, planType, rateLimitReachedType }` (or `null` if `rateLimits` is absent). OAuth `rate_limit.primary_window` / `secondary_window` are converted into the same shape. Each window is normalized to `{ usedPercent, windowDurationMins, resetsAt }` — `resetsAt` is **epoch seconds** (not ISO string like Claude's `resets_at`).
 - `normalizeCredits(raw)` returns `{ hasCredits, unlimited, balance }` where `hasCredits` and `unlimited` are coerced to strict booleans (`=== true`) and `balance` is preserved as a string (Codex returns it pre-formatted, e.g. `'0'`).
 
-**Window semantics:** Codex's API returns two windows per limit: `primary` (5-hour, `windowDurationMins: 300`) and `secondary` (weekly, `windowDurationMins: 10080`). The frontend uses `windowDurationMins` to label each bar — it does **not** assume the slot order, so a future Codex API change that swaps slots won't mislabel the bars.
+**Window semantics:** Codex normally returns two windows per limit: session (`windowDurationMins: 300`) and weekly (`windowDurationMins: 10080`). The service normalizes these roles before caching: a lone weekly window is stored as `secondary`, a session/unknown window is stored as `primary`, and reversed weekly/session or weekly/unknown pairs are swapped. The frontend still uses `windowDurationMins` to label each bar, so a future Codex API change that swaps slots won't mislabel the bars.
 
 **Integration points:**
 - `server.ts` — instantiated with `__dirname` plus `config.AGENT_COCKPIT_DATA_DIR`, `init()` on startup then immediate `maybeRefresh('server-start')`. Passed into `createChatRouter` via the `codexPlanUsageService` dependency.
@@ -1521,5 +1534,6 @@ Fetches and caches the OpenAI Codex (ChatGPT) account snapshot — plan tier (Pl
 - `'<command> app-server unavailable: <msg>'` — async `'error'` event (typically `ENOENT` when the selected command is not on `PATH`).
 - `'codex app-server closed'` — the process exited before responding to a pending RPC.
 - `'codex app-server is closed'` — a request was issued after the proc had already been closed.
+- `'codex RPC timed out waiting for <method>'` — a per-RPC deadline fired; the app-server process was killed.
 - Any RPC error message verbatim (e.g. `'auth required'`, `'invalid params'`).
 - Any network/TLS error verbatim if `codex` itself fails to reach OpenAI's account API.
