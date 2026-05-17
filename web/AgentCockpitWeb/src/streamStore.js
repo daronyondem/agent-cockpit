@@ -138,6 +138,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
   const RECONNECT_BASE_MS = 1000;
   const RECONNECT_MAX_MS = 10000;
   const RECONCILE_AFTER_OPEN_MS = 150;
+  const RECONCILE_AFTER_ASSISTANT_MESSAGE_MS = 5000;
   const CHAT_WINDOW_TAIL_LIMIT = 160;
   const CHAT_WINDOW_PAGE_LIMIT = 80;
   const CHAT_WINDOW_AROUND_BEFORE = 80;
@@ -946,7 +947,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     }
   }
 
-  function scheduleReconcileActiveStream(convId, ws){
+  function scheduleReconcileActiveStream(convId, ws, delayMs = RECONCILE_AFTER_OPEN_MS){
     const s = states.get(convId);
     if (!s || s.ws !== ws) return;
     if (!(s.streaming || s.uiState === 'streaming')) return;
@@ -956,7 +957,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       if (!cur || cur.ws !== ws || cur.replayActive) return;
       update(convId, { reconcileTimer: null });
       reconcileActiveStream(convId, ws);
-    }, RECONCILE_AFTER_OPEN_MS);
+    }, delayMs);
     update(convId, { reconcileTimer: timer });
   }
 
@@ -1291,6 +1292,10 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
         return { ...cur, messages, streamingMsgId: null };
       });
       diagSnap(convId, 'assistant_message-after');
+      const cur = states.get(convId);
+      if (cur && cur.ws && (cur.streaming || cur.uiState === 'streaming')) {
+        scheduleReconcileActiveStream(convId, cur.ws, RECONCILE_AFTER_ASSISTANT_MESSAGE_MS);
+      }
       bumpConvListActivity(convId, frame.message.timestamp);
       return;
     }

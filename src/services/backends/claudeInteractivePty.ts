@@ -44,10 +44,13 @@ const log = logger.child({ module: 'claude-interactive-pty' });
 const DEFAULT_COLS = 120;
 const DEFAULT_ROWS = 40;
 const TRUST_PROMPT_WRITE_INTERVAL_MS = 2_000;
+const BYPASS_PERMISSION_WARNING_WRITE_INTERVAL_MS = 2_000;
 const TERMINAL_TEXT_BUFFER_LIMIT = 8_000;
 const DEFAULT_PROMPT_ENTER_DELAY_MS = 120;
+const DEFAULT_TRUST_PROMPT_ENTER_DELAY_MS = 120;
 const DEFAULT_QUESTION_OPTION_ENTER_DELAY_MS = 120;
 const DEFAULT_QUESTION_OPTION_READY_DELAY_MS = 300;
+const DEFAULT_BYPASS_PERMISSION_ENTER_DELAY_MS = 120;
 const BRACKETED_PASTE_START = '\x1b[200~';
 const BRACKETED_PASTE_END = '\x1b[201~';
 
@@ -61,6 +64,9 @@ export class ClaudeInteractivePtyController {
   private _dataDisposable: { dispose(): void } | null = null;
   private _exitDisposable: { dispose(): void } | null = null;
   private _lastTrustWriteAt = 0;
+  private _lastBypassPermissionWriteAt = 0;
+  private _workspaceTrustConfirmed = false;
+  private _bypassPermissionConfirmed = false;
   private _terminalText = '';
   private _pendingControlWrites: Array<string | Buffer> = [];
   private _flushControlWritesScheduled = false;
@@ -175,11 +181,34 @@ export class ClaudeInteractivePtyController {
     }
 
     const terminalText = this._appendTerminalText(data);
-    if (!shouldAutoConfirmWorkspaceTrust(terminalText, this._cwd)) return;
     const now = Date.now();
-    if (now - this._lastTrustWriteAt < TRUST_PROMPT_WRITE_INTERVAL_MS) return;
-    this._lastTrustWriteAt = now;
-    this._queueControlWrite('\r');
+    if (
+      !this._workspaceTrustConfirmed
+      && shouldAutoConfirmWorkspaceTrust(terminalText, this._cwd)
+      && now - this._lastTrustWriteAt >= TRUST_PROMPT_WRITE_INTERVAL_MS
+    ) {
+      this._lastTrustWriteAt = now;
+      this._workspaceTrustConfirmed = true;
+      const enterTimer = setTimeout(
+        () => this._queueControlWrite('\r'),
+        DEFAULT_TRUST_PROMPT_ENTER_DELAY_MS,
+      );
+      enterTimer.unref?.();
+    }
+    if (
+      !this._bypassPermissionConfirmed
+      && shouldAutoConfirmBypassPermissionsWarning(terminalText)
+      && now - this._lastBypassPermissionWriteAt >= BYPASS_PERMISSION_WARNING_WRITE_INTERVAL_MS
+    ) {
+      this._lastBypassPermissionWriteAt = now;
+      this._bypassPermissionConfirmed = true;
+      this._queueControlWrite('\x1b[B');
+      const enterTimer = setTimeout(
+        () => this._queueControlWrite('\r'),
+        DEFAULT_BYPASS_PERMISSION_ENTER_DELAY_MS,
+      );
+      enterTimer.unref?.();
+    }
   }
 
   private _queueControlWrite(data: string | Buffer): void {
@@ -242,6 +271,13 @@ function shouldAutoConfirmWorkspaceTrust(text: string, cwd?: string): boolean {
         && compact.includes('claudecodewillbeabletoreadeditandexecutefileshere')
       )
     );
+}
+
+function shouldAutoConfirmBypassPermissionsWarning(text: string): boolean {
+  const compact = text.replace(/[^a-z0-9]+/g, '');
+  return compact.includes('bypasspermissionsmode')
+    && compact.includes('noexit')
+    && compact.includes('yesiaccept');
 }
 
 function stripAnsi(value: string): string {

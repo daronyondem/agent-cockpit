@@ -75,6 +75,7 @@ const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_EXIT_GRACE_MS = 750;
 const DEFAULT_SESSION_START_TIMEOUT_MS = 10_000;
 const DEFAULT_PROMPT_READY_DELAY_MS = 300;
+const DEFAULT_PROMPT_FALLBACK_READY_DELAY_MS = 1_500;
 const DEFAULT_PROMPT_ENTER_DELAY_MS = 120;
 const DEFAULT_STOP_HOOK_TIMEOUT_MS = 60 * 60 * 1000;
 const DEFAULT_EXIT_SETTLE_MS = 1_000;
@@ -320,9 +321,11 @@ export class ClaudeCodeInteractiveAdapter extends BaseBackendAdapter {
       this._sessionManager.attach(options.conversationId, controller);
       yield { type: 'backend_runtime', processId: controller.pid };
 
+      let sessionStartReady = false;
       if (hookHarness) {
         try {
           await hookHarness.waitForSessionStart(this._sessionStartTimeoutMs);
+          sessionStartReady = true;
         } catch (err: unknown) {
           log.warn('Claude Code Interactive SessionStart hook did not arrive before prompt fallback', { error: err });
         }
@@ -333,8 +336,11 @@ export class ClaudeCodeInteractiveAdapter extends BaseBackendAdapter {
         emittedDone = true;
         return;
       } else {
-        if (this._promptReadyDelayMs > 0) {
-          await sleep(this._promptReadyDelayMs);
+        const promptReadyDelayMs = sessionStartReady
+          ? this._promptReadyDelayMs
+          : Math.max(this._promptReadyDelayMs, DEFAULT_PROMPT_FALLBACK_READY_DELAY_MS);
+        if (promptReadyDelayMs > 0) {
+          await sleep(promptReadyDelayMs);
         }
         controller.sendPrompt(message, { enterDelayMs: this._promptEnterDelayMs });
         state.promptSubmitted = true;

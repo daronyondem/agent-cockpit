@@ -1271,7 +1271,7 @@ describe('Auto title update on new session', () => {
     ] as StreamEvent[]);
 
     const ws = await env.connectWs(conv.id);
-    const eventsPromise = env.readWsEvents(ws);
+    const eventsPromise = readWsEventsFor(ws, 1000);
 
     await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'New topic question',
@@ -1299,7 +1299,7 @@ describe('Auto title update on new session', () => {
     ] as StreamEvent[]);
 
     const ws = await env.connectWs(conv.id);
-    const eventsPromise = env.readWsEvents(ws);
+    const eventsPromise = readWsEventsFor(ws, 1000);
 
     await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'Hello world',
@@ -1330,7 +1330,7 @@ describe('Auto title update on new session', () => {
     ] as StreamEvent[]);
 
     const ws = await env.connectWs(conv.id);
-    const eventsPromise = env.readWsEvents(ws);
+    const eventsPromise = readWsEventsFor(ws, 1000);
 
     await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
       content: 'New session question',
@@ -1343,6 +1343,25 @@ describe('Auto title update on new session', () => {
     expect(titleEvents).toHaveLength(1);
   });
 });
+
+function readWsEventsFor(ws: any, timeout = 1000): Promise<any[]> {
+  return new Promise((resolve) => {
+    const events: any[] = [];
+    const timer = setTimeout(() => {
+      ws.close();
+      resolve(events);
+    }, timeout);
+    ws.on('message', (data: any) => {
+      try {
+        events.push(JSON.parse(data.toString()));
+      } catch {}
+    });
+    ws.on('close', () => {
+      clearTimeout(timer);
+      resolve(events);
+    });
+  });
+}
 
 // ── Workspace context injection ──────────────────────────────────────────────
 

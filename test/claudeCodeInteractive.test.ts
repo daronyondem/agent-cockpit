@@ -804,6 +804,8 @@ describe('Claude interactive helpers', () => {
     listeners.onData?.('Do you tru');
     listeners.onData?.('st the files in this folder?');
     await Promise.resolve();
+    expect(writes).not.toContain('\r');
+    await sleep(150);
     expect(writes).toContain('\r');
   });
 
@@ -832,7 +834,45 @@ describe('Claude interactive helpers', () => {
     listeners.onData?.('❯\x1b[1C1.\x1b[1CYes,\x1b[1CI\x1b[1Ctrust\x1b[1Cthis\x1b[1Cfolder');
     listeners.onData?.('Claude\x1b[1CCode\\\'ll\x1b[1Cbe\x1b[1Cable\x1b[1Cto\x1b[1Cread,\x1b[1Cedit,\x1b[1Cand\x1b[1Cexecute\x1b[1Cfiles\x1b[1Chere.');
     await Promise.resolve();
+    expect(writes).not.toContain('\r');
+    await sleep(150);
     expect(writes).toContain('\r');
+  });
+
+  test('auto-confirms Claude bypass permissions warning by selecting accept', async () => {
+    const listeners: { onData?: (data: string) => void } = {};
+    const writes: string[] = [];
+    const controller = new ClaudeInteractivePtyController({
+      command: 'claude-test',
+      args: [],
+      cwd: '/tmp/workspace',
+      env: {},
+      factory: () => ({
+        pid: 1234,
+        write(data: string | Buffer) { writes.push(String(data)); },
+        kill() {},
+        onData(listener) {
+          listeners.onData = listener;
+          return { dispose() {} };
+        },
+        onExit() { return { dispose() {} }; },
+      }),
+    });
+
+    controller.start();
+    listeners.onData?.('WARNING:\x1b[1CClaude\x1b[1CCode\x1b[1Crunning\x1b[1Cin\x1b[1CBypass\x1b[1CPermissions\x1b[1Cmode');
+    listeners.onData?.('❯\x1b[1C1.\x1b[1CNo,\x1b[1Cexit');
+    listeners.onData?.('2.\x1b[1CYes,\x1b[1CI\x1b[1Caccept');
+    await Promise.resolve();
+    expect(writes).toContain('\x1b[B');
+    expect(writes).not.toContain('\r');
+    await sleep(150);
+    expect(writes).toEqual(expect.arrayContaining(['\x1b[B', '\r']));
+    expect(writes.indexOf('\x1b[B')).toBeLessThan(writes.indexOf('\r'));
+    const writeCount = writes.length;
+    listeners.onData?.('status repaint after WARNING: Claude Code running in Bypass Permissions mode 1. No, exit 2. Yes, I accept');
+    await sleep(150);
+    expect(writes).toHaveLength(writeCount);
   });
 
   test('does not auto-confirm non-trust permission text', async () => {
