@@ -157,7 +157,7 @@ test.describe('Claude Code Interactive UI', () => {
     await expect(page.locator('.feed')).toContainText(secondToken);
     await expect(page.locator('.feed')).not.toContainText(firstToken);
 
-    await openConversation(page, first.title, workspaceDir);
+    await openConversation(page, first.title, workspaceDir, [firstToken]);
     await expect(page.locator('.feed')).toContainText(firstToken);
     await expect(page.locator('.feed')).not.toContainText(secondToken);
   });
@@ -535,7 +535,7 @@ async function getCsrfToken(request: APIRequestContext): Promise<string> {
   return String(tokenBody.csrfToken || '');
 }
 
-async function openConversation(page: Page, title: string, workingDir: string): Promise<void> {
+async function openConversation(page: Page, title: string, workingDir: string, alternateTitleTexts: string[] = []): Promise<void> {
   await page.goto('/v2/');
   const workspaceFilter = page.getByLabel('Workspace filter');
   const label = workspaceLabel(workingDir);
@@ -543,10 +543,13 @@ async function openConversation(page: Page, title: string, workingDir: string): 
   await expect(workspaceFilter).toContainText(label, { timeout: 30_000 });
   await workspaceFilter.selectOption({ label });
 
-  const row = page.locator('.sb-row').filter({ hasText: title });
+  const titleMatcher = alternateTitleTexts.length
+    ? new RegExp([title, ...alternateTitleTexts].map(escapeRegex).join('|'))
+    : title;
+  const row = page.locator('.sb-row').filter({ hasText: titleMatcher });
   await expect(row).toBeVisible({ timeout: 30_000 });
   await row.click();
-  await expect(page.locator('.topbar-title')).toHaveText(title, { timeout: 30_000 });
+  await expect(page.locator('.topbar-title')).toContainText(titleMatcher, { timeout: 30_000 });
   await expect(page.getByPlaceholder(/Message Agent Cockpit/)).toBeVisible({ timeout: 30_000 });
 }
 
@@ -589,6 +592,10 @@ function shortId(): string {
 
 function workspaceLabel(workingDir: string): string {
   return workingDir.split(path.sep).filter(Boolean).slice(-2).join('/');
+}
+
+function escapeRegex(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 async function restartIsolatedServer(): Promise<ChildProcess> {

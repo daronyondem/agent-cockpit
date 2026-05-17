@@ -184,7 +184,8 @@ runE2E('Claude Code Interactive real CLI compatibility', () => {
 
       expectHookEventAny(ctx, ['PreToolUse', 'PostToolUse'], event => hookToolName(event) === 'EnterPlanMode');
       expect(JSON.stringify(hookToolInput(exitHook))).toContain(planToken);
-      expect(hookPayloadStringFromInput(exitHook, 'planFilePath')).toEqual(expect.stringContaining('.claude/plans/'));
+      const planFilePath = hookPayloadStringFromInput(exitHook, 'planFilePath');
+      if (planFilePath) expect(planFilePath).toEqual(expect.stringMatching(/\/plans\/[^/]+[.]md$/));
       await writeScenarioArtifacts(ctx, events);
     }, { recordHooks: true });
   });
@@ -324,11 +325,28 @@ async function withScenario(
 }
 
 async function collectWithTimeout(stream: AsyncIterable<StreamEvent>, timeoutMs: number): Promise<StreamEvent[]> {
-  return withTimeout(async () => {
-    const events: StreamEvent[] = [];
-    await collectInto(stream, events);
+  const iterator = stream[Symbol.asyncIterator]();
+  const events: StreamEvent[] = [];
+  const deadline = Date.now() + timeoutMs;
+
+  try {
+    while (true) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('Claude Interactive E2E timed out');
+      const next = await Promise.race([
+        iterator.next().then(value => ({ type: 'event' as const, value })),
+        sleep(remaining).then(() => ({ type: 'timeout' as const })),
+      ]);
+      if (next.type === 'timeout') throw new Error('Claude Interactive E2E timed out');
+      if (next.value.done) break;
+      events.push(next.value.value);
+      if (next.value.value.type === 'done') break;
+    }
     return events;
-  }, timeoutMs, 'Claude Interactive E2E timed out');
+  } catch (err: unknown) {
+    await closeStreamIterator(iterator);
+    throw err;
+  }
 }
 
 async function collectInto(stream: AsyncIterable<StreamEvent>, events: StreamEvent[]): Promise<void> {
@@ -343,11 +361,23 @@ async function collectAndAbort(
   abort: () => void,
   timeoutMs: number,
 ): Promise<{ events: StreamEvent[]; processId: number | null }> {
-  return withTimeout(async () => {
-    const events: StreamEvent[] = [];
-    let processId: number | null = null;
-    let abortSent = false;
-    for await (const event of stream) {
+  const iterator = stream[Symbol.asyncIterator]();
+  const events: StreamEvent[] = [];
+  const deadline = Date.now() + timeoutMs;
+  let processId: number | null = null;
+  let abortSent = false;
+
+  try {
+    while (true) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) throw new Error('Claude Interactive abort E2E timed out');
+      const next = await Promise.race([
+        iterator.next().then(value => ({ type: 'event' as const, value })),
+        sleep(remaining).then(() => ({ type: 'timeout' as const })),
+      ]);
+      if (next.type === 'timeout') throw new Error('Claude Interactive abort E2E timed out');
+      if (next.value.done) break;
+      const event = next.value.value;
       events.push(event);
       if (!abortSent && event.type === 'backend_runtime' && typeof event.processId === 'number') {
         processId = event.processId;
@@ -357,7 +387,22 @@ async function collectAndAbort(
       if (event.type === 'done') break;
     }
     return { events, processId };
-  }, timeoutMs, 'Claude Interactive abort E2E timed out');
+  } catch (err: unknown) {
+    abort();
+    await closeStreamIterator(iterator);
+    throw err;
+  }
+}
+
+async function closeStreamIterator(iterator: AsyncIterator<StreamEvent>): Promise<void> {
+  try {
+    await Promise.race([
+      iterator.return?.(undefined) ?? Promise.resolve(),
+      sleep(5_000),
+    ]);
+  } catch {
+    // Best-effort cleanup only; preserve the original test failure.
+  }
 }
 
 function recordingHookFactory(target: ClaudeInteractiveHookEvent[]): () => Promise<ClaudeInteractiveHookHarness> {

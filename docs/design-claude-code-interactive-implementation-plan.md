@@ -84,7 +84,7 @@ Do not parse terminal escape output into chat events except for coarse state-mac
 Create a single source of truth for the interactive adapter's tested CLI version:
 
 ```ts
-export const CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION = '2.1.142';
+export const CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION = '2.1.143';
 ```
 
 Place it near the adapter implementation, likely in `src/services/backends/claudeCodeInteractive.ts` or a focused `src/services/backends/claudeInteractiveCompatibility.ts`.

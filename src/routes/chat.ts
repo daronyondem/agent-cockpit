@@ -80,7 +80,6 @@ export async function processStream(
   let planModeActive = false;
   let planApprovalEmitted = false;
   let titleUpdateTriggered = false;
-  let titleUpdatePromise: Promise<void> | null = null;
   let toolActivityAccumulator: Array<{
     tool: string;
     description: string;
@@ -231,7 +230,6 @@ export async function processStream(
 
   async function emitDoneIfNeeded(): Promise<void> {
     if (doneEmitted) return;
-    if (titleUpdatePromise) await titleUpdatePromise;
     await deleteJobBeforeDone();
     await runOnDoneIfNeeded();
     doneEmitted = true;
@@ -370,9 +368,9 @@ export async function processStream(
   function maybeUpdateTitle() {
     if (titleUpdateTriggered || !entry.needsTitleUpdate || !entry.titleUpdateMessage) return;
     titleUpdateTriggered = true;
-    titleUpdatePromise = chatService.generateAndUpdateTitle(convId, entry.titleUpdateMessage)
+    void chatService.generateAndUpdateTitle(convId, entry.titleUpdateMessage)
       .then((newTitle) => {
-        if (newTitle && !isClosed()) {
+        if (newTitle) {
           log.info('Title updated', { conversationId: convId, title: newTitle });
           emit({ type: 'title_updated', title: newTitle });
         }
