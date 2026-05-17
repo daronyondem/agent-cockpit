@@ -15,36 +15,9 @@
 import path from 'path';
 import { promises as fsp } from 'fs';
 import type { Handler, HandlerResult } from './types';
-import {
-  convertImageToMarkdown,
-  ensureAiReadyImage,
-} from '../ingestion/pageConversion';
+import { IMAGE_EXTS, TEXT_EXTS, passthroughSupports } from './passthroughSupport';
 
-const TEXT_EXTS = new Set([
-  '.txt',
-  '.md',
-  '.markdown',
-  '.rst',
-  '.log',
-  '.csv',
-  '.tsv',
-  '.json',
-  '.yaml',
-  '.yml',
-  '.xml',
-  '.html',
-  '.htm',
-]);
-
-const IMAGE_EXTS = new Set([
-  '.png',
-  '.jpg',
-  '.jpeg',
-  '.gif',
-  '.webp',
-  '.bmp',
-  '.svg',
-]);
+const PAGE_CONVERSION_MODULE = '../ingestion/pageConversion';
 
 /** Extensions the AI image-to-markdown call is appropriate for. SVG is
  *  excluded — vision models don't benefit from rasterizing what's already
@@ -60,11 +33,7 @@ const AI_ELIGIBLE_IMAGE_EXTS = new Set([
 
 type ImageSource = 'artificial-intelligence' | 'image-only';
 
-/** True iff the extension belongs to a format this handler can handle. */
-export function passthroughSupports(filename: string): boolean {
-  const ext = path.extname(filename).toLowerCase();
-  return TEXT_EXTS.has(ext) || IMAGE_EXTS.has(ext);
-}
+export { passthroughSupports };
 
 export const passthroughHandler: Handler = async ({
   buffer,
@@ -113,6 +82,8 @@ export const passthroughHandler: Handler = async ({
     // both ingestion-time AI and digestion-time CLI reads stay under the
     // cap. SVG and other formats `@napi-rs/canvas` can't decode pass
     // through unchanged.
+    const { ensureAiReadyImage, convertImageToMarkdown } =
+      await import(PAGE_CONVERSION_MODULE) as typeof import('../ingestion/pageConversion');
     const aiSidecarAbs = mediaPath + '.ai.png';
     const aiSidecarRel = relMedia + '.ai.png';
     const aiPath = await ensureAiReadyImage(mediaPath, aiSidecarAbs);

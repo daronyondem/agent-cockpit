@@ -10,6 +10,8 @@
 
 Shared chat route tests use `test/helpers/chatEnv.ts` for isolated Express/WebSocket servers and scratch data directories. Teardown waits for active streams, the session finalizer queue, and any in-flight durable stream-job registry mutation to become idle before closing the server and removing the scratch directory, so background finalizer/job writes cannot race temp-directory cleanup.
 
+Test HTTP servers that are contacted through `127.0.0.1` bind explicitly to `127.0.0.1` instead of relying on `listen(0)`'s platform default. This avoids macOS/Node combinations that bind a listener to IPv6 `::` while the test client opens an IPv4 loopback connection, which otherwise leaves `HTTPCLIENTREQUEST` handles in `SYN_SENT` until Jest's per-test timeout fires. Test HTTP helper clients set a short request timeout and destroy the request with a route-specific error so local listener failures fail as harness errors instead of generic 5-second Jest timeouts.
+
 | File | Focus |
 |------|-------|
 | `test/contextMap.db.test.ts` | Context Map SQLite storage foundation: fresh DB schema version, default system entity type catalog including `feature`, `openContextMapDatabase()` directory/bootstrap behavior, workspace-specific entity type upsert/update, entity readable fields and updates, alias de-duplication, fact storage, relationship qualifier normalization, updates, and duplicate prevention, evidence ref de-duplication/linking, processor run lifecycle/listing, source-span idempotency/listing, conversation cursor upsert/listing, source cursor upsert/listing/missing-state recovery, candidate payload/confidence edits, status updates, audit event persistence, and clear-all reset preserving system entity types while removing processing cursors. |

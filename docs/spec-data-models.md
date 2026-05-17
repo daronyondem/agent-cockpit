@@ -80,7 +80,8 @@ agent-cockpit/
 │       │   │   ├── pptxSignals.ts      # PPTX per-slide figure/chart/table signals (regex over raw namespaced XML)
 │       │   │   └── pptxSlideRender.ts  # LibreOffice + unpdf slide rasterization (extracted for jest.spyOn-based tests)
 │       │   └── handlers/
-│       │       ├── index.ts            # pickHandler dispatch + ingestFile + UnsupportedFileTypeError
+│       │       ├── index.ts            # lazy pickHandler dispatch + ingestFile + UnsupportedFileTypeError
+│       │       ├── passthroughSupport.ts # lightweight passthrough extension matrix for dispatch without native imports
 │       │       ├── pdf.ts              # PDF page-by-page 150 DPI rasterization + hybrid pdfjs/AI per-page
 │       │       ├── docx.ts             # DOCX → GFM markdown via pandoc + per-image AI description (hybrid)
 │       │       ├── pptx.ts             # PPTX per-slide hybrid: XML extract / AI / image-only via signals + LO rasterization

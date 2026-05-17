@@ -7,6 +7,8 @@ import { createContextMapMcpServer, CONTEXT_MAP_MCP_STUB_PATH, type ContextMapCh
 import { ContextMapDatabase } from '../src/services/contextMap/db';
 
 const NOW = '2026-05-07T20:00:00.000Z';
+const TEST_HTTP_HOST = '127.0.0.1';
+const TEST_HTTP_TIMEOUT_MS = 2000;
 
 let tmpDir: string;
 let db: ContextMapDatabase;
@@ -84,9 +86,9 @@ function buildAndListen(chatService: ContextMapChatService) {
   app.use(express.json());
   app.use('/mcp', mcp.router);
   return new Promise<{ mcp: typeof mcp; close: () => Promise<void> }>((resolve) => {
-    server = app.listen(0, () => {
+    server = app.listen(0, TEST_HTTP_HOST, () => {
       const addr = server!.address() as { port: number };
-      baseUrl = `http://127.0.0.1:${addr.port}`;
+      baseUrl = `http://${TEST_HTTP_HOST}:${addr.port}`;
       const close = () => new Promise<void>((done) => server!.close(() => done()));
       resolve({ mcp, close });
     });
@@ -123,6 +125,9 @@ function request(body: unknown, token?: string): Promise<{ status: number; body:
         });
       },
     );
+    req.setTimeout(TEST_HTTP_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Timed out after ${TEST_HTTP_TIMEOUT_MS}ms waiting for POST ${url.pathname} on ${baseUrl}`));
+    });
     req.on('error', reject);
     req.write(payload);
     req.end();

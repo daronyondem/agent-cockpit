@@ -17,6 +17,9 @@ import type {
   MemorySnapshot,
 } from '../src/types';
 
+const TEST_HTTP_HOST = '127.0.0.1';
+const TEST_HTTP_TIMEOUT_MS = 2000;
+
 function workspaceHash(p: string): string {
   return crypto.createHash('sha256').update(p).digest('hex').substring(0, 16);
 }
@@ -347,9 +350,9 @@ function startHttpServer(router: express.Router): Promise<void> {
   app.use(express.json());
   app.use('/mcp', router);
   return new Promise((resolve) => {
-    httpServer = app.listen(0, () => {
+    httpServer = app.listen(0, TEST_HTTP_HOST, () => {
       const addr = httpServer!.address() as { port: number };
-      httpBaseUrl = `http://127.0.0.1:${addr.port}`;
+      httpBaseUrl = `http://${TEST_HTTP_HOST}:${addr.port}`;
       resolve();
     });
   });
@@ -393,6 +396,9 @@ function makeRequest(
         });
       },
     );
+    req.setTimeout(TEST_HTTP_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Timed out after ${TEST_HTTP_TIMEOUT_MS}ms waiting for ${method} ${urlPath} on ${httpBaseUrl}`));
+    });
     req.on('error', reject);
     if (payload) req.write(payload);
     req.end();

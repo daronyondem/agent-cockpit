@@ -13,6 +13,9 @@ import * as embeddings from '../src/services/knowledgeBase/embeddings';
 
 // ── Test helpers ──────────────────────────────────────────────────────────
 
+const TEST_HTTP_HOST = '127.0.0.1';
+const TEST_HTTP_TIMEOUT_MS = 2000;
+
 function makeMockChatService(overrides: Partial<KbSearchChatService> = {}): KbSearchChatService {
   return {
     getKbDb: jest.fn().mockReturnValue(null),
@@ -32,9 +35,9 @@ function buildAndListen(chatService: KbSearchChatService, kbIngestion?: any) {
   app.use(express.json());
   app.use('/mcp', mcp.router);
   return new Promise<{ mcp: typeof mcp; close: () => Promise<void> }>((resolve) => {
-    server = app.listen(0, () => {
+    server = app.listen(0, TEST_HTTP_HOST, () => {
       const addr = server.address() as { port: number };
-      baseUrl = `http://127.0.0.1:${addr.port}`;
+      baseUrl = `http://${TEST_HTTP_HOST}:${addr.port}`;
       const close = () => new Promise<void>((r) => server.close(() => r()));
       resolve({ mcp, close });
     });
@@ -76,6 +79,9 @@ function makeRequest(
         });
       },
     );
+    req.setTimeout(TEST_HTTP_TIMEOUT_MS, () => {
+      req.destroy(new Error(`Timed out after ${TEST_HTTP_TIMEOUT_MS}ms waiting for ${method} ${urlPath} on ${baseUrl}`));
+    });
     req.on('error', reject);
     if (payload) req.write(payload);
     req.end();

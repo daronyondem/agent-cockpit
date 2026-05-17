@@ -18,6 +18,8 @@ import { MockBackendAdapter } from './mockBackendAdapter';
 
 export const DEFAULT_WORKSPACE = '/tmp/test-workspace';
 export const CSRF_TOKEN = 'test-csrf-token';
+const TEST_HTTP_HOST = '127.0.0.1';
+const TEST_HTTP_TIMEOUT_MS = 2000;
 
 export interface HttpResult {
   status: number;
@@ -131,9 +133,9 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
   app.use('/api/chat', chatResult.router);
 
   const server = await new Promise<http.Server>((resolve) => {
-    const s = app.listen(0, () => resolve(s));
+    const s = app.listen(0, TEST_HTTP_HOST, () => resolve(s));
   });
-  const baseUrl = `http://127.0.0.1:${(server.address() as any).port}`;
+  const baseUrl = `http://${TEST_HTTP_HOST}:${(server.address() as any).port}`;
 
   const mockStore = {
     get: (_sid: string, cb: (err: any, session: any) => void) => cb(null, null),
@@ -174,6 +176,9 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
             resolve({ status: res.statusCode!, body: data, headers: res.headers });
           }
         });
+      });
+      req.setTimeout(TEST_HTTP_TIMEOUT_MS, () => {
+        req.destroy(new Error(`Timed out after ${TEST_HTTP_TIMEOUT_MS}ms waiting for ${method} ${urlPath} on ${baseUrl}`));
       });
       req.on('error', reject);
       if (body) req.write(JSON.stringify(body));
@@ -221,6 +226,9 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
           }
         });
       });
+      req.setTimeout(TEST_HTTP_TIMEOUT_MS, () => {
+        req.destroy(new Error(`Timed out after ${TEST_HTTP_TIMEOUT_MS}ms waiting for multipart ${method} ${urlPath} on ${baseUrl}`));
+      });
       req.on('error', reject);
       req.write(body);
       req.end();
@@ -230,7 +238,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
   const connectWs = (convId: string): Promise<WebSocket> => {
     return new Promise((resolve, reject) => {
       const port = (server.address() as any).port;
-      const ws = new WebSocket(`ws://127.0.0.1:${port}/api/chat/conversations/${convId}/ws`);
+      const ws = new WebSocket(`ws://${TEST_HTTP_HOST}:${port}/api/chat/conversations/${convId}/ws`);
       ws.on('open', () => resolve(ws));
       ws.on('error', reject);
     });
