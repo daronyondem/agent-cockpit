@@ -30,6 +30,19 @@ Design and planning documents that preserve product intent, implementation plans
 | [design-kb-ingestion-hybrid.md](design-kb-ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |
 | [design-kb-vnext-implementation-plan.md](design-kb-vnext-implementation-plan.md) | Proposed | Phased Knowledge Base vNext plan: document structure, chunked digestion, gleaning, glossary expansion, graph retrieval, synthesis history, and pipeline visualization |
 
+### Public Documentation
+
+User-facing documentation explains how to install, configure, and operate Agent
+Cockpit without reading the implementation specification:
+
+| Document | Description |
+|----------|-------------|
+| [README.md](README.md) | Public docs entry point that routes to user, deploy, and reference guides. |
+| [user/README.md](user/README.md) | User guide for quickstart, backends, Memory, Knowledge Base, Context Map, and mobile PWA. |
+| [deploy/README.md](deploy/README.md) | Deploy guide for platform installers, remote access, security, Install Doctor, and updates. |
+| [reference/README.md](reference/README.md) | Technical reference for environment variables, data layout, backend capabilities, development, and testing. |
+| [product-positioning.md](product-positioning.md) | Public-copy message architecture for keeping positioning provider-neutral and user-owned-context focused. |
+
 ### Notes & Findings
 
 Engineering notes that capture empirical findings — not proposals or specs, but durable knowledge worth preserving:
