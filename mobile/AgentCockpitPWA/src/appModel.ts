@@ -219,6 +219,29 @@ export function upsertMessage(messages: Message[], message: Message): Message[] 
   return next;
 }
 
+export function replaceMessageByID(messages: Message[], id: string, replacement: Message): Message[] {
+  const next: Message[] = [];
+  let replaced = false;
+  for (const message of messages) {
+    if (message.id === id && !replaced) {
+      next.push(replacement);
+      replaced = true;
+      continue;
+    }
+    if (message.id === replacement.id) {
+      continue;
+    }
+    next.push(message);
+  }
+  return replaced ? next : [...next, replacement];
+}
+
+export function removeMessagesByID(messages: Message[], ids: string[]): Message[] {
+  if (!ids.length) return messages;
+  const blocked = new Set(ids);
+  return messages.filter((message) => !blocked.has(message.id));
+}
+
 export function userLabel(user: CurrentUser | null): string {
   if (!user) return 'Not loaded';
   return user.displayName || user.email || 'Local session';
