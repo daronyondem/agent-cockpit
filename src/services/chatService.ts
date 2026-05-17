@@ -802,6 +802,7 @@ export class ChatService {
     return {
       id: convEntry.id,
       title: convEntry.title,
+      titleManuallySet: convEntry.titleManuallySet,
       backend: convEntry.backend,
       cliProfileId: convEntry.cliProfileId,
       model: convEntry.model,

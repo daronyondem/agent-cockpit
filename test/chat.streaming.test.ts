@@ -1289,8 +1289,9 @@ describe('Auto title update on new session', () => {
     expect(loaded.title).toBe('New Topic Title');
   });
 
-  test('does not send title_updated on first session', async () => {
+  test('sends title_updated on first session', async () => {
     const conv = await env.chatService.createConversation('New Chat');
+    env.mockBackend._mockTitle = 'First Session Title';
 
     env.mockBackend.setMockEvents([
       { type: 'text', content: 'First response', streaming: true },
@@ -1308,7 +1309,11 @@ describe('Auto title update on new session', () => {
     const events = await eventsPromise;
 
     const titleEvents = events.filter((e: any) => e.type === 'title_updated');
-    expect(titleEvents).toHaveLength(0);
+    expect(titleEvents).toHaveLength(1);
+    expect(titleEvents[0].title).toBe('First Session Title');
+
+    const loaded = (await env.chatService.getConversation(conv.id))!;
+    expect(loaded.title).toBe('First Session Title');
   });
 
   test('sends title_updated only once even with multiple assistant messages', async () => {
