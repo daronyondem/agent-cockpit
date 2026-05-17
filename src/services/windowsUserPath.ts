@@ -26,7 +26,7 @@ if ([string]::IsNullOrWhiteSpace($dir)) {
 }
 function Normalize-PathEntry([string]$value) {
   if ([string]::IsNullOrWhiteSpace($value)) { return '' }
-  return $value.Trim().TrimEnd('\\\\', '/').ToLowerInvariant()
+  return ($value.Trim() -replace '[\\\\/]+$', '').ToLowerInvariant()
 }
 function Notify-EnvironmentChanged {
   try {

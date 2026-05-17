@@ -84,10 +84,12 @@ tool is unavailable.
   persist that directory on both the live server `PATH` and the current user's
   Windows `Path`, and prefer the real package entrypoints npm installs under
   that prefix (`claude.exe`, `codex.js` through `node.exe`) before falling back
-  to `.cmd` shims. Windows backend, auth, doctor, plan-usage, and CLI-update
-  launches should share that resolver rather than spawning npm shims directly.
-  Detection must still recognize self-installed `claude`/`codex` commands from
-  the user's Windows `PATH`.
+  to `.cmd` shims. If user `Path` persistence fails after npm succeeds, treat it
+  as a warning step and continue wrapper repair plus refreshed detection.
+  Windows backend, auth, doctor, plan-usage, and CLI-update launches should
+  share that resolver rather than spawning npm shims directly. Detection must
+  still recognize self-installed `claude`/`codex` commands from the user's
+  Windows `PATH`.
 - Windows production self-update should also repair the current user's `Path`
   for `<installDir>\cli-tools` so existing installs gain terminal CLI access
   after updating without rerunning the full installer.
