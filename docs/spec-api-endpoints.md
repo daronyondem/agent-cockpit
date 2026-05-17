@@ -627,7 +627,7 @@ See Section 4 (`KiroPlanUsageService`) for the caching, SQLite credential resolu
 
 ## 3.17 Codex Plan Usage
 
-Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pro / Business / Enterprise / etc.), 5-hour rate-limit window utilization, weekly rate-limit window utilization, and optional credit balance. Surfaced in the ContextChip tooltip on Codex conversations. The service spawns a one-shot Codex `app-server` using the server-configured runtime or the requested Codex CLI profile and calls its `account/read` + `account/rateLimits/read` JSON-RPC methods — it does **not** piggyback on the long-lived `app-server` instance owned by `CodexAdapter` (the latter is bound to a specific conversation thread).
+Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pro / Business / Enterprise / etc.), 5-hour rate-limit window utilization, weekly rate-limit window utilization, and optional credit balance. Surfaced in the ContextChip tooltip on Codex conversations. The service first reads the selected Codex home (`~/.codex` or profile `CODEX_HOME`) and calls ChatGPT's OAuth usage endpoint when usable OAuth tokens are available. If that path is unavailable or fails, it spawns a one-shot Codex `app-server` using the server-configured runtime or requested Codex CLI profile and calls `account/read` + `account/rateLimits/read` JSON-RPC methods. It does **not** piggyback on the long-lived `app-server` instance owned by `CodexAdapter` (the latter is bound to a specific conversation thread).
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
@@ -645,7 +645,7 @@ Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pr
 }
 ```
 
-**`CodexRateLimits` shape** — normalized from the `account/rateLimits/read` RPC response (`raw.rateLimits`):
+**`CodexRateLimits` shape** — normalized from the OAuth usage response (`rate_limit`) or the `account/rateLimits/read` RPC response (`raw.rateLimits`):
 
 ```ts
 {
@@ -671,7 +671,7 @@ Account-wide OpenAI Codex (ChatGPT) plan-usage snapshot — plan tier (Plus / Pr
 }
 ```
 
-**Window slot semantics:** The frontend keys bar labels off `windowDurationMins` (300 → "5h session", 10080 → "Weekly"), not slot order. A future Codex API change that swaps `primary` / `secondary` won't mislabel the bars.
+**Window slot semantics:** The server normalizes window roles before caching: `300` minutes is the 5-hour/session slot, `10080` minutes is the weekly slot, a lone weekly window is stored as `secondary`, and reversed weekly/session windows are swapped back into `{ primary: session, secondary: weekly }`. The frontend also keys bar labels off `windowDurationMins` (300 → "5h session", 10080 → "Weekly"), not slot order, so future Codex API slot changes won't mislabel the bars.
 
 **Refresh trigger policy:** The service refreshes opportunistically from two triggers — server startup for the default server-configured runtime (once, via `init()` + `maybeRefresh('server-start')`) and after each Codex assistant turn (`onDone` callback in the chat router calls `maybeRefresh('turn-done', runtime.profile)`). A floor of 10 minutes between attempts is tracked per cache key/profile and by last attempt time, not last success, protecting against rate-limit retry storms. The HTTP route itself never forces a fetch — it only reads the selected cache. Other backends (Claude Code, Kiro) do not trigger this service's refreshes.
 

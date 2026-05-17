@@ -98,19 +98,49 @@ const RATE_LIMITS_RESULT = {
   },
 };
 
+function writeAuthJson(codexHome: string, overrides: Record<string, unknown> = {}): void {
+  fs.mkdirSync(codexHome, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, 'auth.json'), JSON.stringify({
+    tokens: {
+      access_token: 'access-token',
+      refresh_token: 'refresh-token',
+      id_token: makeJwt({
+        email: 'jwt@example.com',
+        'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' },
+      }),
+      account_id: 'account-123',
+    },
+    last_refresh: new Date().toISOString(),
+    ...overrides,
+  }), 'utf8');
+}
+
+function makeJwt(payload: Record<string, unknown>): string {
+  const enc = (obj: unknown) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  return `${enc({ alg: 'none' })}.${enc(payload)}.`;
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('CodexPlanUsageService', () => {
   let tmpDir: string;
   let service: CodexPlanUsageService;
+  let originalCodexHome: string | undefined;
+  let originalFetch: typeof global.fetch;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-plan-usage-'));
+    originalCodexHome = process.env.CODEX_HOME;
+    process.env.CODEX_HOME = path.join(tmpDir, 'codex-home');
+    originalFetch = global.fetch;
     service = new CodexPlanUsageService(tmpDir);
     mockSpawnFn.mockReset();
   });
 
   afterEach(() => {
+    if (originalCodexHome === undefined) delete process.env.CODEX_HOME;
+    else process.env.CODEX_HOME = originalCodexHome;
+    global.fetch = originalFetch;
     try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   });
 
@@ -208,7 +238,7 @@ describe('CodexPlanUsageService', () => {
       await service.maybeRefresh('test');
       const cached = service.getCached();
 
-      expect(mockSpawnFn).toHaveBeenCalledWith('codex', ['app-server'], expect.any(Object));
+      expect(mockSpawnFn).toHaveBeenCalledWith('codex', ['-s', 'read-only', '-a', 'untrusted', 'app-server'], expect.any(Object));
       expect(cached.lastError).toBeNull();
       expect(cached.fetchedAt).not.toBeNull();
       expect(cached.account?.planType).toBe('pro');
@@ -227,6 +257,78 @@ describe('CodexPlanUsageService', () => {
       const onDisk = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
       expect(onDisk.account.planType).toBe('pro');
       expect(onDisk.rateLimits.primary.windowDurationMins).toBe(300);
+      log.mockRestore();
+    });
+
+    test('uses direct OAuth usage API before spawning app-server', async () => {
+      writeAuthJson(process.env.CODEX_HOME!);
+      global.fetch = jest.fn(async () => ({
+        ok: true,
+        json: async () => ({
+          plan_type: 'pro',
+          rate_limit: {
+            primary_window: { used_percent: 22, limit_window_seconds: 18_000, reset_at: 1777593600 },
+            secondary_window: { used_percent: 31, limit_window_seconds: 604_800, reset_at: 1778025600 },
+          },
+          credits: { has_credits: true, unlimited: false, balance: 12.5 },
+        }),
+      } as Response));
+      const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+      await service.maybeRefresh('oauth');
+      const cached = service.getCached();
+
+      expect(mockSpawnFn).not.toHaveBeenCalled();
+      expect(global.fetch).toHaveBeenCalledWith('https://chatgpt.com/backend-api/wham/usage', expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer access-token',
+          'ChatGPT-Account-Id': 'account-123',
+        }),
+      }));
+      expect(cached.account).toEqual({ type: 'chatgpt', email: 'jwt@example.com', planType: 'pro' });
+      expect(cached.rateLimits?.primary?.usedPercent).toBe(22);
+      expect(cached.rateLimits?.primary?.windowDurationMins).toBe(300);
+      expect(cached.rateLimits?.secondary?.windowDurationMins).toBe(10080);
+      expect(cached.rateLimits?.credits?.balance).toBe('12.5');
+      log.mockRestore();
+    });
+
+    test('refreshes stale OAuth token before usage API fetch', async () => {
+      writeAuthJson(process.env.CODEX_HOME!, {
+        last_refresh: new Date(Date.now() - 9 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+      global.fetch = jest.fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            access_token: 'new-access-token',
+            refresh_token: 'new-refresh-token',
+            id_token: makeJwt({ email: 'refreshed@example.com' }),
+          }),
+        })
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            plan_type: 'plus',
+            rate_limit: {
+              primary_window: { used_percent: 10, limit_window_seconds: 18_000, reset_at: 1777593600 },
+            },
+          }),
+        });
+      const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+      await service.maybeRefresh('oauth-refresh');
+      const onDisk = JSON.parse(fs.readFileSync(path.join(process.env.CODEX_HOME!, 'auth.json'), 'utf8'));
+
+      expect(global.fetch).toHaveBeenNthCalledWith(1, 'https://auth.openai.com/oauth/token', expect.objectContaining({
+        method: 'POST',
+      }));
+      expect(global.fetch).toHaveBeenNthCalledWith(2, 'https://chatgpt.com/backend-api/wham/usage', expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: 'Bearer new-access-token' }),
+      }));
+      expect(onDisk.tokens.access_token).toBe('new-access-token');
+      expect(onDisk.tokens.refresh_token).toBe('new-refresh-token');
+      expect(service.getCached().account?.email).toBe('refreshed@example.com');
       log.mockRestore();
     });
 
@@ -289,8 +391,8 @@ describe('CodexPlanUsageService', () => {
       await service.init();
 
       setupMockProc({
-        responses: { initialize: {} },
-        errors: { 'account/read': 'auth required' },
+        responses: { initialize: {}, 'account/read': ACCOUNT_RESULT },
+        errors: { 'account/rateLimits/read': 'auth required' },
       });
       const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -360,7 +462,7 @@ describe('CodexPlanUsageService', () => {
       await service.maybeRefresh('profile-test', profile);
       const cached = service.getCached(profile);
 
-      expect(mockSpawnFn).toHaveBeenCalledWith('/opt/codex/bin/codex', ['app-server'], expect.objectContaining({
+      expect(mockSpawnFn).toHaveBeenCalledWith('/opt/codex/bin/codex', ['-s', 'read-only', '-a', 'untrusted', 'app-server'], expect.objectContaining({
         env: expect.objectContaining({
           CODEX_HOME: '/tmp/codex-work-home',
           OPENAI_BASE_URL: 'https://example.test',
@@ -400,6 +502,123 @@ describe('CodexPlanUsageService', () => {
       expect(service.getCached().account?.email).toBe('user@example.com');
       expect(fs.existsSync(path.join(tmpDir, 'data', 'codex-plan-usage', 'server-configured-codex.json'))).toBe(false);
       log.mockRestore();
+    });
+
+    test('recovers rate limits from Codex RPC error body', async () => {
+      setupMockProc({
+        responses: {
+          initialize: {},
+          'account/read': {},
+        },
+        errors: {
+          'account/rateLimits/read': `
+            failed to fetch codex rate limits: Decode error;
+            body={
+              "email": "body@example.com",
+              "plan_type": "prolite",
+              "rate_limit": {
+                "primary_window": {
+                  "used_percent": 4,
+                  "limit_window_seconds": 18000,
+                  "reset_at": 1776216359
+                },
+                "secondary_window": {
+                  "used_percent": 19,
+                  "limit_window_seconds": 604800,
+                  "reset_at": 1776395384
+                }
+              },
+              "credits": {
+                "has_credits": false,
+                "unlimited": false,
+                "balance": "0E-10"
+              }
+            }`,
+        },
+      });
+      const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+      await service.maybeRefresh('recover-body');
+      const cached = service.getCached();
+
+      expect(cached.lastError).toBeNull();
+      expect(cached.account?.email).toBe('body@example.com');
+      expect(cached.account?.planType).toBe('prolite');
+      expect(cached.rateLimits?.primary?.usedPercent).toBe(4);
+      expect(cached.rateLimits?.primary?.windowDurationMins).toBe(300);
+      expect(cached.rateLimits?.secondary?.usedPercent).toBe(19);
+      expect(cached.rateLimits?.credits?.balance).toBe('0E-10');
+      log.mockRestore();
+    });
+
+    test('normalizes weekly-only rate limit into secondary slot', async () => {
+      setupMockProc({
+        responses: {
+          initialize: {},
+          'account/read': ACCOUNT_RESULT,
+          'account/rateLimits/read': {
+            rateLimits: {
+              ...RATE_LIMITS_RESULT.rateLimits,
+              primary: { usedPercent: 5, windowDurationMins: 10080, resetsAt: 1778025600 },
+              secondary: null,
+            },
+          },
+        },
+      });
+      const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+      await service.maybeRefresh('weekly-only');
+      const cached = service.getCached();
+
+      expect(cached.rateLimits?.primary).toBeNull();
+      expect(cached.rateLimits?.secondary?.usedPercent).toBe(5);
+      expect(cached.rateLimits?.secondary?.windowDurationMins).toBe(10080);
+      log.mockRestore();
+    });
+
+    test('normalizes reversed weekly and session windows', async () => {
+      setupMockProc({
+        responses: {
+          initialize: {},
+          'account/read': ACCOUNT_RESULT,
+          'account/rateLimits/read': {
+            rateLimits: {
+              ...RATE_LIMITS_RESULT.rateLimits,
+              primary: { usedPercent: 43, windowDurationMins: 10080, resetsAt: 1778025600 },
+              secondary: { usedPercent: 17, windowDurationMins: 300, resetsAt: 1777593600 },
+            },
+          },
+        },
+      });
+      const log = jest.spyOn(console, 'log').mockImplementation(() => {});
+
+      await service.maybeRefresh('reversed-windows');
+      const cached = service.getCached();
+
+      expect(cached.rateLimits?.primary?.usedPercent).toBe(17);
+      expect(cached.rateLimits?.primary?.windowDurationMins).toBe(300);
+      expect(cached.rateLimits?.secondary?.usedPercent).toBe(43);
+      expect(cached.rateLimits?.secondary?.windowDurationMins).toBe(10080);
+      log.mockRestore();
+    });
+
+    test('times out a hung RPC method within the request budget', async () => {
+      service = new CodexPlanUsageService(tmpDir, { rpcRequestTimeoutMs: 25 });
+      const proc = setupMockProc({
+        responses: {
+          initialize: {},
+          'account/read': ACCOUNT_RESULT,
+          // no account/rateLimits/read response
+        },
+      });
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await service.maybeRefresh('timeout');
+      const cached = service.getCached();
+
+      expect(cached.lastError).toBe('codex RPC timed out waiting for account/rateLimits/read');
+      expect(proc.killed).toBe(true);
+      warn.mockRestore();
     });
   });
 });
