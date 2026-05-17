@@ -98,6 +98,23 @@ function _formatFetchedAt(iso){
   return `${Math.floor(h / 24)}d ago`;
 }
 
+function _planUsageSourceLabel(source){
+  if (source === 'oauth-file') return 'OAuth file';
+  if (source === 'oauth-keychain') return 'Keychain';
+  if (source === 'cli-usage') return 'Claude CLI';
+  return null;
+}
+
+function _planUsageIdentityLabel(identity){
+  if (!identity) return null;
+  const primary = identity.email || identity.organization || identity.loginMethod || null;
+  if (!primary) return null;
+  const secondary = primary !== identity.organization && identity.organization ? identity.organization
+    : primary !== identity.loginMethod && identity.loginMethod ? identity.loginMethod
+    : null;
+  return secondary ? `${primary} · ${secondary}` : primary;
+}
+
 function _buildRateLimitBars(rateLimits, fetchedAt, stale){
   const out = [];
   const projection = UsageProjection;
@@ -134,6 +151,8 @@ function PlanUsageSection({ data }){
   const fetchedLabel = _formatFetchedAt(data.fetchedAt);
   const errored = !!data.lastError;
   const stale = !!data.stale;
+  const sourceLabel = _planUsageSourceLabel(data.source);
+  const identityLabel = _planUsageIdentityLabel(data.identity);
   const footerColor = errored
     ? 'var(--status-error)'
     : (stale ? 'var(--status-warning)' : 'var(--text-3)');
@@ -169,10 +188,24 @@ function PlanUsageSection({ data }){
                 </b>
               </div>
             ) : null}
+            {identityLabel ? (
+              <div className="tt-kv"><span>Signed in</span><b>{identityLabel}</b></div>
+            ) : null}
+            {sourceLabel ? (
+              <div className="tt-kv"><span>Source</span><b>{sourceLabel}</b></div>
+            ) : null}
           </div>
         ) : (
-          <div style={{fontFamily: 'var(--mono-font)', fontSize: 11, color: 'var(--text-3)'}}>
-            No usage data yet.
+          <div className="tt-rows">
+            <div style={{fontFamily: 'var(--mono-font)', fontSize: 11, color: 'var(--text-3)'}}>
+              No usage data yet.
+            </div>
+            {identityLabel ? (
+              <div className="tt-kv"><span>Signed in</span><b>{identityLabel}</b></div>
+            ) : null}
+            {sourceLabel ? (
+              <div className="tt-kv"><span>Source</span><b>{sourceLabel}</b></div>
+            ) : null}
           </div>
         )}
       </div>
