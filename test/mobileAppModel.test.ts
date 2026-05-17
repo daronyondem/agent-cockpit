@@ -98,6 +98,43 @@ describe('mobile app model helpers', () => {
     }));
   });
 
+  test('replaces and removes optimistic mobile transcript messages', () => {
+    const pendingUser = {
+      id: 'pending-user-1',
+      role: 'user',
+      content: 'Hello',
+      backend: 'codex',
+      timestamp: '2026-05-01T00:00:00.000Z',
+    };
+    const duplicateServerUser = {
+      id: 'server-user-1',
+      role: 'user',
+      content: 'Duplicate',
+      backend: 'codex',
+      timestamp: '2026-05-01T00:00:01.000Z',
+    };
+    const assistantMessage = {
+      id: 'assistant-1',
+      role: 'assistant',
+      content: 'Hi',
+      backend: 'codex',
+      timestamp: '2026-05-01T00:00:02.000Z',
+    };
+    const serverUser = {
+      id: 'server-user-1',
+      role: 'user',
+      content: 'Hello',
+      backend: 'codex',
+      timestamp: '2026-05-01T00:00:03.000Z',
+    };
+
+    expect(model.replaceMessageByID([pendingUser, duplicateServerUser, assistantMessage], 'pending-user-1', serverUser)).toEqual([
+      serverUser,
+      assistantMessage,
+    ]);
+    expect(model.removeMessagesByID([pendingUser, assistantMessage], ['pending-user-1'])).toEqual([assistantMessage]);
+  });
+
   test('normalizes backend-neutral goal elapsed time, actions, and status labels for mobile UI', () => {
     const activeGoal = {
       backend: 'codex',

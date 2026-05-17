@@ -27,6 +27,8 @@ import {
   parentExplorerPath,
   parseMessageFiles,
   reconcileEffort,
+  removeMessagesByID,
+  replaceMessageByID,
   shouldApplyGoalSnapshot,
   updateSessionsAfterReset,
   upsertMessage,
@@ -183,6 +185,7 @@ export default function App() {
   const [goalMode, setGoalMode] = useState(false);
   const [draft, setDraft] = useState('');
   const [streamText, setStreamText] = useState('');
+  const [showStreamPlaceholder, setShowStreamPlaceholder] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
   const [pendingInteraction, setPendingInteraction] = useState<PendingInteraction | null>(null);
   const [interactionAnswer, setInteractionAnswer] = useState('');
@@ -534,6 +537,7 @@ export default function App() {
       activeConversationRef.current = conversation;
       setDraft('');
       setStreamText('');
+      setShowStreamPlaceholder(streamActive);
       setPendingInteraction(null);
       setPendingAttachments([]);
       setGoalMode(false);
@@ -672,31 +676,66 @@ export default function App() {
     if (!conversation) {
       return;
     }
+    const content = wireContent(message);
+    const attachmentsSnapshot = pendingAttachments;
+    const optimisticID = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+    const optimisticUserID = `pending-user-${optimisticID}`;
+    const optimisticUserMessage: Message = {
+      id: optimisticUserID,
+      role: 'user',
+      content,
+      backend: selectedBackend || conversation.backend || '',
+      timestamp: new Date().toISOString(),
+    };
     try {
       setDraft('');
       setPendingAttachments([]);
+      setPendingInteraction(null);
+      setStreamText('');
+      setShowStreamPlaceholder(true);
+      setIsStreaming(true);
+      isStreamingRef.current = true;
+      setActiveStreamIDs((current) => new Set(current).add(conversation.id));
+      setActiveConversation((current) => {
+        if (!current || current.id !== conversation.id) return current;
+        const next = { ...current, messages: [...current.messages, optimisticUserMessage] };
+        activeConversationRef.current = next;
+        return next;
+      });
       const response = await clientRef.current.sendMessage(conversation.id, {
-        content: wireContent(message),
+        content,
         backend: selectedBackend,
         cliProfileId: selectedCliProfileId,
         model: selectedModel,
         effort: selectedEffort,
         serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
       });
-      setActiveConversation((current) =>
-        current && current.id === conversation.id
-          ? {
-              ...current,
-              serviceTier: selectedServiceTier === 'fast' ? 'fast' : undefined,
-              messages: [...current.messages, response.userMessage],
-            }
-          : current,
-      );
+      const responseServiceTier: Conversation['serviceTier'] = selectedServiceTier === 'fast' ? 'fast' : undefined;
+      setActiveConversation((current) => {
+        if (!current || current.id !== conversation.id) return current;
+        const next = {
+          ...current,
+          serviceTier: responseServiceTier,
+          messages: replaceMessageByID(current.messages, optimisticUserID, response.userMessage),
+        };
+        activeConversationRef.current = next;
+        return next;
+      });
       if (response.streamReady) {
         startStream(conversation.id);
+      } else {
+        markStreamFinished(conversation.id);
       }
     } catch (error) {
       setDraft(message.content);
+      setPendingAttachments(attachmentsSnapshot);
+      setActiveConversation((current) => {
+        if (!current || current.id !== conversation.id) return current;
+        const next = { ...current, messages: removeMessagesByID(current.messages, [optimisticUserID]) };
+        activeConversationRef.current = next;
+        return next;
+      });
+      markStreamFinished(conversation.id);
       handleError(error);
     }
   }
@@ -875,6 +914,7 @@ export default function App() {
 
   function startStream(conversationID: string) {
     closeStreamSocket();
+    setShowStreamPlaceholder(true);
     setIsStreaming(true);
     isStreamingRef.current = true;
     setActiveStreamIDs((current) => new Set(current).add(conversationID));
@@ -953,6 +993,7 @@ export default function App() {
       streamReconnectAttemptsRef.current = 0;
       setIsStreaming(false);
       isStreamingRef.current = false;
+      setShowStreamPlaceholder(false);
       closeStreamSocket();
       await refreshAfterStream(conversationID);
     } catch {
@@ -1068,6 +1109,7 @@ export default function App() {
     switch (event.type) {
       case 'text':
       case 'thinking':
+        setShowStreamPlaceholder(false);
         setStreamText((current) => current + (event.content || ''));
         break;
       case 'assistant_message':
@@ -1077,6 +1119,7 @@ export default function App() {
           );
         }
         setStreamText('');
+        setShowStreamPlaceholder(false);
         break;
       case 'tool_activity':
         if (event.isPlanMode && event.planContent && event.planAction !== 'exit') {
@@ -1114,12 +1157,14 @@ export default function App() {
         break;
       case 'done':
         setStreamText('');
+        setShowStreamPlaceholder(false);
         markStreamFinished(conversationID);
         notify('Agent Cockpit stream finished', 'The latest response is ready.');
         void refreshAfterStream(conversationID);
         break;
       case 'replay_start':
         setStreamText('');
+        setShowStreamPlaceholder(true);
         break;
       default:
         break;
@@ -1131,6 +1176,7 @@ export default function App() {
     streamReconnectAttemptsRef.current = 0;
     setIsStreaming(false);
     isStreamingRef.current = false;
+    setShowStreamPlaceholder(false);
     setActiveStreamIDs((current) => {
       const next = new Set(current);
       next.delete(conversationID);
@@ -1193,6 +1239,7 @@ export default function App() {
       closeStreamSocket();
       setIsStreaming(false);
       isStreamingRef.current = false;
+      setShowStreamPlaceholder(false);
       setPendingInteraction(null);
       await clientRef.current.abortConversation(conversation.id);
       const reloaded = await clientRef.current.getConversation(conversation.id);
@@ -1869,6 +1916,7 @@ export default function App() {
           draft={draft}
           setDraft={setDraft}
           streamText={streamText}
+          showStreamPlaceholder={showStreamPlaceholder}
           isStreaming={isStreaming}
           loading={loading}
           errorMessage={errorMessage}
@@ -2184,6 +2232,7 @@ function ChatScreen(props: {
   draft: string;
   setDraft: (value: string) => void;
   streamText: string;
+  showStreamPlaceholder: boolean;
   isStreaming: boolean;
   loading: boolean;
   errorMessage: string | null;
@@ -2365,12 +2414,20 @@ function ChatScreen(props: {
               onShareFile={props.onShareFile}
             />
           ))}
-          {props.isStreaming && props.streamText ? (
-            <div className="message assistant">
+          {props.isStreaming && (props.streamText || props.showStreamPlaceholder) ? (
+            <div className={`message assistant${props.streamText ? '' : ' stream-placeholder'}`}>
               <div className="message-heading">
                 <AssistantIdentity backend={conversation.backend} backends={props.backends} />
               </div>
-              <MarkdownContent content={props.streamText} />
+              {props.streamText ? (
+                <MarkdownContent content={props.streamText} />
+              ) : (
+                <span className="streaming-dots" aria-label="Assistant is writing">
+                  <span />
+                  <span />
+                  <span />
+                </span>
+              )}
               <span className="meta">Streaming...</span>
             </div>
           ) : null}
