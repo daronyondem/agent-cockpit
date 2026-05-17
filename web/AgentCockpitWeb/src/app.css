@@ -6017,7 +6017,7 @@ body{
 }
 .fx-tree-row{
   display: grid;
-  grid-template-columns: 14px 14px minmax(0, 1fr) auto auto auto;
+  grid-template-columns: 14px 14px minmax(0, 1fr) 24px 86px;
   gap: 6px; align-items: center;
   padding: 4px 6px;
   border-radius: var(--r-sm);
@@ -6037,7 +6037,20 @@ body{
 .fx-tree-row .fx-tree-name{
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.fx-tree-row .fx-tree-size{ font-size: 10.5px; }
+.fx-tree-row > .fx-status-badge{
+  grid-column: 4;
+  grid-row: 1;
+  justify-self: end;
+}
+.fx-tree-row .fx-tree-size{
+  grid-column: 5;
+  grid-row: 1;
+  justify-self: end;
+  width: 86px;
+  text-align: right;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
 .fx-status-badge{
   display: inline-flex;
   align-items: center;
@@ -6075,10 +6088,19 @@ body{
 }
 .fx-tree-row .fx-tree-actions{
   display: inline-flex; gap: 2px;
+  grid-column: 5;
+  grid-row: 1;
+  justify-self: end;
+  justify-content: flex-end;
+  width: 86px;
   visibility: hidden;
 }
 .fx-tree-row:hover .fx-tree-actions,
+.fx-tree-row:focus-visible .fx-tree-actions,
 .fx-tree-row:focus-within .fx-tree-actions{ visibility: visible; }
+.fx-tree-row:hover .fx-tree-size,
+.fx-tree-row:focus-visible .fx-tree-size,
+.fx-tree-row:focus-within .fx-tree-size{ visibility: hidden; }
 .fx-tree-row .fx-tree-actions .iconbtn{
   padding: 2px; width: 20px; height: 20px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -8464,8 +8486,15 @@ body{
     font-size: 13px;
     min-height: 40px;
   }
+  .fx-tree-row{
+    grid-template-columns: 14px 14px minmax(0, 1fr) 24px 134px;
+  }
   .fx-tree-row .fx-tree-actions{
     visibility: visible;
+    width: 134px;
+  }
+  .fx-tree-row .fx-tree-size{
+    visibility: hidden;
   }
   .fx-tree-row .fx-tree-actions .iconbtn{
     width: 32px; height: 32px;
