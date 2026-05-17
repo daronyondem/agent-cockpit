@@ -168,6 +168,22 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.welcome-cli-auth');
   });
 
+  test('CLI update settings refresh unprobed rows and render disabled buttons clearly', () => {
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+    const shellStateSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shellState.jsx'), 'utf8');
+    const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/cliUpdateStore.js'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+
+    expect(storeSrc).toContain('function ensureFresh()');
+    expect(storeSrc).toContain('needsInitialCheck(data) ? check() : data');
+    expect(settingsSrc).toContain('CliUpdateStore.ensureFresh()');
+    expect(settingsSrc).toContain("document.addEventListener('visibilitychange', onVisibility)");
+    expect(shellStateSrc).toContain('CliUpdateStore.ensureFresh()');
+    expect(settingsSrc).toContain('No CLI updates available.');
+    expect(cssSrc).toContain('.btn:disabled');
+    expect(cssSrc).toContain('.btn.primary:disabled');
+  });
+
   test('mobile PWA treats stream socket loss as reconnectable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
 

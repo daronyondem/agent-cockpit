@@ -520,8 +520,22 @@ function CliUpdatesPanel(){
 
   React.useEffect(() => {
     const unsub = CliUpdateStore.subscribe(setSnapshot);
-    CliUpdateStore.refresh();
-    return unsub;
+    const refresh = () => {
+      CliUpdateStore.ensureFresh().catch(err => {
+        console.warn('[settings] CLI update refresh failed:', err && err.message);
+      });
+    };
+    refresh();
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', onVisibility);
+      unsub();
+    };
   }, []);
 
   const items = snapshot && Array.isArray(snapshot.items) ? snapshot.items : [];
@@ -616,7 +630,7 @@ function CliUpdatesPanel(){
         </div>
       )}
       <div className="cli-updates-foot u-dim">
-        {updateCount > 0 ? `${updateCount} update${updateCount === 1 ? '' : 's'} available.` : 'No versioned CLI updates available.'}
+        {updateCount > 0 ? `${updateCount} update${updateCount === 1 ? '' : 's'} available.` : 'No CLI updates available.'}
       </div>
     </div>
   );
