@@ -1818,7 +1818,9 @@ export function createMemoryMcpServer({
 
       if (savedCount > 0) {
         console.log(`[memoryMcp] extract: saved ${savedCount} entry(ies) for conv=${conversationId}`);
-        await emitFreshMemoryUpdate(hash, savedRelPaths, conversationId);
+        // Post-session extraction is a background maintenance path. Refresh
+        // workspace memory surfaces, but do not add an in-chat memory bubble.
+        await emitFreshMemoryUpdate(hash, savedRelPaths, null);
       }
 
       return savedCount;
