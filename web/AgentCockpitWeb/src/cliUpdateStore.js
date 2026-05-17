@@ -9,6 +9,7 @@ import { AgentApi } from './api.js';
 
 let cached = null;
 let inFlight = null;
+let ensureFreshInFlight = null;
 const subs = new Set();
 
   function notify(){
@@ -40,6 +41,25 @@ const subs = new Set();
       })
       .finally(() => { inFlight = null; });
     return inFlight;
+  }
+
+  function needsInitialCheck(data){
+    const items = data && Array.isArray(data.items) ? data.items : [];
+    return items.some(item => (
+      item
+      && !item.lastCheckAt
+      && !item.currentVersion
+      && !item.lastError
+      && item.installMethod === 'unknown'
+    ));
+  }
+
+  function ensureFresh(){
+    if (ensureFreshInFlight) return ensureFreshInFlight;
+    ensureFreshInFlight = refresh()
+      .then(data => needsInitialCheck(data) ? check() : data)
+      .finally(() => { ensureFreshInFlight = null; });
+    return ensureFreshInFlight;
   }
 
   function check(){
@@ -89,6 +109,6 @@ const subs = new Set();
     return null;
   }
 
-export const CliUpdateStore = { get, refresh, check, update, subscribe, findForSelection };
+export const CliUpdateStore = { get, refresh, ensureFresh, check, update, subscribe, findForSelection, needsInitialCheck };
 
 export default CliUpdateStore;

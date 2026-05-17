@@ -120,8 +120,11 @@ export function useCliUpdates(){
   const [snapshot, setSnapshot] = React.useState(() => CliUpdateStore.get() || null);
   React.useEffect(() => {
     const unsub = CliUpdateStore.subscribe(setSnapshot);
-    CliUpdateStore.refresh();
-    const timer = setInterval(() => CliUpdateStore.refresh(), 5 * 60 * 1000);
+    const refresh = () => {
+      CliUpdateStore.ensureFresh().catch(() => {});
+    };
+    refresh();
+    const timer = setInterval(refresh, 5 * 60 * 1000);
     return () => {
       clearInterval(timer);
       unsub();

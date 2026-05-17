@@ -2550,6 +2550,12 @@ body{
   box-shadow: var(--shadow-1);
 }
 .btn:hover{ border-color: var(--border-strong); }
+.btn:disabled,
+.btn:disabled:hover{
+  opacity: .5;
+  cursor: not-allowed;
+  filter: none;
+}
 .btn.ghost{ background: transparent; box-shadow: none; border-color: transparent; color: var(--text-2); }
 .btn.ghost:hover{ background: var(--surface); color: var(--text); }
 .btn.danger{ color: var(--status-error); border-color: color-mix(in oklch, var(--status-error), transparent 70%); }
@@ -2558,6 +2564,10 @@ body{
   box-shadow: 0 1px 0 rgba(255,255,255,.2) inset, 0 1px 2px rgba(2,166,245,.35);
 }
 .btn.primary:hover{ filter: brightness(1.05); }
+.btn.primary:disabled,
+.btn.primary:disabled:hover{
+  box-shadow: none;
+}
 .btn .kbd{
   font-family: var(--mono-font); font-size: 10.5px; font-weight: 500;
   color: var(--text-3);
