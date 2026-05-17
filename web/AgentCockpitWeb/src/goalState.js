@@ -68,7 +68,3 @@ export function goalElapsedSeconds(goal, nowMs = Date.now()){
   if (!snapshotAt) return base;
   return base + Math.max(0, Math.floor((nowMs - snapshotAt) / 1000));
 }
-
-if (typeof module !== 'undefined') {
-  module.exports = { goalTimestampMs, goalSnapshotTimeMs, cleanGoalObjectiveText, isActiveGoal, goalSupportsAction, goalStatusLabel, goalElapsedSeconds };
-}

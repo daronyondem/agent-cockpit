@@ -1,4 +1,11 @@
-const { cleanGoalObjectiveText, goalElapsedSeconds, goalSnapshotTimeMs, goalStatusLabel, goalSupportsAction, isActiveGoal } = require('../web/AgentCockpitWeb/src/goalState.js');
+const {
+  cleanGoalObjectiveText,
+  goalElapsedSeconds,
+  goalSnapshotTimeMs,
+  goalStatusLabel,
+  goalSupportsAction,
+  isActiveGoal,
+} = require('../web/AgentCockpitWeb/src/goalState.js');
 
 describe('goalState helpers', () => {
   test('normalizes second and millisecond goal timestamps', () => {
