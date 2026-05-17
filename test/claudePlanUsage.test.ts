@@ -11,7 +11,11 @@ jest.mock('child_process', () => ({
   execFile: function (...args: unknown[]) { return mockExecFileFn(...args); },
 }));
 
-import { ClaudePlanUsageService } from '../src/services/claudePlanUsageService';
+import {
+  ClaudePlanUsageService,
+  parseClaudeCliUsageOutput,
+  type ClaudeCliUsageProbeResult,
+} from '../src/services/claudePlanUsageService';
 
 const CREDENTIALS_PATH = path.join(homedir(), '.claude', '.credentials.json');
 
@@ -37,15 +41,18 @@ function validCredsJson(opts: Partial<{
   expiresAt: number;
   subscriptionType: string;
   rateLimitTier: string;
+  scopes: string[];
+  email: string;
 }> = {}): string {
   return JSON.stringify({
     claudeAiOauth: {
       accessToken: opts.accessToken ?? 'sk-ant-oat01-TEST',
       refreshToken: 'sk-ant-ort01-TEST',
       expiresAt: opts.expiresAt ?? Date.now() + 60 * 60 * 1000,
-      scopes: ['user:inference'],
+      scopes: opts.scopes ?? ['user:inference', 'user:profile'],
       subscriptionType: opts.subscriptionType ?? 'max',
       rateLimitTier: opts.rateLimitTier ?? 'max_20x',
+      account: opts.email ? { email: opts.email } : undefined,
     },
   });
 }
@@ -82,7 +89,7 @@ const USAGE_BODY = {
   seven_day: { utilization: 77, resets_at: new Date(Date.now() + 20 * 3600_000).toISOString() },
   seven_day_sonnet: { utilization: 2, resets_at: new Date(Date.now() + 3 * 86400_000).toISOString() },
   seven_day_opus: { utilization: 50, resets_at: new Date(Date.now() + 3 * 86400_000).toISOString() },
-  extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null },
+  extra_usage: { is_enabled: false, monthly_limit: null, used_credits: null, utilization: null, currency: null },
 };
 
 // ── Tests ──────────────────────────────────────────────────────────────────
@@ -91,12 +98,17 @@ describe('ClaudePlanUsageService', () => {
   let tmpDir: string;
   let service: ClaudePlanUsageService;
   let readSpy: jest.SpyInstance | null = null;
+  let cliUsageProbe: jest.Mock<Promise<ClaudeCliUsageProbeResult>, [any?]>;
   const originalFetch = (global as any).fetch;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'plan-usage-'));
-    service = new ClaudePlanUsageService(tmpDir);
+    cliUsageProbe = jest.fn().mockRejectedValue(new Error('cli unavailable'));
+    service = new ClaudePlanUsageService(tmpDir, { cliUsageProbe });
     mockExecFileFn.mockReset();
+    mockExecFileFn.mockImplementation((_cmd: string, _args: string[], _opts: unknown, cb: Function) => {
+      cb(new Error('keychain unavailable'), '', '');
+    });
     readSpy = null;
   });
 
@@ -124,6 +136,9 @@ describe('ClaudePlanUsageService', () => {
       expect(cached.rateLimits).toBeNull();
       expect(cached.stale).toBe(true);
       expect(cached.lastError).toBeNull();
+      expect(cached.source).toBeNull();
+      expect(cached.identity).toBeNull();
+      expect(cached.attempts).toEqual([]);
     });
 
     test('loads persisted snapshot from disk', async () => {
@@ -134,6 +149,9 @@ describe('ClaudePlanUsageService', () => {
         planTier: 'max_20x',
         subscriptionType: 'max',
         rateLimits: USAGE_BODY,
+        source: 'oauth-file',
+        identity: { email: 'daron@example.test', organization: null, loginMethod: null },
+        attempts: [{ at: new Date().toISOString(), source: 'oauth-file', ok: true, error: null }],
         lastError: null,
       };
       fs.writeFileSync(cacheFile, JSON.stringify(snapshot), 'utf8');
@@ -142,6 +160,9 @@ describe('ClaudePlanUsageService', () => {
       const cached = service.getCached();
       expect(cached.planTier).toBe('max_20x');
       expect(cached.rateLimits).toEqual(USAGE_BODY);
+      expect(cached.source).toBe('oauth-file');
+      expect(cached.identity?.email).toBe('daron@example.test');
+      expect(cached.attempts).toHaveLength(1);
       expect(cached.stale).toBe(false);
     });
 
@@ -187,15 +208,21 @@ describe('ClaudePlanUsageService', () => {
 
   describe('maybeRefresh — credentials file path', () => {
     test('fetches, persists snapshot, and clears errors', async () => {
-      readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson() }]);
+      readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson({ email: 'daron@example.test' }) }]);
       const fetchFn = mockFetchOk(USAGE_BODY);
 
       await service.maybeRefresh('test');
       const cached = service.getCached();
       expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(cliUsageProbe).not.toHaveBeenCalled();
       expect(cached.rateLimits).toEqual(USAGE_BODY);
       expect(cached.planTier).toBe('max_20x');
       expect(cached.subscriptionType).toBe('max');
+      expect(cached.source).toBe('oauth-file');
+      expect(cached.identity?.email).toBe('daron@example.test');
+      expect(cached.attempts).toEqual([
+        expect.objectContaining({ source: 'oauth-file', ok: true, error: null }),
+      ]);
       expect(cached.lastError).toBeNull();
       expect(cached.fetchedAt).not.toBeNull();
 
@@ -203,6 +230,8 @@ describe('ClaudePlanUsageService', () => {
       const cacheFile = path.join(tmpDir, 'data', 'claude-plan-usage.json');
       const onDisk = JSON.parse(fs.readFileSync(cacheFile, 'utf8'));
       expect(onDisk.rateLimits).toEqual(USAGE_BODY);
+      expect(onDisk.source).toBe('oauth-file');
+      expect(onDisk.identity.email).toBe('daron@example.test');
     });
 
     test('plain server-configured profile uses the default cache', async () => {
@@ -260,6 +289,7 @@ describe('ClaudePlanUsageService', () => {
       );
       expect(cached.planTier).toBe('work_20x');
       expect(cached.rateLimits).toEqual(USAGE_BODY);
+      expect(cached.source).toBe('oauth-file');
       expect(service.getCached().rateLimits).toBeNull();
 
       const profileCache = path.join(tmpDir, 'data', 'claude-plan-usage', 'profile-claude-work.json');
@@ -268,7 +298,7 @@ describe('ClaudePlanUsageService', () => {
       expect(onDisk.rateLimits).toEqual(USAGE_BODY);
     });
 
-    test('sends bearer token + anthropic-beta header', async () => {
+    test('sends bearer token, OAuth beta, accept, and Claude Code user-agent headers', async () => {
       readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson({ accessToken: 'my-token' }) }]);
       const fetchFn = mockFetchOk(USAGE_BODY);
 
@@ -279,9 +309,78 @@ describe('ClaudePlanUsageService', () => {
           headers: expect.objectContaining({
             'Authorization': 'Bearer my-token',
             'anthropic-beta': 'oauth-2025-04-20',
+            'Accept': 'application/json',
+            'User-Agent': expect.stringContaining('claude-code/'),
           }),
         }),
       );
+    });
+
+    test('falls back to Claude CLI usage when OAuth credentials are unavailable', async () => {
+      const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' }) as NodeJS.ErrnoException;
+      readSpy = mockReadFile([{ path: CREDENTIALS_PATH, error: enoent }]);
+      const fetchFn = mockFetchOk(USAGE_BODY);
+      cliUsageProbe.mockResolvedValueOnce({
+        rateLimits: {
+          five_hour: { utilization: 61, resets_at: '2026-05-17T20:00:00.000Z' },
+          seven_day_opus: { utilization: 12, resets_at: null },
+        },
+        identity: { email: 'cli@example.test', organization: 'Acme', loginMethod: 'Claude Max' },
+      });
+
+      await service.maybeRefresh('test');
+
+      const cached = service.getCached();
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(cliUsageProbe).toHaveBeenCalledWith(undefined);
+      expect(cached.source).toBe('cli-usage');
+      expect(cached.identity?.email).toBe('cli@example.test');
+      expect(cached.rateLimits?.five_hour?.utilization).toBe(61);
+      expect(cached.rateLimits?.seven_day_opus?.utilization).toBe(12);
+      expect(cached.lastError).toBeNull();
+      expect(['oauth-file', 'oauth-keychain']).toContain(cached.attempts[0].source);
+      expect(cached.attempts[0]).toEqual(expect.objectContaining({ ok: false, error: expect.any(String) }));
+      expect(cached.attempts[1]).toEqual(expect.objectContaining({ source: 'cli-usage', ok: true, error: null }));
+    });
+
+    test('falls back to Claude CLI usage when OAuth token lacks user:profile scope', async () => {
+      readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson({ scopes: ['user:inference'] }) }]);
+      const fetchFn = mockFetchOk(USAGE_BODY);
+      cliUsageProbe.mockResolvedValueOnce({
+        rateLimits: { five_hour: { utilization: 22, resets_at: null } },
+        identity: null,
+      });
+
+      await service.maybeRefresh('test');
+
+      const cached = service.getCached();
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(cached.source).toBe('cli-usage');
+      expect(cached.rateLimits?.five_hour?.utilization).toBe(22);
+      expect(cached.attempts[0]).toEqual(expect.objectContaining({
+        source: 'oauth-file',
+        ok: false,
+        error: 'oauth-token-missing-user-profile-scope',
+      }));
+    });
+
+    test('preserves unknown OAuth buckets and null windows', async () => {
+      const body = {
+        five_hour: null,
+        seven_day_omelette: { utilization: 44, resets_at: null },
+        enterprise_bucket: null,
+        extra_usage: { is_enabled: true, monthly_limit: 10000, used_credits: 2500, utilization: 25, currency: 'USD' },
+      };
+      readSpy = mockReadFile([{ path: CREDENTIALS_PATH, content: validCredsJson() }]);
+      mockFetchOk(body);
+
+      await service.maybeRefresh('test');
+
+      const cached = service.getCached();
+      expect(cached.rateLimits?.five_hour).toBeNull();
+      expect(cached.rateLimits?.seven_day_omelette).toEqual({ utilization: 44, resets_at: null });
+      expect(cached.rateLimits?.enterprise_bucket).toBeNull();
+      expect(cached.rateLimits?.extra_usage?.currency).toBe('USD');
     });
 
     test('throttles second call within 10 min', async () => {
@@ -312,7 +411,8 @@ describe('ClaudePlanUsageService', () => {
 
       await service.maybeRefresh('test');
       expect(fetchFn).not.toHaveBeenCalled();
-      expect(service.getCached().lastError).toBe('token-expired');
+      expect(cliUsageProbe).toHaveBeenCalledTimes(1);
+      expect(service.getCached().lastError).toContain('token-expired');
     });
 
     test('token-expired skip does not burn the 10-min throttle', async () => {
@@ -324,7 +424,7 @@ describe('ClaudePlanUsageService', () => {
       const firstFetch = mockFetchOk(USAGE_BODY);
       await service.maybeRefresh('first');
       expect(firstFetch).not.toHaveBeenCalled();
-      expect(service.getCached().lastError).toBe('token-expired');
+      expect(service.getCached().lastError).toContain('token-expired');
 
       // Simulate Claude Code rotating its OAuth token: swap the creds for a fresh one.
       readSpy.mockRestore();
@@ -357,7 +457,8 @@ describe('ClaudePlanUsageService', () => {
 
       await service.maybeRefresh('test');
       const cached = service.getCached();
-      expect(cached.lastError).toMatch(/401/);
+      expect(cached.lastError).toMatch(/oauth failed: usage API 401/);
+      expect(cached.lastError).toMatch(/cli-usage failed: cli unavailable/);
       // Prior data preserved
       expect(cached.rateLimits).toEqual(USAGE_BODY);
       expect(cached.planTier).toBe('max_20x');
@@ -382,7 +483,7 @@ describe('ClaudePlanUsageService', () => {
 
       await service.maybeRefresh('test');
       const cached = service.getCached();
-      expect(cached.lastError).toBe('ENETDOWN');
+      expect(cached.lastError).toBe('oauth failed: ENETDOWN; cli-usage failed: cli unavailable');
       expect(cached.rateLimits).toEqual(USAGE_BODY);
       warn.mockRestore();
     });
@@ -415,6 +516,7 @@ describe('ClaudePlanUsageService', () => {
           headers: expect.objectContaining({ 'Authorization': 'Bearer kc-token' }),
         }),
       );
+      expect(service.getCached().source).toBe('oauth-keychain');
     });
 
     test('records lastError when keychain read fails', async () => {
@@ -428,7 +530,62 @@ describe('ClaudePlanUsageService', () => {
 
       await service.maybeRefresh('test');
       expect(service.getCached().lastError).toMatch(/keychain read failed/);
+      expect(service.getCached().lastError).toMatch(/cli-usage failed: cli unavailable/);
       warn.mockRestore();
+    });
+  });
+
+  describe('Claude CLI usage parser', () => {
+    test('extracts session and weekly usage plus status identity from terminal text', () => {
+      const now = new Date('2026-05-17T12:00:00.000Z');
+      const parsed = parseClaudeCliUsageOutput(`
+        /usage
+        Current session
+        39% remaining
+        Resets in 2 hours
+
+        Current week
+        77% used
+        Resets Nov 21 at 5am
+
+        Current week (Opus)
+        12% used
+        Resets in 2 days
+
+        /status
+        Account: daron@example.test
+        Organization: Agent Cockpit
+        Login Method: Claude Max
+      `, now);
+
+      expect(parsed.rateLimits?.five_hour?.utilization).toBe(61);
+      expect(parsed.rateLimits?.five_hour?.resets_at).toBe('2026-05-17T14:00:00.000Z');
+      expect(parsed.rateLimits?.seven_day?.utilization).toBe(77);
+      expect(parsed.rateLimits?.seven_day_opus?.utilization).toBe(12);
+      expect(parsed.identity).toEqual({
+        email: 'daron@example.test',
+        organization: 'Agent Cockpit',
+        loginMethod: 'Claude Max',
+      });
+    });
+
+    test('extracts quota windows from Claude terminal output with collapsed spacing', () => {
+      const now = new Date('2026-05-17T15:00:00.000Z');
+      const parsed = parseClaudeCliUsageOutput(`
+        Settings  StausConfigUsageStats
+        Currentsession
+        █▌3%used
+        Resets3:40pm(America/Los_Angeles)
+
+        Currentweek(allmodels)
+        █2%used
+        ResetsMay19at12pm(America/Los_Angeles)
+      `, now);
+
+      expect(parsed.rateLimits?.five_hour?.utilization).toBe(3);
+      expect(parsed.rateLimits?.five_hour?.resets_at).toBe('2026-05-17T22:40:00.000Z');
+      expect(parsed.rateLimits?.seven_day?.utilization).toBe(2);
+      expect(parsed.rateLimits?.seven_day?.resets_at).toBe('2026-05-19T19:00:00.000Z');
     });
   });
 });
