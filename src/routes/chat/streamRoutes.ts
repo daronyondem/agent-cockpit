@@ -431,7 +431,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       serviceTier: effectiveServiceTier,
       mcpServers,
     });
-    const needsTitleUpdate = isNewSession && conv.sessionNumber > 1;
+    const needsTitleUpdate = isNewSession && !conv.titleManuallySet;
     await attachAndPipeStream({
       convId,
       conv,

@@ -124,6 +124,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     loading: false,
     reqGen: 0,          // race-cancellation gen counter for loadConvList
   };
+  const convListPendingPatches = new Map();
   /** @type {Set<() => void>} */
   const convListSubs = new Set();
 
@@ -392,6 +393,19 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
 
   function getConvList(){ return convList; }
 
+  function applyPendingConvListPatches(items){
+    if (!Array.isArray(items) || convListPendingPatches.size === 0) return items;
+    const applied = new Set();
+    const next = items.map(item => {
+      const patch = convListPendingPatches.get(item.id);
+      if (!patch) return item;
+      applied.add(item.id);
+      return { ...item, ...patch };
+    });
+    applied.forEach(id => convListPendingPatches.delete(id));
+    return next;
+  }
+
   /* Fetch conversations matching the given filters and replace `items`.
      `reqGen` drops responses for any fetch that has been overtaken by a
      newer one (e.g. fast typing in the search box). */
@@ -408,7 +422,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     try {
       const items = await AgentApi.listConversations({ q: nextQuery, archived: nextArchived });
       if (gen !== convList.reqGen) return;
-      convList.items = items;
+      convList.items = applyPendingConvListPatches(items);
       convList.loading = false;
       notifyConvList();
     } catch (err) {
@@ -449,14 +463,20 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
   }
 
   function patchConvListItem(convId, patch){
-    if (!Array.isArray(convList.items)) return;
+    if (!Array.isArray(convList.items)) {
+      convListPendingPatches.set(convId, { ...(convListPendingPatches.get(convId) || {}), ...patch });
+      return;
+    }
     let changed = false;
     const next = convList.items.map(c => {
       if (c.id !== convId) return c;
       changed = true;
       return { ...c, ...patch };
     });
-    if (!changed) return;
+    if (!changed) {
+      convListPendingPatches.set(convId, { ...(convListPendingPatches.get(convId) || {}), ...patch });
+      return;
+    }
     convList.items = next;
     notifyConvList();
   }

@@ -784,6 +784,28 @@ test('turn_complete frame is a no-op (does not clear streamingMsgId or drop cont
   expect(after.pendingInteraction).toBeNull();
 });
 
+test('conversation list applies title patches that arrive while list is loading', async () => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  let resolveList: (items: unknown[]) => void = () => {};
+  api.listConversations = jest.fn(() => new Promise(resolve => {
+    resolveList = resolve;
+  }));
+
+  const loading = Store.loadConvList({ query: '', archived: false });
+  expect(Store.getConvList().items).toBeNull();
+
+  Store.patchConvListItem('c1', { title: 'Generated Title' });
+  resolveList([
+    { id: 'c1', title: 'First user message prefix', updatedAt: '2026-05-01T12:00:00.000Z' },
+  ]);
+  await loading;
+
+  expect(Store.getConvList().items).toEqual([
+    { id: 'c1', title: 'Generated Title', updatedAt: '2026-05-01T12:00:00.000Z' },
+  ]);
+});
+
 describe('attachment + queue helpers', () => {
   test('attachmentKindFromPath infers kind from extension', () => {
     const Store = (window as any).StreamStore;
