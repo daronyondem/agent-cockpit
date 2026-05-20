@@ -152,17 +152,21 @@ tool is unavailable.
   terminal onboarding marker in `%USERPROFILE%\.claude.json` after credentials
   verify. Do not do this for isolated profiles using `CLAUDE_CONFIG_DIR`.
 
-## Context Map, Memory, And Knowledge Base
+## Workspace Context, Memory, And Knowledge Base
 
-- Context Map is the workspace-level entity and relationship memory feature. It
-  must work across coding and non-coding workspaces and must not depend on a
-  `context/` folder convention.
-- Context Map processor settings use global defaults with optional workspace
-  overrides. Workspace overrides should store only the override, not copied
-  global values.
-- Context Map has its own processor category rather than implicitly reusing
-  Memory Review or KB digestion settings.
-- Context Map public issue/PR content must avoid private context leakage.
+- Workspace Context is the workspace-level operating memory feature. Its
+  canonical data is markdown under `workspace-context/context/`, maintained by a
+  configured CLI processor and exposed to active chat CLIs through an `AGENTS.md`
+  instruction pointer rather than MCP.
+- Workspace Context processor settings use global defaults with optional
+  workspace overrides. Workspace overrides should store only the override, not
+  copied global values.
+- Workspace Context has its own processor category rather than implicitly
+  reusing Memory Review or KB digestion settings.
+- Workspace Context public issue/PR content must avoid private context leakage.
+- Workspace Context run logs are short-term operational records. Maintenance
+  should prune `workspace-context/runs/*.md` and `state.json.runs` entries older
+  than 7 days; durable learned context belongs in context markdown files.
 - Memory update notifications should open a focused preview of the exact updated
   memory files before the full Memory listing.
 - Memory consolidation should precede vector/embedding work where applicable.

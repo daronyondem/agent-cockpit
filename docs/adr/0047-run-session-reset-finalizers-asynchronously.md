@@ -10,9 +10,9 @@ affects:
   - src/routes/chat.ts
   - src/services/sessionFinalizerQueue.ts
   - src/services/chatService.ts
-  - src/services/contextMap/service.ts
+  - src/services/workspaceContext/service.ts
   - test/chat.conversations.test.ts
-  - test/chat.contextMap.test.ts
+  - test/chat.workspaceContext.test.ts
   - test/chatService.messages.test.ts
   - test/sessionFinalizerQueue.test.ts
   - test/helpers/chatEnv.ts

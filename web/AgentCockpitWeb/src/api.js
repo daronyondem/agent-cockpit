@@ -4,7 +4,7 @@
  * @typedef {import('../../../src/contracts/conversations').RenameConversationRequest} RenameConversationRequest
  * @typedef {import('../../../src/contracts/conversations').SetMessagePinnedRequest} SetMessagePinnedRequest
  * @typedef {import('../../../src/contracts/conversations').SetUnreadRequest} SetUnreadRequest
- * @typedef {import('../../../src/contracts/contextMap').ContextMapSettingsRequest} ContextMapSettingsRequest
+ * @typedef {import('../../../src/contracts/workspaceContext').WorkspaceContextSettingsRequest} WorkspaceContextSettingsRequest
  * @typedef {import('../../../src/contracts/knowledgeBase').KbFolderCreateRequest} KbFolderCreateRequest
  * @typedef {import('../../../src/contracts/knowledgeBase').KbFolderRenameRequest} KbFolderRenameRequest
  * @typedef {import('../../../src/contracts/memory').MemoryEnabledRequest} MemoryEnabledRequest
@@ -746,70 +746,49 @@
       'workspaces/' + encodeURIComponent(hash) + '/memory/entries',
       { method: 'DELETE' },
     ).then(r => r.json()),
-    getContextMapSettings: (hash) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/settings'
+    getWorkspaceContextSettings: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/settings',
+      { cache: 'no-store' },
     ).then(r => r.json()),
-    getContextMapReview: (hash, status) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/review' + (status ? '?status=' + encodeURIComponent(status) : '')
-    ).then(r => r.json()),
-    getContextMapGraph: (hash, opts) => {
-      const p = new URLSearchParams();
-      if (opts && opts.query) p.set('query', opts.query);
-      if (opts && opts.type) p.set('type', opts.type);
-      if (opts && opts.status) p.set('status', opts.status);
-      if (opts && opts.sensitivity) p.set('sensitivity', opts.sensitivity);
-      if (opts && opts.limit) p.set('limit', String(opts.limit));
-      const qs = p.toString();
-      return chatFetch(
-        'workspaces/' + encodeURIComponent(hash) + '/context-map/graph' + (qs ? '?' + qs : '')
-      ).then(r => r.json());
-    },
-    getContextMapEntity: (hash, entityId) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/entities/' + encodeURIComponent(entityId)
-    ).then(r => r.json()),
-    updateContextMapEntity: (hash, entityId, entity) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/entities/' + encodeURIComponent(entityId),
-      { method: 'PUT', body: { entity: entity || {} } },
-    ).then(r => r.json()),
-    setContextMapEnabled: (hash, enabled) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/enabled',
+    setWorkspaceContextEnabled: (hash, enabled) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/enabled',
       { method: 'PUT', body: { enabled: !!enabled } },
     ).then(r => r.json()),
-    setContextMapSettings: (hash, settings) => {
-      /** @type {ContextMapSettingsRequest} */
+    setWorkspaceContextSettings: (hash, settings) => {
+      /** @type {WorkspaceContextSettingsRequest} */
       const body = { settings: settings || {} };
       return chatFetch(
-        'workspaces/' + encodeURIComponent(hash) + '/context-map/settings',
+        'workspaces/' + encodeURIComponent(hash) + '/workspace-context/settings',
         { method: 'PUT', body },
       ).then(r => r.json());
     },
-    runContextMapScan: (hash) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/scan',
+    runWorkspaceContextScan: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/scan',
       { method: 'POST', body: {} },
     ).then(r => r.json()),
-    stopContextMapScan: (hash) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/scan/stop',
+    runWorkspaceContextMaintenance: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/maintenance',
       { method: 'POST', body: {} },
     ).then(r => r.json()),
-    clearContextMap: (hash) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map',
+    stopWorkspaceContextScan: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/scan/stop',
+      { method: 'POST', body: {} },
+    ).then(r => r.json()),
+    clearWorkspaceContext: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context',
       { method: 'DELETE' },
     ).then(r => r.json()),
-    updateContextMapCandidate: (hash, candidateId, payload) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/candidates/' + encodeURIComponent(candidateId),
-      { method: 'PUT', body: payload || {} },
-    ).then(r => r.json()),
-    applyContextMapCandidate: (hash, candidateId, opts) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/candidates/' + encodeURIComponent(candidateId) + '/apply',
-      { method: 'POST', body: opts && opts.includeDependencies ? { includeDependencies: true } : {} },
-    ).then(r => r.json()),
-    discardContextMapCandidate: (hash, candidateId) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/candidates/' + encodeURIComponent(candidateId) + '/discard',
+    repairWorkspaceContextInstructions: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/repair-instructions',
       { method: 'POST', body: {} },
     ).then(r => r.json()),
-    reopenContextMapCandidate: (hash, candidateId) => chatFetch(
-      'workspaces/' + encodeURIComponent(hash) + '/context-map/candidates/' + encodeURIComponent(candidateId) + '/reopen',
-      { method: 'POST', body: {} },
+    getWorkspaceContextFiles: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/files',
+      { cache: 'no-store' },
+    ).then(r => r.json()),
+    getWorkspaceContextFile: (hash, relPath) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/workspace-context/files/' + encodeURIComponent(relPath || ''),
+      { cache: 'no-store' },
     ).then(r => r.json()),
     getKb: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/kb'

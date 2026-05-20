@@ -63,21 +63,21 @@ describe('SessionFinalizerQueue', () => {
       workspaceHash: 'ws1',
       conversationId: 'conv1',
       sessionNumber: 2,
-      type: 'context_map_conversation_final_pass',
+      type: 'workspace_context_conversation_final_pass',
       payload: { source: 'session_reset' },
     });
     const duplicate = await queue.enqueue({
       workspaceHash: 'ws1',
       conversationId: 'conv1',
       sessionNumber: 2,
-      type: 'context_map_conversation_final_pass',
+      type: 'workspace_context_conversation_final_pass',
       payload: { source: 'session_reset' },
     });
     const archive = await queue.enqueue({
       workspaceHash: 'ws1',
       conversationId: 'conv1',
       sessionNumber: 2,
-      type: 'context_map_conversation_final_pass',
+      type: 'workspace_context_conversation_final_pass',
       payload: { source: 'archive' },
     });
 

@@ -76,7 +76,7 @@ data from the vendor interface you happen to use today.
 | Without Agent Cockpit | With Agent Cockpit |
 | --- | --- |
 | AI work is scattered across terminal tabs and vendor apps. | Claude Code, Codex, and Kiro run from one browser UI. |
-| Each vendor owns its own memory and history. | Conversations, memory, KB, and Context Map live locally. |
+| Each vendor owns its own memory and history. | Conversations, memory, KB, and Workspace Context live locally. |
 | Switching vendors means starting over. | Provider-neutral workspace context follows the next backend. |
 | Remote access requires SSHing into a terminal. | Use the desktop web UI or mobile PWA through your own secure access path. |
 | Tool output and generated files are buried in stream logs. | Tool activity, artifacts, file delivery, and session state are shown in the UI. |
@@ -94,19 +94,21 @@ knowledge-base artifacts are stored under your local data directory as
 JSON/Markdown plus local indexes where search requires them.
 
 **Portable workspace context**
-Workspace Memory, Knowledge Base, instruction compatibility checks, and Context
-Map help each backend see the same durable context instead of rebuilding it from
-scratch.
+Workspace Memory, Knowledge Base, instruction compatibility checks, and
+Workspace Context help each backend see the same durable context instead of
+rebuilding it from scratch.
 
 **Knowledge Base**
 Upload PDFs, Word documents, PowerPoints, images, CSV/TSV files, Markdown, and
 text-like files into a per-workspace knowledge base. Agent Cockpit converts,
 extracts, organizes, and retrieves that material for later conversations.
 
-**Context Map**
-Context Map builds a governed workspace graph of important people, projects,
-services, decisions, documents, and relationships. The active CLI can read a
-compact context pack through MCP tools instead of receiving a prompt dump.
+**Workspace Context**
+Workspace Context is markdown-first operating memory for a workspace. Agent
+Cockpit creates a `workspace-context/` folder, installs a managed pointer block
+in the workspace `AGENTS.md`, and uses a configured CLI processor to catch up
+those markdown files from recent conversations and sessions. The active chat CLI
+reads and updates the same files through normal workspace instructions.
 
 **Real-time agent view**
 Responses stream live with tool calls, sub-agents, thinking, outcomes, progress
@@ -240,7 +242,7 @@ npm run auth:reset -- --password "new long password" --disable-passkey-required 
 Start with [docs/README.md](docs/README.md).
 
 - [User Guide](docs/user/README.md) covers daily use, backends, Memory,
-  Knowledge Base, Context Map, and mobile PWA.
+  Knowledge Base, Workspace Context, and mobile PWA.
 - [Deploy Guide](docs/deploy/README.md) covers macOS, Windows, remote access,
   auth, updates, and troubleshooting.
 - [Reference](docs/reference/README.md) covers data layout, environment

@@ -1,7 +1,7 @@
 import fsp from 'fs/promises';
 import os from 'os';
 import path from 'path';
-import { WorkspaceFeatureSettingsStore, normalizeContextMapWorkspaceSettings } from '../src/services/chat/workspaceFeatureSettingsStore';
+import { WorkspaceFeatureSettingsStore, normalizeWorkspaceContextWorkspaceSettings } from '../src/services/chat/workspaceFeatureSettingsStore';
 import type { Settings, WorkspaceIndex } from '../src/types';
 
 function makeIndex(overrides: Partial<WorkspaceIndex> = {}): WorkspaceIndex {
@@ -14,13 +14,14 @@ function makeIndex(overrides: Partial<WorkspaceIndex> = {}): WorkspaceIndex {
 }
 
 describe('WorkspaceFeatureSettingsStore', () => {
-  test('normalizes Context Map workspace overrides against enabled profiles', () => {
-    expect(normalizeContextMapWorkspaceSettings({
+  test('normalizes Workspace Context workspace overrides against enabled profiles', () => {
+    expect(normalizeWorkspaceContextWorkspaceSettings({
       processorMode: 'override',
       cliProfileId: 'codex-work',
       cliModel: 'gpt-5.4',
       cliEffort: 'xhigh',
       scanIntervalMinutes: 7.4,
+      maintenanceIntervalHours: 23.6,
     }, [{
       id: 'codex-work',
       name: 'Codex Work',
@@ -35,9 +36,10 @@ describe('WorkspaceFeatureSettingsStore', () => {
       cliModel: 'gpt-5.4',
       cliEffort: 'xhigh',
       scanIntervalMinutes: 7,
+      maintenanceIntervalHours: 24,
     });
 
-    expect(normalizeContextMapWorkspaceSettings({
+    expect(normalizeWorkspaceContextWorkspaceSettings({
       processorMode: 'override',
       cliProfileId: 'claude-interactive-work',
     }, [{
@@ -55,7 +57,7 @@ describe('WorkspaceFeatureSettingsStore', () => {
     });
   });
 
-  test('persists KB and Context Map workspace flags through the shared index boundary', async () => {
+  test('persists KB and Workspace Context workspace flags through the shared index boundary', async () => {
     const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'ac-feature-settings-'));
     const indexes = new Map<string, WorkspaceIndex>([['hash-a', makeIndex()]]);
     const settings: Settings = {
@@ -76,16 +78,17 @@ describe('WorkspaceFeatureSettingsStore', () => {
     await fsp.mkdir(path.join(dir, 'hash-a'), { recursive: true });
     expect(await store.setKbEnabled('hash-a', true)).toBe(true);
     expect(await store.setKbAutoDigest('hash-a', true)).toBe(true);
-    expect(await store.setContextMapEnabled('hash-a', true)).toBe(true);
-    expect(await store.setContextMapSettings('hash-a', { scanIntervalMinutes: 12 })).toEqual({
+    expect(await store.setWorkspaceContextEnabled('hash-a', true)).toBe(true);
+    expect(await store.setWorkspaceContextSettings('hash-a', { scanIntervalMinutes: 12, maintenanceIntervalHours: 36 })).toEqual({
       processorMode: 'global',
       scanIntervalMinutes: 12,
+      maintenanceIntervalHours: 36,
     });
 
     expect(await store.getKbEnabled('hash-a')).toBe(true);
     expect(await store.getKbAutoDigest('hash-a')).toBe(true);
-    expect(await store.getContextMapEnabled('hash-a')).toBe(true);
+    expect(await store.getWorkspaceContextEnabled('hash-a')).toBe(true);
     expect(await store.listKbEnabledWorkspaceHashes()).toEqual(['hash-a']);
-    expect(await store.listContextMapEnabledWorkspaceHashes()).toEqual(['hash-a']);
+    expect(await store.listWorkspaceContextEnabledWorkspaceHashes()).toEqual(['hash-a']);
   });
 });

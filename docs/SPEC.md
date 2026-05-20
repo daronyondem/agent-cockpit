@@ -10,7 +10,7 @@
 | 2. Data Models & File Structure | [spec-data-models.md](spec-data-models.md) | On-disk layout, JSON schemas, workspace hashing |
 | 3. API Endpoints | [spec-api-endpoints.md](spec-api-endpoints.md) | REST + WebSocket API surface |
 | 4. Backend Services | [spec-backend-services.md](spec-backend-services.md) | ChatService, adapter system, KB pipeline, update service |
-| 5. Context Map Feature | [spec-context-map.md](spec-context-map.md) | Workspace graph feature: source scanning, extraction, synthesis, active map, Needs Attention, MCP retrieval |
+| 5. Workspace Context Feature | [spec-workspace-context.md](spec-workspace-context.md) | Markdown-first workspace operating memory, CLI-maintained context files, scan and maintenance runs |
 | 6. Server Initialization & Security | [spec-server-security.md](spec-server-security.md) | Config, startup order, auth, CSRF, CSP |
 | 7. Frontend Behavior | [spec-frontend.md](spec-frontend.md) | SPA architecture, streaming, KB browser, settings |
 | 8. Mobile PWA Client | [spec-mobile-pwa.md](spec-mobile-pwa.md) | Installable mobile web client architecture, implemented slice, deferred work |
@@ -24,7 +24,6 @@ Design and planning documents that preserve product intent, implementation plans
 
 | Document | Status | Description |
 |----------|--------|-------------|
-| [design-context-map.md](design-context-map.md) | Proposed | Context Map full-scope design: workspace entity/relationship graph, evidence model, background processor with synthesis/ranking, auto-apply plus needs-attention workflow, read-only MCP retrieval, and global-default/workspace-override settings |
 | [design-claude-code-interactive-implementation-plan.md](design-claude-code-interactive-implementation-plan.md) | Proposed | End-to-end implementation plan for a separate Claude Code Interactive backend using hidden PTY control, transcript-derived events, shared Claude profiles, and provider-specific CLI compatibility warnings |
 | [design-claude-code-interactive-hardening-plan.md](design-claude-code-interactive-hardening-plan.md) | Proposed | Follow-up hardening plan for Claude Code Interactive terminal query responses, hook-driven lifecycle signals, transcript finalization, and real-CLI drift coverage |
 | [design-kb-ingestion-hybrid.md](design-kb-ingestion-hybrid.md) | Implemented | Hybrid AI-assisted KB ingestion (PDF/DOCX/PPTX/image conversion at ingest time) — shipped across PRs #213–#228 |
@@ -38,7 +37,7 @@ Cockpit without reading the implementation specification:
 | Document | Description |
 |----------|-------------|
 | [README.md](README.md) | Public docs entry point that routes to user, deploy, and reference guides. |
-| [user/README.md](user/README.md) | User guide for quickstart, backends, Memory, Knowledge Base, Context Map, and mobile PWA. |
+| [user/README.md](user/README.md) | User guide for quickstart, backends, Memory, Knowledge Base, Workspace Context, and mobile PWA. |
 | [deploy/README.md](deploy/README.md) | Deploy guide for platform installers, remote access, security, Install Doctor, and updates. |
 | [reference/README.md](reference/README.md) | Technical reference for environment variables, data layout, backend capabilities, development, and testing. |
 | [product-positioning.md](product-positioning.md) | Public-copy message architecture for keeping positioning provider-neutral and user-owned-context focused. |

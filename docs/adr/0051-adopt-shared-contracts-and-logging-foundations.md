@@ -11,7 +11,7 @@ tags:
   - logging
 affects:
   - src/contracts/chat.ts
-  - src/contracts/contextMap.ts
+  - src/contracts/workspaceContext.ts
   - src/contracts/conversations.ts
   - src/contracts/explorer.ts
   - src/contracts/knowledgeBase.ts
@@ -24,7 +24,7 @@ affects:
   - src/contracts/validation.ts
   - src/routes/chat.ts
   - src/routes/chat/cliProfileRoutes.ts
-  - src/routes/chat/contextMapRoutes.ts
+  - src/routes/chat/workspaceContextRoutes.ts
   - src/routes/chat/conversationRoutes.ts
   - src/routes/chat/explorerRoutes.ts
   - src/routes/chat/filesystemRoutes.ts
@@ -43,12 +43,8 @@ affects:
   - src/services/chat/usageLedgerStore.ts
   - src/services/chat/workspaceFeatureSettingsStore.ts
   - src/services/chat/workspaceInstructionStore.ts
-  - src/services/contextMap/autoApply.ts
-  - src/services/contextMap/candidatePrimitives.ts
-  - src/services/contextMap/service.ts
-  - src/services/contextMap/jsonRepair.ts
-  - src/services/contextMap/pipelineMetadata.ts
-  - src/services/contextMap/sourcePlanning.ts
+  - src/services/workspaceContext/defaults.ts
+  - src/services/workspaceContext/service.ts
   - src/services/memoryWatcher.ts
   - src/services/streamJobSupervisor.ts
   - src/utils/logger.ts
@@ -67,8 +63,8 @@ affects:
   - test/chat.artifactStore.test.ts
   - test/chat.usageLedgerStore.test.ts
   - test/chat.workspaceFeatureSettingsStore.test.ts
-  - test/contextMap.jsonRepair.test.ts
-  - test/contextMap.pipelineMetadata.test.ts
+  - test/chat.workspaceContext.test.ts
+  - test/workspaceContext.service.test.ts
   - test/frontendMessageParsing.test.ts
   - test/mobileAppModel.test.ts
   - test/logger.test.ts
@@ -76,7 +72,7 @@ affects:
   - scripts/check-spec-drift.js
   - docs/spec-api-endpoints.md
   - docs/spec-backend-services.md
-  - docs/spec-context-map.md
+  - docs/spec-workspace-context.md
   - docs/spec-coverage.md
   - docs/spec-data-models.md
   - docs/spec-deployment.md

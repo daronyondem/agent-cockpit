@@ -15,7 +15,7 @@ data/
 │   │   ├── {conversationId}/
 │   │   ├── memory/
 │   │   ├── knowledge/
-│   │   ├── context-map/
+│   │   ├── workspace-context/
 │   │   └── session-finalizers.json
 │   ├── stream-jobs.json
 │   ├── usage-ledger.json
@@ -26,9 +26,9 @@ data/
 
 ## Workspace Scope
 
-Conversations, session files, memory, Knowledge Base artifacts, and Context Map
-state are scoped by workspace directory. The workspace path is hashed before it
-becomes an on-disk directory name.
+Conversations, session files, memory, Knowledge Base artifacts, and Workspace
+Context state are scoped by workspace directory. The workspace path is hashed
+before it becomes an on-disk directory name.
 
 ## Production Install Metadata
 

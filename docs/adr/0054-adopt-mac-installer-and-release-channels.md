@@ -17,7 +17,6 @@ affects:
   - .github/workflows/version-bump.yml
   - server.ts
   - scripts/auth-reset.ts
-  - scripts/context-map-report.ts
   - scripts/install-macos.sh
   - scripts/package-release.js
   - src/config/index.ts

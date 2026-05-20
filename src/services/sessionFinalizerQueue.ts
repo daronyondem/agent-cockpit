@@ -6,7 +6,7 @@ import { KeyedMutex } from '../utils/keyedMutex';
 export type SessionFinalizerJobType =
   | 'session_summary'
   | 'memory_extraction'
-  | 'context_map_conversation_final_pass';
+  | 'workspace_context_conversation_final_pass';
 
 export type SessionFinalizerJobStatus = 'pending' | 'running' | 'completed' | 'failed' | 'retrying';
 
@@ -330,7 +330,7 @@ function isSessionFinalizerJob(value: unknown): value is SessionFinalizerJob {
     && typeof job.sessionNumber === 'number'
     && (job.type === 'session_summary'
       || job.type === 'memory_extraction'
-      || job.type === 'context_map_conversation_final_pass')
+      || job.type === 'workspace_context_conversation_final_pass')
     && (job.status === 'pending'
       || job.status === 'running'
       || job.status === 'completed'

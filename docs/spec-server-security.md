@@ -47,7 +47,7 @@ and mark setup complete. Local password setup and password login explicitly save
 the file-backed session before redirecting so the next browser request can use
 the newly issued `connect.sid` immediately after a fresh install.
 
-Server logging is migrating to `src/utils/logger.ts`. The logger writes one structured line per event, applies `LOG_LEVEL` filtering, redacts metadata keys that look like credentials, cookies, session ids, tokens, or passwords before emitting, and serializes cyclic/rich metadata safely (`Error`, `Date`, `Map`, `Set`, `bigint`, functions, symbols, bounded arrays/objects/strings). WebSocket diagnostics, `MemoryWatcher`, `StreamJobSupervisor`, chat stream orchestration, upload OCR failures, `ChatService` maintenance paths, and Context Map processor update-emission failures use this path for migrated slices and avoid logging stdin message content; debug logs record only lengths and operational identifiers.
+Server logging is migrating to `src/utils/logger.ts`. The logger writes one structured line per event, applies `LOG_LEVEL` filtering, redacts metadata keys that look like credentials, cookies, session ids, tokens, or passwords before emitting, and serializes cyclic/rich metadata safely (`Error`, `Date`, `Map`, `Set`, `bigint`, functions, symbols, bounded arrays/objects/strings). WebSocket diagnostics, `MemoryWatcher`, `StreamJobSupervisor`, chat stream orchestration, upload OCR failures, `ChatService` maintenance paths, and Workspace Context run/update failures use this path for migrated slices and avoid logging stdin message content; debug logs record only lengths and operational identifiers.
 
 ## 6.2 Server Initialization Order
 
@@ -76,7 +76,7 @@ Server logging is migrating to `src/utils/logger.ts`. The logger writes one stru
 19. Reconcile leftover durable stream jobs via `chatResult.reconcileInterruptedJobs()` before the server accepts traffic. This converts unrecoverable accepted/preparing/running jobs from a prior process into one persisted assistant `streamError` when the user message exists, or removes the job when no user message was saved.
 20. Check that the configured port is free; exit with a PM2-oriented fatal message when it is already in use
 21. Run `webBuildService.ensureBuilt()` and `mobileBuildService.ensureBuilt()` before binding. In `auto` mode these build missing/stale `public/v2-built/` and `public/mobile-built/` assets and write `.agent-cockpit-build.json` markers; if a build fails with no previous `index.html`, startup fails loudly. If a previous build exists and rebuild fails, startup logs the stale-build warning and keeps serving the previous build for that asset tree.
-22. Start UpdateService (version polling), CliUpdateService (local CLI update polling), KB Auto-Dream scheduler, Memory Review scheduler, and Context Map scheduler
+22. Start UpdateService (version polling), CliUpdateService (local CLI update polling), KB Auto-Dream scheduler, Memory Review scheduler, and Workspace Context scheduler
 23. Initialize account plan usage caches and fire best-effort startup refreshes for Claude Code (shared by Claude Code Interactive), Kiro, and Codex
 24. Detect LibreOffice and Pandoc in the background for KB ingestion status endpoints
 25. Listen on configured PORT

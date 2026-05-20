@@ -1463,20 +1463,20 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       }));
       return;
     }
-    if (frame.type === 'context_map_update') {
-      const contextMap = frame.contextMap || null;
+    if (frame.type === 'workspace_context_update') {
+      const workspaceContext = frame.workspaceContext || null;
       const cur = states.get(convId);
       if (!cur || !cur.conv) return;
       try {
         if (typeof window !== 'undefined' && cur.conv.workspaceHash) {
-          window.dispatchEvent(new CustomEvent('ac:context-map-update', {
-            detail: { hash: cur.conv.workspaceHash, contextMap, updatedAt: frame.updatedAt || null },
+          window.dispatchEvent(new CustomEvent('ac:workspace-context-update', {
+            detail: { hash: cur.conv.workspaceHash, workspaceContext, updatedAt: frame.updatedAt || null },
           }));
         }
       } catch (_) { /* noop */ }
       update(convId, curState => ({
         ...curState,
-        conv: { ...curState.conv, contextMap },
+        conv: { ...curState.conv, workspaceContext },
       }));
       return;
     }

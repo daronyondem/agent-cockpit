@@ -42,12 +42,12 @@ for conversation, tools, files, sessions, and approvals.
 ### Your AI Interaction Data Stays Local
 
 Lead with user ownership of interaction data: conversations, sessions, memory,
-knowledge-base entries, Context Map state, settings, and generated artifacts.
+knowledge-base entries, Workspace Context files, settings, and generated artifacts.
 Avoid implying that Agent Cockpit operates a cloud service.
 
 ### Context Is Portable Across Vendors
 
-Memory, Knowledge Base, workspace instructions, and Context Map should be
+Memory, Knowledge Base, workspace instructions, and Workspace Context should be
 framed as provider-neutral context layers. A user can choose the best backend
 for the next task without losing the workspace understanding that has built up
 locally.
@@ -86,8 +86,8 @@ Use this order when public copy needs to be brief:
 - Supports Claude Code, OpenAI Codex, and Kiro as local backends.
 - Stores workspace-scoped conversations, sessions, memory, and knowledge-base
   artifacts locally.
-- Context Map builds governed workspace context that backends can query through
-  read-only MCP tools.
+- Workspace Context keeps CLI-maintained markdown context files that backends
+  can read and update through ordinary workspace instructions.
 - Mobile PWA is served by the same authenticated backend.
 - Production installs update from GitHub Releases; development installs track
   `main`.

@@ -166,11 +166,9 @@ function writeSettings(): void {
         updatedAt: now,
       },
     ],
-    contextMap: {
+    workspaceContext: {
       scanIntervalMinutes: 1440,
       cliConcurrency: 1,
-      extractionConcurrency: 1,
-      synthesisConcurrency: 1,
     },
   };
   fs.writeFileSync(path.join(chatDataDir, 'settings.json'), `${JSON.stringify(settings, null, 2)}\n`);

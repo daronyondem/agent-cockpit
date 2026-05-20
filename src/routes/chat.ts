@@ -22,17 +22,16 @@ import { KbDreamScheduler } from '../services/knowledgeBase/autoDream';
 import {
   MemoryReviewScheduler,
 } from '../services/memoryReview';
-import { ContextMapScheduler, ContextMapService } from '../services/contextMap/service';
-import { createContextMapMcpServer, type ContextMapMcpServer } from '../services/contextMap/mcp';
+import { WorkspaceContextScheduler, WorkspaceContextService } from '../services/workspaceContext/service';
 import { WorkspaceTaskQueueRegistry } from '../services/knowledgeBase/workspaceTaskQueue';
 import { createKbSearchMcpServer } from '../services/kbSearchMcp';
 import { SessionFinalizerQueue, type SessionFinalizerJob } from '../services/sessionFinalizerQueue';
-import type { Request, Response, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, MemoryReviewUpdateEvent, ContextMapUpdateEvent, StreamJobRuntimeInfo, SendMessageResult, ThreadGoal, GoalEvent } from '../types';
+import type { Request, Response, ActiveStreamEntry, ContentBlock, ToolActivity, StreamEvent, WsServerFrame, EffortLevel, ServiceTier, StreamErrorSource, MemoryUpdateEvent, MemoryReviewUpdateEvent, WorkspaceContextUpdateEvent, StreamJobRuntimeInfo, SendMessageResult, ThreadGoal, GoalEvent } from '../types';
 import { logger } from '../utils/logger';
 import type { WsFunctions } from '../ws';
 import { createChatStatusRouter } from './chat/statusRoutes';
 import { createCliProfileRouter } from './chat/cliProfileRoutes';
-import { createContextMapRouter } from './chat/contextMapRoutes';
+import { createWorkspaceContextRouter } from './chat/workspaceContextRoutes';
 import { createConversationRouter } from './chat/conversationRoutes';
 import { createExplorerRouter } from './chat/explorerRoutes';
 import { createFilesystemRouter } from './chat/filesystemRoutes';
@@ -676,7 +675,6 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
     memoryMcp.revokeMemoryMcpSession(convId);
     kbSearchMcp.revokeKbSearchSession(convId);
-    contextMapMcp.revokeContextMapMcpSession(convId);
     await streamSupervisor.completeJob(pending.jobId);
     return true;
   }
@@ -847,7 +845,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     });
   }
 
-  function broadcastContextMapUpdate(hash: string, frame: ContextMapUpdateEvent): void {
+  function broadcastWorkspaceContextUpdate(hash: string, frame: WorkspaceContextUpdateEvent): void {
     if (!wsFns) return;
     const sent = new Set<string>();
     wsFns.forEachConnected((convId) => {
@@ -858,12 +856,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     });
   }
 
-  async function emitFreshContextMapUpdate(hash: string): Promise<void> {
-    const contextMap = await chatService.getContextMapStatus(hash);
-    broadcastContextMapUpdate(hash, {
-      type: 'context_map_update',
+  async function emitFreshWorkspaceContextUpdate(hash: string): Promise<void> {
+    const workspaceContext = await chatService.getWorkspaceContextStatus(hash);
+    broadcastWorkspaceContextUpdate(hash, {
+      type: 'workspace_context_update',
       updatedAt: new Date().toISOString(),
-      contextMap,
+      workspaceContext,
     });
   }
 
@@ -928,20 +926,16 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   router.use('/mcp', memoryMcp.router);
   const memoryReviewScheduler = new MemoryReviewScheduler({ chatService, runner: memoryMcp });
 
-  // Context Map MCP server — read-only graph retrieval for active chat CLIs.
-  const contextMapMcp: ContextMapMcpServer = createContextMapMcpServer({ chatService });
-  router.use('/mcp', contextMapMcp.router);
-
-  // Context Map processor. Incremental spans are extracted into pending review
-  // candidates before the service advances conversation cursors.
-  const contextMapService = new ContextMapService({
+  // Workspace Context runner. It asks the configured CLI to update
+  // workspace-owned markdown files directly.
+  const workspaceContextService = new WorkspaceContextService({
     chatService,
     backendRegistry,
-    emitUpdate: emitFreshContextMapUpdate,
+    emitUpdate: emitFreshWorkspaceContextUpdate,
   });
-  const contextMapScheduler = new ContextMapScheduler({
+  const workspaceContextScheduler = new WorkspaceContextScheduler({
     chatService,
-    processor: contextMapService,
+    processor: workspaceContextService,
   });
 
   async function runSessionFinalizerJob(job: SessionFinalizerJob): Promise<void> {
@@ -982,20 +976,20 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
     const source = readStringPayload(job, 'source');
     if (source !== 'session_reset' && source !== 'archive') {
-      throw new Error(`Unknown Context Map finalizer source: ${source || '(missing)'}`);
+      throw new Error(`Unknown Workspace Context finalizer source: ${source || '(missing)'}`);
     }
-    if (!(await chatService.getWorkspaceContextMapEnabled(job.workspaceHash))) return;
-    const result = await contextMapService.processConversationSession(
+    if (!(await chatService.getWorkspaceContextEnabled(job.workspaceHash))) return;
+    const result = await workspaceContextService.processConversationSession(
       job.workspaceHash,
       job.conversationId,
       job.sessionNumber,
       { source },
     );
     if (result.skippedReason === 'already-running') {
-      throw new Error('Context Map processor already running');
+      throw new Error('Workspace Context processor already running');
     }
     if (result.runId) {
-      log.info('Context Map finalizer pass completed', { source, conversationId: job.conversationId, sessionNumber: job.sessionNumber, runId: result.runId, spansInserted: result.spansInserted });
+      log.info('Workspace Context finalizer pass completed', { source, conversationId: job.conversationId, sessionNumber: job.sessionNumber, runId: result.runId, filesConsidered: result.filesConsidered });
     }
   }
 
@@ -1049,18 +1043,18 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     });
   }
 
-  async function enqueueContextMapFinalizer(
+  async function enqueueWorkspaceContextFinalizer(
     workspaceHash: string,
     convId: string,
     sessionNumber: number,
     source: 'session_reset' | 'archive',
   ): Promise<void> {
-    if (!(await chatService.getWorkspaceContextMapEnabled(workspaceHash))) return;
+    if (!(await chatService.getWorkspaceContextEnabled(workspaceHash))) return;
     await sessionFinalizers.enqueue({
       workspaceHash,
       conversationId: convId,
       sessionNumber,
-      type: 'context_map_conversation_final_pass',
+      type: 'workspace_context_conversation_final_pass',
       payload: { source },
     });
   }
@@ -1096,15 +1090,14 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     memoryFingerprints,
     memoryMcp,
     kbSearchMcp,
-    contextMapMcp,
     kbDreaming,
     hasInFlightTurn,
     clearWsBuffer: (convId) => { if (wsFns) wsFns.clearBuffer(convId); },
     enqueueSessionSummaryFinalizer,
     enqueueMemoryFinalizer,
-    enqueueContextMapFinalizer,
+    enqueueWorkspaceContextFinalizer,
   }));
-  router.use(createContextMapRouter({ chatService, contextMapService, emitFreshContextMapUpdate }));
+  router.use(createWorkspaceContextRouter({ chatService, workspaceContextService, emitFreshWorkspaceContextUpdate }));
   router.use(createExplorerRouter(chatService));
   router.use(createGitRouter(chatService));
   router.use(createGoalRouter({
@@ -1131,7 +1124,6 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     pendingMessageSends,
     memoryMcp,
     kbSearchMcp,
-    contextMapMcp,
     hasInFlightTurn,
     requestPendingAbort,
     abortActiveStream,
@@ -1312,12 +1304,8 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     const kbEnabled = wsHash
       ? await chatService.getWorkspaceKbEnabled(wsHash)
       : false;
-    const contextMapEnabled = wsHash
-      ? await chatService.getWorkspaceContextMapEnabled(wsHash)
-      : false;
     const needsMemoryMcp = memoryEnabled && !!wsHash;
     const needsKbMcp = kbEnabled && !!wsHash;
-    const needsContextMapMcp = contextMapEnabled && !!wsHash;
 
     let systemPrompt = '';
     if (isNewSession) {
@@ -1325,7 +1313,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       const globalPrompt = settings.systemPrompt || '';
       const wsInstructions = wsHash ? (await chatService.getWorkspaceInstructions(wsHash)) || '' : '';
       const contextPointers: string[] = [];
-      const ctx = chatService.getWorkspaceContext(convId);
+      const ctx = chatService.getWorkspaceDiscussionHistoryPointer(convId);
       if (ctx) contextPointers.push(ctx);
       if (wsHash) {
         const memPointer = await chatService.getWorkspaceMemoryPointer(wsHash);
@@ -1364,20 +1352,6 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
             ].join('\n');
           })()
         : '';
-      const contextMapMcpAddendum = needsContextMapMcp
-        ? [
-            '# Context Map',
-            'You have read-only Context Map MCP tools (from the `agent-cockpit-context-map` server). Use them when the user asks about durable workspace entities, people, projects, workflows, decisions, tools, assets, relationships, or prior context that should be grounded in active graph data.',
-            '',
-            'Tools:',
-            '- `entity_search(query, types?, limit?)` — search active entities by name, alias, and non-secret summary/notes/facts.',
-            '- `get_entity(id, includeEvidence?)` — inspect one entity with aliases, facts, one-hop relationships, and optional evidence references.',
-            '- `get_related_entities(id, depth?, relationshipTypes?, limit?)` — traverse active relationships around an entity.',
-            '- `context_pack(query, maxEntities?, includeFiles?, includeConversations?)` — retrieve a compact bundle for the current request.',
-            '',
-            'Context Map tools are read-only. Do not try to update the map from chat; new or changed graph items are governed through Agent Cockpit review.',
-          ].join('\n')
-        : '';
       const fileDeliveryAddendum = [
         '# File delivery',
         'When the user explicitly asks you to create, generate, or give them a downloadable file (e.g. "give me a CSV", "create a report file", "export this as JSON"), follow these steps:',
@@ -1388,7 +1362,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         '',
         'Do NOT use FILE_DELIVERY for files you create as part of normal coding tasks (editing source code, config files, etc.). Only use it when the user explicitly wants a deliverable file to download.',
       ].join('\n');
-      const parts = [globalPrompt, wsInstructions, ...contextPointers, memoryMcpAddendum, kbMcpAddendum, contextMapMcpAddendum, fileDeliveryAddendum].filter(Boolean);
+      const parts = [globalPrompt, wsInstructions, ...contextPointers, memoryMcpAddendum, kbMcpAddendum, fileDeliveryAddendum].filter(Boolean);
       systemPrompt = parts.join('\n\n');
     }
 
@@ -1415,12 +1389,6 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       mcpServers = [...(mcpServers || []), ...kbIssued.mcpServers];
       log.debug('Issued KB Search MCP token', { conversationId: convId, backend: 'codex' });
     }
-    if (needsContextMapMcp && wsHash) {
-      const contextMapIssued = contextMapMcp.issueContextMapMcpSession(convId, wsHash);
-      mcpServers = [...(mcpServers || []), ...contextMapIssued.mcpServers];
-      log.debug('Issued Context Map MCP token', { conversationId: convId, backend: 'codex' });
-    }
-
     return { systemPrompt, mcpServers };
   }
 
@@ -1434,11 +1402,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     streamSupervisor.abortAndDetachAllRuntime();
     kbDreamScheduler.stop();
     memoryReviewScheduler.stop();
-    contextMapScheduler.stop();
+    workspaceContextScheduler.stop();
     sessionFinalizers.stop();
     memoryWatcher.unwatchAll();
     memoryFingerprints.clear();
-    chatService.closeContextMapDatabases();
     cliProfileAuth.shutdown();
     if (updateService) updateService.stop();
     if (cliUpdateService) cliUpdateService.stop();
@@ -1448,5 +1415,5 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     wsFns = fns;
   }
 
-  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, contextMapMcp, kbDreamScheduler, memoryReviewScheduler, contextMapService, contextMapScheduler, sessionFinalizers };
+  return { router, shutdown, activeStreams, streamJobs, setWsFunctions, abortActiveStream, reconcileInterruptedJobs, memoryMcp, kbDreamScheduler, memoryReviewScheduler, workspaceContextService, workspaceContextScheduler, sessionFinalizers };
 }

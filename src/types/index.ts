@@ -334,17 +334,13 @@ export interface WorkspaceIndex {
     /** Embedding dimensions (must match the model). Default 768. */
     dimensions?: number;
   };
+  /** Whether markdown-first Workspace Context is enabled for this workspace. */
+  workspaceContextEnabled?: boolean;
   /**
-   * Whether per-workspace Context Map is enabled. When false/undefined,
-   * no Context Map processing, review queue, MCP exposure, or UI graph
-   * state is active for this workspace. Default false.
+   * Per-workspace Workspace Context overrides. When absent or
+   * `processorMode:'global'`, global Settings.workspaceContext defaults apply.
    */
-  contextMapEnabled?: boolean;
-  /**
-   * Per-workspace Context Map overrides. When absent or
-   * `processorMode:'global'`, global Settings.contextMap defaults apply.
-   */
-  contextMap?: ContextMapWorkspaceSettings;
+  workspaceContext?: WorkspaceContextWorkspaceSettings;
   conversations: ConversationEntry[];
 }
 
@@ -374,8 +370,8 @@ export interface Conversation {
   kb?: ConversationKbStatus;
   /** Pending Memory Review snapshot for composer notifications. */
   memoryReview?: ConversationMemoryReviewStatus;
-  /** Pending Context Map review snapshot for composer notifications. */
-  contextMap?: ConversationContextMapStatus;
+  /** Workspace Context run snapshot for composer notifications. */
+  workspaceContext?: ConversationWorkspaceContextStatus;
 }
 
 /** KB status block on conversation responses (avoids extra round-trip for the KB status icon). */
@@ -410,28 +406,53 @@ export interface ConversationMemoryReviewStatus {
   lastRunSource?: MemoryReviewRunSource;
 }
 
-export type ConversationContextMapRunStatus = 'running' | 'completed' | 'failed' | 'stopped';
-export type ConversationContextMapRunSource = 'initial_scan' | 'scheduled' | 'session_reset' | 'archive' | 'manual_rebuild';
+export type ConversationWorkspaceContextRunStatus = 'running' | 'completed' | 'failed' | 'stopped' | 'skipped';
+export type ConversationWorkspaceContextRunSource = 'initial_scan' | 'scheduled' | 'session_reset' | 'archive' | 'manual_catchup' | 'maintenance';
+export type WorkspaceContextRunSkippedReason = 'scan-running' | 'maintenance-running' | 'already-running';
 
-export interface ConversationContextMapStatus {
+export interface ConversationWorkspaceContextStatus {
   enabled: boolean;
   pending: boolean;
-  pendingCandidates: number;
-  staleCandidates: number;
-  conflictCandidates: number;
-  failedCandidates: number;
   runningRuns: number;
   failedRuns: number;
+  contextDir?: string;
+  fileCount?: number;
   latestRunId?: string;
-  latestRunStatus?: ConversationContextMapRunStatus;
+  latestRunStatus?: ConversationWorkspaceContextRunStatus;
   latestRunCreatedAt?: string;
   latestRunUpdatedAt?: string;
-  latestRunSource?: ConversationContextMapRunSource;
+  latestRunSource?: ConversationWorkspaceContextRunSource;
   lastRunId?: string;
-  lastRunStatus?: ConversationContextMapRunStatus;
+  lastRunStatus?: ConversationWorkspaceContextRunStatus;
   lastRunCreatedAt?: string;
   lastRunUpdatedAt?: string;
-  lastRunSource?: ConversationContextMapRunSource;
+  lastRunSource?: ConversationWorkspaceContextRunSource;
+}
+
+export type WorkspaceContextRunStatus = ConversationWorkspaceContextRunStatus;
+export type WorkspaceContextRunSource = ConversationWorkspaceContextRunSource;
+
+export interface WorkspaceContextRunRecord {
+  runId: string;
+  source: WorkspaceContextRunSource;
+  status: WorkspaceContextRunStatus;
+  startedAt: string;
+  completedAt?: string;
+  filesConsidered: number;
+  summary: string | null;
+  errorMessage?: string;
+  skippedReason?: WorkspaceContextRunSkippedReason;
+}
+
+export interface WorkspaceContextState {
+  version: number;
+  contextDir: string;
+  lastRun?: WorkspaceContextRunRecord;
+  /** Legacy aggregate completion timestamp retained for older state files. */
+  lastCompletedAt?: string;
+  lastScanCompletedAt?: string;
+  lastMaintenanceCompletedAt?: string;
+  runs: WorkspaceContextRunRecord[];
 }
 
 export interface ConversationListItem {
@@ -623,11 +644,11 @@ export interface Settings {
     autoDigest?: boolean;
   };
   /**
-   * Globally-configured Context Map processor defaults. Workspaces opt in
-   * independently through WorkspaceIndex.contextMapEnabled and may either
+   * Globally-configured Workspace Context processor defaults. Workspaces opt in
+   * independently through WorkspaceIndex.workspaceContextEnabled and may either
    * use these defaults or provide a workspace-level override.
    */
-  contextMap?: ContextMapGlobalSettings;
+  workspaceContext?: WorkspaceContextGlobalSettings;
 }
 
 export type MemoryProcessorStatus =
@@ -650,7 +671,7 @@ export interface MemoryProcessorStatusSnapshot {
   error?: string;
 }
 
-export interface ContextMapGlobalSettings {
+export interface WorkspaceContextGlobalSettings {
   cliProfileId?: string;
   /** @deprecated Use cliProfileId. */
   cliBackend?: string;
@@ -660,23 +681,24 @@ export interface ContextMapGlobalSettings {
   scanIntervalMinutes?: number;
   /** Max workspace scans started by the scheduler at once. Default 1. */
   cliConcurrency?: number;
-  /** Max extraction CLI calls running concurrently across all active Context Map scans. Default 3. */
-  extractionConcurrency?: number;
-  /** Max synthesis/final-arbiter CLI calls running concurrently across all active Context Map scans. Default 3. */
-  synthesisConcurrency?: number;
+  /** Background maintenance interval in hours. Default 24. */
+  maintenanceIntervalHours?: number;
+  /** Max workspace maintenance runs started by the scheduler at once. Default 1. */
+  maintenanceCliConcurrency?: number;
 }
 
-export type ContextMapProcessorMode = 'global' | 'override';
+export type WorkspaceContextProcessorMode = 'global' | 'override';
 
-export interface ContextMapWorkspaceSettings {
+export interface WorkspaceContextWorkspaceSettings {
   /** Use global processor defaults unless explicitly set to override. */
-  processorMode?: ContextMapProcessorMode;
+  processorMode?: WorkspaceContextProcessorMode;
   cliProfileId?: string;
   /** @deprecated Use cliProfileId. */
   cliBackend?: string;
   cliModel?: string;
   cliEffort?: EffortLevel;
   scanIntervalMinutes?: number;
+  maintenanceIntervalHours?: number;
 }
 
 // ── Stream Events ───────────────────────────────────────────────────────────
@@ -914,10 +936,10 @@ export interface MemoryReviewUpdateEvent {
   review: ConversationMemoryReviewStatus;
 }
 
-export interface ContextMapUpdateEvent {
-  type: 'context_map_update';
+export interface WorkspaceContextUpdateEvent {
+  type: 'workspace_context_update';
   updatedAt: string;
-  contextMap: ConversationContextMapStatus;
+  workspaceContext: ConversationWorkspaceContextStatus;
 }
 
 export type StreamEvent =
@@ -937,7 +959,7 @@ export type StreamEvent =
   | BackendRuntimeEvent
   | MemoryUpdateEvent
   | MemoryReviewUpdateEvent
-  | ContextMapUpdateEvent
+  | WorkspaceContextUpdateEvent
   | KbStateUpdateEvent;
 
 export type StreamErrorSource = 'backend' | 'transport' | 'abort' | 'server';

@@ -19,7 +19,6 @@ const LEGACY_BACKEND_CONSOLE_ALLOWLIST = new Set([
   'src/services/claudePlanUsageService.ts',
   'src/services/cliUpdateService.ts',
   'src/services/codexPlanUsageService.ts',
-  'src/services/contextMap/mcp.ts',
   'src/services/kbSearchMcp/index.ts',
   'src/services/kiroPlanUsageService.ts',
   'src/services/knowledgeBase/db.ts',

@@ -1,4 +1,6 @@
 import React from 'react';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { Ico } from './icons.jsx';
 import { AgentApi } from './api.js';
 import { Tip } from './tooltip.jsx';
@@ -14,18 +16,162 @@ import { useToasts } from './toast.jsx';
        snapshot after each mutation.
      - Knowledge Base: enable toggle (immediate-save). Full KB management lives
        in the dedicated KB Browser screen.
-     - Context Map: enable toggle (immediate-save), workspace processor overrides,
-       active-map browsing, and needs-attention items.
+     - Workspace Context: enable toggle (immediate-save), workspace processor overrides,
+       markdown file preview, workspace processor overrides, and scan/maintenance runs.
    Reuses the same full-screen `settings-shell` structure as global Settings. */
 
 const WS_SETTINGS_TABS = [
   { id: 'instructions', label: 'Instructions' },
   { id: 'memory',       label: 'Memory' },
   { id: 'kb',           label: 'Knowledge Base' },
-  { id: 'contextMap',   label: 'Context Map' },
+  { id: 'workspaceContext',   label: 'Workspace Context' },
 ];
 
-const CONTEXT_MAP_SECTIONS = ['overview', 'processor', 'active', 'attention', 'danger'];
+const WORKSPACE_CONTEXT_SECTIONS = ['overview', 'processor', 'files', 'runs', 'danger'];
+const WORKSPACE_CONTEXT_RUNS_PAGE_SIZE = 5;
+
+function workspaceContextRunsFromState(state){
+  const runs = Array.isArray(state && state.runs) ? state.runs : [];
+  const lastRun = state && state.lastRun;
+  const mergedRuns = lastRun ? [lastRun, ...runs.filter(run => run && run.runId !== lastRun.runId)] : runs;
+  return mergedRuns.slice().sort((a, b) => workspaceContextRunTimestamp(b) - workspaceContextRunTimestamp(a));
+}
+
+function workspaceContextRunFromStatus(status, previousState){
+  if (!status || !status.lastRunId) return null;
+  const existing = workspaceContextRunsFromState(previousState).find(run => run && run.runId === status.lastRunId) || {};
+  const running = status.lastRunStatus === 'running';
+  return {
+    ...existing,
+    runId: status.lastRunId,
+    source: status.lastRunSource || existing.source || 'scheduled',
+    status: status.lastRunStatus || existing.status || 'running',
+    startedAt: status.lastRunCreatedAt || existing.startedAt || status.lastRunUpdatedAt || new Date().toISOString(),
+    completedAt: running ? undefined : (status.lastRunUpdatedAt || existing.completedAt),
+    filesConsidered: existing.filesConsidered || 0,
+    summary: existing.summary || null,
+  };
+}
+
+function workspaceContextRunTimestamp(run){
+  const timestamp = Date.parse((run && run.startedAt) || '');
+  return Number.isFinite(timestamp) ? timestamp : 0;
+}
+
+function renderWorkspaceContextRunMarkdown(markdown){
+  const raw = marked.parse(String(markdown || ''), { breaks: true, gfm: true });
+  return DOMPurify.sanitize(raw);
+}
+
+function resolveWorkspaceContextRunFileLink(href, files, contextDir){
+  let raw = String(href || '').trim();
+  if (!raw) return null;
+  try {
+    raw = decodeURIComponent(raw);
+  } catch {}
+  raw = raw.split('#')[0].split('?')[0].trim();
+  raw = raw.replace(/\.md:\d+(?::\d+)?$/i, '.md');
+  raw = raw.replace(/\.markdown:\d+(?::\d+)?$/i, '.markdown');
+  if (!/\.(md|markdown)$/i.test(raw)) return null;
+
+  const available = Array.isArray(files) ? files : [];
+  const normalizedContextDir = String(contextDir || '').replace(/\/+$/, '');
+  const candidates = new Set([raw.replace(/^\.?\//, '')]);
+  if (normalizedContextDir && raw.startsWith(normalizedContextDir + '/')) {
+    candidates.add(raw.slice(normalizedContextDir.length + 1));
+  }
+
+  for (const candidate of candidates) {
+    const match = available.find(file => file && file.path === candidate);
+    if (match) return match.path;
+  }
+
+  const basename = raw.split('/').pop();
+  const basenameMatches = basename
+    ? available.filter(file => file && (file.path === basename || file.name === basename || String(file.path || '').endsWith('/' + basename)))
+    : [];
+  return basenameMatches.length === 1 ? basenameMatches[0].path : null;
+}
+
+function WorkspaceContextRunSummary({ summary, files, contextDir, onOpenFile }){
+  const html = React.useMemo(() => renderWorkspaceContextRunMarkdown(summary), [summary]);
+  const onClick = React.useCallback((event) => {
+    if (!onOpenFile) return;
+    const target = event.target;
+    const link = target && typeof target.closest === 'function' ? target.closest('a') : null;
+    if (!link) return;
+    const relPath = resolveWorkspaceContextRunFileLink(link.getAttribute('href'), files, contextDir);
+    if (!relPath) return;
+    event.preventDefault();
+    onOpenFile(relPath);
+  }, [files, contextDir, onOpenFile]);
+  return <div className="ws-wc-run-summary prose" onClick={onClick} dangerouslySetInnerHTML={{ __html: html }}/>;
+}
+
+function normalizeWorkspaceContextSection(section){
+  return WORKSPACE_CONTEXT_SECTIONS.includes(section) ? section : 'overview';
+}
+
+function formatWorkspaceContextRunStatus(status){
+  const labels = {
+    running: 'Running',
+    completed: 'Completed',
+    failed: 'Failed',
+    stopped: 'Stopped',
+    skipped: 'Skipped',
+  };
+  return labels[status] || status || 'Unknown';
+}
+
+function formatWorkspaceContextRunSource(source){
+  const labels = {
+    initial_scan: 'Initial scan',
+    scheduled: 'Scheduled',
+    session_reset: 'Session reset',
+    archive: 'Archive',
+    manual_catchup: 'Manual scan',
+    maintenance: 'Maintenance',
+  };
+  return labels[source] || source || 'Workspace Context';
+}
+
+function isWorkspaceContextMaintenanceRun(run){
+  return run && run.source === 'maintenance';
+}
+
+function isWorkspaceContextScanRun(run){
+  return run && run.source !== 'maintenance';
+}
+
+function workspaceContextFileLabel(file){
+  return (file && (file.name || file.path)) || 'Untitled.md';
+}
+
+function WorkspaceSettingsHelpTooltip({ children }){
+  return (
+    <div className="tt-section settings-help-tooltip">
+      <div className="tt-body-text">{children}</div>
+    </div>
+  );
+}
+
+function WorkspaceContextLabel({ children, help }){
+  return (
+    <span className="settings-field-label-row">
+      <span>{children}</span>
+      {help ? (
+        <Tip variant="explain" rich={<WorkspaceSettingsHelpTooltip>{help}</WorkspaceSettingsHelpTooltip>}>
+          <button
+            type="button"
+            className="settings-help-btn"
+            aria-label={`${children} help`}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); }}
+          >?</button>
+        </Tip>
+      ) : null}
+    </span>
+  );
+}
 
 const MEMORY_TYPE_ORDER = ['user', 'feedback', 'project', 'reference', 'unknown'];
 const MEMORY_TYPE_LABELS = {
@@ -102,177 +248,8 @@ function workspaceDefaultEffort(levels){
   return levels.includes('high') ? 'high' : levels[0];
 }
 
-function contextMapRunsFromReview(reviewOrRuns){
-  if (Array.isArray(reviewOrRuns)) return reviewOrRuns;
-  return Array.isArray(reviewOrRuns && reviewOrRuns.runs) ? reviewOrRuns.runs : [];
-}
 
-function normalizeContextMapSection(section){
-  return CONTEXT_MAP_SECTIONS.includes(section) ? section : 'overview';
-}
-
-function nextContextMapInitialScanNotice(runs, previous){
-  const latestRun = contextMapRunsFromReview(runs)[0] || null;
-  if (!latestRun) return previous || null;
-  if (latestRun.source !== 'initial_scan') return null;
-  if (latestRun.status === 'running') return previous || 'rolling';
-  if (latestRun.status === 'completed') return previous ? 'completed' : null;
-  return null;
-}
-
-function contextMapPayloadLabel(value){
-  if (Array.isArray(value)) {
-    return value.map(contextMapPayloadLabel).filter(Boolean).join(', ');
-  }
-  if (value && typeof value === 'object') {
-    const objectValue = value.name || value.title || value.id || value.entityId || value.relationshipId || value.targetId || '';
-    return objectValue == null ? '' : String(objectValue);
-  }
-  return value == null ? '' : String(value);
-}
-
-function contextMapFirstPayloadValue(payload, keys){
-  for (const key of keys) {
-    const label = contextMapPayloadLabel(payload && payload[key]);
-    if (label) return label;
-  }
-  return '';
-}
-
-function contextMapCompactLabel(value, fallback){
-  const text = contextMapPayloadLabel(value) || fallback || 'Unknown';
-  return text.length > 54 ? text.slice(0, 51) + '...' : text;
-}
-
-function contextMapPayloadChangeList(payload){
-  const fields = [];
-  [
-    ['newName', 'name'],
-    ['updatedName', 'name'],
-    ['newTypeSlug', 'type'],
-    ['updatedTypeSlug', 'type'],
-    ['status', 'status'],
-    ['sensitivity', 'sensitivity'],
-    ['summaryMarkdown', 'summary'],
-    ['notesMarkdown', 'notes'],
-  ].forEach(([key, label]) => {
-    if (payload && payload[key] != null && String(payload[key]).trim()) fields.push(label);
-  });
-  if (payload && Array.isArray(payload.aliases) && payload.aliases.length) fields.push('aliases');
-  if (payload && Array.isArray(payload.facts) && payload.facts.length) fields.push('facts');
-  return fields.length ? fields.join(', ') : 'fields';
-}
-
-function contextMapCandidateImpactPreview(candidate){
-  const payload = (candidate && candidate.payload) || {};
-  const type = (candidate && candidate.candidateType) || 'candidate';
-  const entityName = contextMapFirstPayloadValue(payload, ['entityName', 'name', 'targetName', 'subjectName', 'objectName', 'entityId', 'targetEntityId']);
-  const subjectName = contextMapFirstPayloadValue(payload, ['subjectName', 'subjectEntityName', 'sourceName', 'fromName', 'subjectEntityId']);
-  const objectName = contextMapFirstPayloadValue(payload, ['objectName', 'objectEntityName', 'targetName', 'toName', 'objectEntityId']);
-  const predicate = contextMapFirstPayloadValue(payload, ['predicate', 'relationship', 'relationshipType', 'label']);
-  const relationship = contextMapFirstPayloadValue(payload, ['relationshipId', 'targetRelationshipId']);
-  const targetKind = contextMapFirstPayloadValue(payload, ['targetKind', 'kind']);
-  const targetId = contextMapFirstPayloadValue(payload, ['targetId', 'targetEntityId', 'entityId', 'factId', 'relationshipId', 'candidateId']);
-  const sourceName = contextMapFirstPayloadValue(payload, ['sourceEntityName', 'sourceName', 'fromName', 'sourceEntityId']);
-  const targetName = contextMapFirstPayloadValue(payload, ['targetEntityName', 'targetName', 'toName', 'targetEntityId']);
-
-  if (type === 'new_relationship') {
-    return {
-      left: contextMapCompactLabel(subjectName, 'Subject'),
-      edge: contextMapCompactLabel(predicate, 'relates_to'),
-      right: contextMapCompactLabel(objectName, 'Object'),
-      note: contextMapFirstPayloadValue(payload, ['evidenceMarkdown']) ? 'Evidence included' : '',
-    };
-  }
-  if (type === 'relationship_update') {
-    return {
-      left: contextMapCompactLabel(relationship || subjectName, 'Relationship'),
-      edge: 'updates edge',
-      right: contextMapCompactLabel(predicate || objectName, 'relationship fields'),
-      note: contextMapPayloadChangeList(payload),
-    };
-  }
-  if (type === 'relationship_removal') {
-    return {
-      left: contextMapCompactLabel(relationship || subjectName, 'Relationship'),
-      edge: 'supersedes',
-      right: contextMapCompactLabel(objectName || predicate, 'existing edge'),
-      note: 'Relationship history is retained',
-    };
-  }
-  if (type === 'new_entity') {
-    return {
-      left: contextMapCompactLabel(contextMapFirstPayloadValue(payload, ['typeSlug', 'entityType', 'type']), 'entity'),
-      edge: 'creates',
-      right: contextMapCompactLabel(entityName, 'Entity'),
-      note: contextMapFirstPayloadValue(payload, ['sensitivity']) || '',
-    };
-  }
-  if (type === 'entity_update') {
-    return {
-      left: contextMapCompactLabel(entityName, 'Entity'),
-      edge: 'updates',
-      right: contextMapPayloadChangeList(payload),
-      note: '',
-    };
-  }
-  if (type === 'entity_merge') {
-    return {
-      left: contextMapCompactLabel(sourceName || contextMapFirstPayloadValue(payload, ['sourceEntityIds', 'sourceNames']), 'Source entities'),
-      edge: 'merge into',
-      right: contextMapCompactLabel(targetName || entityName, 'Target entity'),
-      note: '',
-    };
-  }
-  if (type === 'alias_addition') {
-    return {
-      left: contextMapCompactLabel(entityName, 'Entity'),
-      edge: 'adds alias',
-      right: contextMapCompactLabel(contextMapFirstPayloadValue(payload, ['alias', 'newAlias']), 'Alias'),
-      note: '',
-    };
-  }
-  if (type === 'sensitivity_classification') {
-    return {
-      left: contextMapCompactLabel(entityName, 'Entity'),
-      edge: 'classifies as',
-      right: contextMapCompactLabel(contextMapFirstPayloadValue(payload, ['sensitivity', 'classification']), 'sensitivity'),
-      note: '',
-    };
-  }
-  if (type === 'new_entity_type') {
-    return {
-      left: 'Type catalog',
-      edge: 'adds',
-      right: contextMapCompactLabel(contextMapFirstPayloadValue(payload, ['typeSlug', 'slug', 'type']), 'entity type'),
-      note: '',
-    };
-  }
-  if (type === 'evidence_link') {
-    return {
-      left: contextMapCompactLabel(targetKind, 'Target'),
-      edge: 'links evidence',
-      right: contextMapCompactLabel(targetId, 'Evidence target'),
-      note: contextMapFirstPayloadValue(payload, ['sourceId', 'evidenceMarkdown']) || '',
-    };
-  }
-  if (type === 'conflict_flag') {
-    return {
-      left: contextMapCompactLabel(targetKind, 'Target'),
-      edge: 'flags',
-      right: contextMapCompactLabel(targetId || entityName, 'Conflict'),
-      note: contextMapFirstPayloadValue(payload, ['reason', 'summaryMarkdown']) || '',
-    };
-  }
-  return {
-    left: contextMapCompactLabel(type, 'Candidate'),
-    edge: 'proposes',
-    right: contextMapCompactLabel(entityName || predicate || targetId, 'Graph change'),
-    note: '',
-  };
-}
-
-export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextMapSection, onOpenMemoryReview, onClose }){
+export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspaceContextSection, onOpenMemoryReview, onClose }){
   const [tab, setTab] = React.useState(() => WS_SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'instructions');
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(null);
@@ -285,30 +262,53 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
   const [memoryReviewStatus, setMemoryReviewStatus] = React.useState(null);
   const [reviewStarting, setReviewStarting] = React.useState(false);
   const [kbEnabled, setKbEnabled] = React.useState(false);
-  const [contextMapEnabled, setContextMapEnabled] = React.useState(false);
-  const [contextMapSettings, setContextMapSettings] = React.useState({ processorMode: 'global' });
-  const [contextMapSettingsDirty, setContextMapSettingsDirty] = React.useState(false);
-  const [contextMapReview, setContextMapReview] = React.useState({ candidates: [], counts: {}, runs: [] });
-  const [contextMapReviewStatus, setContextMapReviewStatus] = React.useState('pending');
-  const [contextMapInitialScanNotice, setContextMapInitialScanNotice] = React.useState(null);
-  const [contextMapGraph, setContextMapGraph] = React.useState({ entities: [], relationships: [], counts: {} });
-  const [contextMapEntityDetail, setContextMapEntityDetail] = React.useState(null);
-  const [contextMapEntityDetailLoading, setContextMapEntityDetailLoading] = React.useState(false);
-  const [contextMapSelectedEntityId, setContextMapSelectedEntityId] = React.useState(null);
-  const [contextMapGraphLoading, setContextMapGraphLoading] = React.useState(false);
-  const [contextMapReviewLoading, setContextMapReviewLoading] = React.useState(false);
-  const [contextMapCandidateBusy, setContextMapCandidateBusy] = React.useState(null);
-  const [contextMapScanBusy, setContextMapScanBusy] = React.useState(false);
-  const [contextMapStopBusy, setContextMapStopBusy] = React.useState(false);
+  const [workspaceContextEnabled, setWorkspaceContextEnabled] = React.useState(false);
+  const [workspaceContextSettings, setWorkspaceContextSettings] = React.useState({ processorMode: 'global' });
+  const [workspaceContextSettingsDirty, setWorkspaceContextSettingsDirty] = React.useState(false);
+  const [workspaceContextState, setWorkspaceContextState] = React.useState(null);
+  const [workspaceContextFiles, setWorkspaceContextFiles] = React.useState([]);
+  const [workspaceContextContextDir, setWorkspaceContextContextDir] = React.useState('');
+  const [workspaceContextInstructionPath, setWorkspaceContextInstructionPath] = React.useState('');
+  const [workspaceContextSelectedFile, setWorkspaceContextSelectedFile] = React.useState(null);
+  const [workspaceContextFileContent, setWorkspaceContextFileContent] = React.useState('');
+  const [workspaceContextFileLoading, setWorkspaceContextFileLoading] = React.useState(false);
+  const [workspaceContextScanBusy, setWorkspaceContextScanBusy] = React.useState(false);
+  const [workspaceContextStopBusy, setWorkspaceContextStopBusy] = React.useState(false);
   const [globalSettings, setGlobalSettings] = React.useState({});
   const [backends, setBackends] = React.useState([]);
   const [profileBackends, setProfileBackends] = React.useState({});
   const dialog = useDialog();
   const toast = useToasts();
 
-  /* Load state on open. The endpoints are independent so we fire them
-     in parallel; any failure flips the whole page into an error state since
-     partial UI would be confusing. */
+  function applyWorkspaceContextResponse(res){
+    const next = res || {};
+    setWorkspaceContextEnabled(!!next.enabled);
+    setWorkspaceContextSettings(next.settings || { processorMode: 'global' });
+    setWorkspaceContextSettingsDirty(false);
+    setWorkspaceContextState(next.state || null);
+    setWorkspaceContextFiles(Array.isArray(next.files) ? next.files : []);
+    setWorkspaceContextContextDir(next.contextDir || '');
+    setWorkspaceContextInstructionPath(next.instructionPath || '');
+  }
+
+  function applyWorkspaceContextRuntimeResponse(res){
+    const next = res || {};
+    setWorkspaceContextEnabled(!!next.enabled);
+    setWorkspaceContextState(next.state || null);
+    setWorkspaceContextFiles(Array.isArray(next.files) ? next.files : []);
+    setWorkspaceContextContextDir(next.contextDir || '');
+    setWorkspaceContextInstructionPath(next.instructionPath || '');
+    const running = workspaceContextRunsFromState(next.state).some(run => run && run.status === 'running');
+    if (!running) {
+      setWorkspaceContextScanBusy(false);
+      setWorkspaceContextStopBusy(false);
+    }
+  }
+
+  const workspaceContextRunPollKey = workspaceContextRunsFromState(workspaceContextState)
+    .map(run => `${run.runId || ''}:${run.status || ''}`)
+    .join('|');
+
   React.useEffect(() => {
     if (!hash) return;
     let cancelled = false;
@@ -320,12 +320,10 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
       AgentApi.workspace.getMemory(hash).catch(() => ({})),
       AgentApi.workspace.getMemoryReviewSchedule(hash).catch(() => ({})),
       AgentApi.workspace.getKb(hash).catch(() => ({})),
-      AgentApi.workspace.getContextMapSettings(hash).catch(() => ({})),
-      AgentApi.workspace.getContextMapReview(hash, 'pending').catch(() => ({ candidates: [], counts: {}, runs: [] })),
-      AgentApi.workspace.getContextMapGraph(hash, { limit: 100 }).catch(() => ({ entities: [], relationships: [], counts: {} })),
+      AgentApi.workspace.getWorkspaceContextSettings(hash).catch(() => ({})),
       AgentApi.settings.get().catch(() => ({})),
       AgentApi.settings.backends().catch(() => ({ backends: [] })),
-    ]).then(([instrRes, memRes, reviewScheduleRes, kbRes, contextMapRes, contextMapReviewRes, contextMapGraphRes, settingsRes, backendsRes]) => {
+    ]).then(([instrRes, memRes, reviewScheduleRes, kbRes, workspaceContextRes, settingsRes, backendsRes]) => {
       if (cancelled) return;
       setInstructions(instrRes.instructions || '');
       setMemoryEnabled(!!memRes.enabled);
@@ -334,21 +332,12 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
       setMemoryReviewStatus(reviewScheduleRes.status || null);
       setReviewStarting(false);
       setKbEnabled(!!kbRes.enabled);
-      setContextMapEnabled(!!contextMapRes.enabled);
-      setContextMapSettings(contextMapRes.settings || { processorMode: 'global' });
-      setContextMapSettingsDirty(false);
-      setContextMapReview(contextMapReviewRes || { candidates: [], counts: {}, runs: [] });
-      setContextMapReviewStatus('pending');
-      setContextMapInitialScanNotice(prev => nextContextMapInitialScanNotice(contextMapRunsFromReview(contextMapReviewRes), prev));
-      setContextMapGraph(contextMapGraphRes || { entities: [], relationships: [], counts: {} });
-      setContextMapEntityDetail(null);
-      setContextMapEntityDetailLoading(false);
-      setContextMapSelectedEntityId(null);
-      setContextMapReviewLoading(false);
-      setContextMapGraphLoading(false);
-      setContextMapCandidateBusy(null);
-      setContextMapScanBusy(false);
-      setContextMapStopBusy(false);
+      applyWorkspaceContextResponse(workspaceContextRes);
+      setWorkspaceContextSelectedFile(null);
+      setWorkspaceContextFileContent('');
+      setWorkspaceContextFileLoading(false);
+      setWorkspaceContextScanBusy(false);
+      setWorkspaceContextStopBusy(false);
       setGlobalSettings(settingsRes || {});
       setBackends((backendsRes && backendsRes.backends) || []);
     }).catch(e => {
@@ -360,14 +349,6 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
   }, [hash, initialTab]);
 
   React.useEffect(() => {
-    if (contextMapInitialScanNotice !== 'started') return undefined;
-    const timer = window.setTimeout(() => {
-      setContextMapInitialScanNotice(prev => prev === 'started' ? 'rolling' : prev);
-    }, 1400);
-    return () => window.clearTimeout(timer);
-  }, [contextMapInitialScanNotice]);
-
-  React.useEffect(() => {
     if (!hash) return;
     let cancelled = false;
     const onMemoryUpdate = (event) => {
@@ -376,9 +357,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
         if (cancelled) return;
         setMemoryEnabled(!!memRes.enabled);
         setMemorySnapshot(memRes.snapshot || null);
-      }).catch(() => {
-        // Best-effort live refresh; the next manual open/mutation refetches.
-      });
+      }).catch(() => {});
     };
     window.addEventListener('ac:memory-update', onMemoryUpdate);
     return () => {
@@ -402,68 +381,49 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
   React.useEffect(() => {
     if (!hash) return;
     let cancelled = false;
-    const onContextMapUpdate = (event) => {
+    const onWorkspaceContextUpdate = (event) => {
       if (!event || !event.detail || event.detail.hash !== hash) return;
-      const status = contextMapReviewStatus || 'pending';
-      const nextContextMap = event.detail.contextMap || null;
-      if (nextContextMap && typeof nextContextMap.enabled === 'boolean') {
-        setContextMapEnabled(nextContextMap.enabled);
-      }
-      if (nextContextMap && nextContextMap.latestRunSource === 'initial_scan') {
-        if (nextContextMap.latestRunStatus === 'running') {
-          setContextMapInitialScanNotice(prev => prev || 'rolling');
-        } else if (nextContextMap.latestRunStatus === 'completed') {
-          setContextMapInitialScanNotice(prev => prev ? 'completed' : prev);
+      const status = event.detail.workspaceContext || null;
+      if (status) {
+        setWorkspaceContextEnabled(!!status.enabled);
+        setWorkspaceContextState(prev => {
+          const run = workspaceContextRunFromStatus(status, prev);
+          if (!run) return prev;
+          const runs = workspaceContextRunsFromState({ ...(prev || {}), lastRun: run }).slice(0, 25);
+          return { ...(prev || {}), lastRun: run, runs };
+        });
+        if (status.lastRunStatus !== 'running') {
+          setWorkspaceContextScanBusy(false);
+          setWorkspaceContextStopBusy(false);
         }
       }
-      if (nextContextMap && nextContextMap.latestRunStatus !== 'running') {
-        setContextMapStopBusy(false);
-      }
-      Promise.all([
-        AgentApi.workspace.getContextMapReview(hash, status).catch(() => ({ candidates: [], counts: {}, runs: [] })),
-        AgentApi.workspace.getContextMapGraph(hash, { limit: 100 }).catch(() => ({ entities: [], relationships: [], counts: {} })),
-      ]).then(([reviewRes, graphRes]) => {
-        if (cancelled) return;
-        setContextMapReview(reviewRes || { candidates: [], counts: {}, runs: [] });
-        setContextMapInitialScanNotice(prev => nextContextMapInitialScanNotice(contextMapRunsFromReview(reviewRes), prev));
-        setContextMapGraph(graphRes || { entities: [], relationships: [], counts: {} });
-      }).catch(() => {
-        // Best-effort live refresh; manual refresh keeps the canonical fallback.
-      });
+      AgentApi.workspace.getWorkspaceContextSettings(hash).then((res) => {
+        if (!cancelled) applyWorkspaceContextRuntimeResponse(res);
+      }).catch(() => {});
     };
-    window.addEventListener('ac:context-map-update', onContextMapUpdate);
+    window.addEventListener('ac:workspace-context-update', onWorkspaceContextUpdate);
     return () => {
       cancelled = true;
-      window.removeEventListener('ac:context-map-update', onContextMapUpdate);
+      window.removeEventListener('ac:workspace-context-update', onWorkspaceContextUpdate);
     };
-  }, [hash, contextMapReviewStatus]);
+  }, [hash]);
 
   React.useEffect(() => {
-    if (!hash || tab !== 'contextMap') return undefined;
-    const runs = contextMapRunsFromReview(contextMapReview);
-    const running = runs.some(run => run && run.status === 'running');
-    const waitingForInitialScan = contextMapInitialScanNotice === 'started' || contextMapInitialScanNotice === 'rolling';
-    if (!running && !waitingForInitialScan) return undefined;
+    if (!hash || tab !== 'workspaceContext') return undefined;
     let cancelled = false;
+    const intervalMs = 1000;
     const refresh = () => {
-      AgentApi.workspace.getContextMapReview(hash, contextMapReviewStatus || 'pending').then((reviewRes) => {
-        if (cancelled) return;
-        setContextMapReview(reviewRes || { candidates: [], counts: {}, runs: [] });
-        const nextRuns = contextMapRunsFromReview(reviewRes);
-        setContextMapInitialScanNotice(prev => nextContextMapInitialScanNotice(nextRuns, prev));
-        if (!nextRuns.some(run => run && run.status === 'running')) {
-          setContextMapStopBusy(false);
-        }
-      }).catch(() => {
-        // Best-effort status refresh; explicit actions still surface errors.
-      });
+      AgentApi.workspace.getWorkspaceContextSettings(hash).then((res) => {
+        if (!cancelled) applyWorkspaceContextRuntimeResponse(res);
+      }).catch(() => {});
     };
-    const timer = setInterval(refresh, 2000);
+    refresh();
+    const timer = setInterval(refresh, intervalMs);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [hash, tab, contextMapReviewStatus, contextMapReview && contextMapReview.runs, contextMapInitialScanNotice]);
+  }, [hash, tab, workspaceContextRunPollKey, workspaceContextScanBusy, workspaceContextStopBusy]);
 
   React.useEffect(() => {
     if (!hash || tab !== 'memory') return undefined;
@@ -475,9 +435,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
         setMemoryReviewSchedule(res.schedule || { mode: 'off' });
         setMemoryReviewStatus(res.status || null);
         if (!res.status || res.status.latestRunStatus !== 'running') setReviewStarting(false);
-      }).catch(() => {
-        // Best-effort status refresh; explicit actions still surface errors.
-      });
+      }).catch(() => {});
     };
     const timer = setInterval(refresh, running ? 2000 : 10000);
     return () => {
@@ -506,12 +464,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
       setInstructionsDirty(false);
       toast.success('Instructions saved');
     } catch (err) {
-      await dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Save failed',
-        body: err.message || String(err),
-      });
+      await dialog.alert({ anchor, variant: 'error', title: 'Save failed', body: err.message || String(err) });
     } finally {
       setSaving(false);
     }
@@ -525,11 +478,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
       await refreshMemory();
     } catch (err) {
       setMemoryEnabled(prev);
-      dialog.alert({
-        variant: 'error',
-        title: 'Failed to update memory setting',
-        body: err.message || String(err),
-      });
+      dialog.alert({ variant: 'error', title: 'Failed to update memory setting', body: err.message || String(err) });
     }
   }
 
@@ -538,514 +487,178 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
     setKbEnabled(enabled);
     try {
       await AgentApi.workspace.setKbEnabled(hash, enabled);
-      /* The book icon on the sidebar group reflects workspaceKbEnabled,
-         which is workspace-scoped (set on every conv in the group). The
-         shell's onCloseWorkspaceSettings refetches the list when the
-         modal closes, which is when the icon needs to update. */
     } catch (err) {
       setKbEnabled(prev);
-      dialog.alert({
-        variant: 'error',
-        title: 'Failed to update knowledge base setting',
-        body: err.message || String(err),
-      });
+      dialog.alert({ variant: 'error', title: 'Failed to update knowledge base setting', body: err.message || String(err) });
     }
   }
 
-  async function toggleContextMap(enabled){
-    const prev = contextMapEnabled;
-    setContextMapEnabled(enabled);
+  async function toggleWorkspaceContext(enabled){
+    const prev = workspaceContextEnabled;
+    setWorkspaceContextEnabled(enabled);
     if (!enabled) {
-      setContextMapInitialScanNotice(null);
-      setContextMapEntityDetail(null);
-      setContextMapSelectedEntityId(null);
+      setWorkspaceContextSelectedFile(null);
+      setWorkspaceContextFileContent('');
     }
     try {
-      const res = await AgentApi.workspace.setContextMapEnabled(hash, enabled);
-      if (enabled && res && res.initialScanStarted) {
-        setContextMapInitialScanNotice('started');
+      const res = await AgentApi.workspace.setWorkspaceContextEnabled(hash, enabled);
+      applyWorkspaceContextResponse(res);
+      if (enabled && res && res.initialRunStarted) {
+        setWorkspaceContextScanBusy(true);
+        toast.success('Workspace Context scan started');
       }
-      const reviewRes = await refreshContextMapReview();
-      if (enabled && res && res.initialScanStarted) {
-        const latestContextMapRun = Array.isArray(reviewRes && reviewRes.runs) ? reviewRes.runs[0] : null;
-        if (latestContextMapRun && latestContextMapRun.source === 'initial_scan' && latestContextMapRun.status === 'completed') {
-          setContextMapInitialScanNotice('completed');
-        }
-      }
-      await refreshContextMapGraph();
     } catch (err) {
-      setContextMapEnabled(prev);
-      setContextMapInitialScanNotice(null);
-      dialog.alert({
-        variant: 'error',
-        title: 'Failed to update Context Map setting',
-        body: err.message || String(err),
-      });
+      setWorkspaceContextEnabled(prev);
+      dialog.alert({ variant: 'error', title: 'Failed to update Workspace Context setting', body: err.message || String(err) });
     }
   }
 
-  async function refreshContextMapReview(status = contextMapReviewStatus){
-    setContextMapReviewLoading(true);
-    try {
-      const res = await AgentApi.workspace.getContextMapReview(hash, status);
-      setContextMapReview(res || { candidates: [], counts: {}, runs: [] });
-      setContextMapInitialScanNotice(prev => nextContextMapInitialScanNotice(contextMapRunsFromReview(res), prev));
-      return res || { candidates: [], counts: {}, runs: [] };
-    } catch (err) {
-      dialog.alert({
-        variant: 'error',
-        title: 'Failed to refresh Context Map review',
-        body: err.message || String(err),
-      });
-      return null;
-    } finally {
-      setContextMapReviewLoading(false);
-    }
+  function patchWorkspaceContextSettings(patch){
+    setWorkspaceContextSettings(prev => ({ ...(prev || { processorMode: 'global' }), ...patch }));
+    setWorkspaceContextSettingsDirty(true);
   }
 
-  async function changeContextMapReviewStatus(status){
-    if (status === contextMapReviewStatus) return;
-    setContextMapReviewStatus(status);
-    await refreshContextMapReview(status);
-  }
-
-  async function refreshContextMapGraph(opts){
-    setContextMapGraphLoading(true);
-    try {
-      const res = await AgentApi.workspace.getContextMapGraph(hash, { limit: 100, ...(opts || {}) });
-      setContextMapGraph(res || { entities: [], relationships: [], counts: {} });
-    } catch (err) {
-      dialog.alert({
-        variant: 'error',
-        title: 'Failed to refresh Context Map',
-        body: err.message || String(err),
-      });
-    } finally {
-      setContextMapGraphLoading(false);
-    }
-  }
-
-  async function loadContextMapEntity(entityId, anchor){
-    if (!entityId) return;
-    setContextMapSelectedEntityId(entityId);
-    setContextMapEntityDetailLoading(true);
-    setContextMapEntityDetail(prev => prev && prev.entityId === entityId ? prev : null);
-    try {
-      const res = await AgentApi.workspace.getContextMapEntity(hash, entityId);
-      setContextMapEntityDetail((res && res.entity) || null);
-    } catch (err) {
-      setContextMapSelectedEntityId(null);
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Entity detail failed',
-        body: err.message || String(err),
-      });
-    } finally {
-      setContextMapEntityDetailLoading(false);
-    }
-  }
-
-  async function updateContextMapEntity(entityId, patch, anchor){
-    if (!entityId) return null;
-    try {
-      const res = await AgentApi.workspace.updateContextMapEntity(hash, entityId, patch || {});
-      const entity = (res && res.entity) || null;
-      if (entity) {
-        setContextMapEntityDetail(entity);
-        setContextMapGraph(prev => ({
-          ...(prev || { entities: [], relationships: [], counts: {} }),
-          entities: Array.isArray(prev && prev.entities)
-            ? prev.entities.map(row => row.entityId === entity.entityId ? { ...row, ...entity } : row)
-            : [],
-        }));
-      }
-      toast.success('Context Map entity updated');
-      return entity;
-    } catch (err) {
-      await dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Failed to update Context Map entity',
-        body: err.message || String(err),
-      });
-      return null;
-    }
-  }
-
-  async function runContextMapScan(anchor){
-    if (contextMapScanBusy) return;
-    setContextMapScanBusy(true);
-    try {
-      const res = await AgentApi.workspace.runContextMapScan(hash);
-      setContextMapReviewStatus('pending');
-      await refreshContextMapReview('pending');
-      await refreshContextMapGraph();
-      if (res && res.started) setContextMapInitialScanNotice(prev => prev || 'rolling');
-      toast.success(res && res.started ? 'Context Map scan started' : 'Context Map scan requested');
-    } catch (err) {
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Scan failed',
-        body: err.message || String(err),
-      });
-    } finally {
-      setContextMapScanBusy(false);
-    }
-  }
-
-  async function stopContextMapScan(anchor){
-    if (contextMapStopBusy) return;
-    setContextMapStopBusy(true);
-    try {
-      await AgentApi.workspace.stopContextMapScan(hash);
-      setContextMapInitialScanNotice(null);
-      await refreshContextMapReview(contextMapReviewStatus || 'pending');
-      toast.success('Context Map scan stopped');
-    } catch (err) {
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Stop scan failed',
-        body: err.message || String(err),
-      });
-    } finally {
-      setContextMapStopBusy(false);
-    }
-  }
-
-  async function clearContextMap(anchor){
-    if (contextMapScanBusy || contextMapCandidateBusy) return;
-    const ok = await dialog.confirm({
-      anchor,
-      title: 'Clear Context Map',
-      body: 'Clear all Context Map entities, relationships, candidates, runs, and evidence for this workspace? The workspace setting will stay unchanged.',
-      confirmLabel: 'Clear map',
-      cancelLabel: 'Cancel',
-      destructive: true,
-    });
-    if (!ok) return;
-    setContextMapScanBusy(true);
-    try {
-      await AgentApi.workspace.clearContextMap(hash);
-      setContextMapGraph({ entities: [], relationships: [], counts: {} });
-      setContextMapReview({ candidates: [], counts: {}, runs: [] });
-      setContextMapInitialScanNotice(null);
-      setContextMapEntityDetail(null);
-      setContextMapSelectedEntityId(null);
-      toast.success('Context Map cleared');
-    } catch (err) {
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Clear failed',
-        body: err.message || String(err),
-      });
-    } finally {
-      setContextMapScanBusy(false);
-    }
-  }
-
-  async function updateContextMapCandidate(candidateId, payloadText, confidenceText, anchor){
-    if (!candidateId || contextMapCandidateBusy) return false;
-    let payload;
-    try {
-      payload = JSON.parse(payloadText || '{}');
-    } catch (err) {
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Invalid candidate JSON',
-        body: err.message || String(err),
-      });
-      return false;
-    }
-    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Invalid candidate JSON',
-        body: 'Candidate payload must be a JSON object.',
-      });
-      return false;
-    }
-    const confidence = confidenceText === '' ? undefined : Number(confidenceText);
-    if (confidence !== undefined && !Number.isFinite(confidence)) {
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Invalid confidence',
-        body: 'Confidence must be a number between 0 and 1.',
-      });
-      return false;
-    }
-    setContextMapCandidateBusy(candidateId);
-    try {
-      await AgentApi.workspace.updateContextMapCandidate(hash, candidateId, { payload, confidence });
-      await refreshContextMapReview();
-      toast.success('Context Map item updated');
-      return true;
-    } catch (err) {
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Update failed',
-        body: err.message || String(err),
-      });
-      return false;
-    } finally {
-      setContextMapCandidateBusy(null);
-    }
-  }
-
-  async function discardContextMapCandidate(candidateId, anchor){
-    if (!candidateId || contextMapCandidateBusy) return;
-    const ok = await dialog.confirm({
-      anchor,
-      title: 'Dismiss candidate',
-      body: 'Dismiss this Context Map item? Nothing will be applied to the map.',
-      confirmLabel: 'Dismiss',
-      cancelLabel: 'Cancel',
-      destructive: true,
-    });
-    if (!ok) return;
-    setContextMapCandidateBusy(candidateId);
-    try {
-      await AgentApi.workspace.discardContextMapCandidate(hash, candidateId);
-      await refreshContextMapReview();
-    } catch (err) {
-      dialog.alert({
-        variant: 'error',
-        title: 'Dismiss failed',
-        body: err.message || String(err),
-      });
-    } finally {
-      setContextMapCandidateBusy(null);
-    }
-  }
-
-  async function applyContextMapCandidate(candidateId, anchor){
-    if (!candidateId || contextMapCandidateBusy) return;
-    setContextMapCandidateBusy(candidateId);
-    try {
-      const res = await AgentApi.workspace.applyContextMapCandidate(hash, candidateId);
-      await refreshContextMapReview();
-      await refreshContextMapGraph();
-      const count = contextMapAppliedItemCount(res);
-      toast.success(count > 1 ? `Applied ${count} Context Map items` : (count > 0 ? 'Context Map item applied' : 'Context Map item already applied'));
-    } catch (err) {
-      const dependencies = Array.isArray(err && err.body && err.body.dependencies) ? err.body.dependencies : [];
-      if (err && err.status === 409 && dependencies.length > 0) {
-        const ok = await dialog.confirm({
-          anchor,
-          title: 'Apply related Context Map items?',
-          body: (
-            <div className="ws-cm-dependency-confirm">
-          <p>This relationship cannot be added by itself because one or both endpoint entities still need attention.</p>
-          <p>Agent Cockpit will apply only the entity items below first, then apply this relationship. Other needs-attention, dismissed, and active items will not be changed.</p>
-              <ul className="ws-cm-dependency-list">
-                {dependencies.map(dep => (
-                  <li key={dep.candidateId}>
-                    <b>{dep.role === 'subject' ? 'Subject' : 'Object'}:</b>
-                    {' '}{dep.name || dep.candidateId}
-                    {dep.typeSlug ? <span> · {dep.typeSlug}</span> : null}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ),
-          confirmLabel: `Apply ${dependencies.length + 1} items`,
-          cancelLabel: 'Inspect manually',
-        });
-        if (ok) {
-          try {
-            const res = await AgentApi.workspace.applyContextMapCandidate(hash, candidateId, { includeDependencies: true });
-            await refreshContextMapReview();
-            await refreshContextMapGraph();
-            const count = contextMapAppliedItemCount(res);
-            toast.success(count > 1 ? `Applied ${count} Context Map items` : 'Context Map item applied');
-          } catch (applyErr) {
-            dialog.alert({
-              anchor,
-              variant: 'error',
-              title: 'Apply failed',
-              body: applyErr.message || String(applyErr),
-            });
-          }
-        }
-        return;
-      }
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Apply failed',
-        body: err.message || String(err),
-      });
-    } finally {
-      setContextMapCandidateBusy(null);
-    }
-  }
-
-  async function applyAllContextMapCandidates(anchor){
-    if (contextMapCandidateBusy) return;
-    const ok = await dialog.confirm({
-      anchor,
-      title: 'Accept all Context Map suggestions',
-      body: 'Apply every pending Context Map suggestion. Dismissed suggestions will stay dismissed. Entity suggestions are applied before relationships so relationship endpoints can resolve cleanly.',
-      confirmLabel: 'Accept all',
-      cancelLabel: 'Cancel',
-    });
-    if (!ok) return;
-    setContextMapCandidateBusy('__all__');
-    try {
-      const reviewRes = await AgentApi.workspace.getContextMapReview(hash, 'pending');
-      const candidates = Array.isArray(reviewRes && reviewRes.candidates) ? reviewRes.candidates : [];
-      const pending = candidates
-        .filter(candidate => candidate && candidate.status === 'pending')
-        .sort(compareContextMapCandidateApplyOrder);
-      if (!pending.length) {
-        await refreshContextMapReview(contextMapReviewStatus || 'pending');
-        toast.success('No Context Map suggestions to apply');
-        return;
-      }
-      let appliedCount = 0;
-      for (const candidate of pending) {
-        try {
-          const res = await AgentApi.workspace.applyContextMapCandidate(hash, candidate.candidateId);
-          appliedCount += contextMapAppliedItemCount(res);
-        } catch (err) {
-          const dependencies = Array.isArray(err && err.body && err.body.dependencies) ? err.body.dependencies : [];
-          if (err && err.status === 409 && dependencies.length > 0) {
-            const res = await AgentApi.workspace.applyContextMapCandidate(hash, candidate.candidateId, { includeDependencies: true });
-            appliedCount += contextMapAppliedItemCount(res);
-            continue;
-          }
-          throw err;
-        }
-      }
-      await refreshContextMapReview(contextMapReviewStatus || 'pending');
-      await refreshContextMapGraph();
-      toast.success(appliedCount > 1 ? `Applied ${appliedCount} Context Map items` : 'Context Map suggestions accepted');
-    } catch (err) {
-      await refreshContextMapReview(contextMapReviewStatus || 'pending');
-      await refreshContextMapGraph();
-      dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Accept all failed',
-        body: err.message || String(err),
-      });
-    } finally {
-      setContextMapCandidateBusy(null);
-    }
-  }
-
-  function contextMapAppliedItemCount(res){
-    const primaryApplied = Array.isArray(res && res.applied) && res.applied.length > 0 ? 1 : 0;
-    const dependencyCount = Array.isArray(res && res.dependenciesApplied) ? res.dependenciesApplied.length : 0;
-    return primaryApplied + dependencyCount;
-  }
-
-  function compareContextMapCandidateApplyOrder(a, b){
-    const pa = contextMapCandidateApplyPriority(a && a.candidateType);
-    const pb = contextMapCandidateApplyPriority(b && b.candidateType);
-    if (pa !== pb) return pa - pb;
-    return String(a && a.candidateId || '').localeCompare(String(b && b.candidateId || ''));
-  }
-
-  function contextMapCandidateApplyPriority(type){
-    if (type === 'new_entity') return 10;
-    if (type === 'entity_update' || type === 'entity_merge' || type === 'alias_addition' || type === 'sensitivity_classification') return 20;
-    if (type === 'evidence_link') return 30;
-    if (type === 'new_relationship') return 80;
-    if (type === 'relationship_update' || type === 'relationship_removal') return 90;
-    return 50;
-  }
-
-  async function reopenContextMapCandidate(candidateId){
-    if (!candidateId || contextMapCandidateBusy) return;
-    setContextMapCandidateBusy(candidateId);
-    try {
-      await AgentApi.workspace.reopenContextMapCandidate(hash, candidateId);
-      await refreshContextMapReview();
-    } catch (err) {
-      dialog.alert({
-        variant: 'error',
-        title: 'Restore failed',
-        body: err.message || String(err),
-      });
-    } finally {
-      setContextMapCandidateBusy(null);
-    }
-  }
-
-  function patchContextMapSettings(patch){
-    setContextMapSettings(prev => ({ ...(prev || { processorMode: 'global' }), ...patch }));
-    setContextMapSettingsDirty(true);
-  }
-
-  async function saveContextMapSettings(anchor){
+  async function saveWorkspaceContextSettings(anchor){
     if (saving) return;
     setSaving(true);
     try {
-      const res = await AgentApi.workspace.setContextMapSettings(hash, contextMapSettings || { processorMode: 'global' });
-      setContextMapSettings(res.settings || contextMapSettings || { processorMode: 'global' });
-      setContextMapSettingsDirty(false);
-      toast.success('Context Map settings saved');
+      const res = await AgentApi.workspace.setWorkspaceContextSettings(hash, workspaceContextSettings || { processorMode: 'global' });
+      setWorkspaceContextSettings(res.settings || workspaceContextSettings || { processorMode: 'global' });
+      setWorkspaceContextSettingsDirty(false);
+      toast.success('Workspace Context settings saved');
     } catch (err) {
-      await dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Save failed',
-        body: err.message || String(err),
-      });
+      await dialog.alert({ anchor, variant: 'error', title: 'Save failed', body: err.message || String(err) });
     } finally {
       setSaving(false);
     }
   }
 
-  async function deleteMemoryEntry(relPath, anchor){
+  async function refreshWorkspaceContext(){
+    const res = await AgentApi.workspace.getWorkspaceContextSettings(hash);
+    applyWorkspaceContextRuntimeResponse(res);
+    return res;
+  }
+
+  async function runWorkspaceContextScan(anchor){
+    if (workspaceContextScanBusy) return;
+    setWorkspaceContextScanBusy(true);
+    try {
+      const res = await AgentApi.workspace.runWorkspaceContextScan(hash);
+      await refreshWorkspaceContext();
+      toast.success(res && res.started ? 'Workspace Context scan started' : 'Workspace Context scan requested');
+    } catch (err) {
+      if (err && err.status === 409) {
+        await refreshWorkspaceContext().catch(() => {});
+        toast.warn('Workspace Context run already running');
+        return;
+      }
+      dialog.alert({ anchor, variant: 'error', title: 'Scan failed', body: err.message || String(err) });
+    } finally {
+      setWorkspaceContextScanBusy(false);
+    }
+  }
+
+  async function runWorkspaceContextMaintenance(anchor){
+    if (workspaceContextScanBusy) return;
+    setWorkspaceContextScanBusy(true);
+    try {
+      const res = await AgentApi.workspace.runWorkspaceContextMaintenance(hash);
+      await refreshWorkspaceContext();
+      toast.success(res && res.started ? 'Workspace Context maintenance started' : 'Workspace Context maintenance requested');
+    } catch (err) {
+      if (err && err.status === 409) {
+        await refreshWorkspaceContext().catch(() => {});
+        toast.warn('Workspace Context run already running');
+        return;
+      }
+      dialog.alert({ anchor, variant: 'error', title: 'Maintenance failed', body: err.message || String(err) });
+    } finally {
+      setWorkspaceContextScanBusy(false);
+    }
+  }
+
+  async function stopWorkspaceContextScan(anchor){
+    if (workspaceContextStopBusy) return;
+    setWorkspaceContextStopBusy(true);
+    try {
+      await AgentApi.workspace.stopWorkspaceContextScan(hash);
+      await refreshWorkspaceContext();
+      toast.success('Workspace Context run stopped');
+    } catch (err) {
+      dialog.alert({ anchor, variant: 'error', title: 'Stop Workspace Context run failed', body: err.message || String(err) });
+    } finally {
+      setWorkspaceContextStopBusy(false);
+    }
+  }
+
+  async function repairWorkspaceContextInstructions(anchor){
+    try {
+      const res = await AgentApi.workspace.repairWorkspaceContextInstructions(hash);
+      await refreshWorkspaceContext();
+      if (res && res.ok) toast.success('Workspace Context instructions repaired');
+    } catch (err) {
+      dialog.alert({ anchor, variant: 'error', title: 'Repair failed', body: err.message || String(err) });
+    }
+  }
+
+  async function clearWorkspaceContext(anchor){
     const ok = await dialog.confirm({
       anchor,
-      title: 'Delete entry',
-      body: `Delete memory entry "${relPath}"?`,
-      confirmLabel: 'Delete',
+      title: 'Clear Workspace Context',
+      body: 'Clear all Workspace Context markdown and run history for this workspace? The workspace setting will stay unchanged.',
+      confirmLabel: 'Clear context',
       cancelLabel: 'Cancel',
       destructive: true,
     });
+    if (!ok) return;
+    setWorkspaceContextScanBusy(true);
+    try {
+      await AgentApi.workspace.clearWorkspaceContext(hash);
+      setWorkspaceContextSelectedFile(null);
+      setWorkspaceContextFileContent('');
+      await refreshWorkspaceContext();
+      toast.success('Workspace Context cleared');
+    } catch (err) {
+      dialog.alert({ anchor, variant: 'error', title: 'Clear failed', body: err.message || String(err) });
+    } finally {
+      setWorkspaceContextScanBusy(false);
+    }
+  }
+
+  async function selectWorkspaceContextFile(relPath){
+    if (!relPath) return;
+    setWorkspaceContextSelectedFile(relPath);
+    setWorkspaceContextFileLoading(true);
+    try {
+      const res = await AgentApi.workspace.getWorkspaceContextFile(hash, relPath);
+      setWorkspaceContextFileContent((res && res.content) || '');
+    } catch (err) {
+      setWorkspaceContextFileContent('');
+      dialog.alert({ variant: 'error', title: 'File preview failed', body: err.message || String(err) });
+    } finally {
+      setWorkspaceContextFileLoading(false);
+    }
+  }
+
+  async function deleteMemoryEntry(relPath, anchor){
+    const ok = await dialog.confirm({ anchor, title: 'Delete entry', body: 'Delete memory entry "' + relPath + '"?', confirmLabel: 'Delete', cancelLabel: 'Cancel', destructive: true });
     if (!ok) return;
     try {
       await AgentApi.workspace.deleteMemoryEntry(hash, relPath);
       await refreshMemory();
     } catch (err) {
-      dialog.alert({
-        variant: 'error',
-        title: 'Failed to delete entry',
-        body: err.message || String(err),
-      });
+      dialog.alert({ variant: 'error', title: 'Failed to delete entry', body: err.message || String(err) });
     }
   }
 
   async function clearAllMemory(anchor){
-    const ok = await dialog.confirm({
-      anchor,
-      title: 'Clear memory',
-      body: 'Clear all memory entries for this workspace? This cannot be undone.',
-      confirmLabel: 'Clear all',
-      cancelLabel: 'Cancel',
-      destructive: true,
-    });
+    const ok = await dialog.confirm({ anchor, title: 'Clear memory', body: 'Clear all memory entries for this workspace? This cannot be undone.', confirmLabel: 'Clear all', cancelLabel: 'Cancel', destructive: true });
     if (!ok) return;
     try {
       await AgentApi.workspace.clearMemory(hash);
       await refreshMemory();
     } catch (err) {
-      dialog.alert({
-        variant: 'error',
-        title: 'Failed to clear memory',
-        body: err.message || String(err),
-      });
+      dialog.alert({ variant: 'error', title: 'Failed to clear memory', body: err.message || String(err) });
     }
   }
 
@@ -1064,11 +677,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
       if (res.status) setMemoryReviewStatus(res.status);
     } catch (err) {
       setMemoryReviewSchedule(prev);
-      dialog.alert({
-        variant: 'error',
-        title: 'Schedule update failed',
-        body: err.message || String(err),
-      });
+      dialog.alert({ variant: 'error', title: 'Schedule update failed', body: err.message || String(err) });
     }
   }
 
@@ -1092,12 +701,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
       if (res.status) setMemoryReviewStatus(res.status);
       if (onOpenMemoryReview) onOpenMemoryReview(hash, label || 'workspace', run ? run.id : null);
     } catch (err) {
-      await dialog.alert({
-        anchor,
-        variant: 'error',
-        title: 'Memory Review failed',
-        body: err.message || String(err),
-      });
+      await dialog.alert({ anchor, variant: 'error', title: 'Memory Review failed', body: err.message || String(err) });
     } finally {
       setReviewStarting(false);
     }
@@ -1122,7 +726,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
         {WS_SETTINGS_TABS.map(t => (
           <div
             key={t.id}
-            className={`settings-tab ${tab === t.id ? 'active' : ''}`}
+            className={'settings-tab ' + (tab === t.id ? 'active' : '')}
             onClick={() => setTab(t.id)}
           >{t.label}</div>
         ))}
@@ -1130,7 +734,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
 
       <div className="settings-body workspace-settings-body">
         {loading ? (
-          <div className="u-dim" style={{padding:'16px'}}>Loading…</div>
+          <div className="u-dim" style={{padding:'16px'}}>Loading...</div>
         ) : loadError ? (
           <div className="u-err" style={{padding:'16px'}}>{loadError}</div>
         ) : tab === 'instructions' ? (
@@ -1159,49 +763,36 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialContextM
           />
         ) : tab === 'kb' ? (
           <KbTab enabled={kbEnabled} onToggle={toggleKb}/>
-        ) : tab === 'contextMap' ? (
-          <ContextMapTab
-            enabled={contextMapEnabled}
-            settings={contextMapSettings}
-            review={contextMapReview}
-            initialScanNotice={contextMapInitialScanNotice}
-            graph={contextMapGraph}
-            entityDetail={contextMapEntityDetail}
-            entityDetailLoading={contextMapEntityDetailLoading}
-            selectedEntityId={contextMapSelectedEntityId}
-            graphLoading={contextMapGraphLoading}
-            reviewLoading={contextMapReviewLoading}
-            reviewStatus={contextMapReviewStatus}
-            candidateBusy={contextMapCandidateBusy}
-            scanBusy={contextMapScanBusy}
-            scanStopping={contextMapStopBusy}
+        ) : tab === 'workspaceContext' ? (
+          <WorkspaceContextTab
+            enabled={workspaceContextEnabled}
+            settings={workspaceContextSettings}
+            state={workspaceContextState}
+            files={workspaceContextFiles}
+            contextDir={workspaceContextContextDir}
+            instructionPath={workspaceContextInstructionPath}
+            selectedFile={workspaceContextSelectedFile}
+            fileContent={workspaceContextFileContent}
+            fileLoading={workspaceContextFileLoading}
+            scanBusy={workspaceContextScanBusy}
+            scanStopping={workspaceContextStopBusy}
             globalSettings={globalSettings}
             backends={backends}
             profileBackends={profileBackends}
             loadProfileBackend={loadProfileBackend}
-            onToggle={toggleContextMap}
-            onPatch={patchContextMapSettings}
-            onSave={saveContextMapSettings}
-            onRefreshReview={refreshContextMapReview}
-            onReviewStatusChange={changeContextMapReviewStatus}
-            onRefreshGraph={refreshContextMapGraph}
-            onSelectEntity={loadContextMapEntity}
-            onUpdateEntity={updateContextMapEntity}
-            onCloseEntityDetail={() => {
-              setContextMapEntityDetail(null);
-              setContextMapSelectedEntityId(null);
-            }}
-            onRunScan={runContextMapScan}
-            onStopScan={stopContextMapScan}
-            onClearMap={clearContextMap}
-            onUpdateCandidate={updateContextMapCandidate}
-            onApplyCandidate={applyContextMapCandidate}
-            onApplyAllCandidates={applyAllContextMapCandidates}
-            onDiscardCandidate={discardContextMapCandidate}
-            onReopenCandidate={reopenContextMapCandidate}
-            settingsDirty={contextMapSettingsDirty}
+            onToggle={toggleWorkspaceContext}
+            onPatch={patchWorkspaceContextSettings}
+            onSave={saveWorkspaceContextSettings}
+            onRefresh={refreshWorkspaceContext}
+            onSelectFile={selectWorkspaceContextFile}
+            onRunScan={runWorkspaceContextScan}
+            onRunMaintenance={runWorkspaceContextMaintenance}
+            onStopScan={stopWorkspaceContextScan}
+            onRepairInstructions={repairWorkspaceContextInstructions}
+            onClear={clearWorkspaceContext}
+            settingsDirty={workspaceContextSettingsDirty}
             saving={saving}
-            initialSection={initialContextMapSection}
+            initialSection={initialWorkspaceContextSection}
           />
         ) : null}
       </div>
@@ -1926,27 +1517,16 @@ function KbTab({ enabled, onToggle }){
   );
 }
 
-function WorkspaceSettingsHelpTooltip({ children }){
-  return (
-    <div className="tt-section settings-help-tooltip">
-      <div className="tt-body-text">{children}</div>
-    </div>
-  );
-}
-
-function ContextMapTab({
+function WorkspaceContextTab({
   enabled,
   settings,
-  review,
-  initialScanNotice,
-  graph,
-  entityDetail,
-  entityDetailLoading,
-  selectedEntityId,
-  graphLoading,
-  reviewLoading,
-  reviewStatus,
-  candidateBusy,
+  state,
+  files,
+  contextDir,
+  instructionPath,
+  selectedFile,
+  fileContent,
+  fileLoading,
   scanBusy,
   scanStopping,
   globalSettings,
@@ -1956,28 +1536,20 @@ function ContextMapTab({
   onToggle,
   onPatch,
   onSave,
-  onRefreshReview,
-  onReviewStatusChange,
-  onRefreshGraph,
-  onSelectEntity,
-  onUpdateEntity,
-  onCloseEntityDetail,
+  onRefresh,
+  onSelectFile,
   onRunScan,
+  onRunMaintenance,
   onStopScan,
-  onClearMap,
-  onUpdateCandidate,
-  onApplyCandidate,
-  onApplyAllCandidates,
-  onDiscardCandidate,
-  onReopenCandidate,
+  onRepairInstructions,
+  onClear,
   settingsDirty,
   saving,
   initialSection,
 }){
-  const contextMapTopRef = React.useRef(null);
-  const contextMapContentRef = React.useRef(null);
+  const workspaceContextContentRef = React.useRef(null);
   const ctx = settings || { processorMode: 'global' };
-  const globalContext = (globalSettings && globalSettings.contextMap) || {};
+  const globalContext = (globalSettings && globalSettings.workspaceContext) || {};
   const profiles = activeWorkspaceCliProfiles(globalSettings);
   const fallbackBackend = globalContext.cliBackend || (globalSettings && globalSettings.defaultBackend) || '';
   const mode = ctx.processorMode === 'override' ? 'override' : 'global';
@@ -1985,6 +1557,14 @@ function ContextMapTab({
   const selectedProfile = mode === 'override'
     ? workspaceProfileForSetting(profiles, ctx.cliProfileId, ctx.cliBackend, fallbackBackend)
     : globalProfile;
+  const [workspaceContextSection, setWorkspaceContextSection] = React.useState(() => normalizeWorkspaceContextSection(initialSection));
+  const [fileQuery, setFileQuery] = React.useState('');
+  const [runPage, setRunPage] = React.useState(0);
+
+  React.useEffect(() => {
+    setWorkspaceContextSection(normalizeWorkspaceContextSection(initialSection));
+  }, [initialSection]);
+
   React.useEffect(() => {
     if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
   }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
@@ -1993,181 +1573,58 @@ function ContextMapTab({
   const modelId = (mode === 'override' ? ctx.cliModel : globalContext.cliModel) || workspaceDefaultModelId(models) || '';
   const efforts = selectedProfile ? workspaceEffortLevelsForProfile(backends, profileBackends, selectedProfile, modelId) : [];
   const effort = (mode === 'override' ? ctx.cliEffort : globalContext.cliEffort) || workspaceDefaultEffort(efforts) || '';
-  const candidates = Array.isArray(review && review.candidates) ? review.candidates : [];
-  const pendingCount = (review && review.counts && review.counts.pending) || 0;
-  const discardedCount = (review && review.counts && review.counts.discarded) || 0;
-  const contextMapRuns = Array.isArray(review && review.runs) ? review.runs : [];
-  const latestContextMapRun = contextMapRuns[0] || null;
-  const runningContextMapRun = contextMapRuns.find(run => run && run.status === 'running') || null;
-  const currentReviewStatus = reviewStatus || 'pending';
-  const activeGraph = graph || { entities: [], relationships: [], counts: {} };
-  const activeEntities = Array.isArray(activeGraph.entities) ? activeGraph.entities : [];
-  const activeRelationships = Array.isArray(activeGraph.relationships) ? activeGraph.relationships : [];
-  const activeCounts = activeGraph.counts || {};
-  const [graphQuery, setGraphQuery] = React.useState('');
-  const [graphType, setGraphType] = React.useState('');
-  const [graphStatus, setGraphStatus] = React.useState('active');
-  const [graphSensitivity, setGraphSensitivity] = React.useState('');
-  const [editingCandidateId, setEditingCandidateId] = React.useState(null);
-  const [candidateEditPayload, setCandidateEditPayload] = React.useState('');
-  const [candidateEditConfidence, setCandidateEditConfidence] = React.useState('');
-  const [editingEntity, setEditingEntity] = React.useState(false);
-  const [entityEditDraft, setEntityEditDraft] = React.useState(null);
-  const [entityEditSaving, setEntityEditSaving] = React.useState(false);
-  const [contextMapSection, setContextMapSection] = React.useState(() => normalizeContextMapSection(initialSection));
+  const runs = workspaceContextRunsFromState(state);
+  const latestRun = runs[0] || null;
+  const latestScanRun = runs.find(isWorkspaceContextScanRun) || null;
+  const latestMaintenanceRun = runs.find(isWorkspaceContextMaintenanceRun) || null;
+  const runningRun = runs.find(run => run && run.status === 'running') || null;
+  const failedRun = runs.find(run => run && run.status === 'failed') || null;
+  const visibleFiles = (Array.isArray(files) ? files : []).filter(file => {
+    const query = fileQuery.trim().toLowerCase();
+    if (!query) return true;
+    return String(file.path || file.name || '').toLowerCase().includes(query);
+  });
+  const globalScanInterval = Number.isFinite(globalContext.scanIntervalMinutes) ? globalContext.scanIntervalMinutes : 5;
+  const globalMaintenanceInterval = Number.isFinite(globalContext.maintenanceIntervalHours) ? globalContext.maintenanceIntervalHours : 24;
+  const statusText = !enabled ? 'Disabled' : runningRun ? 'Running' : failedRun ? 'Error' : 'Enabled';
+  const statusClass = statusText.toLowerCase();
+  const globalProcessorProfile = globalProfile ? globalProfile.name : (fallbackBackend || 'Default profile');
+  const runPageCount = Math.max(1, Math.ceil(runs.length / WORKSPACE_CONTEXT_RUNS_PAGE_SIZE));
+  const safeRunPage = Math.min(runPage, runPageCount - 1);
+  const visibleRuns = runs.slice(
+    safeRunPage * WORKSPACE_CONTEXT_RUNS_PAGE_SIZE,
+    safeRunPage * WORKSPACE_CONTEXT_RUNS_PAGE_SIZE + WORKSPACE_CONTEXT_RUNS_PAGE_SIZE,
+  );
+  const canShowNewerRuns = safeRunPage > 0;
+  const canShowOlderRuns = safeRunPage < runPageCount - 1;
 
   React.useEffect(() => {
-    setContextMapSection(normalizeContextMapSection(initialSection));
-  }, [initialSection]);
+    if (runPage > runPageCount - 1) setRunPage(Math.max(0, runPageCount - 1));
+  }, [runPage, runPageCount]);
 
   React.useEffect(() => {
-    setEditingEntity(false);
-    setEntityEditDraft(null);
-  }, [entityDetail && entityDetail.entityId]);
-
-  React.useEffect(() => {
-    if (!entityDetail && !entityDetailLoading) return undefined;
-    const onKeyDown = (event) => {
-      if (event.key === 'Escape') onCloseEntityDetail();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [entityDetail && entityDetail.entityId, entityDetailLoading, onCloseEntityDetail]);
-
-  function scrollContextMapTopIntoView(){
-    const contentNode = contextMapContentRef.current;
-    const node = contextMapTopRef.current;
-    if (!contentNode && !node) return;
-    window.requestAnimationFrame(() => {
-      if (contentNode && typeof contentNode.scrollTo === 'function') {
-        contentNode.scrollTo({ top: 0, behavior: 'smooth' });
-      } else if (node) {
-        node.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      }
-    });
-  }
-
-  async function runScanFromContextMap(anchor){
-    setContextMapSection('overview');
-    scrollContextMapTopIntoView();
-    try {
-      await onRunScan(anchor);
-    } finally {
-      scrollContextMapTopIntoView();
-    }
-  }
-
-  function editableCandidatePayload(candidate){
-    const payload = Object.assign({}, (candidate && candidate.payload) || {});
-    delete payload.sourceSpan;
-    return payload;
-  }
-
-  function beginCandidateEdit(candidate){
-    setEditingCandidateId(candidate.candidateId);
-    setCandidateEditPayload(JSON.stringify(editableCandidatePayload(candidate), null, 2));
-    setCandidateEditConfidence(String(candidate.confidence ?? 1));
-  }
-
-  function cancelCandidateEdit(){
-    setEditingCandidateId(null);
-    setCandidateEditPayload('');
-    setCandidateEditConfidence('');
-  }
-
-  async function saveCandidateEdit(candidate, anchor){
-    const ok = await onUpdateCandidate(
-      candidate.candidateId,
-      candidateEditPayload,
-      candidateEditConfidence,
-      anchor,
-    );
-    if (ok) cancelCandidateEdit();
-  }
-
-  function refreshGraphWithFilters(){
-    onRefreshGraph({
-      query: graphQuery.trim(),
-      type: graphType,
-      status: graphStatus,
-      sensitivity: graphSensitivity,
-    });
-  }
-
-  function clearGraphFilters(){
-    setGraphQuery('');
-    setGraphType('');
-    setGraphStatus('active');
-    setGraphSensitivity('');
-    onRefreshGraph({ query: '', type: '', status: 'active', sensitivity: '' });
-  }
-
-  function beginEntityEdit(entity){
-    setEditingEntity(true);
-    setEntityEditDraft({
-      name: entity.name || '',
-      typeSlug: entity.typeSlug || 'project',
-      status: entity.status || 'active',
-      sensitivity: entity.sensitivity || 'normal',
-      confidence: String(entity.confidence ?? 1),
-      summaryMarkdown: entity.summaryMarkdown || '',
-      notesMarkdown: entity.notesMarkdown || '',
-    });
-  }
-
-  function patchEntityEdit(patch){
-    setEntityEditDraft(prev => ({ ...(prev || {}), ...patch }));
-  }
-
-  async function saveEntityEdit(anchor){
-    if (!entityDetail || !entityEditDraft || entityEditSaving) return;
-    const confidence = Number(entityEditDraft.confidence);
-    setEntityEditSaving(true);
-    try {
-      const entity = await onUpdateEntity(entityDetail.entityId, {
-        name: entityEditDraft.name,
-        typeSlug: entityEditDraft.typeSlug,
-        status: entityEditDraft.status,
-        sensitivity: entityEditDraft.sensitivity,
-        confidence: Number.isFinite(confidence) ? confidence : entityDetail.confidence,
-        summaryMarkdown: entityEditDraft.summaryMarkdown || null,
-        notesMarkdown: entityEditDraft.notesMarkdown || null,
-      }, anchor);
-      if (entity) {
-        setEditingEntity(false);
-        setEntityEditDraft(null);
-        refreshGraphWithFilters();
-      }
-    } finally {
-      setEntityEditSaving(false);
-    }
-  }
+    if (runningRun) setRunPage(0);
+  }, [runningRun && runningRun.runId]);
+  const workspaceContextSections = [
+    { id: 'overview', label: 'Overview', desc: statusText },
+    { id: 'processor', label: 'Processor', desc: settingsDirty ? 'Unsaved changes' : mode === 'override' ? 'Workspace override' : 'Global defaults' },
+    { id: 'files', label: 'Markdown Files', desc: enabled ? String(visibleFiles.length) + ' files' : 'Disabled' },
+    { id: 'runs', label: 'Runs', desc: runs.length ? String(runs.length) + ' recent' : 'None yet' },
+    { id: 'danger', label: 'Danger Zone', desc: 'Clear data' },
+  ];
 
   function onModeChange(nextMode){
     if (nextMode === 'global') {
-      onPatch({
-        processorMode: 'global',
-        cliProfileId: undefined,
-        cliBackend: undefined,
-        cliModel: undefined,
-        cliEffort: undefined,
-        scanIntervalMinutes: undefined,
-      });
+      onPatch({ processorMode: 'global', cliProfileId: undefined, cliBackend: undefined, cliModel: undefined, cliEffort: undefined, scanIntervalMinutes: undefined, maintenanceIntervalHours: undefined });
+      return;
+    }
+    if (selectedProfile) {
+      const m = workspaceModelsForProfile(backends, profileBackends, selectedProfile);
+      const newModel = workspaceDefaultModelId(m);
+      const e = workspaceEffortLevelsForProfile(backends, profileBackends, selectedProfile, newModel);
+      onPatch({ processorMode: 'override', cliProfileId: selectedProfile.id, cliBackend: workspaceBackendIdForProfile(selectedProfile), cliModel: newModel, cliEffort: workspaceDefaultEffort(e) });
     } else {
-      if (selectedProfile) {
-        const m = workspaceModelsForProfile(backends, profileBackends, selectedProfile);
-        const newModel = workspaceDefaultModelId(m);
-        const e = workspaceEffortLevelsForProfile(backends, profileBackends, selectedProfile, newModel);
-        onPatch({
-          processorMode: 'override',
-          cliProfileId: selectedProfile.id,
-          cliBackend: workspaceBackendIdForProfile(selectedProfile),
-          cliModel: newModel,
-          cliEffort: workspaceDefaultEffort(e),
-        });
-      } else {
-        onPatch({ processorMode: 'override' });
-      }
+      onPatch({ processorMode: 'override' });
     }
   }
 
@@ -2177,13 +1634,7 @@ function ContextMapTab({
     const m = workspaceModelsForProfile(backends, profileBackends, profile);
     const newModel = workspaceDefaultModelId(m);
     const e = workspaceEffortLevelsForProfile(backends, profileBackends, profile, newModel);
-    onPatch({
-      processorMode: 'override',
-      cliProfileId: profile.id,
-      cliBackend: workspaceBackendIdForProfile(profile),
-      cliModel: newModel,
-      cliEffort: workspaceDefaultEffort(e),
-    });
+    onPatch({ processorMode: 'override', cliProfileId: profile.id, cliBackend: workspaceBackendIdForProfile(profile), cliModel: newModel, cliEffort: workspaceDefaultEffort(e) });
   }
 
   function onModelChange(v){
@@ -2196,240 +1647,48 @@ function ContextMapTab({
       onPatch({ scanIntervalMinutes: undefined });
       return;
     }
-    const n = parseInt(v, 10);
-    if (!Number.isFinite(n)) return;
+    const n = Number(v);
+    if (!Number.isInteger(n)) return;
     onPatch({ scanIntervalMinutes: Math.max(1, Math.min(1440, n)) });
   }
 
-  function candidateTitle(candidate){
-    const payload = (candidate && candidate.payload) || {};
-    const value = payload.name || payload.title || payload.subjectName || payload.typeSlug || (candidate && candidate.candidateType);
-    return value == null ? 'Candidate' : String(value);
-  }
-
-  function candidateSummary(candidate){
-    const payload = Object.assign({}, (candidate && candidate.payload) || {});
-    delete payload.sourceSpan;
-    const text = JSON.stringify(payload);
-    return text.length > 220 ? text.slice(0, 220) + '...' : text;
-  }
-
-  function statusLabel(status){
-    if (status === 'pending') return 'Needs attention';
-    if (status === 'discarded') return 'Dismissed';
-    if (status === 'active') return 'Applied';
-    if (status === 'stale') return 'Stale';
-    if (status === 'conflict') return 'Conflict';
-    if (status === 'failed') return 'Failed';
-    if (status === 'stopped') return 'Stopped';
-    return status || 'Unknown';
-  }
-
-  function runSourceLabel(source){
-    if (source === 'initial_scan') return 'Initial scan';
-    if (source === 'manual_rebuild') return 'Manual scan';
-    if (source === 'session_reset') return 'Session reset';
-    if (source === 'archive') return 'Archive';
-    if (source === 'scheduled') return 'Scheduled';
-    return source || 'Scan';
-  }
-
-  function shortCandidateId(value){
-    const text = value == null ? '' : String(value);
-    return text.length > 10 ? text.slice(0, 10) : text;
-  }
-
-  function candidateSourceParts(candidate){
-    const sourceSpan = candidate && candidate.payload && candidate.payload.sourceSpan;
-    if (!sourceSpan) {
-      return {
-        key: 'unknown',
-        label: 'Unknown source',
-        meta: candidate && candidate.runId ? `Run ${shortCandidateId(candidate.runId)}` : '',
-      };
+  function onMaintenanceInterval(v){
+    if (v === '') {
+      onPatch({ maintenanceIntervalHours: undefined });
+      return;
     }
-    const sourceType = sourceSpan.sourceType || 'source';
-    if (sourceType === 'file') {
-      const sourceId = sourceSpan.sourceId || (sourceSpan.locator && sourceSpan.locator.path) || 'file';
-      return {
-        key: `file:${sourceId}:${sourceSpan.runId || ''}`,
-        label: `File · ${sourceId}`,
-        meta: sourceSpan.runId ? `Run ${shortCandidateId(sourceSpan.runId)}` : '',
-      };
+    const n = Number(v);
+    if (!Number.isInteger(n)) return;
+    onPatch({ maintenanceIntervalHours: Math.max(1, Math.min(8760, n)) });
+  }
+
+  function selectSection(section){
+    setWorkspaceContextSection(section);
+    if (workspaceContextContentRef.current && typeof workspaceContextContentRef.current.scrollTo === 'function') {
+      workspaceContextContentRef.current.scrollTo({ top: 0, behavior: 'smooth' });
     }
-    if (sourceType === 'workspace_instruction') {
-      return {
-        key: `workspace_instruction:${sourceSpan.sourceId || 'workspace'}:${sourceSpan.runId || ''}`,
-        label: 'Workspace instructions',
-        meta: sourceSpan.runId ? `Run ${shortCandidateId(sourceSpan.runId)}` : '',
-      };
-    }
-    if (sourceType === 'conversation_message') {
-      const conversationId = sourceSpan.conversationId || 'conversation';
-      const range = sourceSpan.startMessageId && sourceSpan.endMessageId
-        ? `${sourceSpan.startMessageId} -> ${sourceSpan.endMessageId}`
-        : '';
-      return {
-        key: `conversation:${conversationId}:${sourceSpan.spanId || ''}`,
-        label: `Conversation · ${shortCandidateId(conversationId)}`,
-        meta: range,
-      };
-    }
-    return {
-      key: `${sourceType}:${sourceSpan.sourceId || sourceSpan.runId || 'source'}`,
-      label: sourceType,
-      meta: sourceSpan.runId ? `Run ${shortCandidateId(sourceSpan.runId)}` : '',
-    };
   }
 
-  function groupContextMapCandidates(items){
-    const groups = [];
-    const byKey = new Map();
-    items.forEach(candidate => {
-      const parts = candidateSourceParts(candidate);
-      let group = byKey.get(parts.key);
-      if (!group) {
-        group = { key: parts.key, label: parts.label, meta: parts.meta, items: [] };
-        byKey.set(parts.key, group);
-        groups.push(group);
-      }
-      group.items.push(candidate);
-    });
-    return groups;
+  function openWorkspaceContextFileFromRun(relPath){
+    if (!relPath) return;
+    selectSection('files');
+    if (onSelectFile) onSelectFile(relPath);
   }
-
-  function entitySummary(entity){
-    return entity.summaryMarkdown || entity.notesMarkdown || (Array.isArray(entity.facts) && entity.facts[0]) || '';
-  }
-
-  function entityMatchesGraphText(entity, text){
-    if (!text) return false;
-    const fields = [
-      entity && entity.name,
-      entity && entity.typeSlug,
-      ...(Array.isArray(entity && entity.aliases) ? entity.aliases : []),
-    ];
-    return fields.some(value => String(value || '').toLowerCase().includes(text));
-  }
-
-  const graphTypeOptions = Array.from(new Set([
-    'person',
-    'organization',
-    'project',
-    'workflow',
-    'document',
-    'feature',
-    'concept',
-    'decision',
-    'tool',
-    'asset',
-    ...activeEntities.map(entity => entity.typeSlug).filter(Boolean),
-  ])).sort();
-
-  function scanNoticeLabel(){
-    if (runningContextMapRun) return 'Keep rolling';
-    if (initialScanNotice === 'started') return 'Initial scan started';
-    if (initialScanNotice === 'rolling') return 'Keep rolling';
-    if (initialScanNotice === 'completed') return 'Initial scan completed';
-    return '';
-  }
-
-  const scanNotice = runningContextMapRun ? 'rolling' : initialScanNotice;
-  const scanNoticeSource = runningContextMapRun ? runSourceLabel(runningContextMapRun.source) : null;
-  const candidateGroups = groupContextMapCandidates(candidates);
-  const acceptingAllCandidates = candidateBusy === '__all__';
-  const candidateActionBusy = !!candidateBusy;
-  const acceptAllDisabled = !enabled || reviewLoading || candidateActionBusy || !!editingCandidateId || pendingCount <= 0;
-  const activeEntityCount = activeCounts.entities || activeEntities.length;
-  const activeRelationshipCount = activeCounts.relationships || activeRelationships.length;
-  const reviewCounts = (review && review.counts) || {};
-  const topConnectedEntities = activeEntities
-    .slice()
-    .filter(entity => (entity.relationshipCount || 0) > 0)
-    .sort((a, b) => (b.relationshipCount || 0) - (a.relationshipCount || 0))
-    .slice(0, 3);
-  const isolatedEntities = activeEntities.filter(entity => (entity.relationshipCount || 0) <= 0);
-  const recentEntities = activeEntities
-    .slice()
-    .filter(entity => entity.updatedAt && !Number.isNaN(new Date(entity.updatedAt).getTime()))
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-    .slice(0, 3);
-  const needsReviewItems = [
-    pendingCount ? `${pendingCount} pending` : '',
-    reviewCounts.conflict ? `${reviewCounts.conflict} conflicts` : '',
-    reviewCounts.failed ? `${reviewCounts.failed} failed` : '',
-    reviewCounts.stale ? `${reviewCounts.stale} stale` : '',
-  ].filter(Boolean);
-  const overviewInsights = enabled ? [
-    {
-      title: 'Most connected',
-      value: topConnectedEntities.length ? `${topConnectedEntities[0].relationshipCount || 0} links` : '0 links',
-      items: topConnectedEntities.length
-        ? topConnectedEntities.map(entity => `${entity.name} - ${entity.relationshipCount || 0} links`)
-        : ['No relationship hubs in this slice.'],
-    },
-    {
-      title: 'Needs review',
-      value: String(pendingCount),
-      items: needsReviewItems.length ? needsReviewItems : ['Review queue clear.'],
-    },
-    {
-      title: 'Isolated',
-      value: String(isolatedEntities.length),
-      items: isolatedEntities.length
-        ? isolatedEntities.slice(0, 3).map(entity => entity.name)
-        : ['Every entity shown has at least one link.'],
-    },
-    {
-      title: 'Recent changes',
-      value: recentEntities.length ? formatMemoryUpdateTime(recentEntities[0].updatedAt) : 'None',
-      items: recentEntities.length
-        ? recentEntities.map(entity => `${entity.name} - ${formatMemoryUpdateTime(entity.updatedAt)}`)
-        : ['No updated entities in this slice.'],
-    },
-  ] : [];
-  const graphQueryText = graphQuery.trim().toLowerCase();
-  const graphFocusEntity = (graphQueryText ? activeEntities.find(entity => entityMatchesGraphText(entity, graphQueryText)) : null)
-    || topConnectedEntities[0]
-    || activeEntities[0]
-    || null;
-  const focusedRelationshipRows = graphFocusEntity
-    ? activeRelationships.filter(rel => rel.subjectEntityId === graphFocusEntity.entityId || rel.objectEntityId === graphFocusEntity.entityId)
-    : [];
-  const nearbyRelationshipRows = (focusedRelationshipRows.length ? focusedRelationshipRows : activeRelationships).slice(0, 4);
-  const nearbyContextLabel = graphFocusEntity ? graphFocusEntity.name : 'Filtered slice';
-  const globalScanInterval = Number.isFinite(globalContext.scanIntervalMinutes) ? globalContext.scanIntervalMinutes : 5;
-  const statusText = !enabled
-    ? 'Disabled'
-    : runningContextMapRun
-      ? 'Scanning'
-      : latestContextMapRun && latestContextMapRun.status === 'failed'
-        ? 'Error'
-        : 'Enabled';
-  const statusClass = statusText.toLowerCase();
-  const globalProcessorProfile = globalProfile ? globalProfile.name : (fallbackBackend || 'Default profile');
-  const contextMapSections = [
-    { id: 'overview', label: 'Overview', desc: statusText },
-    { id: 'processor', label: 'Processor', desc: settingsDirty ? 'Unsaved changes' : mode === 'override' ? 'Workspace override' : 'Global defaults' },
-    { id: 'active', label: 'Active Map', desc: enabled ? `${activeEntityCount} entities` : 'Disabled' },
-    { id: 'attention', label: 'Needs Attention', desc: enabled ? `${pendingCount} pending` : 'Disabled' },
-    { id: 'danger', label: 'Danger Zone', desc: 'Rescan or clear' },
-  ];
 
   return (
-    <div ref={contextMapTopRef} className="settings-form settings-form-wide ws-form ws-form-context-map">
-      <div className="ws-cm-layout">
-        <nav className="ws-cm-rail" role="tablist" aria-label="Context Map settings sections">
-          {contextMapSections.map(section => (
+    <div className="settings-form settings-form-wide ws-form ws-form-workspace-context">
+      <div className="ws-wc-layout">
+        <nav className="ws-wc-rail" role="tablist" aria-label="Workspace Context settings sections">
+          {workspaceContextSections.map(section => (
             <button
               key={section.id}
               type="button"
-              id={`ws-cm-tab-${section.id}`}
-              className={`ws-cm-nav ${contextMapSection === section.id ? 'active' : ''}`}
+              id={'ws-wc-tab-' + section.id}
+              className={'ws-wc-nav ' + (workspaceContextSection === section.id ? 'active' : '')}
               role="tab"
-              aria-selected={contextMapSection === section.id}
-              aria-controls={`ws-cm-panel-${section.id}`}
-              onClick={() => setContextMapSection(section.id)}
+              aria-selected={workspaceContextSection === section.id}
+              aria-controls={'ws-wc-panel-' + section.id}
+              onClick={() => selectSection(section.id)}
             >
               <span>{section.label}</span>
               <small>{section.desc}</small>
@@ -2437,665 +1696,220 @@ function ContextMapTab({
           ))}
         </nav>
 
-        <div ref={contextMapContentRef} className="ws-cm-content">
-          {contextMapSection === 'overview' ? (
-            <section
-              id="ws-cm-panel-overview"
-              className="ws-cm-panel"
-              role="tabpanel"
-              aria-labelledby="ws-cm-tab-overview"
-            >
-              <div className="ws-cm-title-row">
+        <div ref={workspaceContextContentRef} className="ws-wc-content">
+          {workspaceContextSection === 'overview' ? (
+            <section id="ws-wc-panel-overview" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-overview">
+              <div className="ws-wc-title-row">
                 <div>
-                  <h3 className="ws-cm-title">Context Map</h3>
-                  <p className="ws-desc u-dim">
-                    Context Map keeps workspace entities, relationships, and evidence in a separate self-maintained map.
-                  </p>
+                  <h3 className="ws-wc-title">Workspace Context</h3>
+                  <p className="ws-desc u-dim">Markdown-first operating memory maintained by the workspace CLI.</p>
                 </div>
-                <span className={`ws-cm-status-badge is-${statusClass}`}>{statusText}</span>
+                <span className={'ws-wc-status-badge is-' + statusClass}>{statusText}</span>
               </div>
               <label className="toggle ws-toggle">
                 <input type="checkbox" checked={enabled} onChange={(e) => onToggle(e.target.checked)}/>
                 <span className="tgl"/>
-                <span>Enable Context Map for this workspace</span>
+                <span>Enable Workspace Context for this workspace</span>
               </label>
-              <div className="ws-cm-run-status">
-                {latestContextMapRun ? (
-                  <>
-                    <span>Last scan</span>
-                    <b>{runSourceLabel(latestContextMapRun.source)}</b>
-                    <span>{formatMemoryUpdateTime(latestContextMapRun.startedAt)}</span>
-                    <span className="u-dim">{statusLabel(latestContextMapRun.status)}</span>
-                  </>
-                ) : (
-                  <span className="u-dim">Last scan: None yet</span>
-                )}
+              <div className="ws-wc-readonly-list">
+                <div><span>Context folder</span><b>{contextDir || 'Not created yet'}</b></div>
+                <div><span>Instruction file</span><b>{instructionPath || 'Not created yet'}</b></div>
+                <div><span>Markdown files</span><b>{Array.isArray(files) ? files.length : 0}</b></div>
+                <div><span>Last scan</span><b>{latestScanRun ? formatWorkspaceContextRunSource(latestScanRun.source) + ' - ' + formatWorkspaceContextRunStatus(latestScanRun.status) : 'None yet'}</b></div>
+                <div><span>Last maintenance</span><b>{latestMaintenanceRun ? formatWorkspaceContextRunStatus(latestMaintenanceRun.status) : 'None yet'}</b></div>
               </div>
-              {enabled ? (
+              {runningRun ? (
+                <div className="ws-wc-initial-scan is-rolling">
+                  <span>{formatWorkspaceContextRunSource(runningRun.source)} running</span>
+                  <button type="button" className="btn ghost danger ws-wc-stop-scan" disabled={scanStopping} onClick={(e) => onStopScan(e.currentTarget)}>
+                    {scanStopping ? 'Stopping...' : 'Stop'}
+                  </button>
+                </div>
+              ) : null}
+              <div className="ws-actions ws-wc-danger-actions">
+                <button type="button" className="btn ghost" onClick={(e) => onRunScan(e.currentTarget)} disabled={!enabled || scanBusy || !!runningRun}>
+                  {Ico.search(12)} {scanBusy || runningRun ? 'Running...' : 'Run scan'}
+                </button>
+                <button type="button" className="btn ghost" onClick={(e) => onRunMaintenance(e.currentTarget)} disabled={!enabled || scanBusy || !!runningRun}>
+                  {Ico.reset(12)} Run maintenance
+                </button>
+                <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
+                <button type="button" className="btn ghost" onClick={(e) => onRepairInstructions(e.currentTarget)} disabled={!enabled}>Repair instructions</button>
+              </div>
+            </section>
+          ) : null}
+
+          {workspaceContextSection === 'processor' ? (
+            <section id="ws-wc-panel-processor" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-processor">
+              <div className="ws-wc-section-title">Processor</div>
+              <div className="seg seg-inline ws-wc-seg">
+                <button type="button" aria-pressed={mode === 'global'} onClick={() => onModeChange('global')}>Use global defaults</button>
+                <button type="button" aria-pressed={mode === 'override'} onClick={() => onModeChange('override')}>Override</button>
+              </div>
+              {mode === 'override' ? (
                 <>
-                  <div className="ws-cm-metrics">
-                    <div><b>{activeEntityCount}</b><span>Entities</span></div>
-                    <div><b>{activeRelationshipCount}</b><span>Relationships</span></div>
-                    <div><b>{pendingCount}</b><span>Needs Attention</span></div>
-                  </div>
-                  <div className="ws-cm-insights">
-                    {overviewInsights.map(insight => (
-                      <div key={insight.title} className="ws-cm-insight-card">
-                        <div className="ws-cm-insight-head">
-                          <span>{insight.title}</span>
-                          <b>{insight.value}</b>
-                        </div>
-                        <ul>
-                          {insight.items.map(item => <li key={item}>{item}</li>)}
-                        </ul>
+                  <label className="ws-wc-field">
+                    <span>CLI profile</span>
+                    <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
+                      {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
+                      {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                  </label>
+                  {models.length ? (
+                    <label className="ws-wc-field">
+                      <span>Model</span>
+                      <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
+                        {models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+                      </select>
+                    </label>
+                  ) : null}
+                  {efforts.length ? (
+                    <div className="ws-wc-field">
+                      <span>Effort</span>
+                      <div className="seg seg-inline ws-wc-seg">
+                        {efforts.map(lv => (
+                          <button key={lv} type="button" aria-pressed={effort === lv} onClick={() => onPatch({ cliEffort: lv })}>{lv}</button>
+                        ))}
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ) : null}
+                  <label className="ws-wc-field">
+                    <WorkspaceContextLabel help="How often this workspace checks recent conversations and referenced attachments for durable context updates. Leave blank to use the global scan interval.">
+                      Scan interval override (minutes)
+                    </WorkspaceContextLabel>
+                    <input type="number" min={1} max={1440} step={1} placeholder={String(globalScanInterval)} value={ctx.scanIntervalMinutes ?? ''} onChange={(e) => onScanInterval(e.target.value)}/>
+                  </label>
+                  <label className="ws-wc-field">
+                    <WorkspaceContextLabel help="How often this workspace runs maintenance over existing context markdown to merge duplicates, improve organization, and preserve temporal clarity. Leave blank to use the global maintenance interval.">
+                      Maintenance interval override (hours)
+                    </WorkspaceContextLabel>
+                    <input type="number" min={1} max={8760} step={1} placeholder={String(globalMaintenanceInterval)} value={ctx.maintenanceIntervalHours ?? ''} onChange={(e) => onMaintenanceInterval(e.target.value)}/>
+                  </label>
                 </>
               ) : (
-                <p className="ws-empty u-dim">Enable Context Map to scan this workspace and maintain its active graph.</p>
+                <div className="ws-wc-readonly-list">
+                  <div><span>CLI profile</span><b>{globalProcessorProfile}</b></div>
+                  <div><span>Model</span><b>{globalContext.cliModel || modelId || 'Default model'}</b></div>
+                  <div><span>Effort</span><b>{globalContext.cliEffort || effort || 'Default effort'}</b></div>
+                  <div><span>Scan interval</span><b>{globalScanInterval} minutes</b></div>
+                  <div><span>Maintenance interval</span><b>{globalMaintenanceInterval} hours</b></div>
+                </div>
               )}
-              {scanNotice ? (
-                <div className={'ws-cm-initial-scan is-' + scanNotice}>
-                  <span>{scanNoticeLabel()}{scanNoticeSource ? ` · ${scanNoticeSource}` : ''}</span>
-                  {runningContextMapRun ? (
-                    <button
-                      type="button"
-                      className="btn ghost danger ws-cm-stop-scan"
-                      disabled={scanStopping}
-                      onClick={(e) => onStopScan(e.currentTarget)}
-                    >{scanStopping ? 'Stopping...' : 'Stop'}</button>
-                  ) : initialScanNotice === 'completed' ? (
-                    <span className="ws-cm-initial-scan-check">{Ico.check(12)}</span>
-                  ) : (
-                    <span className="ws-cm-initial-scan-dots" aria-hidden="true">
-                      <i/><i/><i/>
-                    </span>
-                  )}
+              {settingsDirty ? (
+                <div className="ws-wc-save-row">
+                  <span className="u-dim">Unsaved Workspace Context settings changes.</span>
+                  <button type="button" className="btn primary" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>
+                    {saving ? 'Saving...' : 'Save Changes'}
+                  </button>
                 </div>
               ) : null}
             </section>
           ) : null}
 
-          {contextMapSection === 'processor' ? (
-            <section
-              id="ws-cm-panel-processor"
-              className="ws-cm-panel"
-              role="tabpanel"
-              aria-labelledby="ws-cm-tab-processor"
-            >
-      <div className="ws-cm-section-title">Processor</div>
-      <div className="seg seg-inline ws-cm-seg">
-        <button type="button" aria-pressed={mode === 'global'} onClick={() => onModeChange('global')}>Use global defaults</button>
-        <button type="button" aria-pressed={mode === 'override'} onClick={() => onModeChange('override')}>Override</button>
-      </div>
-
-      {mode === 'override' ? (
-        <>
-          <label className="ws-cm-field">
-            <span>CLI profile</span>
-            <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
-              {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
-              {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
-          </label>
-          {models.length ? (
-            <label className="ws-cm-field">
-              <span>Model</span>
-              <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
-                {models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
-              </select>
-            </label>
-          ) : null}
-          {efforts.length ? (
-            <div className="ws-cm-field">
-              <span>Effort</span>
-              <div className="seg seg-inline ws-cm-seg">
-                {efforts.map(lv => (
-                  <button
-                    key={lv}
-                    type="button"
-                    aria-pressed={effort === lv}
-                    onClick={() => onPatch({ cliEffort: lv })}
-                  >{lv}</button>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <div className="ws-cm-readonly-list">
-          <div><span>CLI profile</span><b>{globalProcessorProfile}</b></div>
-          <div><span>Model</span><b>{globalContext.cliModel || modelId || 'Default model'}</b></div>
-          <div><span>Effort</span><b>{globalContext.cliEffort || effort || 'Default effort'}</b></div>
-          <div><span>Scan interval</span><b>{globalScanInterval} minutes</b></div>
-        </div>
-      )}
-
-      {mode === 'override' ? (
-        <label className="ws-cm-field">
-          <span>Scan interval override (minutes)</span>
-          <input
-            type="number"
-            min={1}
-            max={1440}
-            placeholder={String(globalScanInterval)}
-            value={ctx.scanIntervalMinutes ?? ''}
-            onChange={(e) => onScanInterval(e.target.value)}
-          />
-        </label>
-      ) : null}
-
-      {settingsDirty ? (
-        <div className="ws-cm-save-row">
-          <span className="u-dim">Unsaved Context Map settings changes.</span>
-          <button type="button" className="btn primary" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>
-            {saving ? 'Saving...' : 'Save Changes'}
-          </button>
-        </div>
-      ) : null}
-            </section>
-          ) : null}
-
-          {contextMapSection === 'active' ? (
-            <section
-              id="ws-cm-panel-active"
-              className="ws-cm-panel"
-              role="tabpanel"
-              aria-labelledby="ws-cm-tab-active"
-            >
-      <div className="ws-cm-section-title">Active Map</div>
-      {enabled ? (
-        <>
-      <div className="ws-cm-review-head">
-        <div className="ws-cm-section-summary u-dim">Browse the active entity and relationship graph.</div>
-        <div className="ws-cm-head-actions">
-          {!latestContextMapRun ? (
-            <button type="button" className="btn ghost" onClick={(e) => runScanFromContextMap(e.currentTarget)} disabled={!enabled || scanBusy}>
-              {Ico.search(12)} {scanBusy ? 'Scanning...' : 'Run initial scan'}
-            </button>
-          ) : null}
-          <button type="button" className="btn ghost" onClick={refreshGraphWithFilters} disabled={graphLoading}>
-            {Ico.reset(12)} {graphLoading ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
-      </div>
-      <div className="ws-cm-graph-controls">
-        <input
-          type="search"
-          value={graphQuery}
-          onChange={(e) => setGraphQuery(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') refreshGraphWithFilters(); }}
-          placeholder="Search entities"
-          disabled={!enabled}
-        />
-        <select value={graphType} onChange={(e) => setGraphType(e.target.value)} disabled={!enabled}>
-          <option value="">All types</option>
-          {graphTypeOptions.map(type => <option key={type} value={type}>{type}</option>)}
-        </select>
-        <select value={graphStatus} onChange={(e) => setGraphStatus(e.target.value)} disabled={!enabled}>
-          <option value="active">Active</option>
-          <option value="stale">Stale</option>
-          <option value="superseded">Superseded</option>
-          <option value="conflict">Conflict</option>
-          <option value="discarded">Discarded</option>
-          <option value="all">All statuses</option>
-        </select>
-        <select value={graphSensitivity} onChange={(e) => setGraphSensitivity(e.target.value)} disabled={!enabled}>
-          <option value="">All sensitivity</option>
-          <option value="normal">Normal</option>
-          <option value="work-sensitive">Work-sensitive</option>
-          <option value="personal-sensitive">Personal-sensitive</option>
-          <option value="secret-pointer">Secret pointer</option>
-        </select>
-        <button type="button" className="btn ghost" onClick={refreshGraphWithFilters} disabled={!enabled || graphLoading}>
-          {Ico.search(12)} Search
-        </button>
-        <button type="button" className="btn ghost" onClick={clearGraphFilters} disabled={!enabled || graphLoading || (!graphQuery && !graphType && graphStatus === 'active' && !graphSensitivity)}>
-          Clear
-        </button>
-      </div>
-      <div className="ws-cm-nearby">
-        <div className="ws-cm-nearby-head">
-          <span>Nearby context</span>
-          <b>{nearbyContextLabel}</b>
-        </div>
-        {nearbyRelationshipRows.length ? (
-          <div className="ws-cm-nearby-paths">
-            {nearbyRelationshipRows.map(rel => (
-              <div key={rel.relationshipId} className="ws-cm-nearby-row">
-                <span>{rel.subjectName}</span>
-                <b>{rel.predicate}</b>
-                <span>{rel.objectName}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="ws-empty u-dim">No relationships in this slice.</p>
-        )}
-      </div>
-        </>
-      ) : null}
-      {!enabled ? (
-        <p className="ws-empty u-dim">Enable Context Map to scan this workspace and view entities and relationships.</p>
-      ) : activeEntities.length === 0 ? (
-        <p className="ws-empty u-dim">No active Context Map entities yet.</p>
-      ) : (
-        <div className="ws-cm-graph">
-          <div className="ws-cm-entity-grid">
-            {activeEntities.map(entity => {
-              const isSelectedEntity = selectedEntityId === entity.entityId || (entityDetail && entityDetail.entityId === entity.entityId);
-              const isLoadingEntity = entityDetailLoading && selectedEntityId === entity.entityId;
-              return (
-                <div key={entity.entityId} className={'ws-cm-entity-card' + (isSelectedEntity ? ' is-selected' : '')}>
-                  <div className="ws-cm-entity-top">
-                    <div>
-                      <div className="ws-cm-entity-name">{entity.name}</div>
-                      <div className="ws-cm-entity-type">{entity.typeSlug} · {entity.status || 'active'} · {entity.sensitivity || 'normal'}</div>
-                    </div>
-                    <span className="ws-cm-entity-confidence">{Math.round(((entity.confidence || 0) * 100))}%</span>
-                  </div>
-                  {entitySummary(entity) ? (
-                    <p className="ws-cm-entity-summary">{entitySummary(entity)}</p>
-                  ) : null}
-                  {Array.isArray(entity.aliases) && entity.aliases.length ? (
-                    <div className="ws-cm-entity-chips">
-                      {entity.aliases.slice(0, 4).map(alias => <span key={alias}>{alias}</span>)}
-                    </div>
-                  ) : null}
-                  <div className="ws-cm-entity-foot">
-                    <span>{entity.factCount || 0} facts</span>
-                    <span>{entity.relationshipCount || 0} links</span>
-                    <span>{entity.evidenceCount || 0} evidence</span>
-                    <button
-                      type="button"
-                      className="ws-mem-review-btn ws-cm-details-btn"
-                      onClick={(e) => onSelectEntity(entity.entityId, e.currentTarget)}
-                      disabled={isLoadingEntity}
-                    >{isLoadingEntity ? 'Loading...' : 'Details'}</button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          {(entityDetailLoading || entityDetail) ? (
-            <div
-              className="ws-cm-detail-modal"
-              role="dialog"
-              aria-modal="true"
-              aria-label={entityDetail ? `Context Map entity details: ${entityDetail.name}` : 'Context Map entity details'}
-              onMouseDown={onCloseEntityDetail}
-            >
-              <div className="ws-cm-detail-panel" onMouseDown={(e) => e.stopPropagation()}>
-                {entityDetailLoading && !entityDetail ? (
-                  <div id="ws-context-map-entity-detail" className="ws-cm-detail" tabIndex="-1">
-                    <div className="ws-cm-detail-head">
-                      <div>
-                        <div className="ws-cm-detail-title">Loading entity details...</div>
-                        <div className="ws-cm-detail-meta"><span>Context Map</span></div>
-                      </div>
-                      <div className="ws-cm-detail-actions">
-                        <button type="button" className="btn ghost" onClick={onCloseEntityDetail}>{Ico.x(12)} Close</button>
-                      </div>
-                    </div>
-                  </div>
-                ) : entityDetail ? (
-                  <div id="ws-context-map-entity-detail" className="ws-cm-detail" tabIndex="-1">
-              <div className="ws-cm-detail-head">
+          {workspaceContextSection === 'files' ? (
+            <section id="ws-wc-panel-files" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-files">
+              <div className="ws-wc-review-head">
                 <div>
-                  <div className="ws-cm-detail-title">{entityDetail.name}</div>
-                  <div className="ws-cm-detail-meta">
-                    <span>{entityDetail.typeSlug}</span>
-                    <span>{entityDetail.status}</span>
-                    <span>{entityDetail.sensitivity}</span>
-                  </div>
+                  <div className="ws-wc-section-title">Markdown Files</div>
+                  <div className="ws-wc-section-summary u-dim">Read-only preview of the Workspace Context markdown folder.</div>
                 </div>
-                <div className="ws-cm-detail-actions">
-                  {!editingEntity ? (
-                    <button type="button" className="btn ghost" onClick={() => beginEntityEdit(entityDetail)}>{Ico.edit(12)} Edit</button>
-                  ) : null}
-                  <button type="button" className="btn ghost" onClick={onCloseEntityDetail}>{Ico.x(12)} Close</button>
-                </div>
+                <button type="button" className="btn ghost" onClick={onRefresh}>{Ico.reset(12)} Refresh</button>
               </div>
-              {editingEntity && entityEditDraft ? (
-                <div className="ws-cm-entity-edit">
-                  <label>
-                    <span>Name</span>
-                    <input value={entityEditDraft.name} onChange={(e) => patchEntityEdit({ name: e.target.value })}/>
-                  </label>
-                  <label>
-                    <span>Type</span>
-                    <select value={entityEditDraft.typeSlug} onChange={(e) => patchEntityEdit({ typeSlug: e.target.value })}>
-                      {graphTypeOptions.map(type => <option key={type} value={type}>{type}</option>)}
-                    </select>
-                  </label>
-                  <label>
-                    <span>Status</span>
-                    <select value={entityEditDraft.status} onChange={(e) => patchEntityEdit({ status: e.target.value })}>
-                      <option value="active">Active</option>
-                      <option value="stale">Stale</option>
-                      <option value="superseded">Superseded</option>
-                      <option value="conflict">Conflict</option>
-                      <option value="discarded">Discarded</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Sensitivity</span>
-                    <select value={entityEditDraft.sensitivity} onChange={(e) => patchEntityEdit({ sensitivity: e.target.value })}>
-                      <option value="normal">Normal</option>
-                      <option value="work-sensitive">Work-sensitive</option>
-                      <option value="personal-sensitive">Personal-sensitive</option>
-                      <option value="secret-pointer">Secret pointer</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>Confidence</span>
-                    <input type="number" min={0} max={1} step={0.01} value={entityEditDraft.confidence} onChange={(e) => patchEntityEdit({ confidence: e.target.value })}/>
-                  </label>
-                  <label className="wide">
-                    <span>Summary</span>
-                    <textarea rows={3} value={entityEditDraft.summaryMarkdown} onChange={(e) => patchEntityEdit({ summaryMarkdown: e.target.value })}/>
-                  </label>
-                  <label className="wide">
-                    <span>Notes</span>
-                    <textarea rows={3} value={entityEditDraft.notesMarkdown} onChange={(e) => patchEntityEdit({ notesMarkdown: e.target.value })}/>
-                  </label>
-                  <div className="ws-cm-edit-actions">
-                    <button type="button" className="btn ghost" disabled={entityEditSaving} onClick={() => { setEditingEntity(false); setEntityEditDraft(null); }}>Cancel</button>
-                    <button type="button" className="btn primary" disabled={entityEditSaving || !entityEditDraft.name.trim()} onClick={(e) => saveEntityEdit(e.currentTarget)}>
-                      {entityEditSaving ? 'Saving...' : 'Save entity'}
-                    </button>
-                  </div>
-                </div>
-              ) : entityDetail.summaryMarkdown ? <p className="ws-cm-detail-summary">{entityDetail.summaryMarkdown}</p> : null}
-              {Array.isArray(entityDetail.aliases) && entityDetail.aliases.length ? (
-                <div className="ws-cm-entity-chips">
-                  {entityDetail.aliases.map(alias => <span key={alias}>{alias}</span>)}
-                </div>
-              ) : null}
-              <div className="ws-cm-detail-grid">
-                <div>
-                  <div className="ws-cm-detail-label">Facts</div>
-                  {Array.isArray(entityDetail.facts) && entityDetail.facts.length ? (
-                    <ul className="ws-cm-detail-list">
-                      {entityDetail.facts.map(fact => (
-                        <li key={fact.factId || fact.statementMarkdown}>
-                          <span>{fact.statementMarkdown}</span>
-                          <b>{Math.round(((fact.confidence || 0) * 100))}%</b>
+              {!enabled ? (
+                <p className="ws-empty u-dim">Workspace Context is disabled for this workspace.</p>
+              ) : !files || files.length === 0 ? (
+                <p className="ws-empty u-dim">No Workspace Context markdown files yet.</p>
+              ) : (
+                <div className="ws-wc-file-browser">
+                  <div className="ws-wc-file-list">
+                    <input type="search" value={fileQuery} onChange={(e) => setFileQuery(e.target.value)} placeholder="Search files" aria-label="Search Workspace Context files"/>
+                    <ul>
+                      {visibleFiles.map(file => (
+                        <li key={file.path}>
+                          <button type="button" className={selectedFile === file.path ? 'active' : ''} onClick={() => onSelectFile(file.path)}>
+                            <span>{workspaceContextFileLabel(file)}</span>
+                            <small>{file.updatedAt ? formatMemoryUpdateTime(file.updatedAt) : ''}</small>
+                          </button>
                         </li>
                       ))}
                     </ul>
-                  ) : <p className="ws-empty u-dim">No facts.</p>}
-                </div>
-                <div>
-                  <div className="ws-cm-detail-label">Evidence</div>
-                  {Array.isArray(entityDetail.evidence) && entityDetail.evidence.length ? (
-                    <ul className="ws-cm-detail-list">
-                      {entityDetail.evidence.map(ev => (
-                        <li key={ev.evidenceId}>
-                          <span>{ev.sourceType}: {ev.sourceId}</span>
-                          {ev.excerpt ? <b>{ev.excerpt}</b> : null}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : <p className="ws-empty u-dim">No direct evidence.</p>}
-                </div>
-              </div>
-              {Array.isArray(entityDetail.relationships) && entityDetail.relationships.length ? (
-                <div className="ws-cm-detail-block">
-                  <div className="ws-cm-detail-label">Relationship Neighborhood</div>
-                  <div className="ws-cm-neighborhood">
-                    {entityDetail.relationships.slice(0, 10).map((rel, index) => {
-                      const subjectIsEntity = rel.subjectEntityId === entityDetail.entityId || rel.subjectName === entityDetail.name;
-                      const objectIsEntity = rel.objectEntityId === entityDetail.entityId || rel.objectName === entityDetail.name;
-                      return (
-                        <div key={rel.relationshipId || index} className={'ws-cm-neighborhood-row is-' + (rel.status || 'active')}>
-                          <span className={'ws-cm-neighborhood-node' + (subjectIsEntity ? ' is-center' : '')}>{rel.subjectName}</span>
-                          <span className="ws-cm-neighborhood-edge">
-                            <b>{rel.predicate}</b>
-                            <em>{statusLabel(rel.status || 'active')} - {Math.round(((rel.confidence || 0) * 100))}%</em>
-                          </span>
-                          <span className={'ws-cm-neighborhood-node' + (objectIsEntity ? ' is-center' : '')}>{rel.objectName}</span>
+                  </div>
+                  <div className="ws-wc-file-preview">
+                    {fileLoading ? (
+                      <div className="u-dim">Loading...</div>
+                    ) : selectedFile ? (
+                      <>
+                        <div className="ws-wc-file-preview-head">
+                          <span>{selectedFile}</span>
+                          <small>Read-only</small>
                         </div>
-                      );
-                    })}
+                        <pre>{fileContent || ''}</pre>
+                      </>
+                    ) : (
+                      <p className="ws-empty u-dim">Select a markdown file to preview it.</p>
+                    )}
                   </div>
                 </div>
-              ) : null}
-              {Array.isArray(entityDetail.audit) && entityDetail.audit.length ? (
-                <div className="ws-cm-detail-block">
-                  <div className="ws-cm-detail-label">Audit</div>
-                  <ul className="ws-cm-detail-list">
-                    {entityDetail.audit.slice(0, 5).map(event => (
-                      <li key={event.eventId}>
-                        <span>{event.eventType}</span>
-                        <b>{event.createdAt}</b>
-                      </li>
-                    ))}
-                  </ul>
+              )}
+            </section>
+          ) : null}
+
+          {workspaceContextSection === 'runs' ? (
+            <section id="ws-wc-panel-runs" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-runs">
+              <div className="ws-wc-review-head">
+                <div>
+                  <div className="ws-wc-section-title">Runs</div>
+                  <div className="ws-wc-section-summary u-dim">Latest run logs first.</div>
                 </div>
-              ) : null}
+                {runs.length > WORKSPACE_CONTEXT_RUNS_PAGE_SIZE ? (
+                  <div className="ws-wc-run-pager" aria-label="Workspace Context run log pages">
+                    <button type="button" className="btn ghost" disabled={!canShowNewerRuns} onClick={() => setRunPage(page => Math.max(0, page - 1))}>
+                      <span className="ws-wc-pager-icon is-left">{Ico.chev(12)}</span> Newer
+                    </button>
+                    <button type="button" className="btn ghost" disabled={!canShowOlderRuns} onClick={() => setRunPage(page => Math.min(runPageCount - 1, page + 1))}>
+                      Older {Ico.chev(12)}
+                    </button>
                   </div>
                 ) : null}
               </div>
-            </div>
-          ) : null}
-          {activeRelationships.length ? (
-            <div className="ws-cm-relationships">
-              {activeRelationships.slice(0, 8).map(rel => (
-                <div key={rel.relationshipId} className="ws-cm-relationship-row">
-                  <span>{rel.subjectName}</span>
-                  <b>{rel.predicate}</b>
-                  <span>{rel.objectName}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      )}
-
-            </section>
-          ) : null}
-
-          {contextMapSection === 'attention' ? (
-            <section
-              id="ws-cm-panel-attention"
-              className="ws-cm-panel"
-              role="tabpanel"
-              aria-labelledby="ws-cm-tab-attention"
-            >
-      <div className="ws-cm-section-title">Needs Attention</div>
-      {enabled ? (
-        <>
-      <div className="ws-cm-review-head">
-        <div className="ws-cm-section-summary u-dim">
-          {currentReviewStatus === 'discarded' ? `${discardedCount} dismissed` : `${pendingCount} need attention`}
-        </div>
-        <div className="ws-cm-review-tools">
-          <button
-            type="button"
-            className="btn primary"
-            onClick={(e) => onApplyAllCandidates(e.currentTarget)}
-            disabled={acceptAllDisabled}
-          >{acceptingAllCandidates ? 'Accepting...' : 'Accept All'}</button>
-          <div className="seg seg-inline ws-cm-seg ws-cm-review-filter">
-            <button type="button" aria-pressed={currentReviewStatus === 'pending'} onClick={() => onReviewStatusChange('pending')} disabled={reviewLoading || candidateActionBusy}>
-              Needs Attention
-            </button>
-            <button type="button" aria-pressed={currentReviewStatus === 'discarded'} onClick={() => onReviewStatusChange('discarded')} disabled={reviewLoading || candidateActionBusy}>
-              Dismissed
-            </button>
-          </div>
-          <button type="button" className="btn ghost" onClick={() => onRefreshReview(currentReviewStatus)} disabled={reviewLoading || candidateActionBusy}>
-            {Ico.reset(12)} {reviewLoading ? 'Refreshing...' : 'Refresh'}
-          </button>
-        </div>
-      </div>
-        </>
-      ) : null}
-      {!enabled ? (
-        <p className="ws-empty u-dim">Enable Context Map to review proposed entities, relationships, and evidence.</p>
-      ) : candidates.length === 0 ? (
-        <p className="ws-empty u-dim">{currentReviewStatus === 'discarded' ? 'No dismissed Context Map items.' : 'No Context Map items need attention.'}</p>
-      ) : (
-        <div className="ws-cm-candidate-groups">
-          {candidateGroups.map(group => (
-            <section key={group.key} className="ws-cm-candidate-group">
-              <div className="ws-cm-candidate-group-head">
-                <div>
-                  <span>{group.label}</span>
-                  {group.meta ? <b>{group.meta}</b> : null}
-                </div>
-                <em>{group.items.length} {group.items.length === 1 ? 'item' : 'items'}</em>
-              </div>
-              <div className="ws-cm-candidates">
-                {group.items.map(candidate => {
-                  const sourceParts = candidateSourceParts(candidate);
-                  const impact = contextMapCandidateImpactPreview(candidate);
-                  return (
-                    <div key={candidate.candidateId} className={'ws-cm-candidate is-' + (candidate.status || 'pending')}>
-                      <div className="ws-cm-candidate-top">
-                        <div className="ws-cm-candidate-main">
-                          <div className="ws-cm-candidate-title">{candidateTitle(candidate)}</div>
-                          <div className="ws-cm-candidate-meta">
-                            <span>{candidate.candidateType}</span>
-                            <span>{Math.round(((candidate.confidence || 0) * 100))}%</span>
-                            <span>{statusLabel(candidate.status)}</span>
-                          </div>
-                        </div>
-                        <div className="ws-cm-candidate-actions">
-                          {candidate.status === 'active' ? (
-                            <button type="button" className="btn ghost" disabled>{Ico.check(12)} Applied</button>
-                          ) : candidate.status === 'discarded' ? (
-                            <button
-                              type="button"
-                              className="btn ghost"
-                              disabled={candidateActionBusy}
-                              onClick={() => onReopenCandidate(candidate.candidateId)}
-                            >{Ico.reset(12)} Restore</button>
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                className="btn ghost"
-                                disabled={candidateActionBusy}
-                                onClick={() => editingCandidateId === candidate.candidateId ? cancelCandidateEdit() : beginCandidateEdit(candidate)}
-                              >{editingCandidateId === candidate.candidateId ? Ico.x(12) : Ico.edit(12)} {editingCandidateId === candidate.candidateId ? 'Cancel' : 'Edit'}</button>
-                              <button
-                                type="button"
-                                className="btn ghost"
-                                disabled={candidateActionBusy || editingCandidateId === candidate.candidateId}
-                                onClick={(e) => onApplyCandidate(candidate.candidateId, e.currentTarget)}
-                              >{Ico.check(12)} Apply</button>
-                              <button
-                                type="button"
-                                className="btn ghost danger"
-                                disabled={candidateActionBusy}
-                                onClick={(e) => onDiscardCandidate(candidate.candidateId, e.currentTarget)}
-                              >{Ico.x(12)} Dismiss</button>
-                            </>
-                          )}
-                        </div>
+              {runs.length ? (
+                <div className="ws-wc-runs">
+                  {visibleRuns.map(run => (
+                    <div key={run.runId} className="ws-wc-run-card">
+                      <div className="ws-wc-run-card-head">
+                        <b>{formatWorkspaceContextRunSource(run.source)}</b>
+                        <span>{formatWorkspaceContextRunStatus(run.status)}</span>
                       </div>
-                      {impact ? (
-                        <div className="ws-cm-candidate-impact">
-                          <span className="ws-cm-impact-node">{impact.left}</span>
-                          <span className="ws-cm-impact-edge">{impact.edge}</span>
-                          <span className="ws-cm-impact-node">{impact.right}</span>
-                          {impact.note ? <em>{impact.note}</em> : null}
-                        </div>
+                      <div className="ws-wc-run-card-meta">
+                        <span>{run.startedAt ? formatMemoryUpdateTime(run.startedAt) : ''}</span>
+                        <span>{run.filesConsidered || 0} file{run.filesConsidered === 1 ? '' : 's'}</span>
+                      </div>
+                      {run.summary ? (
+                        <WorkspaceContextRunSummary
+                          summary={run.summary}
+                          files={files}
+                          contextDir={contextDir}
+                          onOpenFile={openWorkspaceContextFileFromRun}
+                        />
                       ) : null}
-                      {editingCandidateId === candidate.candidateId ? (
-                        <div className="ws-cm-candidate-edit">
-                          <label>
-                            <span>Payload JSON</span>
-                            <textarea value={candidateEditPayload} onChange={(e) => setCandidateEditPayload(e.target.value)}/>
-                          </label>
-                          <label>
-                            <span>Confidence</span>
-                            <input
-                              type="number"
-                              min="0"
-                              max="1"
-                              step="0.01"
-                              value={candidateEditConfidence}
-                              onChange={(e) => setCandidateEditConfidence(e.target.value)}
-                            />
-                          </label>
-                          <div className="ws-cm-candidate-edit-actions">
-                            <button
-                              type="button"
-                              className="btn ghost"
-                              disabled={candidateActionBusy}
-                              onClick={(e) => saveCandidateEdit(candidate, e.currentTarget)}
-                            >{Ico.check(12)} Save edit</button>
-                            <button type="button" className="btn ghost" disabled={candidateActionBusy} onClick={cancelCandidateEdit}>Cancel</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <pre className="ws-cm-candidate-payload">{candidateSummary(candidate)}</pre>
-                      )}
-                      <div className="ws-cm-source-ref">
-                        {sourceParts.label}{sourceParts.meta ? ` · ${sourceParts.meta}` : ''}
-                      </div>
+                      {run.errorMessage ? <p className="u-err">{run.errorMessage}</p> : null}
                     </div>
-                  );
-                })}
-              </div>
-            </section>
-          ))}
-        </div>
-      )}
-
+                  ))}
+                </div>
+              ) : (
+                <p className="ws-empty u-dim">No Workspace Context runs yet.</p>
+              )}
             </section>
           ) : null}
 
-          {contextMapSection === 'danger' ? (
-            <section
-              id="ws-cm-panel-danger"
-              className="ws-cm-panel"
-              role="tabpanel"
-              aria-labelledby="ws-cm-tab-danger"
-            >
-              <div className="ws-cm-section-title">Danger Zone</div>
-              {enabled && latestContextMapRun ? (
-                <div className="ws-cm-danger-block">
-                  <div className="ws-cm-danger-title">Rescan workspace</div>
-                  <p className="ws-desc u-dim">
-                    Start a full Context Map rescan for this workspace. Existing graph data stays in place while the background scan updates the map and Needs Attention.
-                  </p>
-                  <div className="ws-actions ws-cm-danger-actions">
-                    <button type="button" className="btn ghost" onClick={(e) => runScanFromContextMap(e.currentTarget)} disabled={scanBusy || candidateBusy}>
-                      {Ico.search(12)} {scanBusy ? 'Scanning...' : 'Rescan now'}
-                    </button>
-                    <Tip
-                      variant="explain"
-                      rich={(
-                        <WorkspaceSettingsHelpTooltip>
-                          Starts a full Context Map rescan for this workspace. Agent Cockpit reprocesses discovered workspace sources even if they have not changed, checks conversations for anything new, and updates the map and Needs Attention while the scan runs in the background.
-                        </WorkspaceSettingsHelpTooltip>
-                      )}
-                    >
-                      <button
-                        type="button"
-                        className="settings-help-btn ws-cm-rescan-help"
-                        aria-label="Rescan now help"
-                      >?</button>
-                    </Tip>
-                  </div>
-                </div>
-              ) : null}
-              <div className="ws-cm-danger-block">
-                <div className="ws-cm-danger-title">Clear stored map</div>
-                <p className="ws-empty u-dim">
-                  Clear all Context Map graph data, candidate review items, evidence, run history, cursors, and audit rows for this workspace. Workspace enablement and processor settings stay in place.
-                </p>
-                <div className="ws-actions ws-cm-danger-actions">
-                  <button
-                    className="btn ghost danger"
-                    disabled={scanBusy || candidateBusy}
-                    onClick={(e) => onClearMap(e.currentTarget)}
-                  >{Ico.trash(12)} Clear Context Map</button>
+          {workspaceContextSection === 'danger' ? (
+            <section id="ws-wc-panel-danger" className="ws-wc-panel" role="tabpanel" aria-labelledby="ws-wc-tab-danger">
+              <div className="ws-wc-section-title">Danger Zone</div>
+              <div className="ws-wc-danger-block">
+                <div className="ws-wc-danger-title">Clear Workspace Context</div>
+                <p className="ws-empty u-dim">Clear the markdown context folder and run history. Workspace enablement and processor settings stay in place.</p>
+                <div className="ws-actions ws-wc-danger-actions">
+                  <button className="btn ghost danger" disabled={scanBusy || !!runningRun} onClick={(e) => onClear(e.currentTarget)}>{Ico.trash(12)} Clear Workspace Context</button>
                 </div>
               </div>
             </section>

@@ -8,7 +8,7 @@ import { CliUpdateStore } from '../cliUpdateStore.js';
 
 /* SettingsScreen — full-screen V2 app settings page.
    Mirrors the V1 layout (General / CLI Config / Memory / Knowledge Base /
-   Context Map / Security / Usage / Server) backed by `GET/PUT /settings` plus `GET /backends`,
+   Workspace Context / Security / Usage / Server) backed by `GET/PUT /settings` plus `GET /backends`,
    auth/security endpoints, `GET /usage-stats` (+ DELETE), and `POST /server/restart`.
    All form tabs share a single
    in-memory `settings` object; clicking Save on any form tab POSTs the full
@@ -20,7 +20,7 @@ const SETTINGS_TABS = [
   { id: 'cli',     label: 'CLI Config' },
   { id: 'memory',  label: 'Memory' },
   { id: 'kb',      label: 'Knowledge Base' },
-  { id: 'contextMap', label: 'Context Map' },
+  { id: 'workspaceContext', label: 'Workspace Context' },
   { id: 'security', label: 'Security' },
   { id: 'usage',   label: 'Usage' },
   { id: 'server',  label: 'Server' },
@@ -374,7 +374,7 @@ export function SettingsScreen({ onClose, initialTab }){
             : tab === 'cli'     ? <CliProfilesTab settings={settings} backends={backends} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'memory'  ? <SettingsMemoryTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'kb'      ? <SettingsKbTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
-            : tab === 'contextMap' ? <SettingsContextMapTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
+            : tab === 'workspaceContext' ? <SettingsWorkspaceContextTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'security' ? <SecurityTab/>
             : tab === 'usage'   ? <UsageTab/>
             : tab === 'server'  ? <ServerTab/>
@@ -1488,34 +1488,31 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
   );
 }
 
-/* ──────────────────── Context Map tab ──────────────────── */
+/* ──────────────────── Workspace Context tab ──────────────────── */
 
-function SettingsContextMapTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
-  const contextMap = settings.contextMap || {};
+function SettingsWorkspaceContextTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
+  const workspaceContext = settings.workspaceContext || {};
   const profiles = activeCliProfiles(settings);
   const fallbackBackend = settings.defaultBackend || '';
-  const selectedProfile = profileForSetting(profiles, contextMap.cliProfileId, contextMap.cliBackend, fallbackBackend);
+  const selectedProfile = profileForSetting(profiles, workspaceContext.cliProfileId, workspaceContext.cliBackend, fallbackBackend);
   React.useEffect(() => {
     if (selectedProfile && loadProfileBackend) loadProfileBackend(selectedProfile.id);
   }, [selectedProfile && selectedProfile.id, loadProfileBackend]);
   const models = selectedProfile
     ? modelsForProfile(backends, profileBackends, selectedProfile)
     : modelsForBackend(backends, fallbackBackend);
-  const modelId = contextMap.cliModel || defaultModelId(models) || '';
+  const modelId = workspaceContext.cliModel || defaultModelId(models) || '';
   const efforts = selectedProfile
     ? effortLevelsForProfile(backends, profileBackends, selectedProfile, modelId)
     : effortLevelsForModel(backends, fallbackBackend, modelId);
-  const effort = contextMap.cliEffort || defaultEffortFor(efforts) || '';
-  const scanInterval = Number.isFinite(contextMap.scanIntervalMinutes) ? contextMap.scanIntervalMinutes : 5;
-  const scanConcurrency = Number.isFinite(contextMap.cliConcurrency) ? contextMap.cliConcurrency : 1;
-  const extractionConcurrency = Number.isFinite(contextMap.extractionConcurrency) ? contextMap.extractionConcurrency : 3;
-  const synthesisConcurrency = Number.isFinite(contextMap.synthesisConcurrency) ? contextMap.synthesisConcurrency : 3;
-  const processorConcurrency = extractionConcurrency === synthesisConcurrency
-    ? extractionConcurrency
-    : Math.max(extractionConcurrency, synthesisConcurrency);
+  const effort = workspaceContext.cliEffort || defaultEffortFor(efforts) || '';
+  const scanInterval = Number.isFinite(workspaceContext.scanIntervalMinutes) ? workspaceContext.scanIntervalMinutes : 5;
+  const scanConcurrency = Number.isFinite(workspaceContext.cliConcurrency) ? workspaceContext.cliConcurrency : 1;
+  const maintenanceInterval = Number.isFinite(workspaceContext.maintenanceIntervalHours) ? workspaceContext.maintenanceIntervalHours : 24;
+  const maintenanceConcurrency = Number.isFinite(workspaceContext.maintenanceCliConcurrency) ? workspaceContext.maintenanceCliConcurrency : 1;
 
   function patchContext(next){
-    onPatch(prev => ({ contextMap: { ...(prev.contextMap || {}), ...next } }));
+    onPatch(prev => ({ workspaceContext: { ...(prev.workspaceContext || {}), ...next } }));
   }
   function onProfileChange(v){
     const profile = profiles.find(p => p.id === v);
@@ -1537,47 +1534,47 @@ function SettingsContextMapTab({ settings, backends, profileBackends, loadProfil
     patchContext({ cliModel: v, cliEffort: defaultEffortFor(e) });
   }
   function onScanInterval(v){
-    const n = parseInt(v, 10);
-    if (!Number.isFinite(n)) return;
+    const n = Number(v);
+    if (!Number.isInteger(n)) return;
     patchContext({ scanIntervalMinutes: Math.max(1, Math.min(1440, n)) });
   }
   function onScanConcurrency(v){
-    const n = parseInt(v, 10);
-    if (!Number.isFinite(n)) return;
+    const n = Number(v);
+    if (!Number.isInteger(n)) return;
     patchContext({ cliConcurrency: Math.max(1, Math.min(10, n)) });
   }
-  function onProcessorConcurrency(v){
-    const n = parseInt(v, 10);
-    if (!Number.isFinite(n)) return;
-    const concurrency = Math.max(1, Math.min(6, n));
-    patchContext({
-      extractionConcurrency: concurrency,
-      synthesisConcurrency: concurrency,
-    });
+  function onMaintenanceInterval(v){
+    const n = Number(v);
+    if (!Number.isInteger(n)) return;
+    patchContext({ maintenanceIntervalHours: Math.max(1, Math.min(8760, n)) });
   }
-
+  function onMaintenanceConcurrency(v){
+    const n = Number(v);
+    if (!Number.isInteger(n)) return;
+    patchContext({ maintenanceCliConcurrency: Math.max(1, Math.min(10, n)) });
+  }
   return (
     <div className="settings-form settings-form-wide">
       <p className="settings-desc u-dim">
-        Processor defaults used by workspaces that enable Context Map and keep the workspace processor mode set to global.
+        Processor defaults used by workspaces that enable Workspace Context and keep the workspace processor mode set to global.
       </p>
 
       <div className="settings-section-title">Processor</div>
-      <Field label="Context Map CLI profile">
+      <Field label="Workspace Context CLI profile">
         <select value={selectedProfile ? selectedProfile.id : ''} onChange={(e) => onProfileChange(e.target.value)}>
           {profiles.length === 0 ? <option value="">No CLI profiles available</option> : null}
           {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
       </Field>
       {models.length ? (
-        <Field label="Context Map model">
+        <Field label="Workspace Context model">
           <select value={modelId} onChange={(e) => onModelChange(e.target.value)}>
             {models.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
           </select>
         </Field>
       ) : null}
       {efforts.length ? (
-        <Field label="Context Map effort">
+        <Field label="Workspace Context effort">
           <Seg
             value={effort}
             onChange={(v) => patchContext({ cliEffort: v })}
@@ -1587,38 +1584,58 @@ function SettingsContextMapTab({ settings, backends, profileBackends, loadProfil
       ) : null}
 
       <div className="settings-section-title">Schedule</div>
-      <Field label="Scan interval" hint="Minutes between background checks for enabled workspaces.">
+      <Field
+        label="Scan interval"
+        hint="Minutes between background checks for enabled workspaces."
+        help="Scanning reads recent workspace conversations and referenced attachments, then asks the Workspace Context processor to create, reorganize, or update context markdown from new source material. The scheduler checks this cadence in minutes."
+      >
         <input
           type="number"
           min={1}
           max={1440}
+          step={1}
           value={scanInterval}
           onChange={(e) => onScanInterval(e.target.value)}
         />
       </Field>
       <Field
-        label="Concurrent Workspace Scans"
+        label="Concurrent workspace scans"
         help="How many workspaces Agent Cockpit may scan at the same time when multiple enabled workspaces are due. Most users should leave this at 1; raising it helps only when you actively use several workspaces and want their background scans to overlap."
       >
         <input
           type="number"
           min={1}
           max={10}
+          step={1}
           value={scanConcurrency}
           onChange={(e) => onScanConcurrency(e.target.value)}
         />
       </Field>
-
       <Field
-        label="Processor concurrency"
-        help="How many Context Map CLI processor calls may run at the same time across all active scans. Higher values can finish scans faster, but they also use more CLI/model capacity. This one setting controls both extraction and cleanup work."
+        label="Maintenance interval"
+        hint="Hours between background maintenance checks for enabled workspaces."
+        help="Maintenance reviews the existing Workspace Context markdown files, improves organization, merges duplicates, preserves temporal/as-of details, and does not ingest new conversations or external source files. Agent Cockpit checks hourly and starts maintenance only when this many whole hours have passed."
       >
         <input
           type="number"
           min={1}
-          max={6}
-          value={processorConcurrency}
-          onChange={(e) => onProcessorConcurrency(e.target.value)}
+          max={8760}
+          step={1}
+          value={maintenanceInterval}
+          onChange={(e) => onMaintenanceInterval(e.target.value)}
+        />
+      </Field>
+      <Field
+        label="Concurrent workspace maintenance"
+        help="How many workspaces Agent Cockpit may maintain at the same time when multiple enabled workspaces are due. This is separate from scan concurrency, but each individual workspace still runs only one Workspace Context job at a time."
+      >
+        <input
+          type="number"
+          min={1}
+          max={10}
+          step={1}
+          value={maintenanceConcurrency}
+          onChange={(e) => onMaintenanceConcurrency(e.target.value)}
         />
       </Field>
 

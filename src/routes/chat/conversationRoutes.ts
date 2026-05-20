@@ -6,7 +6,6 @@ import type { KbDreamService } from '../../services/knowledgeBase/dream';
 import type { KbSearchMcpServer } from '../../services/kbSearchMcp';
 import type { MemoryMcpServer } from '../../services/memoryMcp';
 import type { MemoryWatcher } from '../../services/memoryWatcher';
-import type { ContextMapMcpServer } from '../../services/contextMap/mcp';
 import { StreamJobSupervisor, type PendingMessageSend } from '../../services/streamJobSupervisor';
 import { validateQueueUpdateRequest } from '../../contracts/chat';
 import {
@@ -35,13 +34,12 @@ export interface ConversationRoutesOptions {
   memoryFingerprints: Map<string, Map<string, string>>;
   memoryMcp: MemoryMcpServer;
   kbSearchMcp: KbSearchMcpServer;
-  contextMapMcp: ContextMapMcpServer;
   kbDreaming: KbDreamService;
   hasInFlightTurn: (convId: string) => boolean;
   clearWsBuffer: (convId: string) => void;
   enqueueSessionSummaryFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, runtime: CliRuntime) => Promise<void>;
   enqueueMemoryFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, runtime: CliRuntime) => Promise<void>;
-  enqueueContextMapFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, source: 'session_reset' | 'archive') => Promise<void>;
+  enqueueWorkspaceContextFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, source: 'session_reset' | 'archive') => Promise<void>;
 }
 
 function queryString(value: unknown): string | undefined {
@@ -95,13 +93,12 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
     memoryFingerprints,
     memoryMcp,
     kbSearchMcp,
-    contextMapMcp,
     kbDreaming,
     hasInFlightTurn,
     clearWsBuffer,
     enqueueSessionSummaryFinalizer,
     enqueueMemoryFinalizer,
-    enqueueContextMapFinalizer,
+    enqueueWorkspaceContextFinalizer,
   } = opts;
   const router = express.Router();
 
@@ -130,8 +127,8 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
     if (await chatService.getWorkspaceMemoryEnabled(conv.workspaceHash)) {
       (conv as unknown as Record<string, unknown>).memoryReview = await chatService.getMemoryReviewStatus(conv.workspaceHash);
     }
-    if (await chatService.getWorkspaceContextMapEnabled(conv.workspaceHash)) {
-      (conv as unknown as Record<string, unknown>).contextMap = await chatService.getContextMapStatus(conv.workspaceHash);
+    if (await chatService.getWorkspaceContextEnabled(conv.workspaceHash)) {
+      (conv as unknown as Record<string, unknown>).workspaceContext = await chatService.getWorkspaceContextStatus(conv.workspaceHash);
     }
   }
 
@@ -266,7 +263,6 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       memoryFingerprints.delete(convId);
       memoryMcp.revokeMemoryMcpSession(convId);
       kbSearchMcp.revokeKbSearchSession(convId);
-      contextMapMcp.revokeContextMapMcpSession(convId);
       const ok = await chatService.deleteConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
@@ -290,7 +286,7 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       const ok = await chatService.archiveConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       if (preConv) {
-        await enqueueContextMapFinalizer(preConv.workspaceHash, convId, preConv.sessionNumber, 'archive');
+        await enqueueWorkspaceContextFinalizer(preConv.workspaceHash, convId, preConv.sessionNumber, 'archive');
       }
       res.json({ ok: true });
     } catch (err: unknown) {
@@ -429,7 +425,7 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       if (resetWsHash) {
         await enqueueSessionSummaryFinalizer(resetWsHash, convId, result.archivedSession.number, endingRuntime);
         await enqueueMemoryFinalizer(resetWsHash, convId, result.archivedSession.number, endingRuntime);
-        await enqueueContextMapFinalizer(resetWsHash, convId, result.archivedSession.number, 'session_reset');
+        await enqueueWorkspaceContextFinalizer(resetWsHash, convId, result.archivedSession.number, 'session_reset');
       }
 
       // Let the backend adapter clean up per-conversation state (e.g. ACP processes)
@@ -440,11 +436,9 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
         if (adapter) adapter.onSessionReset(convId);
       }
 
-      // Revoke any Memory / KB Search / Context Map MCP tokens issued for this
-      // conversation — new ones will be minted on the next message send.
+      // Revoke any Memory / KB Search MCP tokens issued for this conversation.
       memoryMcp.revokeMemoryMcpSession(convId);
       kbSearchMcp.revokeKbSearchSession(convId);
-      contextMapMcp.revokeContextMapMcpSession(convId);
 
       res.json(result);
     } catch (err: unknown) {

@@ -4,10 +4,8 @@ import {
   validateSettingsRequest,
 } from '../src/contracts/chat';
 import {
-  validateContextMapCandidateApplyRequest,
-  validateContextMapCandidateUpdateRequest,
-  validateContextMapEnabledRequest,
-} from '../src/contracts/contextMap';
+  validateWorkspaceContextEnabledRequest,
+} from '../src/contracts/workspaceContext';
 import { validateCreateConversationRequest, validateSetMessagePinnedRequest, validateSetUnreadRequest } from '../src/contracts/conversations';
 import { validateExplorerSaveFileRequest } from '../src/contracts/explorer';
 import {
@@ -57,7 +55,7 @@ describe('chat API contracts', () => {
     expect(() => validateSettingsRequest(null)).toThrow('settings must be an object');
     expect(() => validateSettingsRequest({ theme: 'sepia' })).toThrow('theme must be light, dark, or system');
     expect(() => validateSettingsRequest({ cliProfiles: {} })).toThrow('cliProfiles must be an array');
-    expect(() => validateSettingsRequest({ contextMap: [] })).toThrow('contextMap must be an object');
+    expect(() => validateSettingsRequest({ workspaceContext: [] })).toThrow('workspaceContext must be an object');
   });
 
   test('shared validation helpers cover object, array, and clamped integer payload fields', () => {
@@ -121,13 +119,7 @@ describe('chat API contracts', () => {
       dimensions: 768,
     });
     expect(validateMemoryEnabledRequest({ enabled: false })).toEqual({ enabled: false });
-    expect(validateContextMapEnabledRequest({ enabled: true })).toEqual({ enabled: true });
-    expect(validateContextMapCandidateUpdateRequest({ payload: { name: 'Project' }, confidence: 0.8 })).toEqual({
-      payload: { name: 'Project' },
-      confidence: 0.8,
-    });
-    expect(validateContextMapCandidateApplyRequest({ includeDependencies: true })).toEqual({ includeDependencies: true });
-    expect(validateContextMapCandidateApplyRequest(undefined)).toEqual({ includeDependencies: false });
+    expect(validateWorkspaceContextEnabledRequest({ enabled: true })).toEqual({ enabled: true });
 
     for (const fn of [
       () => validateSendMessageRequest({ content: '' }),
@@ -141,10 +133,7 @@ describe('chat API contracts', () => {
       () => validateKbGlossaryTermRequest({ term: '', expansion: 'x' }),
       () => validateKbEmbeddingConfigRequest({ dimensions: 0 }),
       () => validateMemoryEnabledRequest({ enabled: 'yes' }),
-      () => validateContextMapEnabledRequest({ enabled: 'yes' }),
-      () => validateContextMapCandidateUpdateRequest({ payload: [] }),
-      () => validateContextMapCandidateUpdateRequest({ payload: {}, confidence: Number.NaN }),
-      () => validateContextMapCandidateApplyRequest({ includeDependencies: 'yes' }),
+      () => validateWorkspaceContextEnabledRequest({ enabled: 'yes' }),
     ]) {
       try {
         fn();

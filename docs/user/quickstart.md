@@ -38,7 +38,8 @@ See [Supported Backends](backends.md) for setup notes and feature differences.
 ## 4. Choose A Workspace
 
 Create or select a workspace directory in the UI. Conversations, memory, KB
-state, Context Map data, and workspace settings are scoped to that directory.
+state, Workspace Context data, and workspace settings are scoped to that
+directory.
 
 ## 5. Send A Message
 
@@ -55,5 +56,5 @@ workflow:
 
 - [Memory](memory.md) for persistent working notes.
 - [Knowledge Base](knowledge-base.md) for source documents.
-- [Context Map](context-map.md) for governed workspace entities and
-  relationships.
+- [Workspace Context](workspace-context.md) for markdown-first workspace
+  operating memory.

@@ -5,7 +5,7 @@ This file is the canonical project guidance for coding agents working in this re
 Project memory that should persist across agents is mirrored in
 [`docs/agent-project-memory.md`](docs/agent-project-memory.md). Read it when
 work touches installer/updater/release behavior, CLI profiles, mobile PWA,
-Context Map, Memory, KB, or cross-agent workflow. When durable memory records a
+Workspace Context, Memory, KB, or cross-agent workflow. When durable memory records a
 recurring project rule, update that document and this file if the rule changes
 agent workflow.
 
@@ -69,9 +69,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 Follow ADR-0051 for shared contracts, logging, and ownership boundaries.
 
-- Keep public facades stable. `ChatService` and `ContextMapService` should remain orchestration/facade entrypoints; new persistence, parsing, normalization, scoring, source-planning, or policy logic should live in focused modules under the owning domain directory.
+- Keep public facades stable. `ChatService` and `WorkspaceContextService` should remain orchestration/facade entrypoints; new persistence, parsing, normalization, scoring, source-planning, or policy logic should live in focused modules under the owning domain directory.
 - For ChatService work, prefer focused modules under `src/services/chat/` for artifacts, usage ledgers, workspace feature settings, message queues, workspace instructions, and similar private stores. Preserve existing storage formats and migrations unless the task explicitly changes them.
-- For Context Map work, keep `src/services/contextMap/service.ts` as the coordinator. Put source discovery/planning in `sourcePlanning.ts`, candidate primitives in `candidatePrimitives.ts`, safe auto-apply policy in `autoApply.ts`, JSON extraction/repair in `jsonRepair.ts`, and run/synthesis metadata in `pipelineMetadata.ts`.
+- For Workspace Context work, keep `src/services/workspaceContext/service.ts` as the coordinator. Keep markdown storage, instruction management, source planning, processor prompting, run state, and scheduling inside focused modules under `src/services/workspaceContext/` as the feature grows; do not reintroduce graph, candidate-review, or MCP subsystems unless a new ADR supersedes the markdown-first design.
 - Put shared request/response shapes and runtime validators in `src/contracts/` whenever routes, clients, tests, or specs need the same boundary. Contract files imported by web or mobile must stay browser-safe and must not import server-only modules.
 - Web and mobile clients should import shared types only from browser-safe contracts. Do not reach into backend services, route modules, filesystem helpers, or server-only types from frontend code.
 - Keep large UI entrypoints as composition layers. Move pure projection, parsing, state-provider, viewport, and formatting behavior into focused modules or hooks with direct tests.

@@ -1,11 +1,11 @@
 ---
 id: 0044
 title: Add Context Map as self-maintained workspace graph
-status: Proposed
+status: Superseded
 date: 2026-05-07
 supersedes: []
-superseded-by: null
-tags: [context-map, memory, mcp, governance]
+superseded-by: 0068
+tags: [context-map, memory, mcp, governance, historical]
 affects:
   - src/types/index.ts
   - src/services/settingsService.ts
