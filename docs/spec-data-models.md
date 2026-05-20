@@ -399,6 +399,7 @@ Together these guarantee that a workspace index always parses on disk and that c
         pricedAt: string,
         provider: 'openai'|'anthropic'|'kiro',
         model: string,
+        pricingTier?: string,             // Provider pricing tier used for the estimate, e.g. OpenAI priority.
         pricingEntryId: string,
         sourceUrl: string,
         verifiedAt: string,
@@ -414,6 +415,7 @@ Together these guarantee that a workspace index always parses on disk and that c
         usdPerCredit?: number
       },
       credits?: number,                // Kiro only: accumulated credits consumed (fractional)
+      pricingTier?: string,            // Raw event pricing tier before aggregation; not meaningful on cumulative totals.
       contextUsagePercentage?: number  // Kiro/Codex: context window usage snapshot (0–100)
     }|null,
     usageByBackend: {            // Per-backend usage breakdown (keyed by backend id)
@@ -1162,7 +1164,8 @@ Daily per-backend/model token usage records for global statistics:
     records: [{
       backend: string,          // Backend ID (e.g. 'claude-code')
       model: string,            // Model ID (e.g. 'claude-sonnet-4-20250514') or 'unknown'
-      usage: Usage              // Accumulated usage for this backend+model on this day
+      pricingTier?: string,     // Optional provider pricing tier when rates differ by service tier.
+      usage: Usage              // Accumulated usage for this backend+model+tier on this day
     }]
   }]
 }
@@ -1174,9 +1177,12 @@ the server estimates an API-equivalent fallback into `usage.estimatedCostUsd`
 and marks `usage.costSource = "estimated"`. Once `estimatedCostUsd` is written,
 the ledger treats it as historical data and does not recalculate it from future
 catalog changes. `costSnapshot` records the pricing entry, rates, catalog
-version, and source metadata used for that stored estimate. Historical legacy
-day buckets shaped as `{ backends: { [backendId]: Usage } }` are normalized into
-`records[]` on write or lazy usage-stat enrichment.
+version, provider pricing tier when present, and source metadata used for that
+stored estimate. Ledger rows are grouped by backend, model, and optional
+`pricingTier`, so Codex default and Fast/Priority usage are not merged into one
+average. Historical legacy day buckets shaped as `{ backends: { [backendId]:
+Usage } }` are normalized into `records[]` on write or lazy usage-stat
+enrichment without inferring a tier.
 
 Built-in pricing defaults are release-owned JSON at
 `src/services/usagePricing/catalog.default.json`. They are validated at server
@@ -1196,6 +1202,7 @@ Mutable user pricing overrides are stored separately from release-owned defaults
     id: string,
     provider: "openai" | "anthropic" | "kiro",
     modelPattern: string,          // Exact model id or wildcard pattern with *
+    pricingTier?: string,          // Optional provider pricing tier, such as "priority".
     unit: "tokens" | "credits",
     sourceUrl: string,
     verifiedAt: string,            // YYYY-MM-DD or ISO date string entered by server/UI

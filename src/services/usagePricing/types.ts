@@ -6,6 +6,7 @@ import type {
   UsagePricingEntry,
   UsagePricingProvider,
   UsagePricingResponse,
+  UsagePricingTier,
   UsagePricingUnit,
   UsageTokenRatesPerMillion,
 } from '../../contracts/usagePricing';
@@ -16,6 +17,7 @@ export type {
   UsagePricingEntry,
   UsagePricingProvider,
   UsagePricingResponse,
+  UsagePricingTier,
   UsagePricingUnit,
   UsageTokenRatesPerMillion,
 } from '../../contracts/usagePricing';
@@ -26,7 +28,12 @@ export interface UsageCostEstimate {
   costSnapshot?: UsageCostSnapshot;
 }
 
-export interface UsageCostInput {
+export interface UsagePricingContext {
+  /** Provider pricing tier selected for the usage event, such as OpenAI priority processing. */
+  pricingTier?: UsagePricingTier;
+}
+
+export interface UsageCostInput extends UsagePricingContext {
   backend: string;
   model: string;
   usage: Usage;

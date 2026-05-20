@@ -135,6 +135,42 @@ describe('ClaudeCodeInteractiveAdapter', () => {
     expect(events).toEqual([]);
   });
 
+  test('ignores synthetic and zero-value usage transcript entries', () => {
+    const synthetic = mapClaudeTranscriptEntryToStreamEvents({
+      type: 'assistant',
+      message: {
+        model: '<synthetic>',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Partial local output' }],
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      },
+      cost_usd: 0,
+    } as any);
+    expect(synthetic).toEqual([{ type: 'text', content: 'Partial local output' }]);
+
+    const zeroRealModel = mapClaudeTranscriptEntryToStreamEvents({
+      type: 'assistant',
+      message: {
+        model: 'claude-opus-4-7',
+        role: 'assistant',
+        content: [],
+        usage: {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+        },
+      },
+      cost_usd: 0,
+    } as any);
+    expect(zeroRealModel).toEqual([]);
+  });
+
   test('maps Claude local goal clear output to a goal_cleared event', () => {
     const events = mapClaudeTranscriptEntryToStreamEvents({
       type: 'system',

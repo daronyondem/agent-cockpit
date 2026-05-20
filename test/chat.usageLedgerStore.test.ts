@@ -51,8 +51,8 @@ describe('UsageLedgerStore', () => {
 
   test('records estimated cost snapshots for zero-cost subscription CLI usage', async () => {
     const ledgerPath = path.join(dir, 'usage-ledger.json');
-    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage) => (
-      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z')
+    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage, context) => (
+      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z', undefined, undefined, context?.pricingTier)
     ));
 
     await store.record('codex', 'gpt-5.4', {
@@ -76,6 +76,35 @@ describe('UsageLedgerStore', () => {
     });
   });
 
+  test('keeps separate ledger rows for provider pricing tiers', async () => {
+    const ledgerPath = path.join(dir, 'usage-ledger.json');
+    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage, context) => (
+      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z', undefined, undefined, context?.pricingTier)
+    ));
+
+    await store.record('codex', 'gpt-5.5', {
+      ...emptyUsage(),
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    });
+    await store.record('codex', 'gpt-5.5', {
+      ...emptyUsage(),
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    }, { pricingTier: 'priority' });
+
+    const ledger = await store.read();
+    expect(ledger.days[0].records).toHaveLength(2);
+    const standard = ledger.days[0].records.find(record => !record.pricingTier);
+    const priority = ledger.days[0].records.find(record => record.pricingTier === 'priority');
+    expect(standard?.usage.estimatedCostUsd).toBeCloseTo(35);
+    expect(priority?.usage.estimatedCostUsd).toBeCloseTo(87.5);
+    expect(priority?.usage.costSnapshot).toMatchObject({
+      pricingTier: 'priority',
+      pricingEntryId: 'openai-gpt-5.5-priority',
+    });
+  });
+
   test('lazily enriches historical zero-cost ledger rows without repricing stored estimates', async () => {
     const ledgerPath = path.join(dir, 'usage-ledger.json');
     await fsp.writeFile(ledgerPath, JSON.stringify({
@@ -89,8 +118,8 @@ describe('UsageLedgerStore', () => {
       }],
     }), 'utf8');
 
-    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage) => (
-      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z')
+    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage, context) => (
+      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z', undefined, undefined, context?.pricingTier)
     ));
 
     const enriched = await store.enrichMissingCosts();
@@ -117,8 +146,8 @@ describe('UsageLedgerStore', () => {
     };
     await fsp.writeFile(ledgerPath, JSON.stringify(legacy), 'utf8');
 
-    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage) => (
-      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z')
+    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage, context) => (
+      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z', undefined, undefined, context?.pricingTier)
     ));
     const enriched = await store.enrichMissingCosts();
 

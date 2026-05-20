@@ -9,6 +9,7 @@ import type {
   CliToolUseBlock,
   StreamEvent,
   ThreadGoal,
+  UsageEvent,
 } from '../../types';
 
 export interface ClaudeTranscriptAttachment {
@@ -102,7 +103,7 @@ export function mapClaudeTranscriptEntryToStreamEvents(
         ? entry.cost_usd
         : (typeof entry.costUSD === 'number' ? entry.costUSD : undefined),
     });
-    if (usageEvent) {
+    if (usageEvent && shouldEmitUsageEvent(entry, usageEvent)) {
       if (typeof entry.message?.model === 'string') usageEvent.model = entry.message.model;
       events.push(usageEvent);
     }
@@ -198,6 +199,18 @@ function isSyntheticNoResponseEntry(entry: ClaudeTranscriptEntry, content: Array
     && content.length === 1
     && content[0].type === 'text'
     && content[0].text === 'No response requested.';
+}
+
+function shouldEmitUsageEvent(entry: ClaudeTranscriptEntry, event: UsageEvent): boolean {
+  if (entry.message?.model === '<synthetic>') return false;
+  const usage = event.usage;
+  return Boolean(
+    (usage.inputTokens || 0) > 0
+    || (usage.outputTokens || 0) > 0
+    || (usage.cacheReadTokens || 0) > 0
+    || (usage.cacheWriteTokens || 0) > 0
+    || (usage.costUsd || 0) > 0
+  );
 }
 
 function toolResultContent(block: CliToolResultBlock, toolUseResult: unknown): unknown {

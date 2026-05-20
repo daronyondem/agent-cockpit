@@ -184,6 +184,36 @@ describe('addUsage', () => {
     });
   });
 
+  test('uses OpenAI priority pricing for Codex Fast conversations', async () => {
+    const conv = await service.createConversation('Codex Fast Cost', undefined, 'codex', 'gpt-5.5', undefined, undefined, 'fast');
+    const updated = await service.addUsage(conv.id, {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0,
+    }, 'codex', 'gpt-5.5');
+
+    expect(updated!.conversationUsage.costSource).toBe('estimated');
+    expect(updated!.conversationUsage.estimatedCostUsd).toBeCloseTo(87.5);
+    expect(updated!.conversationUsage.costSnapshot).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5.5',
+      pricingTier: 'priority',
+      pricingEntryId: 'openai-gpt-5.5-priority',
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const ledger = await service.getUsageStats();
+    const today = new Date().toISOString().slice(0, 10);
+    const dayEntry = ledger.days.find((d: any) => d.date === today);
+    const record = dayEntry!.records.find((r: any) => r.backend === 'codex' && r.model === 'gpt-5.5' && r.pricingTier === 'priority');
+    expect(record).toBeDefined();
+    expect(record!.usage.estimatedCostUsd).toBeCloseTo(87.5);
+    expect(record!.usage.costSnapshot).toMatchObject({ pricingTier: 'priority' });
+  });
+
   test('uses user pricing overrides before built-in pricing when estimating usage', async () => {
     await service.saveUsagePricingOverrides([{
       id: 'user-openai-gpt-5.5',

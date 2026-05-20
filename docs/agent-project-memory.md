@@ -132,6 +132,9 @@ tool is unavailable.
   mid-session/per-message switching.
 - Codex effort defaults and service-tier semantics are adapter-specific; do not
   generalize them across providers without checking specs/ADRs.
+- Usage pricing should stay provider-specific. Codex/OpenAI service tiers,
+  Claude token/cache pricing, Kiro credits, and future CLIs should use focused
+  calculators or provider context rather than one growing generic formula.
 - Claude Code Interactive is a separate provider path requiring real CLI
   compatibility checks when protocol behavior changes.
 - Do not auto-update Claude Code CLI as part of Claude Code Interactive

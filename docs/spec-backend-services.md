@@ -823,6 +823,12 @@ Before the first PTY spawn, `claudeInteractivePty.ts` verifies the bundled `node
 - `goal_status` attachments → backend-neutral `goal_updated` snapshots with `backend: 'claude-code-interactive'`
 - `/goal clear` local-command stdout containing `Goal cleared` → `goal_cleared`
 
+Transcript entries whose message model is Claude's local `<synthetic>` marker
+are not allowed to emit `usage` events, and usage entries with all token/cache
+and dollar fields at zero are dropped. Synthetic text can still stream when it
+represents partial local output, but it must not create `<synthetic>` rows in
+the daily usage ledger.
+
 When a `.claude/plans/` write completes in plan mode, the streaming route may emit a synthetic `ExitPlanMode` approval before Claude's transcript flushes the real `ExitPlanMode` tool event. If the real transcript event arrives later, the route uses it to flush any deferred approval input and then suppresses the duplicate plan card so an already-approved plan cannot reopen after the final response.
 
 `sendInput(text)` maps live responses back into the PTY. For `AskUserQuestion`, the controller chooses the numbered option when the user's text matches an option label/value, including object-shaped options with `label` fields, otherwise it sends the raw text. Option selection waits briefly before sending arrow/Enter keystrokes so the interactive question menu is ready even when the question card came from `PreToolUse` before the transcript flushed. Current real Claude Code question menus are option-driven, so browser typed-input coverage verifies option-label-to-menu-index mapping rather than relying on arbitrary free-text `AskUserQuestion` payloads. `abort()` sends Escape to stop the active turn. Because transcript parsing is private-API dependent, the adapter is version-gated by compatibility warnings rather than assumed stable across arbitrary Claude CLI releases.
@@ -1403,6 +1409,7 @@ See [ADR-0027](adr/0027-manage-cli-updates-from-web-cockpit.md) for the web-only
 
 **Files:** `src/services/usagePricing/catalog.default.json`,
 `src/services/usagePricing/catalog.ts`, `src/services/usagePricing/estimator.ts`,
+`src/services/usagePricing/providerCalculators.ts`,
 `src/services/usagePricing/store.ts`
 
 The usage-pricing subsystem estimates API-equivalent dollars for subscription
@@ -1411,8 +1418,8 @@ spend. It never replaces provider-reported dollars: `costUsd > 0` is labeled
 `Cost` and marked `costSource: "reported"`. Zero-dollar usage with a matching
 pricing entry is labeled `Estimated Cost`, persisted as `estimatedCostUsd`, and
 stamped with `costSnapshot` containing the catalog version, priced-at time,
-provider, model, pricing entry id, source URL, verified/effective dates,
-currency, unit, and rates used.
+provider, model, optional provider pricing tier, pricing entry id, source URL,
+verified/effective dates, currency, unit, and rates used.
 
 Built-in defaults are release-owned JSON under
 `src/services/usagePricing/catalog.default.json` and are validated on import.
@@ -1420,7 +1427,10 @@ Each entry carries the provider source URL, verification date, and effective
 date. The checked-in catalog is manually refreshed before release from official
 provider pricing pages (OpenAI API pricing, Anthropic Claude pricing, and Kiro
 pricing/overage credits); broad wildcard patterns are avoided where current and
-deprecated model families share a prefix but have different rates.
+deprecated model families share a prefix but have different rates. OpenAI
+priority-processing entries carry `pricingTier: "priority"` and are selected
+only when the usage context requests that tier, currently from Codex Fast
+conversations.
 Mutable user overrides live under
 `data/chat/usage-pricing-overrides.json`; `UsagePricingStore` reads them with a
 separate keyed mutex, writes through `atomicWriteFile`, ignores corrupt files
@@ -1429,14 +1439,26 @@ precede built-ins. Override saves replace the full override catalog, and
 releases must refresh only the built-in JSON unless the user explicitly resets
 or edits overrides.
 
+`providerCalculators.ts` owns provider dispatch. OpenAI/Codex and
+Anthropic/Claude currently share token-rate math but remain separate providers
+in the registry, while Kiro uses a credit calculator. The public estimator keeps
+provider-reported nonzero cost and already-persisted estimates as terminal
+states before delegating to the calculator registry. Future CLIs should add a
+provider calculator or provider-specific context fields instead of expanding one
+generic pricing branch.
+
 `ChatService.addUsage()` loads the effective catalog before applying an event,
 adds estimated cost to conversation/session totals, and records the enriched
-usage in the daily ledger. `UsageLedgerStore.enrichMissingCosts()` performs lazy
+usage in the daily ledger. Codex conversations with `serviceTier: "fast"` map
+to pricing tier `priority` for estimation and ledger grouping. The ledger row
+identity is backend + model + optional pricing tier, so default and priority
+usage stay separate. `UsageLedgerStore.enrichMissingCosts()` performs lazy
 historical enrichment for old zero-cost rows, but skips rows already marked
 `costSource: "estimated"` with `estimatedCostUsd` so per-token catalog changes
 cannot alter historical estimates.
 
-See [ADR-0069](adr/0069-estimate-usage-costs-from-persisted-pricing-catalog.md).
+See [ADR-0069](adr/0069-estimate-usage-costs-from-persisted-pricing-catalog.md)
+and [ADR-0070](adr/0070-use-provider-calculators-for-usage-pricing.md).
 
 ## 4.4 ClaudePlanUsageService
 

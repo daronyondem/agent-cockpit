@@ -106,6 +106,10 @@ const KB_ENTRY_SCHEMA_VERSION = 1;
 
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
 
+function usagePricingTierForConversation(backendId: string, serviceTier?: ServiceTier): string | undefined {
+  return backendId === 'codex' && serviceTier === 'fast' ? 'priority' : undefined;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
 }
@@ -396,8 +400,8 @@ export class ChatService {
     this.usageLedgerFile = path.join(this.baseDir, 'usage-ledger.json');
     this.usagePricingOverridesFile = path.join(this.baseDir, 'usage-pricing-overrides.json');
     this._usagePricingStore = new UsagePricingStore(this.usagePricingOverridesFile);
-    this._usageLedgerStore = new UsageLedgerStore(this.usageLedgerFile, (backendId, model, usage) => (
-      this._estimateUsageCost(backendId, model, usage)
+    this._usageLedgerStore = new UsageLedgerStore(this.usageLedgerFile, (backendId, model, usage, context) => (
+      this._estimateUsageCost(backendId, model, usage, context?.pricingTier)
     ));
     this._settingsService = new SettingsService(this.baseDir);
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
@@ -3500,7 +3504,8 @@ export class ChatService {
       // Conversation-level totals
       const backendId = backend || convEntry.backend;
       const modelId = model || convEntry.model || 'unknown';
-      const enrichedUsage = applyCostEstimate(backendId, modelId, usage, undefined, pricingCatalog.entries, pricingCatalog.version);
+      const pricingTier = usage.pricingTier || usagePricingTierForConversation(backendId, convEntry.serviceTier);
+      const enrichedUsage = applyCostEstimate(backendId, modelId, usage, undefined, pricingCatalog.entries, pricingCatalog.version, pricingTier);
       if (!convEntry.usage) convEntry.usage = emptyUsage();
       addToUsage(convEntry.usage, enrichedUsage);
 
@@ -3523,14 +3528,15 @@ export class ChatService {
       }
 
       await this._writeWorkspaceIndex(hash, index);
-      return { conversationUsage: convEntry.usage, sessionUsage, backendId, modelId, enrichedUsage };
+      return { conversationUsage: convEntry.usage, sessionUsage, backendId, modelId, enrichedUsage, pricingTier };
     });
     if (!mutated) return null;
 
     // Record to daily ledger (fire-and-forget, don't block the response)
     // Skip ledger for backends that don't provide token-based usage (e.g. Kiro)
     if (!options?.skipLedger) {
-      this._usageLedgerStore.record(mutated.backendId, mutated.modelId, mutated.enrichedUsage).catch(err => {
+      const pricingContext = mutated.pricingTier ? { pricingTier: mutated.pricingTier } : undefined;
+      this._usageLedgerStore.record(mutated.backendId, mutated.modelId, mutated.enrichedUsage, pricingContext).catch(err => {
         log.error('Failed to write usage ledger', { error: err });
       });
     }
@@ -3565,9 +3571,9 @@ export class ChatService {
     return this._usagePricingStore.clearOverrides();
   }
 
-  private _estimateUsageCost(backendId: string, model: string, usage: Usage): Usage {
+  private _estimateUsageCost(backendId: string, model: string, usage: Usage, pricingTier?: string): Usage {
     const catalog = this._usagePricingStore.getEffectiveCatalogSync();
-    return applyCostEstimate(backendId, model, usage, undefined, catalog.entries, catalog.version);
+    return applyCostEstimate(backendId, model, usage, undefined, catalog.entries, catalog.version, pricingTier);
   }
 
   // ── Settings ───────────────────────────────────────────────────────────────

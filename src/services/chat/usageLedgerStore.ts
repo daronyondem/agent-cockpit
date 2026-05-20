@@ -2,10 +2,11 @@ import fsp from 'fs/promises';
 import type { Usage, UsageLedger, UsageLedgerDay } from '../../types';
 import { atomicWriteFile } from '../../utils/atomicWrite';
 import { KeyedMutex } from '../../utils/keyedMutex';
+import type { UsagePricingContext } from '../usagePricing/types';
 
 const LEDGER_LOCK_KEY = '__usage_ledger__';
 
-export type UsageCostEnricher = (backendId: string, model: string, usage: Usage) => Usage;
+export type UsageCostEnricher = (backendId: string, model: string, usage: Usage, context?: UsagePricingContext) => Usage;
 
 export function emptyUsage(): Usage {
   return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
@@ -50,10 +51,12 @@ export class UsageLedgerStore {
     await atomicWriteFile(this.ledgerFile, JSON.stringify(ledger, null, 2));
   }
 
-  async record(backendId: string, model: string, usage: Usage): Promise<void> {
+  async record(backendId: string, model: string, usage: Usage, context?: UsagePricingContext): Promise<void> {
     await this.lock.run(LEDGER_LOCK_KEY, async () => {
       const ledger = await this.read();
       const today = new Date().toISOString().slice(0, 10);
+      const pricingTier = context?.pricingTier || usage.pricingTier;
+      const pricingContext = pricingTier ? { pricingTier } : undefined;
 
       let dayEntry = ledger.days.find(d => d.date === today);
       if (!dayEntry) {
@@ -64,12 +67,16 @@ export class UsageLedgerStore {
       const legacy = dayEntry as UsageLedgerDay & { backends?: Record<string, Usage> };
       normalizeDayRecords(legacy);
 
-      let record = dayEntry.records.find(r => r.backend === backendId && r.model === model);
+      let record = dayEntry.records.find(r => (
+        r.backend === backendId
+        && r.model === model
+        && (r.pricingTier || '') === (pricingTier || '')
+      ));
       if (!record) {
-        record = { backend: backendId, model, usage: emptyUsage() };
+        record = { backend: backendId, model, ...(pricingTier ? { pricingTier } : {}), usage: emptyUsage() };
         dayEntry.records.push(record);
       }
-      addToUsage(record.usage, this._enrich(backendId, model, usage));
+      addToUsage(record.usage, this._enrich(backendId, model, usage, pricingContext));
 
       await this.write(ledger);
     });
@@ -86,7 +93,8 @@ export class UsageLedgerStore {
         if (!day.records) continue;
         for (const record of day.records) {
           if (!shouldEnrichCost(record.usage)) continue;
-          const enriched = this._enrich(record.backend, record.model, record.usage);
+          const pricingContext = record.pricingTier ? { pricingTier: record.pricingTier } : undefined;
+          const enriched = this._enrich(record.backend, record.model, record.usage, pricingContext);
           if (!usageCostEqual(record.usage, enriched)) {
             record.usage = enriched;
             changed = true;
@@ -105,8 +113,8 @@ export class UsageLedgerStore {
     });
   }
 
-  private _enrich(backendId: string, model: string, usage: Usage): Usage {
-    return this.enrichUsageCost ? this.enrichUsageCost(backendId, model, usage) : usage;
+  private _enrich(backendId: string, model: string, usage: Usage, context?: UsagePricingContext): Usage {
+    return this.enrichUsageCost ? this.enrichUsageCost(backendId, model, usage, context) : usage;
   }
 }
 

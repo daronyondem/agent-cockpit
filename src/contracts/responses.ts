@@ -17,6 +17,7 @@ export interface Usage {
     pricedAt: string;
     provider: 'openai' | 'anthropic' | 'kiro';
     model: string;
+    pricingTier?: string;
     pricingEntryId: string;
     sourceUrl: string;
     verifiedAt: string;
@@ -32,12 +33,14 @@ export interface Usage {
     usdPerCredit?: number;
   };
   credits?: number;
+  pricingTier?: string;
   contextUsagePercentage?: number;
 }
 
 export interface UsageLedgerRecord {
   backend: string;
   model: string;
+  pricingTier?: string;
   usage: Usage;
 }
 

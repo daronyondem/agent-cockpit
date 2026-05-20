@@ -57,9 +57,33 @@ describe('usage cost estimator', () => {
     });
   });
 
+  test('uses OpenAI priority pricing when a pricing tier is supplied', () => {
+    const estimate = estimateUsageCost({
+      backend: 'codex',
+      model: 'gpt-5.5',
+      pricingTier: 'priority',
+      pricedAt: '2026-05-20T00:00:00.000Z',
+      usage: { ...baseUsage, inputTokens: 1_000_000, cacheReadTokens: 2_000_000, outputTokens: 500_000 },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(52.5);
+    expect(estimate.costSnapshot).toMatchObject({
+      provider: 'openai',
+      model: 'gpt-5.5',
+      pricingTier: 'priority',
+      pricingEntryId: 'openai-gpt-5.5-priority',
+      sourceUrl: 'https://openai.com/api-priority-processing/',
+    });
+  });
+
   test('matches more specific model patterns before broad patterns', () => {
     const entry = findPricingEntry(BUILTIN_USAGE_PRICING_CATALOG.entries, 'openai', 'gpt-5.4-mini');
     expect(entry?.id).toBe('openai-gpt-5.4-mini-standard');
+  });
+
+  test('matches more specific model patterns within a pricing tier', () => {
+    const entry = findPricingEntry(BUILTIN_USAGE_PRICING_CATALOG.entries, 'openai', 'gpt-5.4-mini', 'priority');
+    expect(entry?.id).toBe('openai-gpt-5.4-mini-priority');
   });
 
   test('estimates Claude cache write and cache read cost', () => {
