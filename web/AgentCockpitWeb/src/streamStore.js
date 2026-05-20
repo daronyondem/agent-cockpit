@@ -1286,10 +1286,19 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
           'incomingId=' + String(incomingId || '').slice(0,16),
           'incomingTs=' + (frame.message.timestamp || 'null'),
           'mode=' + mode);
+        const isFinalTurn = frame.message.turn === 'final';
         const messages = phStillPresent
           ? cleaned.map(m => m.id === phId ? frame.message : m)
           : [...cleaned, frame.message];
-        return { ...cur, messages, streamingMsgId: null };
+        return {
+          ...cur,
+          messages,
+          streamingMsgId: null,
+          pendingInteraction: isFinalTurn ? null : cur.pendingInteraction,
+          uiState: isFinalTurn && cur.pendingInteraction
+            ? (cur.streaming ? 'streaming' : (cur.streamError ? 'error' : null))
+            : cur.uiState,
+        };
       });
       diagSnap(convId, 'assistant_message-after');
       const cur = states.get(convId);

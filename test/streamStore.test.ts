@@ -153,6 +153,38 @@ test('plan-exit frame sets pendingInteraction and uiState=awaiting', async () =>
   expect(Store.convStates()).toEqual({ c1: 'awaiting' });
 });
 
+test('final assistant_message clears stale pending plan interaction after replay', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  ws.dispatch({
+    type: 'tool_activity',
+    tool: 'ExitPlanMode',
+    isPlanMode: true,
+    planAction: 'exit',
+    planContent: '# Plan',
+    id: 't-plan',
+  });
+  ws.dispatch({
+    type: 'assistant_message',
+    message: {
+      id: 'final-c1',
+      role: 'assistant',
+      content: 'done',
+      backend: 'claude-code-interactive',
+      timestamp: '2026-05-01T12:00:01.000Z',
+      turn: 'final',
+      contentBlocks: [{ type: 'text', content: 'done' }],
+    },
+  });
+  ws.dispatch({ type: 'done' });
+
+  const state = Store.getState('c1');
+  expect(state.pendingInteraction).toBeNull();
+  expect(state.uiState).toBeNull();
+  expect(state.messages.some((message: { id?: string }) => message.id === 'final-c1')).toBe(true);
+});
+
 test('plan-enter frame does NOT set pendingInteraction', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;
