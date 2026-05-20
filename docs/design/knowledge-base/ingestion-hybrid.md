@@ -1,6 +1,6 @@
 # Design: Hybrid AI-Assisted Knowledge Base Ingestion
 
-[← Back to index](SPEC.md)
+[← Back to index](../../SPEC.md)
 
 | | |
 |--|--|
@@ -552,4 +552,4 @@ flowchart LR
 
 ---
 
-[← Back to index](SPEC.md)
+[← Back to index](../../SPEC.md)

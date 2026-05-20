@@ -8,7 +8,7 @@
 
 ## 1. Why This Document Exists
 
-`agent-cockpit` was originally built around the Claude Code CLI (direct Anthropic API). When the Kiro CLI was added as a second backend ([`src/services/backends/kiro.ts`](../src/services/backends/kiro.ts)), several behaviors that "just worked" in Claude Code broke in Kiro despite both backends nominally exposing Opus 4.7. Every gap below traces to a specific divergence between Anthropic's API and AWS Bedrock's deployment of the same model, or to differences in the CLI transport (Claude Code's pure-stdio newline-JSON stream vs. Kiro's ACP/JSON-RPC channel).
+`agent-cockpit` was originally built around the Claude Code CLI (direct Anthropic API). When the Kiro CLI was added as a second backend ([`src/services/backends/kiro.ts`](../../src/services/backends/kiro.ts)), several behaviors that "just worked" in Claude Code broke in Kiro despite both backends nominally exposing Opus 4.7. Every gap below traces to a specific divergence between Anthropic's API and AWS Bedrock's deployment of the same model, or to differences in the CLI transport (Claude Code's pure-stdio newline-JSON stream vs. Kiro's ACP/JSON-RPC channel).
 
 The point of this document is to keep these gotchas catalogued so the next person touching either backend can:
 
@@ -51,8 +51,8 @@ The point of this document is to keep these gotchas catalogued so the next perso
 
 **Code.**
 
-- [`reencodeForKiro()`](../src/services/backends/kiro.ts) — re-encode helper. Returns `null` (caller sends original bytes) when no transform is needed.
-- [`pngHasAlpha()`](../src/services/backends/kiro.ts) — detects color type 4/6 by reading the IHDR chunk at fixed offset 25.
+- [`reencodeForKiro()`](../../src/services/backends/kiro.ts) — re-encode helper. Returns `null` (caller sends original bytes) when no transform is needed.
+- [`pngHasAlpha()`](../../src/services/backends/kiro.ts) — detects color type 4/6 by reading the IHDR chunk at fixed offset 25.
 - `KIRO_MAX_LONG_EDGE_PX = 1568` — exported, enforced inside `reencodeForKiro`.
 - Note: `MAX_LONG_EDGE_PX = 2576` in `src/services/knowledgeBase/ingestion/pageConversion.ts` is correct for Claude Code direct-API and is intentionally **NOT** lowered to match Kiro.
 
@@ -80,7 +80,7 @@ session/prompt → prompt: [
 
 **Code.**
 
-- [`collectImageContentBlocks(prompt, workingDir)`](../src/services/backends/kiro.ts) — scans `workingDir`, attaches up to 5 images mentioned by basename in `prompt`.
+- [`collectImageContentBlocks(prompt, workingDir)`](../../src/services/backends/kiro.ts) — scans `workingDir`, attaches up to 5 images mentioned by basename in `prompt`.
 - Wired into the `runOneShot` ACP path: the adapter builds `promptArray = [{type:'text',...}, ...imageBlocks]` before sending `session/prompt`.
 
 **Ref.** [PR #223](https://github.com/daronyondem/agent-cockpit/pull/223) — `fix(kiro): attach image content blocks to ACP session/prompt`.
@@ -112,7 +112,7 @@ function basenameAppearsAsToken(prompt: string, basename: string): boolean {
 
 **Why it matters in practice.** KB ingestion writes a downscaled `<name>.ai.png` sibling next to oversized images (PR #222). Both files end up on disk in the working directory. Without token-boundary matching the adapter would attach both, and the larger original blew the 10 MB cap.
 
-**Code.** [`basenameAppearsAsToken()`](../src/services/backends/kiro.ts) — used by `collectImageContentBlocks` before reading file bytes.
+**Code.** [`basenameAppearsAsToken()`](../../src/services/backends/kiro.ts) — used by `collectImageContentBlocks` before reading file bytes.
 
 **Ref.** [PR #224](https://github.com/daronyondem/agent-cockpit/pull/224) — `fix(kiro): require token-boundary match for image basename attach`.
 
@@ -150,7 +150,7 @@ throw new Error(`kiro-cli acp prompt failed: ${e.message}${codePart}${dataPart}$
 
 **Code.**
 
-- JSON-RPC client error attach — `AcpClient` message-handling switch in [`src/services/backends/kiro.ts`](../src/services/backends/kiro.ts).
+- JSON-RPC client error attach — `AcpClient` message-handling switch in [`src/services/backends/kiro.ts`](../../src/services/backends/kiro.ts).
 - Caller-side formatting — `runOneShot` and the chat-path `session/prompt` `.catch()` in the same file.
 
 **Ref.** [PR #225](https://github.com/daronyondem/agent-cockpit/pull/225) — same PR as the Bedrock re-encode work, since the two were debugged together.
@@ -181,7 +181,7 @@ The `stopNotifications()` call breaks the `for await (const notification of clie
 
 **Code.**
 
-- One-shot path — the `session/prompt` `.then(stopNotifications)` block in [`src/services/backends/kiro.ts`](../src/services/backends/kiro.ts).
+- One-shot path — the `session/prompt` `.then(stopNotifications)` block in [`src/services/backends/kiro.ts`](../../src/services/backends/kiro.ts).
 - Chat path — same pattern, plus `stopReason` logging.
 - Defensive `turn_end` handler — same file, in the streaming notification switch.
 
@@ -209,7 +209,7 @@ try {
 
 **Why 5 seconds.** Empirically the legitimate `set_model` round-trip is sub-second. 5 s covers a slow ACP startup without keeping the user waiting on a silent ignore.
 
-**Code.** Two call sites in [`src/services/backends/kiro.ts`](../src/services/backends/kiro.ts) — one in `runOneShot` (silent fall-through) and one in the chat streaming path (yields a user-visible warning).
+**Code.** Two call sites in [`src/services/backends/kiro.ts`](../../src/services/backends/kiro.ts) — one in `runOneShot` (silent fall-through) and one in the chat streaming path (yields a user-visible warning).
 
 ---
 
@@ -242,7 +242,7 @@ flowchart TD
 
 ## 4. Test Coverage
 
-The following Jest tests in [`test/kiroBackend.test.ts`](../test/kiroBackend.test.ts) lock the parity workarounds in place. Removing or relaxing any of these is a tell that someone is regressing parity:
+The following Jest tests in [`test/kiroBackend.test.ts`](../../test/kiroBackend.test.ts) lock the parity workarounds in place. Removing or relaxing any of these is a tell that someone is regressing parity:
 
 - `pngHasAlpha` — detects RGBA color type via IHDR offset.
 - `reencodeForKiro` — passthrough for in-spec images, downscale + JPEG flatten otherwise.

@@ -1,6 +1,6 @@
 # Claude Code Interactive Hardening Plan
 
-Status: Proposed
+Status: Implemented
 Date: 2026-05-14
 
 ## Objective
@@ -521,5 +521,5 @@ CLAUDE_INTERACTIVE_E2E=1 npm test -- test/claudeCodeInteractive.e2e.test.ts
 ## Suggested Goal-System Prompt
 
 ```text
-Implement the Claude Code Interactive hardening work described in docs/design-claude-code-interactive-hardening-plan.md. Keep the existing Claude Code Interactive architecture intact: hidden node-pty control channel, transcript-derived stream events, Claude profile protocol selection, and standard Claude Code delegation for one-shot/background work. Add terminal query responses, hook-driven SessionStart/Stop lifecycle support, hook-derived transcript path finalization, transcript flush retry/backoff, delayed Enter prompt submission, rolling trust-prompt detection, focused unit tests, optional real-Claude E2E coverage, and spec updates. Do not introduce a user-facing terminal, Remote Control, claude-p as a runtime dependency, Zig/zmux packaging, or composer backend/protocol pickers. After implementation, review the work for high/medium impact issues, fix them, and repeat that review/fix loop ten times or until no high/medium issues remain. Run the verification commands listed in the plan and report any command that cannot be run.
+Implement the Claude Code Interactive hardening work described in docs/design/claude-code-interactive/hardening-plan.md. Keep the existing Claude Code Interactive architecture intact: hidden node-pty control channel, transcript-derived stream events, Claude profile protocol selection, and standard Claude Code delegation for one-shot/background work. Add terminal query responses, hook-driven SessionStart/Stop lifecycle support, hook-derived transcript path finalization, transcript flush retry/backoff, delayed Enter prompt submission, rolling trust-prompt detection, focused unit tests, optional real-Claude E2E coverage, and spec updates. Do not introduce a user-facing terminal, Remote Control, claude-p as a runtime dependency, Zig/zmux packaging, or composer backend/protocol pickers. After implementation, review the work for high/medium impact issues, fix them, and repeat that review/fix loop ten times or until no high/medium issues remain. Run the verification commands listed in the plan and report any command that cannot be run.
 ```

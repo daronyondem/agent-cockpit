@@ -33,7 +33,7 @@ affects:
   - docs/spec-frontend.md
   - docs/spec-mobile-pwa.md
   - docs/spec-testing.md
-  - docs/design-claude-code-interactive-hardening-plan.md
+  - docs/design/claude-code-interactive/hardening-plan.md
 ---
 
 ## Context
@@ -79,9 +79,9 @@ The shared Claude CLI update status includes `interactiveCompatibility` for `cla
 - [Backend services spec](../spec-backend-services.md)
 - [Frontend spec](../spec-frontend.md)
 - [Mobile PWA spec](../spec-mobile-pwa.md)
-- [Claude Code Interactive research report](../research-claude-code-interactive-report.md)
-- [Claude Code Interactive implementation plan](../design-claude-code-interactive-implementation-plan.md)
-- [Claude Code Interactive hardening plan](../design-claude-code-interactive-hardening-plan.md)
+- [Claude Code Interactive research report](../research/claude-code-interactive-report.md)
+- [Claude Code Interactive implementation plan](../design/claude-code-interactive/implementation-plan.md)
+- [Claude Code Interactive hardening plan](../design/claude-code-interactive/hardening-plan.md)
 - ADR-0015: Separate CLI profiles from backend vendors
 - ADR-0018: Route stream lifecycle through supervisor
 - ADR-0019: Record backend stream resume capability matrix

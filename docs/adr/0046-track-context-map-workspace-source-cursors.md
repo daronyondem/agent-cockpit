@@ -47,6 +47,6 @@ Scheduled runs use a lower candidate-synthesis threshold than initial/manual sca
 
 ## References
 
-- [Context Map design](../design-context-map.md)
+- [Context Map design](../design/context-map.md)
 - [Data model spec](../spec-data-models.md#context-map-store-workspaceshashcontext-map)
 - [Backend services spec](../spec-backend-services.md#context-map-processor-service)
