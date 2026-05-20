@@ -1,6 +1,6 @@
 # Claude Code Interactive Implementation Plan
 
-Status: Proposed
+Status: Implemented
 Date: 2026-05-14
 
 ## Goal-System Objective
@@ -8,7 +8,7 @@ Date: 2026-05-14
 Use this short objective when handing the work to the goal system:
 
 ```text
-Implement the separate `claude-code-interactive` backend/provider end to end according to `docs/design-claude-code-interactive-implementation-plan.md`. Preserve the existing `claude-code` backend. Do not use Claude Remote Control and do not expose a user-facing terminal. Implement hidden backend PTY control, transcript-derived streaming events, CLI compatibility warnings, tests, specs, and any required ADR. Verify with the required commands listed in the plan.
+Implement the separate `claude-code-interactive` backend/provider end to end according to `docs/design/claude-code-interactive/implementation-plan.md`. Preserve the existing `claude-code` backend. Do not use Claude Remote Control and do not expose a user-facing terminal. Implement hidden backend PTY control, transcript-derived streaming events, CLI compatibility warnings, tests, specs, and any required ADR. Verify with the required commands listed in the plan.
 ```
 
 ## Executive Summary
@@ -45,8 +45,8 @@ This is a high-risk adapter because it depends on private Claude Code transcript
 
 Use these documents as source material:
 
-- `docs/research-claude-code-interactive.md`
-- `docs/research-claude-code-interactive-report.md`
+- `docs/research/claude-code-interactive.md`
+- `docs/research/claude-code-interactive-report.md`
 
 Key research findings to preserve:
 

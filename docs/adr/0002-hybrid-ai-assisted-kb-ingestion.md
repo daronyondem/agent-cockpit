@@ -7,7 +7,7 @@ supersedes: []
 superseded-by: null
 tags: [knowledge-base, ingestion, historical]
 affects:
-  - docs/design-kb-ingestion-hybrid.md
+  - docs/design/knowledge-base/ingestion-hybrid.md
   - src/services/knowledgeBase/ingestion.ts
   - src/services/knowledgeBase/handlers/pdf.ts
   - src/services/knowledgeBase/handlers/docx.ts
@@ -69,5 +69,5 @@ A single unified image-to-markdown prompt is used for all four AI call sites. Co
 
 ## References
 
-- docs/design-kb-ingestion-hybrid.md — the full design doc, including unified prompt text, `meta.json` schema, signal heuristics, and PR sequencing
+- docs/design/knowledge-base/ingestion-hybrid.md — the full design doc, including unified prompt text, `meta.json` schema, signal heuristics, and PR sequencing
 - Issue #211 and PRs #213–#228 — the implementation sequence (8 design PRs plus follow-ups for image downscaling #222, PPTX paragraph structure #219, adaptive CLI timeouts #228)

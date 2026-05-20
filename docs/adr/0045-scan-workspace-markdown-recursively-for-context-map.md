@@ -9,7 +9,7 @@ tags: [context-map, processing, source-selection, historical]
 affects:
   - src/services/contextMap/service.ts
   - test/contextMap.service.test.ts
-  - docs/design-context-map.md
+  - docs/design/context-map.md
   - docs/spec-api-endpoints.md
   - docs/spec-backend-services.md
   - docs/spec-data-models.md
@@ -48,7 +48,7 @@ The scanner keeps source selection product-owned rather than user-configurable. 
 ## References
 
 - [ADR-0044: Add Context Map as governed workspace graph](0044-add-context-map-as-governed-workspace-graph.md)
-- [Context Map design](../design-context-map.md)
+- [Context Map design](../design/context-map.md)
 - [Backend services specification](../spec-backend-services.md)
 - [Data models specification](../spec-data-models.md)
 - [API endpoints specification](../spec-api-endpoints.md)

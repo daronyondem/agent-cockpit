@@ -1,6 +1,6 @@
 # Knowledge Base vNext Implementation Plan
 
-[← Back to index](SPEC.md)
+[← Back to index](../../SPEC.md)
 
 ---
 
@@ -8,7 +8,7 @@
 
 **Status:** Implemented locally through Phase 12  
 **Created:** 2026-05-05  
-**Decision record:** [ADR-0033](adr/0033-adopt-structure-guided-knowledge-base-digestion-and-retrieval.md)  
+**Decision record:** [ADR-0033](../../adr/0033-adopt-structure-guided-knowledge-base-digestion-and-retrieval.md)  
 **Related issues:** [#123](https://github.com/daronyondem/agent-cockpit/issues/123), [#137](https://github.com/daronyondem/agent-cockpit/issues/137), [#138](https://github.com/daronyondem/agent-cockpit/issues/138), [#244](https://github.com/daronyondem/agent-cockpit/issues/244)  
 **External reference:** [VectifyAI/PageIndex](https://github.com/VectifyAI/PageIndex)
 
@@ -20,7 +20,7 @@ The vNext goal is to add document structure, range-aware chunking, extraction co
 
 ## Progress
 
-- **2026-05-05:** Phase 0 design contract created: this plan, the `docs/SPEC.md` design-doc index entry, and [ADR-0033](adr/0033-adopt-structure-guided-knowledge-base-digestion-and-retrieval.md).
+- **2026-05-05:** Phase 0 design contract created: this plan, the `docs/SPEC.md` design-doc index entry, and [ADR-0033](../../adr/0033-adopt-structure-guided-knowledge-base-digestion-and-retrieval.md).
 - **2026-05-05:** Phase 1 schema foundation completed: `KB_DB_SCHEMA_VERSION` matches the documented current version, migrations now advance through explicit version steps, and DB migration coverage includes V1 to V2, V2 to V3, and current-version fixtures.
 - **2026-05-05:** Phase 2 completed: `kb_documents` and `kb_document_nodes` exist with typed DB accessors, replace-on-upsert semantics, migration coverage, raw-delete cascade coverage, deterministic page/slide/heading/fallback structure generation, and ingestion-time persistence after `text.md`/`meta.json` are written.
 - **2026-05-05:** Phase 3 completed: KB Search MCP exposes `list_documents`, `get_document_structure`, and `get_source_range`; source range reads are capped, slice converted Markdown by page/slide/heading/line units, return relative media references, and the KB prompt addendum teaches agents to inspect structure before reading large sources.
@@ -143,7 +143,7 @@ Freeze the architecture before behavior changes.
 
 ### Deliverables
 
-- `docs/design-kb-vnext-implementation-plan.md`
+- `docs/design/knowledge-base/vnext-implementation-plan.md`
 - ADR under `docs/adr/`
 - `docs/SPEC.md` design-doc index update
 

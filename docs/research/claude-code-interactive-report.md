@@ -6,7 +6,7 @@ Date: 2026-05-14
 
 `claude-code-interactive` is **viable only with an unacceptable or at least high-risk constraint**: Agent Cockpit would need to drive a hidden backend PTY and reconstruct structured events from Claude Code's private JSONL transcript files.
 
-This spike followed the constraints in `docs/research-claude-code-interactive.md`: it did not use Claude Remote Control, did not build a user-facing embedded terminal, and did not change production backend code.
+This spike followed the constraints in `docs/research/claude-code-interactive.md`: it did not use Claude Remote Control, did not build a user-facing embedded terminal, and did not change production backend code.
 
 Without a PTY, `claude` without explicit `-p` is not a true interactive transport when stdout/stdin are pipes. It behaves as an implicit headless invocation. With `--output-format stream-json --verbose`, it emits the same useful stream shape as `claude -p --output-format stream-json`, but transcript entries use `entrypoint: "sdk-cli"`, not `entrypoint: "cli"`. This path is therefore not the intended `Claude Code Interactive` path.
 

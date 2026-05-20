@@ -142,6 +142,11 @@ The project specification lives under `docs/` as a wiki-style collection of mark
 - When making changes to the codebase, always update the relevant spec file(s) to reflect the new state.
 - Include maximum detail - spec documents should be precise enough that a developer unfamiliar with the codebase can reimplement any feature from the spec alone.
 - The root `SPEC.md` is a thin redirect; all content lives in `docs/`.
+- Keep current canonical specs at the top level as `docs/spec-*.md`. Store
+  supporting design plans under `docs/design/`, empirical research and findings
+  under `docs/research/`, and obsolete compatibility/history notes under
+  `docs/archive/`. Update `docs/SPEC.md` and `docs/spec-coverage.md` when moving
+  or adding docs in these categories.
 
 # Architecture Decision Records (ADRs)
 
@@ -174,5 +179,8 @@ When in doubt, lean toward writing one - but keep the bar honest. Over-writing p
 - Filename pattern: `NNNN-kebab-title.md` (zero-padded sequential ID).
 - Status lifecycle: `Proposed` -> `Accepted` (on merge) -> optionally `Deprecated` or `Superseded` later.
 - Once `Accepted`, content is immutable. Only `status` and `superseded-by` may change. Reversing or revising = a new ADR that supersedes the old.
+- Link-only updates to Accepted ADRs are allowed when repository documentation
+  is reorganized and the linked target moves. Do not use link maintenance as an
+  excuse to change the recorded decision text.
 - Do **not** edit `docs/adr/README.md`. CI regenerates it from frontmatter on every PR touching `docs/adr/**`.
 - The lint job (`npm run adr:lint`) validates frontmatter, filename, status/superseded-by rules, required sections, and that every path in `affects:` exists. Run it before pushing if you want fast feedback.

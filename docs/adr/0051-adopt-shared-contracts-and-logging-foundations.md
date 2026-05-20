@@ -158,7 +158,7 @@ changes that touch the same behavior.
 
 - [API endpoints specification](../spec-api-endpoints.md)
 - [Backend services specification](../spec-backend-services.md)
-- [Context Map specification](../spec-context-map.md)
+- [Context Map specification](../archive/context-map-spec.md)
 - [Frontend behavior specification](../spec-frontend.md)
 - [Mobile PWA specification](../spec-mobile-pwa.md)
 - [Server initialization and security specification](../spec-server-security.md)

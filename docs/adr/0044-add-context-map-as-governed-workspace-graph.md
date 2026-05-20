@@ -33,7 +33,7 @@ affects:
   - test/chat.contextMap.test.ts
   - test/frontendRoutes.test.ts
   - test/streamStore.test.ts
-  - docs/design-context-map.md
+  - docs/design/context-map.md
   - docs/SPEC.md
   - docs/spec-data-models.md
   - docs/spec-api-endpoints.md
@@ -104,7 +104,7 @@ Configure Context Map with global processor defaults plus per-workspace override
 ## References
 
 - Issue #281 - Context Map: workspace entity and relationship memory
-- [Context Map scope](../design-context-map.md)
+- [Context Map scope](../design/context-map.md)
 - [SPEC index](../SPEC.md)
 - [Data model specification](../spec-data-models.md)
 - [API endpoint specification](../spec-api-endpoints.md)

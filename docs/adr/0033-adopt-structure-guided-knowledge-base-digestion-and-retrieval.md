@@ -11,8 +11,8 @@ tags:
   - ingestion
   - synthesis
 affects:
-  - docs/design-kb-vnext-implementation-plan.md
-  - docs/design-kb-ingestion-hybrid.md
+  - docs/design/knowledge-base/vnext-implementation-plan.md
+  - docs/design/knowledge-base/ingestion-hybrid.md
   - docs/spec-data-models.md
   - docs/spec-backend-services.md
   - docs/spec-api-endpoints.md
@@ -42,7 +42,7 @@ Agent Cockpit adopts a structure-guided Knowledge Base pipeline.
 
 The system keeps the current hybrid converter as the source of converted Markdown, media, and metadata. After conversion, KB vNext adds a document structure/range layer, a deterministic chunk planner, chunked digestion, optional gleaning, entry source lineage, glossary-expanded search, graph-neighborhood retrieval, synthesis evidence history, and visual pipeline/query traces.
 
-The implementation lands incrementally using [the KB vNext plan](../design-kb-vnext-implementation-plan.md) as the operational roadmap. Each phase must preserve existing raw upload, conversion, entry storage, vector/BM25 search, dreaming, and MCP behavior unless that phase explicitly changes the contract and updates the specs.
+The implementation lands incrementally using [the KB vNext plan](../design/knowledge-base/vnext-implementation-plan.md) as the operational roadmap. Each phase must preserve existing raw upload, conversion, entry storage, vector/BM25 search, dreaming, and MCP behavior unless that phase explicitly changes the contract and updates the specs.
 
 Agent Cockpit does not vendor PageIndex or add a Python/LiteLLM runtime dependency for this work. PageIndex is an architectural reference for structure/range retrieval, not a package dependency.
 
@@ -64,8 +64,8 @@ Agent Cockpit does not vendor PageIndex or add a Python/LiteLLM runtime dependen
 
 ## References
 
-- [KB vNext implementation plan](../design-kb-vnext-implementation-plan.md)
-- [Hybrid KB ingestion design](../design-kb-ingestion-hybrid.md)
+- [KB vNext implementation plan](../design/knowledge-base/vnext-implementation-plan.md)
+- [Hybrid KB ingestion design](../design/knowledge-base/ingestion-hybrid.md)
 - [Data model spec](../spec-data-models.md#knowledge-base-sqlite-schema)
 - [Backend services spec](../spec-backend-services.md#knowledge-base-services-srcservicesknowledgebase)
 - [API endpoints spec](../spec-api-endpoints.md)

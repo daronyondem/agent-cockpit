@@ -7,7 +7,7 @@ supersedes: []
 superseded-by: null
 tags: [backends, kiro, bedrock, adapter, historical]
 affects:
-  - docs/notes-kiro-bedrock-parity.md
+  - docs/research/kiro-bedrock-parity.md
   - src/services/backends/kiro.ts
   - src/services/knowledgeBase/ingestion/pageConversion.ts
   - test/kiroBackend.test.ts
@@ -20,7 +20,7 @@ affects:
 1. **Bedrock vs Anthropic-API limits.** Bedrock's deployment of Opus 4.7 is stricter than the Anthropic-hosted endpoint. It rejects RGBA PNGs at any size and rejects any image whose long edge exceeds 1568 px, where the Anthropic API accepts RGBA up to 2576 px.
 2. **CLI transport differences.** Claude Code uses newline-delimited JSON over stdio with explicit `result` events. Kiro uses ACP/JSON-RPC, which has its own quirks: `fs_read` of an image base64-inlines the bytes into the transcript (overflowing the prompt budget), `session/prompt` never emits `turn_end` (the response body's `stopReason` is the real signal), `session/set_model` is silently ignored on bad input (must race against a timeout), and JSON-RPC error responses' `data` field carries Bedrock's actual diagnostic but the original adapter dropped it.
 
-The total surface is seven concrete findings (catalogued in `docs/notes-kiro-bedrock-parity.md`). The architectural question this ADR answers is *where* the parity workarounds live — inside the adapter, or threaded through every caller.
+The total surface is seven concrete findings (catalogued in `docs/research/kiro-bedrock-parity.md`). The architectural question this ADR answers is *where* the parity workarounds live — inside the adapter, or threaded through every caller.
 
 ## Decision
 
@@ -63,7 +63,7 @@ A Jest suite (`test/kiroBackend.test.ts`) locks the parity workarounds in place:
 
 ## References
 
-- docs/notes-kiro-bedrock-parity.md — the living catalogue of all seven findings, with code refs, root causes, and PR history
+- docs/research/kiro-bedrock-parity.md — the living catalogue of all seven findings, with code refs, root causes, and PR history
 - PR #223 — `fix(kiro): attach image content blocks to ACP session/prompt` (findings 3.2, 3.7)
 - PR #224 — `fix(kiro): require token-boundary match for image basename attach` (finding 3.3)
 - PR #225 — `fix(kiro): re-encode RGBA/oversized images for Bedrock + surface ACP error data` (findings 3.1, 3.4)
