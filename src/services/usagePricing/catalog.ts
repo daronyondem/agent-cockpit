@@ -39,6 +39,9 @@ function validateEntry(value: unknown, index: number): UsagePricingEntry {
     verifiedAt: requireString(value.verifiedAt, `entries[${index}].verifiedAt`),
     effectiveDate: requireString(value.effectiveDate, `entries[${index}].effectiveDate`),
   };
+  if (value.pricingTier !== undefined) {
+    entry.pricingTier = requireString(value.pricingTier, `entries[${index}].pricingTier`);
+  }
 
   if (unit === 'tokens') {
     if (!isObject(value.ratesPerMillion)) {

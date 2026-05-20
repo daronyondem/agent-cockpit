@@ -2107,7 +2107,7 @@ function daysForRange(days, range){
   return days.filter(d => (d.date || '') >= cutoffStr);
 }
 
-/* Flatten `days` into one row per (date, backend, model). Sorted by
+/* Flatten `days` into one row per (date, backend, model, pricing tier). Sorted by
    date descending so the most recent activity leads. Drives the
    "Daily breakdown" table ported from V1 main.js:1217-1230. */
 function buildDailyRows(days){
@@ -2119,6 +2119,7 @@ function buildDailyRows(days){
         date: d.date || '',
         backend: r.backend,
         model: r.model,
+        pricingTier: r.pricingTier || '',
         usage: r.usage || {},
       });
     }
@@ -2130,9 +2131,10 @@ function aggregatePerModel(days){
   const map = new Map();
   for (const d of days || []) {
     for (const r of (d.records || [])) {
-      const key = `${r.backend}\u0001${r.model}`;
+      const pricingTier = r.pricingTier || '';
+      const key = `${r.backend}\u0001${r.model}\u0001${pricingTier}`;
       const slot = map.get(key) || {
-        backend: r.backend, model: r.model,
+        backend: r.backend, model: r.model, pricingTier,
         inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, estimatedCostUsd: 0,
       };
       const u = r.usage || {};
@@ -2196,6 +2198,8 @@ function cleanPricingOverride(entry){
     verifiedAt: String(entry.verifiedAt || '').trim() || date,
     effectiveDate: String(entry.effectiveDate || '').trim() || date,
   };
+  const pricingTier = String(entry.pricingTier || '').trim();
+  if (pricingTier) base.pricingTier = pricingTier;
   if (base.unit === 'credits') return { ...base, usdPerCredit: safeRate(entry.usdPerCredit) };
   const rates = entry.ratesPerMillion || {};
   const ratesPerMillion = {
@@ -2404,7 +2408,7 @@ function UsageTab(){
             <table className="tbl usage-summary-table">
               <thead>
                 <tr>
-                  <th>Backend</th><th>Model</th>
+                  <th>Backend</th><th>Model</th><th>Tier</th>
                   <th className="r">Input</th><th className="r">Output</th>
                   <th className="r">Cache R</th><th className="r">Cache W</th>
                   <th className="r">Cost</th><th className="r">Estimated Cost</th>
@@ -2412,9 +2416,10 @@ function UsageTab(){
               </thead>
               <tbody>
                 {summary.map(r => (
-                  <tr key={`${r.backend}/${r.model}`}>
+                  <tr key={`${r.backend}/${r.model}/${r.pricingTier || ''}`}>
                     <td>{r.backend}</td>
                     <td className="u-mono">{r.model}</td>
+                    <td className="u-mono">{r.pricingTier || '—'}</td>
                     <td className="r">{fmtNum(r.inputTokens)}</td>
                     <td className="r">{fmtNum(r.outputTokens)}</td>
                     <td className="r">{fmtNum(r.cacheReadTokens)}</td>
@@ -2440,7 +2445,7 @@ function UsageTab(){
             <table className="tbl usage-daily-table">
               <thead>
                 <tr>
-                  <th>Date</th><th>Backend</th><th>Model</th>
+                  <th>Date</th><th>Backend</th><th>Model</th><th>Tier</th>
                   <th className="r">Tokens</th><th className="r">Cost</th><th className="r">Estimated Cost</th>
                 </tr>
               </thead>
@@ -2449,10 +2454,11 @@ function UsageTab(){
                   const u = r.usage;
                   const tokens = (u.inputTokens || 0) + (u.outputTokens || 0);
                   return (
-                    <tr key={`${r.date}/${r.backend}/${r.model}/${i}`}>
+                    <tr key={`${r.date}/${r.backend}/${r.model}/${r.pricingTier || ''}/${i}`}>
                       <td className="u-mono">{r.date}</td>
                       <td>{r.backend}</td>
                       <td className="u-mono">{r.model}</td>
+                      <td className="u-mono">{r.pricingTier || '—'}</td>
                       <td className="r">{fmtNum(tokens)}</td>
                       <td className="r">{usageReportedCost(u) > 0 ? fmtCost(usageReportedCost(u)) : '—'}</td>
                       <td className="r">{fmtEstimatedCostCell(usageEstimatedCost(u))}</td>
@@ -2473,15 +2479,15 @@ function UsageTab(){
         </div>
         <div className="usage-table-scroll">
           <table className="tbl usage-pricing-table">
-            <thead>
-              <tr>
-                <th>ID</th><th>Provider</th><th>Model</th><th>Unit</th>
-                <th className="r">Input</th><th className="r">Cached</th><th className="r">Cache W</th><th className="r">Output</th><th className="r">Credit</th><th/>
-              </tr>
-            </thead>
-            <tbody>
+              <thead>
+                <tr>
+                  <th>ID</th><th>Provider</th><th>Model</th><th>Tier</th><th>Unit</th>
+                  <th className="r">Input</th><th className="r">Cached</th><th className="r">Cache W</th><th className="r">Output</th><th className="r">Credit</th><th/>
+                </tr>
+              </thead>
+              <tbody>
               {pricingDraft.length === 0 ? (
-                <tr><td colSpan={10} className="u-dim">No user overrides</td></tr>
+                <tr><td colSpan={11} className="u-dim">No user overrides</td></tr>
               ) : pricingDraft.map((row, index) => {
                 const rates = row.ratesPerMillion || {};
                 return (
@@ -2495,6 +2501,7 @@ function UsageTab(){
                       </select>
                     </td>
                     <td><input className="inp u-mono usage-price-model" value={row.modelPattern || ''} onChange={e => updatePricingDraft(index, { modelPattern: e.target.value })}/></td>
+                    <td><input className="inp u-mono usage-price-model" value={row.pricingTier || ''} placeholder="standard" onChange={e => updatePricingDraft(index, { pricingTier: e.target.value })}/></td>
                     <td>
                       <select className="sel usage-price-select" value={row.unit || 'tokens'} onChange={e => updatePricingDraft(index, { unit: e.target.value })}>
                         <option value="tokens">Tokens</option>

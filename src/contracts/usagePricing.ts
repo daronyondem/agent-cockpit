@@ -3,6 +3,7 @@ import { asRecord, contractError, requiredNonEmptyString } from './validation';
 export type UsagePricingProvider = 'openai' | 'anthropic' | 'kiro';
 export type UsagePricingUnit = 'tokens' | 'credits';
 export type UsageCostSource = 'reported' | 'estimated' | 'none';
+export type UsagePricingTier = string;
 
 export interface UsageTokenRatesPerMillion {
   input: number;
@@ -15,6 +16,8 @@ export interface UsagePricingEntry {
   id: string;
   provider: UsagePricingProvider;
   modelPattern: string;
+  /** Optional provider pricing tier, such as OpenAI priority processing. */
+  pricingTier?: UsagePricingTier;
   unit: UsagePricingUnit;
   sourceUrl: string;
   verifiedAt: string;
@@ -35,6 +38,7 @@ export interface UsageCostSnapshot {
   pricedAt: string;
   provider: UsagePricingProvider;
   model: string;
+  pricingTier?: UsagePricingTier;
   pricingEntryId: string;
   sourceUrl: string;
   verifiedAt: string;
@@ -82,6 +86,9 @@ function validateUsagePricingEntry(value: unknown, index: number): UsagePricingE
     verifiedAt: requiredNonEmptyString(record, 'verifiedAt', `usage pricing overrides entries[${index}].verifiedAt is required`),
     effectiveDate: requiredNonEmptyString(record, 'effectiveDate', `usage pricing overrides entries[${index}].effectiveDate is required`),
   };
+  if (record.pricingTier !== undefined) {
+    entry.pricingTier = requiredNonEmptyString(record, 'pricingTier', `usage pricing overrides entries[${index}].pricingTier must be a non-empty string`);
+  }
 
   if (unit === 'tokens') {
     const rates = asRecord(record.ratesPerMillion, `usage pricing overrides entries[${index}].ratesPerMillion must be an object`);

@@ -18,6 +18,7 @@ export interface Usage {
     pricedAt: string;
     provider: 'openai' | 'anthropic' | 'kiro';
     model: string;
+    pricingTier?: string;
     pricingEntryId: string;
     sourceUrl: string;
     verifiedAt: string;
@@ -34,6 +35,8 @@ export interface Usage {
   };
   /** Kiro credits consumed (fractional, Kiro-specific unit). */
   credits?: number;
+  /** Provider pricing tier for a raw usage event, such as OpenAI priority. Not meaningful on aggregate totals. */
+  pricingTier?: string;
   /** Percentage of the model's context window used (0–100). Snapshot, not cumulative. */
   contextUsagePercentage?: number;
 }
@@ -43,6 +46,8 @@ export interface Usage {
 export interface UsageLedgerRecord {
   backend: string;
   model: string;
+  /** Optional pricing tier for rows where provider pricing differs by service tier. */
+  pricingTier?: string;
   usage: Usage;
 }
 

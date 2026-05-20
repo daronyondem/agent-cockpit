@@ -145,6 +145,15 @@ export function buildCodexServiceTierArgs(serviceTier?: ServiceTier): string[] {
   return serviceTier === 'fast' ? [...CODEX_FAST_SERVICE_TIER_ARGS] : [];
 }
 
+function codexUsagePricingTier(serviceTier?: ServiceTier): string | undefined {
+  return serviceTier === 'fast' ? 'priority' : undefined;
+}
+
+function attachCodexUsagePricingTier(usage: Usage, serviceTier?: ServiceTier): Usage {
+  const pricingTier = codexUsagePricingTier(serviceTier);
+  return pricingTier ? { ...usage, pricingTier } : usage;
+}
+
 async function buildCodexConfigArgs(
   mcpServers: McpServerConfig[],
   runtime: CodexCliRuntime = resolveCodexCliRuntime(),
@@ -1798,7 +1807,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       subagentByThreadId: Map<string, string>;
     },
   ): AsyncGenerator<StreamEvent> {
-    const { model, effort, cliProfile } = options;
+    const { model, effort, cliProfile, serviceTier } = options;
     const runtime = resolveCodexCliRuntime(cliProfile);
 
     let ctx: Awaited<ReturnType<CodexAdapter['_getGoalThreadContext']>>;
@@ -2119,7 +2128,7 @@ export class CodexAdapter extends BaseBackendAdapter {
             entry.lastTotalTokens = totalTokens;
             yield {
               type: 'usage',
-              usage: deriveCodexUsage(tokenUsage),
+              usage: attachCodexUsagePricingTier(deriveCodexUsage(tokenUsage), serviceTier),
               ...(model ? { model } : {}),
             };
             break;
@@ -2493,7 +2502,7 @@ export class CodexAdapter extends BaseBackendAdapter {
             entry.lastTotalTokens = totalTokens;
             yield {
               type: 'usage',
-              usage: deriveCodexUsage(tokenUsage),
+              usage: attachCodexUsagePricingTier(deriveCodexUsage(tokenUsage), serviceTier),
               ...(model ? { model } : {}),
             };
             break;

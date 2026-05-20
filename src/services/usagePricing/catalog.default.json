@@ -18,6 +18,21 @@
       }
     },
     {
+      "id": "openai-gpt-5.5-priority",
+      "provider": "openai",
+      "modelPattern": "gpt-5.5",
+      "pricingTier": "priority",
+      "unit": "tokens",
+      "sourceUrl": "https://openai.com/api-priority-processing/",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 12.5,
+        "cachedInput": 1.25,
+        "output": 75
+      }
+    },
+    {
       "id": "openai-gpt-5.5-codex-standard",
       "provider": "openai",
       "modelPattern": "gpt-5.5-codex",
@@ -29,6 +44,21 @@
         "input": 5,
         "cachedInput": 0.5,
         "output": 30
+      }
+    },
+    {
+      "id": "openai-gpt-5.5-codex-priority",
+      "provider": "openai",
+      "modelPattern": "gpt-5.5-codex",
+      "pricingTier": "priority",
+      "unit": "tokens",
+      "sourceUrl": "https://openai.com/api-priority-processing/",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 12.5,
+        "cachedInput": 1.25,
+        "output": 75
       }
     },
     {
@@ -46,6 +76,21 @@
       }
     },
     {
+      "id": "openai-gpt-5.4-mini-priority",
+      "provider": "openai",
+      "modelPattern": "gpt-5.4-mini",
+      "pricingTier": "priority",
+      "unit": "tokens",
+      "sourceUrl": "https://openai.com/api-priority-processing/",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 1.5,
+        "cachedInput": 0.15,
+        "output": 9
+      }
+    },
+    {
       "id": "openai-gpt-5.4-standard",
       "provider": "openai",
       "modelPattern": "gpt-5.4*",
@@ -57,6 +102,21 @@
         "input": 2.5,
         "cachedInput": 0.25,
         "output": 15
+      }
+    },
+    {
+      "id": "openai-gpt-5.4-priority",
+      "provider": "openai",
+      "modelPattern": "gpt-5.4*",
+      "pricingTier": "priority",
+      "unit": "tokens",
+      "sourceUrl": "https://openai.com/api-priority-processing/",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 5,
+        "cachedInput": 0.5,
+        "output": 30
       }
     },
     {
