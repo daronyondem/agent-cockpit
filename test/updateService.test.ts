@@ -898,6 +898,7 @@ describe('UpdateService', () => {
 
     test('applies a production GitHub Release update and writes rollback restart script', async () => {
       mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('darwin');
       const install = makeProductionInstall('agent-cockpit-prod-update-');
       const release = makeReleaseFixture('1.1.0');
       const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
@@ -996,6 +997,7 @@ describe('UpdateService', () => {
           stdio: 'ignore',
         }));
       } finally {
+        restorePlatform();
         fs.rmSync(install.installDir, { recursive: true, force: true });
       }
     });
@@ -1409,6 +1411,7 @@ describe('UpdateService', () => {
 
     test('rejects a production release with a checksum mismatch without switching current', async () => {
       mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('darwin');
       const install = makeProductionInstall('agent-cockpit-prod-bad-sha-');
       const release = makeReleaseFixture('1.1.0');
       const badChecksums = `${release.manifestSha}  release-manifest.json\n${'0'.repeat(64)}  ${release.tarballName}\n`;
@@ -1447,6 +1450,7 @@ describe('UpdateService', () => {
         expect(writeState).not.toHaveBeenCalled();
         expect(mockSpawnFn).not.toHaveBeenCalled();
       } finally {
+        restorePlatform();
         fs.rmSync(install.installDir, { recursive: true, force: true });
       }
     });
