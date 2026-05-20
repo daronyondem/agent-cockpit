@@ -264,6 +264,38 @@ describe('frontend routes', () => {
     expect(`${packageSrc}\n${packageLockSrc}`).not.toMatch(/react-virtuoso|@tanstack\/react-virtual|react-window/);
   });
 
+  test('desktop chat download button offers all-session and current-session exports', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+
+    expect(apiSrc).toContain('conversationDownloadUrl: (convId) => chatUrl(');
+    expect(apiSrc).toContain("'/download'");
+    expect(apiSrc).toContain('sessionDownloadUrl: (convId, sessionNumber) => chatUrl(');
+    expect(shellSrc).toContain('dialog.choice({');
+    expect(shellSrc).toContain("label: 'All sessions'");
+    expect(shellSrc).toContain("label: 'Current session'");
+    expect(shellSrc).toContain('AgentApi.conv.sessionDownloadUrl(convId, sessionNumber)');
+    expect(shellSrc).toContain('AgentApi.conv.conversationDownloadUrl(convId)');
+  });
+
+  test('mobile PWA Markdown action offers all-session and current-session exports', () => {
+    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+
+    expect(apiSrc).toContain('conversationMarkdownURL(conversationID: string)');
+    expect(apiSrc).toContain('sessionMarkdownURL(conversationID: string, sessionNumber: number)');
+    expect(appSrc).toContain('const [markdownShareVisible, setMarkdownShareVisible] = useState(false)');
+    expect(appSrc).toContain('function openMarkdownSharePicker()');
+    expect(appSrc).toContain('function shareMarkdown(scope: MarkdownShareScope)');
+    expect(appSrc).toContain('function MarkdownShareModal');
+    expect(appSrc).toContain('All sessions');
+    expect(appSrc).toContain('Current session');
+    expect(appSrc).toContain('clientRef.current.conversationMarkdownURL(conversation.id)');
+    expect(appSrc).toContain('clientRef.current.sessionMarkdownURL(conversation.id, conversation.sessionNumber || 1)');
+    expect(cssSrc).toContain('.action-copy');
+  });
+
   test('mobile PWA exposes backend-neutral goal controls through the composer shell', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
     const apiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');

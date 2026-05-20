@@ -1736,8 +1736,24 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
     if (files.length) StreamStore.addAttachments(convId, files);
   }
 
-  async function handleDownload(){
-    window.open(AgentApi.chatUrl('conversations/' + encodeURIComponent(convId) + '/download'), '_blank', 'noopener');
+  async function handleDownload(anchor){
+    const sessionNumber = Number(conv.sessionNumber || 1);
+    const scope = await dialog.choice({
+      anchor,
+      title: 'Download conversation',
+      body: 'Choose which transcript to export as Markdown.',
+      confirmLabel: 'Download',
+      choices: [
+        { id: 'all', label: 'All sessions', hint: 'Every session in this conversation.' },
+        { id: 'current', label: 'Current session', hint: `Session ${sessionNumber}.` },
+      ],
+      defaultChoice: 'all',
+    });
+    if (!scope) return;
+    const url = scope === 'current'
+      ? AgentApi.conv.sessionDownloadUrl(convId, sessionNumber)
+      : AgentApi.conv.conversationDownloadUrl(convId);
+    window.open(url, '_blank', 'noopener');
   }
 
   async function handleReset(anchor){
@@ -1877,7 +1893,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
         </div>
         <div className="right">
           {usage ? <ContextChip backendId={topbarBackendId} cliProfileId={topbarCliProfileId} usage={usage}/> : null}
-          <button className="btn ghost" onClick={handleDownload} title="Download as markdown">↓ Download</button>
+          <button className="btn ghost" onClick={(e) => handleDownload(e.currentTarget)} title="Download as markdown">↓ Download</button>
           <button className="btn ghost" onClick={(e) => handleReset(e.currentTarget)} disabled={streaming || sending || resetting} title="Reset session">{resetting ? '↺ Resetting…' : '↺ Reset'}</button>
           <button className="btn ghost" onClick={() => setSessionsOpen(true)} title="Session history">{Ico.clock(12)} Sessions</button>
           {conv.archived ? (
