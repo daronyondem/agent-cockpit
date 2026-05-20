@@ -622,6 +622,104 @@ describe('CodexAdapter', () => {
     jest.dontMock('child_process');
   });
 
+  test('sendMessage forwards current-thread goal updates without taking over turn ownership', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+
+    jest.isolateModules(() => {
+      installCodexAppServerMock((req, emit) => {
+        const goal = {
+          threadId: 'thread-1',
+          objective: 'self-started goal',
+          status: 'active',
+          tokenBudget: null,
+          tokensUsed: 0,
+          timeUsedSeconds: 0,
+          createdAt: 1,
+          updatedAt: 2,
+        };
+        if (req.method === 'initialize') {
+          setImmediate(() => emit({ id: req.id, result: {} }));
+        } else if (req.method === 'thread/start') {
+          setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-1' } } }));
+        } else if (req.method === 'turn/start') {
+          setImmediate(() => {
+            emit({ id: req.id, result: { turn: { id: 'turn-current' } } });
+            emit({
+              method: 'thread/goal/updated',
+              params: {
+                threadId: 'other-thread',
+                turnId: 'turn-other-goal',
+                goal: { ...goal, threadId: 'other-thread', objective: 'stale other goal' },
+              },
+            });
+            emit({
+              method: 'thread/goal/updated',
+              params: { threadId: 'thread-1', turnId: 'turn-goal', goal },
+            });
+            emit({
+              method: 'thread/goal/cleared',
+              params: { threadId: 'other-thread' },
+            });
+            emit({
+              method: 'thread/goal/cleared',
+              params: { threadId: 'thread-1' },
+            });
+            emit({
+              method: 'item/agentMessage/delta',
+              params: { threadId: 'thread-1', turnId: 'turn-current', itemId: 'msg-current', delta: 'current text' },
+            });
+            emit({
+              method: 'turn/completed',
+              params: { threadId: 'thread-1', turn: { id: 'turn-current' } },
+            });
+          });
+        }
+      });
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-session-goal-side-channel',
+        conversationId: 'test-conv-goal-side-channel',
+        isNewSession: true,
+        workingDir: '/tmp',
+        systemPrompt: '',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(events.filter((event) => event.type === 'goal_updated')).toEqual([
+      expect.objectContaining({
+        goal: expect.objectContaining({
+          backend: 'codex',
+          threadId: 'thread-1',
+          objective: 'self-started goal',
+          status: 'active',
+        }),
+      }),
+    ]);
+    expect(events.filter((event) => event.type === 'goal_cleared')).toEqual([
+      { type: 'goal_cleared', threadId: 'thread-1' },
+    ]);
+    expect(events.some((event) => (
+      event.type === 'goal_updated' && event.goal.objective === 'stale other goal'
+    ))).toBe(false);
+    expect(events.some((event) => (
+      event.type === 'backend_runtime' && event.activeTurnId === 'turn-goal'
+    ))).toBe(false);
+    expect(events.filter((event) => event.type === 'text').map((event) => event.content)).toEqual(['current text']);
+    expect(events).toEqual(expect.arrayContaining([{ type: 'done' }]));
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
   test('setGoalObjective ignores stale prior goal output before the owned goal turn', async () => {
     let streamRef!: AsyncGenerator<any>;
     let adapterRef!: { shutdown: () => void };

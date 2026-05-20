@@ -2378,6 +2378,20 @@ export class CodexAdapter extends BaseBackendAdapter {
 
         // ── Notifications ───────────────────────────────────────────
         switch (method) {
+          case 'thread/goal/updated': {
+            if (extractCodexThreadId(params) !== state.threadId) break;
+            const goal = (params as { goal?: CodexThreadGoal }).goal;
+            const normalizedGoal = normalizeCodexGoal(goal);
+            if (normalizedGoal) yield { type: 'goal_updated', goal: normalizedGoal };
+            break;
+          }
+
+          case 'thread/goal/cleared': {
+            if (extractCodexThreadId(params) !== state.threadId) break;
+            yield { type: 'goal_cleared', threadId: (params as { threadId?: string }).threadId || state.threadId };
+            break;
+          }
+
           case 'turn/started': {
             const turnId = extractCodexTurnId(params);
             if (turnId && turnId === responseTurnId && extractCodexThreadId(params) === state.threadId) {
