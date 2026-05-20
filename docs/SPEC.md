@@ -51,6 +51,7 @@ Engineering notes that capture empirical findings — not proposals or specs, bu
 | [research/claude-code-interactive.md](research/claude-code-interactive.md) | Research prompt and test matrix for evaluating Claude Code Interactive viability without Remote Control or a user-facing terminal. |
 | [research/claude-code-interactive-report.md](research/claude-code-interactive-report.md) | Findings from the Claude Code Interactive spike: hidden PTY plus transcript watching is viable but private-shape/version-sensitive. |
 | [research/kiro-bedrock-parity.md](research/kiro-bedrock-parity.md) | Differences observed between Kiro (AWS Bedrock-routed) and Claude Code (direct Anthropic API) for Opus 4.7 — image format/dimension caps, ACP stream termination, JSON-RPC error extraction, etc. |
+| [research/linux-release-implementation-review-report.md](research/linux-release-implementation-review-report.md) | Review-cycle report for Linux production release support, including phase findings, implemented items, verification commands, and residual test notes. |
 | [research/usage-cost-estimation-review-report.md](research/usage-cost-estimation-review-report.md) | Review-cycle report for Usage Cost / Estimated Cost implementation, pricing-source verification, fixes, verification commands, and residual risks. |
 | [parity-decisions.md](parity-decisions.md) | Intentional parity decisions between the desktop web UI and the mobile PWA, especially features that are deliberately web-only. |
 

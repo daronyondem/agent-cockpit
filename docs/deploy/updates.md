@@ -14,10 +14,12 @@ restart through PM2.
 Release artifacts include:
 
 - macOS tarball;
+- Linux tarball manifest entry using the same tarball bytes;
 - Windows ZIP;
 - release manifest;
 - SHA256 sums;
 - macOS installer;
+- Linux installer;
 - Windows installer.
 
 ## Dev Installs

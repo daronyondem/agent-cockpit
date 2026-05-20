@@ -35,6 +35,8 @@ const INSTALLER_ASSET_PATH = 'scripts/install-macos.sh';
 const INSTALLER_ASSET_NAME = 'install-macos.sh';
 const WINDOWS_INSTALLER_ASSET_PATH = 'scripts/install-windows.ps1';
 const WINDOWS_INSTALLER_ASSET_NAME = 'install-windows.ps1';
+const LINUX_INSTALLER_ASSET_PATH = 'scripts/install-linux.sh';
+const LINUX_INSTALLER_ASSET_NAME = 'install-linux.sh';
 
 const EXCLUDED_SEGMENTS = new Set([
   '.git',
@@ -268,6 +270,7 @@ function makeReleasePackage(options) {
   const zipName = `${packageRootName}.zip`;
   const installerAssetPath = path.join(outDir, INSTALLER_ASSET_NAME);
   const windowsInstallerAssetPath = path.join(outDir, WINDOWS_INSTALLER_ASSET_NAME);
+  const linuxInstallerAssetPath = path.join(outDir, LINUX_INSTALLER_ASSET_NAME);
   const manifestName = 'release-manifest.json';
   const checksumsName = 'SHA256SUMS';
   const tarballPath = path.join(outDir, tarballName);
@@ -319,6 +322,14 @@ function makeReleasePackage(options) {
         sha256: tarballSha256,
       },
       {
+        name: tarballName,
+        role: 'app-tarball',
+        platform: 'linux',
+        format: 'tar.gz',
+        size: tarballStat.size,
+        sha256: tarballSha256,
+      },
+      {
         name: zipName,
         role: 'app-zip',
         platform: 'win32',
@@ -349,6 +360,18 @@ function makeReleasePackage(options) {
         platform: 'win32',
         size: windowsInstallerStat.size,
         sha256: sha256File(windowsInstallerAssetPath),
+      });
+    }
+    if (fs.existsSync(path.join(root, LINUX_INSTALLER_ASSET_PATH))) {
+      fs.copyFileSync(path.join(root, LINUX_INSTALLER_ASSET_PATH), linuxInstallerAssetPath);
+      fs.chmodSync(linuxInstallerAssetPath, 0o755);
+      const linuxInstallerStat = fs.statSync(linuxInstallerAssetPath);
+      artifacts.push({
+        name: LINUX_INSTALLER_ASSET_NAME,
+        role: 'linux-installer',
+        platform: 'linux',
+        size: linuxInstallerStat.size,
+        sha256: sha256File(linuxInstallerAssetPath),
       });
     }
 
@@ -383,6 +406,9 @@ function makeReleasePackage(options) {
     }
     if (fs.existsSync(windowsInstallerAssetPath)) {
       checksumLines.push(`${sha256File(windowsInstallerAssetPath)}  ${WINDOWS_INSTALLER_ASSET_NAME}`);
+    }
+    if (fs.existsSync(linuxInstallerAssetPath)) {
+      checksumLines.push(`${sha256File(linuxInstallerAssetPath)}  ${LINUX_INSTALLER_ASSET_NAME}`);
     }
     fs.writeFileSync(checksumsPath, `${checksumLines.join('\n')}\n`);
 

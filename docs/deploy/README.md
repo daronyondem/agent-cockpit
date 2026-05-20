@@ -6,6 +6,7 @@ that server, write runtime config, start PM2, and open first-run owner setup.
 ## Install
 
 - [macOS install](macos.md)
+- [Linux install](linux.md)
 - [Windows install](windows.md)
 - [Development setup](../reference/development.md)
 

@@ -41,6 +41,9 @@ tool is unavailable.
 - Windows fixes must be explicitly Windows-specific and platform-gated. Run
   macOS regression coverage before release when installer/updater/welcome
   behavior changes.
+- Linux production release support targets Ubuntu 24.04 LTS x64/glibc first.
+  Keep Alpine/musl, NixOS, WSL, Linux arm64, and 32-bit Linux unsupported unless
+  a later tested decision changes the support matrix.
 
 ## macOS Install Path
 

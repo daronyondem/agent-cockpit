@@ -55,7 +55,7 @@ locally.
 ### Self-Hosted, But Not From Scratch
 
 Be honest that Agent Cockpit is not a hosted SaaS. At the same time, production
-installers on macOS and Windows own much of the server setup: private runtime
+installers on macOS, Linux, and Windows own much of the server setup: private runtime
 fallbacks, PM2 startup, release verification, self-update, and first-run owner
 setup.
 
@@ -79,7 +79,7 @@ Use this order when public copy needs to be brief:
 2. Conversations and context stay on your machine.
 3. Switch providers without losing accumulated workspace understanding.
 4. Works today with Claude Code, Codex, and Kiro.
-5. Production installers manage the local server on macOS and Windows.
+5. Production installers manage the local server on macOS, Linux, and Windows.
 
 ## Proof Points
 

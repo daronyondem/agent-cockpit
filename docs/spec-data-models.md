@@ -227,7 +227,7 @@ when logon startup is registered, or `{ "kind": "manual", ... }` when the user
 supplied `-NoAutoStart`. Older manifests omit it and readers normalize that as
 `null`.
 
-`nodeRuntime` is `null` for older/inferred manifests. New macOS and Windows
+`nodeRuntime` is `null` for older/inferred manifests. New macOS, Linux, and Windows
 installer manifests record whether Agent Cockpit is using a host-managed
 `system` Node runtime or an installer-managed `private` runtime under the install root.
 `version` is the Node.js version without a leading `v`; `npmVersion` is the npm
@@ -279,6 +279,14 @@ Current schema:
       "sha256": "<64 lowercase hex chars>"
     },
     {
+      "name": "agent-cockpit-v1.0.0.tar.gz",
+      "role": "app-tarball",
+      "platform": "linux",
+      "format": "tar.gz",
+      "size": 123456,
+      "sha256": "<64 lowercase hex chars>"
+    },
+    {
       "name": "agent-cockpit-v1.0.0.zip",
       "role": "app-zip",
       "platform": "win32",
@@ -290,6 +298,13 @@ Current schema:
       "name": "install-macos.sh",
       "role": "macos-installer",
       "platform": "darwin",
+      "size": 12345,
+      "sha256": "<64 lowercase hex chars>"
+    },
+    {
+      "name": "install-linux.sh",
+      "role": "linux-installer",
+      "platform": "linux",
       "size": 12345,
       "sha256": "<64 lowercase hex chars>"
     },
@@ -311,14 +326,16 @@ Current schema:
 }
 ```
 
-`artifacts[]` includes the macOS app tarball, Windows app ZIP, and external
-installer assets uploaded beside the app archives. `files[]` contains every
-regular file copied into the app archives, with paths relative to the package root.
+`artifacts[]` includes macOS and Linux app tarball entries, the Windows app ZIP,
+and external installer assets uploaded beside the app archives. The macOS and
+Linux tarball entries currently refer to the same physical tarball bytes because
+the packaged source and built web/mobile assets are platform-neutral. `files[]`
+contains every regular file copied into the app archives, with paths relative to the package root.
 It excludes mutable/local-only state such as `node_modules/`, `data/`, `.env`,
 `ecosystem.config.js`, `coverage/`, `plans/`, `plan.md`, release `dist/` output,
 and generated build staging directories. `SHA256SUMS` currently contains
-checksums for the tarball, ZIP, this external manifest, `install-macos.sh`, and
-`install-windows.ps1`.
+checksums for the tarball, ZIP, this external manifest, `install-macos.sh`,
+`install-linux.sh`, and `install-windows.ps1`.
 `requiredRuntime.node` is derived from root `package.json` `engines.node`.
 Current packaging extracts simple lower-bound engines such as `>=22` into
 `minimumMajor`; production self-update uses that value to decide whether a
