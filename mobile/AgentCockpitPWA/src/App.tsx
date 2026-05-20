@@ -71,6 +71,7 @@ const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
 
 type Screen = 'list' | 'chat';
 type SessionViewerState = { session: SessionHistoryItem; messages: Message[] };
+type MarkdownShareScope = 'all' | 'current';
 type GoalCapabilityMetadata = NonNullable<NonNullable<BackendMetadata['capabilities']>['goals']>;
 type GoalCapability = {
   set: boolean;
@@ -200,6 +201,7 @@ export default function App() {
   const [newTitle, setNewTitle] = useState('');
   const [newWorkingDir, setNewWorkingDir] = useState('');
   const [actionsVisible, setActionsVisible] = useState(false);
+  const [markdownShareVisible, setMarkdownShareVisible] = useState(false);
   const [renameTitle, setRenameTitle] = useState('');
   const [settingsVisible, setSettingsVisible] = useState(false);
 
@@ -1538,10 +1540,20 @@ export default function App() {
     }
   }
 
-  function shareActiveConversation() {
-    if (activeConversation) {
-      window.open(clientRef.current.conversationMarkdownURL(activeConversation.id), '_blank');
-    }
+  function openMarkdownSharePicker() {
+    if (!activeConversation) return;
+    setActionsVisible(false);
+    setMarkdownShareVisible(true);
+  }
+
+  function shareMarkdown(scope: MarkdownShareScope) {
+    const conversation = activeConversation;
+    if (!conversation) return;
+    const url = scope === 'current'
+      ? clientRef.current.sessionMarkdownURL(conversation.id, conversation.sessionNumber || 1)
+      : clientRef.current.conversationMarkdownURL(conversation.id);
+    setMarkdownShareVisible(false);
+    window.open(url, '_blank');
   }
 
   async function toggleMessagePin(messageID: string, pinned: boolean) {
@@ -1994,10 +2006,18 @@ export default function App() {
           onRename={() => void renameActiveConversation()}
           onArchiveRestore={() => void archiveOrRestoreActiveConversation()}
           onDelete={() => void deleteActiveConversation()}
-          onShare={shareActiveConversation}
+          onShare={openMarkdownSharePicker}
           onSessions={() => void openSessions()}
           onFiles={() => void openFiles()}
           onReset={() => void resetActiveSession()}
+        />
+      ) : null}
+
+      {markdownShareVisible ? (
+        <MarkdownShareModal
+          conversation={activeConversation}
+          onClose={() => setMarkdownShareVisible(false)}
+          onShare={shareMarkdown}
         />
       ) : null}
 
@@ -3478,6 +3498,41 @@ function ActionsModal(props: {
         <button className="action danger" type="button" disabled={props.isStreaming} onClick={props.onDelete}>
           <span className="ic"><TrashIcon /></span>
           <span>Delete</span>
+          <ChevronRightIcon />
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function MarkdownShareModal(props: {
+  conversation: Conversation | null;
+  onClose: () => void;
+  onShare: (scope: MarkdownShareScope) => void;
+}) {
+  const sessionNumber = props.conversation?.sessionNumber || 1;
+  return (
+    <Modal
+      title="Share Markdown"
+      subtitle={`Session ${sessionNumber} is current`}
+      className="markdown-share-modal"
+      onClose={props.onClose}
+    >
+      <div className="actions">
+        <button className="action" type="button" onClick={() => props.onShare('all')}>
+          <span className="ic"><ExternalIcon /></span>
+          <span className="action-copy">
+            <strong>All sessions</strong>
+            <small>Every session in this conversation</small>
+          </span>
+          <ChevronRightIcon />
+        </button>
+        <button className="action" type="button" onClick={() => props.onShare('current')}>
+          <span className="ic"><SessionsIcon /></span>
+          <span className="action-copy">
+            <strong>Current session</strong>
+            <small>Session {sessionNumber}</small>
+          </span>
           <ChevronRightIcon />
         </button>
       </div>

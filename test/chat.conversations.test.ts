@@ -239,6 +239,28 @@ describe('GET /conversations/:id/download', () => {
   });
 });
 
+// ── GET /conversations/:id/sessions/:num/download ──────────────────────────
+
+describe('GET /conversations/:id/sessions/:num/download', () => {
+  test('downloads a single session as markdown with correct headers', async () => {
+    const conv = await env.chatService.createConversation('Current Session Download');
+    await env.chatService.addMessage(conv.id, 'user', 'Current only', 'claude-code');
+
+    const res = await env.request('GET', `/api/chat/conversations/${conv.id}/sessions/${conv.sessionNumber}/download`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-type']).toContain('text/markdown');
+    expect(res.headers['content-disposition']).toContain('attachment');
+    expect(res.headers['content-disposition']).toContain('session-1.md');
+    expect(res.body).toContain('Current only');
+  });
+
+  test('returns 404 for non-existent session', async () => {
+    const conv = await env.chatService.createConversation('Missing Session Download');
+    const res = await env.request('GET', `/api/chat/conversations/${conv.id}/sessions/99/download`);
+    expect(res.status).toBe(404);
+  });
+});
+
 // ── GET /settings ─────────────────────────────────────────────────────────
 
 describe('GET /settings', () => {

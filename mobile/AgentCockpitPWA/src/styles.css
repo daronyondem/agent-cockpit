@@ -2589,6 +2589,25 @@ code {
   width: 28px;
 }
 
+.action-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.action-copy strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.action-copy small {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
 .action .chev {
   color: var(--text-3);
 }

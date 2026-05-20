@@ -981,6 +981,9 @@
       );
       return await res.json();
     },
+    conversationDownloadUrl: (convId) => chatUrl(
+      'conversations/' + encodeURIComponent(convId) + '/download'
+    ),
     /* Session history — the Sessions modal in the chat topbar. `getSessions`
        returns a flat list of session metadata; `getSessionMessages` hydrates
        a single past session's messages on demand; `sessionDownloadUrl` is a
