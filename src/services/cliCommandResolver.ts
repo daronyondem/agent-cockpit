@@ -59,9 +59,13 @@ export function windowsCliCommandCandidates(
   if (process.platform !== 'win32') return [{ command, displayCommand: command }];
   const defaultCommand = command.replace(/[.](?:cmd|exe)$/i, '');
   const candidates: CliCommandResolution[] = [];
-  for (const prefix of windowsCliPrefixes(env, extraPrefixes)) {
+  const prefixes = windowsCliPrefixes(env, extraPrefixes);
+  for (const prefix of prefixes) {
     const packageCandidate = windowsPackageCandidate(vendor, prefix, env);
     if (packageCandidate && candidateExists(packageCandidate, env)) candidates.push(packageCandidate);
+  }
+  candidates.push(...windowsPathPackageCandidates(vendor, env));
+  for (const prefix of prefixes) {
     const exe = joinForBase(prefix, `${defaultCommand}.exe`);
     if (fs.existsSync(exe)) {
       candidates.push({
@@ -145,6 +149,15 @@ function windowsPackageCandidate(vendor: CliVendor, prefix: string, env: NodeJS.
   return { command: target, displayCommand: target };
 }
 
+function windowsPathPackageCandidates(vendor: CliVendor, env: NodeJS.ProcessEnv): CliCommandResolution[] {
+  const candidates: CliCommandResolution[] = [];
+  for (const prefix of windowsPathDirs(env)) {
+    const packageCandidate = windowsPackageCandidate(vendor, prefix, env);
+    if (packageCandidate && candidateExists(packageCandidate, env)) candidates.push(packageCandidate);
+  }
+  return candidates;
+}
+
 function candidateExists(candidate: CliCommandResolution, env: NodeJS.ProcessEnv): boolean {
   if (candidate.argsPrefix && candidate.argsPrefix.length > 0) {
     return commandExists(candidate.command, env) && fs.existsSync(candidate.argsPrefix[0]);
@@ -213,13 +226,15 @@ function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {
   if (command.includes('/') || command.includes('\\')) {
     return fs.existsSync(command);
   }
-  const pathValue = env.PATH || env.Path || '';
-  const dirs = pathValue.split(';').filter(Boolean);
-  for (const dir of dirs) {
-    const cleanDir = dir.replace(/^"+|"+$/g, '');
-    if (fs.existsSync(joinForBase(cleanDir, command))) return true;
+  for (const dir of windowsPathDirs(env)) {
+    if (fs.existsSync(joinForBase(dir, command))) return true;
   }
   return false;
+}
+
+function windowsPathDirs(env: NodeJS.ProcessEnv): string[] {
+  const pathValue = env.PATH || env.Path || '';
+  return uniqueDirs(pathValue.split(';').map(dir => dir.trim().replace(/^"+|"+$/g, '')).filter(Boolean));
 }
 
 function dedupeCandidates(values: CliCommandResolution[]): CliCommandResolution[] {

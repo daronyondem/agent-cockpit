@@ -311,6 +311,37 @@ describe('ClaudeCodeAdapter', () => {
     }
   });
 
+  test('resolveClaudeCliRuntime prefers a PATH npm package entrypoint over the cmd shim', () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-runtime-path-package-win-'));
+    const userBin = path.join(root, 'bin');
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
+      process.env.PATH = userBin;
+      const claudeExe = path.join(userBin, 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe');
+      fs.mkdirSync(path.dirname(claudeExe), { recursive: true });
+      fs.writeFileSync(path.join(userBin, 'claude.cmd'), '');
+      fs.writeFileSync(claudeExe, '');
+
+      const runtime = resolveClaudeCliRuntime();
+
+      expect(runtime.command).toBe(claudeExe);
+      expect(runtime.argsPrefix).toBeUndefined();
+      expect(runtime.windowsCmdShim).toBeUndefined();
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
+      process.env.PATH = originalPath;
+      fs.rmSync(root, { recursive: true, force: true });
+      restorePlatform();
+    }
+  });
+
   test('resolveClaudeCliRuntime rejects non-Claude profiles', () => {
     expect(() => resolveClaudeCliRuntime({
       id: 'profile-codex',
@@ -1121,6 +1152,64 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     expect(capturedArgs).toBeDefined();
     expect(capturedArgs).not.toContain('--append-system-prompt');
     expect(capturedArgs).toContain('--resume');
+  });
+
+  test('retries missing Claude resume targets as new sessions', async () => {
+    const capturedArgs: string[][] = [];
+    let streamRef: AsyncGenerator<any>;
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: (_cmd: string, args: string[]) => {
+          capturedArgs.push(args);
+          const callIndex = capturedArgs.length;
+          const { EventEmitter } = require('events');
+          const proc = new EventEmitter();
+          proc.stdout = new EventEmitter();
+          proc.stderr = new EventEmitter();
+          proc.stdin = { write: () => {}, destroyed: false };
+          proc.kill = () => {};
+          setTimeout(() => {
+            if (callIndex === 1) {
+              proc.stderr.emit('data', Buffer.from('No conversation found with session ID: test-resume-missing\n'));
+              proc.emit('close', 1, null);
+              return;
+            }
+            proc.stdout.emit('data', Buffer.from(JSON.stringify({
+              type: 'assistant',
+              message: { content: [{ type: 'text', text: 'recovered' }] },
+            }) + '\n'));
+            proc.emit('close', 0, null);
+          }, 10);
+          return proc;
+        },
+        execFile: () => {},
+      }));
+      const { ClaudeCodeAdapter: IsolatedAdapter } = require('../src/services/backends/claudeCode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      const { stream } = adapter.sendMessage('hello', {
+        sessionId: 'test-resume-missing',
+        isNewSession: false,
+        workingDir: '/tmp',
+        systemPrompt: 'You are a helpful assistant',
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef!) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(capturedArgs).toHaveLength(2);
+    expect(capturedArgs[0]).toContain('--resume');
+    expect(capturedArgs[1]).toContain('--session-id');
+    expect(capturedArgs[1]).not.toContain('--resume');
+    expect(events.some(e => e.type === 'error')).toBe(false);
+    expect(events).toEqual(expect.arrayContaining([
+      { type: 'text', content: 'recovered' },
+    ]));
+    expect(events[events.length - 1].type).toBe('done');
   });
 
   test('abort yields error and done events', async () => {

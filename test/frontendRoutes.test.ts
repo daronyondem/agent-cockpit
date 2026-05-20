@@ -153,6 +153,8 @@ describe('frontend routes', () => {
     expect(shellSrc).not.toContain(['cloud', 'flared'].join(''));
     expect(shellSrc).toContain("onOpenSettings('security')");
     expect(shellSrc).toContain("onOpenSettings('cli')");
+    expect(shellSrc).toContain("title: 'CLI profile required'");
+    expect(shellSrc).toContain("confirmLabel: 'Open CLI Profiles'");
     expect(shellSrc).toContain('Install only the backend CLIs you plan to use.');
     expect(shellSrc).toContain('item.installActions');
     expect(shellSrc).toContain('welcome-install-actions');

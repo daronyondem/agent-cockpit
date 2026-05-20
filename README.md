@@ -236,7 +236,9 @@ npm start
 ```
 
 Open `http://localhost:3334` in your browser and create the first local owner
-account. For persistent local server management, use PM2 as documented in
+account. On Windows, manual development installs use the same source checkout
+path but the production PowerShell installer remains the recommended path for
+non-development use. For persistent local server management, use PM2 as documented in
 [ONBOARDING.md](ONBOARDING.md).
 
 ## Authentication and Security

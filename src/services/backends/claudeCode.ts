@@ -45,6 +45,10 @@ function filterStdinWarning(stderr: string): string {
     .trim();
 }
 
+function isClaudeResumeSessionMissing(stderr: string): boolean {
+  return /No conversation found with session ID/i.test(String(stderr || ''));
+}
+
 export interface ClaudeCliRuntime extends CliCommandResolution {
   command: string;
   env: NodeJS.ProcessEnv;
@@ -412,7 +416,17 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     options: SendMessageOptions,
     state: StreamState,
   ): AsyncGenerator<StreamEvent> {
+    yield* this._createStreamAttempt(message, options, state, false);
+  }
+
+  private async *_createStreamAttempt(
+    message: string,
+    options: SendMessageOptions,
+    state: StreamState,
+    retryingResumeAsNew: boolean,
+  ): AsyncGenerator<StreamEvent> {
     const { sessionId, isNewSession, workingDir, systemPrompt, model, effort, mcpServers, cliProfile } = options;
+    const attemptIsNewSession = isNewSession || retryingResumeAsNew;
     const runtime = resolveClaudeCliRuntime(cliProfile);
 
     const args = [
@@ -435,7 +449,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       }
     }
 
-    if (isNewSession) {
+    if (attemptIsNewSession) {
       args.push('--session-id', sessionId);
       const cleanPrompt = sanitizeSystemPrompt(systemPrompt);
       if (cleanPrompt) {
@@ -457,10 +471,11 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
 
     args.push('-p', message);
 
+    let retryResumeAsNew = false;
     try {
       const cwd = workingDir || this.workingDir || undefined;
       const invocation = buildCliCommandInvocation(runtime, args);
-      console.log(`[claudeCode] spawning ${runtime.displayCommand || runtime.command}, sessionId=${sessionId} isNew=${isNewSession} promptLen=${message.length} systemPromptLen=${(systemPrompt || '').length} cwd=${cwd}`);
+      console.log(`[claudeCode] spawning ${runtime.displayCommand || runtime.command}, sessionId=${sessionId} isNew=${attemptIsNewSession} promptLen=${message.length} systemPromptLen=${(systemPrompt || '').length} cwd=${cwd}`);
       const proc = spawn(invocation.command, invocation.args, {
         cwd,
         stdio: ['pipe', 'pipe', 'pipe'],
@@ -639,10 +654,17 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           const filteredStderr = filterStdinWarning(stderrOutput);
           const stdinTimedOut = !filteredStderr && stderrOutput.includes('no stdin data received');
           if (!stdinTimedOut) {
-            textQueue.push({ type: 'error', error: filteredStderr || `Process exited with code ${code}` });
+            const errorMessage = filteredStderr || `Process exited with code ${code}`;
+            if (!attemptIsNewSession && isClaudeResumeSessionMissing(errorMessage)) {
+              retryResumeAsNew = true;
+            } else {
+              textQueue.push({ type: 'error', error: errorMessage });
+            }
           }
         }
-        textQueue.push({ type: 'done' });
+        if (!retryResumeAsNew) {
+          textQueue.push({ type: 'done' });
+        }
         if (resolveWait) {
           resolveWait();
           resolveWait = null;
@@ -685,6 +707,10 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       }
     } finally {
       // no cleanup needed
+    }
+    if (retryResumeAsNew && !state.aborted) {
+      console.warn(`[claudeCode] resume target ${sessionId} was not found; retrying as a new session`);
+      yield* this._createStreamAttempt(message, options, state, true);
     }
   }
 }

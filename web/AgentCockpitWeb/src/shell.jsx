@@ -562,15 +562,31 @@ function App(){
       setViewingArchive(false);
       setActiveConvId(conv.id);
     } catch (err) {
+      const message = err.message || String(err);
+      if (/CLI profile is required/i.test(message)) {
+        const openSettings = await dialog.confirm({
+          variant: 'error',
+          title: 'CLI profile required',
+          body: message,
+          confirmLabel: 'Open CLI Profiles',
+          cancelLabel: 'Cancel',
+        });
+        if (openSettings) {
+          setFolderPickerOpen(false);
+          setFolderPickerInitialPath('');
+          onOpenSettings('cli');
+        }
+        return;
+      }
       dialog.alert({
         variant: 'error',
         title: 'Failed to create conversation',
-        body: err.message || String(err),
+        body: message,
       });
     } finally {
       setCreatingConv(false);
     }
-  }, [creatingConv, dialog]);
+  }, [creatingConv, dialog, onOpenSettings]);
 
   const onWelcomeDone = React.useCallback((nextInstallStatus) => {
     if (nextInstallStatus && typeof nextInstallStatus === 'object' && 'welcomeCompletedAt' in nextInstallStatus) {
