@@ -59,7 +59,7 @@ data from the vendor interface you happen to use today.
   workspace understanding built up over time.
 - You use AI for coding, writing, research, planning, operations, or other
   knowledge work.
-- You are comfortable running a local server, or using the macOS/Windows
+- You are comfortable running a local server, or using the macOS/Linux/Windows
   installers to manage that server for you.
 
 ## Agent Cockpit is not for you if
@@ -152,9 +152,9 @@ This has three important consequences:
 
 ## Prerequisites
 
-- Node.js 22+ for manual development installs. The macOS and Windows release
-  installers can install a private Node.js runtime automatically when Node/npm
-  are missing.
+- Node.js 22+ for manual development installs. The macOS, Linux, and Windows
+  release installers can install a private Node.js runtime automatically when
+  Node/npm are missing.
 - At least one CLI backend installed and authenticated on the same machine:
   - [Claude Code CLI](https://docs.anthropic.com/en/docs/claude-code)
     (`claude`)
@@ -186,6 +186,27 @@ Dev installs track `main`:
 ```bash
 bash /tmp/install-agent-cockpit.sh --channel dev
 ```
+
+### Linux Production Install
+
+The validated Linux production path is the release installer on Ubuntu 24.04 LTS
+x64. It uses the same local server model as macOS, installs a private Node.js
+runtime when needed, starts Agent Cockpit through local PM2, and opens or prints
+the first-run setup URL.
+
+```bash
+curl -fsSL https://github.com/daronyondem/agent-cockpit/releases/latest/download/install-linux.sh -o /tmp/install-agent-cockpit.sh
+bash /tmp/install-agent-cockpit.sh --channel production
+```
+
+Dev installs track `main`:
+
+```bash
+bash /tmp/install-agent-cockpit.sh --channel dev
+```
+
+Alpine/musl, NixOS, WSL, Linux arm64, and 32-bit Linux are not supported by the
+first Linux installer.
 
 ### Windows Production Install
 
@@ -243,7 +264,7 @@ Start with [docs/README.md](docs/README.md).
 
 - [User Guide](docs/user/README.md) covers daily use, backends, Memory,
   Knowledge Base, Workspace Context, and mobile PWA.
-- [Deploy Guide](docs/deploy/README.md) covers macOS, Windows, remote access,
+- [Deploy Guide](docs/deploy/README.md) covers macOS, Linux, Windows, remote access,
   auth, updates, and troubleshooting.
 - [Reference](docs/reference/README.md) covers data layout, environment
   variables, backend capabilities, development, and tests.

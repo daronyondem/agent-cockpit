@@ -28,6 +28,7 @@ function makeFixtureRoot() {
   writeFile(root, 'scripts/tool.js', 'console.log("tool");\n');
   writeFile(root, 'scripts/install-macos.sh', '#!/usr/bin/env bash\n');
   writeFile(root, 'scripts/install-windows.ps1', 'Set-StrictMode -Version Latest\n');
+  writeFile(root, 'scripts/install-linux.sh', '#!/usr/bin/env bash\n');
   writeFile(root, 'web/AgentCockpitWeb/src/App.jsx', 'export default function App() { return null; }\n');
   writeFile(root, 'mobile/AgentCockpitPWA/src/main.tsx', 'export {};\n');
   writeFile(root, 'public/favicon.svg', '<svg />\n');
@@ -103,6 +104,7 @@ describe('release package script', () => {
     expect(fs.existsSync(zipPath)).toBe(true);
     expect(fs.existsSync(path.join(outDir, 'install-macos.sh'))).toBe(true);
     expect(fs.existsSync(path.join(outDir, 'install-windows.ps1'))).toBe(true);
+    expect(fs.existsSync(path.join(outDir, 'install-linux.sh'))).toBe(true);
     expect(fs.existsSync(manifestPath)).toBe(true);
     expect(fs.existsSync(checksumsPath)).toBe(true);
 
@@ -136,6 +138,13 @@ describe('release package script', () => {
         sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       }),
       expect.objectContaining({
+        name: 'agent-cockpit-v1.2.3.tar.gz',
+        role: 'app-tarball',
+        platform: 'linux',
+        format: 'tar.gz',
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+      expect.objectContaining({
         name: 'agent-cockpit-v1.2.3.zip',
         role: 'app-zip',
         platform: 'win32',
@@ -152,6 +161,12 @@ describe('release package script', () => {
         name: 'install-windows.ps1',
         role: 'windows-installer',
         platform: 'win32',
+        sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
+      }),
+      expect.objectContaining({
+        name: 'install-linux.sh',
+        role: 'linux-installer',
+        platform: 'linux',
         sha256: expect.stringMatching(/^[a-f0-9]{64}$/),
       }),
     ]));
@@ -183,11 +198,13 @@ describe('release package script', () => {
     expect(checksums).toContain('release-manifest.json');
     expect(checksums).toContain('install-macos.sh');
     expect(checksums).toContain('install-windows.ps1');
+    expect(checksums).toContain('install-linux.sh');
 
     const tarList = execFileSync('tar', ['-tzf', tarballPath], { encoding: 'utf8' });
     expect(tarList).toContain('agent-cockpit-v1.2.3/public/v2-built/index.html');
     expect(tarList).toContain('agent-cockpit-v1.2.3/public/mobile-built/index.html');
     expect(tarList).toContain('agent-cockpit-v1.2.3/scripts/install-macos.sh');
+    expect(tarList).toContain('agent-cockpit-v1.2.3/scripts/install-linux.sh');
     expect(tarList).not.toContain('agent-cockpit-v1.2.3/.env');
     expect(tarList).not.toContain('agent-cockpit-v1.2.3/data/state.json');
     expect(tarList).not.toContain('agent-cockpit-v1.2.3/plan.md');
@@ -198,6 +215,7 @@ describe('release package script', () => {
       'agent-cockpit-v1.2.3/public/v2-built/index.html',
       'agent-cockpit-v1.2.3/public/mobile-built/index.html',
       'agent-cockpit-v1.2.3/scripts/install-windows.ps1',
+      'agent-cockpit-v1.2.3/scripts/install-linux.sh',
     ]));
     expect(zipEntries).not.toEqual(expect.arrayContaining([
       'agent-cockpit-v1.2.3/.env',

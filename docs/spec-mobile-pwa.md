@@ -49,7 +49,7 @@ Production GitHub Release artifacts include `public/mobile-built/index.html` and
 the generated mobile asset tree. `scripts/package-release.js` refuses to create
 a release archive when the mobile build shell is missing, the manual release
 workflow runs `npm run mobile:typecheck` and `npm run mobile:build`, and the
-macOS/Windows installers verify the packaged mobile shell before startup.
+macOS/Linux/Windows installers verify the packaged mobile shell before startup.
 Production updates run `npm --prefix mobile/AgentCockpitPWA ci` inside the extracted
 release and then run `MobileBuildService` for that release when build markers or
 assets are missing or stale before activating the release. Dev updates

@@ -99,12 +99,22 @@ function writeText(filePath: string, value: string) {
 }
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+const originalArchDescriptor = Object.getOwnPropertyDescriptor(process, 'arch');
 
 function mockProcessPlatform(platform: NodeJS.Platform): () => void {
   Object.defineProperty(process, 'platform', { value: platform });
   return () => {
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  };
+}
+
+function mockProcessArch(arch: NodeJS.Architecture): () => void {
+  Object.defineProperty(process, 'arch', { value: arch });
+  return () => {
+    if (originalArchDescriptor) {
+      Object.defineProperty(process, 'arch', originalArchDescriptor);
     }
   };
 }
@@ -261,6 +271,48 @@ function makeWindowsReleaseFixture(version = '1.1.0', minimumNodeMajor = 22) {
   const manifestSha = crypto.createHash('sha256').update(manifestRaw).digest('hex');
   const checksumsRaw = `${manifestSha}  release-manifest.json\n${zipSha}  ${zipName}\n`;
   return { manifest, manifestRaw, manifestSha, zipName, zipBytes, zipSha, checksumsRaw };
+}
+
+function makeLinuxReleaseFixture(version = '1.1.0', minimumNodeMajor = 22) {
+  const linuxTarballName = `agent-cockpit-v${version}-linux.tar.gz`;
+  const linuxTarballBytes = Buffer.from(`release linux tarball ${version}`);
+  const linuxTarballSha = crypto.createHash('sha256').update(linuxTarballBytes).digest('hex');
+  const darwinTarballName = `agent-cockpit-v${version}-darwin.tar.gz`;
+  const darwinTarballBytes = Buffer.from(`release darwin tarball ${version}`);
+  const darwinTarballSha = crypto.createHash('sha256').update(darwinTarballBytes).digest('hex');
+  const manifest = {
+    schemaVersion: 1,
+    version,
+    packageRoot: `agent-cockpit-v${version}`,
+    requiredRuntime: {
+      node: {
+        engine: `>=${minimumNodeMajor}`,
+        minimumMajor: minimumNodeMajor,
+      },
+    },
+    artifacts: [
+      {
+        name: darwinTarballName,
+        role: 'app-tarball',
+        platform: 'darwin',
+        format: 'tar.gz',
+        size: darwinTarballBytes.length,
+        sha256: darwinTarballSha,
+      },
+      {
+        name: linuxTarballName,
+        role: 'app-tarball',
+        platform: 'linux',
+        format: 'tar.gz',
+        size: linuxTarballBytes.length,
+        sha256: linuxTarballSha,
+      },
+    ],
+  };
+  const manifestRaw = JSON.stringify(manifest);
+  const manifestSha = crypto.createHash('sha256').update(manifestRaw).digest('hex');
+  const checksumsRaw = `${manifestSha}  release-manifest.json\n${linuxTarballSha}  ${linuxTarballName}\n`;
+  return { manifest, manifestRaw, manifestSha, linuxTarballName, linuxTarballBytes, linuxTarballSha, checksumsRaw };
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────
@@ -846,6 +898,7 @@ describe('UpdateService', () => {
 
     test('applies a production GitHub Release update and writes rollback restart script', async () => {
       mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('darwin');
       const install = makeProductionInstall('agent-cockpit-prod-update-');
       const release = makeReleaseFixture('1.1.0');
       const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
@@ -944,6 +997,131 @@ describe('UpdateService', () => {
           stdio: 'ignore',
         }));
       } finally {
+        restorePlatform();
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('applies a Linux production update using the Linux tarball artifact', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('linux');
+      const install = makeProductionInstall('agent-cockpit-linux-prod-update-');
+      const release = makeLinuxReleaseFixture('1.1.0');
+      const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
+      try {
+        service = new UpdateService(install.currentLink, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+            writeState,
+          },
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'curl' && args[1].endsWith('/release-manifest.json')) {
+            cb(null, release.manifestRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith('/SHA256SUMS')) {
+            cb(null, release.checksumsRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith(`/${release.linuxTarballName}`)) {
+            cb(null, release.linuxTarballBytes, Buffer.alloc(0));
+            return;
+          }
+          if (cmd === 'tar') {
+            expect(args[0]).toBe('-xzf');
+            const extractDir = String(args[args.indexOf('-C') + 1]);
+            const packageDir = path.join(extractDir, release.manifest.packageRoot);
+            writeText(path.join(packageDir, 'server.ts'), 'console.log("server");\n');
+            writeJson(path.join(packageDir, 'package.json'), { version: '1.1.0' });
+            writeText(path.join(packageDir, 'public/v2-built/index.html'), '<!doctype html>\n');
+            writeText(path.join(packageDir, 'public/mobile-built/index.html'), '<!doctype html>\n');
+            cb(null, 'extracted\n', '');
+            return;
+          }
+          if (cmd === 'git' && args[0] === 'rev-parse') {
+            cb(null, 'abc123\n', '');
+            return;
+          }
+          if (cmd === 'npm') {
+            const outDirIndex = args.indexOf('--outDir');
+            if (outDirIndex >= 0) {
+              writeText(path.join(String(args[outDirIndex + 1]), 'index.html'), '<!doctype html>\n');
+              cb(null, 'built\n', '');
+              return;
+            }
+            cb(null, 'ok\n', '');
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+        expect(result.success).toBe(true);
+        expect(result.steps.map(step => step.name)).toEqual(expect.arrayContaining([
+          'download release manifest',
+          'download release tarball',
+          'extract release',
+          'switch current release',
+          'write install manifest',
+          'pm2 restart',
+        ]));
+        expect(writeState).toHaveBeenCalledWith(expect.objectContaining({
+          channel: 'production',
+          source: 'github-release',
+          version: '1.1.0',
+          appDir: install.currentLink,
+          dataDir: install.dataDir,
+        }));
+        expect(fs.realpathSync(install.currentLink)).toBe(fs.realpathSync(path.join(install.releasesDir, 'agent-cockpit-v1.1.0')));
+        expect(mockSpawnFn).toHaveBeenCalledWith('sh', expect.arrayContaining(['-c']), expect.objectContaining({
+          cwd: install.currentLink,
+          stdio: 'ignore',
+        }));
+      } finally {
+        restorePlatform();
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
+    test('rejects Linux production updates when the manifest lacks a Linux tarball artifact', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('linux');
+      const install = makeProductionInstall('agent-cockpit-linux-missing-artifact-');
+      const release = makeReleaseFixture('1.1.0');
+      const writeState = jest.fn(async (state) => ({ ...install.status, ...state }));
+      try {
+        service = new UpdateService(install.currentLink, {
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+            writeState,
+          },
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'curl' && args[1].endsWith('/release-manifest.json')) {
+            cb(null, release.manifestRaw, '');
+            return;
+          }
+          if (cmd === 'curl' && args[1].endsWith('/SHA256SUMS')) {
+            cb(null, release.checksumsRaw, '');
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const result = await service.triggerUpdate({ hasActiveStreams: () => false });
+
+        expect(result.success).toBe(false);
+        expect(result.error).toContain('Release manifest does not include a Linux app tarball artifact');
+        expect(writeState).not.toHaveBeenCalled();
+        expect(mockSpawnFn).not.toHaveBeenCalled();
+      } finally {
+        restorePlatform();
         fs.rmSync(install.installDir, { recursive: true, force: true });
       }
     });
@@ -1059,6 +1237,70 @@ describe('UpdateService', () => {
       }
     });
 
+    test('installs a private Linux Node.js tar.xz runtime when required major increases', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('linux');
+      const restoreArch = mockProcessArch('x64');
+      const install = makeProductionInstall('agent-cockpit-linux-node-');
+      const nodeVersion = '23.7.0';
+      const nodeArchiveName = `node-v${nodeVersion}-linux-x64.tar.xz`;
+      const nodeBytes = Buffer.from('node linux tarball');
+      const nodeSha = crypto.createHash('sha256').update(nodeBytes).digest('hex');
+      const checksumsRaw = `${nodeSha}  ${nodeArchiveName}\n`;
+      try {
+        service = new UpdateService(install.currentLink, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot: install.dataDir,
+          installStateService: {
+            getStatus: () => install.status,
+          },
+        });
+        jest.spyOn(service as any, '_downloadText').mockResolvedValue(checksumsRaw);
+        jest.spyOn(service as any, '_downloadToFile').mockImplementation(async (...args: unknown[]) => {
+          const [, dest] = args as [string, string];
+          fs.mkdirSync(path.dirname(dest), { recursive: true });
+          originalWriteFileSync(dest, nodeBytes);
+        });
+        mockExecFileFn.mockImplementation((cmd: string, args: string[], _opts: unknown, cb: Function) => {
+          if (cmd === 'tar') {
+            expect(args[0]).toBe('-xJf');
+            const extractDir = String(args[args.indexOf('-C') + 1]);
+            writeText(path.join(extractDir, `node-v${nodeVersion}-linux-x64`, 'bin/node'), 'node\n');
+            writeText(path.join(extractDir, `node-v${nodeVersion}-linux-x64`, 'lib/node_modules/npm/bin/npm-cli.js'), 'npm cli\n');
+            cb(null, 'expanded node\n', '');
+            return;
+          }
+          if (String(cmd).endsWith('/bin/node') && String(args[0]).endsWith('npm-cli.js') && args[1] === '--version') {
+            cb(null, '11.0.0\n', '');
+            return;
+          }
+          cb(new Error(`unexpected command ${cmd}`), '', '');
+        });
+
+        const steps: any[] = [];
+        const runtime = await (service as any)._installPrivateNodeRuntime(install.status, 23, steps);
+
+        expect(runtime).toEqual(expect.objectContaining({
+          source: 'private',
+          version: nodeVersion,
+          npmVersion: '11.0.0',
+          binDir: path.join(install.installDir, 'runtime', 'node', 'bin'),
+          runtimeDir: path.join(install.installDir, 'runtime', 'node'),
+          requiredMajor: 23,
+        }));
+        expect(fs.realpathSync(path.join(install.installDir, 'runtime', 'node')))
+          .toBe(fs.realpathSync(path.join(install.installDir, 'runtime', `node-v${nodeVersion}`)));
+        expect(steps).toEqual(expect.arrayContaining([
+          expect.objectContaining({ name: 'install Node.js runtime', success: true }),
+        ]));
+      } finally {
+        restoreArch();
+        restorePlatform();
+        fs.rmSync(install.installDir, { recursive: true, force: true });
+      }
+    });
+
     test('migrates a system Node production install to a private runtime when required major increases', async () => {
       mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
       const restorePlatform = mockProcessPlatform('darwin');
@@ -1169,6 +1411,7 @@ describe('UpdateService', () => {
 
     test('rejects a production release with a checksum mismatch without switching current', async () => {
       mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      const restorePlatform = mockProcessPlatform('darwin');
       const install = makeProductionInstall('agent-cockpit-prod-bad-sha-');
       const release = makeReleaseFixture('1.1.0');
       const badChecksums = `${release.manifestSha}  release-manifest.json\n${'0'.repeat(64)}  ${release.tarballName}\n`;
@@ -1207,6 +1450,7 @@ describe('UpdateService', () => {
         expect(writeState).not.toHaveBeenCalled();
         expect(mockSpawnFn).not.toHaveBeenCalled();
       } finally {
+        restorePlatform();
         fs.rmSync(install.installDir, { recursive: true, force: true });
       }
     });

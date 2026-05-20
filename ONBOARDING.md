@@ -53,6 +53,22 @@ Production installs update from GitHub Releases. Dev installs track `main`:
 bash /tmp/install-agent-cockpit.sh --channel dev
 ```
 
+## 1a. Validated Linux Production Install
+
+On Linux, the validated production path is Ubuntu 24.04 LTS x64 with
+`install-linux.sh`. The installer downloads the latest GitHub Release, verifies
+checksums, installs a private Node.js runtime when needed, writes runtime config,
+starts Agent Cockpit with local PM2, and opens or prints first-run setup.
+
+```bash
+curl -fsSL https://github.com/daronyondem/agent-cockpit/releases/latest/download/install-linux.sh -o /tmp/install-agent-cockpit.sh
+bash /tmp/install-agent-cockpit.sh --channel production
+```
+
+Alpine/musl, NixOS, WSL, Linux arm64, and 32-bit Linux are not supported by the
+first Linux installer. Other glibc x64 distributions may work but are not part
+of the manual release test matrix.
+
 After owner setup, the authenticated welcome flow shows install/doctor checks
 for Node, npm, PM2, writable data paths, built web/mobile assets, backend CLIs,
 and optional document/tunnel tools. If you use the installer, skip the manual

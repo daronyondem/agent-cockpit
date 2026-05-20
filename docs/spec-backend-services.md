@@ -1017,11 +1017,12 @@ assets, verify PM2 configuration, and restart. Production installs
 Release manifest, download and verify the platform app archive, stage the new
 release under the install root, run dependency/build preflight work there,
 activate the release, then restart through PM2 with a health-check rollback
-script. macOS activates by switching the `current` symlink. Windows activates by
+script. macOS and Linux activate by switching the `current` symlink. Windows activates by
 recording the active versioned release directory in `install.json`.
 [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md) records the
 channel decision and [ADR-0063](adr/0063-adopt-per-user-windows-installer.md)
-records the Windows install/update decision. Production updates also enforce
+records the Windows install/update decision. [ADR-0071](adr/0071-support-linux-production-installs.md)
+records the Linux install/update decision. Production updates also enforce
 release-declared Node runtime requirements from `release-manifest.json`; private
 installer-managed runtimes are refreshed before dependency installation when a
 release raises the required Node major.
@@ -1048,20 +1049,21 @@ Dev-channel sequence:
 
 Production-channel sequence:
 
-1. Require stored `installDir` and `appDir`; on macOS resolve the current symlink
-   target as the rollback target, and on Windows use the stored versioned
-   `appDir` as the rollback target.
+1. Require stored `installDir` and `appDir`; on macOS and Linux resolve the
+   current symlink target as the rollback target, and on Windows use the stored
+   versioned `appDir` as the rollback target.
 2. Download `release-manifest.json` and `SHA256SUMS` from
    `https://github.com/<repo>/releases/latest/download/`.
 3. Verify the manifest checksum against `SHA256SUMS`.
-4. Parse the manifest, find the platform archive artifact (`role:
-   "app-tarball"` on macOS, `role: "app-zip"` or `platform: "win32",
-   format: "zip"` on Windows), download it, verify its `SHA256SUMS` entry, and
-   verify its manifest `sha256`.
+4. Parse the manifest, find the platform archive artifact (`platform: "darwin",
+   format: "tar.gz"` or legacy unplatformed `role: "app-tarball"` on macOS,
+   `platform: "linux", format: "tar.gz"` on Linux, and `role: "app-zip"` or
+   `platform: "win32", format: "zip"` on Windows), download it, verify its
+   `SHA256SUMS` entry, and verify its manifest `sha256`.
 5. Refuse when the manifest version is not newer than the running package
    version.
 6. Extract the archive into a staging directory under `<installDir>/releases`
-   (`tar -xzf` on macOS, PowerShell `Expand-Archive` on Windows), require
+   (`tar -xzf` on macOS/Linux, PowerShell `Expand-Archive` on Windows), require
    `server.ts`, then atomically rename it to the manifest `packageRoot`.
 7. Resolve the release-required Node major from
    `manifest.requiredRuntime.node.minimumMajor`, falling back to the extracted
@@ -1078,8 +1080,10 @@ Production-channel sequence:
    `ecosystem.config.js`, record the bundled npm version when it can be
    observed, and report an `install Node.js runtime` step. macOS uses the Darwin
    tarball, extracts to `<installDir>/runtime/node-v<version>`, and repoints
-   `<installDir>/runtime/node`. Windows uses the Windows ZIP and keeps the
-   versioned runtime directory directly, without a symlink or junction. This
+   `<installDir>/runtime/node`. Linux uses the official Linux x64 `tar.xz`,
+   extracts with `tar -xJf` to `<installDir>/runtime/node-v<version>`, and
+   repoints `<installDir>/runtime/node`. Windows uses the Windows ZIP and keeps
+   the versioned runtime directory directly, without a symlink or junction. This
    migrates system-Node production installs to an installer-owned private
    runtime without mutating global Node.
 8. Run root `npm ci` and mobile `npm --prefix mobile/AgentCockpitPWA ci` inside
@@ -1096,7 +1100,7 @@ Production-channel sequence:
 10. Confirm `public/v2-built/index.html` and `public/mobile-built/index.html`
    exist.
 11. Copy `.env` from the previous current release into the new release. macOS
-    also copies `ecosystem.config.js`; Windows regenerates `ecosystem.config.js`
+    and Linux also copy `ecosystem.config.js`; Windows regenerates `ecosystem.config.js`
     so PM2 monitors `<installDir>\bin\run-agent-cockpit.vbs` through
     `wscript.exe //B //NoLogo` and the config points at the new versioned app
     directory. The Windows runner launches `node --import tsx server.ts` hidden
@@ -1104,7 +1108,7 @@ Production-channel sequence:
     `<installDir>\pm2\logs\agent-cockpit-runner-*.log`, and the config sets
     `windowsHide: true` so PM2-managed Node processes do not open a desktop
     console window.
-12. Activate the release. macOS switches `<installDir>/current` to the new
+12. Activate the release. macOS and Linux switch `<installDir>/current` to the new
     release; the path must either be absent or a symlink, and a non-symlink
     current path is refused. Windows records the new versioned release path as
     `appDir` in `install.json`.
@@ -1135,7 +1139,7 @@ Production-channel sequence:
   Output is logged to `<dataRoot>/update-restart.log`. Shared by
   `triggerUpdate()` and `restart()`. Production callers also pass a health URL
   and rollback target; the script probes the health URL for up to 20 seconds and
-  rolls back (relinking `current` on macOS, restoring the previous install
+  rolls back (relinking `current` on macOS/Linux, restoring the previous install
   manifest and starting the old versioned app on Windows) before exiting with
   failure. Windows production updates additionally parse the health JSON and
   require `version` to match the target release, so an older stale server on the
@@ -1159,7 +1163,7 @@ Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, succes
 manifest that records whether this install is production (`github-release`) or
 dev (`git-main`). It provides stable status data to the update service,
 `/api/chat/install/status`, `/api/chat/install/doctor`, and the welcome flow.
-The macOS and Windows installers write production/dev metadata, and the welcome
+The macOS, Linux, and Windows installers write production/dev metadata, and the welcome
 flow marks `welcomeCompletedAt` through this service.
 
 Constructor: `new InstallStateService({ appRoot, dataRoot, repo?, branch?, version? })`.

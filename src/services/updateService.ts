@@ -732,12 +732,16 @@ export class UpdateService {
     if (!installStatus.installDir) {
       throw new Error('Production install manifest is missing installDir; cannot update private Node.js runtime.');
     }
-    if (process.platform !== 'darwin' && process.platform !== 'win32') {
-      throw new Error('Private Node.js runtime updates are currently supported on macOS and Windows only.');
+    if (process.platform !== 'darwin' && process.platform !== 'linux' && process.platform !== 'win32') {
+      throw new Error('Private Node.js runtime updates are currently supported on macOS, Linux, and Windows only.');
     }
 
     const nodeArch = process.arch === 'arm64' ? 'arm64' : process.arch === 'x64' ? 'x64' : null;
     if (!nodeArch) throw new Error(`Unsupported CPU architecture for Node.js runtime update: ${process.arch}`);
+    if (process.platform === 'linux' && nodeArch !== 'x64') {
+      throw new Error(`Unsupported Linux CPU architecture for Node.js runtime update: ${process.arch}`);
+    }
+    const archiveSpec = this._nodeRuntimeArchiveSpec();
 
     const runtime = this._privateNodeRuntime(installStatus);
     const downloadDir = fs.mkdtempSync(path.join(this._dataRoot, 'node-runtime-download-'));
@@ -750,7 +754,7 @@ export class UpdateService {
       this._verifyChecksum(tarballPath, tarballName, checksumsRaw);
 
       const version = tarballName.replace(/^node-v/, '')
-        .replace(new RegExp(`-${process.platform === 'win32' ? 'win' : 'darwin'}-${nodeArch}[.](?:tar[.]gz|zip)$`), '');
+        .replace(new RegExp(`-${archiveSpec.platform}-${nodeArch}[.](?:${archiveSpec.extensionPattern})$`), '');
       fs.mkdirSync(runtime.runtimeRoot, { recursive: true });
       const stagingParent = fs.mkdtempSync(path.join(runtime.runtimeRoot, '.node-extract-'));
       try {
@@ -763,9 +767,9 @@ export class UpdateService {
             `Expand-Archive -Path ${this._psQuote(tarballPath)} -DestinationPath ${this._psQuote(stagingParent)} -Force`,
           ], 120000);
         } else {
-          await this._exec('tar', ['-xzf', tarballPath, '-C', stagingParent], 120000);
+          await this._exec('tar', [archiveSpec.tarFlag, tarballPath, '-C', stagingParent], 120000);
         }
-        const extractedDir = path.join(stagingParent, `node-v${version}-${process.platform === 'win32' ? 'win' : 'darwin'}-${nodeArch}`);
+        const extractedDir = path.join(stagingParent, `node-v${version}-${archiveSpec.platform}-${nodeArch}`);
         let finalDir = path.join(runtime.runtimeRoot, process.platform === 'win32' ? `node-v${version}-win-${nodeArch}` : `node-v${version}`);
         if (process.platform === 'win32' && fs.existsSync(finalDir)) {
           finalDir = `${finalDir}-${crypto.randomBytes(16).toString('hex')}`;
@@ -825,14 +829,23 @@ export class UpdateService {
   }
 
   private _findNodeRuntimeArchiveName(checksumsRaw: string, requiredMajor: number, nodeArch: string): string {
-    const platform = process.platform === 'win32' ? 'win' : 'darwin';
-    const extension = process.platform === 'win32' ? 'zip' : 'tar[.]gz';
-    const pattern = new RegExp(`^node-v${requiredMajor}[.][0-9]+[.][0-9]+-${platform}-${nodeArch}[.]${extension}$`);
+    const archiveSpec = this._nodeRuntimeArchiveSpec();
+    const pattern = new RegExp(`^node-v${requiredMajor}[.][0-9]+[.][0-9]+-${archiveSpec.platform}-${nodeArch}[.]${archiveSpec.extensionPattern}$`);
     for (const line of checksumsRaw.split(/\r?\n/)) {
       const [, name] = line.trim().split(/\s+/);
       if (name && pattern.test(name)) return name;
     }
-    throw new Error(`Could not find a ${process.platform === 'win32' ? 'Windows' : 'macOS'} ${nodeArch} Node.js ${requiredMajor} archive in SHASUMS256.txt.`);
+    throw new Error(`Could not find a ${archiveSpec.label} ${nodeArch} Node.js ${requiredMajor} archive in SHASUMS256.txt.`);
+  }
+
+  private _nodeRuntimeArchiveSpec(): { platform: string; extensionPattern: string; tarFlag: string; label: string } {
+    if (process.platform === 'win32') {
+      return { platform: 'win', extensionPattern: 'zip', tarFlag: '', label: 'Windows' };
+    }
+    if (process.platform === 'linux') {
+      return { platform: 'linux', extensionPattern: 'tar[.]xz', tarFlag: '-xJf', label: 'Linux' };
+    }
+    return { platform: 'darwin', extensionPattern: 'tar[.]gz', tarFlag: '-xzf', label: 'macOS' };
   }
 
   private _nodeMajor(version: string | null): number {
@@ -980,7 +993,7 @@ export class UpdateService {
     steps.push({ name: 'download release manifest', success: true, output: `version ${manifest.version}` });
 
     const tarball = this._selectReleaseArchive(manifest);
-    if (!tarball) throw new Error(`Release manifest does not include a ${process.platform === 'win32' ? 'Windows app ZIP' : 'macOS app tarball'} artifact.`);
+    if (!tarball) throw new Error(`Release manifest does not include a ${this._releaseArchiveLabel()} artifact.`);
 
     const tarballPath = path.join(downloadDir, tarball.name);
     await this._downloadToFile(`${base}/${tarball.name}`, tarballPath, 120000);
@@ -1008,7 +1021,22 @@ export class UpdateService {
         || (artifact.platform === 'win32' && artifact.format === 'zip')
       );
     }
-    return manifest.artifacts.find(artifact => artifact.role === 'app-tarball');
+    if (process.platform === 'linux') {
+      return manifest.artifacts.find(artifact =>
+        artifact.platform === 'linux'
+        && artifact.format === 'tar.gz'
+      );
+    }
+    return manifest.artifacts.find(artifact =>
+      (artifact.platform === 'darwin' && artifact.format === 'tar.gz')
+      || (artifact.role === 'app-tarball' && !artifact.platform)
+    );
+  }
+
+  private _releaseArchiveLabel(): string {
+    if (process.platform === 'win32') return 'Windows app ZIP';
+    if (process.platform === 'linux') return 'Linux app tarball';
+    return 'macOS app tarball';
   }
 
   private async _downloadText(url: string, timeout = 30000): Promise<string> {

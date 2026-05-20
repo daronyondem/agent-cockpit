@@ -65,7 +65,7 @@ jobs:
         shell: pwsh
         run: |
           npm run release:package -- --version 0.0.0-windows-smoke --source-ref "${{ inputs.source_ref }}" --commit local --out-dir dist/windows-smoke
-          node -e "const m=require('./dist/windows-smoke/release-manifest.json'); const wanted=[['app-tarball','darwin','tar.gz'],['app-zip','win32','zip'],['windows-installer','win32',undefined]]; for (const [role, platform, format] of wanted) { if (!m.artifacts.some(a => a.role === role && (!platform || a.platform === platform) && (!format || a.format === format))) throw new Error('missing artifact '+[role,platform,format].filter(Boolean).join(':')); }"
+          node -e "const m=require('./dist/windows-smoke/release-manifest.json'); const wanted=[['app-tarball','darwin','tar.gz'],['app-tarball','linux','tar.gz'],['app-zip','win32','zip'],['macos-installer','darwin',undefined],['linux-installer','linux',undefined],['windows-installer','win32',undefined]]; for (const [role, platform, format] of wanted) { if (!m.artifacts.some(a => a.role === role && (!platform || a.platform === platform) && (!format || a.format === format))) throw new Error('missing artifact '+[role,platform,format].filter(Boolean).join(':')); }"
 
       - name: Exercise Windows installer
         shell: pwsh
@@ -97,8 +97,92 @@ jobs:
             schtasks.exe /Delete /TN AgentCockpit /F 2>$null
           }
 
+  linux-smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.source_ref }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npm --prefix mobile/AgentCockpitPWA ci
+      - run: npm run typecheck
+      - run: npm run web:typecheck
+      - run: npm run web:build
+      - run: npm run web:budget
+      - run: npm run mobile:typecheck
+      - run: npm run mobile:build
+      - run: npm test -- --runInBand test/linuxInstallerScript.test.ts test/installDoctorService.test.ts test/installStateService.test.ts
+      - run: npm test -- --runInBand test/updateService.test.ts -t Linux
+
+      - name: Parse Linux installer
+        run: bash -n scripts/install-linux.sh
+
+      - name: Package release on Linux
+        run: |
+          npm run release:package -- --version 0.0.0-linux-smoke --source-ref "${{ inputs.source_ref }}" --commit local --out-dir dist/linux-smoke
+          node -e "const m=require('./dist/linux-smoke/release-manifest.json'); const wanted=[['app-tarball','darwin','tar.gz'],['app-tarball','linux','tar.gz'],['app-zip','win32','zip'],['macos-installer','darwin',undefined],['linux-installer','linux',undefined],['windows-installer','win32',undefined]]; for (const [role, platform, format] of wanted) { if (!m.artifacts.some(a => a.role === role && (!platform || a.platform === platform) && (!format || a.format === format))) throw new Error('missing artifact '+[role,platform,format].filter(Boolean).join(':')); }"
+
+      - name: Exercise Linux installer
+        run: |
+          installDir="$RUNNER_TEMP/agent-cockpit-linux-smoke"
+          origin="$RUNNER_TEMP/agent-cockpit-linux-smoke-origin.git"
+          devDir="$RUNNER_TEMP/agent-cockpit-linux-smoke-source"
+          port=38335
+          git init --bare "$origin"
+          git -C "$GITHUB_WORKSPACE" push "$origin" HEAD:refs/heads/main
+          git clone "$origin" "$devDir"
+          cleanup() {
+            if [ -d "$devDir" ]; then
+              (cd "$devDir" && npx pm2 delete agent-cockpit >/dev/null 2>&1 || true)
+              (cd "$devDir" && npx pm2 kill >/dev/null 2>&1 || true)
+            fi
+          }
+          trap cleanup EXIT
+          ./scripts/install-linux.sh --channel dev --dev-dir "$devDir" --install-dir "$installDir" --install-node --skip-open --port "$port"
+          curl -fsS --max-time 5 "http://127.0.0.1:$port/auth/setup" >/dev/null
+          node - "$port" <<'NODE'
+          const port = Number(process.argv[2]);
+          const http = require('http');
+          const req = http.get({ host: '127.0.0.1', port, path: '/api/chat/install/doctor', timeout: 5000 }, (res) => {
+            let body = '';
+            res.setEncoding('utf8');
+            res.on('data', chunk => { body += chunk; });
+            res.on('end', () => {
+              try {
+                if (res.statusCode !== 200) {
+                  throw new Error(`Install doctor returned HTTP ${res.statusCode}`);
+                }
+                const data = JSON.parse(body);
+                for (const id of ['node', 'npm', 'pm2']) {
+                  const check = data.checks.find(item => item.id === id);
+                  if (!check || check.status !== 'ok') {
+                    throw new Error(`Install doctor required check failed: ${id}`);
+                  }
+                }
+              } catch (error) {
+                console.error(error.message);
+                process.exit(1);
+              }
+            });
+          });
+          req.on('timeout', () => req.destroy(new Error('Install doctor request timed out')));
+          req.on('error', error => {
+            console.error(error.message);
+            process.exit(1);
+          });
+          NODE
+
   release:
-    needs: windows-smoke
+    needs: [windows-smoke, linux-smoke]
     if: ${{ !inputs.smoke_only }}
     runs-on: ubuntu-latest
     permissions:
@@ -186,4 +270,5 @@ jobs:
             "dist/release/release-manifest.json" \
             "dist/release/SHA256SUMS" \
             "dist/release/install-macos.sh" \
+            "dist/release/install-linux.sh" \
             "dist/release/install-windows.ps1"

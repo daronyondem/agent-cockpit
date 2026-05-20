@@ -66,13 +66,16 @@ npm start              # Listens on PORT (default 3334)
 ### Installation and Release Channels
 
 [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md) defines the
-Mac-first packaging direction, and
+Mac-first packaging direction,
 [ADR-0063](adr/0063-adopt-per-user-windows-installer.md) adds the supported
-Windows path. Production installs are local server-agent installs: Agent Cockpit
+Windows path, and
+[ADR-0071](adr/0071-support-linux-production-installs.md) adds the validated
+Linux path. Production installs are local server-agent installs: Agent Cockpit
 runs locally under PM2 and opens the browser for first-run setup. Electron/Tauri
-wrappers, Homebrew formulae, code signing, notarization, automatic Cloudflare
-tunnel provisioning, multi-user hosting, hosted SaaS, and unattended Windows
-service/no-login operation are outside the supported installer scope.
+wrappers, Homebrew formulae, code signing, notarization, Linux distro packages,
+automatic Cloudflare tunnel provisioning, multi-user hosting, hosted SaaS, and
+unattended Windows service/no-login operation are outside the supported
+installer scope.
 
 Agent Cockpit has two release/update channels:
 
@@ -86,10 +89,10 @@ Agent Cockpit has two release/update channels:
 Runtime self-update is channel-aware. Production installs read `install.json`,
 check the latest GitHub Release manifest, verify release checksums, stage the
 next release under the platform install root, activate it, and restart through
-PM2 with health-check rollback. macOS activates releases by switching the
-`current` symlink. Windows activates releases by writing the active versioned
-`appDir` to `install.json` and restarting from that directory. Dev installs keep
-the git/main update behavior described below.
+PM2 with health-check rollback. macOS and Linux activate releases by switching
+the `current` symlink. Windows activates releases by writing the active
+versioned `appDir` to `install.json` and restarting from that directory. Dev
+installs keep the git/main update behavior described below.
 
 ## Production Release Packaging
 
@@ -105,21 +108,33 @@ Production releases are created by `.github/workflows/release.yml`, a manual
 The workflow checks out `source_ref`, normalizes the version, records the
 checked-out commit, and runs `npm version <version> --no-git-tag-version` only
 when the checked-out package version differs from the requested release version.
-Before the publish job can create the GitHub Release, a `windows-smoke` job runs
-on `windows-latest`. That job checks out `source_ref` with full history, installs
-root and mobile dependencies, runs the root/web/mobile TypeScript checks, builds
-the web and mobile assets required by the release package, checks the web bundle
-budget, runs the Windows-focused installer/doctor/install-state Jest tests plus
-the Windows-named update-service Jest tests, parses `scripts/install-windows.ps1`
-with PowerShell's parser API, runs `npm run release:package` on Windows, and
-verifies the manifest includes the macOS tarball, Windows ZIP, and Windows
-installer artifacts. It then creates a temporary Git origin whose `main` branch
-points at the selected `source_ref`, runs `scripts/install-windows.ps1 -Channel
-dev` against a temporary checkout with `-InstallNode`, an install path containing
-spaces, `-SkipOpen`, and a fixed high port, verifies the `AgentCockpit` ONLOGON
-scheduled task is queryable, probes `/auth/setup`, verifies `/api/chat/install/doctor`
-reports `node`, `npm`, and `pm2` as `ok`, and runs the generated stop script
-before the publish job starts.
+Before the publish job can create the GitHub Release, platform smoke jobs run on
+Windows and Linux. The `windows-smoke` job runs on `windows-latest`. It checks
+out `source_ref` with full history, installs root and mobile dependencies, runs
+the root/web/mobile TypeScript checks, builds the web and mobile assets required
+by the release package, checks the web bundle budget, runs the Windows-focused
+installer/doctor/install-state Jest tests plus the Windows-named update-service
+Jest tests, parses `scripts/install-windows.ps1` with PowerShell's parser API,
+runs `npm run release:package` on Windows, and verifies the manifest includes
+macOS, Linux, and Windows app/installer artifacts. It then creates a temporary
+Git origin whose `main` branch points at the selected `source_ref`, runs
+`scripts/install-windows.ps1 -Channel dev` against a temporary checkout with
+`-InstallNode`, an install path containing spaces, `-SkipOpen`, and a fixed high
+port, verifies the `AgentCockpit` ONLOGON scheduled task is queryable, probes
+`/auth/setup`, verifies `/api/chat/install/doctor` reports `node`, `npm`, and
+`pm2` as `ok`, and runs the generated stop script before the publish job starts.
+
+The `linux-smoke` job runs on `ubuntu-latest`. It installs root and mobile
+dependencies, runs the root/web/mobile TypeScript checks, builds the web and
+mobile assets, checks the web bundle budget, runs the Linux installer static
+coverage plus install doctor/install-state tests and the Linux-named
+update-service tests, parses `scripts/install-linux.sh` with `bash -n`, runs
+`npm run release:package`, and verifies the manifest includes macOS, Linux, and
+Windows app/installer artifacts. It then creates a temporary Git origin, runs
+`scripts/install-linux.sh --channel dev` against a temporary checkout with a
+temporary install root, `--skip-open`, and a fixed high port, probes
+`/auth/setup`, verifies `/api/chat/install/doctor` reports `node`, `npm`, and
+`pm2` as `ok`, and deletes the PM2 process before the publish job starts.
 
 When `smoke_only` is false, the Ubuntu publish job then runs the release gate in
 this order:
@@ -150,6 +165,7 @@ The final step creates GitHub Release `v<version>` with title
 - `release-manifest.json`
 - `SHA256SUMS`
 - `install-macos.sh`
+- `install-linux.sh`
 - `install-windows.ps1`
 
 `npm run release:notes` executes `scripts/render-release-notes.js`. The script
@@ -181,9 +197,12 @@ from root `package.json` `engines.node`, required build paths, app archive
 artifact names/sizes/SHA256 hashes, installer artifact names/sizes/SHA256
 hashes, and per-file paths, sizes, and SHA256 hashes for the packaged tree. The
 macOS archive remains `role: "app-tarball", platform: "darwin",
-format: "tar.gz"` for compatibility. The Windows archive is
-`role: "app-zip", platform: "win32", format: "zip"`. `SHA256SUMS` contains
-checksums for both app archives, the release manifest, `install-macos.sh`, and
+format: "tar.gz"` for compatibility. Linux uses the same tarball bytes with a
+separate manifest artifact entry, `role: "app-tarball", platform: "linux",
+format: "tar.gz"`, because the packaged app source and built web/mobile assets
+are platform-neutral. The Windows archive is `role: "app-zip", platform:
+"win32", format: "zip"`. `SHA256SUMS` contains checksums for both physical app
+archives, the release manifest, `install-macos.sh`, `install-linux.sh`, and
 `install-windows.ps1`. The manifest is not embedded in either app archive, so
 archive hashes can be verified before extraction.
 
@@ -284,6 +303,67 @@ Successful owner creation redirects to `/v2/?welcome=1`, where the authenticated
 welcome flow reads install/doctor status, links to Security and CLI Settings,
 offers workspace selection, and calls `POST /api/chat/install/welcome-complete`
 to persist `welcomeCompletedAt`.
+
+## Linux Installer
+
+The supported Linux installer is `scripts/install-linux.sh`. It is uploaded as a
+separate GitHub Release asset so a Linux user can run one shell bootstrap command
+without cloning the repository. The validated manual test target is Ubuntu 24.04
+LTS x64. Other glibc-based x64 distributions may work but are not part of the
+manual release test matrix. Alpine/musl Linux, NixOS, WSL, Linux arm64, and
+32-bit Linux are unsupported by the first Linux installer.
+
+Defaults:
+
+```bash
+scripts/install-linux.sh --channel production
+scripts/install-linux.sh --channel dev
+```
+
+Supported options are `--channel production|dev`, `--version <version>`,
+`--repo <owner/name>`, `--install-dir <path>`, `--dev-dir <path>`,
+`--port <port>`, `--install-node`, `--no-install-node`, and `--skip-open`. The
+default install root is `${XDG_DATA_HOME:-$HOME/.local/share}/agent-cockpit`;
+production releases are extracted under `releases/agent-cockpit-v<version>`,
+and `current` is a symlink to the active release. Mutable runtime data lives
+under `<install-root>/data`.
+
+The installer exits unless `uname -s` is `Linux`, `uname -m` is `x86_64`, and
+`curl`, `tar`, and `sha256sum` are available. It rejects musl-based systems when
+`ldd --version` reports musl, because the first supported runtime path uses
+official glibc-linked Node.js Linux binaries. When Node.js 22+ and npm are
+already available on `PATH`, the installer uses them. Otherwise it downloads the
+latest official Node.js 22 Linux x64 tarball from
+`https://nodejs.org/dist/latest-v22.x/`, downloads `SHASUMS256.txt`, verifies
+the tarball with `sha256sum`, extracts it under
+`<install-root>/runtime/node-v<version>`, and points
+`<install-root>/runtime/node` at that runtime. It prepends the private
+`runtime/node/bin` directory for install-time `node`, `npm`, and `npx` commands
+and persists that `PATH` in generated `.env` and `ecosystem.config.js` so the
+PM2-managed server and restart/update scripts continue to use the private
+runtime. The installer records `nodeRuntime` ownership/version metadata in
+`install.json` so later production updates know whether Agent Cockpit may update
+that runtime.
+
+Production installs download `release-manifest.json`, `SHA256SUMS`, and the
+manifest artifact with `platform: "linux"` and `format: "tar.gz"` from
+GitHub Releases. They verify SHA256 for both the manifest and tarball before
+extraction. After extraction they install root and mobile dependencies with the
+same quiet npm settings as macOS, verify prebuilt `public/v2-built/` and
+`public/mobile-built/` shells, and build only if an expected shell is missing.
+Dev installs clone or update `main` under `--dev-dir`, install dependencies, and
+force both builds.
+
+Both Linux channels generate `.env`, `ecosystem.config.js`, and
+`<AGENT_COCKPIT_DATA_DIR>/install.json` with the same runtime config fields as
+macOS. The PM2 ecosystem file uses the local `./node_modules/.bin/tsx`
+interpreter, `cwd` set to the selected app directory, and app name
+`agent-cockpit`. The installer starts the app with local PM2 through
+`npx pm2 startOrRestart ecosystem.config.js --update-env` and `npx pm2 save`,
+then probes `http://127.0.0.1:<port>/auth/setup` for up to 90 seconds. Once the
+setup endpoint is ready, it prints the first-run setup token and opens
+`http://localhost:<port>/auth/setup` with `xdg-open` when available unless
+`--skip-open` is set; when `xdg-open` is unavailable, it prints the setup URL.
 
 ## Windows Installer
 
@@ -432,7 +512,7 @@ npm run mobile:build
 
 `WEB_BUILD_MODE=skip` disables both main V2 web and mobile startup preflights for tests or unusual deployments that provision assets out of band. If no previous build exists and the build fails, startup fails. If a previous build exists and a rebuild fails, the server logs the error and serves the previous build.
 
-Dev self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. Production self-update checks the release manifest's required Node runtime before dependency installation. When a release raises the required Node major, the updater installs or refreshes a checksum-verified private Node runtime from Node.org under the Agent Cockpit install root before running `npm ci`; installs that previously used system Node migrate to this private runtime instead of mutating global Node. macOS private runtime updates use Node's Darwin tarball and stable private-runtime symlink. Windows private runtime updates use Node's Windows ZIP and a versioned runtime directory. Production then runs root/mobile `npm ci` inside the extracted release, then runs the V2/mobile build preflight there only when markers or assets require it. macOS switches the `current` symlink before PM2 restart; Windows writes the active versioned `appDir` to `install.json` and launches a PowerShell restart script with health-check rollback. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md), [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md), [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md), [ADR-0059](adr/0059-install-private-node-runtime-on-macos.md), and [ADR-0063](adr/0063-adopt-per-user-windows-installer.md).
+Dev self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. Production self-update checks the release manifest's required Node runtime before dependency installation. When a release raises the required Node major, the updater installs or refreshes a checksum-verified private Node runtime from Node.org under the Agent Cockpit install root before running `npm ci`; installs that previously used system Node migrate to this private runtime instead of mutating global Node. macOS private runtime updates use Node's Darwin tarball and stable private-runtime symlink. Linux private runtime updates use Node's Linux x64 `tar.xz` archive and the same stable private-runtime symlink. Windows private runtime updates use Node's Windows ZIP and a versioned runtime directory. Production then runs root/mobile `npm ci` inside the extracted release, then runs the V2/mobile build preflight there only when markers or assets require it. macOS and Linux switch the `current` symlink before PM2 restart; Windows writes the active versioned `appDir` to `install.json` and launches a PowerShell restart script with health-check rollback. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md), [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md), [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md), [ADR-0059](adr/0059-install-private-node-runtime-on-macos.md), [ADR-0063](adr/0063-adopt-per-user-windows-installer.md), and [ADR-0071](adr/0071-support-linux-production-installs.md).
 
 **Remote access via ngrok:**
 ```bash

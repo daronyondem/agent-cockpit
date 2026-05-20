@@ -63,20 +63,28 @@ After review, trigger `.github/workflows/release.yml` with:
 - `smoke_only`: when true, run pre-publish validation and skip GitHub Release
   creation; default false
 
-The workflow always runs a Windows smoke job before publishing. For real
-releases, it also validates that `docs/releases/v<version>.md` exists in the
-selected source ref, renders `dist/release/github-release-notes.md`, and passes
-that file to `gh release create --notes-file`. The Windows smoke job parses
-`install-windows.ps1`, runs Windows-focused installer/doctor/install-state tests
-plus the Windows-named update-service tests, builds the web and mobile assets
-required by release packaging, and packages the release on `windows-latest` to
-verify the Windows ZIP and installer manifest entries before assets are uploaded.
-It also runs
-`install-windows.ps1` in dev mode against a temporary checkout, forces a private
-Node runtime, uses an install path containing spaces, confirms the ONLOGON
-scheduled task exists, probes `/auth/setup`, confirms Install Doctor reports
-`node`, `npm`, and `pm2` as ready, and stops PM2 before the publish job can
-start.
+The workflow always runs Windows and Linux smoke jobs before publishing. For
+real releases, it also validates that `docs/releases/v<version>.md` exists in
+the selected source ref, renders `dist/release/github-release-notes.md`, and
+passes that file to `gh release create --notes-file`. The Windows smoke job
+parses `install-windows.ps1`, runs Windows-focused installer/doctor/install-state
+tests plus the Windows-named update-service tests, builds the web and mobile
+assets required by release packaging, and packages the release on
+`windows-latest` to verify macOS, Linux, and Windows manifest entries before
+assets are uploaded. It also runs `install-windows.ps1` in dev mode against a
+temporary checkout, uses a private-runtime-capable path, uses an install path
+containing spaces, confirms the ONLOGON scheduled task exists, probes
+`/auth/setup`, confirms Install Doctor reports `node`, `npm`, and `pm2` as
+ready, and stops PM2 before the publish job can start.
+
+The Linux smoke job parses `install-linux.sh`, runs Linux installer static
+coverage plus install doctor/install-state tests and the Linux-named
+update-service tests, builds the web and mobile assets required by release
+packaging, packages the release on `ubuntu-latest`, verifies macOS, Linux, and
+Windows manifest entries, runs `install-linux.sh` in dev mode against a
+temporary checkout and install root, probes `/auth/setup`, confirms Install
+Doctor reports `node`, `npm`, and `pm2` as ready, and deletes the PM2 process
+before the publish job can start.
 
 ## Post-Release Checks
 
@@ -86,6 +94,6 @@ After the workflow succeeds:
 2. Confirm the developer-details link resolves to
    `docs/releases/v<version>.md` at the release tag.
 3. Confirm release assets are present: tarball, Windows ZIP,
-   `release-manifest.json`, `SHA256SUMS`, `install-macos.sh`, and
-   `install-windows.ps1`.
+   `release-manifest.json`, `SHA256SUMS`, `install-macos.sh`,
+   `install-linux.sh`, and `install-windows.ps1`.
 4. Confirm the README release badge points at the new version.
