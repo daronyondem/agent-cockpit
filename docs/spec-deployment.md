@@ -443,10 +443,12 @@ Claude wrapper to call the installed `claude.exe` directly when that package is
 present. On Windows the server-side CLI resolver prefers the package entrypoints npm puts
 under that prefix (`@anthropic-ai\claude-code\bin\claude.exe` directly and
 `@openai\codex\bin\codex.js` through `node.exe`) before falling back to npm
-`.cmd` shims through `cmd.exe`; it also recognizes self-installed
-`claude.exe`/`claude.cmd` and `codex.exe`/`codex.cmd` commands already available
-on the user's PATH. Claude/Codex chat, auth, doctor, usage, and CLI update flows
-use that shared resolution path. Windows
+`.cmd` shims through `cmd.exe`. It also inspects PATH directories for the same
+package entrypoint layout beside a PATH-visible npm shim, so a global npm
+install rooted at `C:\Program Files\nodejs` can launch the real package target
+instead of `claude.cmd`/`codex.cmd`; PATH-visible `.exe`/`.cmd` commands remain
+the final self-installed fallback. Claude/Codex chat, auth, doctor, usage, and
+CLI update flows use that shared resolution path. Windows
 path-valued `.env` entries use backtick quoting so dotenv does not interpret
 `\r` or `\n` inside paths such as `runtime\node-v...`. Fresh `SESSION_SECRET`
 and `AUTH_SETUP_TOKEN` values are generated with
@@ -500,7 +502,7 @@ directory, under `~/Library/Application Support/Agent Cockpit/data` by default.
 
 `LOG_LEVEL` controls the structured logger threshold for modules that have migrated to `src/utils/logger.ts`. Supported values are `error`, `warn`, `info`, and `debug`; invalid or missing values fall back to `info`. Metadata keys that look like credentials or session material are redacted before log lines are written.
 
-The main `/v2/` web UI is built with Vite from `web/AgentCockpitWeb/` into `public/v2-built/`. Normal development and production both use the same one-server architecture: Express serves backend routes and the built web UI. A separate Vite dev server is not required for the normal `agent-cockpit-dev` workflow. After editing V2 frontend source, restart the PM2-managed dev server; startup preflight detects missing or stale main V2 web assets, runs `npm run web:build`, writes `public/v2-built/.agent-cockpit-build.json`, then starts serving `/v2/`. The same startup preflight also detects missing or stale mobile PWA assets, runs `npm run mobile:build`, and writes `public/mobile-built/.agent-cockpit-build.json` before listen. Explicit local checks are available:
+The main `/v2/` web UI is built with Vite from `web/AgentCockpitWeb/` into `public/v2-built/`. Normal development and production both use the same one-server architecture: Express serves backend routes and the built web UI. A separate Vite dev server is not required for the normal `agent-cockpit-dev` workflow. After editing V2 frontend source, restart the PM2-managed dev server; startup preflight detects missing or stale main V2 web assets, runs `npm run web:build`, writes `public/v2-built/.agent-cockpit-build.json`, then starts serving `/v2/`. The same startup preflight also detects missing or stale mobile PWA assets, runs `npm run mobile:build`, and writes `public/mobile-built/.agent-cockpit-build.json` before listen. On Windows these startup preflight commands invoke `npm.cmd` through the same `cmd.exe /d /s /c` wrapper used for other `.cmd` shims, so manual `npm start` development installs do not depend on `execFile` being able to spawn bare `npm`. Explicit local checks are available:
 
 ```bash
 npm run web:typecheck

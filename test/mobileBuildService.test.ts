@@ -115,6 +115,7 @@ describe('MobileBuildService', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'services', 'mobileBuildService.ts'), 'utf8');
 
     expect(src).toContain("path.join(appRoot, 'public', 'mobile-built')");
+    expect(src).toContain('cmd: defaultNpmCommand()');
     expect(src).toContain("args: ['--prefix', 'mobile/AgentCockpitPWA', 'run', 'build', '--', '--outDir', stagingDir]");
     expect(src).toContain("stagingPrefix: 'mobile-built'");
   });

@@ -73,7 +73,7 @@ export class WebBuildService {
     this.buildLabel = opts.buildLabel || 'V2 web';
     this.buildScript = opts.buildScript || 'web:build';
     this.buildCommand = opts.buildCommand || ((stagingDir: string) => ({
-      cmd: 'npm',
+      cmd: defaultNpmCommand(),
       args: ['run', this.buildScript, '--', '--outDir', stagingDir],
       cwd: this.appRoot,
       timeout: 120_000,
@@ -262,6 +262,10 @@ export class WebBuildService {
 
 function normalizeMode(value: string | undefined): WebBuildMode {
   return value === 'skip' ? 'skip' : 'auto';
+}
+
+export function defaultNpmCommand(): string {
+  return process.platform === 'win32' ? 'npm.cmd' : 'npm';
 }
 
 function markerMatches(marker: WebBuildMarker | null, expected: Omit<WebBuildMarker, 'builtAt'>): boolean {

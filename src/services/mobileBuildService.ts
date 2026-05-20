@@ -1,6 +1,7 @@
 import path from 'path';
 import {
   WebBuildService,
+  defaultNpmCommand,
   type WebBuildServiceOptions,
   type WebBuildStatus,
 } from './webBuildService';
@@ -23,7 +24,7 @@ export class MobileBuildService {
       buildLabel: 'Mobile PWA',
       buildScript: 'mobile:build',
       buildCommand: opts.buildCommand || ((stagingDir: string) => ({
-        cmd: 'npm',
+        cmd: defaultNpmCommand(),
         args: ['--prefix', 'mobile/AgentCockpitPWA', 'run', 'build', '--', '--outDir', stagingDir],
         cwd: appRoot,
         timeout: 120_000,

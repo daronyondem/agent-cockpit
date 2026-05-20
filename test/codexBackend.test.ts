@@ -221,6 +221,37 @@ describe('CodexAdapter', () => {
     }
   });
 
+  test('resolveCodexCliRuntime prefers a PATH npm package entrypoint over the cmd shim', () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'codex-runtime-path-package-win-'));
+    const userBin = path.join(root, 'bin');
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
+      process.env.PATH = userBin;
+      const codexJs = path.join(userBin, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
+      fs.mkdirSync(path.dirname(codexJs), { recursive: true });
+      fs.writeFileSync(path.join(userBin, 'codex.cmd'), '');
+      fs.writeFileSync(codexJs, '');
+
+      const runtime = resolveCodexCliRuntime();
+
+      expect(runtime.command).toBe(process.execPath);
+      expect(runtime.argsPrefix).toEqual([codexJs]);
+      expect(runtime.windowsCmdShim).toBeUndefined();
+    } finally {
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
+      process.env.PATH = originalPath;
+      fs.rmSync(root, { recursive: true, force: true });
+      restorePlatform();
+    }
+  });
+
   test('resolveCodexCliRuntime rejects non-Codex profiles', () => {
     expect(() => resolveCodexCliRuntime({
       id: 'profile-claude',

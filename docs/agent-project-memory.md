@@ -92,7 +92,12 @@ tool is unavailable.
   Windows backend, auth, doctor, plan-usage, and CLI-update launches should
   share that resolver rather than spawning npm shims directly. Detection must
   still recognize self-installed `claude`/`codex` commands from the user's
-  Windows `PATH`.
+  Windows `PATH`. When a PATH directory contains npm's global package layout,
+  prefer the package entrypoint next to the PATH-visible shim before spawning
+  `claude.cmd` or `codex.cmd`.
+- Manual Windows development startup builds should invoke `npm.cmd` through the
+  existing `.cmd` wrapper path; bare `npm` can fail under Node `execFile` even
+  though the production installer path works.
 - Windows production self-update should also repair the current user's `Path`
   for `<installDir>\cli-tools` so existing installs gain terminal CLI access
   after updating without rerunning the full installer.

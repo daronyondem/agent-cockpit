@@ -1,7 +1,18 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { WebBuildService } from '../src/services/webBuildService';
+import { WebBuildService, defaultNpmCommand } from '../src/services/webBuildService';
+
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+
+function mockProcessPlatform(platform: NodeJS.Platform): () => void {
+  Object.defineProperty(process, 'platform', { value: platform });
+  return () => {
+    if (originalPlatformDescriptor) {
+      Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  };
+}
 
 function makeEnv() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'web-build-'));
@@ -31,6 +42,15 @@ function writeNpmBuildScript(root: string, scriptSource: string) {
 }
 
 describe('WebBuildService', () => {
+  test('uses npm.cmd for default Windows build commands', () => {
+    const restorePlatform = mockProcessPlatform('win32');
+    try {
+      expect(defaultNpmCommand()).toBe('npm.cmd');
+    } finally {
+      restorePlatform();
+    }
+  });
+
   test('missing build triggers build and writes marker', async () => {
     const env = makeEnv();
     let builds = 0;

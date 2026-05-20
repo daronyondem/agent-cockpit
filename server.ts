@@ -39,7 +39,7 @@ applySecurity(app);
 const sessionStore = new FileStore({
   path: path.join(config.AGENT_COCKPIT_DATA_DIR, 'sessions'),
   ttl: 24 * 60 * 60,
-  retries: 0,
+  retries: process.platform === 'win32' ? 3 : 0,
 });
 
 app.use(session({

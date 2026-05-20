@@ -57,7 +57,7 @@ Server logging is migrating to `src/utils/logger.ts`. The logger writes one stru
 
 1. Create Express app, set `trust proxy: 1`
 2. Apply Helmet security headers via `applySecurity(app)`
-3. Configure express-session with FileStore (`<AGENT_COCKPIT_DATA_DIR>/sessions/`, 24h TTL, `retries: 0`). `cookie.maxAge` is 24h and `rolling: true` is set — every request re-issues the cookie with a fresh 24h expiry, so active users never hit the wall mid-workflow while idle users still expire after 24h of no activity.
+3. Configure express-session with FileStore (`<AGENT_COCKPIT_DATA_DIR>/sessions/`, 24h TTL, `retries: 0` on non-Windows and `retries: 3` on Windows). `cookie.maxAge` is 24h and `rolling: true` is set — every request re-issues the cookie with a fresh 24h expiry, so active users never hit the wall mid-workflow while idle users still expire after 24h of no activity.
 4. Passport 0.7 polyfill — adds `session.regenerate`/`session.save` stubs if missing
 4a. Mount the public logo route `GET /logo-full-no-text.svg` (serves `public/logo-full-no-text.svg`) — placed before `setupAuth` / `requireAuth` so the unauthenticated login page can load the Agent Cockpit brand mark
 5. Setup Passport with `setupAuth(app, config)`

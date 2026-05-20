@@ -747,7 +747,7 @@ Adaptive reasoning effort support (`supportedEffortLevels`):
 - `sendInput(text)` writes to stdin (safe after abort)
 - Per-request state: each call creates its own `state` object (no shared mutable state)
 - Guards the `--effort` flag: only forwards it when the model declares the requested level in `supportedEffortLevels`. This protects against stale conversation state after a model swap.
-- Resolves `cliProfile` through `resolveClaudeCliRuntime(profile?)`: `command` defaults to `claude`, `env` is merged into `process.env`, and `configDir` maps to `CLAUDE_CONFIG_DIR` (taking precedence over any `env.CLAUDE_CONFIG_DIR`). On Windows, the runtime resolver prefers installer-managed package entrypoints under `<installDir>\cli-tools` or `%APPDATA%\npm` before falling back to `.cmd` shims through `cmd.exe`; macOS/Linux keep direct command execution. Non-Claude profiles are rejected before spawning.
+- Resolves `cliProfile` through `resolveClaudeCliRuntime(profile?)`: `command` defaults to `claude`, `env` is merged into `process.env`, and `configDir` maps to `CLAUDE_CONFIG_DIR` (taking precedence over any `env.CLAUDE_CONFIG_DIR`). On Windows, the runtime resolver prefers installer-managed package entrypoints under `<installDir>\cli-tools` or `%APPDATA%\npm`, then package entrypoints discoverable beside PATH-visible npm shims, before falling back to `.cmd` shims through `cmd.exe`; macOS/Linux keep direct command execution. Non-Claude profiles are rejected before spawning.
 
 **CLI invocation:**
 ```bash
@@ -763,6 +763,8 @@ Adaptive reasoning effort support (`supportedEffortLevels`):
   -p "<user message>"
 ```
 The child process env is the resolved profile env. Server-configured profiles leave `CLAUDE_CONFIG_DIR` unset, so Claude Code uses the server user's default `~/.claude`. Account profiles set `CLAUDE_CONFIG_DIR=<configDir>`, isolating credentials, settings, sessions, plugins, and native memory under that directory.
+
+If a resumed standard Claude Code invocation exits nonzero with Claude's `No conversation found with session ID` stderr, the adapter retries the same prompt once as a new Claude session using the persisted cockpit `sessionId`. The retry avoids poisoning a conversation after an initial failed `--session-id` launch; it does not change startup reconciliation, and no automatic retry is attempted for ordinary nonzero exits. Streaming stdin remains open because this adapter advertises `stdinInput: true`; only one-shot helpers close stdin immediately.
 
 **Goals:** `setGoalObjective(objective, options)` delegates to the existing streaming path by sending `/goal <objective>` as the prompt text. The chat route uses the same durable stream supervision as normal messages but does not save a user message for the slash command; instead it persists a system `goalEvent` message so the objective is visible in the transcript without becoming ordinary backend input. `clearGoal(options)` runs `/goal clear` through `_createStream()` and drains it to completion; the route only permits this while the conversation is idle so a second Claude CLI invocation does not race the active turn. `pauseGoal()` and `resumeGoal()` intentionally throw because Claude Code does not expose reliable pause/resume controls for goals.
 
@@ -1280,7 +1282,8 @@ Claude/Codex probes share the backend resolver:
 `@anthropic-ai\claude-code\bin\claude.exe` is executed directly,
 `@openai\codex\bin\codex.js` is executed through `node.exe`, and npm-created
 `claude.cmd`/`codex.cmd` shims in installer/user prefixes remain fallbacks. If
-the CLIs were installed outside Agent Cockpit, the resolver also probes bare
+the CLIs were installed outside Agent Cockpit, the resolver first looks for the
+same package entrypoint layout beside PATH-visible npm shims, then probes bare
 `claude.exe`/`claude.cmd` and `codex.exe`/`codex.cmd` commands from the user's
 Windows PATH. The
 fallback Windows command runner still launches
@@ -1333,7 +1336,7 @@ Welcome screen's Refresh button without requiring a server restart.
 
 **File:** `src/services/webBuildService.ts`
 
-`WebBuildService` owns the generated-asset build preflight used by `server.ts` and the self-update path. The default instance covers the main V2 web app: it compares source/config/package hashes against `public/v2-built/.agent-cockpit-build.json`, runs the root `npm run web:build` script when needed, and writes a fresh marker after successful builds. The default source root is `web/AgentCockpitWeb/`; the default output root is `public/v2-built/`. The default runner builds into a hidden sibling staging directory (`public/.v2-built-staging-*`) via Vite's `--outDir` override, verifies the staged `index.html`, then swaps the staging directory over `public/v2-built/` only after success. This keeps the last known-good build available if a rebuild fails.
+`WebBuildService` owns the generated-asset build preflight used by `server.ts` and the self-update path. The default instance covers the main V2 web app: it compares source/config/package hashes against `public/v2-built/.agent-cockpit-build.json`, runs the root `npm run web:build` script when needed, and writes a fresh marker after successful builds. The default source root is `web/AgentCockpitWeb/`; the default output root is `public/v2-built/`. The default runner builds into a hidden sibling staging directory (`public/.v2-built-staging-*`) via Vite's `--outDir` override, verifies the staged `index.html`, then swaps the staging directory over `public/v2-built/` only after success. This keeps the last known-good build available if a rebuild fails. `defaultNpmCommand()` returns `npm.cmd` on Windows and `npm` elsewhere; when a `.cmd`/`.bat` command is used, `execFileText()` wraps it with `cmd.exe /d /s /c` so manual Windows `npm start` runs can execute startup builds without relying on bare `npm` process resolution.
 
 Public surface:
 
@@ -1366,7 +1369,7 @@ Modes and failure policy:
 npm --prefix mobile/AgentCockpitPWA run build -- --outDir <stagingDir>
 ```
 
-It is constructed in `server.ts` with the same `WEB_BUILD_MODE` as the main V2 web build service. Startup calls `mobileBuildService.ensureBuilt()` before binding the port; self-update calls `mobileBuildService.ensureBuilt({ force:true })` after mobile dependency installation and after the main V2 web build. The status/failure semantics are identical to `WebBuildService`: a missing-build failure aborts startup, a stale-build failure with prior assets keeps serving the previous build at startup, and any self-update build error prevents PM2 restart.
+On Windows the command uses `npm.cmd` and the inherited `WebBuildService` `.cmd` wrapper; on macOS/Linux it uses `npm`. It is constructed in `server.ts` with the same `WEB_BUILD_MODE` as the main V2 web build service. Startup calls `mobileBuildService.ensureBuilt()` before binding the port; self-update calls `mobileBuildService.ensureBuilt({ force:true })` after mobile dependency installation and after the main V2 web build. The status/failure semantics are identical to `WebBuildService`: a missing-build failure aborts startup, a stale-build failure with prior assets keeps serving the previous build at startup, and any self-update build error prevents PM2 restart.
 
 ## 4.3.5 CliUpdateService
 
@@ -1382,8 +1385,8 @@ It is constructed in `server.ts` with the same `WEB_BUILD_MODE` as the main V2 w
 **Target resolution:**
 - Reads `Settings.cliProfiles`; if a persisted legacy `defaultBackend` exists without a matching profile, the settings read migration supplies that profile. Fresh installs with no profiles produce no update targets.
 - Skips disabled profiles and groups active profiles by resolved vendor, command, invocation prefix, and `PATH`, producing one update item for each real runtime target.
-- Codex profiles resolve through `resolveCodexCliRuntime(profile)` so `command`, merged `env`, and `CODEX_HOME` are honored. On Windows, installer-managed Codex resolves to `node.exe <installDir>\cli-tools\node_modules\@openai\codex\bin\codex.js`.
-- Claude Code profiles resolve through `resolveClaudeCliRuntime(profile)` so `command`, merged `env`, and `CLAUDE_CONFIG_DIR` are honored. On Windows, installer-managed Claude resolves to the package `claude.exe`.
+- Codex profiles resolve through `resolveCodexCliRuntime(profile)` so `command`, merged `env`, and `CODEX_HOME` are honored. On Windows, installer-managed Codex resolves to `node.exe <installDir>\cli-tools\node_modules\@openai\codex\bin\codex.js`; package entrypoints beside PATH-visible npm shims are preferred before `codex.cmd`.
+- Claude Code profiles resolve through `resolveClaudeCliRuntime(profile)` so `command`, merged `env`, and `CLAUDE_CONFIG_DIR` are honored. On Windows, installer-managed Claude resolves to the package `claude.exe`; package entrypoints beside PATH-visible npm shims are preferred before `claude.cmd`.
 - Kiro uses the server-configured `kiro-cli` runtime because Kiro profiles do not expose profile-local command/config/env overrides.
 
 **Status checks:**
