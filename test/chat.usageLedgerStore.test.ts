@@ -2,6 +2,7 @@ import fsp from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { UsageLedgerStore, addToUsage, emptyUsage } from '../src/services/chat/usageLedgerStore';
+import { applyCostEstimate } from '../src/services/usagePricing/estimator';
 import type { UsageLedger } from '../src/types';
 
 describe('UsageLedgerStore', () => {
@@ -42,9 +43,110 @@ describe('UsageLedgerStore', () => {
       cacheReadTokens: 33,
       cacheWriteTokens: 44,
       costUsd: 2,
+      costSource: 'reported',
       credits: 4,
       contextUsagePercentage: 60,
     });
+  });
+
+  test('records estimated cost snapshots for zero-cost subscription CLI usage', async () => {
+    const ledgerPath = path.join(dir, 'usage-ledger.json');
+    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage) => (
+      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z')
+    ));
+
+    await store.record('codex', 'gpt-5.4', {
+      ...emptyUsage(),
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    });
+
+    const ledger = await store.read();
+    const record = ledger.days[0].records[0];
+    expect(record.usage.costUsd).toBe(0);
+    expect(record.usage.costSource).toBe('estimated');
+    expect(record.usage.estimatedCostUsd).toBeCloseTo(17.5);
+    expect(record.usage.costSnapshot).toMatchObject({
+      catalogVersion: '2026-05-20',
+      pricedAt: '2026-05-20T00:00:00.000Z',
+      provider: 'openai',
+      model: 'gpt-5.4',
+      pricingEntryId: 'openai-gpt-5.4-standard',
+      unit: 'tokens',
+    });
+  });
+
+  test('lazily enriches historical zero-cost ledger rows without repricing stored estimates', async () => {
+    const ledgerPath = path.join(dir, 'usage-ledger.json');
+    await fsp.writeFile(ledgerPath, JSON.stringify({
+      days: [{
+        date: '2026-05-20',
+        records: [{
+          backend: 'claude-code',
+          model: 'claude-sonnet-4',
+          usage: { ...emptyUsage(), inputTokens: 1_000_000, outputTokens: 1_000_000 },
+        }],
+      }],
+    }), 'utf8');
+
+    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage) => (
+      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z')
+    ));
+
+    const enriched = await store.enrichMissingCosts();
+    expect(enriched.days[0].records[0].usage.costSource).toBe('estimated');
+    expect(enriched.days[0].records[0].usage.estimatedCostUsd).toBeCloseTo(18);
+
+    const repricingStore = new UsageLedgerStore(ledgerPath, (_backend, _model, usage) => ({
+      ...usage,
+      costSource: 'estimated',
+      estimatedCostUsd: 999,
+    }));
+    const preserved = await repricingStore.enrichMissingCosts();
+    expect(preserved.days[0].records[0].usage.estimatedCostUsd).toBeCloseTo(18);
+  });
+
+  test('normalizes legacy day buckets during lazy enrichment', async () => {
+    const ledgerPath = path.join(dir, 'usage-ledger.json');
+    const legacy: UsageLedger & { days: Array<UsageLedger['days'][number] & { backends?: Record<string, ReturnType<typeof emptyUsage>> }> } = {
+      days: [{
+        date: '2026-05-20',
+        records: undefined as unknown as UsageLedger['days'][number]['records'],
+        backends: { codex: { ...emptyUsage(), inputTokens: 1_000_000, outputTokens: 1_000_000 } },
+      }],
+    };
+    await fsp.writeFile(ledgerPath, JSON.stringify(legacy), 'utf8');
+
+    const store = new UsageLedgerStore(ledgerPath, (backend, model, usage) => (
+      applyCostEstimate(backend, model, usage, '2026-05-20T00:00:00.000Z')
+    ));
+    const enriched = await store.enrichMissingCosts();
+
+    expect(enriched.days[0].records).toEqual([
+      { backend: 'codex', model: 'unknown', usage: { ...emptyUsage(), inputTokens: 1_000_000, outputTokens: 1_000_000, costSource: 'none' } },
+    ]);
+    expect('backends' in enriched.days[0]).toBe(false);
+
+    const persisted = JSON.parse(await fsp.readFile(ledgerPath, 'utf8'));
+    expect('backends' in persisted.days[0]).toBe(false);
+  });
+
+  test('removes legacy backends when records already exist', async () => {
+    const ledgerPath = path.join(dir, 'usage-ledger.json');
+    await fsp.writeFile(ledgerPath, JSON.stringify({
+      days: [{
+        date: '2026-05-20',
+        records: [{ backend: 'codex', model: 'gpt-5.4', usage: { ...emptyUsage(), outputTokens: 1000 } }],
+        backends: { codex: { ...emptyUsage(), inputTokens: 1000 } },
+      }],
+    }), 'utf8');
+
+    const store = new UsageLedgerStore(ledgerPath);
+    const ledger = await store.enrichMissingCosts();
+
+    expect(ledger.days[0].records).toHaveLength(2);
+    expect(ledger.days[0].records.find(record => record.model === 'unknown')?.usage.inputTokens).toBe(1000);
+    expect('backends' in ledger.days[0]).toBe(false);
   });
 
   test('records per-backend model usage and migrates legacy day buckets', async () => {

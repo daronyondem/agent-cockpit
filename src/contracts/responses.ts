@@ -10,6 +10,27 @@ export interface Usage {
   cacheReadTokens: number;
   cacheWriteTokens: number;
   costUsd: number;
+  costSource?: 'reported' | 'estimated' | 'none';
+  estimatedCostUsd?: number;
+  costSnapshot?: {
+    catalogVersion: string;
+    pricedAt: string;
+    provider: 'openai' | 'anthropic' | 'kiro';
+    model: string;
+    pricingEntryId: string;
+    sourceUrl: string;
+    verifiedAt: string;
+    effectiveDate: string;
+    currency: 'USD';
+    unit: 'tokens' | 'credits';
+    ratesPerMillion?: {
+      input: number;
+      output: number;
+      cachedInput?: number;
+      cacheWrite?: number;
+    };
+    usdPerCredit?: number;
+  };
   credits?: number;
   contextUsagePercentage?: number;
 }

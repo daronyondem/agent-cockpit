@@ -184,6 +184,46 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.btn.primary:disabled');
   });
 
+  test('desktop Usage settings separate reported and estimated cost with pricing override controls', () => {
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+    const chipSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chip-renderers.jsx'), 'utf8');
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+
+    expect(settingsSrc).toContain('usageEstimatedCost');
+    expect(settingsSrc).toContain('fmtEstimatedCost');
+    expect(settingsSrc).toContain('Math.ceil(v)');
+    expect(settingsSrc).toContain('Estimated Cost');
+    expect(settingsSrc).toContain("{ id: 'estimated', label: 'Estimated Cost' }");
+    expect(settingsSrc).toContain('AgentApi.settings.usagePricing()');
+    expect(settingsSrc).toContain('AgentApi.settings.saveUsagePricingOverrides');
+    expect(settingsSrc).toContain('AgentApi.settings.clearUsagePricingOverrides');
+    expect(settingsSrc).toContain('Save pricing');
+    expect(chipSrc).toContain('estimatedCostUsd');
+    expect(chipSrc).toContain('Math.ceil(estimated)');
+    expect(apiSrc).toContain("usagePricing: () => chatFetch('usage-pricing')");
+    expect(apiSrc).toContain("saveUsagePricingOverrides: (entries) => chatFetch('usage-pricing/overrides'");
+    expect(settingsSrc).toContain('usage-table-scroll');
+    expect(cssSrc).toContain('.main.main-settings');
+    expect(cssSrc).toContain('min-width: 0;');
+    expect(cssSrc).toContain('overflow-x: hidden;');
+    expect(cssSrc).toContain('repeat(4, minmax(0, 1fr))');
+    expect(cssSrc).toContain('.usage-table-scroll');
+    expect(cssSrc).toContain('.usage-pricing-table');
+    expect(cssSrc).toContain('.usage-pricing-actions');
+  });
+
+  test('mobile Usage bar separates reported and estimated cost', () => {
+    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+
+    expect(appSrc).toContain('const estimatedCost = Number(usage.estimatedCostUsd) || 0;');
+    expect(appSrc).toContain('Math.ceil(estimatedCost).toLocaleString()');
+    expect(appSrc).toContain('<span className="usage-label">Estimated Cost</span>');
+    expect(appSrc).toContain('{estimatedCostLabel}');
+    expect(cssSrc).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
+  });
+
   test('mobile PWA treats stream socket loss as reconnectable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
 

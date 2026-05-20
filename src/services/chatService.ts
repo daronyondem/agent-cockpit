@@ -78,6 +78,9 @@ import {
 } from './chat/messageQueueStore';
 import { WorkspaceInstructionStore } from './chat/workspaceInstructionStore';
 import { UsageLedgerStore, addToUsage, emptyUsage } from './chat/usageLedgerStore';
+import { applyCostEstimate } from './usagePricing/estimator';
+import { UsagePricingStore } from './usagePricing/store';
+import type { UsagePricingEntry, UsagePricingResponse } from './usagePricing/types';
 import { ArtifactStore, type CreateConversationArtifactInput } from './chat/artifactStore';
 import { WorkspaceFeatureSettingsStore } from './chat/workspaceFeatureSettingsStore';
 
@@ -357,10 +360,12 @@ export class ChatService {
   workspacesDir: string;
   artifactsDir: string;
   usageLedgerFile: string;
+  usagePricingOverridesFile: string;
   private _settingsService: SettingsService;
   private _messageQueueStore: MessageQueueStore;
   private _workspaceInstructionStore: WorkspaceInstructionStore;
   private _usageLedgerStore: UsageLedgerStore;
+  private _usagePricingStore: UsagePricingStore;
   private _artifactStore: ArtifactStore;
   private _featureSettingsStore: WorkspaceFeatureSettingsStore;
   private _defaultWorkspace: string;
@@ -389,7 +394,11 @@ export class ChatService {
     this.workspacesDir = path.join(this.baseDir, 'workspaces');
     this.artifactsDir = path.join(this.baseDir, 'artifacts');
     this.usageLedgerFile = path.join(this.baseDir, 'usage-ledger.json');
-    this._usageLedgerStore = new UsageLedgerStore(this.usageLedgerFile);
+    this.usagePricingOverridesFile = path.join(this.baseDir, 'usage-pricing-overrides.json');
+    this._usagePricingStore = new UsagePricingStore(this.usagePricingOverridesFile);
+    this._usageLedgerStore = new UsageLedgerStore(this.usageLedgerFile, (backendId, model, usage) => (
+      this._estimateUsageCost(backendId, model, usage)
+    ));
     this._settingsService = new SettingsService(this.baseDir);
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
     this._backendRegistry = options.backendRegistry || null;
@@ -431,6 +440,7 @@ export class ChatService {
     if (fs.existsSync(this._legacyConversationsDir)) {
       await this._migrateToWorkspaces();
     }
+    await this._usagePricingStore.readOverrides();
     await this._migrateCliProfiles();
     await this._buildLookupMap();
   }
@@ -3481,43 +3491,46 @@ export class ChatService {
     if (!usage) return null;
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return null;
+    const pricingCatalog = (await this._usagePricingStore.getCatalogs()).effective;
     const mutated = await this._indexLock.run(hash, async () => {
       const result = await this._getConvFromIndex(convId);
       if (!result) return null;
       const { index, convEntry } = result;
 
       // Conversation-level totals
+      const backendId = backend || convEntry.backend;
+      const modelId = model || convEntry.model || 'unknown';
+      const enrichedUsage = applyCostEstimate(backendId, modelId, usage, undefined, pricingCatalog.entries, pricingCatalog.version);
       if (!convEntry.usage) convEntry.usage = emptyUsage();
-      addToUsage(convEntry.usage, usage);
+      addToUsage(convEntry.usage, enrichedUsage);
 
       // Per-backend on conversation
-      const backendId = backend || convEntry.backend;
       if (!convEntry.usageByBackend) convEntry.usageByBackend = {};
       if (!convEntry.usageByBackend[backendId]) convEntry.usageByBackend[backendId] = emptyUsage();
-      addToUsage(convEntry.usageByBackend[backendId], usage);
+      addToUsage(convEntry.usageByBackend[backendId], enrichedUsage);
 
       // Session-level totals + per-backend
       let sessionUsage = emptyUsage();
       const activeSession = convEntry.sessions.find(s => s.active);
       if (activeSession) {
         if (!activeSession.usage) activeSession.usage = emptyUsage();
-        addToUsage(activeSession.usage, usage);
+        addToUsage(activeSession.usage, enrichedUsage);
         sessionUsage = activeSession.usage;
 
         if (!activeSession.usageByBackend) activeSession.usageByBackend = {};
         if (!activeSession.usageByBackend[backendId]) activeSession.usageByBackend[backendId] = emptyUsage();
-        addToUsage(activeSession.usageByBackend[backendId], usage);
+        addToUsage(activeSession.usageByBackend[backendId], enrichedUsage);
       }
 
       await this._writeWorkspaceIndex(hash, index);
-      return { conversationUsage: convEntry.usage, sessionUsage, backendId };
+      return { conversationUsage: convEntry.usage, sessionUsage, backendId, modelId, enrichedUsage };
     });
     if (!mutated) return null;
 
     // Record to daily ledger (fire-and-forget, don't block the response)
     // Skip ledger for backends that don't provide token-based usage (e.g. Kiro)
     if (!options?.skipLedger) {
-      this._usageLedgerStore.record(mutated.backendId, model || 'unknown', usage).catch(err => {
+      this._usageLedgerStore.record(mutated.backendId, mutated.modelId, mutated.enrichedUsage).catch(err => {
         log.error('Failed to write usage ledger', { error: err });
       });
     }
@@ -3533,11 +3546,28 @@ export class ChatService {
   }
 
   async getUsageStats(): Promise<UsageLedger> {
-    return this._usageLedgerStore.read();
+    return this._usageLedgerStore.enrichMissingCosts();
   }
 
   async clearUsageStats(): Promise<void> {
     await this._usageLedgerStore.clear();
+  }
+
+  async getUsagePricingCatalog(): Promise<UsagePricingResponse> {
+    return this._usagePricingStore.getCatalogs();
+  }
+
+  async saveUsagePricingOverrides(entries: UsagePricingEntry[]): Promise<UsagePricingResponse> {
+    return this._usagePricingStore.replaceOverrides(entries);
+  }
+
+  async clearUsagePricingOverrides(): Promise<UsagePricingResponse> {
+    return this._usagePricingStore.clearOverrides();
+  }
+
+  private _estimateUsageCost(backendId: string, model: string, usage: Usage): Usage {
+    const catalog = this._usagePricingStore.getEffectiveCatalogSync();
+    return applyCostEstimate(backendId, model, usage, undefined, catalog.entries, catalog.version);
   }
 
   // ── Settings ───────────────────────────────────────────────────────────────

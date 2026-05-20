@@ -1,0 +1,223 @@
+{
+  "schemaVersion": 1,
+  "version": "2026-05-20",
+  "currency": "USD",
+  "entries": [
+    {
+      "id": "openai-gpt-5.5-standard",
+      "provider": "openai",
+      "modelPattern": "gpt-5.5",
+      "unit": "tokens",
+      "sourceUrl": "https://openai.com/api/pricing/",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 5,
+        "cachedInput": 0.5,
+        "output": 30
+      }
+    },
+    {
+      "id": "openai-gpt-5.5-codex-standard",
+      "provider": "openai",
+      "modelPattern": "gpt-5.5-codex",
+      "unit": "tokens",
+      "sourceUrl": "https://openai.com/api/pricing/",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 5,
+        "cachedInput": 0.5,
+        "output": 30
+      }
+    },
+    {
+      "id": "openai-gpt-5.4-mini-standard",
+      "provider": "openai",
+      "modelPattern": "gpt-5.4-mini",
+      "unit": "tokens",
+      "sourceUrl": "https://openai.com/api/pricing/",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 0.75,
+        "cachedInput": 0.075,
+        "output": 4.5
+      }
+    },
+    {
+      "id": "openai-gpt-5.4-standard",
+      "provider": "openai",
+      "modelPattern": "gpt-5.4*",
+      "unit": "tokens",
+      "sourceUrl": "https://openai.com/api/pricing/",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 2.5,
+        "cachedInput": 0.25,
+        "output": 15
+      }
+    },
+    {
+      "id": "anthropic-claude-opus-4.7-family",
+      "provider": "anthropic",
+      "modelPattern": "claude-opus-4-7*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 5,
+        "cacheWrite": 6.25,
+        "cachedInput": 0.5,
+        "output": 25
+      }
+    },
+    {
+      "id": "anthropic-claude-opus-4.6-family",
+      "provider": "anthropic",
+      "modelPattern": "claude-opus-4-6*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 5,
+        "cacheWrite": 6.25,
+        "cachedInput": 0.5,
+        "output": 25
+      }
+    },
+    {
+      "id": "anthropic-claude-opus-4.5-family",
+      "provider": "anthropic",
+      "modelPattern": "claude-opus-4-5*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 5,
+        "cacheWrite": 6.25,
+        "cachedInput": 0.5,
+        "output": 25
+      }
+    },
+    {
+      "id": "anthropic-claude-opus-4.1-family",
+      "provider": "anthropic",
+      "modelPattern": "claude-opus-4-1*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 15,
+        "cacheWrite": 18.75,
+        "cachedInput": 1.5,
+        "output": 75
+      }
+    },
+    {
+      "id": "anthropic-claude-opus-4-deprecated",
+      "provider": "anthropic",
+      "modelPattern": "claude-opus-4",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 15,
+        "cacheWrite": 18.75,
+        "cachedInput": 1.5,
+        "output": 75
+      }
+    },
+    {
+      "id": "anthropic-claude-opus-4-2025-deprecated",
+      "provider": "anthropic",
+      "modelPattern": "claude-opus-4-2025*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 15,
+        "cacheWrite": 18.75,
+        "cachedInput": 1.5,
+        "output": 75
+      }
+    },
+    {
+      "id": "anthropic-claude-sonnet-4-family",
+      "provider": "anthropic",
+      "modelPattern": "claude-sonnet-4*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 3,
+        "cacheWrite": 3.75,
+        "cachedInput": 0.3,
+        "output": 15
+      }
+    },
+    {
+      "id": "anthropic-claude-haiku-4.5-family",
+      "provider": "anthropic",
+      "modelPattern": "claude-haiku-4-5*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 1,
+        "cacheWrite": 1.25,
+        "cachedInput": 0.1,
+        "output": 5
+      }
+    },
+    {
+      "id": "anthropic-claude-haiku-3.5-family",
+      "provider": "anthropic",
+      "modelPattern": "claude-3-5-haiku*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 0.8,
+        "cacheWrite": 1,
+        "cachedInput": 0.08,
+        "output": 4
+      }
+    },
+    {
+      "id": "anthropic-claude-haiku-3.5-alias",
+      "provider": "anthropic",
+      "modelPattern": "claude-haiku-3-5*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "ratesPerMillion": {
+        "input": 0.8,
+        "cacheWrite": 1,
+        "cachedInput": 0.08,
+        "output": 4
+      }
+    },
+    {
+      "id": "kiro-credit-overage",
+      "provider": "kiro",
+      "modelPattern": "*",
+      "unit": "credits",
+      "sourceUrl": "https://kiro.dev/pricing",
+      "verifiedAt": "2026-05-20",
+      "effectiveDate": "2026-05-20",
+      "usdPerCredit": 0.04
+    }
+  ]
+}
