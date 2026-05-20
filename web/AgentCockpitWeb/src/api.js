@@ -831,6 +831,9 @@
     backends: () => chatFetch('backends').then(r => r.json()),
     usageStats: () => chatFetch('usage-stats').then(r => r.json()),
     clearUsageStats: () => chatFetch('usage-stats', { method: 'DELETE' }).then(r => r.json()),
+    usagePricing: () => chatFetch('usage-pricing').then(r => r.json()),
+    saveUsagePricingOverrides: (entries) => chatFetch('usage-pricing/overrides', { method: 'PUT', body: { entries: entries || [] } }).then(r => r.json()),
+    clearUsagePricingOverrides: () => chatFetch('usage-pricing/overrides', { method: 'DELETE' }).then(r => r.json()),
     restartServer: () => chatFetch('server/restart', { method: 'POST', body: {} }).then(r => r.json()),
     testCliProfile: (profileId) => chatFetch(
       'cli-profiles/' + encodeURIComponent(profileId) + '/test',

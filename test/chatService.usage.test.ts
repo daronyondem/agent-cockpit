@@ -151,6 +151,67 @@ describe('addUsage', () => {
     expect(record!.usage.costUsd).toBe(0.05);
   });
 
+  test('estimates zero-cost subscription CLI usage on conversation, session, and ledger', async () => {
+    const conv = await service.createConversation('Estimated Cost Test');
+    const updated = await service.addUsage(conv.id, {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0,
+    }, 'claude-code', 'claude-sonnet-4');
+
+    expect(updated!.conversationUsage.costUsd).toBe(0);
+    expect(updated!.conversationUsage.costSource).toBe('estimated');
+    expect(updated!.conversationUsage.estimatedCostUsd).toBeCloseTo(18);
+    expect(updated!.sessionUsage.costSource).toBe('estimated');
+    expect(updated!.sessionUsage.estimatedCostUsd).toBeCloseTo(18);
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const ledger = await service.getUsageStats();
+    const today = new Date().toISOString().slice(0, 10);
+    const dayEntry = ledger.days.find((d: any) => d.date === today);
+    const record = dayEntry!.records.find((r: any) => r.backend === 'claude-code' && r.model === 'claude-sonnet-4');
+    expect(record!.usage.costUsd).toBe(0);
+    expect(record!.usage.costSource).toBe('estimated');
+    expect(record!.usage.estimatedCostUsd).toBeCloseTo(18);
+    expect(record!.usage.costSnapshot).toMatchObject({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4',
+      pricingEntryId: 'anthropic-claude-sonnet-4-family',
+      unit: 'tokens',
+    });
+  });
+
+  test('uses user pricing overrides before built-in pricing when estimating usage', async () => {
+    await service.saveUsagePricingOverrides([{
+      id: 'user-openai-gpt-5.5',
+      provider: 'openai',
+      modelPattern: 'gpt-5.5',
+      unit: 'tokens',
+      sourceUrl: 'user',
+      verifiedAt: '2026-05-20',
+      effectiveDate: '2026-05-20',
+      ratesPerMillion: { input: 1, output: 2 },
+    }]);
+
+    const conv = await service.createConversation('Override Cost Test');
+    const updated = await service.addUsage(conv.id, {
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      costUsd: 0,
+    }, 'codex', 'gpt-5.5');
+
+    expect(updated!.conversationUsage.estimatedCostUsd).toBeCloseTo(3);
+    expect(updated!.conversationUsage.costSnapshot).toMatchObject({
+      pricingEntryId: 'user-openai-gpt-5.5',
+      sourceUrl: 'user',
+    });
+  });
+
   test('defaults model to unknown when not provided', async () => {
     const conv = await service.createConversation('Ledger No Model');
     await service.addUsage(conv.id, { inputTokens: 100, outputTokens: 50, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0.01 }, 'claude-code');

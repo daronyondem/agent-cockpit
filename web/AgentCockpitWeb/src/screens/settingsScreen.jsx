@@ -2051,6 +2051,13 @@ function fmtTokensShort(n){
 }
 function fmtCost(n){ const v = Number(n) || 0; return `$${v.toFixed(4)}`; }
 function fmtCostShort(n){ const v = Number(n) || 0; return v >= 100 ? `$${v.toFixed(0)}` : `$${v.toFixed(2)}`; }
+function fmtEstimatedCost(n){
+  const v = Number(n) || 0;
+  return v > 0 ? `$${Math.ceil(v)}` : '$0';
+}
+function fmtEstimatedCostCell(n){
+  return (Number(n) || 0) > 0 ? fmtEstimatedCost(n) : '—';
+}
 
 /* Pick the most-recent N days from the ledger (relative to the latest date
    present, not wallclock today — sparse data still aggregates sensibly). */
@@ -2060,10 +2067,18 @@ function trailingDays(days, n){
   return n >= sorted.length ? sorted : sorted.slice(0, n);
 }
 
-/* Sum every record across the given days into a single { input, output,
-   cache R, cache W, cost } total. Used for the stat cards. */
+function usageReportedCost(usage){ return Number(usage && usage.costUsd) || 0; }
+function usageEstimatedCost(usage){ return Number(usage && usage.estimatedCostUsd) || 0; }
+function usageRoundedEstimatedCost(usage){ const v = usageEstimatedCost(usage); return v > 0 ? Math.ceil(v) : 0; }
+function fmtUsageDisplayCost(usage){
+  const estimated = usageRoundedEstimatedCost(usage);
+  const reported = usageReportedCost(usage);
+  return estimated > 0 ? `$${Math.ceil(reported + estimated)}` : fmtCostShort(reported);
+}
+
+/* Sum every record across the given days into a single usage total. */
 function totalsFor(days){
-  const t = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0 };
+  const t = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, estimatedCostUsd: 0 };
   for (const d of days || []) {
     for (const r of (d.records || [])) {
       const u = r.usage || {};
@@ -2071,7 +2086,8 @@ function totalsFor(days){
       t.outputTokens     += u.outputTokens     || 0;
       t.cacheReadTokens  += u.cacheReadTokens  || 0;
       t.cacheWriteTokens += u.cacheWriteTokens || 0;
-      t.costUsd          += u.costUsd          || 0;
+      t.costUsd          += usageReportedCost(u);
+      t.estimatedCostUsd += usageEstimatedCost(u);
     }
   }
   return t;
@@ -2117,18 +2133,19 @@ function aggregatePerModel(days){
       const key = `${r.backend}\u0001${r.model}`;
       const slot = map.get(key) || {
         backend: r.backend, model: r.model,
-        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0,
+        inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costUsd: 0, estimatedCostUsd: 0,
       };
       const u = r.usage || {};
       slot.inputTokens      += u.inputTokens      || 0;
       slot.outputTokens     += u.outputTokens     || 0;
       slot.cacheReadTokens  += u.cacheReadTokens  || 0;
       slot.cacheWriteTokens += u.cacheWriteTokens || 0;
-      slot.costUsd          += u.costUsd          || 0;
+      slot.costUsd          += usageReportedCost(u);
+      slot.estimatedCostUsd += usageEstimatedCost(u);
       map.set(key, slot);
     }
   }
-  return Array.from(map.values()).sort((a, b) => b.costUsd - a.costUsd);
+  return Array.from(map.values()).sort((a, b) => (b.costUsd + b.estimatedCostUsd) - (a.costUsd + a.estimatedCostUsd));
 }
 
 /* Build the bar series for the "last 14 days" chart. Returns ascending
@@ -2140,19 +2157,70 @@ function buildBars(days, metric){
     let value = 0;
     for (const r of (d.records || [])) {
       const u = r.usage || {};
-      if (metric === 'cost')  value += u.costUsd || 0;
-      else                    value += (u.inputTokens || 0) + (u.outputTokens || 0);
+      if (metric === 'cost')       value += usageReportedCost(u);
+      else if (metric === 'estimated') value += usageEstimatedCost(u);
+      else                         value += (u.inputTokens || 0) + (u.outputTokens || 0);
     }
     return { date: d.date, value };
   });
 }
 
+function todayDateString(){ return new Date().toISOString().slice(0, 10); }
+function safeRate(value){ const n = Number(value); return Number.isFinite(n) && n >= 0 ? n : 0; }
+function optionalRate(value){
+  if (value === '' || value === undefined || value === null) return undefined;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+function blankPricingOverride(){
+  const date = todayDateString();
+  return {
+    id: `user-openai-${Date.now()}`,
+    provider: 'openai',
+    modelPattern: 'gpt-5.5',
+    unit: 'tokens',
+    sourceUrl: 'user',
+    verifiedAt: date,
+    effectiveDate: date,
+    ratesPerMillion: { input: 0, output: 0 },
+  };
+}
+function cleanPricingOverride(entry){
+  const date = todayDateString();
+  const base = {
+    id: String(entry.id || '').trim() || `user-${Date.now()}`,
+    provider: entry.provider || 'openai',
+    modelPattern: String(entry.modelPattern || '').trim() || '*',
+    unit: entry.unit === 'credits' ? 'credits' : 'tokens',
+    sourceUrl: String(entry.sourceUrl || '').trim() || 'user',
+    verifiedAt: String(entry.verifiedAt || '').trim() || date,
+    effectiveDate: String(entry.effectiveDate || '').trim() || date,
+  };
+  if (base.unit === 'credits') return { ...base, usdPerCredit: safeRate(entry.usdPerCredit) };
+  const rates = entry.ratesPerMillion || {};
+  const ratesPerMillion = {
+    input: safeRate(rates.input),
+    output: safeRate(rates.output),
+  };
+  const cachedInput = optionalRate(rates.cachedInput);
+  const cacheWrite = optionalRate(rates.cacheWrite);
+  if (cachedInput !== undefined) ratesPerMillion.cachedInput = cachedInput;
+  if (cacheWrite !== undefined) ratesPerMillion.cacheWrite = cacheWrite;
+  return {
+    ...base,
+    ratesPerMillion,
+  };
+}
+
 function UsageTab(){
   const dialog = useDialog();
   const [data, setData]   = React.useState(null);
+  const [pricing, setPricing] = React.useState(null);
+  const [pricingDraft, setPricingDraft] = React.useState([]);
   const [error, setError] = React.useState(null);
   const [loading, setLoading] = React.useState(true);
-  const [metric, setMetric] = React.useState('cost');   // bars: 'cost' | 'tokens'
+  const [savingPricing, setSavingPricing] = React.useState(false);
+  const [metric, setMetric] = React.useState('cost');   // bars: 'cost' | 'estimated' | 'tokens'
   const [range, setRange] = React.useState('week');     // 'today' | 'week' | 'month' | 'all'
 
   React.useEffect(() => { reload(); }, []);
@@ -2160,8 +2228,15 @@ function UsageTab(){
   async function reload(){
     setLoading(true); setError(null);
     try {
-      const res = await AgentApi.settings.usageStats();
+      const [res, pricingRes] = await Promise.all([
+        AgentApi.settings.usageStats(),
+        AgentApi.settings.usagePricing(),
+      ]);
       setData(res || { days: [] });
+      const totals = totalsFor((res && res.days) || []);
+      setMetric(current => (current === 'cost' && totals.costUsd <= 0 && totals.estimatedCostUsd > 0 ? 'estimated' : current));
+      setPricing(pricingRes || null);
+      setPricingDraft(((pricingRes && pricingRes.overrides && pricingRes.overrides.entries) || []).map(e => ({ ...e, ratesPerMillion: e.ratesPerMillion ? { ...e.ratesPerMillion } : undefined })));
     } catch (e) {
       setError(e.message || String(e));
     } finally { setLoading(false); }
@@ -2183,6 +2258,60 @@ function UsageTab(){
     }
   }
 
+  function updatePricingDraft(index, patch){
+    setPricingDraft(rows => rows.map((row, i) => {
+      if (i !== index) return row;
+      const next = { ...row, ...patch };
+      if (patch.unit === 'credits') {
+        delete next.ratesPerMillion;
+        if (next.usdPerCredit === undefined) next.usdPerCredit = 0;
+      } else if (patch.unit === 'tokens') {
+        delete next.usdPerCredit;
+        next.ratesPerMillion = next.ratesPerMillion || { input: 0, output: 0 };
+      }
+      return next;
+    }));
+  }
+
+  function updatePricingRate(index, key, value){
+    setPricingDraft(rows => rows.map((row, i) => (
+      i === index ? { ...row, ratesPerMillion: { ...(row.ratesPerMillion || {}), [key]: value } } : row
+    )));
+  }
+
+  async function savePricing(anchor){
+    setSavingPricing(true);
+    try {
+      const next = await AgentApi.settings.saveUsagePricingOverrides(pricingDraft.map(cleanPricingOverride));
+      setPricing(next || null);
+      setPricingDraft(((next && next.overrides && next.overrides.entries) || []).map(e => ({ ...e, ratesPerMillion: e.ratesPerMillion ? { ...e.ratesPerMillion } : undefined })));
+    } catch (e) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Save failed', body: e.message || String(e) });
+    } finally {
+      setSavingPricing(false);
+    }
+  }
+
+  async function clearPricing(anchor){
+    const ok = await dialog.confirm({
+      anchor, destructive: true,
+      title: 'Reset pricing overrides?',
+      body: 'Built-in pricing defaults stay in place. Existing estimated usage keeps its stored historical value.',
+      confirmLabel: 'Reset',
+    });
+    if (!ok) return;
+    setSavingPricing(true);
+    try {
+      const next = await AgentApi.settings.clearUsagePricingOverrides();
+      setPricing(next || null);
+      setPricingDraft([]);
+    } catch (e) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Reset failed', body: e.message || String(e) });
+    } finally {
+      setSavingPricing(false);
+    }
+  }
+
   if (loading) return <div className="u-dim" style={{padding:'16px'}}>Loading…</div>;
   if (error)   return <div className="u-err" style={{padding:'16px'}}>{error}</div>;
 
@@ -2196,28 +2325,33 @@ function UsageTab(){
   const rangeDays = daysForRange(allDays, range);
   const summary = aggregatePerModel(rangeDays);
   const dailyRows = buildDailyRows(rangeDays);
+  const builtinPricing = (pricing && pricing.builtin && pricing.builtin.entries) || [];
 
   return (
     <div className="settings-usage">
       <div className="stat-grid">
         <div className="stat">
           <div className="lbl">Today</div>
-          <div className="num">{fmtCostShort(today.costUsd)}</div>
+          <div className="num">{fmtUsageDisplayCost(today)}</div>
+          <div className="sub u-dim">Cost {fmtCostShort(today.costUsd)} · Estimated Cost {fmtEstimatedCost(today.estimatedCostUsd)}</div>
           <div className="sub u-dim">{fmtTokensShort(today.inputTokens)} in · {fmtTokensShort(today.outputTokens)} out</div>
         </div>
         <div className="stat">
           <div className="lbl">Last 7 days</div>
-          <div className="num">{fmtCostShort(week.costUsd)}</div>
+          <div className="num">{fmtUsageDisplayCost(week)}</div>
+          <div className="sub u-dim">Cost {fmtCostShort(week.costUsd)} · Estimated Cost {fmtEstimatedCost(week.estimatedCostUsd)}</div>
           <div className="sub u-dim">{fmtTokensShort(week.inputTokens + week.outputTokens)} tokens</div>
         </div>
         <div className="stat">
           <div className="lbl">Last 30 days</div>
-          <div className="num">{fmtCostShort(month.costUsd)}</div>
+          <div className="num">{fmtUsageDisplayCost(month)}</div>
+          <div className="sub u-dim">Cost {fmtCostShort(month.costUsd)} · Estimated Cost {fmtEstimatedCost(month.estimatedCostUsd)}</div>
           <div className="sub u-dim">{fmtTokensShort(month.inputTokens + month.outputTokens)} tokens</div>
         </div>
         <div className="stat">
           <div className="lbl">All time</div>
-          <div className="num">{fmtCostShort(all.costUsd)}</div>
+          <div className="num">{fmtUsageDisplayCost(all)}</div>
+          <div className="sub u-dim">Cost {fmtCostShort(all.costUsd)} · Estimated Cost {fmtEstimatedCost(all.estimatedCostUsd)}</div>
           <div className="sub u-dim">{fmtTokensShort(all.inputTokens + all.outputTokens)} tokens</div>
         </div>
       </div>
@@ -2229,7 +2363,7 @@ function UsageTab(){
           <Seg
             value={metric}
             onChange={setMetric}
-            options={[{ id: 'cost', label: 'Cost' }, { id: 'tokens', label: 'Tokens' }]}
+            options={[{ id: 'cost', label: 'Cost' }, { id: 'estimated', label: 'Estimated Cost' }, { id: 'tokens', label: 'Tokens' }]}
           />
         </div>
         {bars.length === 0 || maxBar === 0 ? (
@@ -2241,7 +2375,7 @@ function UsageTab(){
                 key={b.date || i}
                 className="bar"
                 style={{ height: `${(b.value / maxBar) * 100}%` }}
-                title={`${b.date} · ${metric === 'cost' ? fmtCost(b.value) : fmtNum(b.value) + ' tokens'}`}
+                title={`${b.date} · ${metric === 'tokens' ? fmtNum(b.value) + ' tokens' : metric === 'estimated' ? fmtEstimatedCost(b.value) : fmtCost(b.value)}`}
               />
             ))}
           </div>
@@ -2266,29 +2400,32 @@ function UsageTab(){
         {summary.length === 0 ? (
           <div className="u-dim" style={{padding:'24px',fontSize:12}}>No records for this period.</div>
         ) : (
-          <table className="tbl">
-            <thead>
-              <tr>
-                <th>Backend</th><th>Model</th>
-                <th className="r">Input</th><th className="r">Output</th>
-                <th className="r">Cache R</th><th className="r">Cache W</th>
-                <th className="r">Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.map(r => (
-                <tr key={`${r.backend}/${r.model}`}>
-                  <td>{r.backend}</td>
-                  <td className="u-mono">{r.model}</td>
-                  <td className="r">{fmtNum(r.inputTokens)}</td>
-                  <td className="r">{fmtNum(r.outputTokens)}</td>
-                  <td className="r">{fmtNum(r.cacheReadTokens)}</td>
-                  <td className="r">{fmtNum(r.cacheWriteTokens)}</td>
-                  <td className="r">{fmtCost(r.costUsd)}</td>
+          <div className="usage-table-scroll">
+            <table className="tbl usage-summary-table">
+              <thead>
+                <tr>
+                  <th>Backend</th><th>Model</th>
+                  <th className="r">Input</th><th className="r">Output</th>
+                  <th className="r">Cache R</th><th className="r">Cache W</th>
+                  <th className="r">Cost</th><th className="r">Estimated Cost</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {summary.map(r => (
+                  <tr key={`${r.backend}/${r.model}`}>
+                    <td>{r.backend}</td>
+                    <td className="u-mono">{r.model}</td>
+                    <td className="r">{fmtNum(r.inputTokens)}</td>
+                    <td className="r">{fmtNum(r.outputTokens)}</td>
+                    <td className="r">{fmtNum(r.cacheReadTokens)}</td>
+                    <td className="r">{fmtNum(r.cacheWriteTokens)}</td>
+                    <td className="r">{r.costUsd > 0 ? fmtCost(r.costUsd) : '—'}</td>
+                    <td className="r">{fmtEstimatedCostCell(r.estimatedCostUsd)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </div>
 
@@ -2299,31 +2436,99 @@ function UsageTab(){
             <span className="spacer"/>
             <span className="u-dim u-mono" style={{fontSize:10.5}}>{rangeDays.length} day{rangeDays.length === 1 ? '' : 's'}</span>
           </div>
-          <table className="tbl">
+          <div className="usage-table-scroll">
+            <table className="tbl usage-daily-table">
+              <thead>
+                <tr>
+                  <th>Date</th><th>Backend</th><th>Model</th>
+                  <th className="r">Tokens</th><th className="r">Cost</th><th className="r">Estimated Cost</th>
+                </tr>
+              </thead>
+              <tbody>
+                {dailyRows.map((r, i) => {
+                  const u = r.usage;
+                  const tokens = (u.inputTokens || 0) + (u.outputTokens || 0);
+                  return (
+                    <tr key={`${r.date}/${r.backend}/${r.model}/${i}`}>
+                      <td className="u-mono">{r.date}</td>
+                      <td>{r.backend}</td>
+                      <td className="u-mono">{r.model}</td>
+                      <td className="r">{fmtNum(tokens)}</td>
+                      <td className="r">{usageReportedCost(u) > 0 ? fmtCost(usageReportedCost(u)) : '—'}</td>
+                      <td className="r">{fmtEstimatedCostCell(usageEstimatedCost(u))}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="pane-block usage-pricing-pane">
+        <div className="pane-block-head">
+          <span>Pricing</span>
+          <span className="spacer"/>
+          <span className="u-dim u-mono" style={{fontSize:10.5}}>{builtinPricing.length} defaults</span>
+        </div>
+        <div className="usage-table-scroll">
+          <table className="tbl usage-pricing-table">
             <thead>
               <tr>
-                <th>Date</th><th>Backend</th><th>Model</th>
-                <th className="r">Tokens</th><th className="r">Cost</th>
+                <th>ID</th><th>Provider</th><th>Model</th><th>Unit</th>
+                <th className="r">Input</th><th className="r">Cached</th><th className="r">Cache W</th><th className="r">Output</th><th className="r">Credit</th><th/>
               </tr>
             </thead>
             <tbody>
-              {dailyRows.map((r, i) => {
-                const u = r.usage;
-                const tokens = (u.inputTokens || 0) + (u.outputTokens || 0);
+              {pricingDraft.length === 0 ? (
+                <tr><td colSpan={10} className="u-dim">No user overrides</td></tr>
+              ) : pricingDraft.map((row, index) => {
+                const rates = row.ratesPerMillion || {};
                 return (
-                  <tr key={`${r.date}/${r.backend}/${r.model}/${i}`}>
-                    <td className="u-mono">{r.date}</td>
-                    <td>{r.backend}</td>
-                    <td className="u-mono">{r.model}</td>
-                    <td className="r">{fmtNum(tokens)}</td>
-                    <td className="r">{u.costUsd > 0 ? fmtCost(u.costUsd) : '—'}</td>
+                  <tr key={`${row.id || 'override'}-${index}`}>
+                    <td><input className="inp u-mono usage-price-id" value={row.id || ''} onChange={e => updatePricingDraft(index, { id: e.target.value })}/></td>
+                    <td>
+                      <select className="sel usage-price-select" value={row.provider || 'openai'} onChange={e => updatePricingDraft(index, { provider: e.target.value })}>
+                        <option value="openai">OpenAI</option>
+                        <option value="anthropic">Anthropic</option>
+                        <option value="kiro">Kiro</option>
+                      </select>
+                    </td>
+                    <td><input className="inp u-mono usage-price-model" value={row.modelPattern || ''} onChange={e => updatePricingDraft(index, { modelPattern: e.target.value })}/></td>
+                    <td>
+                      <select className="sel usage-price-select" value={row.unit || 'tokens'} onChange={e => updatePricingDraft(index, { unit: e.target.value })}>
+                        <option value="tokens">Tokens</option>
+                        <option value="credits">Credits</option>
+                      </select>
+                    </td>
+                    {row.unit === 'credits' ? (
+                      <>
+                        <td className="r">—</td><td className="r">—</td><td className="r">—</td><td className="r">—</td>
+                        <td><input className="inp usage-price-num" type="number" min="0" step="0.0001" value={row.usdPerCredit ?? 0} onChange={e => updatePricingDraft(index, { usdPerCredit: e.target.value })}/></td>
+                      </>
+                    ) : (
+                      <>
+                        <td><input className="inp usage-price-num" type="number" min="0" step="0.0001" value={rates.input ?? 0} onChange={e => updatePricingRate(index, 'input', e.target.value)}/></td>
+                        <td><input className="inp usage-price-num" type="number" min="0" step="0.0001" value={rates.cachedInput ?? ''} onChange={e => updatePricingRate(index, 'cachedInput', e.target.value)}/></td>
+                        <td><input className="inp usage-price-num" type="number" min="0" step="0.0001" value={rates.cacheWrite ?? ''} onChange={e => updatePricingRate(index, 'cacheWrite', e.target.value)}/></td>
+                        <td><input className="inp usage-price-num" type="number" min="0" step="0.0001" value={rates.output ?? 0} onChange={e => updatePricingRate(index, 'output', e.target.value)}/></td>
+                        <td className="r">—</td>
+                      </>
+                    )}
+                    <td className="r"><button className="btn ghost" type="button" onClick={() => setPricingDraft(rows => rows.filter((_, i) => i !== index))}>Remove</button></td>
                   </tr>
                 );
               })}
             </tbody>
           </table>
         </div>
-      ) : null}
+        <div className="usage-pricing-actions">
+          <button className="btn" type="button" onClick={() => setPricingDraft(rows => [...rows, blankPricingOverride()])}>Add override</button>
+          <span className="spacer"/>
+          <button className="btn ghost" type="button" disabled={savingPricing} onClick={(e) => clearPricing(e.currentTarget)}>Reset overrides</button>
+          <button className="btn primary" type="button" disabled={savingPricing} onClick={(e) => savePricing(e.currentTarget)}>{savingPricing ? 'Saving…' : 'Save pricing'}</button>
+        </div>
+      </div>
 
       <div className="settings-actions">
         <button className="btn ghost" onClick={(e) => onClear(e.currentTarget)}>Clear all usage data</button>

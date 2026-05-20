@@ -10,7 +10,7 @@
 
 **Constructor:** `new ChatService(appRoot, options)` — sets `baseDir` to `<options.dataRoot || appRoot/data>/chat`, creates `workspaces/` and `artifacts/` dirs synchronously at startup, initializes in-memory `Map<convId, workspaceHash>` for fast lookup. `server.ts` passes `config.AGENT_COCKPIT_DATA_DIR`, so production installs can keep chat data outside replaceable app code while existing callers without `dataRoot` preserve the legacy `<appRoot>/data/chat` layout.
 
-`ChatService` remains the public facade for conversation, workspace, memory, KB, Workspace Context, settings, queue, usage, artifact, and workspace-instruction operations. Pure attachment helpers stay in `src/services/chat/attachments.ts` and are re-exported where legacy imports still expect them from `chatService.ts`; generated artifact persistence lives in `src/services/chat/artifactStore.ts` behind `createConversationArtifact`; message-queue persistence and legacy queue normalization live in `src/services/chat/messageQueueStore.ts` behind the same public `getQueue`/`setQueue`/`clearQueue` methods; usage-ledger persistence/aggregation lives in `src/services/chat/usageLedgerStore.ts` behind `addUsage`, `getUsageStats`, and `clearUsageStats`; workspace KB and Workspace Context enablement/settings flags live in `src/services/chat/workspaceFeatureSettingsStore.ts`; workspace-instruction compatibility detection and pointer-file creation live in `src/services/chat/workspaceInstructionStore.ts` behind the existing instruction facade methods. This keeps helper/store behavior testable without changing the service API.
+`ChatService` remains the public facade for conversation, workspace, memory, KB, Workspace Context, settings, queue, usage, artifact, and workspace-instruction operations. Pure attachment helpers stay in `src/services/chat/attachments.ts` and are re-exported where legacy imports still expect them from `chatService.ts`; generated artifact persistence lives in `src/services/chat/artifactStore.ts` behind `createConversationArtifact`; message-queue persistence and legacy queue normalization live in `src/services/chat/messageQueueStore.ts` behind the same public `getQueue`/`setQueue`/`clearQueue` methods; usage-ledger persistence/aggregation lives in `src/services/chat/usageLedgerStore.ts` behind `addUsage`, `getUsageStats`, and `clearUsageStats`; usage-pricing defaults, estimation, and mutable overrides live in `src/services/usagePricing/` behind `getUsagePricingCatalog`, `saveUsagePricingOverrides`, and `clearUsagePricingOverrides`; workspace KB and Workspace Context enablement/settings flags live in `src/services/chat/workspaceFeatureSettingsStore.ts`; workspace-instruction compatibility detection and pointer-file creation live in `src/services/chat/workspaceInstructionStore.ts` behind the existing instruction facade methods. This keeps helper/store behavior testable without changing the service API.
 
 Chat API route registration is split by domain. `src/routes/chat.ts` owns dependency construction, stream lifecycle orchestration, and route composition. Focused routers own status/settings (`statusRoutes.ts`), CLI profile metadata/auth (`cliProfileRoutes.ts`), conversation/session/queue CRUD (`conversationRoutes.ts`), stream send/input/abort/status (`streamRoutes.ts`), backend goal mutations (`goalRoutes.ts`), conversation uploads and workspace file delivery (`uploadRoutes.ts`), local directory picker routes (`filesystemRoutes.ts`), workspace instruction routes (`workspaceInstructionRoutes.ts`), workspace file explorer routes (`explorerRoutes.ts`), read-only workspace Git status/diff routes (`gitRoutes.ts`), memory routes (`memoryRoutes.ts`), Workspace Context routes (`workspaceContextRoutes.ts`), and KB routes (`kbRoutes.ts`). Common Express helpers live in `src/routes/chat/routeUtils.ts`; goal lifecycle transcript formatting and runtime snapshots live in `src/services/chat/goalEventMessages.ts` so routes and stream processing persist the same `Message.goalEvent` shape. Runtime request validators and small shared response contracts live in focused files under `src/contracts/`; browser-safe wire types avoid importing server-only `src/types` where web/mobile clients use type-only references.
 
@@ -150,7 +150,7 @@ The password and recovery-code hash format is `scrypt$<base64url salt>$<base64ur
 
 ### Durability primitives
 
-Every JSON file ChatService writes (`workspaces/{hash}/index.json`, session files, the usage ledger, memory `snapshot.json`) goes through `atomicWriteFile` from `src/utils/atomicWrite.ts` — a sibling-tmp + `rename(2)` helper so readers never observe a torn file. Read-modify-write methods that mutate a workspace index are wrapped in `_indexLock.run(hash, ...)` (a `KeyedMutex` from `src/utils/keyedMutex.ts`) so concurrent mutators on the same workspace serialize FIFO and never lose updates; different workspaces run in parallel. `UsageLedgerStore` owns the shared ledger mutex and serializes ledger read-modify-write operations under the constant key `'__usage_ledger__'`. `generateAndUpdateTitle` and `generateAndStoreSessionSummary` keep slow backend adapter calls **outside** the lock (only the persist step acquires it) so a hung backend can't stall other writes on the workspace. `initialize()`'s `_buildLookupMap` catches `JSON.parse` failures per workspace, logs a warning, and keeps building — a single corrupt `index.json` degrades access to that workspace but cannot crash the server into a restart loop.
+Every JSON file ChatService writes (`workspaces/{hash}/index.json`, session files, the usage ledger, memory `snapshot.json`) goes through `atomicWriteFile` from `src/utils/atomicWrite.ts` — a sibling-tmp + `rename(2)` helper so readers never observe a torn file. Read-modify-write methods that mutate a workspace index are wrapped in `_indexLock.run(hash, ...)` (a `KeyedMutex` from `src/utils/keyedMutex.ts`) so concurrent mutators on the same workspace serialize FIFO and never lose updates; different workspaces run in parallel. `UsageLedgerStore` owns the shared ledger mutex and serializes ledger read-modify-write operations under the constant key `'__usage_ledger__'`. `UsagePricingStore` owns a separate keyed mutex for `usage-pricing-overrides.json`; corrupt override files are logged and ignored without overwriting the user's file. `generateAndUpdateTitle` and `generateAndStoreSessionSummary` keep slow backend adapter calls **outside** the lock (only the persist step acquires it) so a hung backend can't stall other writes on the workspace. `initialize()`'s `_buildLookupMap` catches `JSON.parse` failures per workspace, logs a warning, and keeps building — a single corrupt `index.json` degrades access to that workspace but cannot crash the server into a restart loop.
 
 `src/services/streamJobRegistry.ts` applies the same atomic-write + keyed-mutex pattern to `data/chat/stream-jobs.json`, the chat router's operational registry for active CLI turns. The registry is not transcript history: it contains only accepted/preparing/running/abort-requested/finalizing jobs, and normal completion, explicit abort finalization, delete/archive cleanup, and startup reconciliation remove entries once a conversation message or terminal `streamError` is durable.
 
@@ -875,7 +875,7 @@ No `supportedEffortLevels` — Kiro does not expose effort tuning. When Kiro add
 
 **Permission handling:** All `session/request_permission` messages are auto-approved with `allow_always`.
 
-**Usage tracking:** Kiro's `_kiro.dev/metadata` notifications are parsed for `credits` (accumulated) and `contextUsagePercentage` (snapshot, overwritten each update). These are persisted on the conversation and session `Usage` objects but **excluded from the daily usage ledger** — Kiro's credit-based billing is not comparable with token-based backends. The frontend header's per-CLI chip surfaces the context percentage for `kiro` (see `chip-renderers.jsx` in spec-frontend). Because `contextUsagePercentage` is a Kiro-only snapshot and `chatService._addToUsage` only overwrites the field when the incoming source includes it, both `updateConversationBackend` and `resetSession` explicitly clear the field on the conversation entry (and `updateConversationBackend` also clears it on the active session) so a stale Kiro value cannot leak into a subsequent Claude Code / generic-backend chip.
+**Usage tracking:** Kiro's `_kiro.dev/metadata` notifications are parsed for `credits` (accumulated) and `contextUsagePercentage` (snapshot, overwritten each update). These are persisted on the conversation and session `Usage` objects. Kiro metadata events that include `credits` are also recorded in the daily usage ledger under the `kiro` backend so the pricing estimator can apply the catalog's credit overage value; metadata events without credits still skip the ledger to avoid creating context-only rows. The frontend header's per-CLI chip surfaces the context percentage for `kiro` (see `chip-renderers.jsx` in spec-frontend). Because `contextUsagePercentage` is a Kiro-only snapshot and `chatService._addToUsage` only overwrites the field when the incoming source includes it, both `updateConversationBackend` and `resetSession` explicitly clear the field on the conversation entry (and `updateConversationBackend` also clears it on the active session) so a stale Kiro value cannot leak into a subsequent Claude Code / generic-backend chip.
 
 **ACP error diagnostics:** `AcpClient` rejects pending requests with an `Error` enriched with the JSON-RPC `error.code` (as a numeric `code` property) and `error.data` (preserved as-is). Both `_acpOneShot` and the streaming `sendMessage` path format a `[code=N] | data: <json>` suffix into the rejection / terminal stream error / log message (data is JSON-stringified and clamped to 500 chars). A streaming `session/prompt` rejection yields a backend `error` event before `done` so the frontend shows a durable stream error instead of an empty assistant turn. This is critical for diagnosing upstream-model rejections like `-32603 Internal error`, where the JSON-RPC `data` field carries the actual reason ("Prompt is too long", token counts, etc.) that the bare `message` discards.
 
@@ -1398,6 +1398,45 @@ It is constructed in `server.ts` with the same `WEB_BUILD_MODE` as the main V2 w
 - After the update command, the service re-probes the target and returns `{ success: true, steps, item }`. Failures return `{ success: false, steps, error, item? }` without mutating unrelated status items.
 
 See [ADR-0027](adr/0027-manage-cli-updates-from-web-cockpit.md) for the web-only product decision and supported-install policy.
+
+## 4.3.1 UsagePricingStore
+
+**Files:** `src/services/usagePricing/catalog.default.json`,
+`src/services/usagePricing/catalog.ts`, `src/services/usagePricing/estimator.ts`,
+`src/services/usagePricing/store.ts`
+
+The usage-pricing subsystem estimates API-equivalent dollars for subscription
+CLI usage when providers report tokens or credits but do not report nonzero
+spend. It never replaces provider-reported dollars: `costUsd > 0` is labeled
+`Cost` and marked `costSource: "reported"`. Zero-dollar usage with a matching
+pricing entry is labeled `Estimated Cost`, persisted as `estimatedCostUsd`, and
+stamped with `costSnapshot` containing the catalog version, priced-at time,
+provider, model, pricing entry id, source URL, verified/effective dates,
+currency, unit, and rates used.
+
+Built-in defaults are release-owned JSON under
+`src/services/usagePricing/catalog.default.json` and are validated on import.
+Each entry carries the provider source URL, verification date, and effective
+date. The checked-in catalog is manually refreshed before release from official
+provider pricing pages (OpenAI API pricing, Anthropic Claude pricing, and Kiro
+pricing/overage credits); broad wildcard patterns are avoided where current and
+deprecated model families share a prefix but have different rates.
+Mutable user overrides live under
+`data/chat/usage-pricing-overrides.json`; `UsagePricingStore` reads them with a
+separate keyed mutex, writes through `atomicWriteFile`, ignores corrupt files
+without overwriting them, and returns an effective catalog where overrides
+precede built-ins. Override saves replace the full override catalog, and
+releases must refresh only the built-in JSON unless the user explicitly resets
+or edits overrides.
+
+`ChatService.addUsage()` loads the effective catalog before applying an event,
+adds estimated cost to conversation/session totals, and records the enriched
+usage in the daily ledger. `UsageLedgerStore.enrichMissingCosts()` performs lazy
+historical enrichment for old zero-cost rows, but skips rows already marked
+`costSource: "estimated"` with `estimatedCostUsd` so per-token catalog changes
+cannot alter historical estimates.
+
+See [ADR-0069](adr/0069-estimate-usage-costs-from-persisted-pricing-catalog.md).
 
 ## 4.4 ClaudePlanUsageService
 

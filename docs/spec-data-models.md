@@ -28,6 +28,7 @@ agent-cockpit/
 ├── src/
 │   ├── contracts/
 │   │   ├── chat.ts                    # Chat API request/response contracts and runtime validators
+│   │   ├── usagePricing.ts            # Browser-safe usage pricing catalog/override contracts
 │   │   ├── conversations.ts           # Browser-safe conversation mutation contracts
 │   │   ├── streams.ts                 # Browser-safe message/input mutation contracts
 │   │   ├── explorer.ts                # Workspace file explorer mutation contracts
@@ -92,6 +93,7 @@ agent-cockpit/
 │       │   ├── attachments.ts          # Attachment/artifact metadata helpers used by ChatService
 │       │   ├── messageQueueStore.ts    # Private ChatService queue store + legacy queue normalization
 │       │   └── workspaceInstructionStore.ts # Private ChatService workspace instruction compatibility/pointer store
+│       ├── usagePricing/               # Built-in pricing JSON, validator, estimator, and override store
 │       ├── chatService.ts              # Conversation CRUD, messages, sessions
 │       ├── settingsService.ts          # Settings I/O: read, write, legacy migration
     │       └── updateService.ts            # Self-update: dev git/main path and production GitHub Release path
@@ -158,7 +160,8 @@ agent-cockpit/
     │   │       └── session-N.json      # Active session (updated every message)
     │   ├── artifacts/{convId}/         # Per-conversation uploaded files and generated assistant artifacts
     │   ├── settings.json               # User settings, including CLI profile definitions
-    │   └── usage-ledger.json           # Daily per-backend token usage ledger
+    │   ├── usage-ledger.json           # Daily per-backend token usage ledger
+    │   └── usage-pricing-overrides.json # User-owned pricing overrides, never replaced by releases
     ├── sessions/                       # Express session JSON files (24h TTL)
     ├── auth/                           # First-party owner auth state unless AUTH_DATA_DIR overrides it
     ├── claude-plan-usage.json          # Default Claude account usage cache
@@ -326,7 +329,7 @@ running `npm ci`.
 
 All mutable JSON files under `data/` are written with two primitives to survive concurrent access without corruption:
 
-- **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, usage ledger, memory `snapshot.json`, memory `state.json`), `SessionFinalizerQueue` (`session-finalizers.json`), `SettingsService`, `ClaudePlanUsageService`, `CodexPlanUsageService`, and `KiroPlanUsageService`.
+- **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, usage ledger, memory `snapshot.json`, memory `state.json`), `UsagePricingStore` (`usage-pricing-overrides.json`), `SessionFinalizerQueue` (`session-finalizers.json`), `SettingsService`, `ClaudePlanUsageService`, `CodexPlanUsageService`, and `KiroPlanUsageService`.
 - **Per-key mutex** — `src/utils/keyedMutex.ts` exports `KeyedMutex.run<T>(key, fn)`. Callers sharing a key are serialized FIFO; different keys run concurrently. `ChatService` holds one `_indexLock` keyed by workspace hash (every read-modify-write on a workspace `index.json` runs inside `_indexLock.run(hash, ...)`) and one `_ledgerLock` keyed by the constant `'__usage_ledger__'` (wrapping ledger record/clear). Not reentrant — locked regions must not recursively acquire the same key.
 
 Together these guarantee that a workspace index always parses on disk and that concurrent mutators do not clobber each other's updates. `ChatService._buildLookupMap` also catches per-workspace `JSON.parse` failures at startup, logs them, and continues, so a single corrupt file cannot crash the server into a restart loop.
@@ -388,7 +391,28 @@ Together these guarantee that a workspace index always parses on disk and that c
       outputTokens: number,
       cacheReadTokens: number,
       cacheWriteTokens: number,
-      costUsd: number,
+      costUsd: number,                  // Provider-reported nonzero spend. Display label: Cost.
+      costSource?: 'reported'|'estimated'|'none',
+      estimatedCostUsd?: number,        // Persisted API-equivalent fallback. Display label: Estimated Cost.
+      costSnapshot?: {                  // Pricing provenance for a persisted estimate.
+        catalogVersion: string,
+        pricedAt: string,
+        provider: 'openai'|'anthropic'|'kiro',
+        model: string,
+        pricingEntryId: string,
+        sourceUrl: string,
+        verifiedAt: string,
+        effectiveDate: string,
+        currency: 'USD',
+        unit: 'tokens'|'credits',
+        ratesPerMillion?: {
+          input: number,
+          output: number,
+          cachedInput?: number,
+          cacheWrite?: number
+        },
+        usdPerCredit?: number
+      },
       credits?: number,                // Kiro only: accumulated credits consumed (fractional)
       contextUsagePercentage?: number  // Kiro/Codex: context window usage snapshot (0–100)
     }|null,
@@ -1143,6 +1167,64 @@ Daily per-backend/model token usage records for global statistics:
   }]
 }
 ```
+
+`usage.costUsd` is reserved for provider-reported nonzero dollars. For
+subscription CLI usage where the provider reports tokens/credits but no spend,
+the server estimates an API-equivalent fallback into `usage.estimatedCostUsd`
+and marks `usage.costSource = "estimated"`. Once `estimatedCostUsd` is written,
+the ledger treats it as historical data and does not recalculate it from future
+catalog changes. `costSnapshot` records the pricing entry, rates, catalog
+version, and source metadata used for that stored estimate. Historical legacy
+day buckets shaped as `{ backends: { [backendId]: Usage } }` are normalized into
+`records[]` on write or lazy usage-stat enrichment.
+
+Built-in pricing defaults are release-owned JSON at
+`src/services/usagePricing/catalog.default.json`. They are validated at server
+startup and stamped into every estimate through `costSnapshot`, so a later
+release changing token/credit prices does not alter historical rows.
+
+## Usage Pricing Overrides (`data/chat/usage-pricing-overrides.json`)
+
+Mutable user pricing overrides are stored separately from release-owned defaults:
+
+```javascript
+{
+  schemaVersion: 1,
+  version: "user-overrides:<ISO timestamp>" | "user-overrides:empty",
+  currency: "USD",
+  entries: [{
+    id: string,
+    provider: "openai" | "anthropic" | "kiro",
+    modelPattern: string,          // Exact model id or wildcard pattern with *
+    unit: "tokens" | "credits",
+    sourceUrl: string,
+    verifiedAt: string,            // YYYY-MM-DD or ISO date string entered by server/UI
+    effectiveDate: string,
+    ratesPerMillion?: {
+      input: number,
+      output: number,
+      cachedInput?: number,
+      cacheWrite?: number
+    },
+    usdPerCredit?: number
+}]
+}
+```
+
+Override entries are validated through the browser-safe
+`src/contracts/usagePricing.ts` contract and replace the complete override
+catalog on save. The effective catalog is `overrides.entries` followed by
+built-in entries, so a user override can intentionally shadow a built-in model
+pattern. Release updates only change `src/services/usagePricing/catalog.default.json`;
+they never rewrite this override file unless the user clears or saves overrides
+from the Usage settings UI.
+
+Built-in defaults live in `src/services/usagePricing/catalog.default.json` and
+are validated on import. Effective pricing is `overrides.entries` first,
+followed by built-in entries, so user overrides take precedence and releases can
+refresh defaults without replacing user configuration. A corrupt override file
+is logged and ignored for startup/read purposes but is not overwritten until the
+user explicitly saves or resets overrides.
 
 ## CLI Update Status (API-only)
 

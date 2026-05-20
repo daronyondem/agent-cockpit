@@ -22,6 +22,15 @@ function _fmtTokensShort(n){
 function _fmtCost(c){
   return c.toFixed(c >= 1 ? 2 : 4);
 }
+function _costChipSuffix(usage){
+  const cost = Number(usage && usage.costUsd) || 0;
+  const estimated = Number(usage && usage.estimatedCostUsd) || 0;
+  return cost > 0 ? `$${_fmtCost(cost)}` : estimated > 0 ? `est $${Math.ceil(estimated)}` : '';
+}
+function _withCostSuffix(base, usage){
+  const suffix = _costChipSuffix(usage);
+  return base ? (suffix ? `${base} · ${suffix}` : base) : (suffix || null);
+}
 function _fmtInt(n){
   return (n || 0).toLocaleString();
 }
@@ -225,7 +234,7 @@ function ClaudeCodeTokenCard({ usage, planUsage }){
   const cacheWrite = usage.cacheWriteTokens || 0;
   const freshTotal = _usageFreshTokens(usage);
   const total      = _usageTotalTokens(usage);
-  const cost       = typeof usage.costUsd === 'number' ? usage.costUsd : 0;
+  const costSuffix = _costChipSuffix(usage);
   return (
     <>
       <div className="tt-header">
@@ -236,7 +245,7 @@ function ClaudeCodeTokenCard({ usage, planUsage }){
         {freshTotal > 0 && freshTotal !== total ? (
           <span className="u-dim"> · {_fmtTokensShort(freshTotal)} fresh</span>
         ) : null}
-        {cost > 0 ? <span className="u-dim"> · ${_fmtCost(cost)}</span> : null}
+        {costSuffix ? <span className="u-dim"> · {costSuffix}</span> : null}
       </h4>
       <div className="tt-section">
         <div className="tt-section-label">Breakdown</div>
@@ -371,16 +380,18 @@ function KiroTokenCard({ usage, planUsage }){
   const pctRaw = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
   const pct    = pctRaw == null ? 0 : pctRaw;
   const pctStr = pct.toFixed(2) + '%';
+  const costSuffix = _costChipSuffix(usage);
   return (
     <>
       <div className="tt-header">
         <span className="tt-eye">Session usage</span>
       </div>
       <h4 className="tt-h">
-        {pctRaw != null ? <>{pctStr} context</> : <>{_fmtTokensShort(total)} tokens</>}
+        {pctRaw != null ? <>{pctStr} context</> : total > 0 ? <>{_fmtTokensShort(total)} tokens</> : <>Session usage</>}
         {pctRaw != null && total > 0 ? (
           <span className="u-dim"> · {_fmtTokensShort(total)} tokens</span>
         ) : null}
+        {costSuffix ? <span className="u-dim"> · {costSuffix}</span> : null}
       </h4>
       {pctRaw != null ? (
         <div className="tt-section">
@@ -554,19 +565,21 @@ function CodexTokenCard({ usage, planUsage }){
   const pctRaw = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
   const pct    = pctRaw == null ? 0 : pctRaw;
   const pctStr = pct.toFixed(2) + '%';
+  const costSuffix = _costChipSuffix(usage);
   return (
     <>
       <div className="tt-header">
         <span className="tt-eye">Session usage</span>
       </div>
       <h4 className="tt-h">
-        {pctRaw != null ? <>{pctStr} context</> : <>{_fmtTokensShort(total)} tokens</>}
+        {pctRaw != null ? <>{pctStr} context</> : total > 0 ? <>{_fmtTokensShort(total)} tokens</> : <>Session usage</>}
         {pctRaw != null && total > 0 ? (
           <span className="u-dim"> · {_fmtTokensShort(total)} tokens</span>
         ) : null}
         {freshTotal > 0 && freshTotal !== total ? (
           <span className="u-dim"> · {_fmtTokensShort(freshTotal)} fresh</span>
         ) : null}
+        {costSuffix ? <span className="u-dim"> · {costSuffix}</span> : null}
       </h4>
       {pctRaw != null ? (
         <div className="tt-section">
@@ -603,15 +616,15 @@ function DefaultTokenCard({ usage }){
   const input  = usage.inputTokens  || 0;
   const output = usage.outputTokens || 0;
   const total  = input + output;
-  const cost   = typeof usage.costUsd === 'number' ? usage.costUsd : 0;
+  const costSuffix = _costChipSuffix(usage);
   return (
     <>
       <div className="tt-header">
         <span className="tt-eye">Session usage</span>
       </div>
       <h4 className="tt-h">
-        {_fmtTokensShort(total)} tokens
-        {cost > 0 ? <span className="u-dim"> · ${_fmtCost(cost)}</span> : null}
+        {total > 0 ? <>{_fmtTokensShort(total)} tokens</> : <>Session usage</>}
+        {costSuffix ? <span className="u-dim"> · {costSuffix}</span> : null}
       </h4>
       {total > 0 ? (
         <div className="tt-section">
@@ -630,10 +643,7 @@ const CHIP_RENDERERS = {
   'claude-code': {
     renderChipText(usage){
       const total = _usageTotalTokens(usage);
-      if (total === 0) return null;
-      const cost = typeof usage.costUsd === 'number' ? usage.costUsd : 0;
-      const tokensLabel = _fmtTokensShort(total);
-      return cost > 0 ? `${tokensLabel} · $${_fmtCost(cost)}` : tokensLabel;
+      return _withCostSuffix(total > 0 ? _fmtTokensShort(total) : '', usage);
     },
     renderTooltipCard(usage, opts){
       return <ClaudeCodeTokenCard usage={usage} planUsage={opts && opts.planUsage}/>;
@@ -651,11 +661,11 @@ const CHIP_RENDERERS = {
     renderChipText(usage){
       const total = (usage.inputTokens || 0) + (usage.outputTokens || 0);
       const pct   = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
-      if (pct == null && total === 0) return null;
       const tokensLabel = total > 0 ? _fmtTokensShort(total) : '';
-      if (pct != null && tokensLabel) return `${pct.toFixed(2)}% context · ${tokensLabel}`;
-      if (pct != null) return `${pct.toFixed(2)}% context`;
-      return tokensLabel;
+      const base = pct != null && tokensLabel ? `${pct.toFixed(2)}% context · ${tokensLabel}`
+        : pct != null ? `${pct.toFixed(2)}% context`
+        : tokensLabel;
+      return _withCostSuffix(base, usage);
     },
     renderTooltipCard(usage, opts){
       return <KiroTokenCard usage={usage} planUsage={opts && opts.planUsage}/>;
@@ -665,11 +675,11 @@ const CHIP_RENDERERS = {
     renderChipText(usage){
       const total = _usageTotalTokens(usage);
       const pct   = typeof usage.contextUsagePercentage === 'number' ? usage.contextUsagePercentage : null;
-      if (pct == null && total === 0) return null;
       const tokensLabel = total > 0 ? _fmtTokensShort(total) : '';
-      if (pct != null && tokensLabel) return `${pct.toFixed(2)}% context · ${tokensLabel}`;
-      if (pct != null) return `${pct.toFixed(2)}% context`;
-      return tokensLabel;
+      const base = pct != null && tokensLabel ? `${pct.toFixed(2)}% context · ${tokensLabel}`
+        : pct != null ? `${pct.toFixed(2)}% context`
+        : tokensLabel;
+      return _withCostSuffix(base, usage);
     },
     renderTooltipCard(usage, opts){
       return <CodexTokenCard usage={usage} planUsage={opts && opts.planUsage}/>;
@@ -680,10 +690,7 @@ const CHIP_RENDERERS = {
 const DEFAULT_CHIP_RENDERER = {
   renderChipText(usage){
     const total = (usage.inputTokens || 0) + (usage.outputTokens || 0);
-    if (total === 0) return null;
-    const cost = typeof usage.costUsd === 'number' ? usage.costUsd : 0;
-    const tokensLabel = _fmtTokensShort(total);
-    return cost > 0 ? `${tokensLabel} · $${_fmtCost(cost)}` : tokensLabel;
+    return _withCostSuffix(total > 0 ? _fmtTokensShort(total) : '', usage);
   },
   renderTooltipCard(usage){ return <DefaultTokenCard usage={usage}/>; },
 };

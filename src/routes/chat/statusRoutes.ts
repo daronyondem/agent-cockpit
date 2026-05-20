@@ -15,6 +15,8 @@ import type { Request, Response } from '../../types';
 import packageJson from '../../../package.json';
 import { isCliProfileResolutionError, param, sendError } from './routeUtils';
 import { validateSettingsRequest, type VersionResponse } from '../../contracts/chat';
+import { validateUsagePricingOverridesRequest } from '../../contracts/usagePricing';
+import { isContractValidationError } from '../../contracts/validation';
 import { cliVendorForBackend } from '../../services/cliProfiles';
 
 export interface ChatStatusRoutesOptions {
@@ -245,6 +247,31 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
     try {
       await chatService.clearUsageStats();
       res.json({ ok: true });
+    } catch (err: unknown) {
+      sendError(res, 500, err);
+    }
+  });
+
+  router.get('/usage-pricing', async (_req: Request, res: Response) => {
+    try {
+      res.json(await chatService.getUsagePricingCatalog());
+    } catch (err: unknown) {
+      sendError(res, 500, err);
+    }
+  });
+
+  router.put('/usage-pricing/overrides', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { entries } = validateUsagePricingOverridesRequest(req.body);
+      res.json(await chatService.saveUsagePricingOverrides(entries));
+    } catch (err: unknown) {
+      sendError(res, isContractValidationError(err) ? 400 : 500, err);
+    }
+  });
+
+  router.delete('/usage-pricing/overrides', csrfGuard, async (_req: Request, res: Response) => {
+    try {
+      res.json(await chatService.clearUsagePricingOverrides());
     } catch (err: unknown) {
       sendError(res, 500, err);
     }

@@ -2277,4 +2277,56 @@ describe('Usage stats endpoints', () => {
   });
 });
 
+describe('Usage pricing endpoints', () => {
+  const overrideEntry = {
+    id: 'user-openai-gpt-5.5',
+    provider: 'openai',
+    modelPattern: 'gpt-5.5',
+    unit: 'tokens',
+    sourceUrl: 'user',
+    verifiedAt: '2026-05-20',
+    effectiveDate: '2026-05-20',
+    ratesPerMillion: { input: 1, output: 2 },
+  };
+
+  test('GET /usage-pricing returns built-in and effective catalogs', async () => {
+    const res = await env.request('GET', '/api/chat/usage-pricing');
+    expect(res.status).toBe(200);
+    expect(res.body.builtin.entries.length).toBeGreaterThan(0);
+    expect(res.body.overrides.entries).toEqual([]);
+    expect(res.body.effective.entries[0]).toEqual(res.body.builtin.entries[0]);
+  });
+
+  test('PUT and DELETE /usage-pricing/overrides manage durable user overrides', async () => {
+    const putRes = await env.request('PUT', '/api/chat/usage-pricing/overrides', { entries: [overrideEntry] });
+    expect(putRes.status).toBe(200);
+    expect(putRes.body.overrides.entries).toEqual([overrideEntry]);
+    expect(putRes.body.effective.entries[0]).toEqual(overrideEntry);
+
+    const getRes = await env.request('GET', '/api/chat/usage-pricing');
+    expect(getRes.body.overrides.entries).toEqual([overrideEntry]);
+
+    const delRes = await env.request('DELETE', '/api/chat/usage-pricing/overrides');
+    expect(delRes.status).toBe(200);
+    expect(delRes.body.overrides.entries).toEqual([]);
+    expect(delRes.body.effective.entries[0]).toEqual(delRes.body.builtin.entries[0]);
+  });
+
+  test('PUT /usage-pricing/overrides rejects malformed entries', async () => {
+    const res = await env.request('PUT', '/api/chat/usage-pricing/overrides', {
+      entries: [{ ...overrideEntry, ratesPerMillion: undefined }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/ratesPerMillion/);
+  });
+
+  test('PUT /usage-pricing/overrides rejects duplicate override ids', async () => {
+    const res = await env.request('PUT', '/api/chat/usage-pricing/overrides', {
+      entries: [overrideEntry, { ...overrideEntry }],
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/duplicate entry id/);
+  });
+});
+
 // ── WebSocket streaming ─────────────────────────────────────────────────────

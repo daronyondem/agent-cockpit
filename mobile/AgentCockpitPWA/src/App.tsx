@@ -3176,6 +3176,9 @@ function UsageBar({ usage }: { usage?: Usage }) {
   }
   const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
   const context = usage.contextUsagePercentage ?? 0;
+  const reportedCost = Number(usage.costUsd) || 0;
+  const estimatedCost = Number(usage.estimatedCostUsd) || 0;
+  const estimatedCostLabel = estimatedCost > 0 ? `$${Math.ceil(estimatedCost).toLocaleString()}` : '$0';
   return (
     <div className="usage-bar">
       <div>
@@ -3185,8 +3188,13 @@ function UsageBar({ usage }: { usage?: Usage }) {
       </div>
       <div>
         <span className="usage-label">Cost</span>
-        <span className="usage-value">${usage.costUsd.toFixed(4)}</span>
-        <span className="usage-track"><i style={{ width: `${usage.costUsd > 0 ? 18 : 4}%` }} /></span>
+        <span className="usage-value">${reportedCost.toFixed(4)}</span>
+        <span className="usage-track"><i style={{ width: `${reportedCost > 0 ? 18 : 4}%` }} /></span>
+      </div>
+      <div>
+        <span className="usage-label">Estimated Cost</span>
+        <span className="usage-value">{estimatedCostLabel}</span>
+        <span className="usage-track"><i style={{ width: `${estimatedCost > 0 ? 18 : 4}%` }} /></span>
       </div>
       <div>
         <span className="usage-label">Context</span>
