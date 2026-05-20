@@ -29,10 +29,10 @@ diagrams line up so future changes can see what must be updated.
 | Project entry and setup | `README.md`, `ONBOARDING.md`, `BACKENDS.md` | Product overview, self-hosting, backend capability comparison. |
 | Agent guidance | `AGENTS.md`, `CLAUDE.md`, `.kiro/steering/claude-md.md` | Repository instructions for coding agents and cross-tool compatibility. |
 | Canonical spec index | `SPEC.md`, `docs/SPEC.md` | Thin root redirect plus the canonical spec table of contents. |
-| Canonical feature specs | `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/spec-backend-services.md`, `docs/spec-context-map.md`, `docs/spec-server-security.md`, `docs/spec-frontend.md`, `docs/spec-mobile-pwa.md`, `docs/spec-deployment.md`, `docs/spec-testing.md` | Current implemented behavior by area. |
+| Canonical feature specs | `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/spec-backend-services.md`, `docs/spec-workspace-context.md`, `docs/spec-server-security.md`, `docs/spec-frontend.md`, `docs/spec-mobile-pwa.md`, `docs/spec-deployment.md`, `docs/spec-testing.md` | Current implemented behavior by area. |
 | Coverage and diagrams | `docs/spec-coverage.md` | This traceability matrix and cross-feature flow diagrams. |
 | Release operations | `docs/release-workflow.md`, `docs/release-notes-prompt.md`, `docs/releases/README.md`, `docs/releases/v*.md` | Agent-owned release preparation, release-note generation prompt, and per-release developer detail documents. |
-| Design/planning docs | `docs/design-context-map.md`, `docs/design-kb-ingestion-hybrid.md`, `docs/design-kb-vnext-implementation-plan.md`, `CLI_PROFILES_MULTI_ACCOUNT_PLAN.md` | Proposed or implemented design intent. Status headings decide whether content is current behavior or future scope. |
+| Design/planning docs | `docs/design-kb-ingestion-hybrid.md`, `docs/design-kb-vnext-implementation-plan.md`, `CLI_PROFILES_MULTI_ACCOUNT_PLAN.md` | Proposed or implemented design intent. Status headings decide whether content is current behavior or future scope. |
 | Notes/findings | `docs/notes-kiro-bedrock-parity.md`, `docs/parity-decisions.md` | Durable empirical findings and intentional parity differences. |
 | ADRs | `docs/adr/*.md`, `docs/adr/README.md`, `docs/adr/_template.md` | Architecture decision history. Accepted ADR content is not rewritten except status/supersession fields. |
 
@@ -52,13 +52,13 @@ diagrams line up so future changes can see what must be updated.
 | Memory Review scheduler and review UI | `src/services/memoryReview.ts`, `src/routes/chat.ts`, `src/routes/chat/memoryRoutes.ts`, `web/AgentCockpitWeb/src/screens/memoryReview.jsx`, `web/AgentCockpitWeb/src/workspaceSettings.jsx` | `docs/spec-backend-services.md`, `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/spec-frontend.md`, ADRs 0041-0043 | `test/memoryReview.test.ts`, `test/chat.memory.test.ts`, `test/frontendRoutes.test.ts` | Memory flow below. |
 | Knowledge Base upload, conversion, handlers, document structure, source ranges, chunk planning, glossary | `src/services/knowledgeBase/ingestion.ts`, `src/services/knowledgeBase/workspaceTaskQueue.ts`, `src/services/knowledgeBase/handlers/index.ts`, `src/services/knowledgeBase/handlers/pdf.ts`, `src/services/knowledgeBase/handlers/docx.ts`, `src/services/knowledgeBase/handlers/pptx.ts`, `src/services/knowledgeBase/handlers/passthrough.ts`, `src/services/knowledgeBase/ingestion/pageConversion.ts`, `src/services/knowledgeBase/ingestion/pdfSignals.ts`, `src/services/knowledgeBase/ingestion/pptxSignals.ts`, `src/services/knowledgeBase/ingestion/pptxSlideRender.ts`, `src/services/knowledgeBase/libreOffice.ts`, `src/services/knowledgeBase/pandoc.ts`, `src/services/knowledgeBase/documentStructure.ts`, `src/services/knowledgeBase/sourceRange.ts`, `src/services/knowledgeBase/chunkPlanner.ts`, `src/services/knowledgeBase/glossary.ts`, `src/services/knowledgeBase/db.ts`, `src/routes/chat.ts`, `src/routes/chat/kbRoutes.ts` | `docs/spec-backend-services.md`, `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/design-kb-ingestion-hybrid.md`, `docs/design-kb-vnext-implementation-plan.md` | `test/knowledgeBase.*.test.ts`, `test/chat.kb.test.ts`, `test/kbSearchMcp.test.ts`, `test/frontendRoutes.test.ts` | KB pipeline below and `docs/design-kb-ingestion-hybrid.md`. |
 | Knowledge Base dreaming, synthesis, reflections, embeddings, vector search, MCP search tools, auto-dream | `src/services/knowledgeBase/digest.ts`, `src/services/knowledgeBase/dream.ts`, `src/services/knowledgeBase/dreamOps.ts`, `src/services/knowledgeBase/dreamMarkdown.ts`, `src/services/knowledgeBase/embeddings.ts`, `src/services/knowledgeBase/vectorStore.ts`, `src/services/knowledgeBase/autoDream.ts`, `src/services/kbSearchMcp/index.ts`, `src/services/kbSearchMcp/stub.cjs`, `web/AgentCockpitWeb/src/screens/kbBrowser.jsx`, `web/AgentCockpitWeb/src/synthesisAtlas.js`, `web/AgentCockpitWeb/src/stepper.css` | `docs/spec-backend-services.md`, `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/spec-frontend.md`, `docs/design-kb-vnext-implementation-plan.md`, ADRs 0029, 0033-0035, 0039 | `test/knowledgeBase.*.test.ts`, `test/kbSearchMcp.test.ts`, `test/synthesisAtlas.test.ts`, `test/frontendRoutes.test.ts` | KB pipeline below. |
-| Context Map graph, candidates, review, MCP retrieval, scheduled/manual scans | `src/services/contextMap/db.ts`, `src/services/contextMap/service.ts`, `src/services/contextMap/sourcePlanning.ts`, `src/services/contextMap/candidatePrimitives.ts`, `src/services/contextMap/autoApply.ts`, `src/services/contextMap/jsonRepair.ts`, `src/services/contextMap/pipelineMetadata.ts`, `src/services/contextMap/apply.ts`, `src/services/contextMap/defaults.ts`, `src/services/contextMap/mcp.ts`, `src/services/contextMap/stub.cjs`, `src/routes/chat.ts`, `src/routes/chat/contextMapRoutes.ts`, `scripts/context-map-report.ts` | `docs/spec-context-map.md`, `docs/design-context-map.md`, `docs/spec-api-endpoints.md`, `docs/spec-data-models.md`, `docs/spec-backend-services.md`, ADRs 0044-0046 | `test/contextMap.*.test.ts`, `test/chat.contextMap.test.ts`, `test/frontendRoutes.test.ts` | Full diagrams in `docs/spec-context-map.md`; compact cross-feature flow below. |
+| Workspace Context markdown operating memory | `src/services/workspaceContext/defaults.ts`, `src/services/workspaceContext/service.ts`, `src/routes/chat/workspaceContextRoutes.ts`, `src/contracts/workspaceContext.ts`, `src/routes/chat.ts`, `src/services/chatService.ts`, `src/services/chat/workspaceFeatureSettingsStore.ts`, `web/AgentCockpitWeb/src/workspaceSettings.jsx`, `web/AgentCockpitWeb/src/screens/settingsScreen.jsx`, `web/AgentCockpitWeb/src/streamStore.js`, `web/AgentCockpitWeb/src/shell.jsx` | `docs/spec-workspace-context.md`, `docs/spec-api-endpoints.md`, `docs/spec-data-models.md`, `docs/spec-backend-services.md`, `docs/spec-frontend.md` | `test/workspaceContext.service.test.ts`, `test/chat.workspaceContext.test.ts`, `test/frontendRoutes.test.ts`, `test/streamStore.test.ts`, `test/settingsService.test.ts`, `test/chat.workspaceFeatureSettingsStore.test.ts` | Workspace Context flow below. |
 | Desktop V2 frontend | `web/AgentCockpitWeb/index.html`, `web/AgentCockpitWeb/vite.config.ts`, `web/AgentCockpitWeb/tsconfig.json`, `web/AgentCockpitWeb/src/api.js`, `web/AgentCockpitWeb/src/streamStore.js`, `web/AgentCockpitWeb/src/shell.jsx`, `web/AgentCockpitWeb/src/shellState.jsx`, `web/AgentCockpitWeb/src/chat/*.jsx`, `web/AgentCockpitWeb/src/syntaxHighlight.js`, `web/AgentCockpitWeb/src/*.jsx`, `web/AgentCockpitWeb/src/*.js`, `web/AgentCockpitWeb/src/*.ts`, `web/AgentCockpitWeb/src/*.css`, generated `public/v2-built/*`, `scripts/check-web-bundle-size.js` | `docs/spec-frontend.md`, `docs/spec-api-endpoints.md`, `docs/parity-decisions.md`, ADRs 0048, 0049, and 0054 | `npm run web:typecheck`, `npm run web:build`, `npm run web:budget`, `test/frontendRoutes.test.ts`, `test/streamStore.test.ts`, `test/planUsageStores.test.ts`, `test/tabIndicator.test.ts`, `test/synthesisAtlas.test.ts`, `test/webBundleBudget.test.ts` | Frontend/client flow below. |
 | Shared static assets and install metadata | `public/favicon.svg`, `public/logo-full-no-text.svg`, `public/logo-small.svg`, `public/logo-text.svg`, `public/icons/*.svg`, `mobile/AgentCockpitPWA/public/manifest.webmanifest`, `mobile/AgentCockpitPWA/public/icon.svg`, `mobile/AgentCockpitPWA/public/icon-192.png`, `mobile/AgentCockpitPWA/public/icon-512.png`, `mobile/AgentCockpitPWA/public/apple-touch-icon.png` | `docs/spec-data-models.md`, `docs/spec-frontend.md`, `docs/spec-mobile-pwa.md`, `docs/spec-deployment.md`, `README.md` | `test/frontendRoutes.test.ts`, `npm run mobile:build` | Frontend/client flow below. |
 | Mobile PWA | `mobile/AgentCockpitPWA/package.json`, `mobile/AgentCockpitPWA/tsconfig.json`, `mobile/AgentCockpitPWA/vite.config.ts`, `mobile/AgentCockpitPWA/index.html`, `mobile/AgentCockpitPWA/public/*`, `mobile/AgentCockpitPWA/src/main.tsx`, `mobile/AgentCockpitPWA/src/App.tsx`, `mobile/AgentCockpitPWA/src/appModel.ts`, `mobile/AgentCockpitPWA/src/useViewportHeightVar.ts`, `mobile/AgentCockpitPWA/src/api.ts`, `mobile/AgentCockpitPWA/src/types.ts`, `mobile/AgentCockpitPWA/src/styles.css`, `mobile/AgentCockpitPWA/src/vite-env.d.ts`, browser-safe `src/contracts/*.ts` type imports, generated ignored `public/mobile-built/*` | `docs/spec-mobile-pwa.md`, `docs/spec-frontend.md`, `docs/parity-decisions.md`, ADRs 0025-0026, 0049, and 0050 | `npm run mobile:typecheck`, `npm run mobile:build`, `test/frontendRoutes.test.ts`, `test/mobileAppModel.test.ts`, `test/mobileBuildService.test.ts` | Frontend/client flow below. |
 | Self-update, install state, install doctor, release packaging, release notes, CLI updates, restart | `.github/workflows/release.yml`, `.github/workflows/version-bump.yml`, `scripts/install-macos.sh`, `scripts/install-windows.ps1`, `scripts/package-release.js`, `scripts/render-release-notes.js`, `docs/release-workflow.md`, `docs/release-notes-prompt.md`, `docs/releases/README.md`, `src/services/updateService.ts`, `src/services/installStateService.ts`, `src/services/installDoctorService.ts`, `src/services/webBuildService.ts`, `src/services/mobileBuildService.ts`, `src/services/cliUpdateService.ts`, `src/routes/chat.ts`, `web/AgentCockpitWeb/src/cliUpdateStore.js`, `web/AgentCockpitWeb/src/updateModal.jsx`, `scripts/auth-reset.ts` | `docs/spec-api-endpoints.md`, `docs/spec-backend-services.md`, `docs/spec-data-models.md`, `docs/spec-frontend.md`, `docs/spec-deployment.md`, `docs/release-workflow.md`, ADRs 0027, 0048, 0049, 0050, 0054, 0059, and 0063 | `test/updateService.test.ts`, `test/installStateService.test.ts`, `test/installDoctorService.test.ts`, `test/macosInstallerScript.test.ts`, `test/windowsInstallerScript.test.ts`, `test/releasePackage.test.ts`, `test/releaseNotes.test.ts`, `test/webBuildService.test.ts`, `test/mobileBuildService.test.ts`, `test/cliUpdateService.test.ts`, `test/frontendRoutes.test.ts` | Update flow below. |
 | Account plan usage and quota projection | `src/services/claudePlanUsageService.ts`, `src/services/kiroPlanUsageService.ts`, `src/services/codexPlanUsageService.ts`, `web/AgentCockpitWeb/src/planUsageStore.js`, `web/AgentCockpitWeb/src/kiroPlanUsageStore.js`, `web/AgentCockpitWeb/src/codexPlanUsageStore.js`, `web/AgentCockpitWeb/src/usageProjection.ts`, `web/AgentCockpitWeb/src/chip-renderers.jsx` | `docs/spec-api-endpoints.md`, `docs/spec-backend-services.md`, `docs/spec-frontend.md`, `BACKENDS.md` | `test/claudePlanUsage.test.ts`, `test/kiroPlanUsage.test.ts`, `test/codexPlanUsage.test.ts`, `test/planUsageStores.test.ts`, `test/usageProjection.test.ts` | Frontend/client flow below. |
-| ADR tooling and repository scripts | `scripts/adr-new.js`, `scripts/adr-index.js`, `scripts/adr-lint.js`, `scripts/lib/adr-frontmatter.js`, `scripts/auth-reset.ts`, `scripts/context-map-report.ts`, `scripts/check-maintainability.js`, `scripts/check-spec-drift.js`, `scripts/install-macos.sh`, `scripts/install-windows.ps1`, `scripts/package-release.js` | `AGENTS.md`, `CLAUDE.md`, `docs/adr/0001-record-architecture-decisions.md`, `docs/spec-testing.md`, `docs/spec-deployment.md`, `docs/spec-context-map.md` | `test/adrLint.test.ts`, `test/auth.test.ts`, `test/macosInstallerScript.test.ts`, `test/windowsInstallerScript.test.ts`, `test/releasePackage.test.ts`, `npm run maintainability:check`, `npm run spec:drift`, Context Map report manual command | Update/operations flow below. |
+| ADR tooling and repository scripts | `scripts/adr-new.js`, `scripts/adr-index.js`, `scripts/adr-lint.js`, `scripts/lib/adr-frontmatter.js`, `scripts/auth-reset.ts`, `scripts/check-maintainability.js`, `scripts/check-spec-drift.js`, `scripts/install-macos.sh`, `scripts/install-windows.ps1`, `scripts/package-release.js` | `AGENTS.md`, `CLAUDE.md`, `docs/adr/0001-record-architecture-decisions.md`, `docs/spec-testing.md`, `docs/spec-deployment.md`, `docs/spec-workspace-context.md` | `test/adrLint.test.ts`, `test/auth.test.ts`, `test/macosInstallerScript.test.ts`, `test/windowsInstallerScript.test.ts`, `test/releasePackage.test.ts`, `npm run maintainability:check`, `npm run spec:drift` | Update/operations flow below. |
 
 ## System Map
 
@@ -77,7 +77,7 @@ flowchart TD
   ChatService --> WorkspaceFiles["data/chat/workspaces/<hash>"]
   ChatRoutes --> Memory["Workspace Memory + Memory MCP"]
   ChatRoutes --> KB["Knowledge Base + KB MCP"]
-  ChatRoutes --> ContextMap["Context Map + MCP"]
+  ChatRoutes --> WorkspaceContext["Workspace Context markdown"]
   ChatRoutes --> Updates["Self-update + CLI updates"]
   WS --> Browser
   StreamSupervisor --> WS
@@ -226,24 +226,22 @@ document structure, entries, synthesis, reflections, glossary terms, progress,
 and operation history. Markdown files under `knowledge/entries` and
 `knowledge/synthesis` are materialized views for humans and CLI tools.
 
-## Context Map Cross-Feature Flow
+## Workspace Context Cross-Feature Flow
 
 ```mermaid
 flowchart LR
-  Sources["conversation spans + workspace instructions + Markdown + code outlines"] --> Processor["ContextMapService processor"]
-  Processor --> Candidates["governed candidates"]
-  Candidates --> AutoApply["safe auto-apply"]
-  Candidates --> Review["Needs Attention"]
-  AutoApply --> Graph["active entities/facts/relationships"]
-  Review --> Graph
-  Graph --> MCP["Context Map MCP read tools"]
-  Graph --> UI["Workspace Settings graph/review UI"]
-  MCP --> Chat["new chat turns with context_map MCP addendum"]
+  Enable["Workspace Context enabled"] --> Files["workspace-context/WORKSPACE_CONTEXT.md + context/*.md"]
+  Files --> Agents["managed AGENTS.md include block"]
+  Conversations["conversation session files + recent changes"] --> Runner["WorkspaceContextService scan prompt"]
+  Runner --> CLI["configured CLI runOneShot with tools"]
+  CLI --> Files
+  Files --> UI["Workspace Settings read-only markdown preview"]
+  Files --> Chat["regular chat CLI reads/updates files through AGENTS.md"]
 ```
 
-`docs/spec-context-map.md` contains the full Context Map diagrams for settings
-resolution, storage, incremental processing, processor stages, candidate
-decisions, diagnostics, MCP retrieval, and quality gates.
+`docs/spec-workspace-context.md` contains the full Workspace Context details for
+settings resolution, storage, instruction injection, scan and maintenance runs, scheduling,
+routes, UI, and quality gates.
 
 ## Frontend and Mobile Data Flow
 
@@ -263,7 +261,7 @@ flowchart TD
 
 Desktop V2 is the full administrative UI. The mobile PWA intentionally covers
 the mobile chat/file/session workflow and leaves settings-heavy surfaces such as
-KB, Memory, Context Map, and CLI updates to desktop V2.
+KB, Memory, Workspace Context, and CLI updates to desktop V2.
 
 ## Operations Flow
 
@@ -279,7 +277,6 @@ flowchart LR
   Updater --> Registry["BackendRegistry.shutdownAll"]
   ADR["ADR scripts"] --> ADRIndex["adr-index"]
   ADR --> ADRLint["adr-lint"]
-  ContextReport["context-map-report"] --> ContextDb["context-map/state.db readonly"]
 ```
 
 Update and restart routes refuse to run while any conversation turn is active

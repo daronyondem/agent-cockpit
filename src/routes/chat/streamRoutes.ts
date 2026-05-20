@@ -8,7 +8,6 @@ import { ACTIVE_STREAM_JOB_STATES } from '../../services/streamJobRegistry';
 import { StreamJobSupervisor, type PendingMessageSend } from '../../services/streamJobSupervisor';
 import type { MemoryMcpServer } from '../../services/memoryMcp';
 import type { KbSearchMcpServer } from '../../services/kbSearchMcp';
-import type { ContextMapMcpServer } from '../../services/contextMap/mcp';
 import { validateConversationInputRequest, validateSendMessageRequest } from '../../contracts/streams';
 import { isContractValidationError } from '../../contracts/validation';
 import type {
@@ -57,7 +56,6 @@ export interface StreamRoutesOptions {
   pendingMessageSends: Map<string, PendingMessageSend>;
   memoryMcp: MemoryMcpServer;
   kbSearchMcp: KbSearchMcpServer;
-  contextMapMcp: ContextMapMcpServer;
   hasInFlightTurn: (convId: string) => boolean;
   requestPendingAbort: (convId: string) => Promise<boolean>;
   abortActiveStream: (convId: string) => Promise<boolean>;
@@ -76,7 +74,6 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     pendingMessageSends,
     memoryMcp,
     kbSearchMcp,
-    contextMapMcp,
     hasInFlightTurn,
     requestPendingAbort,
     abortActiveStream,
@@ -272,11 +269,6 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       ? await chatService.getWorkspaceKbEnabled(wsHashForSend)
       : false;
     const needsKbMcp = kbEnabledForSend && !!wsHashForSend;
-    const contextMapEnabledForSend = wsHashForSend
-      ? await chatService.getWorkspaceContextMapEnabled(wsHashForSend)
-      : false;
-    const needsContextMapMcp = contextMapEnabledForSend && !!wsHashForSend;
-
     let cliMessage = content.trim();
     if (isNewSession) {
       // Build the user-message prefix: workspace discussion history
@@ -287,7 +279,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       // `--resume` via the CLI's own conversation history on subsequent
       // turns.
       const prefixes: string[] = [];
-      const ctx = chatService.getWorkspaceContext(convId);
+      const ctx = chatService.getWorkspaceDiscussionHistoryPointer(convId);
       if (ctx) prefixes.push(ctx);
       if (wsHashForSend) {
         const memPointer = await chatService.getWorkspaceMemoryPointer(wsHashForSend);
@@ -343,20 +335,6 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
             ].join('\n');
           })()
         : '';
-      const contextMapMcpAddendum = needsContextMapMcp
-        ? [
-            '# Context Map',
-            'You have read-only Context Map MCP tools (from the `agent-cockpit-context-map` server). Use them when the user asks about durable workspace entities, people, projects, workflows, decisions, tools, assets, relationships, or prior context that should be grounded in active graph data.',
-            '',
-            'Tools:',
-            '- `entity_search(query, types?, limit?)` — search active entities by name, alias, and non-secret summary/notes/facts.',
-            '- `get_entity(id, includeEvidence?)` — inspect one entity with aliases, facts, one-hop relationships, and optional evidence references.',
-            '- `get_related_entities(id, depth?, relationshipTypes?, limit?)` — traverse active relationships around an entity.',
-            '- `context_pack(query, maxEntities?, includeFiles?, includeConversations?)` — retrieve a compact bundle for the current request.',
-            '',
-            'Context Map tools are read-only. Do not try to update the map from chat; new or changed graph items are governed through Agent Cockpit review.',
-          ].join('\n')
-        : '';
       const fileDeliveryAddendum = [
         '# File delivery',
         'When the user explicitly asks you to create, generate, or give them a downloadable file (e.g. "give me a CSV", "create a report file", "export this as JSON"), follow these steps:',
@@ -367,7 +345,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
         '',
         'Do NOT use FILE_DELIVERY for files you create as part of normal coding tasks (editing source code, config files, etc.). Only use it when the user explicitly wants a deliverable file to download.',
       ].join('\n');
-      const parts = [globalPrompt, wsInstructions, memoryMcpAddendum, kbMcpAddendum, contextMapMcpAddendum, fileDeliveryAddendum].filter(Boolean);
+      const parts = [globalPrompt, wsInstructions, memoryMcpAddendum, kbMcpAddendum, fileDeliveryAddendum].filter(Boolean);
       systemPrompt = parts.join('\n\n');
     }
 
@@ -394,12 +372,6 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       mcpServers = [...(mcpServers || []), ...kbIssued.mcpServers];
       log.debug('Issued KB Search MCP token', { conversationId: convId, backend: backendId });
     }
-    if (needsContextMapMcp && wsHashForSend) {
-      const contextMapIssued = contextMapMcp.issueContextMapMcpSession(convId, wsHashForSend);
-      mcpServers = [...(mcpServers || []), ...contextMapIssued.mcpServers];
-      log.debug('Issued Context Map MCP token', { conversationId: convId, backend: backendId });
-    }
-
     if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
       return res.json({ userMessage: userMsg, streamReady: false, aborted: true });
     }

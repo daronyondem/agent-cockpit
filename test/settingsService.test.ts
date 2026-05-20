@@ -29,11 +29,11 @@ describe('settings', () => {
     expect(settings.defaultCliProfileId).toBeUndefined();
     expect(settings.cliProfiles).toEqual([]);
     expect(settings.systemPrompt).toBe('');
-    expect(settings.contextMap).toEqual({
+    expect(settings.workspaceContext).toEqual({
       scanIntervalMinutes: 5,
       cliConcurrency: 1,
-      extractionConcurrency: 3,
-      synthesisConcurrency: 3,
+      maintenanceIntervalHours: 24,
+      maintenanceCliConcurrency: 1,
     });
     expect((settings as any).customInstructions).toBeUndefined();
   });
@@ -317,7 +317,7 @@ describe('settings', () => {
     expect(persisted.cliProfiles[0].env).toEqual({ OPENAI_BASE_URL: 'https://example.test' });
   });
 
-  test('saving Memory, KB, and Context Map CLI profile selections keeps legacy backend fields aligned', async () => {
+  test('saving Memory, KB, and Workspace Context CLI profile selections keeps legacy backend fields aligned', async () => {
     const settings = await service.getSettings();
     const profile = {
       id: 'profile-codex-kb',
@@ -341,13 +341,13 @@ describe('settings', () => {
         dreamingCliProfileId: profile.id,
         dreamingCliBackend: 'claude-code',
       },
-      contextMap: {
+      workspaceContext: {
         cliProfileId: profile.id,
         cliBackend: 'claude-code',
         scanIntervalMinutes: 0,
         cliConcurrency: 99,
-        extractionConcurrency: 0,
-        synthesisConcurrency: 99,
+        maintenanceIntervalHours: 0,
+        maintenanceCliConcurrency: 99,
         sources: {
           conversations: true,
           git: 'yes',
@@ -360,12 +360,14 @@ describe('settings', () => {
     expect(saved.knowledgeBase?.ingestionCliBackend).toBe('codex');
     expect(saved.knowledgeBase?.digestionCliBackend).toBe('codex');
     expect(saved.knowledgeBase?.dreamingCliBackend).toBe('codex');
-    expect(saved.contextMap?.cliProfileId).toBe(profile.id);
-    expect(saved.contextMap?.cliBackend).toBe('codex');
-    expect(saved.contextMap?.scanIntervalMinutes).toBe(1);
-    expect(saved.contextMap?.cliConcurrency).toBe(10);
-    expect(saved.contextMap?.extractionConcurrency).toBe(1);
-    expect(saved.contextMap?.synthesisConcurrency).toBe(6);
-    expect((saved.contextMap as any)?.sources).toBeUndefined();
+    expect(saved.workspaceContext?.cliProfileId).toBe(profile.id);
+    expect(saved.workspaceContext?.cliBackend).toBe('codex');
+    expect(saved.workspaceContext?.scanIntervalMinutes).toBe(1);
+    expect(saved.workspaceContext?.cliConcurrency).toBe(10);
+    expect(saved.workspaceContext?.maintenanceIntervalHours).toBe(1);
+    expect(saved.workspaceContext?.maintenanceCliConcurrency).toBe(10);
+    expect((saved.workspaceContext as any)?.extractionConcurrency).toBeUndefined();
+    expect((saved.workspaceContext as any)?.synthesisConcurrency).toBeUndefined();
+    expect((saved.workspaceContext as any)?.sources).toBeUndefined();
   });
 });

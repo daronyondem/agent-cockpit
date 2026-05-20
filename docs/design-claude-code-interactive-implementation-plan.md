@@ -39,7 +39,7 @@ This is a high-risk adapter because it depends on private Claude Code transcript
 - It must not auto-update the shared `claude` CLI for the interactive adapter.
 - It may allow users to run with a newer CLI version, but must warn clearly that Agent Cockpit has not validated that version.
 - It should remain opt-in by provider selection.
-- One-shot background work should initially stay on the existing `claude-code` adapter unless the user explicitly configures `claude-code-interactive` and accepts the extra risk. Title generation, summaries, OCR, Memory processing, KB digestion/dreaming, and Context Map should not be forced through hidden PTY in the first production slice.
+- One-shot background work should initially stay on the existing `claude-code` adapter unless the user explicitly configures `claude-code-interactive` and accepts the extra risk. Title generation, summaries, OCR, Memory processing, KB digestion/dreaming, and Workspace Context should not be forced through hidden PTY in the first production slice.
 
 ## Research Inputs
 
@@ -475,7 +475,7 @@ Default plan:
   - OCR,
   - Memory MCP processor work,
   - KB digestion/dreaming,
-  - Context Map extraction/synthesis.
+  - Workspace Context catch-up runs.
 - Document that "Claude Code Interactive" streaming sessions use subscription interactive behavior, while one-shot background jobs still use headless Claude Code unless a future release explicitly implements hidden-PTY one-shot parity.
 
 Reasoning:
@@ -824,11 +824,11 @@ Verification:
 1. Verify MCP config passthrough in adapter tests.
 2. Verify memory watcher path reuse.
 3. Verify workspace instruction pointer behavior does not need provider-specific changes.
-4. Verify KB/Context Map one-shot delegation stays on reliable path.
+4. Verify KB/Workspace Context one-shot delegation stays on reliable path.
 
 Verification:
 
-- `npm test -- --runTestsByPath test/memoryMcp.test.ts test/chat.memory.test.ts test/contextMap.service.test.ts`
+- `npm test -- --runTestsByPath test/memoryMcp.test.ts test/chat.memory.test.ts test/workspaceContext.service.test.ts`
 
 ### Phase 8: Specs, ADR, And Full Verification
 

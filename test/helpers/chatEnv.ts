@@ -12,7 +12,7 @@ import { attachWebSocket, type WsFunctions } from '../../src/ws';
 import { BackendRegistry } from '../../src/services/backends/registry';
 import type { ActiveStreamEntry } from '../../src/types';
 import type { StreamJobRegistry } from '../../src/services/streamJobRegistry';
-import type { ContextMapService } from '../../src/services/contextMap/service';
+import type { WorkspaceContextService } from '../../src/services/workspaceContext/service';
 import type { SessionFinalizerQueue } from '../../src/services/sessionFinalizerQueue';
 import { MockBackendAdapter } from './mockBackendAdapter';
 
@@ -37,7 +37,7 @@ export interface ChatRouterEnv {
   baseUrl: string;
   activeStreams: Map<string, ActiveStreamEntry>;
   streamJobs: StreamJobRegistry;
-  contextMapService: ContextMapService;
+  workspaceContextService: WorkspaceContextService;
   sessionFinalizers: SessionFinalizerQueue;
   reconcileInterruptedJobs: () => Promise<{ interrupted: number; removed: number }>;
   chatShutdown: () => Promise<void>;
@@ -129,7 +129,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     codexPlanUsageService: mockCodexPlanUsage,
   });
   await chatResult.reconcileInterruptedJobs();
-  const { activeStreams, streamJobs, contextMapService, sessionFinalizers, reconcileInterruptedJobs, shutdown: chatShutdown } = chatResult;
+  const { activeStreams, streamJobs, workspaceContextService, sessionFinalizers, reconcileInterruptedJobs, shutdown: chatShutdown } = chatResult;
   app.use('/api/chat', chatResult.router);
 
   const server = await new Promise<http.Server>((resolve) => {
@@ -269,7 +269,7 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     });
   };
 
-  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, streamJobs, contextMapService, sessionFinalizers, reconcileInterruptedJobs, chatShutdown, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
+  return { tmpDir, chatService, mockBackend, backendRegistry, app, server, baseUrl, activeStreams, streamJobs, workspaceContextService, sessionFinalizers, reconcileInterruptedJobs, chatShutdown, wsFns: wsResult, wsShutdown, request, multipartRequest, connectWs, readWsEvents };
 }
 
 async function removeTmpDirWithRetry(tmpDir: string): Promise<void> {

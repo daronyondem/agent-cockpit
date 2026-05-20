@@ -44,7 +44,7 @@ import type {
   MemoryReviewRun,
   MemoryReviewScheduleConfig,
   ConversationMemoryReviewStatus,
-  ConversationContextMapStatus,
+  ConversationWorkspaceContextStatus,
   EffortLevel,
   ServiceTier,
   KbState,
@@ -57,17 +57,13 @@ import type {
   StreamErrorSource,
   WorkspaceInstructionCompatibilityStatus,
   WorkspaceInstructionPointerResult,
-  ContextMapWorkspaceSettings,
+  WorkspaceContextWorkspaceSettings,
 } from '../types';
 import {
   openKbDatabase,
   normalizeFolderPath,
   KbDatabase,
 } from './knowledgeBase/db';
-import {
-  ContextMapDatabase,
-  openContextMapDatabase,
-} from './contextMap/db';
 import { computeDigestProgress } from './knowledgeBase/digest';
 import { DEFAULT_KB_AUTO_DREAM_CONFIG, normalizeKbAutoDreamConfig } from './knowledgeBase/autoDream';
 import { DEFAULT_MEMORY_REVIEW_SCHEDULE, normalizeMemoryReviewScheduleConfig } from './memoryReview';
@@ -109,6 +105,34 @@ const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+interface ConversationWorkspaceContextStatusRun {
+  runId: string;
+  source: ConversationWorkspaceContextStatus['latestRunSource'];
+  status: ConversationWorkspaceContextStatus['latestRunStatus'];
+  startedAt: string;
+  completedAt?: string;
+}
+
+function normalizeWorkspaceContextStatusRun(value: unknown): ConversationWorkspaceContextStatusRun | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const record = value as Record<string, unknown>;
+  if (typeof record.runId !== 'string' || typeof record.startedAt !== 'string') return undefined;
+  const status = record.status === 'running' || record.status === 'completed' || record.status === 'failed' || record.status === 'stopped' || record.status === 'skipped'
+    ? record.status
+    : undefined;
+  const source = record.source === 'initial_scan' || record.source === 'scheduled' || record.source === 'session_reset' || record.source === 'archive' || record.source === 'manual_catchup' || record.source === 'maintenance'
+    ? record.source
+    : undefined;
+  if (!status || !source) return undefined;
+  return {
+    runId: record.runId,
+    source,
+    status,
+    startedAt: record.startedAt,
+    completedAt: typeof record.completedAt === 'string' ? record.completedAt : undefined,
+  };
 }
 
 /**
@@ -350,8 +374,6 @@ export class ChatService {
    * `closeKbDatabases()` on shutdown.
    */
   private _kbDbs: Map<string, KbDatabase> = new Map();
-  /** Per-workspace Context Map database cache. Mirrors `_kbDbs` lifecycle. */
-  private _contextMapDbs: Map<string, ContextMapDatabase> = new Map();
   /** Per-workspace PGLite vector store cache. Mirrors `_kbDbs` lifecycle. */
   private _kbVectorStores: Map<string, KbVectorStore> = new Map();
   /**
@@ -530,8 +552,12 @@ export class ChatService {
     return path.join(this._workspaceDir(hash), 'index.json');
   }
 
-  private _contextMapDir(hash: string): string {
-    return path.join(this._workspaceDir(hash), 'context-map');
+  getWorkspaceContextDir(hash: string): string {
+    return path.join(this._workspaceDir(hash), 'workspace-context');
+  }
+
+  getConversationSessionFilePath(hash: string, convId: string, sessionNumber: number): string {
+    return this._sessionFilePath(hash, convId, sessionNumber);
   }
 
   private _sessionFilePath(hash: string, convId: string, sessionNumber: number): string {
@@ -2665,7 +2691,7 @@ export class ChatService {
 
   // ── Workspace Context ──────────────────────────────────────────────────────
 
-  getWorkspaceContext(convId: string): string | null {
+  getWorkspaceDiscussionHistoryPointer(convId: string): string | null {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return null;
     const absPath = path.resolve(this._workspaceDir(hash));
@@ -2948,65 +2974,58 @@ export class ChatService {
     return this._featureSettingsStore.listKbEnabledWorkspaceHashes();
   }
 
-  /** Per-workspace Context Map enable/disable (stored on the workspace index). */
-  async getWorkspaceContextMapEnabled(hash: string): Promise<boolean> {
-    return this._featureSettingsStore.getContextMapEnabled(hash);
+  /** Per-workspace Workspace Context enable/disable (stored on the workspace index). */
+  async getWorkspaceContextEnabled(hash: string): Promise<boolean> {
+    return this._featureSettingsStore.getWorkspaceContextEnabled(hash);
   }
 
-  async setWorkspaceContextMapEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
-    return this._featureSettingsStore.setContextMapEnabled(hash, enabled);
+  async setWorkspaceContextEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
+    return this._featureSettingsStore.setWorkspaceContextEnabled(hash, enabled);
   }
 
-  async getWorkspaceContextMapSettings(hash: string): Promise<ContextMapWorkspaceSettings | null> {
-    return this._featureSettingsStore.getContextMapSettings(hash);
+  async getWorkspaceContextSettings(hash: string): Promise<WorkspaceContextWorkspaceSettings | null> {
+    return this._featureSettingsStore.getWorkspaceContextSettings(hash);
   }
 
-  async setWorkspaceContextMapSettings(
+  async setWorkspaceContextSettings(
     hash: string,
     settings: unknown,
-  ): Promise<ContextMapWorkspaceSettings | null> {
-    return this._featureSettingsStore.setContextMapSettings(hash, settings);
+  ): Promise<WorkspaceContextWorkspaceSettings | null> {
+    return this._featureSettingsStore.setWorkspaceContextSettings(hash, settings);
   }
 
-  async listContextMapEnabledWorkspaceHashes(): Promise<string[]> {
-    return this._featureSettingsStore.listContextMapEnabledWorkspaceHashes();
+  async listWorkspaceContextEnabledWorkspaceHashes(): Promise<string[]> {
+    return this._featureSettingsStore.listWorkspaceContextEnabledWorkspaceHashes();
   }
 
-  async getContextMapStatus(hash: string): Promise<ConversationContextMapStatus> {
-    const enabled = await this.getWorkspaceContextMapEnabled(hash);
+  async getWorkspaceContextStatus(hash: string): Promise<ConversationWorkspaceContextStatus> {
+    const enabled = await this.getWorkspaceContextEnabled(hash);
+    const contextDir = this.getWorkspaceContextDir(hash);
     if (!enabled) {
       return {
         enabled: false,
         pending: false,
-        pendingCandidates: 0,
-        staleCandidates: 0,
-        conflictCandidates: 0,
-        failedCandidates: 0,
         runningRuns: 0,
         failedRuns: 0,
+        contextDir,
+        fileCount: 0,
       };
     }
 
-    const db = this.getContextMapDb(hash);
-    const candidates = db ? db.listCandidates() : [];
-    const runs = db ? db.listRuns() : [];
-    const latest = runs.length ? runs[runs.length - 1] : undefined;
+    const state = await this.readWorkspaceContextState(hash);
+    const runs = state.runs || [];
+    const latest = state.lastRun || runs[0];
     const failedRuns = runs.filter((run) => run.status === 'failed').length;
     const runningRuns = runs.filter((run) => run.status === 'running').length;
-    const pendingCandidates = candidates.filter((candidate) => candidate.status === 'pending').length;
-    const staleCandidates = candidates.filter((candidate) => candidate.status === 'stale').length;
-    const conflictCandidates = candidates.filter((candidate) => candidate.status === 'conflict').length;
-    const failedCandidates = candidates.filter((candidate) => candidate.status === 'failed').length;
+    const fileCount = await this.countWorkspaceContextFiles(hash);
 
     return {
       enabled: true,
-      pending: pendingCandidates + staleCandidates + conflictCandidates + failedCandidates + failedRuns + runningRuns > 0,
-      pendingCandidates,
-      staleCandidates,
-      conflictCandidates,
-      failedCandidates,
+      pending: failedRuns + runningRuns > 0,
       runningRuns,
       failedRuns,
+      contextDir,
+      fileCount,
       ...(latest ? {
         latestRunId: latest.runId,
         latestRunStatus: latest.status,
@@ -3022,26 +3041,41 @@ export class ChatService {
     };
   }
 
-  getContextMapDb(hash: string): ContextMapDatabase | null {
-    if (!hash) return null;
-    const cached = this._contextMapDbs.get(hash);
-    if (cached) return cached;
-    fs.mkdirSync(this._contextMapDir(hash), { recursive: true });
-    const db = openContextMapDatabase(this._contextMapDir(hash));
-    this._contextMapDbs.set(hash, db);
-    return db;
+  private async readWorkspaceContextState(hash: string): Promise<{ lastRun?: ConversationWorkspaceContextStatusRun; runs: ConversationWorkspaceContextStatusRun[] }> {
+    try {
+      const state = JSON.parse(await fsp.readFile(path.join(this.getWorkspaceContextDir(hash), 'state.json'), 'utf8'));
+      return {
+        lastRun: normalizeWorkspaceContextStatusRun(state.lastRun),
+        runs: Array.isArray(state.runs) ? state.runs.map(normalizeWorkspaceContextStatusRun).filter(Boolean) : [],
+      };
+    } catch (err: unknown) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+        log.warn('Failed to read Workspace Context status state', { workspaceHash: hash, error: err });
+      }
+      return { runs: [] };
+    }
   }
 
-  /** Close every cached Context Map database. Call during graceful shutdown. */
-  closeContextMapDatabases(): void {
-    for (const [hash, db] of this._contextMapDbs.entries()) {
+  private async countWorkspaceContextFiles(hash: string): Promise<number> {
+    const root = path.join(this.getWorkspaceContextDir(hash), 'context');
+    let count = 0;
+    async function walk(dir: string): Promise<void> {
+      let entries: fs.Dirent[];
       try {
-        db.close();
+        entries = await fsp.readdir(dir, { withFileTypes: true });
       } catch (err: unknown) {
-        log.warn('Failed to close Context Map database', { workspaceHash: hash, error: err });
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+        throw err;
+      }
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const abs = path.join(dir, entry.name);
+        if (entry.isDirectory()) await walk(abs);
+        else if (entry.isFile() && entry.name.toLowerCase().endsWith('.md')) count += 1;
       }
     }
-    this._contextMapDbs.clear();
+    await walk(root);
+    return count;
   }
 
   /**

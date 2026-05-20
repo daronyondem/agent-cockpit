@@ -214,7 +214,7 @@ function App(){
   const [viewingArchive, setViewingArchive] = React.useState(false);
   const [updateTarget, setUpdateTarget] = React.useState(null); // { localVersion, remoteVersion } | null
   const [restarting, setRestarting] = React.useState(false);
-  const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label, initialTab, initialContextMapSection } | null
+  const [workspaceSettings, setWorkspaceSettings] = React.useState(null); // { hash, label, initialTab, initialWorkspaceContextSection } | null
   const [memoryUpdateView, setMemoryUpdateView] = React.useState(null); // { hash, label, update } | null
   const [memoryReviewView, setMemoryReviewView] = React.useState(null); // { hash, label, runId } | null
   const [welcomeOpen, setWelcomeOpen] = React.useState(() => {
@@ -467,7 +467,7 @@ function App(){
     });
   }, []);
 
-  const onOpenWorkspaceSettings = React.useCallback((hash, label, initialTab, initialContextMapSection) => {
+  const onOpenWorkspaceSettings = React.useCallback((hash, label, initialTab, initialWorkspaceContextSection) => {
     setWelcomeOpen(false);
     setKbView(null);
     setFilesView(null);
@@ -478,7 +478,7 @@ function App(){
       hash,
       label,
       initialTab: initialTab || null,
-      initialContextMapSection: initialContextMapSection || null,
+      initialWorkspaceContextSection: initialWorkspaceContextSection || null,
     });
     setSbOpen(false);
   }, []);
@@ -631,7 +631,7 @@ function App(){
               hash={workspaceSettings.hash}
               label={workspaceSettings.label}
               initialTab={workspaceSettings.initialTab}
-              initialContextMapSection={workspaceSettings.initialContextMapSection}
+              initialWorkspaceContextSection={workspaceSettings.initialWorkspaceContextSection}
               onOpenMemoryReview={onOpenMemoryReview}
               onClose={onCloseWorkspaceSettings}
             />
@@ -2396,7 +2396,7 @@ const ChatComposer = React.memo(function ChatComposer({ convId, profileLocked, w
             </span>
             <ComposerNotifIcon conv={conv} convId={convId}/>
             <ComposerMemoryReviewIcon conv={conv} workspaceLabel={workspaceLabel} onOpenMemoryReview={onOpenMemoryReview}/>
-            <ComposerContextMapIcon conv={conv} workspaceLabel={workspaceLabel} onOpenWorkspaceSettings={onOpenWorkspaceSettings}/>
+            <ComposerWorkspaceContextIcon conv={conv} workspaceLabel={workspaceLabel} onOpenWorkspaceSettings={onOpenWorkspaceSettings}/>
             <ComposerInstructionCompatibilityIcon
               workspaceHash={conv.workspaceHash}
               workspaceLabel={workspaceLabel}
@@ -4446,11 +4446,11 @@ function formatMemoryReviewComposerStatus(status){
   return 'Ready to review';
 }
 
-function ComposerContextMapIcon({ conv, workspaceLabel, onOpenWorkspaceSettings }){
+function ComposerWorkspaceContextIcon({ conv, workspaceLabel, onOpenWorkspaceSettings }){
   const buttonRef = React.useRef(null);
   const panelRef = React.useRef(null);
   const [open, setOpen] = React.useState(false);
-  const contextMap = conv && conv.contextMap;
+  const workspaceContext = conv && conv.workspaceContext;
   const pos = useFixedPopoverPosition(buttonRef, panelRef, open);
 
   React.useEffect(() => {
@@ -4475,29 +4475,25 @@ function ComposerContextMapIcon({ conv, workspaceLabel, onOpenWorkspaceSettings 
   }, [open]);
 
   React.useEffect(() => {
-    if (!contextMap || !contextMap.pending) setOpen(false);
-  }, [contextMap && contextMap.pending, contextMap && contextMap.latestRunId]);
+    if (!workspaceContext || !workspaceContext.pending) setOpen(false);
+  }, [workspaceContext && workspaceContext.pending, workspaceContext && workspaceContext.latestRunId]);
 
-  if (!contextMap || !contextMap.enabled || !contextMap.pending) return null;
+  if (!workspaceContext || !workspaceContext.enabled || !workspaceContext.pending) return null;
 
-  const pending = Math.max(0, contextMap.pendingCandidates || 0);
-  const stale = Math.max(0, contextMap.staleCandidates || 0);
-  const conflicts = Math.max(0, contextMap.conflictCandidates || 0);
-  const failures = Math.max(0, (contextMap.failedCandidates || 0) + (contextMap.failedRuns || 0));
-  const running = Math.max(0, contextMap.runningRuns || 0) > 0 || contextMap.latestRunStatus === 'running';
-  const reviewCount = pending + stale + conflicts + failures;
+  const running = Math.max(0, workspaceContext.runningRuns || 0) > 0 || workspaceContext.latestRunStatus === 'running';
+  const failures = Math.max(0, workspaceContext.failedRuns || 0);
   const title = running
-    ? 'Context Map scanning'
-    : reviewCount === 1 ? '1 Context Map item needs attention' : `${reviewCount} Context Map items need attention`;
+    ? 'Workspace Context learning'
+    : failures === 1 ? '1 Workspace Context run failed' : `${failures} Workspace Context runs failed`;
   const style = pos
     ? { top: pos.top, left: pos.left }
     : { visibility: 'hidden', top: 0, left: 0 };
 
-  function openContextMap(){
+  function openWorkspaceContext(){
     setOpen(false);
     if (onOpenWorkspaceSettings && conv && conv.workspaceHash) {
-      const targetSection = pending > 0 ? 'attention' : null;
-      onOpenWorkspaceSettings(conv.workspaceHash, workspaceLabel || 'workspace', 'contextMap', targetSection);
+      const targetSection = running || failures > 0 ? 'runs' : null;
+      onOpenWorkspaceSettings(conv.workspaceHash, workspaceLabel || 'workspace', 'workspaceContext', targetSection);
     }
   }
 
@@ -4506,7 +4502,7 @@ function ComposerContextMapIcon({ conv, workspaceLabel, onOpenWorkspaceSettings 
       <button
         ref={buttonRef}
         type="button"
-        className={"composer-notif state-context-map " + (running ? 'state-running' : 'state-pending')}
+        className={"composer-notif state-workspace-context " + (running ? 'state-running' : 'state-pending')}
         aria-label={title}
         aria-expanded={open ? 'true' : 'false'}
         onClick={() => setOpen(v => !v)}
@@ -4527,21 +4523,21 @@ function ComposerContextMapIcon({ conv, workspaceLabel, onOpenWorkspaceSettings 
         >
           <span className="tt-arrow" style={{ left: pos ? pos.arrowX : 12 }}/>
           <div className="tt-header">
-            <span className="tt-eye">Context Map</span>
+            <span className="tt-eye">Workspace Context</span>
           </div>
           <h4 className="tt-h">{title}</h4>
           <div className="tt-section">
             <div className="tt-rows">
-              <div className="tt-kv"><span>Needs attention</span><b>{pending || '-'}</b></div>
-              <div className="tt-kv"><span>Conflicts</span><b>{conflicts || '-'}</b></div>
-              <div className="tt-kv"><span>Stale</span><b>{stale || '-'}</b></div>
+              <div className="tt-kv"><span>Running</span><b>{workspaceContext.runningRuns || '-'}</b></div>
               <div className="tt-kv"><span>Failures</span><b>{failures || '-'}</b></div>
+              <div className="tt-kv"><span>Files</span><b>{workspaceContext.fileCount || '-'}</b></div>
+              <div className="tt-kv"><span>Latest</span><b>{formatWorkspaceContextComposerStatus(workspaceContext.latestRunStatus)}</b></div>
             </div>
           </div>
           <div className="tt-foot">
-            <span className="hint">{formatContextMapComposerStatus(contextMap.latestRunStatus)}</span>
+            <span className="hint">{formatWorkspaceContextComposerStatus(workspaceContext.latestRunStatus)}</span>
             <span className="spacer"/>
-            <button type="button" className="tt-btn primary" onClick={openContextMap}>Open map</button>
+            <button type="button" className="tt-btn primary" onClick={openWorkspaceContext}>Open context</button>
           </div>
         </div>
       ) : null}
@@ -4549,9 +4545,11 @@ function ComposerContextMapIcon({ conv, workspaceLabel, onOpenWorkspaceSettings 
   );
 }
 
-function formatContextMapComposerStatus(status){
-  if (status === 'running') return 'Scanning workspace';
-  if (status === 'failed') return 'Processor needs attention';
+function formatWorkspaceContextComposerStatus(status){
+  if (status === 'running') return 'Learning';
+  if (status === 'failed') return 'Failed';
+  if (status === 'stopped') return 'Stopped';
+  if (status === 'completed') return 'Completed';
   return 'Ready';
 }
 

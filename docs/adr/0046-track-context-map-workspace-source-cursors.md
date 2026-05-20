@@ -1,11 +1,11 @@
 ---
 id: 0046
 title: Track Context Map workspace source cursors
-status: Proposed
+status: Superseded
 date: 2026-05-10
 supersedes: []
-superseded-by: null
-tags: [context-map, data-model, scheduler]
+superseded-by: 0068
+tags: [context-map, data-model, scheduler, historical]
 affects:
   - src/services/contextMap/db.ts
   - src/services/contextMap/service.ts

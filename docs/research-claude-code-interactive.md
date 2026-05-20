@@ -55,7 +55,7 @@ Research whether Claude Code Interactive can support all of this:
 19. Native Claude memory capture from Claude project memory files.
 20. Real-time memory watching.
 21. Goal mode: `/goal`, `/goal clear`, transcript-derived status, supported action parity.
-22. One-shot equivalent for title generation, summaries, OCR, Memory MCP, KB digestion/dreaming, and Context Map.
+22. One-shot equivalent for title generation, summaries, OCR, Memory MCP, KB digestion/dreaming, and Workspace Context.
 23. CLI profile support: command override, env override, `CLAUDE_CONFIG_DIR`, profile-specific auth/config/session isolation.
 24. Plan usage tooltip impact, only as a note; do not make billing the focus.
 

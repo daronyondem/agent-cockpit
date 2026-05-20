@@ -1,11 +1,11 @@
 ---
 id: 0045
 title: Scan workspace Markdown recursively for Context Map
-status: Accepted
+status: Superseded
 date: 2026-05-08
 supersedes: []
-superseded-by: null
-tags: [context-map, processing, source-selection]
+superseded-by: 0068
+tags: [context-map, processing, source-selection, historical]
 affects:
   - src/services/contextMap/service.ts
   - test/contextMap.service.test.ts

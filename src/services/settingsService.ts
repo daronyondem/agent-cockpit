@@ -12,15 +12,15 @@ import {
   serverConfiguredCliProfileId,
 } from './cliProfiles';
 import {
-  DEFAULT_CONTEXT_MAP_CLI_CONCURRENCY,
-  DEFAULT_CONTEXT_MAP_EXTRACTION_CONCURRENCY,
-  DEFAULT_CONTEXT_MAP_SCAN_INTERVAL_MINUTES,
-  DEFAULT_CONTEXT_MAP_SYNTHESIS_CONCURRENCY,
-  MAX_CONTEXT_MAP_PROCESSOR_CONCURRENCY,
-} from './contextMap/defaults';
+  DEFAULT_WORKSPACE_CONTEXT_CLI_CONCURRENCY,
+  DEFAULT_WORKSPACE_CONTEXT_MAINTENANCE_CLI_CONCURRENCY,
+  DEFAULT_WORKSPACE_CONTEXT_MAINTENANCE_INTERVAL_HOURS,
+  DEFAULT_WORKSPACE_CONTEXT_SCAN_INTERVAL_MINUTES,
+} from './workspaceContext/defaults';
 
 interface PersistedSettings extends Settings {
   customInstructions?: { aboutUser?: string; responseStyle?: string };
+  contextMap?: Settings['workspaceContext'];
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -28,11 +28,11 @@ export const DEFAULT_SETTINGS: Settings = {
   sendBehavior: 'enter',
   systemPrompt: '',
   workingDirectory: '',
-  contextMap: {
-    scanIntervalMinutes: DEFAULT_CONTEXT_MAP_SCAN_INTERVAL_MINUTES,
-    cliConcurrency: DEFAULT_CONTEXT_MAP_CLI_CONCURRENCY,
-    extractionConcurrency: DEFAULT_CONTEXT_MAP_EXTRACTION_CONCURRENCY,
-    synthesisConcurrency: DEFAULT_CONTEXT_MAP_SYNTHESIS_CONCURRENCY,
+  workspaceContext: {
+    scanIntervalMinutes: DEFAULT_WORKSPACE_CONTEXT_SCAN_INTERVAL_MINUTES,
+    cliConcurrency: DEFAULT_WORKSPACE_CONTEXT_CLI_CONCURRENCY,
+    maintenanceIntervalHours: DEFAULT_WORKSPACE_CONTEXT_MAINTENANCE_INTERVAL_HOURS,
+    maintenanceCliConcurrency: DEFAULT_WORKSPACE_CONTEXT_MAINTENANCE_CLI_CONCURRENCY,
   },
 };
 
@@ -75,17 +75,17 @@ export class SettingsService {
         return this.saveSettings(setupAuthHomeMigration.settings);
       }
 
-      return this._normalizeSettings(this._withLegacyDefaultCliProfile(this._withContextMapDefaults(settings)));
+      return this._normalizeSettings(this._withLegacyDefaultCliProfile(this._withWorkspaceContextDefaults(settings)));
     } catch (err: unknown) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
-        return this._normalizeSettings(this._withContextMapDefaults({ ...DEFAULT_SETTINGS }));
+        return this._normalizeSettings(this._withWorkspaceContextDefaults({ ...DEFAULT_SETTINGS }));
       }
       throw err;
     }
   }
 
   async saveSettings(settings: Settings): Promise<Settings> {
-    const normalized = this._normalizeSettings(this._withContextMapDefaults(settings));
+    const normalized = this._normalizeSettings(this._withWorkspaceContextDefaults(settings));
     await atomicWriteFile(this._settingsFile, JSON.stringify(normalized, null, 2));
     return normalized;
   }
@@ -128,17 +128,25 @@ export class SettingsService {
     return next;
   }
 
-  private _withContextMapDefaults(settings: Settings): Settings {
-    const contextMap = { ...(settings.contextMap || {}) } as NonNullable<Settings['contextMap']> & { sources?: unknown };
-    delete contextMap.sources;
+  private _withWorkspaceContextDefaults(settings: Settings): Settings {
+    const persisted = settings as PersistedSettings;
+    const workspaceContext = { ...(settings.workspaceContext || persisted.contextMap || {}) } as NonNullable<Settings['workspaceContext']> & {
+      sources?: unknown;
+      extractionConcurrency?: unknown;
+      synthesisConcurrency?: unknown;
+    };
+    delete workspaceContext.sources;
+    delete workspaceContext.extractionConcurrency;
+    delete workspaceContext.synthesisConcurrency;
+    const { contextMap: _oldContextMap, ...rest } = persisted;
     return {
-      ...settings,
-      contextMap: {
-        scanIntervalMinutes: DEFAULT_CONTEXT_MAP_SCAN_INTERVAL_MINUTES,
-        cliConcurrency: DEFAULT_CONTEXT_MAP_CLI_CONCURRENCY,
-        extractionConcurrency: DEFAULT_CONTEXT_MAP_EXTRACTION_CONCURRENCY,
-        synthesisConcurrency: DEFAULT_CONTEXT_MAP_SYNTHESIS_CONCURRENCY,
-        ...contextMap,
+      ...rest,
+      workspaceContext: {
+        scanIntervalMinutes: DEFAULT_WORKSPACE_CONTEXT_SCAN_INTERVAL_MINUTES,
+        cliConcurrency: DEFAULT_WORKSPACE_CONTEXT_CLI_CONCURRENCY,
+        maintenanceIntervalHours: DEFAULT_WORKSPACE_CONTEXT_MAINTENANCE_INTERVAL_HOURS,
+        maintenanceCliConcurrency: DEFAULT_WORKSPACE_CONTEXT_MAINTENANCE_CLI_CONCURRENCY,
+        ...workspaceContext,
       },
     };
   }
@@ -174,8 +182,8 @@ export class SettingsService {
     if (settings.knowledgeBase) {
       next.knowledgeBase = this._normalizeKnowledgeBaseSettings(settings.knowledgeBase, profiles);
     }
-    if (settings.contextMap) {
-      next.contextMap = this._normalizeContextMapSettings(settings.contextMap, profiles);
+    if (settings.workspaceContext) {
+      next.workspaceContext = this._normalizeWorkspaceContextSettings(settings.workspaceContext, profiles);
     }
     if (settings.defaultCliProfileId && !defaultProfile) {
       delete next.defaultCliProfileId;
@@ -244,13 +252,19 @@ export class SettingsService {
     return next;
   }
 
-  private _normalizeContextMapSettings(
-    contextMap: NonNullable<Settings['contextMap']>,
+  private _normalizeWorkspaceContextSettings(
+    workspaceContext: NonNullable<Settings['workspaceContext']>,
     profiles: CliProfile[],
-  ): NonNullable<Settings['contextMap']> {
-    const selection = this._normalizeProfileSelection(profiles, contextMap.cliProfileId, contextMap.cliBackend);
-    const next = { ...contextMap } as NonNullable<Settings['contextMap']> & { sources?: unknown };
+  ): NonNullable<Settings['workspaceContext']> {
+    const selection = this._normalizeProfileSelection(profiles, workspaceContext.cliProfileId, workspaceContext.cliBackend);
+    const next = { ...workspaceContext } as NonNullable<Settings['workspaceContext']> & {
+      sources?: unknown;
+      extractionConcurrency?: unknown;
+      synthesisConcurrency?: unknown;
+    };
     delete next.sources;
+    delete next.extractionConcurrency;
+    delete next.synthesisConcurrency;
     delete next.cliProfileId;
     if (selection.profileId) next.cliProfileId = selection.profileId;
     if (selection.backend) next.cliBackend = selection.backend;
@@ -264,15 +278,15 @@ export class SettingsService {
     } else if (next.cliConcurrency !== undefined) {
       delete next.cliConcurrency;
     }
-    if (typeof next.extractionConcurrency === 'number' && Number.isFinite(next.extractionConcurrency)) {
-      next.extractionConcurrency = Math.max(1, Math.min(MAX_CONTEXT_MAP_PROCESSOR_CONCURRENCY, Math.round(next.extractionConcurrency)));
-    } else if (next.extractionConcurrency !== undefined) {
-      delete next.extractionConcurrency;
+    if (typeof next.maintenanceIntervalHours === 'number' && Number.isFinite(next.maintenanceIntervalHours)) {
+      next.maintenanceIntervalHours = Math.max(1, Math.min(8760, Math.round(next.maintenanceIntervalHours)));
+    } else if (next.maintenanceIntervalHours !== undefined) {
+      delete next.maintenanceIntervalHours;
     }
-    if (typeof next.synthesisConcurrency === 'number' && Number.isFinite(next.synthesisConcurrency)) {
-      next.synthesisConcurrency = Math.max(1, Math.min(MAX_CONTEXT_MAP_PROCESSOR_CONCURRENCY, Math.round(next.synthesisConcurrency)));
-    } else if (next.synthesisConcurrency !== undefined) {
-      delete next.synthesisConcurrency;
+    if (typeof next.maintenanceCliConcurrency === 'number' && Number.isFinite(next.maintenanceCliConcurrency)) {
+      next.maintenanceCliConcurrency = Math.max(1, Math.min(10, Math.round(next.maintenanceCliConcurrency)));
+    } else if (next.maintenanceCliConcurrency !== undefined) {
+      delete next.maintenanceCliConcurrency;
     }
     return next;
   }

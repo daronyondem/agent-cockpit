@@ -14,7 +14,8 @@ installed and the first owner account exists.
 
 - [Memory](memory.md) explains workspace-scoped persistent memory.
 - [Knowledge Base](knowledge-base.md) explains document ingestion and retrieval.
-- [Context Map](context-map.md) explains the governed workspace graph.
+- [Workspace Context](workspace-context.md) explains markdown-first workspace
+  operating memory.
 - [Mobile PWA](mobile-pwa.md) explains browser-based mobile access.
 
 ## Related Deployment Topics

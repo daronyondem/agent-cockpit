@@ -18,7 +18,7 @@ affects:
   - src/services/memoryMcp/index.ts
   - src/services/knowledgeBase/digest.ts
   - src/services/knowledgeBase/dream.ts
-  - src/services/contextMap/service.ts
+  - src/services/workspaceContext/service.ts
   - web/AgentCockpitWeb/src/screens/settingsScreen.jsx
   - web/AgentCockpitWeb/src/workspaceSettings.jsx
   - mobile/AgentCockpitPWA/src/App.tsx

@@ -77,7 +77,7 @@ export function validateSettingsRequest(body: unknown): Settings {
   validateCliProfiles(record.cliProfiles);
   validateOptionalObject(record.memory, 'memory');
   validateOptionalObject(record.knowledgeBase, 'knowledgeBase');
-  validateOptionalObject(record.contextMap, 'contextMap');
+  validateOptionalObject(record.workspaceContext, 'workspaceContext');
   return record as unknown as Settings;
 }
 

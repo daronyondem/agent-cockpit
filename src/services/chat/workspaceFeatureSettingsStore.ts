@@ -1,7 +1,8 @@
 import fsp from 'fs/promises';
+import path from 'path';
 import type {
   CliProfile,
-  ContextMapWorkspaceSettings,
+  WorkspaceContextWorkspaceSettings,
   EffortLevel,
   KbAutoDreamConfig,
   Settings,
@@ -10,7 +11,7 @@ import type {
 import { backendForCliProfile, cliVendorForBackend } from '../cliProfiles';
 import { DEFAULT_KB_AUTO_DREAM_CONFIG, normalizeKbAutoDreamConfig } from '../knowledgeBase/autoDream';
 
-const CONTEXT_MAP_EFFORT_LEVELS = new Set<EffortLevel>([
+const WORKSPACE_CONTEXT_EFFORT_LEVELS = new Set<EffortLevel>([
   'none',
   'minimal',
   'low',
@@ -28,23 +29,30 @@ interface WorkspaceFeatureSettingsStoreDeps {
   getSettings(): Promise<Settings>;
 }
 
-function normalizeContextMapScanInterval(value: unknown): number | undefined {
+function normalizeWorkspaceContextScanInterval(value: unknown): number | undefined {
   if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
   return Math.max(1, Math.min(1440, Math.round(value)));
 }
 
-export function normalizeContextMapWorkspaceSettings(
+function normalizeWorkspaceContextMaintenanceInterval(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.max(1, Math.min(8760, Math.round(value)));
+}
+
+export function normalizeWorkspaceContextWorkspaceSettings(
   value: unknown,
   profiles: CliProfile[],
-): ContextMapWorkspaceSettings {
+): WorkspaceContextWorkspaceSettings {
   const raw = value && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
     : {};
   const processorMode = raw.processorMode === 'override' ? 'override' : 'global';
-  const settings: ContextMapWorkspaceSettings = { processorMode };
+  const settings: WorkspaceContextWorkspaceSettings = { processorMode };
 
-  const scanIntervalMinutes = normalizeContextMapScanInterval(raw.scanIntervalMinutes);
+  const scanIntervalMinutes = normalizeWorkspaceContextScanInterval(raw.scanIntervalMinutes);
   if (scanIntervalMinutes !== undefined) settings.scanIntervalMinutes = scanIntervalMinutes;
+  const maintenanceIntervalHours = normalizeWorkspaceContextMaintenanceInterval(raw.maintenanceIntervalHours);
+  if (maintenanceIntervalHours !== undefined) settings.maintenanceIntervalHours = maintenanceIntervalHours;
 
   if (processorMode !== 'override') return settings;
 
@@ -62,7 +70,7 @@ export function normalizeContextMapWorkspaceSettings(
   const cliModel = typeof raw.cliModel === 'string' ? raw.cliModel.trim() : '';
   if (cliModel) settings.cliModel = cliModel;
 
-  if (typeof raw.cliEffort === 'string' && CONTEXT_MAP_EFFORT_LEVELS.has(raw.cliEffort as EffortLevel)) {
+  if (typeof raw.cliEffort === 'string' && WORKSPACE_CONTEXT_EFFORT_LEVELS.has(raw.cliEffort as EffortLevel)) {
     settings.cliEffort = raw.cliEffort as EffortLevel;
   }
 
@@ -124,45 +132,71 @@ export class WorkspaceFeatureSettingsStore {
     return this.listEnabledWorkspaceHashes((index) => Boolean(index.kbEnabled));
   }
 
-  async getContextMapEnabled(hash: string): Promise<boolean> {
-    const index = await this.deps.readWorkspaceIndex(hash);
+  async getWorkspaceContextEnabled(hash: string): Promise<boolean> {
+    const index = await this.readMigratedWorkspaceIndex(hash);
     if (!index) return false;
-    return Boolean(index.contextMapEnabled);
+    return Boolean(index.workspaceContextEnabled);
   }
 
-  async setContextMapEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
+  async setWorkspaceContextEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
     return this.deps.indexLock.run(hash, async () => {
-      const index = await this.deps.readWorkspaceIndex(hash);
+      const index = await this.readMigratedWorkspaceIndex(hash);
       if (!index) return null;
-      index.contextMapEnabled = Boolean(enabled);
+      index.workspaceContextEnabled = Boolean(enabled);
       await this.deps.writeWorkspaceIndex(hash, index);
-      return index.contextMapEnabled;
+      return index.workspaceContextEnabled;
     });
   }
 
-  async getContextMapSettings(hash: string): Promise<ContextMapWorkspaceSettings | null> {
-    const index = await this.deps.readWorkspaceIndex(hash);
+  async getWorkspaceContextSettings(hash: string): Promise<WorkspaceContextWorkspaceSettings | null> {
+    const index = await this.readMigratedWorkspaceIndex(hash);
     if (!index) return null;
     const settings = await this.deps.getSettings();
-    return normalizeContextMapWorkspaceSettings(index.contextMap, settings.cliProfiles || []);
+    return normalizeWorkspaceContextWorkspaceSettings(index.workspaceContext, settings.cliProfiles || []);
   }
 
-  async setContextMapSettings(
+  async setWorkspaceContextSettings(
     hash: string,
     settings: unknown,
-  ): Promise<ContextMapWorkspaceSettings | null> {
+  ): Promise<WorkspaceContextWorkspaceSettings | null> {
     return this.deps.indexLock.run(hash, async () => {
-      const index = await this.deps.readWorkspaceIndex(hash);
+      const index = await this.readMigratedWorkspaceIndex(hash);
       if (!index) return null;
       const globalSettings = await this.deps.getSettings();
-      index.contextMap = normalizeContextMapWorkspaceSettings(settings, globalSettings.cliProfiles || []);
+      index.workspaceContext = normalizeWorkspaceContextWorkspaceSettings(settings, globalSettings.cliProfiles || []);
       await this.deps.writeWorkspaceIndex(hash, index);
-      return index.contextMap;
+      return index.workspaceContext;
     });
   }
 
-  async listContextMapEnabledWorkspaceHashes(): Promise<string[]> {
-    return this.listEnabledWorkspaceHashes((index) => Boolean(index.contextMapEnabled));
+  async listWorkspaceContextEnabledWorkspaceHashes(): Promise<string[]> {
+    return this.listEnabledWorkspaceHashes((index) => Boolean(index.workspaceContextEnabled));
+  }
+
+  private async readMigratedWorkspaceIndex(hash: string): Promise<WorkspaceIndex | null> {
+    const index = await this.deps.readWorkspaceIndex(hash);
+    if (!index) return null;
+    return this.migrateWorkspaceContextIndex(hash, index);
+  }
+
+  private async migrateWorkspaceContextIndex(hash: string, index: WorkspaceIndex): Promise<WorkspaceIndex> {
+    const legacy = index as WorkspaceIndex & {
+      contextMapEnabled?: boolean;
+      contextMap?: unknown;
+    };
+    if (legacy.contextMapEnabled === undefined && legacy.contextMap === undefined) return index;
+    if (index.workspaceContextEnabled === undefined && legacy.contextMapEnabled !== undefined) {
+      index.workspaceContextEnabled = Boolean(legacy.contextMapEnabled);
+    }
+    if (index.workspaceContext === undefined && legacy.contextMap !== undefined) {
+      const globalSettings = await this.deps.getSettings();
+      index.workspaceContext = normalizeWorkspaceContextWorkspaceSettings(legacy.contextMap, globalSettings.cliProfiles || []);
+    }
+    delete legacy.contextMapEnabled;
+    delete legacy.contextMap;
+    await fsp.rm(path.join(this.deps.workspacesDir, hash, 'context-map'), { recursive: true, force: true });
+    await this.deps.writeWorkspaceIndex(hash, index);
+    return index;
   }
 
   private async listEnabledWorkspaceHashes(predicate: (index: WorkspaceIndex) => boolean): Promise<string[]> {
@@ -177,7 +211,7 @@ export class WorkspaceFeatureSettingsStore {
     const hashes: string[] = [];
     for (const hash of dirs) {
       if (hash.startsWith('.')) continue;
-      const index = await this.deps.readWorkspaceIndex(hash);
+      const index = await this.readMigratedWorkspaceIndex(hash);
       if (index && predicate(index)) hashes.push(hash);
     }
     return hashes;

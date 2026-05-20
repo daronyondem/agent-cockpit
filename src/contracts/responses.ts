@@ -217,15 +217,15 @@ export interface BackendMetadata {
   models?: ModelOption[];
 }
 
-export interface ContextMapGlobalSettings {
+export interface WorkspaceContextGlobalSettings {
   cliProfileId?: string;
   cliBackend?: string;
   cliModel?: string;
   cliEffort?: EffortLevel;
   scanIntervalMinutes?: number;
   cliConcurrency?: number;
-  extractionConcurrency?: number;
-  synthesisConcurrency?: number;
+  maintenanceIntervalHours?: number;
+  maintenanceCliConcurrency?: number;
 }
 
 export interface Settings {
@@ -241,7 +241,7 @@ export interface Settings {
   workingDirectory?: string;
   memory?: Record<string, unknown>;
   knowledgeBase?: Record<string, unknown>;
-  contextMap?: ContextMapGlobalSettings;
+  workspaceContext?: WorkspaceContextGlobalSettings;
 }
 
 export interface BasicOkResponse {
