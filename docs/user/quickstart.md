@@ -58,3 +58,8 @@ workflow:
 - [Knowledge Base](knowledge-base.md) for source documents.
 - [Workspace Context](workspace-context.md) for markdown-first workspace
   operating memory.
+
+If the workspace is a Git repository and you plan to run multiple
+conversations against it at the same time, also consider
+[Worktree Isolation](worktree-isolation.md) so each conversation works in its
+own checkout and session branch.

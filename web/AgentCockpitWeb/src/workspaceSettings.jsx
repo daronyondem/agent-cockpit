@@ -3,13 +3,14 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import { Ico } from './icons.jsx';
 import { AgentApi } from './api.js';
+import { StreamStore } from './streamStore.js';
 import { Tip } from './tooltip.jsx';
 import { useDialog } from './dialog.jsx';
 import { useToasts } from './toast.jsx';
 
 /* ---------- WorkspaceSettingsPage — per-workspace settings screen. ---------- */
 /* Opens from the gear button in the sidebar workspace action buttons.
-   Four tabs:
+   Five tabs:
      - Instructions: free-form system-prompt prefix (Save button).
      - Memory: enable toggle (immediate-save) + searchable, lifecycle-filtered
        grouped browser with per-file delete and a "Clear all" footer. Refetches
@@ -18,6 +19,7 @@ import { useToasts } from './toast.jsx';
        in the dedicated KB Browser screen.
      - Workspace Context: enable toggle (immediate-save), workspace processor overrides,
        markdown file preview, workspace processor overrides, and scan/maintenance runs.
+     - Worktrees: enable toggle for per-conversation Git worktree isolation.
    Reuses the same full-screen `settings-shell` structure as global Settings. */
 
 const WS_SETTINGS_TABS = [
@@ -25,6 +27,7 @@ const WS_SETTINGS_TABS = [
   { id: 'memory',       label: 'Memory' },
   { id: 'kb',           label: 'Knowledge Base' },
   { id: 'workspaceContext',   label: 'Workspace Context' },
+  { id: 'worktrees',    label: 'Worktrees' },
 ];
 
 const WORKSPACE_CONTEXT_SECTIONS = ['overview', 'processor', 'files', 'runs', 'danger'];
@@ -274,6 +277,8 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   const [workspaceContextFileLoading, setWorkspaceContextFileLoading] = React.useState(false);
   const [workspaceContextScanBusy, setWorkspaceContextScanBusy] = React.useState(false);
   const [workspaceContextStopBusy, setWorkspaceContextStopBusy] = React.useState(false);
+  const [worktreeStatus, setWorktreeStatus] = React.useState(null);
+  const [worktreeBusy, setWorktreeBusy] = React.useState(false);
   const [globalSettings, setGlobalSettings] = React.useState({});
   const [backends, setBackends] = React.useState([]);
   const [profileBackends, setProfileBackends] = React.useState({});
@@ -321,9 +326,10 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       AgentApi.workspace.getMemoryReviewSchedule(hash).catch(() => ({})),
       AgentApi.workspace.getKb(hash).catch(() => ({})),
       AgentApi.workspace.getWorkspaceContextSettings(hash).catch(() => ({})),
+      AgentApi.workspace.getWorktreeIsolation(hash).catch((err) => ({ available: false, enabled: false, blockers: [{ code: 'load_failed', message: err.message || String(err) }] })),
       AgentApi.settings.get().catch(() => ({})),
       AgentApi.settings.backends().catch(() => ({ backends: [] })),
-    ]).then(([instrRes, memRes, reviewScheduleRes, kbRes, workspaceContextRes, settingsRes, backendsRes]) => {
+    ]).then(([instrRes, memRes, reviewScheduleRes, kbRes, workspaceContextRes, worktreeRes, settingsRes, backendsRes]) => {
       if (cancelled) return;
       setInstructions(instrRes.instructions || '');
       setMemoryEnabled(!!memRes.enabled);
@@ -333,6 +339,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       setReviewStarting(false);
       setKbEnabled(!!kbRes.enabled);
       applyWorkspaceContextResponse(workspaceContextRes);
+      setWorktreeStatus(worktreeRes || null);
       setWorkspaceContextSelectedFile(null);
       setWorkspaceContextFileContent('');
       setWorkspaceContextFileLoading(false);
@@ -510,6 +517,66 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     } catch (err) {
       setWorkspaceContextEnabled(prev);
       dialog.alert({ variant: 'error', title: 'Failed to update Workspace Context setting', body: err.message || String(err) });
+    }
+  }
+
+  async function refreshWorktreeIsolation(anchor){
+    setWorktreeBusy(true);
+    try {
+      const res = await AgentApi.workspace.getWorktreeIsolation(hash);
+      setWorktreeStatus(res || null);
+      return res;
+    } catch (err) {
+      if (anchor) {
+        await dialog.alert({
+          anchor,
+          variant: 'error',
+          title: 'Refresh Worktrees failed',
+          body: err.message || String(err),
+        });
+      }
+      throw err;
+    } finally {
+      setWorktreeBusy(false);
+    }
+  }
+
+  async function toggleWorktreeIsolation(enabled, anchor){
+    const ok = await dialog.confirm({
+      anchor,
+      title: enabled ? 'Enable Worktrees' : 'Disable Worktrees',
+      body: enabled
+        ? 'Enable one Git worktree per conversation? This resets every CLI session in this workspace and creates a branch for each conversation.'
+        : 'Disable worktree isolation? This removes clean conversation worktrees, returns conversations to the shared workspace folder, and resets every CLI session.',
+      confirmLabel: enabled ? 'Enable' : 'Disable',
+      cancelLabel: 'Cancel',
+      destructive: !enabled,
+    });
+    if (!ok) return;
+    setWorktreeBusy(true);
+    try {
+      const res = await AgentApi.workspace.setWorktreeIsolation(hash, enabled);
+      setWorktreeStatus(res || null);
+      const affectedConversationIds = Array.isArray(res && res.conversations)
+        ? res.conversations.map((conversation) => conversation.id).filter(Boolean)
+        : [];
+      StreamStore.refreshConvList().catch(() => {});
+      await StreamStore.refreshLoadedConversations(affectedConversationIds).catch(() => {});
+      toast.success(enabled ? 'Worktrees enabled' : 'Worktrees disabled');
+    } catch (err) {
+      const blockers = err && err.body && Array.isArray(err.body.blockers) ? err.body.blockers : [];
+      const detail = blockers.length
+        ? blockers.map(formatWorktreeBlocker).join('\n')
+        : (err.message || String(err));
+      await dialog.alert({
+        anchor,
+        variant: 'error',
+        title: enabled ? 'Enable Worktrees failed' : 'Disable Worktrees failed',
+        body: detail,
+      });
+      await refreshWorktreeIsolation().catch(() => {});
+    } finally {
+      setWorktreeBusy(false);
     }
   }
 
@@ -793,6 +860,13 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
             settingsDirty={workspaceContextSettingsDirty}
             saving={saving}
             initialSection={initialWorkspaceContextSection}
+          />
+        ) : tab === 'worktrees' ? (
+          <WorktreeIsolationTab
+            status={worktreeStatus}
+            busy={worktreeBusy}
+            onToggle={toggleWorktreeIsolation}
+            onRefresh={refreshWorktreeIsolation}
           />
         ) : null}
       </div>
@@ -1513,6 +1587,84 @@ function KbTab({ enabled, onToggle }){
       ) : (
         <p className="ws-empty u-dim">Knowledge Base is disabled for this workspace.</p>
       )}
+    </div>
+  );
+}
+
+function formatWorktreeBlocker(blocker){
+  if (!blocker) return '';
+  const prefix = blocker.conversationId ? `${blocker.conversationId}: ` : '';
+  const files = Array.isArray(blocker.files) && blocker.files.length
+    ? ` (${blocker.files.slice(0, 4).join(', ')}${blocker.files.length > 4 ? ', ...' : ''})`
+    : '';
+  return `${prefix}${blocker.message || blocker.code || 'Worktree blocker'}${files}`;
+}
+
+function WorktreeIsolationTab({ status, busy, onToggle, onRefresh }){
+  const enabled = !!(status && status.enabled);
+  const available = !!(status && status.available);
+  const blockers = Array.isArray(status && status.blockers) ? status.blockers : [];
+  const conversations = Array.isArray(status && status.conversations) ? status.conversations : [];
+  const affectedGrid = 'minmax(180px, 1fr) minmax(130px, auto) minmax(80px, auto) minmax(80px, auto)';
+  return (
+    <div className="settings-form settings-form-wide ws-form">
+      <p className="ws-desc u-dim">
+        Run each conversation in its own Git worktree and session branch. The workspace path stays the same in the sidebar; CLI execution moves to that conversation's worktree.
+      </p>
+      <label className="toggle ws-toggle">
+        <input
+          type="checkbox"
+          checked={enabled}
+          disabled={busy || (!available && !enabled)}
+          onChange={(e) => onToggle(e.target.checked, e.currentTarget)}
+        />
+        <span className="tgl"/>
+        <span>Use one worktree per conversation</span>
+      </label>
+      <div className="ws-actions">
+        <button type="button" className="btn ghost" onClick={(e) => onRefresh(e.currentTarget).catch(() => {})} disabled={busy}>Refresh</button>
+      </div>
+      {status ? (
+        <div className="ws-empty">
+          <div><b>Status:</b> {enabled ? 'Enabled' : available ? 'Available' : 'Unavailable'}</div>
+          {status.repoRoot ? <div><b>Repo:</b> <span className="u-mono">{status.repoRoot}</span></div> : null}
+          {status.remoteBaseRef ? <div><b>Base:</b> <span className="u-mono">{status.remoteBaseRef}</span></div> : null}
+          {status.worktreeBaseDir ? <div><b>Worktrees:</b> <span className="u-mono">{status.worktreeBaseDir}</span></div> : null}
+        </div>
+      ) : (
+        <p className="ws-empty u-dim">Worktree status has not loaded.</p>
+      )}
+      {blockers.length ? (
+        <div className="ws-empty u-err">
+          {blockers.map((blocker, index) => (
+            <div key={(blocker.code || 'blocker') + ':' + index}>{formatWorktreeBlocker(blocker)}</div>
+          ))}
+        </div>
+      ) : null}
+      {conversations.length ? (
+        <div className="ws-empty">
+          <div className="u-dim" style={{ marginBottom: 8 }}>Conversations affected</div>
+          <div className="u-dim" style={{ display: 'grid', gridTemplateColumns: affectedGrid, gap: 8, padding: '0 0 6px 0' }}>
+            <div>Conversation</div>
+            <div>Uses</div>
+            <div>Status</div>
+            <div/>
+          </div>
+          {conversations.map((conversation) => (
+            <div key={conversation.id} style={{ display: 'grid', gridTemplateColumns: affectedGrid, gap: 8, padding: '6px 0', borderTop: '1px solid var(--border)', opacity: conversation.archived ? 0.72 : 1 }}>
+              <div>
+                <div>{conversation.title || 'New Chat'}</div>
+                {conversation.executionDir ? <div className="u-mono u-dim">{conversation.executionDir}</div> : null}
+              </div>
+              <div className="u-dim">{conversation.mode === 'worktree' ? 'Worktree' : 'Workspace Folder'}</div>
+              <div className={conversation.dirty || conversation.missing ? 'u-err' : 'u-dim'}>
+                {conversation.missing ? 'Missing' : conversation.dirty ? 'Dirty' : ''}
+              </div>
+              <div className="u-dim">{conversation.archived ? 'Archived' : ''}</div>
+            </div>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

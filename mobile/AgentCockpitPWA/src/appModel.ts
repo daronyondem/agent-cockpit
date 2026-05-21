@@ -92,7 +92,7 @@ export function fileReferencesFromParsed(
   if (role === 'user') {
     references.push(...parsed.uploadedPaths.map((path) => makeConversationUploadReference(client, conversation, path)));
   }
-  references.push(...parsed.deliveredPaths.map((path) => makeWorkspaceFileReference(client, conversation.workspaceHash, path)));
+  references.push(...parsed.deliveredPaths.map((path) => makeConversationWorkspaceFileReference(client, conversation, path)));
   return references;
 }
 
@@ -134,6 +134,18 @@ export function makeWorkspaceFileReference(client: AgentCockpitAPI, workspaceHas
   };
 }
 
+export function makeConversationWorkspaceFileReference(client: AgentCockpitAPI, conversation: Conversation, path: string): FileReference {
+  const title = basenameFromPath(path);
+  return {
+    id: `conversation-workspace:${conversation.id}:${path}`,
+    title,
+    path,
+    downloadURL: client.conversationWorkspaceFileURL(conversation.id, path, 'download'),
+    isImage: isImageFileName(title),
+    fetchPreview: () => client.getConversationWorkspaceFilePreview(conversation.id, path),
+  };
+}
+
 export function makeExplorerFileReference(client: AgentCockpitAPI, workspaceHash: string, path: string): FileReference {
   const title = basenameFromPath(path);
   return {
@@ -157,6 +169,8 @@ export function conversationListItemFromConversation(conversation: Conversation)
     effort: conversation.effort,
     serviceTier: conversation.serviceTier,
     workingDir: conversation.workingDir,
+    executionDir: conversation.executionDir,
+    checkout: conversation.checkout,
     workspaceHash: conversation.workspaceHash,
     workspaceKbEnabled: false,
     messageCount: conversation.messages.length,

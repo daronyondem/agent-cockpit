@@ -172,6 +172,10 @@ export interface SessionEntry {
   usageByBackend?: Record<string, Usage> | null;
   /** Backend-managed session ID (e.g. Kiro ACP session ID). Generic — any backend can use this. */
   externalSessionId?: string | null;
+  /** Git branch used by this session when the workspace is in worktree-isolation mode. */
+  branchName?: string;
+  /** Git ref the session branch was created from. */
+  baseRef?: string;
 }
 
 export interface SessionFile {
@@ -304,6 +308,30 @@ export interface ConversationEntry {
    */
   unread?: boolean;
   messageQueue?: QueuedMessage[];
+  /** Checkout used to run this conversation's CLI. Omitted means shared workspace folder. */
+  checkout?: ConversationCheckout;
+}
+
+export interface WorktreeIsolationSettings {
+  enabled: boolean;
+  repoRoot: string;
+  workspaceRelPath: string;
+  remoteName: string;
+  baseBranch: string;
+  remoteBaseRef: string;
+  worktreeBaseDir: string;
+  enabledAt: string;
+}
+
+export interface ConversationCheckout {
+  mode: 'shared' | 'worktree';
+  repoRoot?: string;
+  worktreeRoot?: string;
+  executionDir?: string;
+  workspaceRelPath?: string;
+  currentBranch?: string;
+  remoteBaseRef?: string;
+  updatedAt?: string;
 }
 
 export interface WorkspaceIndex {
@@ -370,6 +398,8 @@ export interface WorkspaceIndex {
    * `processorMode:'global'`, global Settings.workspaceContext defaults apply.
    */
   workspaceContext?: WorkspaceContextWorkspaceSettings;
+  /** Per-conversation Git worktree isolation settings for this workspace. */
+  worktreeIsolation?: WorktreeIsolationSettings;
   conversations: ConversationEntry[];
 }
 
@@ -383,6 +413,8 @@ export interface Conversation {
   effort?: EffortLevel;
   serviceTier?: ServiceTier;
   workingDir: string;
+  executionDir?: string;
+  checkout?: ConversationCheckout;
   workspaceHash: string;
   currentSessionId: string;
   sessionNumber: number;
@@ -494,6 +526,8 @@ export interface ConversationListItem {
   effort?: EffortLevel;
   serviceTier?: ServiceTier;
   workingDir: string;
+  executionDir?: string;
+  checkout?: ConversationCheckout;
   workspaceHash: string;
   /** Per-workspace Knowledge Base toggle. Defaults to false for legacy workspaces. */
   workspaceKbEnabled: boolean;

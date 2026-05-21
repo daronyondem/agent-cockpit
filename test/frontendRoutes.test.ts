@@ -85,6 +85,33 @@ describe('frontend routes', () => {
     expect(shellSrc).toContain('dangerouslySetInnerHTML={{ __html: html }}');
   });
 
+  test('desktop and mobile file surfaces understand conversation worktrees', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
+    const mobileApiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
+    const mobileModelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
+
+    expect(apiSrc).toContain("'/worktree-isolation'");
+    expect(apiSrc).toContain('conversationStatus: (convId)');
+    expect(shellSrc).toContain("'/workspace-file?path='");
+    expect(shellSrc).toContain('executionDir: conv.executionDir || conv.workingDir || null');
+    expect(workspaceSettingsSrc).toContain("{ id: 'worktrees'");
+    expect(workspaceSettingsSrc).toContain('Use one worktree per conversation');
+    expect(workspaceSettingsSrc).toContain("import { StreamStore } from './streamStore.js'");
+    expect(workspaceSettingsSrc).toContain('Conversations affected');
+    expect(workspaceSettingsSrc).toContain('Conversation</div>');
+    expect(workspaceSettingsSrc).toContain('Uses</div>');
+    expect(workspaceSettingsSrc).toContain('Status</div>');
+    expect(workspaceSettingsSrc).toContain('Workspace Folder');
+    expect(workspaceSettingsSrc).toContain("'Worktree'");
+    expect(workspaceSettingsSrc).toContain('conversation.archived');
+    expect(workspaceSettingsSrc).toContain('Archived');
+    expect(workspaceSettingsSrc).toContain('StreamStore.refreshLoadedConversations');
+    expect(mobileApiSrc).toContain('conversationWorkspaceFileURL');
+    expect(mobileModelSrc).toContain('makeConversationWorkspaceFileReference');
+  });
+
   test('mobile PWA keeps iOS viewport and modal sheet content reachable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
     const viewportHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useViewportHeightVar.ts'), 'utf8');

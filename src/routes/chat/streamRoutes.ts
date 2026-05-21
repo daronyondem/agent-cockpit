@@ -30,6 +30,10 @@ const log = logger.child({ module: 'stream-routes' });
 type Conversation = NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>;
 type CliRuntime = Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
 
+function conversationExecutionDir(conv: Conversation): string | null {
+  return conv.executionDir || conv.workingDir || null;
+}
+
 export interface AttachAndPipeStreamArgs {
   convId: string;
   conv: Conversation;
@@ -177,6 +181,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
 
     let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+    let executionDir = conversationExecutionDir(conv);
     if (hasInFlightTurn(convId)) {
       return res.status(409).json({ error: 'Conversation is already streaming' });
     }
@@ -192,7 +197,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
         model: model !== undefined ? (model || null) : (conv.model || null),
         effort: effort !== undefined ? (effort || null) : (conv.effort || null),
         serviceTier: serviceTier !== undefined ? serviceTier : (conv.serviceTier || null),
-        workingDir: conv.workingDir || null,
+        workingDir: executionDir,
       });
       const jobId = pendingMessageSend.jobId;
 
@@ -224,6 +229,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       await chatService.updateConversationServiceTier(convId, serviceTier);
     }
     conv = (await chatService.getConversation(convId))!;
+    executionDir = conversationExecutionDir(conv);
 
     let runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
     try {
@@ -245,7 +251,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       model: conv.model || null,
       effort: conv.effort || null,
       serviceTier: conv.serviceTier || null,
-      workingDir: conv.workingDir || null,
+      workingDir: executionDir,
     });
     const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backendId);
     await streamSupervisor.markPreparing(jobId, {
@@ -376,7 +382,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       return res.json({ userMessage: userMsg, streamReady: false, aborted: true });
     }
 
-    log.info('Starting CLI stream', { conversationId: convId, sessionId: conv.currentSessionId, isNewSession, backend: backendId, workingDir: conv.workingDir || 'default' });
+    log.info('Starting CLI stream', { conversationId: convId, sessionId: conv.currentSessionId, isNewSession, backend: backendId, workingDir: executionDir || 'default' });
     // Re-fetch conversation so we pick up any effort downgrade triggered by a
     // model change in this same request.
     const refreshedConv = await chatService.getConversation(convId);
@@ -395,7 +401,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       cliProfileId: runtime.cliProfileId || refreshedConv?.cliProfileId || conv.cliProfileId || undefined,
       cliProfile: runtime.profile,
       isNewSession,
-      workingDir: conv.workingDir || null,
+      workingDir: executionDir,
       systemPrompt,
       externalSessionId: conv.externalSessionId || null,
       model: model || conv.model || undefined,

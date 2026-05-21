@@ -504,6 +504,10 @@
       .then(r => r.json()),
     diff: (hash, relPath) => chatFetch(chatQueryPath('workspaces/' + encodeURIComponent(hash) + '/git/diff', { path: relPath }))
       .then(r => r.json()),
+    conversationStatus: (convId) => chatFetch('conversations/' + encodeURIComponent(convId) + '/git/status')
+      .then(r => r.json()),
+    conversationDiff: (convId, relPath) => chatFetch(chatQueryPath('conversations/' + encodeURIComponent(convId) + '/git/diff', { path: relPath }))
+      .then(r => r.json()),
   };
 
   const KbApi = {
@@ -762,6 +766,14 @@
         { method: 'PUT', body },
       ).then(r => r.json());
     },
+    getWorktreeIsolation: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/worktree-isolation',
+      { cache: 'no-store' },
+    ).then(r => r.json()),
+    setWorktreeIsolation: (hash, enabled) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/worktree-isolation',
+      { method: 'PUT', body: { enabled: !!enabled, confirmedSessionReset: true } },
+    ).then(r => r.json()),
     runWorkspaceContextScan: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/workspace-context/scan',
       { method: 'POST', body: {} },

@@ -16,6 +16,8 @@ installed and the first owner account exists.
 - [Knowledge Base](knowledge-base.md) explains document ingestion and retrieval.
 - [Workspace Context](workspace-context.md) explains markdown-first workspace
   operating memory.
+- [Worktree Isolation](worktree-isolation.md) explains per-conversation Git
+  worktrees for concurrent CLI work in the same repo.
 - [Mobile PWA](mobile-pwa.md) explains browser-based mobile access.
 
 ## Related Deployment Topics

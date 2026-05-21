@@ -46,6 +46,33 @@ export function createGitRouter(chatService: ChatService): express.Router {
     }
   });
 
+  router.get('/conversations/:id/git/status', async (req: Request, res: Response) => {
+    try {
+      const convId = param(req, 'id');
+      const workspace = await resolveGitConversation(chatService, convId);
+      if (!workspace.ok) {
+        if (workspace.status === 404) return res.status(404).json({ error: workspace.error });
+        const response: GitStatusResponse = {
+          isGitRepo: false,
+          files: [],
+          error: workspace.error,
+        };
+        return res.json(response);
+      }
+
+      const status = await loadStatus(workspace.gitRoot, workspace.prefix);
+      res.json({
+        isGitRepo: true,
+        root: workspace.root,
+        repoRoot: workspace.gitRoot,
+        branch: workspace.branch,
+        files: status,
+      } satisfies GitStatusResponse);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   router.get('/workspaces/:hash/git/diff', async (req: Request, res: Response) => {
     try {
       const hash = param(req, 'hash');
@@ -98,14 +125,75 @@ export function createGitRouter(chatService: ChatService): express.Router {
     }
   });
 
+  router.get('/conversations/:id/git/diff', async (req: Request, res: Response) => {
+    try {
+      const convId = param(req, 'id');
+      const requestedPath = req.query.path as string | undefined;
+      if (!requestedPath) return res.status(400).json({ error: 'path query parameter is required' });
+
+      const workspace = await resolveGitConversation(chatService, convId);
+      if (!workspace.ok) return res.status(workspace.status === 404 ? 404 : 400).json({ error: workspace.error });
+
+      const normalizedPath = normalizeGitPath(workspace.root, requestedPath);
+      if (!normalizedPath.ok) return res.status(normalizedPath.status).json({ error: normalizedPath.error });
+
+      const files = await loadStatus(workspace.gitRoot, workspace.prefix);
+      const change = files.find(file => file.path === normalizedPath.rel || file.oldPath === normalizedPath.rel);
+      if (!change) return res.status(404).json({ error: 'No uncommitted changes for path' });
+      if (change.status === 'conflicted') {
+        return res.status(409).json({ error: 'Diff is unavailable for conflicted files', path: change.path, status: change.status });
+      }
+
+      const oldRel = change.oldPath || change.path;
+      const oldPath = normalizeGitPath(workspace.root, oldRel);
+      if (!oldPath.ok) return res.status(oldPath.status).json({ error: oldPath.error });
+      const newPath = normalizeGitPath(workspace.root, change.path);
+      if (!newPath.ok) return res.status(newPath.status).json({ error: newPath.error });
+
+      const oldBlob = change.status === 'added' || change.status === 'untracked'
+        ? emptyBlob(true)
+        : await readHeadBlob(workspace.gitRoot, toRepoRelative(workspace.prefix, oldPath.rel));
+      const newBlob = change.status === 'deleted'
+        ? emptyBlob(true)
+        : await readWorkspaceFile(newPath.abs);
+
+      const binary = oldBlob.binary || newBlob.binary;
+      const tooLarge = oldBlob.tooLarge || newBlob.tooLarge;
+
+      res.json({
+        path: change.path,
+        oldPath: change.oldPath,
+        status: change.status,
+        oldContent: binary || tooLarge ? '' : oldBlob.content,
+        newContent: binary || tooLarge ? '' : newBlob.content,
+        oldMissing: oldBlob.missing,
+        newMissing: newBlob.missing,
+        binary,
+        tooLarge,
+        sizeLimit: GIT_TEXT_DIFF_LIMIT,
+      });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
   return router;
 }
 
 async function resolveGitWorkspace(chatService: ChatService, hash: string): Promise<GitWorkspaceOk | GitWorkspaceErr> {
   const wsRoot = await chatService.getWorkspacePath(hash);
   if (!wsRoot) return { ok: false, status: 404, error: 'Workspace not found' };
+  return resolveGitRoot(wsRoot);
+}
 
-  const root = await realpathOrResolve(wsRoot);
+async function resolveGitConversation(chatService: ChatService, convId: string): Promise<GitWorkspaceOk | GitWorkspaceErr> {
+  const executionDir = await chatService.getConversationExecutionDir(convId);
+  if (!executionDir) return { ok: false, status: 404, error: 'Conversation not found' };
+  return resolveGitRoot(executionDir);
+}
+
+async function resolveGitRoot(workspaceRoot: string): Promise<GitWorkspaceOk | GitWorkspaceErr> {
+  const root = await realpathOrResolve(workspaceRoot);
   let topLevel: string;
   try {
     topLevel = (await execGitText(root, ['rev-parse', '--show-toplevel'])).trim();

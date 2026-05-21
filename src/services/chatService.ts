@@ -58,6 +58,8 @@ import type {
   WorkspaceInstructionCompatibilityStatus,
   WorkspaceInstructionPointerResult,
   WorkspaceContextWorkspaceSettings,
+  ConversationCheckout,
+  WorktreeIsolationSettings,
 } from '../types';
 import {
   openKbDatabase,
@@ -83,6 +85,12 @@ import { UsagePricingStore } from './usagePricing/store';
 import type { UsagePricingEntry, UsagePricingResponse } from './usagePricing/types';
 import { ArtifactStore, type CreateConversationArtifactInput } from './chat/artifactStore';
 import { WorkspaceFeatureSettingsStore } from './chat/workspaceFeatureSettingsStore';
+import {
+  WorktreeIsolationService,
+  WorktreeIsolationError,
+  normalizeCheckout,
+} from './chat/worktreeIsolationService';
+import type { WorktreeIsolationStatusResponse } from '../contracts/worktreeIsolation';
 
 const log = logger.child({ module: 'chat-service' });
 
@@ -372,6 +380,7 @@ export class ChatService {
   private _usagePricingStore: UsagePricingStore;
   private _artifactStore: ArtifactStore;
   private _featureSettingsStore: WorkspaceFeatureSettingsStore;
+  private _worktreeIsolation: WorktreeIsolationService;
   private _defaultWorkspace: string;
   private _backendRegistry: BackendRegistry | null;
   private _convWorkspaceMap: Map<string, string>;
@@ -422,6 +431,7 @@ export class ChatService {
       artifactsDir: this.artifactsDir,
       hasConversation: (convId) => this._convWorkspaceMap.has(convId),
     });
+    this._worktreeIsolation = new WorktreeIsolationService();
     this._featureSettingsStore = new WorkspaceFeatureSettingsStore({
       workspacesDir: this.workspacesDir,
       indexLock: this._indexLock,
@@ -620,6 +630,86 @@ export class ChatService {
     return { hash, index, convEntry };
   }
 
+  private _checkoutForConversation(convEntry: ConversationEntry): ConversationCheckout | undefined {
+    const checkout = normalizeCheckout(convEntry.checkout);
+    return checkout.mode === 'worktree' ? checkout : undefined;
+  }
+
+  private _executionDirForConversation(index: WorkspaceIndex, convEntry: ConversationEntry): string {
+    const checkout = this._checkoutForConversation(convEntry);
+    return checkout?.executionDir || index.workspacePath;
+  }
+
+  private _sessionBranchName(convId: string, sessionNumber: number): string {
+    return this._worktreeIsolation.branchName(convId, sessionNumber);
+  }
+
+  private async _advanceConversationSession(
+    hash: string,
+    convEntry: ConversationEntry,
+    now: Date,
+    opts: { branchName?: string; baseRef?: string } = {},
+  ): Promise<ResetSessionResult['archivedSession'] | null> {
+    const activeSession = convEntry.sessions.find(s => s.active);
+    if (!activeSession) return null;
+
+    const currentSessionNumber = activeSession.number;
+    const sessionFile = await this._readSessionFile(hash, convEntry.id, currentSessionNumber);
+    const currentMessages = sessionFile ? sessionFile.messages : [];
+    const summary = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
+
+    activeSession.active = false;
+    activeSession.summary = summary;
+    activeSession.endedAt = now.toISOString();
+    activeSession.messageCount = currentMessages.length;
+
+    if (sessionFile) {
+      sessionFile.endedAt = now.toISOString();
+      await this._writeSessionFile(hash, convEntry.id, currentSessionNumber, sessionFile);
+    }
+
+    const newSessionNumber = currentSessionNumber + 1;
+    const newSessionId = this._newId();
+
+    delete convEntry.messageQueue;
+    if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
+    convEntry.currentSessionId = newSessionId;
+    if (!convEntry.titleManuallySet) {
+      convEntry.title = 'New Chat';
+    }
+    convEntry.lastActivity = now.toISOString();
+    convEntry.lastMessage = null;
+    delete convEntry.unread;
+    convEntry.sessions.push({
+      number: newSessionNumber,
+      sessionId: newSessionId,
+      summary: null,
+      active: true,
+      messageCount: 0,
+      startedAt: now.toISOString(),
+      endedAt: null,
+      ...(opts.branchName ? { branchName: opts.branchName } : {}),
+      ...(opts.baseRef ? { baseRef: opts.baseRef } : {}),
+    });
+
+    await this._writeSessionFile(hash, convEntry.id, newSessionNumber, {
+      sessionNumber: newSessionNumber,
+      sessionId: newSessionId,
+      startedAt: now.toISOString(),
+      endedAt: null,
+      messages: [],
+    });
+
+    return {
+      number: currentSessionNumber,
+      sessionId: activeSession.sessionId || null,
+      startedAt: activeSession.startedAt,
+      endedAt: now.toISOString(),
+      messageCount: currentMessages.length,
+      summary,
+    };
+  }
+
   private async _generateSessionSummary(
     messages: Pick<Message, 'role' | 'content'>[],
     fallback: string,
@@ -676,6 +766,15 @@ export class ChatService {
         index = { workspacePath, conversations: [] };
       }
 
+      let checkout: ConversationCheckout | undefined;
+      let branchName: string | undefined;
+      const isolation = index.worktreeIsolation;
+      if (isolation?.enabled) {
+        await this._worktreeIsolation.assertBaseReady(isolation);
+        branchName = this._sessionBranchName(id, 1);
+        checkout = await this._worktreeIsolation.createConversationWorktree(isolation, id, branchName);
+      }
+
       const effective = this._effectiveEffort(resolvedBackend, model, effort);
       const requestedServiceTier = serviceTier === undefined ? settings.defaultServiceTier : serviceTier || undefined;
       const effectiveServiceTier = this._effectiveServiceTier(resolvedBackend, requestedServiceTier);
@@ -698,7 +797,10 @@ export class ChatService {
           messageCount: 0,
           startedAt: now,
           endedAt: null,
+          ...(branchName ? { branchName } : {}),
+          ...(isolation?.remoteBaseRef ? { baseRef: isolation.remoteBaseRef } : {}),
         }],
+        ...(checkout ? { checkout } : {}),
       };
 
       index.conversations.push(convEntry);
@@ -723,6 +825,7 @@ export class ChatService {
         effort: convEntry.effort,
         serviceTier: convEntry.serviceTier,
         workingDir: workspacePath,
+        ...(checkout ? { executionDir: checkout.executionDir, checkout } : {}),
         workspaceHash: hash,
         currentSessionId: sessionId,
         sessionNumber: 1,
@@ -838,6 +941,7 @@ export class ChatService {
     } else if (convEntry.messageQueue) {
       delete convEntry.messageQueue;
     }
+    const checkout = this._checkoutForConversation(convEntry);
 
     return {
       id: convEntry.id,
@@ -849,6 +953,7 @@ export class ChatService {
       effort: convEntry.effort,
       serviceTier: convEntry.serviceTier,
       workingDir: index.workspacePath,
+      ...(checkout ? { executionDir: checkout.executionDir, checkout } : {}),
       workspaceHash: hash,
       currentSessionId: convEntry.currentSessionId,
       sessionNumber,
@@ -915,6 +1020,10 @@ export class ChatService {
           effort: conv.effort,
           serviceTier: conv.serviceTier,
           workingDir: index.workspacePath,
+          ...(this._checkoutForConversation(conv) ? {
+            executionDir: this._checkoutForConversation(conv)?.executionDir,
+            checkout: this._checkoutForConversation(conv),
+          } : {}),
           workspaceHash: hash,
           workspaceKbEnabled: Boolean(index.kbEnabled),
           messageCount: activeSession ? activeSession.messageCount : 0,
@@ -996,7 +1105,12 @@ export class ChatService {
     return this._indexLock.run(hash, async () => {
       const result = await this._getConvFromIndex(id);
       if (!result) return false;
-      const { index } = result;
+      const { index, convEntry } = result;
+
+      const checkout = normalizeCheckout(convEntry.checkout);
+      if (index.worktreeIsolation?.enabled && checkout.mode === 'worktree') {
+        await this._worktreeIsolation.removeConversationWorktree(index.worktreeIsolation, checkout, convEntry);
+      }
 
       index.conversations = index.conversations.filter(c => c.id !== id);
       await this._writeWorkspaceIndex(hash, index);
@@ -1396,69 +1510,29 @@ export class ChatService {
       if (!activeSession) return null;
 
       const currentSessionNumber = activeSession.number;
-
-      const sessionFile = await this._readSessionFile(hash, convId, currentSessionNumber);
-      const currentMessages = sessionFile ? sessionFile.messages : [];
-
-      const summary = `Session ${currentSessionNumber} (${currentMessages.length} messages)`;
-
-      activeSession.active = false;
-      activeSession.summary = summary;
-      activeSession.endedAt = now.toISOString();
-      activeSession.messageCount = currentMessages.length;
-
-      if (sessionFile) {
-        sessionFile.endedAt = now.toISOString();
-        await this._writeSessionFile(hash, convId, currentSessionNumber, sessionFile);
-      }
-
       const newSessionNumber = currentSessionNumber + 1;
-      const newSessionId = this._newId();
-
-      delete convEntry.messageQueue;
-      // contextUsagePercentage is a live snapshot tied to the prior session's
-      // context window; clear it so the chip doesn't show a stale value before
-      // the new session's first turn reports fresh usage.
-      if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
-      convEntry.currentSessionId = newSessionId;
-      // Preserve a user-set title across resets; only auto-titled conversations
-      // get stamped back to "New Chat" so the next session can re-derive a title.
-      if (!convEntry.titleManuallySet) {
-        convEntry.title = 'New Chat';
+      let branchName: string | undefined;
+      let baseRef: string | undefined;
+      if (index.worktreeIsolation?.enabled) {
+        branchName = this._sessionBranchName(convEntry.id, newSessionNumber);
+        baseRef = index.worktreeIsolation.remoteBaseRef;
+        const checkout = await this._worktreeIsolation.resetConversationWorktree(
+          index.worktreeIsolation,
+          normalizeCheckout(convEntry.checkout),
+          convEntry,
+          branchName,
+        );
+        convEntry.checkout = checkout;
       }
-      convEntry.lastActivity = now.toISOString();
-      convEntry.lastMessage = null;
-      delete convEntry.unread;
-      convEntry.sessions.push({
-        number: newSessionNumber,
-        sessionId: newSessionId,
-        summary: null,
-        active: true,
-        messageCount: 0,
-        startedAt: now.toISOString(),
-        endedAt: null,
-      });
 
-      await this._writeSessionFile(hash, convId, newSessionNumber, {
-        sessionNumber: newSessionNumber,
-        sessionId: newSessionId,
-        startedAt: now.toISOString(),
-        endedAt: null,
-        messages: [],
-      });
+      const archivedSession = await this._advanceConversationSession(hash, convEntry, now, { branchName, baseRef });
+      if (!archivedSession) return null;
 
       await this._writeWorkspaceIndex(hash, index);
 
       return {
         newSessionNumber,
-        archivedSession: {
-          number: currentSessionNumber,
-          sessionId: activeSession.sessionId || null,
-          startedAt: activeSession.startedAt,
-          endedAt: now.toISOString(),
-          messageCount: currentMessages.length,
-          summary,
-        },
+        archivedSession,
       };
     });
     if (!summarySnapshot) return null;
@@ -1662,6 +1736,153 @@ export class ChatService {
   async getWorkspacePath(hash: string): Promise<string | null> {
     const index = await this._readWorkspaceIndex(hash);
     return index?.workspacePath || null;
+  }
+
+  async getConversationExecutionDir(convId: string): Promise<string | null> {
+    const result = await this._getConvFromIndex(convId);
+    if (!result) return null;
+    return this._executionDirForConversation(result.index, result.convEntry);
+  }
+
+  async getWorkspaceWorktreeIsolationStatus(hash: string): Promise<WorktreeIsolationStatusResponse> {
+    const index = await this._readWorkspaceIndex(hash);
+    return this._worktreeIsolation.getStatus(hash, index);
+  }
+
+  async setWorkspaceWorktreeIsolation(
+    hash: string,
+    enabled: boolean,
+    opts: { confirmedSessionReset?: boolean } = {},
+  ): Promise<WorktreeIsolationStatusResponse | null> {
+    if (!opts.confirmedSessionReset) {
+      throw new WorktreeIsolationError(
+        'confirmation_required',
+        'Changing worktree mode resets CLI sessions for all conversations in this workspace',
+        [{
+          code: 'confirmation_required',
+          message: 'Changing worktree mode resets CLI sessions for all conversations in this workspace',
+        }],
+        400,
+      );
+    }
+
+    await this._indexLock.run(hash, async () => {
+      const index = await this._readWorkspaceIndex(hash);
+      if (!index) return null;
+      if (enabled) {
+        await this._enableWorktreeIsolation(hash, index);
+      } else {
+        await this._disableWorktreeIsolation(hash, index);
+      }
+      return true;
+    });
+
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    return this._worktreeIsolation.getStatus(hash, index);
+  }
+
+  private async _enableWorktreeIsolation(hash: string, index: WorkspaceIndex): Promise<void> {
+    if (index.worktreeIsolation?.enabled) return;
+    const settings = await this._worktreeIsolation.buildSettings(hash, index.workspacePath);
+    await this._worktreeIsolation.assertBaseReady(settings);
+    const now = new Date();
+    const created: ConversationCheckout[] = [];
+    const migrations: Array<{
+      convEntry: ConversationEntry;
+      checkout: ConversationCheckout;
+      branchName: string;
+    }> = [];
+    try {
+      for (const convEntry of index.conversations) {
+        const activeSession = convEntry.sessions.find((session) => session.active);
+        if (!activeSession) continue;
+        const newSessionNumber = activeSession.number + 1;
+        const branchName = this._sessionBranchName(convEntry.id, newSessionNumber);
+        const checkout = await this._worktreeIsolation.createConversationWorktree(settings, convEntry.id, branchName);
+        created.push(checkout);
+        migrations.push({ convEntry, checkout, branchName });
+      }
+
+      index.worktreeIsolation = settings;
+      for (const migration of migrations) {
+        migration.convEntry.checkout = migration.checkout;
+        await this._advanceConversationSession(hash, migration.convEntry, now, {
+          branchName: migration.branchName,
+          baseRef: settings.remoteBaseRef,
+        });
+      }
+      await this._writeWorkspaceIndex(hash, index);
+    } catch (err) {
+      for (const checkout of created.reverse()) {
+        try {
+          await this._worktreeIsolation.removeConversationWorktree(settings, checkout, { id: 'rollback', title: 'rollback' });
+        } catch {
+          // Best-effort cleanup; preserve the original enablement failure.
+        }
+      }
+      delete index.worktreeIsolation;
+      throw err;
+    }
+  }
+
+  private async _disableWorktreeIsolation(hash: string, index: WorkspaceIndex): Promise<void> {
+    const settings = index.worktreeIsolation;
+    if (!settings?.enabled) return;
+    const blockers: Array<{ code: string; message: string; conversationId?: string; path?: string; files?: string[] }> = [];
+    const baseDirty = await this._worktreeIsolation.changedFiles(settings.repoRoot);
+    if (baseDirty.length > 0) {
+      blockers.push({
+        code: 'base_dirty',
+        message: 'Base checkout has uncommitted changes',
+        path: settings.repoRoot,
+        files: baseDirty,
+      });
+    }
+
+    for (const convEntry of index.conversations) {
+      const checkout = normalizeCheckout(convEntry.checkout);
+      if (checkout.mode === 'worktree') {
+        if (!checkout.worktreeRoot || !fs.existsSync(checkout.worktreeRoot)) {
+          blockers.push({
+            code: 'worktree_missing',
+            message: 'Conversation worktree is missing',
+            conversationId: convEntry.id,
+            path: checkout.worktreeRoot,
+          });
+          continue;
+        }
+        const dirtyFiles = await this._worktreeIsolation.changedFiles(checkout.worktreeRoot);
+        if (dirtyFiles.length > 0) {
+          blockers.push({
+            code: 'worktree_dirty',
+            message: 'Conversation worktree has uncommitted changes',
+            conversationId: convEntry.id,
+            path: checkout.worktreeRoot,
+            files: dirtyFiles,
+          });
+        }
+      }
+    }
+    if (blockers.length > 0) {
+      throw new WorktreeIsolationError(
+        blockers.some((blocker) => blocker.code === 'worktree_dirty') ? 'worktree_dirty' : blockers[0].code,
+        'Cannot disable worktree mode until dirty or missing checkouts are resolved',
+        blockers,
+      );
+    }
+
+    const now = new Date();
+    for (const convEntry of index.conversations) {
+      const checkout = normalizeCheckout(convEntry.checkout);
+      if (checkout.mode === 'worktree') {
+        await this._worktreeIsolation.removeConversationWorktree(settings, checkout, convEntry);
+      }
+      delete convEntry.checkout;
+      await this._advanceConversationSession(hash, convEntry, now);
+    }
+    delete index.worktreeIsolation;
+    await this._writeWorkspaceIndex(hash, index);
   }
 
   // ── Workspace Memory ───────────────────────────────────────────────────────
@@ -2679,17 +2900,22 @@ export class ChatService {
       return null;
     }
 
-    log.info('Extracting workspace memory', { convId, backendId, workspacePath: index.workspacePath });
+    const convEntry = index.conversations.find(c => c.id === convId);
+    const workspacePath = convEntry
+      ? this._executionDirForConversation(index, convEntry)
+      : index.workspacePath;
+
+    log.info('Extracting workspace memory', { convId, backendId, workspacePath });
     let snapshot: MemorySnapshot | null = null;
     try {
-      snapshot = await adapter.extractMemory(index.workspacePath, { cliProfile });
+      snapshot = await adapter.extractMemory(workspacePath, { cliProfile });
     } catch (err: unknown) {
-      log.error('Memory extraction failed', { backendId, workspacePath: index.workspacePath, error: err });
+      log.error('Memory extraction failed', { backendId, workspacePath, error: err });
       return null;
     }
 
     if (!snapshot) {
-      log.info('Memory extraction returned no snapshot', { backendId, workspacePath: index.workspacePath });
+      log.info('Memory extraction returned no snapshot', { backendId, workspacePath });
       return null;
     }
 

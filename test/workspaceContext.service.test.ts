@@ -159,7 +159,7 @@ describe('WorkspaceContextService', () => {
     workspaceContextService = new WorkspaceContextService({
       chatService,
       backendRegistry,
-      minVisibleNoSourceRunMs: 50,
+      minVisibleNoSourceRunMs: 500,
     });
     await chatService.createConversation('Workspace Context visible progress', workspacePath);
     const hash = workspaceHash(workspacePath);

@@ -18,6 +18,7 @@ Start here if you are installing or using Agent Cockpit.
 - [Memory](user/memory.md)
 - [Knowledge Base](user/knowledge-base.md)
 - [Workspace Context](user/workspace-context.md)
+- [Worktree Isolation](user/worktree-isolation.md)
 - [Mobile PWA](user/mobile-pwa.md)
 
 ## Deploy Guide

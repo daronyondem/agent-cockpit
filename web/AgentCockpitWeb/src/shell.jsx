@@ -120,6 +120,7 @@ const FileViewerContext = React.createContext({
   wsHash: null,
   convId: null,
   workingDir: null,
+  executionDir: null,
   openFileViewer: null,
   openLightbox: null,
 });
@@ -1942,7 +1943,14 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                 No messages yet. Say hello below.
               </div>
             )}
-            <FileViewerContext.Provider value={{ wsHash: conv.workspaceHash || null, convId, workingDir: conv.workingDir || null, openFileViewer, openLightbox }}>
+            <FileViewerContext.Provider value={{
+              wsHash: conv.workspaceHash || null,
+              convId,
+              workingDir: conv.workingDir || null,
+              executionDir: conv.executionDir || conv.workingDir || null,
+              openFileViewer,
+              openLightbox,
+            }}>
             <AgentIndexProvider messages={feedMessages}>
               {messageFeedEntries.map(entry => {
                 if (entry.kind === 'plain') {
@@ -3024,10 +3032,12 @@ function renderSegment(seg, key){
   return null;
 }
 
-function buildWorkspaceFileDescriptor(ref, wsHash){
-  if (!ref || !ref.filePath || !wsHash) return null;
+function buildWorkspaceFileDescriptor(ref, wsHash, convId){
+  if (!ref || !ref.filePath || (!wsHash && !convId)) return null;
   const filename = (ref.filePath.split('/').pop() || ref.filePath);
-  const basePath = 'workspaces/' + encodeURIComponent(wsHash) + '/files?path=' + encodeURIComponent(ref.filePath);
+  const basePath = convId
+    ? 'conversations/' + encodeURIComponent(convId) + '/workspace-file?path=' + encodeURIComponent(ref.filePath)
+    : 'workspaces/' + encodeURIComponent(wsHash) + '/files?path=' + encodeURIComponent(ref.filePath);
   const viewPath = basePath + '&mode=view';
   const downloadUrl = AgentApi.chatUrl(basePath + '&mode=download');
   const isImage = CHAT_IMAGE_EXTS.test(filename);
@@ -3130,7 +3140,7 @@ function GeneratedArtifactCard({ artifact, filename, viewPath, downloadUrl, imag
 }
 
 const TextSegment = React.memo(function TextSegment({ content }){
-  const { wsHash, convId, workingDir, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
+  const { wsHash, convId, workingDir, executionDir, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
   const { cleaned, files } = extractFileDeliveries(content);
   const html = React.useMemo(() => renderMarkdown(cleaned), [cleaned]);
   const proseRef = React.useRef(null);
@@ -3182,8 +3192,13 @@ const TextSegment = React.memo(function TextSegment({ content }){
           openFileViewer(artifactDescriptor);
           return;
         }
-        const ref = resolveLocalFileHref(href, workingDir);
-        const descriptor = buildWorkspaceFileDescriptor(ref, wsHash);
+        let ref = executionDir ? resolveLocalFileHref(href, executionDir) : null;
+        let descriptorConvId = convId;
+        if (!ref) {
+          ref = workingDir ? resolveLocalFileHref(href, workingDir) : null;
+          descriptorConvId = null;
+        }
+        const descriptor = buildWorkspaceFileDescriptor(ref, wsHash, descriptorConvId);
         if (descriptor && openFileViewer) {
           e.preventDefault();
           openFileViewer(descriptor);
@@ -3204,14 +3219,15 @@ const TextSegment = React.memo(function TextSegment({ content }){
         link.title = artifactRef.line ? `Preview ${artifactRef.filename}:${artifactRef.line}` : `Preview ${artifactRef.filename}`;
         return;
       }
-      const ref = resolveLocalFileHref(href, workingDir);
+      const ref = (executionDir ? resolveLocalFileHref(href, executionDir) : null)
+        || (workingDir ? resolveLocalFileHref(href, workingDir) : null);
       if (!ref) return;
       link.classList.add('local-file-link');
       link.title = ref.line ? `Preview ${ref.filePath}:${ref.line}` : `Preview ${ref.filePath}`;
     });
     root.addEventListener('click', onClick);
     return () => root.removeEventListener('click', onClick);
-  }, [cleaned, convId, openFileViewer, openLightbox, workingDir, wsHash]);
+  }, [cleaned, convId, executionDir, openFileViewer, openLightbox, workingDir, wsHash]);
 
   return (
     <>
@@ -3229,6 +3245,7 @@ const TextSegment = React.memo(function TextSegment({ content }){
               key={p + ':' + i}
               filePath={p}
               wsHash={wsHash}
+              convId={convId}
               onOpenView={openFileViewer}
             />
           ))}
@@ -3238,9 +3255,11 @@ const TextSegment = React.memo(function TextSegment({ content }){
   );
 });
 
-function FileDeliveryCard({ filePath, wsHash, onOpenView }){
+function FileDeliveryCard({ filePath, wsHash, convId, onOpenView }){
   const filename = (filePath.split('/').pop() || filePath);
-  const basePath = wsHash
+  const basePath = convId
+    ? 'conversations/' + encodeURIComponent(convId) + '/workspace-file?path=' + encodeURIComponent(filePath)
+    : wsHash
     ? 'workspaces/' + encodeURIComponent(wsHash) + '/files?path=' + encodeURIComponent(filePath)
     : null;
   const viewPath = basePath ? basePath + '&mode=view' : null;
@@ -3260,7 +3279,7 @@ function FileDeliveryCard({ filePath, wsHash, onOpenView }){
             imageUrl: isImage ? downloadUrl : null,
             displayPath: filePath,
           })}
-          disabled={!wsHash || !onOpenView}
+          disabled={!basePath || !onOpenView}
         >View</button>
         {downloadUrl ? (
           <a className="btn ghost file-card-btn" href={downloadUrl} download={filename}>Download</a>

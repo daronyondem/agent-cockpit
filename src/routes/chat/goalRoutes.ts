@@ -25,6 +25,10 @@ const log = logger.child({ module: 'goal-routes' });
 type Conversation = NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>;
 type CliRuntime = Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
 
+function conversationExecutionDir(conv: Conversation): string | null {
+  return conv.executionDir || conv.workingDir || null;
+}
+
 export interface AttachAndPipeStreamArgs {
   convId: string;
   conv: Conversation;
@@ -142,7 +146,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
         cliProfile: runtime.profile,
         isNewSession: false,
-        workingDir: conv.workingDir || null,
+        workingDir: conversationExecutionDir(conv),
         systemPrompt: '',
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
@@ -188,6 +192,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
 
     let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+    let executionDir = conversationExecutionDir(conv);
     if (hasInFlightTurn(convId)) {
       return res.status(409).json({ error: 'Conversation is already streaming' });
     }
@@ -203,7 +208,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         model: model !== undefined ? (model || null) : (conv.model || null),
         effort: effort !== undefined ? (effort || null) : (conv.effort || null),
         serviceTier: serviceTier !== undefined ? serviceTier : (conv.serviceTier || null),
-        workingDir: conv.workingDir || null,
+        workingDir: executionDir,
       });
       const jobId = pendingMessageSend.jobId;
 
@@ -235,6 +240,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         await chatService.updateConversationServiceTier(convId, serviceTier);
       }
       conv = (await chatService.getConversation(convId))!;
+      executionDir = conversationExecutionDir(conv);
 
       let runtime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>;
       try {
@@ -264,7 +270,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         model: conv.model || null,
         effort: conv.effort || null,
         serviceTier: conv.serviceTier || null,
-        workingDir: conv.workingDir || null,
+        workingDir: executionDir,
       });
       if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
         return res.json({ streamReady: false, aborted: true });
@@ -288,7 +294,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         cliProfileId: runtime.cliProfileId || refreshedConv?.cliProfileId || conv.cliProfileId || undefined,
         cliProfile: runtime.profile,
         isNewSession,
-        workingDir: conv.workingDir || null,
+        workingDir: executionDir,
         systemPrompt,
         externalSessionId: conv.externalSessionId || null,
         model: model || conv.model || undefined,
@@ -339,6 +345,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     const convId = param(req, 'id');
     let conv = await chatService.getConversation(convId);
     if (!conv) return res.status(404).json({ error: 'Conversation not found' });
+    let executionDir = conversationExecutionDir(conv);
     if (hasInFlightTurn(convId)) {
       return res.status(409).json({ error: 'Conversation is already streaming' });
     }
@@ -356,7 +363,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         model: conv.model || null,
         effort: conv.effort || null,
         serviceTier: conv.serviceTier || null,
-        workingDir: conv.workingDir || null,
+        workingDir: executionDir,
       });
       const jobId = pendingMessageSend.jobId;
       await streamSupervisor.markPreparing(jobId, {
@@ -366,12 +373,13 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         model: conv.model || null,
         effort: conv.effort || null,
         serviceTier: conv.serviceTier || null,
-        workingDir: conv.workingDir || null,
+        workingDir: executionDir,
       });
       if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
         return res.json({ streamReady: false, aborted: true });
       }
       conv = (await chatService.getConversation(convId))!;
+      executionDir = conversationExecutionDir(conv);
       const { systemPrompt, mcpServers } = await buildGoalRunEnvironment(convId, false);
       let resumedGoal: ThreadGoal | null = null;
       try {
@@ -381,7 +389,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
           cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
           cliProfile: runtime.profile,
           isNewSession: false,
-          workingDir: conv.workingDir || null,
+          workingDir: executionDir,
           systemPrompt: '',
           externalSessionId: conv.externalSessionId || null,
           model: conv.model || undefined,
@@ -400,7 +408,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
         cliProfile: runtime.profile,
         isNewSession: false,
-        workingDir: conv.workingDir || null,
+        workingDir: executionDir,
         systemPrompt,
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
@@ -460,7 +468,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
         cliProfile: runtime.profile,
         isNewSession: false,
-        workingDir: conv.workingDir || null,
+        workingDir: conversationExecutionDir(conv),
         systemPrompt: '',
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
@@ -497,7 +505,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         cliProfileId: runtime.cliProfileId || conv.cliProfileId || undefined,
         cliProfile: runtime.profile,
         isNewSession: false,
-        workingDir: conv.workingDir || null,
+        workingDir: conversationExecutionDir(conv),
         systemPrompt: '',
         externalSessionId: conv.externalSessionId || null,
         model: conv.model || undefined,
