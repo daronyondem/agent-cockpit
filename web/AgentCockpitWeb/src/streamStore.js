@@ -728,35 +728,8 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       const s = states.get(convId);
       if (!s || !s.loaded) return false;
       try {
-        const data = await fetchConversationTail(convId);
-        const messages = readWindowMessages(data);
-        const messageWindow = normalizeMessageWindow(data, messages);
-        const pinnedMessages = normalizePinnedMessages(data, messages);
-        const persistedStreamError = activeStreamErrorFromMessages(messages);
-        update(convId, cur => ({
-          ...cur,
-          conv: data,
-          messages,
-          messageWindow,
-          pinnedMessages,
-          loadingOlder: false,
-          loadingAround: false,
-          queue: Array.isArray(data.messageQueue) ? data.messageQueue : [],
-          usage: data.sessionUsage || null,
-          streamError: persistedStreamError ? persistedStreamError.message : null,
-          streamErrorSource: persistedStreamError ? persistedStreamError.source : null,
-          streaming: false,
-          streamingMsgId: null,
-          pendingInteraction: null,
-          goal: null,
-          goalMode: false,
-          uiState: persistedStreamError ? 'error' : null,
-          loadError: null,
-          loaded: true,
-        }));
-        if (data && typeof data.title === 'string') {
-          patchConvListItem(convId, { title: data.title });
-        }
+        const data = await refreshConversationFromServer(convId, null, true);
+        update(convId, { loadError: null, loaded: true });
         applyGoalSnapshot(convId, null);
         return true;
       } catch (err) {
@@ -847,7 +820,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     }
   }
 
-  async function refreshConversationFromServer(convId, opts){
+  async function refreshConversationFromServer(convId, opts, freshSession){
     const data = await fetchConversationTail(convId);
     const messages = readWindowMessages(data);
     const messageWindow = normalizeMessageWindow(data, messages);
@@ -856,7 +829,7 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     const fallbackStreamError = opts && typeof opts.streamError === 'string'
       ? { message: opts.streamError, source: typeof opts.streamErrorSource === 'string' ? opts.streamErrorSource : null }
       : null;
-    const streamErrorInfo = persistedStreamError || fallbackStreamError;
+    const streamErrorInfo = freshSession ? null : (persistedStreamError || fallbackStreamError);
     const streamError = streamErrorInfo ? streamErrorInfo.message : null;
     update(convId, next => ({
       ...next,
@@ -867,10 +840,12 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       loadingOlder: false,
       loadingAround: false,
       usage: data.sessionUsage || null,
-      queue: Array.isArray(data.messageQueue) ? data.messageQueue : next.queue,
+      queue: Array.isArray(data.messageQueue) ? data.messageQueue : (freshSession ? [] : next.queue),
       streaming: false,
       streamingMsgId: null,
       pendingInteraction: null,
+      goal: freshSession ? null : next.goal,
+      goalMode: freshSession ? false : next.goalMode,
       planModeActive: false,
       replayActive: false,
       reconcileTimer: null,
@@ -879,7 +854,11 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       streamErrorSource: streamErrorInfo ? streamErrorInfo.source : null,
       uiState: streamError ? 'error' : null,
     }));
-    if (!streamError) drainQueueIfReady(convId);
+    if (data && typeof data.title === 'string') {
+      patchConvListItem(convId, { title: data.title });
+    }
+    if (!streamError && !freshSession) drainQueueIfReady(convId);
+    return data;
   }
 
   async function loadTailMessages(convId){
@@ -2511,35 +2490,8 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     update(convId, { resetting: true });
     try {
       await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/reset', { method: 'POST', body: {} });
-      const data = await fetchConversationTail(convId);
-      const messages = readWindowMessages(data);
-      const messageWindow = normalizeMessageWindow(data, messages);
-      const pinnedMessages = normalizePinnedMessages(data, messages);
-      update(convId, cur => ({
-        ...cur,
-        conv: data,
-        messages,
-        messageWindow,
-        pinnedMessages,
-        loadingOlder: false,
-        loadingAround: false,
-        queue: Array.isArray(data.messageQueue) ? data.messageQueue : [],
-        usage: data.sessionUsage || null,
-        streamError: null,
-        streamErrorSource: null,
-        streaming: false,
-        streamingMsgId: null,
-        pendingInteraction: null,
-        goal: null,
-        goalMode: false,
-        uiState: null,
-        resetting: false,
-      }));
-      /* Server resets title to 'New Chat' on session reset; mirror that
-         in the sidebar list so the row label flips immediately. */
-      if (data && typeof data.title === 'string') {
-        patchConvListItem(convId, { title: data.title });
-      }
+      await refreshConversationFromServer(convId, null, true);
+      update(convId, { resetting: false });
       return true;
     } catch (err) {
       update(convId, { streamError: err.message || String(err), streamErrorSource: null, resetting: false });
