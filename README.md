@@ -110,6 +110,13 @@ in the workspace `AGENTS.md`, and uses a configured CLI processor to catch up
 those markdown files from recent conversations and sessions. The active chat CLI
 reads and updates the same files through normal workspace instructions.
 
+**Worktree Isolation**
+For Git-backed workspaces, you can run each conversation in its own Git
+worktree and session branch. Multiple conversations can then edit the same
+repository at the same time without clobbering each other's files, and pull
+requests stay ordinary GitHub branches. See
+[docs/user/worktree-isolation.md](docs/user/worktree-isolation.md).
+
 **Real-time agent view**
 Responses stream live with tool calls, sub-agents, thinking, outcomes, progress
 state, draft persistence, plan-mode approvals, interactive questions, and
@@ -265,7 +272,7 @@ npm run auth:reset -- --password "new long password" --disable-passkey-required 
 Start with [docs/README.md](docs/README.md).
 
 - [User Guide](docs/user/README.md) covers daily use, backends, Memory,
-  Knowledge Base, Workspace Context, and mobile PWA.
+  Knowledge Base, Workspace Context, Worktree Isolation, and mobile PWA.
 - [Deploy Guide](docs/deploy/README.md) covers macOS, Linux, Windows, remote access,
   auth, updates, and troubleshooting.
 - [Reference](docs/reference/README.md) covers data layout, environment

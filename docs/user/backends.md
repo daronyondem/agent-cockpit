@@ -60,3 +60,12 @@ workspace storage regardless of which backend produced it.
 Provider-neutral context features such as Memory, Knowledge Base, and Context
 Map are designed to make switching backends useful instead of starting from an
 empty prompt every time.
+
+## Concurrent Conversations On The Same Repo
+
+Backend choice does not change how the CLI sees the filesystem. When two
+conversations run against the same Git workspace at the same time, the CLI
+processes share that workspace folder by default. To give each conversation an
+isolated checkout and session branch, enable
+[Worktree Isolation](worktree-isolation.md) on the workspace. This works the
+same way for every supported backend.
