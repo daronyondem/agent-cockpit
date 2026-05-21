@@ -927,9 +927,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
         open={workspaceLocationPickerOpen}
         initialPath={workspaceLocationDraft || (workspaceLocation && workspaceLocation.workspacePath) || ''}
         busy={saving}
-        showUseDefault={false}
         onClose={() => setWorkspaceLocationPickerOpen(false)}
-        onUseDefault={() => setWorkspaceLocationPickerOpen(false)}
         onSelect={(nextPath) => {
           setWorkspaceLocationDraft(nextPath || '');
           setWorkspaceLocationDirty(String(nextPath || '').trim() !== ((workspaceLocation && workspaceLocation.workspacePath) || ''));

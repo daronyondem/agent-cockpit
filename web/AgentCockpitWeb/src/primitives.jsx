@@ -93,8 +93,7 @@ function buildWorkspaceOptions(convs){
     if (!byKey.has(key)) {
       byKey.set(key, {
         key,
-        hash: c.workspaceId || c.workspaceHash || '',
-        id: c.workspaceId || '',
+        hash: c.workspaceId || c.workspaceHash,
         label: workspaceLabelForConv(c),
         fullPath: c.workingDir || '',
         kbEnabled: false,
@@ -339,7 +338,7 @@ export function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null,
   const activeConversationWorkspace = React.useMemo(() => {
     if (!activeConversation || !(activeConversation.workspaceId || activeConversation.workspaceHash)) return null;
     const key = workspaceKeyForConv(activeConversation);
-    const workspaceRef = activeConversation.workspaceId || activeConversation.workspaceHash || '';
+    const workspaceRef = activeConversation.workspaceId || activeConversation.workspaceHash;
     return workspaceByKey.get(key) || {
       key,
       hash: workspaceRef,

@@ -6,7 +6,7 @@ import { AgentApi } from './api.js';
 /* Mirrors V1's chatShowFolderPicker (navigate dirs via GET /browse, create via POST */
 /* /mkdir, delete via POST /rmdir). `onSelect(path)` fires with the chosen folder; */
 /* `onUseDefault()` fires with no workingDir so the server picks its own default. */
-export function FolderPicker({ open, initialPath = '', onClose, onSelect, onUseDefault, showUseDefault = true, busy = false }){
+export function FolderPicker({ open, initialPath = '', onClose, onSelect, onUseDefault, busy = false }){
   const [data, setData] = React.useState(null);      // { currentPath, parent, dirs } | null
   const [showHidden, setShowHidden] = React.useState(false);
   const [err, setErr] = React.useState(null);
@@ -175,9 +175,9 @@ export function FolderPicker({ open, initialPath = '', onClose, onSelect, onUseD
         </div>
 
         <div className="fp-foot">
-          {showUseDefault ? (
-            <button type="button" className="fp-btn-ghost" onClick={() => onUseDefault()} disabled={busy || loading}>Use default (workspace)</button>
-          ) : null}
+          {onUseDefault && (
+            <button type="button" className="fp-btn-ghost" onClick={onUseDefault} disabled={busy || loading}>Use default (workspace)</button>
+          )}
           <div style={{flex:1}}/>
           <button type="button" className="fp-btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="button" className="fp-btn-primary" onClick={() => data && onSelect(data.currentPath)} disabled={!data || busy || loading}>
