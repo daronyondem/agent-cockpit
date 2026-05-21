@@ -86,16 +86,33 @@ import type { UsagePricingEntry, UsagePricingResponse } from './usagePricing/typ
 import { ArtifactStore, type CreateConversationArtifactInput } from './chat/artifactStore';
 import { WorkspaceFeatureSettingsStore } from './chat/workspaceFeatureSettingsStore';
 import {
+  WorkspaceIdentityPathConflictError,
+  WorkspaceIdentityStore,
+} from './chat/workspaceIdentityStore';
+import {
   WorktreeIsolationService,
   WorktreeIsolationError,
   normalizeCheckout,
 } from './chat/worktreeIsolationService';
 import type { WorktreeIsolationStatusResponse } from '../contracts/worktreeIsolation';
+import type { WorkspaceLocationResponse } from '../contracts/workspaces';
 
 const log = logger.child({ module: 'chat-service' });
 
 export { attachmentFromPath } from './chat/attachments';
 export { normalizeMessageQueue, parseUploadedFilesTag } from './chat/messageQueueStore';
+
+export class WorkspaceLocationUpdateError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(code: string, message: string, status = 400) {
+    super(message);
+    this.name = 'WorkspaceLocationUpdateError';
+    this.code = code;
+    this.status = status;
+  }
+}
 
 /**
  * Schema version of the `state.json` envelope itself. Bumped only when
@@ -371,6 +388,7 @@ export class ChatService {
   baseDir: string;
   workspacesDir: string;
   artifactsDir: string;
+  workspaceRegistryFile: string;
   usageLedgerFile: string;
   usagePricingOverridesFile: string;
   private _settingsService: SettingsService;
@@ -379,6 +397,7 @@ export class ChatService {
   private _usageLedgerStore: UsageLedgerStore;
   private _usagePricingStore: UsagePricingStore;
   private _artifactStore: ArtifactStore;
+  private _workspaceIdentityStore: WorkspaceIdentityStore;
   private _featureSettingsStore: WorkspaceFeatureSettingsStore;
   private _worktreeIsolation: WorktreeIsolationService;
   private _defaultWorkspace: string;
@@ -406,6 +425,7 @@ export class ChatService {
     this.baseDir = path.join(dataRoot, 'chat');
     this.workspacesDir = path.join(this.baseDir, 'workspaces');
     this.artifactsDir = path.join(this.baseDir, 'artifacts');
+    this.workspaceRegistryFile = path.join(this.baseDir, 'workspaces.json');
     this.usageLedgerFile = path.join(this.baseDir, 'usage-ledger.json');
     this.usagePricingOverridesFile = path.join(this.baseDir, 'usage-pricing-overrides.json');
     this._usagePricingStore = new UsagePricingStore(this.usagePricingOverridesFile);
@@ -416,6 +436,10 @@ export class ChatService {
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
     this._backendRegistry = options.backendRegistry || null;
     this._convWorkspaceMap = new Map();
+    this._workspaceIdentityStore = new WorkspaceIdentityStore({
+      registryPath: this.workspaceRegistryFile,
+      workspacesDir: this.workspacesDir,
+    });
     this._messageQueueStore = new MessageQueueStore({
       convWorkspaceMap: this._convWorkspaceMap,
       indexLock: this._indexLock,
@@ -434,6 +458,7 @@ export class ChatService {
     this._worktreeIsolation = new WorktreeIsolationService();
     this._featureSettingsStore = new WorkspaceFeatureSettingsStore({
       workspacesDir: this.workspacesDir,
+      getWorkspaceDir: (hash) => this._workspaceDir(hash),
       indexLock: this._indexLock,
       readWorkspaceIndex: (hash) => this._readWorkspaceIndex(hash),
       writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
@@ -454,6 +479,7 @@ export class ChatService {
     if (fs.existsSync(this._legacyConversationsDir)) {
       await this._migrateToWorkspaces();
     }
+    await this._workspaceIdentityStore.initialize();
     await this._usagePricingStore.readOverrides();
     await this._migrateCliProfiles();
     await this._buildLookupMap();
@@ -539,21 +565,22 @@ export class ChatService {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw err;
     }
-    for (const hash of dirs) {
-      if (hash.startsWith('.')) continue;
+    for (const storageKey of dirs) {
+      if (storageKey.startsWith('.')) continue;
       let index: WorkspaceIndex | null;
       try {
-        index = await this._readWorkspaceIndex(hash);
+        index = await this._readWorkspaceIndex(storageKey);
       } catch (err) {
         // A corrupt index.json must not take the server down on startup.
         // Log and skip — the affected workspace becomes invisible until the
         // file is repaired, but every other workspace stays usable.
-        log.error('Skipping workspace because index.json could not be read', { workspaceHash: hash, error: err });
+        log.error('Skipping workspace because index.json could not be read', { workspaceStorageKey: storageKey, error: err });
         continue;
       }
       if (!index || !index.conversations) continue;
+      const workspaceId = index.workspaceId || this._workspaceIdentityStore.resolveWorkspaceId(storageKey) || storageKey;
       for (const conv of index.conversations) {
-        this._convWorkspaceMap.set(conv.id, hash);
+        this._convWorkspaceMap.set(conv.id, workspaceId);
       }
     }
   }
@@ -565,11 +592,24 @@ export class ChatService {
   }
 
   private _workspaceHash(workspacePath: string): string {
-    return crypto.createHash('sha256').update(workspacePath).digest('hex').substring(0, 16);
+    return this._workspaceIdentityStore.legacyHashForPath(workspacePath);
+  }
+
+  private _workspaceIdForRef(ref: string): string {
+    return this._workspaceIdentityStore.resolveWorkspaceId(ref) || ref;
+  }
+
+  private _workspaceStorageKeyForRef(ref: string): string {
+    return this._workspaceIdentityStore.resolveStorageKey(ref) || ref;
+  }
+
+  private _workspaceLegacyHashForRef(ref: string): string {
+    const record = this._workspaceIdentityStore.resolve(ref);
+    return record?.legacyHash || ref;
   }
 
   private _workspaceDir(hash: string): string {
-    return path.join(this.workspacesDir, hash);
+    return path.join(this.workspacesDir, this._workspaceStorageKeyForRef(hash));
   }
 
   private _workspaceIndexPath(hash: string): string {
@@ -601,6 +641,8 @@ export class ChatService {
   private async _writeWorkspaceIndex(hash: string, index: WorkspaceIndex): Promise<void> {
     const dir = this._workspaceDir(hash);
     await fsp.mkdir(dir, { recursive: true });
+    const record = this._workspaceIdentityStore.resolve(hash);
+    if (record) index.workspaceId = record.workspaceId;
     await atomicWriteFile(this._workspaceIndexPath(hash), JSON.stringify(index, null, 2));
   }
 
@@ -738,7 +780,6 @@ export class ChatService {
     const now = new Date().toISOString();
     const sessionId = this._newId();
     const workspacePath = workingDir || this._defaultWorkspace;
-    const hash = this._workspaceHash(workspacePath);
     const settings = await this._settingsService.getSettings();
     const requestedCliProfileId = cliProfileId || (!backend ? settings.defaultCliProfileId : undefined);
     const fallbackBackend = backend || (!requestedCliProfileId ? settings.defaultBackend : undefined);
@@ -759,12 +800,16 @@ export class ChatService {
     if (!runtime.cliProfileId && resolvedCliProfileId) {
       await this._ensureServerConfiguredCliProfiles([resolvedBackend]);
     }
+    const workspaceRecord = await this._workspaceIdentityStore.ensureWorkspaceForPath(workspacePath);
+    const workspaceId = workspaceRecord.workspaceId;
+    const legacyHash = workspaceRecord.legacyHash;
 
-    return this._indexLock.run(hash, async () => {
-      let index = await this._readWorkspaceIndex(hash);
+    return this._indexLock.run(workspaceId, async () => {
+      let index = await this._readWorkspaceIndex(workspaceId);
       if (!index) {
-        index = { workspacePath, conversations: [] };
+        index = { workspaceId, workspacePath, conversations: [] };
       }
+      index.workspaceId = workspaceId;
 
       let checkout: ConversationCheckout | undefined;
       let branchName: string | undefined;
@@ -804,9 +849,9 @@ export class ChatService {
       };
 
       index.conversations.push(convEntry);
-      await this._writeWorkspaceIndex(hash, index);
+      await this._writeWorkspaceIndex(workspaceId, index);
 
-      await this._writeSessionFile(hash, id, 1, {
+      await this._writeSessionFile(workspaceId, id, 1, {
         sessionNumber: 1,
         sessionId,
         startedAt: now,
@@ -814,7 +859,7 @@ export class ChatService {
         messages: [],
       });
 
-      this._convWorkspaceMap.set(id, hash);
+      this._convWorkspaceMap.set(id, workspaceId);
 
       return {
         id,
@@ -826,7 +871,8 @@ export class ChatService {
         serviceTier: convEntry.serviceTier,
         workingDir: workspacePath,
         ...(checkout ? { executionDir: checkout.executionDir, checkout } : {}),
-        workspaceHash: hash,
+        workspaceId,
+        workspaceHash: legacyHash,
         currentSessionId: sessionId,
         sessionNumber: 1,
         messages: [],
@@ -954,7 +1000,8 @@ export class ChatService {
       serviceTier: convEntry.serviceTier,
       workingDir: index.workspacePath,
       ...(checkout ? { executionDir: checkout.executionDir, checkout } : {}),
-      workspaceHash: hash,
+      workspaceId: index.workspaceId || hash,
+      workspaceHash: this._workspaceLegacyHashForRef(hash),
       currentSessionId: convEntry.currentSessionId,
       sessionNumber,
       messages,
@@ -1002,10 +1049,12 @@ export class ChatService {
       throw err;
     }
 
-    for (const hash of dirs) {
-      if (hash.startsWith('.')) continue;
-      const index = await this._readWorkspaceIndex(hash);
+    for (const storageKey of dirs) {
+      if (storageKey.startsWith('.')) continue;
+      const index = await this._readWorkspaceIndex(storageKey);
       if (!index || !index.conversations) continue;
+      const workspaceId = index.workspaceId || this._workspaceIdentityStore.resolveWorkspaceId(storageKey) || storageKey;
+      const legacyHash = this._workspaceLegacyHashForRef(workspaceId);
       for (const conv of index.conversations) {
         const isArchived = !!conv.archived;
         if (isArchived !== wantArchived) continue;
@@ -1024,7 +1073,8 @@ export class ChatService {
             executionDir: this._checkoutForConversation(conv)?.executionDir,
             checkout: this._checkoutForConversation(conv),
           } : {}),
-          workspaceHash: hash,
+          workspaceId,
+          workspaceHash: legacyHash,
           workspaceKbEnabled: Boolean(index.kbEnabled),
           messageCount: activeSession ? activeSession.messageCount : 0,
           lastMessage: conv.lastMessage,
@@ -1706,36 +1756,145 @@ export class ChatService {
 
   // ── Workspace Instructions ──────────────────────────────────────────────────
 
+  private _normalizeWorkspaceInstructionStatus(
+    ref: string,
+    status: WorkspaceInstructionCompatibilityStatus | null,
+  ): WorkspaceInstructionCompatibilityStatus | null {
+    if (!status) return null;
+    const record = this._workspaceIdentityStore.resolve(ref) || this._workspaceIdentityStore.resolve(status.workspaceId);
+    const workspaceId = record?.workspaceId || status.workspaceId;
+    return {
+      ...status,
+      workspaceId,
+      workspaceHash: record?.legacyHash || this._workspaceLegacyHashForRef(workspaceId),
+    };
+  }
+
   async getWorkspaceInstructions(hash: string): Promise<string | null> {
-    return this._workspaceInstructionStore.getInstructions(hash);
+    return this._workspaceInstructionStore.getInstructions(this._workspaceIdForRef(hash));
   }
 
   async setWorkspaceInstructions(hash: string, instructions: string): Promise<string | null> {
-    return this._workspaceInstructionStore.setInstructions(hash, instructions);
+    return this._workspaceInstructionStore.setInstructions(this._workspaceIdForRef(hash), instructions);
   }
 
   async getWorkspaceInstructionCompatibility(hash: string): Promise<WorkspaceInstructionCompatibilityStatus | null> {
-    return this._workspaceInstructionStore.getCompatibility(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    return this._normalizeWorkspaceInstructionStatus(
+      hash,
+      await this._workspaceInstructionStore.getCompatibility(workspaceId),
+    );
   }
 
   async createWorkspaceInstructionPointers(hash: string): Promise<{
     status: WorkspaceInstructionCompatibilityStatus;
     created: WorkspaceInstructionPointerResult[];
   } | null> {
-    return this._workspaceInstructionStore.createPointers(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    const result = await this._workspaceInstructionStore.createPointers(workspaceId);
+    if (!result) return null;
+    return {
+      ...result,
+      status: this._normalizeWorkspaceInstructionStatus(hash, result.status) || result.status,
+    };
   }
 
   async dismissWorkspaceInstructionCompatibility(hash: string): Promise<WorkspaceInstructionCompatibilityStatus | null> {
-    return this._workspaceInstructionStore.dismissCompatibility(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    return this._normalizeWorkspaceInstructionStatus(
+      hash,
+      await this._workspaceInstructionStore.dismissCompatibility(workspaceId),
+    );
   }
 
   getWorkspaceHashForConv(convId: string): string | null {
+    const workspaceId = this._convWorkspaceMap.get(convId);
+    if (!workspaceId) return null;
+    return this._workspaceLegacyHashForRef(workspaceId);
+  }
+
+  getWorkspaceIdForConv(convId: string): string | null {
     return this._convWorkspaceMap.get(convId) || null;
+  }
+
+  getWorkspaceIdForRef(ref: string): string | null {
+    return this._workspaceIdentityStore.resolveWorkspaceId(ref) || null;
+  }
+
+  getWorkspaceStorageKey(ref: string): string | null {
+    return this._workspaceIdentityStore.resolveStorageKey(ref) || null;
   }
 
   async getWorkspacePath(hash: string): Promise<string | null> {
     const index = await this._readWorkspaceIndex(hash);
     return index?.workspacePath || null;
+  }
+
+  async getWorkspaceLocation(hash: string): Promise<WorkspaceLocationResponse | null> {
+    const index = await this._readWorkspaceIndex(hash);
+    if (!index) return null;
+    const workspaceId = index.workspaceId || this._workspaceIdentityStore.resolveWorkspaceId(hash) || hash;
+    const record = this._workspaceIdentityStore.resolve(workspaceId);
+    return {
+      workspaceId,
+      workspacePath: index.workspacePath,
+      legacyHash: record?.legacyHash || this._workspaceLegacyHashForRef(workspaceId),
+      previousPaths: [...(record?.previousPaths || [])],
+    };
+  }
+
+  async updateWorkspaceLocation(hash: string, workspacePath: string): Promise<WorkspaceLocationResponse | null> {
+    const current = await this._readWorkspaceIndex(hash);
+    if (!current) return null;
+    const workspaceId = current.workspaceId || this._workspaceIdentityStore.resolveWorkspaceId(hash) || hash;
+    const nextPath = path.resolve(workspacePath.trim());
+    let stat: fs.Stats;
+    try {
+      stat = await fsp.stat(nextPath);
+    } catch {
+      throw new WorkspaceLocationUpdateError('path_not_found', 'Workspace path does not exist', 400);
+    }
+    if (!stat.isDirectory()) {
+      throw new WorkspaceLocationUpdateError('not_directory', 'Workspace path must be a directory', 400);
+    }
+
+    const existing = this._workspaceIdentityStore.getByPath(nextPath)
+      || this._workspaceIdentityStore.getByPath(workspacePath.trim());
+    if (existing && existing.workspaceId !== workspaceId) {
+      throw new WorkspaceLocationUpdateError('path_already_registered', 'Workspace path is already registered to another workspace', 409);
+    }
+
+    return this._indexLock.run(workspaceId, async () => {
+      const index = await this._readWorkspaceIndex(workspaceId);
+      if (!index) return null;
+      if (index.worktreeIsolation?.enabled) {
+        throw new WorkspaceLocationUpdateError(
+          'worktree_isolation_enabled',
+          'Disable Worktrees before changing the workspace location',
+          409,
+        );
+      }
+      const record = await (async () => {
+        try {
+          return await this._workspaceIdentityStore.updateWorkspacePath(workspaceId, nextPath);
+        } catch (err) {
+          if (err instanceof WorkspaceIdentityPathConflictError) {
+            throw new WorkspaceLocationUpdateError('path_already_registered', 'Workspace path is already registered to another workspace', 409);
+          }
+          throw err;
+        }
+      })();
+      if (!record) return null;
+      index.workspaceId = workspaceId;
+      index.workspacePath = nextPath;
+      await this._writeWorkspaceIndex(workspaceId, index);
+      return {
+        workspaceId,
+        workspacePath: nextPath,
+        legacyHash: record.legacyHash,
+        previousPaths: [...record.previousPaths],
+      };
+    });
   }
 
   async getConversationExecutionDir(convId: string): Promise<string | null> {
@@ -1745,8 +1904,9 @@ export class ChatService {
   }
 
   async getWorkspaceWorktreeIsolationStatus(hash: string): Promise<WorktreeIsolationStatusResponse> {
-    const index = await this._readWorkspaceIndex(hash);
-    return this._worktreeIsolation.getStatus(hash, index);
+    const workspaceId = this._workspaceIdForRef(hash);
+    const index = await this._readWorkspaceIndex(workspaceId);
+    return this._worktreeIsolation.getStatus(workspaceId, index);
   }
 
   async setWorkspaceWorktreeIsolation(
@@ -1766,20 +1926,21 @@ export class ChatService {
       );
     }
 
-    await this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    await this._indexLock.run(workspaceId, async () => {
+      const index = await this._readWorkspaceIndex(workspaceId);
       if (!index) return null;
       if (enabled) {
-        await this._enableWorktreeIsolation(hash, index);
+        await this._enableWorktreeIsolation(workspaceId, index);
       } else {
-        await this._disableWorktreeIsolation(hash, index);
+        await this._disableWorktreeIsolation(workspaceId, index);
       }
       return true;
     });
 
-    const index = await this._readWorkspaceIndex(hash);
+    const index = await this._readWorkspaceIndex(workspaceId);
     if (!index) return null;
-    return this._worktreeIsolation.getStatus(hash, index);
+    return this._worktreeIsolation.getStatus(workspaceId, index);
   }
 
   private async _enableWorktreeIsolation(hash: string, index: WorkspaceIndex): Promise<void> {
@@ -2674,29 +2835,31 @@ export class ChatService {
 
   /** Per-workspace Memory enable/disable (stored on the workspace index). */
   async getWorkspaceMemoryEnabled(hash: string): Promise<boolean> {
-    const index = await this._readWorkspaceIndex(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    const index = await this._readWorkspaceIndex(workspaceId);
     if (!index) return false;
     return Boolean(index.memoryEnabled);
   }
 
   async setWorkspaceMemoryEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    return this._indexLock.run(workspaceId, async () => {
+      const index = await this._readWorkspaceIndex(workspaceId);
       if (!index) return null;
       index.memoryEnabled = Boolean(enabled);
-      await this._writeWorkspaceIndex(hash, index);
+      await this._writeWorkspaceIndex(workspaceId, index);
       return index.memoryEnabled;
     });
   }
 
   async getWorkspaceMemoryReviewSchedule(hash: string): Promise<MemoryReviewScheduleConfig> {
-    const index = await this._readWorkspaceIndex(hash);
+    const index = await this._readWorkspaceIndex(this._workspaceIdForRef(hash));
     if (!index) return { ...DEFAULT_MEMORY_REVIEW_SCHEDULE };
     return normalizeMemoryReviewScheduleConfig(index.memoryReviewSchedule);
   }
 
   async getWorkspaceMemoryReviewScheduleUpdatedAt(hash: string): Promise<string | undefined> {
-    const index = await this._readWorkspaceIndex(hash);
+    const index = await this._readWorkspaceIndex(this._workspaceIdForRef(hash));
     return index?.memoryReviewScheduleUpdatedAt;
   }
 
@@ -2704,8 +2867,9 @@ export class ChatService {
     hash: string,
     schedule: MemoryReviewScheduleConfig,
   ): Promise<MemoryReviewScheduleConfig | null> {
-    return this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    return this._indexLock.run(workspaceId, async () => {
+      const index = await this._readWorkspaceIndex(workspaceId);
       if (!index) return null;
       const next = normalizeMemoryReviewScheduleConfig(schedule);
       const prev = normalizeMemoryReviewScheduleConfig(index.memoryReviewSchedule);
@@ -2713,7 +2877,7 @@ export class ChatService {
       if (JSON.stringify(prev) !== JSON.stringify(next)) {
         index.memoryReviewScheduleUpdatedAt = new Date().toISOString();
       }
-      await this._writeWorkspaceIndex(hash, index);
+      await this._writeWorkspaceIndex(workspaceId, index);
       return index.memoryReviewSchedule;
     });
   }
@@ -2727,13 +2891,15 @@ export class ChatService {
       throw err;
     }
 
-    const hashes: string[] = [];
-    for (const hash of dirs) {
-      if (hash.startsWith('.')) continue;
-      const index = await this._readWorkspaceIndex(hash);
-      if (index?.memoryEnabled) hashes.push(hash);
+    const workspaceIds: string[] = [];
+    for (const storageKey of dirs) {
+      if (storageKey.startsWith('.')) continue;
+      const index = await this._readWorkspaceIndex(storageKey);
+      if (index?.memoryEnabled) {
+        workspaceIds.push(index.workspaceId || this._workspaceIdentityStore.resolveWorkspaceId(storageKey) || storageKey);
+      }
     }
-    return hashes;
+    return workspaceIds;
   }
 
   async saveMemoryReviewRun(hash: string, run: MemoryReviewRun): Promise<MemoryReviewRun> {
@@ -3051,17 +3217,18 @@ export class ChatService {
    */
   getKbDb(hash: string): KbDatabase | null {
     if (!hash) return null;
-    const cached = this._kbDbs.get(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    const cached = this._kbDbs.get(workspaceId);
     if (cached) return cached;
     // Ensure parent dirs exist before better-sqlite3 tries to open.
-    fs.mkdirSync(this._knowledgeDir(hash), { recursive: true });
-    fs.mkdirSync(this._kbRawDir(hash), { recursive: true });
+    fs.mkdirSync(this._knowledgeDir(workspaceId), { recursive: true });
+    fs.mkdirSync(this._kbRawDir(workspaceId), { recursive: true });
     const db = openKbDatabase({
-      dbPath: this._kbDbPath(hash),
-      legacyJsonPath: this._kbLegacyStatePath(hash),
-      rawDir: this._kbRawDir(hash),
+      dbPath: this._kbDbPath(workspaceId),
+      legacyJsonPath: this._kbLegacyStatePath(workspaceId),
+      rawDir: this._kbRawDir(workspaceId),
     });
-    this._kbDbs.set(hash, db);
+    this._kbDbs.set(workspaceId, db);
     return db;
   }
 
@@ -3084,13 +3251,14 @@ export class ChatService {
    */
   async getKbVectorStore(hash: string, dimensions?: number): Promise<KbVectorStore | null> {
     if (!hash) return null;
-    const cached = this._kbVectorStores.get(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    const cached = this._kbVectorStores.get(workspaceId);
     if (cached) return cached;
-    const knowledgeDir = this._knowledgeDir(hash);
+    const knowledgeDir = this._knowledgeDir(workspaceId);
     fs.mkdirSync(knowledgeDir, { recursive: true });
     const store = new KbVectorStore(knowledgeDir, dimensions);
     await store.ready();
-    this._kbVectorStores.set(hash, store);
+    this._kbVectorStores.set(workspaceId, store);
     return store;
   }
 
@@ -3108,7 +3276,7 @@ export class ChatService {
 
   /** Per-workspace embedding config (stored on the workspace index). */
   async getWorkspaceKbEmbeddingConfig(hash: string): Promise<EmbeddingConfig | undefined> {
-    const index = await this._readWorkspaceIndex(hash);
+    const index = await this._readWorkspaceIndex(this._workspaceIdForRef(hash));
     return index?.kbEmbedding ?? undefined;
   }
 
@@ -3116,8 +3284,9 @@ export class ChatService {
     hash: string,
     cfg: EmbeddingConfig,
   ): Promise<EmbeddingConfig | null> {
-    const updated = await this._indexLock.run(hash, async () => {
-      const index = await this._readWorkspaceIndex(hash);
+    const workspaceId = this._workspaceIdForRef(hash);
+    const updated = await this._indexLock.run(workspaceId, async () => {
+      const index = await this._readWorkspaceIndex(workspaceId);
       if (!index) return null;
 
       const oldCfg = index.kbEmbedding;
@@ -3129,18 +3298,18 @@ export class ChatService {
         ollamaHost: cfg.ollamaHost,
         dimensions: cfg.dimensions,
       };
-      await this._writeWorkspaceIndex(hash, index);
+      await this._writeWorkspaceIndex(workspaceId, index);
       return { config: index.kbEmbedding, wipe: modelChanged || dimsChanged };
     });
     if (!updated) return null;
 
     // When model or dimensions change, wipe existing embeddings so they
     // get regenerated on the next digest/dream cycle.
-    if (updated.wipe && this._kbVectorStores.has(hash)) {
+    if (updated.wipe && this._kbVectorStores.has(workspaceId)) {
       try {
-        const store = this._kbVectorStores.get(hash)!;
+        const store = this._kbVectorStores.get(workspaceId)!;
         await store.close();
-        this._kbVectorStores.delete(hash);
+        this._kbVectorStores.delete(workspaceId);
       } catch { /* ignore close errors */ }
     }
 
@@ -3176,11 +3345,11 @@ export class ChatService {
 
   /** Per-workspace KB enable/disable (stored on the workspace index). */
   async getWorkspaceKbEnabled(hash: string): Promise<boolean> {
-    return this._featureSettingsStore.getKbEnabled(hash);
+    return this._featureSettingsStore.getKbEnabled(this._workspaceIdForRef(hash));
   }
 
   async setWorkspaceKbEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
-    return this._featureSettingsStore.setKbEnabled(hash, enabled);
+    return this._featureSettingsStore.setKbEnabled(this._workspaceIdForRef(hash), enabled);
   }
 
   /**
@@ -3195,19 +3364,19 @@ export class ChatService {
    * tests that stub `getSettings` don't accidentally reset it.
    */
   async getWorkspaceKbAutoDigest(hash: string): Promise<boolean> {
-    return this._featureSettingsStore.getKbAutoDigest(hash);
+    return this._featureSettingsStore.getKbAutoDigest(this._workspaceIdForRef(hash));
   }
 
   async setWorkspaceKbAutoDigest(hash: string, autoDigest: boolean): Promise<boolean | null> {
-    return this._featureSettingsStore.setKbAutoDigest(hash, autoDigest);
+    return this._featureSettingsStore.setKbAutoDigest(this._workspaceIdForRef(hash), autoDigest);
   }
 
   async getWorkspaceKbAutoDream(hash: string): Promise<KbAutoDreamConfig> {
-    return this._featureSettingsStore.getKbAutoDream(hash);
+    return this._featureSettingsStore.getKbAutoDream(this._workspaceIdForRef(hash));
   }
 
   async setWorkspaceKbAutoDream(hash: string, autoDream: KbAutoDreamConfig): Promise<KbAutoDreamConfig | null> {
-    return this._featureSettingsStore.setKbAutoDream(hash, autoDream);
+    return this._featureSettingsStore.setKbAutoDream(this._workspaceIdForRef(hash), autoDream);
   }
 
   async listKbEnabledWorkspaceHashes(): Promise<string[]> {
@@ -3216,22 +3385,22 @@ export class ChatService {
 
   /** Per-workspace Workspace Context enable/disable (stored on the workspace index). */
   async getWorkspaceContextEnabled(hash: string): Promise<boolean> {
-    return this._featureSettingsStore.getWorkspaceContextEnabled(hash);
+    return this._featureSettingsStore.getWorkspaceContextEnabled(this._workspaceIdForRef(hash));
   }
 
   async setWorkspaceContextEnabled(hash: string, enabled: boolean): Promise<boolean | null> {
-    return this._featureSettingsStore.setWorkspaceContextEnabled(hash, enabled);
+    return this._featureSettingsStore.setWorkspaceContextEnabled(this._workspaceIdForRef(hash), enabled);
   }
 
   async getWorkspaceContextSettings(hash: string): Promise<WorkspaceContextWorkspaceSettings | null> {
-    return this._featureSettingsStore.getWorkspaceContextSettings(hash);
+    return this._featureSettingsStore.getWorkspaceContextSettings(this._workspaceIdForRef(hash));
   }
 
   async setWorkspaceContextSettings(
     hash: string,
     settings: unknown,
   ): Promise<WorkspaceContextWorkspaceSettings | null> {
-    return this._featureSettingsStore.setWorkspaceContextSettings(hash, settings);
+    return this._featureSettingsStore.setWorkspaceContextSettings(this._workspaceIdForRef(hash), settings);
   }
 
   async listWorkspaceContextEnabledWorkspaceHashes(): Promise<string[]> {
@@ -3555,6 +3724,7 @@ export class ChatService {
 
     for (const [hash, group] of workspaceGroups) {
       const index: WorkspaceIndex = {
+        workspaceId: this._newId(),
         workspacePath: group.workspacePath,
         conversations: [],
       };

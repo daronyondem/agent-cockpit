@@ -46,6 +46,7 @@ export interface EnqueueSessionFinalizerJobInput {
 export interface SessionFinalizerQueueOptions {
   workspacesDir: string;
   handleJob: (job: SessionFinalizerJob) => Promise<void>;
+  resolveWorkspaceStorageKey?: (workspaceRef: string) => string | null;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   concurrency?: number;
   retryDelayMs?: number;
@@ -58,6 +59,7 @@ const DEFAULT_RETRY_DELAY_MS = 5_000;
 export class SessionFinalizerQueue {
   private readonly workspacesDir: string;
   private readonly handleJob: (job: SessionFinalizerJob) => Promise<void>;
+  private readonly resolveWorkspaceStorageKey: (workspaceRef: string) => string | null;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly concurrency: number;
   private readonly retryDelayMs: number;
@@ -70,6 +72,7 @@ export class SessionFinalizerQueue {
   constructor(opts: SessionFinalizerQueueOptions) {
     this.workspacesDir = opts.workspacesDir;
     this.handleJob = opts.handleJob;
+    this.resolveWorkspaceStorageKey = opts.resolveWorkspaceStorageKey ?? (() => null);
     this.logger = opts.logger ?? console;
     this.concurrency = Math.max(1, Math.min(4, Math.round(opts.concurrency ?? 1)));
     this.retryDelayMs = Math.max(250, opts.retryDelayMs ?? DEFAULT_RETRY_DELAY_MS);
@@ -92,7 +95,8 @@ export class SessionFinalizerQueue {
   async enqueue(input: EnqueueSessionFinalizerJobInput): Promise<SessionFinalizerJob> {
     const now = new Date().toISOString();
     const identity = jobIdentity(input.type, input.conversationId, input.sessionNumber, input.payload);
-    const job = await this.lock.run(input.workspaceHash, async () => {
+    const storageKey = this.workspaceStorageKey(input.workspaceHash);
+    const job = await this.lock.run(storageKey, async () => {
       const store = await this.readStore(input.workspaceHash);
       const existing = store.jobs.find((candidate) => candidate.identity === identity);
       if (existing) return existing;
@@ -240,7 +244,8 @@ export class SessionFinalizerQueue {
   }
 
   private async markCompleted(job: SessionFinalizerJob): Promise<void> {
-    await this.lock.run(job.workspaceHash, async () => {
+    const storageKey = this.workspaceStorageKey(job.workspaceHash);
+    await this.lock.run(storageKey, async () => {
       const store = await this.readStore(job.workspaceHash);
       const current = store.jobs.find((candidate) => candidate.id === job.id);
       if (!current) return;
@@ -255,7 +260,8 @@ export class SessionFinalizerQueue {
   }
 
   private async markFailed(job: SessionFinalizerJob, errorMessage: string): Promise<void> {
-    await this.lock.run(job.workspaceHash, async () => {
+    const storageKey = this.workspaceStorageKey(job.workspaceHash);
+    await this.lock.run(storageKey, async () => {
       const store = await this.readStore(job.workspaceHash);
       const current = store.jobs.find((candidate) => candidate.id === job.id);
       if (!current) return;
@@ -288,7 +294,11 @@ export class SessionFinalizerQueue {
   }
 
   private storePath(hash: string): string {
-    return path.join(this.workspacesDir, hash, STORE_FILENAME);
+    return path.join(this.workspacesDir, this.workspaceStorageKey(hash), STORE_FILENAME);
+  }
+
+  private workspaceStorageKey(ref: string): string {
+    return this.resolveWorkspaceStorageKey(ref) || ref;
   }
 
   private async readStore(hash: string): Promise<SessionFinalizerStore> {

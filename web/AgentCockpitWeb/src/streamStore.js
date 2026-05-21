@@ -16,6 +16,11 @@ import { PlanUsageStore } from './planUsageStore.js';
 import { KiroPlanUsageStore } from './kiroPlanUsageStore.js';
 import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
 import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
+
+function workspaceRefForConv(conv) {
+  return conv ? (conv.workspaceId || conv.workspaceHash || null) : null;
+}
+
   /** @typedef {import('../../../src/contracts/streams').ConversationInputRequest} ConversationInputRequest */
   /** @typedef {import('../../../src/contracts/streams').SendMessageRequest} SendMessageRequest */
   /** @typedef {{
@@ -1454,10 +1459,11 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       const displayInChat = frame.displayInChat === true;
       const cur = states.get(convId);
       try {
-        if (typeof window !== 'undefined' && cur && cur.conv && cur.conv.workspaceHash) {
+        const workspaceRef = cur && cur.conv ? workspaceRefForConv(cur.conv) : null;
+        if (typeof window !== 'undefined' && workspaceRef) {
           window.dispatchEvent(new CustomEvent('ac:memory-update', {
             detail: {
-              hash: cur.conv.workspaceHash,
+              hash: workspaceRef,
               capturedAt,
               fileCount,
               changedFiles: changed,
@@ -1483,9 +1489,10 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       const cur = states.get(convId);
       if (!cur || !cur.conv) return;
       try {
-        if (typeof window !== 'undefined' && cur.conv.workspaceHash) {
+        const workspaceRef = workspaceRefForConv(cur.conv);
+        if (typeof window !== 'undefined' && workspaceRef) {
           window.dispatchEvent(new CustomEvent('ac:memory-review-update', {
-            detail: { hash: cur.conv.workspaceHash, review, updatedAt: frame.updatedAt || null },
+            detail: { hash: workspaceRef, review, updatedAt: frame.updatedAt || null },
           }));
         }
       } catch (_) { /* noop */ }
@@ -1500,9 +1507,10 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       const cur = states.get(convId);
       if (!cur || !cur.conv) return;
       try {
-        if (typeof window !== 'undefined' && cur.conv.workspaceHash) {
+        const workspaceRef = workspaceRefForConv(cur.conv);
+        if (typeof window !== 'undefined' && workspaceRef) {
           window.dispatchEvent(new CustomEvent('ac:workspace-context-update', {
-            detail: { hash: cur.conv.workspaceHash, workspaceContext, updatedAt: frame.updatedAt || null },
+            detail: { hash: workspaceRef, workspaceContext, updatedAt: frame.updatedAt || null },
           }));
         }
       } catch (_) { /* noop */ }
@@ -1519,12 +1527,13 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
       /* Fan out workspace-scoped KB events so surfaces outside the chat
          conv scope (KB Browser, etc.) can observe. Mirrors V1, where
          `chatKbBrowserState` and the chat renderer both branch off the
-         same WS frame. `hash` is the conv's workspace hash so listeners
+         same WS frame. `hash` is the conv's workspace reference so listeners
          can filter to their own workspace. */
       try {
-        if (typeof window !== 'undefined' && cur.conv.workspaceHash) {
+        const workspaceRef = workspaceRefForConv(cur.conv);
+        if (typeof window !== 'undefined' && workspaceRef) {
           window.dispatchEvent(new CustomEvent('ac:kb-state-update', {
-            detail: { hash: cur.conv.workspaceHash, changed },
+            detail: { hash: workspaceRef, changed },
           }));
         }
       } catch (_) { /* noop */ }

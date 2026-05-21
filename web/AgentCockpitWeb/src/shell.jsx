@@ -106,6 +106,10 @@ function backendSupportsGoals(backendId){
   return backendId === 'codex' || backendId === 'claude-code' || backendId === CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
 }
 
+function workspaceRefForConv(conv){
+  return conv ? (conv.workspaceId || conv.workspaceHash || null) : null;
+}
+
 /* Cross-message subagent linkage. Because a subagent's Agent tool_use and its
    internal children can be persisted on different messages (the Agent's
    "Now spawning..." text triggers an early save, then children accumulate on
@@ -1944,7 +1948,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
               </div>
             )}
             <FileViewerContext.Provider value={{
-              wsHash: conv.workspaceHash || null,
+              wsHash: workspaceRefForConv(conv),
               convId,
               workingDir: conv.workingDir || null,
               executionDir: conv.executionDir || conv.workingDir || null,
@@ -1960,8 +1964,9 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                         key={entry.message.id}
                         message={entry.message}
                         onOpen={() => {
-                          if (!onOpenMemoryUpdate || !conv.workspaceHash) return;
-                          onOpenMemoryUpdate(conv.workspaceHash, wsLabel, entry.message.memoryUpdate || null);
+                          const workspaceRef = workspaceRefForConv(conv);
+                          if (!onOpenMemoryUpdate || !workspaceRef) return;
+                          onOpenMemoryUpdate(workspaceRef, wsLabel, entry.message.memoryUpdate || null);
                         }}
                       />
                     );
@@ -2438,7 +2443,7 @@ const ChatComposer = React.memo(function ChatComposer({ convId, profileLocked, w
             <ComposerMemoryReviewIcon conv={conv} workspaceLabel={workspaceLabel} onOpenMemoryReview={onOpenMemoryReview}/>
             <ComposerWorkspaceContextIcon conv={conv} workspaceLabel={workspaceLabel} onOpenWorkspaceSettings={onOpenWorkspaceSettings}/>
             <ComposerInstructionCompatibilityIcon
-              workspaceHash={conv.workspaceHash}
+              workspaceHash={workspaceRefForConv(conv)}
               workspaceLabel={workspaceLabel}
               onOpenWorkspaceSettings={onOpenWorkspaceSettings}
             />
@@ -4439,8 +4444,9 @@ function ComposerMemoryReviewIcon({ conv, workspaceLabel, onOpenMemoryReview }){
 
   function openReview(){
     setOpen(false);
-    if (onOpenMemoryReview && conv && conv.workspaceHash) {
-      onOpenMemoryReview(conv.workspaceHash, workspaceLabel || 'workspace', review.latestRunId || null);
+    const workspaceRef = workspaceRefForConv(conv);
+    if (onOpenMemoryReview && workspaceRef) {
+      onOpenMemoryReview(workspaceRef, workspaceLabel || 'workspace', review.latestRunId || null);
     }
   }
 
@@ -4542,9 +4548,10 @@ function ComposerWorkspaceContextIcon({ conv, workspaceLabel, onOpenWorkspaceSet
 
   function openWorkspaceContext(){
     setOpen(false);
-    if (onOpenWorkspaceSettings && conv && conv.workspaceHash) {
+    const workspaceRef = workspaceRefForConv(conv);
+    if (onOpenWorkspaceSettings && workspaceRef) {
       const targetSection = running || failures > 0 ? 'runs' : null;
-      onOpenWorkspaceSettings(conv.workspaceHash, workspaceLabel || 'workspace', 'workspaceContext', targetSection);
+      onOpenWorkspaceSettings(workspaceRef, workspaceLabel || 'workspace', 'workspaceContext', targetSection);
     }
   }
 

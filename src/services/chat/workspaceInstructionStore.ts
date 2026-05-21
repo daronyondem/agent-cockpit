@@ -293,6 +293,7 @@ export class WorkspaceInstructionStore {
       || null;
 
     return {
+      workspaceId: index.workspaceId || hash,
       workspaceHash: hash,
       workspacePath,
       sources,

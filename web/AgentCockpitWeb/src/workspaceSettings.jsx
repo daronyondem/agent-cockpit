@@ -7,6 +7,7 @@ import { StreamStore } from './streamStore.js';
 import { Tip } from './tooltip.jsx';
 import { useDialog } from './dialog.jsx';
 import { useToasts } from './toast.jsx';
+import { FolderPicker } from './folderPicker.jsx';
 
 /* ---------- WorkspaceSettingsPage — per-workspace settings screen. ---------- */
 /* Opens from the gear button in the sidebar workspace action buttons.
@@ -23,6 +24,7 @@ import { useToasts } from './toast.jsx';
    Reuses the same full-screen `settings-shell` structure as global Settings. */
 
 const WS_SETTINGS_TABS = [
+  { id: 'location', label: 'Location' },
   { id: 'instructions', label: 'Instructions' },
   { id: 'memory',       label: 'Memory' },
   { id: 'kb',           label: 'Knowledge Base' },
@@ -259,6 +261,10 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   const [instructions, setInstructions] = React.useState('');
   const [instructionsDirty, setInstructionsDirty] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [workspaceLocation, setWorkspaceLocation] = React.useState(null);
+  const [workspaceLocationDraft, setWorkspaceLocationDraft] = React.useState('');
+  const [workspaceLocationDirty, setWorkspaceLocationDirty] = React.useState(false);
+  const [workspaceLocationPickerOpen, setWorkspaceLocationPickerOpen] = React.useState(false);
   const [memoryEnabled, setMemoryEnabled] = React.useState(false);
   const [memorySnapshot, setMemorySnapshot] = React.useState(null);
   const [memoryReviewSchedule, setMemoryReviewSchedule] = React.useState({ mode: 'off' });
@@ -320,7 +326,9 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     setTab(WS_SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'instructions');
     setLoading(true); setLoadError(null);
     setInstructionsDirty(false);
+    setWorkspaceLocationDirty(false);
     Promise.all([
+      AgentApi.workspace.getLocation(hash).catch(() => null),
       AgentApi.workspace.getInstructions(hash).catch(() => ({})),
       AgentApi.workspace.getMemory(hash).catch(() => ({})),
       AgentApi.workspace.getMemoryReviewSchedule(hash).catch(() => ({})),
@@ -329,8 +337,10 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       AgentApi.workspace.getWorktreeIsolation(hash).catch((err) => ({ available: false, enabled: false, blockers: [{ code: 'load_failed', message: err.message || String(err) }] })),
       AgentApi.settings.get().catch(() => ({})),
       AgentApi.settings.backends().catch(() => ({ backends: [] })),
-    ]).then(([instrRes, memRes, reviewScheduleRes, kbRes, workspaceContextRes, worktreeRes, settingsRes, backendsRes]) => {
+    ]).then(([locationRes, instrRes, memRes, reviewScheduleRes, kbRes, workspaceContextRes, worktreeRes, settingsRes, backendsRes]) => {
       if (cancelled) return;
+      setWorkspaceLocation(locationRes || null);
+      setWorkspaceLocationDraft((locationRes && locationRes.workspacePath) || '');
       setInstructions(instrRes.instructions || '');
       setMemoryEnabled(!!memRes.enabled);
       setMemorySnapshot(memRes.snapshot || null);
@@ -462,6 +472,36 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   }, [profileBackends]);
 
   if (!hash) return null;
+
+  async function saveWorkspaceLocation(anchor){
+    if (saving || !workspaceLocationDirty) return;
+    const nextPath = workspaceLocationDraft.trim();
+    if (!nextPath) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Path required', body: 'Workspace path is required.' });
+      return;
+    }
+    const ok = await dialog.confirm({
+      anchor,
+      title: 'Change Workspace Location',
+      body: 'Update this workspace to use the selected folder for future chats and workspace tools?',
+      confirmLabel: 'Update location',
+      cancelLabel: 'Cancel',
+    });
+    if (!ok) return;
+    setSaving(true);
+    try {
+      const res = await AgentApi.workspace.updateLocation(hash, nextPath);
+      setWorkspaceLocation(res || null);
+      setWorkspaceLocationDraft((res && res.workspacePath) || nextPath);
+      setWorkspaceLocationDirty(false);
+      await StreamStore.refreshConvList().catch(() => {});
+      toast.success('Workspace location updated');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Location update failed', body: err.message || String(err) });
+    } finally {
+      setSaving(false);
+    }
+  }
 
   async function saveInstructions(anchor){
     if (saving) return;
@@ -804,6 +844,19 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
           <div className="u-dim" style={{padding:'16px'}}>Loading...</div>
         ) : loadError ? (
           <div className="u-err" style={{padding:'16px'}}>{loadError}</div>
+        ) : tab === 'location' ? (
+          <LocationTab
+            location={workspaceLocation}
+            draft={workspaceLocationDraft}
+            dirty={workspaceLocationDirty}
+            saving={saving}
+            onDraftChange={(value) => {
+              setWorkspaceLocationDraft(value);
+              setWorkspaceLocationDirty(value.trim() !== ((workspaceLocation && workspaceLocation.workspacePath) || ''));
+            }}
+            onBrowse={() => setWorkspaceLocationPickerOpen(true)}
+            onSave={saveWorkspaceLocation}
+          />
         ) : tab === 'instructions' ? (
           <InstructionsTab
             instructions={instructions}
@@ -870,6 +923,19 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
           />
         ) : null}
       </div>
+      <FolderPicker
+        open={workspaceLocationPickerOpen}
+        initialPath={workspaceLocationDraft || (workspaceLocation && workspaceLocation.workspacePath) || ''}
+        busy={saving}
+        showUseDefault={false}
+        onClose={() => setWorkspaceLocationPickerOpen(false)}
+        onUseDefault={() => setWorkspaceLocationPickerOpen(false)}
+        onSelect={(nextPath) => {
+          setWorkspaceLocationDraft(nextPath || '');
+          setWorkspaceLocationDirty(String(nextPath || '').trim() !== ((workspaceLocation && workspaceLocation.workspacePath) || ''));
+          setWorkspaceLocationPickerOpen(false);
+        }}
+      />
     </div>
   );
 }
@@ -1028,6 +1094,46 @@ function formatSettingsMemoryReviewStatus(status){
 }
 
 /* ---------- Tabs ---------- */
+
+function LocationTab({ location, draft, dirty, saving, onDraftChange, onBrowse, onSave }){
+  const previousPaths = Array.isArray(location && location.previousPaths) ? location.previousPaths : [];
+  return (
+    <div className="settings-form settings-form-wide ws-form">
+      <div className="settings-field">
+        <label className="settings-field-label-row">
+          <span>Workspace folder</span>
+        </label>
+        <div className="settings-inline-row">
+          <input
+            type="text"
+            className="settings-text-input u-mono"
+            value={draft}
+            onChange={(e) => onDraftChange(e.target.value)}
+            placeholder="/path/to/workspace"
+            spellCheck={false}
+          />
+          <button type="button" className="btn ghost" onClick={onBrowse} disabled={saving}>Browse</button>
+        </div>
+      </div>
+      {location && location.workspaceId ? (
+        <div className="ws-muted-metadata">
+          <div><span className="u-dim">Workspace ID</span> <span className="u-mono">{location.workspaceId}</span></div>
+          {previousPaths.length ? (
+            <div><span className="u-dim">Previous</span> <span className="u-mono">{previousPaths[previousPaths.length - 1]}</span></div>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="ws-actions">
+        <button
+          type="button"
+          className="btn"
+          disabled={saving || !dirty}
+          onClick={(e) => onSave(e.currentTarget)}
+        >{saving ? 'Updating...' : 'Update location'}</button>
+      </div>
+    </div>
+  );
+}
 
 function InstructionsTab({ instructions, setInstructions, dirty, saving, onSave }){
   return (

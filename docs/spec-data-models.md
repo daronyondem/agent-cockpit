@@ -123,7 +123,8 @@ agent-cockpit/
 └── data/                               # Runtime data root, default `<repo>/data` and movable with AGENT_COCKPIT_DATA_DIR
     ├── chat/
     │   ├── stream-jobs.json            # Durable active CLI turn registry for server-restart reconciliation
-    │   ├── workspaces/{hash}/          # Workspace-based storage (see below)
+    │   ├── workspaces.json             # Workspace identity registry: stable workspaceId -> storage key/current path
+    │   ├── workspaces/{storageKey}/    # Workspace-based storage; storageKey is usually the original path hash
     │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled`, `kbEnabled`, `workspaceContextEnabled`, and optional `worktreeIsolation`)
     │   │   ├── session-finalizers.json # Persisted background jobs for reset/archive finalizers
     │   │   ├── memory/                 # Per-workspace memory store (opt-in per workspace)
@@ -177,9 +178,40 @@ agent-cockpit/
     └── update-restart.log              # Restart script output
 ```
 
-## Workspace Hash
+## Workspace Identity
 
-All workspace hashes throughout the system use: `SHA-256(workspacePath).substring(0, 16)` — a deterministic mapping from absolute workspace path to storage folder name.
+Workspaces have a stable internal `workspaceId` UUID. The absolute workspace
+path is mutable metadata, not identity. See
+[ADR-0073](adr/0073-use-stable-workspace-identities.md).
+
+`data/chat/workspaces.json` is the registry that maps `workspaceId` to:
+
+```typescript
+{
+  schemaVersion: 1,
+  workspaces: [{
+    workspaceId: string,    // stable UUID used by current clients and runtime maps
+    storageKey: string,     // folder under data/chat/workspaces/
+    currentPath: string,    // current absolute workspace path
+    legacyHash: string,     // original path hash, retained for compatibility/debugging
+    previousPaths: string[],
+    createdAt: string,
+    updatedAt: string
+  }]
+}
+```
+
+Existing workspace folders keep their legacy path-hash folder name. New
+workspaces also use the initial path hash as `storageKey` to avoid unnecessary
+folder churn, but current clients use `workspaceId` for workspace-scoped API
+calls. The server still accepts legacy hashes and storage keys as workspace
+references by resolving them through the registry.
+
+Legacy workspace hashes use `SHA-256(workspacePath).substring(0, 16)`. They are
+now storage/compatibility identifiers only.
+Registry mutations are serialized inside `WorkspaceIdentityStore` so concurrent
+workspace creation or location-remap requests cannot register the same
+`currentPath` to multiple `workspaceId` values.
 
 ## Install Manifest (`install.json`)
 
@@ -349,14 +381,15 @@ running `npm ci`.
 All mutable JSON files under `data/` are written with two primitives to survive concurrent access without corruption:
 
 - **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, usage ledger, memory `snapshot.json`, memory `state.json`), `UsagePricingStore` (`usage-pricing-overrides.json`), `SessionFinalizerQueue` (`session-finalizers.json`), `SettingsService`, `ClaudePlanUsageService`, `CodexPlanUsageService`, and `KiroPlanUsageService`.
-- **Per-key mutex** — `src/utils/keyedMutex.ts` exports `KeyedMutex.run<T>(key, fn)`. Callers sharing a key are serialized FIFO; different keys run concurrently. `ChatService` holds one `_indexLock` keyed by workspace hash (every read-modify-write on a workspace `index.json` runs inside `_indexLock.run(hash, ...)`) and one `_ledgerLock` keyed by the constant `'__usage_ledger__'` (wrapping ledger record/clear). Not reentrant — locked regions must not recursively acquire the same key.
+- **Per-key mutex** — `src/utils/keyedMutex.ts` exports `KeyedMutex.run<T>(key, fn)`. Callers sharing a key are serialized FIFO; different keys run concurrently. `ChatService` holds one `_indexLock` keyed by canonical `workspaceId` for workspace index read-modify-write operations and one `_ledgerLock` keyed by the constant `'__usage_ledger__'` (wrapping ledger record/clear). Not reentrant — locked regions must not recursively acquire the same key.
 
 Together these guarantee that a workspace index always parses on disk and that concurrent mutators do not clobber each other's updates. `ChatService._buildLookupMap` also catches per-workspace `JSON.parse` failures at startup, logs them, and continues, so a single corrupt file cannot crash the server into a restart loop.
 
-## Workspace Index (`workspaces/{hash}/index.json`)
+## Workspace Index (`workspaces/{storageKey}/index.json`)
 
 ```javascript
 {
+  workspaceId: string,         // Stable workspace UUID; generated once and preserved across path moves
   workspacePath: string,        // Absolute path to the workspace directory
   instructions: string,         // Per-workspace instructions (appended to system prompt on new sessions)
   instructionCompatibilityDismissedFingerprint: string|undefined, // Last dismissed CLI instruction compatibility warning. Fingerprint changes when detected instruction sources or missing vendor entrypoints change.
@@ -481,16 +514,16 @@ Together these guarantee that a workspace index always parses on disk and that c
 }
 ```
 
-When `worktreeIsolation.enabled` is true, `workspacePath` remains the canonical
+When `worktreeIsolation.enabled` is true, `workspaceId` remains the canonical
 workspace identity and every conversation still lives in the same
-`workspaces/{hash}/index.json`. `checkout.executionDir` is the runtime cwd for
+`workspaces/{storageKey}/index.json`. `workspacePath` is the shared base
+checkout path and can change through the workspace location endpoint when
+worktree isolation is disabled. `checkout.executionDir` is the runtime cwd for
 that conversation; response contracts expose it as `executionDir` while keeping
-`workingDir` set to the canonical workspace path. Existing clients that group
-by `workspaceHash` or `workingDir` therefore continue to see one workspace,
-while CLI execution, OCR, goal work, delivered-file preview, and
-conversation-scoped Git status/diff read from the isolated checkout.
+`workingDir` set to the canonical workspace path. Current clients group by
+`workspaceId`; legacy clients/diagnostics may still read `workspaceHash`.
 
-## Session Finalizer Store (`workspaces/{hash}/session-finalizers.json`)
+## Session Finalizer Store (`workspaces/{storageKey}/session-finalizers.json`)
 
 Persisted queue for post-reset/archive work that must survive process restarts but must not block the reset/archive HTTP response.
 
@@ -500,7 +533,7 @@ Persisted queue for post-reset/archive work that must survive process restarts b
   jobs: Array<{
     id: string,
     identity: string,          // type + payload.source + conversationId + sessionNumber
-    workspaceHash: string,
+    workspaceHash: string,      // Legacy field name; current jobs store workspaceId here
     conversationId: string,
     sessionNumber: number,
     type: 'session_summary' | 'memory_extraction' | 'workspace_context_conversation_final_pass',
@@ -524,7 +557,7 @@ Persisted queue for post-reset/archive work that must survive process restarts b
 
 `SessionFinalizerQueue.start()` converts leftover `running` jobs back to `pending` after restart. `enqueue()` de-duplicates by `identity`, persists the job, and schedules asynchronous processing. The reset route enqueues `session_summary`, `memory_extraction`, and a `workspace_context_conversation_final_pass` with source `session_reset`; archive enqueues only the Workspace Context finalizer with source `archive` when Workspace Context is enabled.
 
-## Workspace Memory Store (`workspaces/{hash}/memory/`)
+## Workspace Memory Store (`workspaces/{storageKey}/memory/`)
 
 `snapshot.json` remains the merged content snapshot consumed by existing callers:
 
@@ -689,7 +722,7 @@ Memory Review runs persist scheduled/manual proposal + draft state under `memory
 }
 ```
 
-## Workspace Context Store (`workspaces/{hash}/workspace-context/`)
+## Workspace Context Store (`workspaces/{storageKey}/workspace-context/`)
 
 Workspace Context is markdown-first operating memory. Its canonical store is the
 `workspace-context/context/` markdown folder, not a SQLite graph database.
@@ -771,10 +804,11 @@ Audits are append-only review records. They do not change `snapshot.json` direct
 
 ## CLI Instruction Compatibility Status
 
-`GET /workspaces/:hash/instruction-compatibility` returns a computed, non-persisted status object:
+`GET /workspaces/:workspaceId/instruction-compatibility` returns a computed, non-persisted status object:
 
 ```javascript
 {
+  workspaceId: string,
   workspaceHash: string,
   workspacePath: string,
   sources: [{
@@ -805,7 +839,7 @@ Audits are append-only review records. They do not change `snapshot.json` direct
 
 Detection is filesystem-based and read-only: `AGENTS.md` covers Codex/vendor-neutral agents, `CLAUDE.md` covers Claude Code, and any `*.md` under `.kiro/steering/` covers Kiro. Pointer creation writes only missing files with exclusive-create semantics and never overwrites existing instruction files.
 
-## Session File (`workspaces/{hash}/{convId}/session-N.json`)
+## Session File (`workspaces/{storageKey}/{convId}/session-N.json`)
 
 ```javascript
 {
@@ -1809,7 +1843,7 @@ interface KbAutoDreamState extends KbAutoDreamConfig {
   windowEndAt?: string | null;    // current/next window end when mode is window
 }
 
-/** Full KB state snapshot returned by GET /workspaces/:hash/kb */
+/** Full KB state snapshot returned by GET /workspaces/:workspaceId/kb */
 interface KbState {
   version: number;              // DB schema version
   entrySchemaVersion: number;   // KB_ENTRY_SCHEMA_VERSION (currently 1)
@@ -1836,7 +1870,7 @@ interface KbState {
   updatedAt: string;
 }
 
-/** Synthesis snapshot returned by GET /workspaces/:hash/kb/synthesis */
+/** Synthesis snapshot returned by GET /workspaces/:workspaceId/kb/synthesis */
 interface KbSynthesisState {
   status: KbSynthesisStatus;
   lastRunAt: string | null;
@@ -1877,7 +1911,7 @@ interface KbSynthesisConnectionSummary {
   confidence: string;   // 'extracted'|'inferred'|'speculative'
 }
 
-/** Full topic detail returned by GET /workspaces/:hash/kb/synthesis/:topicId */
+/** Full topic detail returned by GET /workspaces/:workspaceId/kb/synthesis/:topicId */
 interface KbSynthesisTopicDetail {
   topicId: string;
   title: string;
@@ -1891,7 +1925,7 @@ interface KbSynthesisTopicDetail {
   connections: KbSynthesisConnectionSummary[];
 }
 
-/** Summary shape returned by GET /workspaces/:hash/kb/reflections */
+/** Summary shape returned by GET /workspaces/:workspaceId/kb/reflections */
 interface KbReflectionSummary {
   reflectionId: string;
   title: string;
@@ -1902,7 +1936,7 @@ interface KbReflectionSummary {
   isStale: boolean;    // true if any cited entry was re-digested, deleted, or lost via cascade
 }
 
-/** Detail shape returned by GET /workspaces/:hash/kb/reflections/:reflectionId */
+/** Detail shape returned by GET /workspaces/:workspaceId/kb/reflections/:reflectionId */
 interface KbReflectionDetail {
   reflectionId: string;
   title: string;

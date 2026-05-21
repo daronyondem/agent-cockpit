@@ -23,10 +23,10 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
   const { chatService, workspaceContextService, emitFreshWorkspaceContextUpdate } = opts;
   const router = express.Router();
 
-  router.get('/workspaces/:hash/workspace-context/settings', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/workspace-context/settings', async (req: Request, res: Response) => {
     try {
       res.set('Cache-Control', 'no-store');
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const settings = await chatService.getWorkspaceContextSettings(hash);
       if (settings === null) return res.status(404).json({ error: 'Workspace not found' });
       const enabled = await chatService.getWorkspaceContextEnabled(hash);
@@ -45,9 +45,9 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
     }
   });
 
-  router.put('/workspaces/:hash/workspace-context/enabled', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/workspace-context/enabled', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { enabled } = validateWorkspaceContextEnabledRequest(req.body);
       const wasEnabled = await chatService.getWorkspaceContextEnabled(hash);
       if (enabled === false && workspaceContextService.isRunning(hash)) {
@@ -82,9 +82,9 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
     }
   });
 
-  router.put('/workspaces/:hash/workspace-context/settings', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/workspace-context/settings', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { settings: input } = validateWorkspaceContextSettingsRequest(req.body);
       const settings = await chatService.setWorkspaceContextSettings(hash, input);
       if (settings === null) return res.status(404).json({ error: 'Workspace not found' });
@@ -95,9 +95,9 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
     }
   });
 
-  router.post('/workspaces/:hash/workspace-context/scan', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/workspace-context/scan', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       if (!(await chatService.getWorkspaceContextEnabled(hash))) {
         return res.status(403).json({ error: 'Workspace Context is disabled' });
       }
@@ -117,9 +117,9 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
     }
   });
 
-  router.post('/workspaces/:hash/workspace-context/maintenance', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/workspace-context/maintenance', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       if (!(await chatService.getWorkspaceContextEnabled(hash))) {
         return res.status(403).json({ error: 'Workspace Context is disabled' });
       }
@@ -139,9 +139,9 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
     }
   });
 
-  router.post('/workspaces/:hash/workspace-context/scan/stop', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/workspace-context/scan/stop', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const stopped = await workspaceContextService.stopWorkspace(hash);
       if (!stopped) return res.status(409).json({ error: 'No Workspace Context run is running' });
       res.json({ ok: true, stopped: true });
@@ -150,9 +150,9 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
     }
   });
 
-  router.post('/workspaces/:hash/workspace-context/repair-instructions', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/workspace-context/repair-instructions', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const state = await workspaceContextService.repairInstructions(hash);
       if (!state) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ ok: true, state });
@@ -161,10 +161,10 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
     }
   });
 
-  router.get('/workspaces/:hash/workspace-context/files', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/workspace-context/files', async (req: Request, res: Response) => {
     try {
       res.set('Cache-Control', 'no-store');
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       if (!(await chatService.getWorkspaceContextEnabled(hash))) {
         return res.json({ files: [], contextDir: workspaceContextService.getContextFilesDir(hash) });
       }
@@ -174,10 +174,10 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
     }
   });
 
-  router.get('/workspaces/:hash/workspace-context/files/*', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/workspace-context/files/*', async (req: Request, res: Response) => {
     try {
       res.set('Cache-Control', 'no-store');
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const relPath = String(req.params[0] || '');
       if (!(await chatService.getWorkspaceContextEnabled(hash))) {
         return res.status(403).json({ error: 'Workspace Context is disabled' });
@@ -190,9 +190,9 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
     }
   });
 
-  router.delete('/workspaces/:hash/workspace-context', csrfGuard, async (req: Request, res: Response) => {
+  router.delete('/workspaces/:workspaceId/workspace-context', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const settings = await chatService.getWorkspaceContextSettings(hash);
       if (settings === null) return res.status(404).json({ error: 'Workspace not found' });
       if (workspaceContextService.isRunning(hash)) {

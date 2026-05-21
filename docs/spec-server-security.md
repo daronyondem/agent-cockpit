@@ -219,23 +219,23 @@ principle:
 
 | Route | Guards |
 |-------|--------|
-| `GET /workspaces/:hash/explorer/tree` | traversal |
-| `GET /workspaces/:hash/explorer/preview` | traversal |
-| `POST /workspaces/:hash/explorer/upload` | traversal on destination folder; multer `LIMIT_FILE_SIZE` 500 MB |
-| `POST /workspaces/:hash/explorer/mkdir` | traversal on parent folder; name rejected for `/`, `\`, `.`, `..`, or empty strings; final absolute path re-verified under the parent root before `fs.mkdir` |
-| `POST /workspaces/:hash/explorer/file` | traversal on parent folder; name rejected for `/`, `\`, `.`, `..`, or empty strings; final absolute path re-verified under the parent root; 409 on collision with any existing file or folder (no overwrite); optional seed `content` must be a string ≤ 5 MB UTF-8 or the request returns 413 without writing |
-| `PUT /workspaces/:hash/explorer/file` | traversal; refuses directories and workspace root; `content` must be a string; `Buffer.byteLength(content, 'utf8')` checked against the 5 MB edit cap before any write; over-limit payloads return 413 and leave the file untouched |
-| `PATCH /workspaces/:hash/explorer/rename` | traversal on both `from` and `to`; root-rename refusal; 409 on non-overwrite conflict |
-| `DELETE /workspaces/:hash/explorer/entry` | traversal; root-delete refusal |
-| `GET /workspaces/:hash/git/status` | workspace hash lookup; Git top-level realpath must contain the workspace root realpath; changed paths are filtered and rewritten to the workspace subtree before being returned |
-| `GET /workspaces/:hash/git/diff` | traversal on `path` under the workspace root; Git top-level realpath must contain the workspace root realpath; diff content capped at 2 MB per side; binary content withheld |
+| `GET /workspaces/:workspaceId/explorer/tree` | traversal |
+| `GET /workspaces/:workspaceId/explorer/preview` | traversal |
+| `POST /workspaces/:workspaceId/explorer/upload` | traversal on destination folder; multer `LIMIT_FILE_SIZE` 500 MB |
+| `POST /workspaces/:workspaceId/explorer/mkdir` | traversal on parent folder; name rejected for `/`, `\`, `.`, `..`, or empty strings; final absolute path re-verified under the parent root before `fs.mkdir` |
+| `POST /workspaces/:workspaceId/explorer/file` | traversal on parent folder; name rejected for `/`, `\`, `.`, `..`, or empty strings; final absolute path re-verified under the parent root; 409 on collision with any existing file or folder (no overwrite); optional seed `content` must be a string ≤ 5 MB UTF-8 or the request returns 413 without writing |
+| `PUT /workspaces/:workspaceId/explorer/file` | traversal; refuses directories and workspace root; `content` must be a string; `Buffer.byteLength(content, 'utf8')` checked against the 5 MB edit cap before any write; over-limit payloads return 413 and leave the file untouched |
+| `PATCH /workspaces/:workspaceId/explorer/rename` | traversal on both `from` and `to`; root-rename refusal; 409 on non-overwrite conflict |
+| `DELETE /workspaces/:workspaceId/explorer/entry` | traversal; root-delete refusal |
+| `GET /workspaces/:workspaceId/git/status` | workspace reference lookup; Git top-level realpath must contain the workspace root realpath; changed paths are filtered and rewritten to the workspace subtree before being returned |
+| `GET /workspaces/:workspaceId/git/diff` | traversal on `path` under the workspace root; Git top-level realpath must contain the workspace root realpath; diff content capped at 2 MB per side; binary content withheld |
 | `GET /conversations/:id/git/status` | conversation lookup; resolves the conversation execution directory, then applies the same Git top-level containment and path filtering as workspace Git status |
 | `GET /conversations/:id/git/diff` | traversal on `path` under the conversation execution directory; Git top-level realpath must contain the execution root realpath; diff content capped at 2 MB per side; binary content withheld |
-| `GET /workspaces/:hash/files` | traversal (pre-existing file-delivery route) |
+| `GET /workspaces/:workspaceId/files` | traversal (pre-existing file-delivery route) |
 | `GET /conversations/:id/workspace-file` | traversal under the conversation execution directory (`checkout.executionDir` when worktree isolation is enabled, otherwise the canonical workspace path) |
-| `POST /workspaces/:hash/kb/raw` | filename + folder segment validation via `KbValidationError`; MIME-typed stage path verified under `knowledge/raw/` |
-| `DELETE /workspaces/:hash/kb/raw/:rawId` | hex-only `rawId` regex gate; staged path verified under `knowledge/raw/` |
-| `GET /workspaces/:hash/kb/raw/:rawId` | hex-only `rawId` gate; resolved file path verified under `knowledge/raw/` |
+| `POST /workspaces/:workspaceId/kb/raw` | filename + folder segment validation via `KbValidationError`; MIME-typed stage path verified under `knowledge/raw/` |
+| `DELETE /workspaces/:workspaceId/kb/raw/:rawId` | hex-only `rawId` regex gate; staged path verified under `knowledge/raw/` |
+| `GET /workspaces/:workspaceId/kb/raw/:rawId` | hex-only `rawId` gate; resolved file path verified under `knowledge/raw/` |
 
 The explorer upload uses multer's disk storage with a randomized `.ac-upload-<ts>-<nonce>-<safe>` prefix in the destination folder so a partial upload never clobbers an existing file. After the stream completes, a collision check against the real target decides whether to unlink the temp file (conflict without overwrite) or rename it into place.
 

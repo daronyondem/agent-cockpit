@@ -3,7 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { ChatService } from '../src/services/chatService';
+import { ChatService, WorkspaceLocationUpdateError } from '../src/services/chatService';
 import { workspaceHash } from './helpers/workspace';
 
 
@@ -39,6 +39,56 @@ describe('getWorkspaceContext', () => {
 
   test('returns null for non-existent conversation', () => {
     expect(service.getWorkspaceDiscussionHistoryPointer('nope')).toBeNull();
+  });
+});
+
+describe('workspace location', () => {
+  test('updates path metadata without changing workspace identity or storage folder', async () => {
+    const originalPath = path.join(tmpDir, 'workspace-original');
+    const movedPath = path.join(tmpDir, 'workspace-moved');
+    fs.mkdirSync(originalPath, { recursive: true });
+    fs.mkdirSync(movedPath, { recursive: true });
+
+    const conv = await service.createConversation('Move workspace', originalPath);
+    const originalStorageKey = workspaceHash(originalPath);
+
+    const updated = await service.updateWorkspaceLocation(conv.workspaceId, movedPath);
+    expect(updated).toMatchObject({
+      workspaceId: conv.workspaceId,
+      workspacePath: movedPath,
+      legacyHash: originalStorageKey,
+      previousPaths: [originalPath],
+    });
+    expect(service.getWorkspaceStorageKey(conv.workspaceId)).toBe(originalStorageKey);
+
+    const reloaded = await service.getConversation(conv.id);
+    expect(reloaded?.workspaceId).toBe(conv.workspaceId);
+    expect(reloaded?.workspaceHash).toBe(originalStorageKey);
+    expect(reloaded?.workingDir).toBe(movedPath);
+    expect(fs.existsSync(path.join(tmpDir, 'data', 'chat', 'workspaces', originalStorageKey, 'index.json'))).toBe(true);
+    expect(fs.existsSync(path.join(tmpDir, 'data', 'chat', 'workspaces', workspaceHash(movedPath), 'index.json'))).toBe(false);
+  });
+
+  test('rejects paths already registered to another workspace', async () => {
+    const firstPath = path.join(tmpDir, 'workspace-a');
+    const secondPath = path.join(tmpDir, 'workspace-b');
+    fs.mkdirSync(firstPath, { recursive: true });
+    fs.mkdirSync(secondPath, { recursive: true });
+    const first = await service.createConversation('First', firstPath);
+    await service.createConversation('Second', secondPath);
+
+    await expect(service.updateWorkspaceLocation(first.workspaceId, secondPath)).rejects.toMatchObject({
+      code: 'path_already_registered',
+      status: 409,
+    });
+  });
+
+  test('rejects missing workspace locations', async () => {
+    const originalPath = path.join(tmpDir, 'workspace-location-missing-original');
+    fs.mkdirSync(originalPath, { recursive: true });
+    const conv = await service.createConversation('Missing path', originalPath);
+
+    await expect(service.updateWorkspaceLocation(conv.workspaceId, path.join(tmpDir, 'missing'))).rejects.toBeInstanceOf(WorkspaceLocationUpdateError);
   });
 });
 
@@ -82,6 +132,18 @@ describe('getWorkspaceMemoryPointer', () => {
 
   test('returns null when hash is empty', async () => {
     expect(await service.getWorkspaceMemoryPointer('')).toBeNull();
+  });
+});
+
+describe('listMemoryEnabledWorkspaceHashes', () => {
+  test('returns canonical workspace IDs for memory-enabled workspaces', async () => {
+    const enabledConv = await service.createConversation('Memory Enabled', '/tmp/memory-enabled-list');
+    await service.createConversation('Memory Disabled', '/tmp/memory-disabled-list');
+    const enabledHash = workspaceHash('/tmp/memory-enabled-list');
+
+    await service.setWorkspaceMemoryEnabled(enabledHash, true);
+
+    expect(await service.listMemoryEnabledWorkspaceHashes()).toEqual([enabledConv.workspaceId]);
   });
 });
 
@@ -157,14 +219,14 @@ describe('getWorkspaceContextEnabled / setWorkspaceContextEnabled', () => {
   });
 
   test('lists only Workspace Context enabled workspaces', async () => {
-    await service.createConversation('Workspace Context Enabled', '/tmp/workspace-context-enabled');
+    const enabledConv = await service.createConversation('Workspace Context Enabled', '/tmp/workspace-context-enabled');
     await service.createConversation('Workspace Context Disabled', '/tmp/workspace-context-disabled');
     const enabledHash = workspaceHash('/tmp/workspace-context-enabled');
     const disabledHash = workspaceHash('/tmp/workspace-context-disabled');
 
     await service.setWorkspaceContextEnabled(enabledHash, true);
 
-    expect(await service.listWorkspaceContextEnabledWorkspaceHashes()).toEqual([enabledHash]);
+    expect(await service.listWorkspaceContextEnabledWorkspaceHashes()).toEqual([enabledConv.workspaceId]);
     expect(await service.getWorkspaceContextEnabled(disabledHash)).toBe(false);
   });
 });
@@ -454,16 +516,15 @@ describe('getKbStateSnapshot / getKbDb', () => {
   });
 
   test('listKbEnabledWorkspaceHashes returns only KB-enabled workspaces', async () => {
-    await service.createConversation('KB Enabled A', '/tmp/kb-enabled-a');
-    await service.createConversation('KB Disabled B', '/tmp/kb-disabled-b');
+    const convA = await service.createConversation('KB Enabled A', '/tmp/kb-enabled-a');
+    const convB = await service.createConversation('KB Disabled B', '/tmp/kb-disabled-b');
     const hashA = workspaceHash('/tmp/kb-enabled-a');
-    const hashB = workspaceHash('/tmp/kb-disabled-b');
 
     await service.setWorkspaceKbEnabled(hashA, true);
 
-    const hashes = await service.listKbEnabledWorkspaceHashes();
-    expect(hashes).toContain(hashA);
-    expect(hashes).not.toContain(hashB);
+    const workspaceIds = await service.listKbEnabledWorkspaceHashes();
+    expect(workspaceIds).toContain(convA.workspaceId);
+    expect(workspaceIds).not.toContain(convB.workspaceId);
   });
 });
 

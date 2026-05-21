@@ -7,7 +7,7 @@
 | Section | File | Description |
 |---------|------|-------------|
 | 1. Overview | [This file](#1-overview) | Core use case, key principles |
-| 2. Data Models & File Structure | [spec-data-models.md](spec-data-models.md) | On-disk layout, JSON schemas, workspace hashing |
+| 2. Data Models & File Structure | [spec-data-models.md](spec-data-models.md) | On-disk layout, JSON schemas, workspace identity and storage keys |
 | 3. API Endpoints | [spec-api-endpoints.md](spec-api-endpoints.md) | REST + WebSocket API surface |
 | 4. Backend Services | [spec-backend-services.md](spec-backend-services.md) | ChatService, adapter system, KB pipeline, update service |
 | 5. Workspace Context Feature | [spec-workspace-context.md](spec-workspace-context.md) | Markdown-first workspace operating memory, CLI-maintained context files, scan and maintenance runs |

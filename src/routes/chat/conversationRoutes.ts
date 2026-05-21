@@ -104,32 +104,33 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
   const router = express.Router();
 
   async function augmentConversationResponse(conv: NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>): Promise<void> {
+    const workspaceId = conv.workspaceId;
     // Augment with KB status so the frontend's composer KB status icon
     // can render without a separate round-trip to GET /kb.
-    const kbEnabled = await chatService.getWorkspaceKbEnabled(conv.workspaceHash);
+    const kbEnabled = await chatService.getWorkspaceKbEnabled(workspaceId);
     if (kbEnabled) {
-      const db = chatService.getKbDb(conv.workspaceHash);
+      const db = chatService.getKbDb(workspaceId);
       if (db) {
         const snapshot = db.getSynthesisSnapshot();
         const counters = db.getCounters();
-        const autoDigest = await chatService.getWorkspaceKbAutoDigest(conv.workspaceHash);
+        const autoDigest = await chatService.getWorkspaceKbAutoDigest(workspaceId);
         (conv as unknown as Record<string, unknown>).kb = {
           enabled: true,
           dreamingNeeded: snapshot.needsSynthesisCount > 0,
           pendingEntries: snapshot.needsSynthesisCount,
           pendingDigestions: counters.pendingCount,
           autoDigest,
-          dreamingStatus: kbDreaming.isRunning(conv.workspaceHash) ? 'running' : snapshot.status,
-          dreamingStopping: kbDreaming.isStopRequested(conv.workspaceHash),
+          dreamingStatus: kbDreaming.isRunning(workspaceId) ? 'running' : snapshot.status,
+          dreamingStopping: kbDreaming.isStopRequested(workspaceId),
           failedItems: counters.rawByStatus.failed,
         };
       }
     }
-    if (await chatService.getWorkspaceMemoryEnabled(conv.workspaceHash)) {
-      (conv as unknown as Record<string, unknown>).memoryReview = await chatService.getMemoryReviewStatus(conv.workspaceHash);
+    if (await chatService.getWorkspaceMemoryEnabled(workspaceId)) {
+      (conv as unknown as Record<string, unknown>).memoryReview = await chatService.getMemoryReviewStatus(workspaceId);
     }
-    if (await chatService.getWorkspaceContextEnabled(conv.workspaceHash)) {
-      (conv as unknown as Record<string, unknown>).workspaceContext = await chatService.getWorkspaceContextStatus(conv.workspaceHash);
+    if (await chatService.getWorkspaceContextEnabled(workspaceId)) {
+      (conv as unknown as Record<string, unknown>).workspaceContext = await chatService.getWorkspaceContextStatus(workspaceId);
     }
   }
 
@@ -293,7 +294,7 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       const ok = await chatService.archiveConversation(convId);
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       if (preConv) {
-        await enqueueWorkspaceContextFinalizer(preConv.workspaceHash, convId, preConv.sessionNumber, 'archive');
+        await enqueueWorkspaceContextFinalizer(preConv.workspaceId, convId, preConv.sessionNumber, 'archive');
       }
       res.json({ ok: true });
     } catch (err: unknown) {
@@ -428,11 +429,11 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       const result = await chatService.resetSession(convId);
       if (!result) return res.status(404).json({ error: 'Conversation not found' });
 
-      const resetWsHash = chatService.getWorkspaceHashForConv(convId);
-      if (resetWsHash) {
-        await enqueueSessionSummaryFinalizer(resetWsHash, convId, result.archivedSession.number, endingRuntime);
-        await enqueueMemoryFinalizer(resetWsHash, convId, result.archivedSession.number, endingRuntime);
-        await enqueueWorkspaceContextFinalizer(resetWsHash, convId, result.archivedSession.number, 'session_reset');
+      const resetWorkspaceId = chatService.getWorkspaceIdForConv(convId);
+      if (resetWorkspaceId) {
+        await enqueueSessionSummaryFinalizer(resetWorkspaceId, convId, result.archivedSession.number, endingRuntime);
+        await enqueueMemoryFinalizer(resetWorkspaceId, convId, result.archivedSession.number, endingRuntime);
+        await enqueueWorkspaceContextFinalizer(resetWorkspaceId, convId, result.archivedSession.number, 'session_reset');
       }
 
       // Let the backend adapter clean up per-conversation state (e.g. ACP processes)

@@ -19,9 +19,9 @@ type BlobRead = { missing: boolean; binary: boolean; tooLarge: boolean; content:
 export function createGitRouter(chatService: ChatService): express.Router {
   const router = express.Router();
 
-  router.get('/workspaces/:hash/git/status', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/git/status', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const workspace = await resolveGitWorkspace(chatService, hash);
       if (!workspace.ok) {
         if (workspace.status === 404) return res.status(404).json({ error: workspace.error });
@@ -73,9 +73,9 @@ export function createGitRouter(chatService: ChatService): express.Router {
     }
   });
 
-  router.get('/workspaces/:hash/git/diff', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/git/diff', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const requestedPath = req.query.path as string | undefined;
       if (!requestedPath) return res.status(400).json({ error: 'path query parameter is required' });
 

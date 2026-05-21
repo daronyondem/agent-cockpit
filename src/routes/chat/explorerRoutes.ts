@@ -35,9 +35,9 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     return { ok: true, abs, root };
   }
 
-  router.get('/workspaces/:hash/explorer/tree', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/explorer/tree', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const rel = (req.query.path as string) || '';
       const r = await resolveExplorerPath(hash, rel);
       if (!r.ok) return res.status(r.status).json({ error: r.error });
@@ -93,9 +93,9 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     }
   });
 
-  router.get('/workspaces/:hash/explorer/preview', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/explorer/preview', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const rel = req.query.path as string | undefined;
       const mode = (req.query.mode as string) || 'view';
       if (!rel) return res.status(400).json({ error: 'path query parameter is required' });
@@ -155,7 +155,7 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
 
   const explorerUploadPrelude = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const rel = (req.query.path as string) || '';
       const r = await resolveExplorerPath(hash, rel);
       if (!r.ok) { res.status(r.status).json({ error: r.error }); return; }
@@ -195,7 +195,7 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     });
   };
 
-  router.post('/workspaces/:hash/explorer/upload', csrfGuard, explorerUploadPrelude, explorerUploadMiddleware, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/explorer/upload', csrfGuard, explorerUploadPrelude, explorerUploadMiddleware, async (req: Request, res: Response) => {
     const file = (req as unknown as { file?: Express.Multer.File }).file;
     const targetDir = (req as unknown as { _explorerTargetAbs?: string })._explorerTargetAbs;
     if (!file || !targetDir) return res.status(400).json({ error: 'Missing file or target directory' });
@@ -223,9 +223,9 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     }
   });
 
-  router.patch('/workspaces/:hash/explorer/rename', csrfGuard, async (req: Request, res: Response) => {
+  router.patch('/workspaces/:workspaceId/explorer/rename', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { from, to, overwrite } = validateExplorerRenameRequest(req.body);
       const fromRes = await resolveExplorerPath(hash, from);
       if (!fromRes.ok) return res.status(fromRes.status).json({ error: fromRes.error });
@@ -260,9 +260,9 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/explorer/mkdir', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/explorer/mkdir', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { parent, name } = validateExplorerMkdirRequest(req.body);
       const trimmed = name.trim();
       if (/[/\\]/.test(trimmed) || trimmed === '.' || trimmed === '..') {
@@ -302,9 +302,9 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/explorer/file', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/explorer/file', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { parent, name, content } = validateExplorerCreateFileRequest(req.body);
       const trimmed = name.trim();
       if (/[/\\]/.test(trimmed) || trimmed === '.' || trimmed === '..') {
@@ -350,9 +350,9 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     }
   });
 
-  router.put('/workspaces/:hash/explorer/file', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/explorer/file', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { path: rel, content } = validateExplorerSaveFileRequest(req.body);
       const byteLength = Buffer.byteLength(content, 'utf8');
       if (byteLength > EXPLORER_TEXT_VIEW_LIMIT) {
@@ -384,9 +384,9 @@ export function createExplorerRouter(chatService: ChatService): express.Router {
     }
   });
 
-  router.delete('/workspaces/:hash/explorer/entry', csrfGuard, async (req: Request, res: Response) => {
+  router.delete('/workspaces/:workspaceId/explorer/entry', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const rel = req.query.path as string | undefined;
       if (!rel) return res.status(400).json({ error: 'path query parameter is required' });
       const r = await resolveExplorerPath(hash, rel);

@@ -87,6 +87,30 @@ describe('SessionFinalizerQueue', () => {
     expect(jobs).toHaveLength(2);
   });
 
+  test('stores canonical workspace jobs under the resolved storage key', async () => {
+    queue = new SessionFinalizerQueue({
+      workspacesDir,
+      resolveWorkspaceStorageKey: (workspaceRef) => (workspaceRef === 'workspace-id-1' ? 'legacy-storage-1' : null),
+      handleJob: async () => {},
+    });
+    queue.stop();
+
+    await queue.enqueue({
+      workspaceHash: 'workspace-id-1',
+      conversationId: 'conv1',
+      sessionNumber: 1,
+      type: 'session_summary',
+    });
+
+    expect(fs.existsSync(path.join(workspacesDir, 'workspace-id-1', 'session-finalizers.json'))).toBe(false);
+    expect(fs.existsSync(path.join(workspacesDir, 'legacy-storage-1', 'session-finalizers.json'))).toBe(true);
+    const jobs = await queue.listJobs('workspace-id-1');
+    expect(jobs[0]).toMatchObject({
+      workspaceHash: 'workspace-id-1',
+      conversationId: 'conv1',
+    });
+  });
+
   test('retries transient failures and records the successful attempt', async () => {
     let attempts = 0;
     queue = new SessionFinalizerQueue({

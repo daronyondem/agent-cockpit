@@ -34,7 +34,7 @@ filling a rigid schema.
 Per-workspace data lives under:
 
 ```
-data/chat/workspaces/{hash}/workspace-context/
+data/chat/workspaces/{storageKey}/workspace-context/
 ├── WORKSPACE_CONTEXT.md
 ├── context/
 │   └── overview.md
@@ -193,7 +193,7 @@ Legacy settings are migrated at read/write boundaries:
   `WorkspaceIndex.workspaceContextEnabled`.
 - `WorkspaceIndex.contextMap` is normalized into
   `WorkspaceIndex.workspaceContext`.
-- Existing `workspaces/{hash}/context-map/` folders are removed during workspace
+- Existing `workspaces/{storageKey}/context-map/` folders are removed during workspace
   index migration because the old graph store is no longer used.
 - Removed old processor fields such as source toggles and extraction/synthesis
   concurrency are stripped.
@@ -317,16 +317,16 @@ Workspace Context routes are mounted under `/api/chat` and are owned by
 
 | Method | Path | CSRF | Description |
 |--------|------|------|-------------|
-| `GET` | `/workspaces/:hash/workspace-context/settings` | No | Returns `{ enabled, settings, state, contextDir, instructionPath, files }`. Disabled workspaces return an empty `files` list. |
-| `PUT` | `/workspaces/:hash/workspace-context/enabled` | Yes | Body `{ enabled }`. Enables/disables the workspace. Enabling ensures the folder and `AGENTS.md` managed block exist and starts `initial_scan` when transitioning from disabled. Disabling stops an active run and removes the managed block. |
-| `PUT` | `/workspaces/:hash/workspace-context/settings` | Yes | Body `{ settings }` or direct settings object. Saves workspace processor override settings. |
-| `POST` | `/workspaces/:hash/workspace-context/scan` | Yes | Starts a background `manual_catchup` run with `forceAll:true`. Returns `{ ok:true, started:true, source:'manual_catchup' }`. Disabled workspaces return `403`; already-running workspaces return `409`. |
-| `POST` | `/workspaces/:hash/workspace-context/maintenance` | Yes | Starts a background `maintenance` run over the current context markdown files. Returns `{ ok:true, started:true, source:'maintenance' }`. Disabled workspaces return `403`; already-running workspaces return `409`. |
-| `POST` | `/workspaces/:hash/workspace-context/scan/stop` | Yes | Aborts the active run for the workspace. Returns `409` when no run is active. |
-| `POST` | `/workspaces/:hash/workspace-context/repair-instructions` | Yes | Recreates generated files and reinstalls the `AGENTS.md` managed block. |
-| `GET` | `/workspaces/:hash/workspace-context/files` | No | Lists markdown files under `workspace-context/context/` as `{ path, name, size, updatedAt }`. |
-| `GET` | `/workspaces/:hash/workspace-context/files/*` | No | Reads a markdown file under `workspace-context/context/`. Traversal and non-markdown paths are rejected. Disabled workspaces return `403`. |
-| `DELETE` | `/workspaces/:hash/workspace-context` | Yes | Clears the Workspace Context folder and run history, then repairs generated files/instructions. Enablement and settings remain. Active runs return `409`. |
+| `GET` | `/workspaces/:workspaceId/workspace-context/settings` | No | Returns `{ enabled, settings, state, contextDir, instructionPath, files }`. Disabled workspaces return an empty `files` list. |
+| `PUT` | `/workspaces/:workspaceId/workspace-context/enabled` | Yes | Body `{ enabled }`. Enables/disables the workspace. Enabling ensures the folder and `AGENTS.md` managed block exist and starts `initial_scan` when transitioning from disabled. Disabling stops an active run and removes the managed block. |
+| `PUT` | `/workspaces/:workspaceId/workspace-context/settings` | Yes | Body `{ settings }` or direct settings object. Saves workspace processor override settings. |
+| `POST` | `/workspaces/:workspaceId/workspace-context/scan` | Yes | Starts a background `manual_catchup` run with `forceAll:true`. Returns `{ ok:true, started:true, source:'manual_catchup' }`. Disabled workspaces return `403`; already-running workspaces return `409`. |
+| `POST` | `/workspaces/:workspaceId/workspace-context/maintenance` | Yes | Starts a background `maintenance` run over the current context markdown files. Returns `{ ok:true, started:true, source:'maintenance' }`. Disabled workspaces return `403`; already-running workspaces return `409`. |
+| `POST` | `/workspaces/:workspaceId/workspace-context/scan/stop` | Yes | Aborts the active run for the workspace. Returns `409` when no run is active. |
+| `POST` | `/workspaces/:workspaceId/workspace-context/repair-instructions` | Yes | Recreates generated files and reinstalls the `AGENTS.md` managed block. |
+| `GET` | `/workspaces/:workspaceId/workspace-context/files` | No | Lists markdown files under `workspace-context/context/` as `{ path, name, size, updatedAt }`. |
+| `GET` | `/workspaces/:workspaceId/workspace-context/files/*` | No | Reads a markdown file under `workspace-context/context/`. Traversal and non-markdown paths are rejected. Disabled workspaces return `403`. |
+| `DELETE` | `/workspaces/:workspaceId/workspace-context` | Yes | Clears the Workspace Context folder and run history, then repairs generated files/instructions. Enablement and settings remain. Active runs return `409`. |
 
 The Workspace Context settings and file GET routes set
 `Cache-Control: no-store`. The settings screen polls these routes for live run
@@ -335,7 +335,7 @@ runs.
 
 Removed old Context Map endpoints are not supported:
 
-- `/workspaces/:hash/context-map/*`
+- `/workspaces/:workspaceId/context-map/*`
 - `/mcp/context-map/call`
 - graph/detail/review/candidate/entity routes
 
@@ -406,7 +406,7 @@ The UI does not expose graph search, entity editing, Needs Attention, candidate
 approval queues, or raw database inspection.
 
 While the Workspace Context tab is on screen, the page refreshes runtime state
-from `GET /workspaces/:hash/workspace-context/settings` with a no-store request
+from `GET /workspaces/:workspaceId/workspace-context/settings` with a no-store request
 every second. WebSocket `workspace_context_update` frames also construct or
 refresh the visible latest run row immediately from the workspace status fields.
 The latest run always takes precedence over older cached run rows so running
