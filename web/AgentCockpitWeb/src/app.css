@@ -6619,6 +6619,26 @@ body{
 .settings-field input:focus,
 .settings-field select:focus,
 .settings-field textarea:focus{ border-color: var(--accent); }
+.settings-inline-row{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-inline-row input{
+  min-width: 0;
+  flex: 1;
+}
+.ws-muted-metadata{
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
 .cli-pane-head{
   display: flex;
   align-items: flex-start;

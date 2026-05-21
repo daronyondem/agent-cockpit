@@ -175,7 +175,9 @@ export function FolderPicker({ open, initialPath = '', onClose, onSelect, onUseD
         </div>
 
         <div className="fp-foot">
-          <button type="button" className="fp-btn-ghost" onClick={() => onUseDefault()} disabled={busy || loading}>Use default (workspace)</button>
+          {onUseDefault && (
+            <button type="button" className="fp-btn-ghost" onClick={onUseDefault} disabled={busy || loading}>Use default (workspace)</button>
+          )}
           <div style={{flex:1}}/>
           <button type="button" className="fp-btn-ghost" onClick={onClose} disabled={busy}>Cancel</button>
           <button type="button" className="fp-btn-primary" onClick={() => data && onSelect(data.currentPath)} disabled={!data || busy || loading}>

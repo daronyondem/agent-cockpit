@@ -142,6 +142,7 @@ export interface ConversationListItem {
   workingDir: string;
   executionDir?: string;
   checkout?: ConversationCheckout;
+  workspaceId: string;
   workspaceHash: string;
   workspaceKbEnabled: boolean;
   messageCount: number;
@@ -162,6 +163,7 @@ export interface Conversation {
   workingDir: string;
   executionDir?: string;
   checkout?: ConversationCheckout;
+  workspaceId: string;
   workspaceHash: string;
   currentSessionId: string;
   sessionNumber: number;

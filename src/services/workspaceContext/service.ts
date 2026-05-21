@@ -48,6 +48,8 @@ export interface WorkspaceContextChatService {
     fallbackBackend?: string | null,
   ): Promise<CliProfileRuntime>;
   getWorkspacePath(hash: string): Promise<string | null>;
+  getWorkspaceLocation?(hash: string): Promise<{ workspaceId: string; legacyHash?: string } | null>;
+  getWorkspaceContextDir(hash: string): string;
   getWorkspaceContextSettings(hash: string): Promise<WorkspaceContextWorkspaceSettings | null>;
   getWorkspaceContextEnabled(hash: string): Promise<boolean>;
   listConversations(opts?: { archived?: boolean }): Promise<ConversationListItem[]>;
@@ -104,6 +106,7 @@ export class WorkspaceContextService {
   private readonly emitUpdate?: (hash: string) => void | Promise<void>;
   private readonly minVisibleNoSourceRunMs: number;
   private readonly running = new Map<string, ActiveWorkspaceContextRun>();
+  private readonly runningAliases = new Map<string, string>();
 
   constructor(opts: WorkspaceContextServiceOptions) {
     this.chatService = opts.chatService;
@@ -113,17 +116,35 @@ export class WorkspaceContextService {
     this.minVisibleNoSourceRunMs = Math.max(0, opts.minVisibleNoSourceRunMs ?? DEFAULT_MIN_VISIBLE_NO_SOURCE_RUN_MS);
   }
 
+  private runningKey(hash: string): string {
+    return this.runningAliases.get(hash) || hash;
+  }
+
+  private async resolveWorkspaceId(hash: string): Promise<string> {
+    return (await this.resolveWorkspaceLocation(hash)).workspaceId;
+  }
+
+  private async resolveWorkspaceLocation(hash: string): Promise<{ workspaceId: string; legacyHash?: string }> {
+    try {
+      const location = await this.chatService.getWorkspaceLocation?.(hash);
+      return location?.workspaceId ? location : { workspaceId: hash };
+    } catch {
+      return { workspaceId: hash };
+    }
+  }
+
   isRunning(hash: string): boolean {
-    return this.running.has(hash);
+    return this.running.has(this.runningKey(hash));
   }
 
   getRunningSource(hash: string): WorkspaceContextRunSource | null {
-    return this.running.get(hash)?.source || this.running.get(hash)?.run?.source || null;
+    const active = this.running.get(this.runningKey(hash));
+    return active?.source || active?.run?.source || null;
   }
 
   async getDisplayState(hash: string): Promise<WorkspaceContextState> {
     const state = await this.getState(hash);
-    const active = this.running.get(hash);
+    const active = this.running.get(this.runningKey(hash));
     if (!active) return state;
     const runningRun = active.run || {
       runId: active.runId,
@@ -145,7 +166,7 @@ export class WorkspaceContextService {
   }
 
   getWorkspaceContextDir(hash: string): string {
-    return path.join(this.chatService.workspacesDir, hash, WORKSPACE_CONTEXT_DIRNAME);
+    return this.chatService.getWorkspaceContextDir(hash);
   }
 
   getInstructionPath(hash: string): string {
@@ -230,19 +251,20 @@ export class WorkspaceContextService {
   }
 
   async stopWorkspace(hash: string): Promise<boolean> {
-    const active = this.running.get(hash);
+    const workspaceId = await this.resolveWorkspaceId(hash);
+    const active = this.running.get(workspaceId);
     if (!active) return false;
     active.abortController.abort();
     if (active.run) {
-      const state = await this.getState(hash);
-      await this.recordRun(hash, {
+      const state = await this.getState(workspaceId);
+      await this.recordRun(workspaceId, {
         ...active.run,
         status: 'stopped',
         completedAt: this.now().toISOString(),
         summary: 'Stopped by user.',
       }, state);
     }
-    await this.emit(hash);
+    await this.emit(workspaceId);
     return true;
   }
 
@@ -276,8 +298,10 @@ export class WorkspaceContextService {
       forceAll?: boolean;
     } = {},
   ): Promise<WorkspaceContextProcessResult> {
-    if (this.running.has(hash)) {
-      return emptyResult(hash, opts.source ?? null, 'already-running');
+    const location = await this.resolveWorkspaceLocation(hash);
+    const workspaceId = location.workspaceId;
+    if (this.running.has(workspaceId)) {
+      return emptyResult(workspaceId, opts.source ?? null, 'already-running');
     }
     const active: ActiveWorkspaceContextRun = {
       abortController: new AbortController(),
@@ -285,15 +309,18 @@ export class WorkspaceContextService {
       runId: `wc-run-${crypto.randomUUID()}`,
       startedAt: this.now().toISOString(),
     };
-    this.running.set(hash, active);
-    await this.emit(hash);
+    const aliases = [hash, location.legacyHash].filter((alias): alias is string => !!alias && alias !== workspaceId);
+    for (const alias of aliases) this.runningAliases.set(alias, workspaceId);
+    this.running.set(workspaceId, active);
+    await this.emit(workspaceId);
     try {
-      const enabled = await this.chatService.getWorkspaceContextEnabled(hash);
-      if (!enabled) return emptyResult(hash, opts.source ?? null, 'disabled');
-      return await this.processWorkspaceInternal(hash, opts, active);
+      const enabled = await this.chatService.getWorkspaceContextEnabled(workspaceId);
+      if (!enabled) return emptyResult(workspaceId, opts.source ?? null, 'disabled');
+      return await this.processWorkspaceInternal(workspaceId, opts, active);
     } finally {
-      this.running.delete(hash);
-      await this.emit(hash);
+      this.running.delete(workspaceId);
+      for (const alias of aliases) this.runningAliases.delete(alias);
+      await this.emit(workspaceId);
     }
   }
 
@@ -518,14 +545,14 @@ export class WorkspaceContextService {
     }
 
     const conversations = (await this.chatService.listConversations({ archived: false }))
-      .filter((conv) => conv.workspaceHash === hash && !conv.archived);
+      .filter((conv) => conv.workspaceId === hash && !conv.archived);
     const since = opts.forceAll ? 0 : source === 'initial_scan' ? 0 : Date.parse(state.lastScanCompletedAt || state.lastCompletedAt || '') || 0;
     const paths: string[] = [];
     for (const ref of conversations) {
       const updatedAt = Date.parse(ref.updatedAt || '');
       if (!opts.forceAll && since > 0 && Number.isFinite(updatedAt) && updatedAt <= since) continue;
       const conv = await this.chatService.getConversation(ref.id);
-      if (!conv || conv.workspaceHash !== hash) continue;
+      if (!conv || conv.workspaceId !== hash) continue;
       const sessions = conv.messages.length > 0
         ? [conv.sessionNumber]
         : [];

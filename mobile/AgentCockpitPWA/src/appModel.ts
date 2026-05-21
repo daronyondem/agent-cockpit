@@ -122,15 +122,15 @@ export function makeConversationArtifactReference(client: AgentCockpitAPI, conve
   };
 }
 
-export function makeWorkspaceFileReference(client: AgentCockpitAPI, workspaceHash: string, path: string): FileReference {
+export function makeWorkspaceFileReference(client: AgentCockpitAPI, workspaceId: string, path: string): FileReference {
   const title = basenameFromPath(path);
   return {
-    id: `workspace:${workspaceHash}:${path}`,
+    id: `workspace:${workspaceId}:${path}`,
     title,
     path,
-    downloadURL: client.workspaceFileURL(workspaceHash, path, 'download'),
+    downloadURL: client.workspaceFileURL(workspaceId, path, 'download'),
     isImage: isImageFileName(title),
-    fetchPreview: () => client.getWorkspaceFilePreview(workspaceHash, path),
+    fetchPreview: () => client.getWorkspaceFilePreview(workspaceId, path),
   };
 }
 
@@ -146,15 +146,15 @@ export function makeConversationWorkspaceFileReference(client: AgentCockpitAPI, 
   };
 }
 
-export function makeExplorerFileReference(client: AgentCockpitAPI, workspaceHash: string, path: string): FileReference {
+export function makeExplorerFileReference(client: AgentCockpitAPI, workspaceId: string, path: string): FileReference {
   const title = basenameFromPath(path);
   return {
-    id: `explorer:${workspaceHash}:${path}`,
+    id: `explorer:${workspaceId}:${path}`,
     title,
     path,
-    downloadURL: client.explorerFileURL(workspaceHash, path, 'download'),
+    downloadURL: client.explorerFileURL(workspaceId, path, 'download'),
     isImage: isImageFileName(title),
-    fetchPreview: () => client.getExplorerPreview(workspaceHash, path),
+    fetchPreview: () => client.getExplorerPreview(workspaceId, path),
   };
 }
 
@@ -171,6 +171,7 @@ export function conversationListItemFromConversation(conversation: Conversation)
     workingDir: conversation.workingDir,
     executionDir: conversation.executionDir,
     checkout: conversation.checkout,
+    workspaceId: conversation.workspaceId,
     workspaceHash: conversation.workspaceHash,
     workspaceKbEnabled: false,
     messageCount: conversation.messages.length,
@@ -277,8 +278,9 @@ export function lastTwoPathComponents(path: string): string {
 export function workspaceOptions(conversations: ConversationListItem[]): Array<{ hash: string; label: string; fullPath: string }> {
   const byHash = new Map<string, { label: string; fullPath: string }>();
   for (const conversation of conversations) {
-    if (!byHash.has(conversation.workspaceHash)) {
-      byHash.set(conversation.workspaceHash, {
+    const workspaceId = conversation.workspaceId || conversation.workspaceHash;
+    if (!byHash.has(workspaceId)) {
+      byHash.set(workspaceId, {
         label: lastTwoPathComponents(conversation.workingDir),
         fullPath: conversation.workingDir,
       });

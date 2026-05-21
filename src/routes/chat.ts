@@ -43,6 +43,7 @@ import { buildMemoryMcpAddendum } from './chat/memoryPrompt';
 import { createStreamRouter } from './chat/streamRoutes';
 import { createUploadRouter } from './chat/uploadRoutes';
 import { createWorkspaceInstructionRouter } from './chat/workspaceInstructionRoutes';
+import { createWorkspaceLocationRouter } from './chat/workspaceLocationRoutes';
 import { createWorktreeIsolationRouter } from './chat/worktreeIsolationRoutes';
 import { clearGoalEvent, formatGoalEventMessage, goalEventDedupeKey, goalEventFromStatus, normalizeGoalSnapshot } from '../services/chat/goalEventMessages';
 
@@ -661,10 +662,10 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
   function hasInFlightTurnForWorkspace(hash: string): boolean {
     for (const convId of activeStreams.keys()) {
-      if (chatService.getWorkspaceHashForConv(convId) === hash) return true;
+      if (chatService.getWorkspaceIdForConv(convId) === hash) return true;
     }
     for (const convId of pendingMessageSends.keys()) {
-      if (chatService.getWorkspaceHashForConv(convId) === hash) return true;
+      if (chatService.getWorkspaceIdForConv(convId) === hash) return true;
     }
     return false;
   }
@@ -818,8 +819,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   function broadcastKbStateUpdate(hash: string, frame: import('../types').KbStateUpdateEvent): void {
     if (!wsFns) return;
     const sent = new Set<string>();
+    const workspaceId = chatService.getWorkspaceIdForRef(hash) || hash;
     wsFns.forEachConnected((convId) => {
-      if (chatService.getWorkspaceHashForConv(convId) !== hash) return;
+      if (chatService.getWorkspaceIdForConv(convId) !== workspaceId) return;
       if (sent.has(convId)) return;
       sent.add(convId);
       wsFns!.send(convId, frame);
@@ -829,12 +831,13 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   function broadcastMemoryUpdate(hash: string, frame: MemoryUpdateEvent): void {
     if (!wsFns) return;
     const sent = new Set<string>();
+    const workspaceId = chatService.getWorkspaceIdForRef(hash) || hash;
     const sourceConversationId = frame.sourceConversationId || null;
     const wantsChatDisplay = frame.displayInChat === undefined
       ? !!sourceConversationId
       : frame.displayInChat === true;
     wsFns.forEachConnected((convId) => {
-      if (chatService.getWorkspaceHashForConv(convId) !== hash) return;
+      if (chatService.getWorkspaceIdForConv(convId) !== workspaceId) return;
       if (sent.has(convId)) return;
       sent.add(convId);
       wsFns!.send(convId, {
@@ -848,8 +851,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   function broadcastMemoryReviewUpdate(hash: string, frame: MemoryReviewUpdateEvent): void {
     if (!wsFns) return;
     const sent = new Set<string>();
+    const workspaceId = chatService.getWorkspaceIdForRef(hash) || hash;
     wsFns.forEachConnected((convId) => {
-      if (chatService.getWorkspaceHashForConv(convId) !== hash) return;
+      if (chatService.getWorkspaceIdForConv(convId) !== workspaceId) return;
       if (sent.has(convId)) return;
       sent.add(convId);
       wsFns!.send(convId, frame);
@@ -859,8 +863,9 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   function broadcastWorkspaceContextUpdate(hash: string, frame: WorkspaceContextUpdateEvent): void {
     if (!wsFns) return;
     const sent = new Set<string>();
+    const workspaceId = chatService.getWorkspaceIdForRef(hash) || hash;
     wsFns.forEachConnected((convId) => {
-      if (chatService.getWorkspaceHashForConv(convId) !== hash) return;
+      if (chatService.getWorkspaceIdForConv(convId) !== workspaceId) return;
       if (sent.has(convId)) return;
       sent.add(convId);
       wsFns!.send(convId, frame);
@@ -1006,6 +1011,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
 
   const sessionFinalizers = new SessionFinalizerQueue({
     workspacesDir: chatService.workspacesDir,
+    resolveWorkspaceStorageKey: (workspaceRef) => chatService.getWorkspaceStorageKey(workspaceRef),
     handleJob: runSessionFinalizerJob,
   });
   void sessionFinalizers.start().catch((err: unknown) => {
@@ -1109,6 +1115,11 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     enqueueWorkspaceContextFinalizer,
   }));
   router.use(createWorkspaceContextRouter({ chatService, workspaceContextService, emitFreshWorkspaceContextUpdate }));
+  router.use(createWorkspaceLocationRouter({
+    chatService,
+    hasInFlightTurnForWorkspace,
+    isWorkspaceOperationRunning: (workspaceId) => workspaceContextService.isRunning(workspaceId),
+  }));
   router.use(createWorktreeIsolationRouter(chatService, {
     hasInFlightTurnForWorkspace,
     clearWsBuffer: (convId) => { if (wsFns) wsFns.clearBuffer(convId); },
@@ -1232,7 +1243,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
         wsFns.startStreamGracePeriod(convId);
       }
 
-      const watchWorkspaceHash = chatService.getWorkspaceHashForConv(convId);
+      const watchWorkspaceHash = chatService.getWorkspaceIdForConv(convId);
       const memoryOnForWatch = watchWorkspaceHash
         ? await chatService.getWorkspaceMemoryEnabled(watchWorkspaceHash)
         : false;
@@ -1318,7 +1329,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     systemPrompt: string;
     mcpServers?: import('../types').McpServerConfig[];
   }> {
-    const wsHash = chatService.getWorkspaceHashForConv(convId);
+    const wsHash = chatService.getWorkspaceIdForConv(convId);
     const memoryEnabled = wsHash
       ? await chatService.getWorkspaceMemoryEnabled(wsHash)
       : false;

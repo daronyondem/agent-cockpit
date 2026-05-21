@@ -417,7 +417,7 @@ describe('frontend routes', () => {
     const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(shellSrc).toContain('MemoryUpdateModal');
-    expect(shellSrc).toContain('onOpenMemoryUpdate(conv.workspaceHash, wsLabel, entry.message.memoryUpdate || null)');
+    expect(shellSrc).toContain('onOpenMemoryUpdate(workspaceRef, wsLabel, entry.message.memoryUpdate || null)');
     expect(shellSrc).toContain('WorkspaceSettingsPage');
     expect(workspaceSettingsSrc).toContain('function MemoryUpdateModal');
     expect(workspaceSettingsSrc).toContain('export function MemoryUpdateModal');
@@ -548,7 +548,7 @@ describe('frontend routes', () => {
     expect(shellSrc).toContain('ComposerWorkspaceContextIcon');
     expect(shellSrc).toContain('initialWorkspaceContextSection');
     expect(shellSrc).toContain("const targetSection = running || failures > 0 ? 'runs' : null");
-    expect(shellSrc).toContain("onOpenWorkspaceSettings(conv.workspaceHash, workspaceLabel || 'workspace', 'workspaceContext', targetSection)");
+    expect(shellSrc).toContain("onOpenWorkspaceSettings(workspaceRef, workspaceLabel || 'workspace', 'workspaceContext', targetSection)");
     expect(shellSrc).toContain('Open context');
     expect(shellSrc).not.toContain('Open map');
     expect(streamStoreSrc).toContain("frame.type === 'workspace_context_update'");
@@ -577,7 +577,7 @@ describe('frontend routes', () => {
     expect(shellSrc).toContain("./screens/memoryReview.jsx");
     expect(shellSrc).toContain('MemoryReviewPage');
     expect(shellSrc).toContain('ComposerMemoryReviewIcon');
-    expect(shellSrc).toContain('onOpenMemoryReview(conv.workspaceHash');
+    expect(shellSrc).toContain('onOpenMemoryReview(workspaceRef');
     expect(shellSrc).not.toContain('Run now');
     expect(reviewSrc).toContain('export function MemoryReviewPage');
     expect(reviewSrc).toContain('MemoryReviewInlineProgress');

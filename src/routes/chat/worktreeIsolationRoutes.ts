@@ -13,14 +13,14 @@ import { isCliProfileResolutionError, param } from './routeUtils';
 type CliRuntime = Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>> | null;
 
 interface WorktreeIsolationRouteOptions {
-  hasInFlightTurnForWorkspace: (workspaceHash: string) => boolean;
+  hasInFlightTurnForWorkspace: (workspaceId: string) => boolean;
   clearWsBuffer: (convId: string) => void;
   backendRegistry: BackendRegistry;
   memoryMcp: MemoryMcpServer;
   kbSearchMcp: KbSearchMcpServer;
-  enqueueSessionSummaryFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, runtime: CliRuntime) => Promise<void>;
-  enqueueMemoryFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, runtime: CliRuntime) => Promise<void>;
-  enqueueWorkspaceContextFinalizer: (workspaceHash: string, convId: string, sessionNumber: number, source: 'session_reset') => Promise<void>;
+  enqueueSessionSummaryFinalizer: (workspaceId: string, convId: string, sessionNumber: number, runtime: CliRuntime) => Promise<void>;
+  enqueueMemoryFinalizer: (workspaceId: string, convId: string, sessionNumber: number, runtime: CliRuntime) => Promise<void>;
+  enqueueWorkspaceContextFinalizer: (workspaceId: string, convId: string, sessionNumber: number, source: 'session_reset') => Promise<void>;
 }
 
 interface WorktreeSessionResetTarget {
@@ -35,8 +35,8 @@ export function createWorktreeIsolationRouter(
 ): express.Router {
   const router = express.Router();
 
-  async function getWorkspaceResetTargets(workspaceHash: string): Promise<WorktreeSessionResetTarget[]> {
-    const status = await chatService.getWorkspaceWorktreeIsolationStatus(workspaceHash);
+  async function getWorkspaceResetTargets(workspaceId: string): Promise<WorktreeSessionResetTarget[]> {
+    const status = await chatService.getWorkspaceWorktreeIsolationStatus(workspaceId);
     const conversations = Array.isArray(status.conversations) ? status.conversations : [];
     const targets: WorktreeSessionResetTarget[] = [];
     for (const row of conversations) {
@@ -54,11 +54,11 @@ export function createWorktreeIsolationRouter(
     return targets;
   }
 
-  async function runSessionResetSideEffects(workspaceHash: string, targets: WorktreeSessionResetTarget[]): Promise<void> {
+  async function runSessionResetSideEffects(workspaceId: string, targets: WorktreeSessionResetTarget[]): Promise<void> {
     for (const target of targets) {
-      await opts.enqueueSessionSummaryFinalizer(workspaceHash, target.convId, target.sessionNumber, target.runtime);
-      await opts.enqueueMemoryFinalizer(workspaceHash, target.convId, target.sessionNumber, target.runtime);
-      await opts.enqueueWorkspaceContextFinalizer(workspaceHash, target.convId, target.sessionNumber, 'session_reset');
+      await opts.enqueueSessionSummaryFinalizer(workspaceId, target.convId, target.sessionNumber, target.runtime);
+      await opts.enqueueMemoryFinalizer(workspaceId, target.convId, target.sessionNumber, target.runtime);
+      await opts.enqueueWorkspaceContextFinalizer(workspaceId, target.convId, target.sessionNumber, 'session_reset');
 
       const adapter = target.runtime ? opts.backendRegistry.get(target.runtime.backendId) : null;
       if (adapter) adapter.onSessionReset(target.convId);
@@ -68,9 +68,9 @@ export function createWorktreeIsolationRouter(
     }
   }
 
-  router.get('/workspaces/:hash/worktree-isolation', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/worktree-isolation', async (req: Request, res: Response) => {
     try {
-      const status = await chatService.getWorkspaceWorktreeIsolationStatus(param(req, 'hash'));
+      const status = await chatService.getWorkspaceWorktreeIsolationStatus(param(req, 'workspaceId'));
       if (!status.available && status.blockers.some((blocker) => blocker.code === 'workspace_not_found')) {
         return res.status(404).json({ error: 'Workspace not found', ...status });
       }
@@ -80,11 +80,14 @@ export function createWorktreeIsolationRouter(
     }
   });
 
-  router.put('/workspaces/:hash/worktree-isolation', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/worktree-isolation', csrfGuard, async (req: Request, res: Response) => {
     try {
       const body = validateSetWorktreeIsolationRequest(req.body);
-      const workspaceHash = param(req, 'hash');
-      if (opts.hasInFlightTurnForWorkspace(workspaceHash)) {
+      const workspaceRef = param(req, 'workspaceId');
+      const location = await chatService.getWorkspaceLocation(workspaceRef);
+      if (!location) return res.status(404).json({ error: 'Workspace not found' });
+      const workspaceId = location.workspaceId;
+      if (opts.hasInFlightTurnForWorkspace(workspaceId)) {
         return res.status(409).json({
           error: 'Cannot change worktree mode while a conversation is running',
           blockers: [{
@@ -93,16 +96,16 @@ export function createWorktreeIsolationRouter(
           }],
         });
       }
-      const beforeStatus = await chatService.getWorkspaceWorktreeIsolationStatus(workspaceHash);
+      const beforeStatus = await chatService.getWorkspaceWorktreeIsolationStatus(workspaceId);
       const resetTargets = beforeStatus.enabled !== body.enabled
-        ? await getWorkspaceResetTargets(workspaceHash)
+        ? await getWorkspaceResetTargets(workspaceId)
         : [];
       for (const target of resetTargets) opts.clearWsBuffer(target.convId);
-      const status = await chatService.setWorkspaceWorktreeIsolation(workspaceHash, body.enabled, {
+      const status = await chatService.setWorkspaceWorktreeIsolation(workspaceId, body.enabled, {
         confirmedSessionReset: body.confirmedSessionReset,
       });
       if (!status) return res.status(404).json({ error: 'Workspace not found' });
-      await runSessionResetSideEffects(workspaceHash, resetTargets);
+      await runSessionResetSideEffects(workspaceId, resetTargets);
       res.json({ ok: true, ...status });
     } catch (err: unknown) {
       if (isContractValidationError(err)) {

@@ -33,9 +33,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
   const { chatService, memoryMcp, broadcastMemoryUpdate } = opts;
   const router = express.Router();
 
-  router.get('/workspaces/:hash/memory', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/memory', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const enabled = await chatService.getWorkspaceMemoryEnabled(hash);
       const snapshot = await chatService.getWorkspaceMemory(hash);
       if (snapshot === null && !enabled) {
@@ -47,9 +47,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.get('/workspaces/:hash/memory/search', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/memory/search', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const query = typeof req.query.query === 'string' ? req.query.query.trim() : '';
       if (!query) return res.status(400).json({ error: 'query is required' });
 
@@ -87,9 +87,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/consolidate/propose', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/consolidate/propose', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const proposal = await memoryMcp.proposeMemoryConsolidation(hash);
       return res.json({ ok: true, proposal });
     } catch (err: unknown) {
@@ -97,9 +97,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/consolidate/draft', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/consolidate/draft', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { action } = validateMemoryConsolidationDraftRequest(req.body);
       const draft = await memoryMcp.draftMemoryConsolidation(hash, { action: action as unknown as MemoryConsolidationAction });
       return res.json({ ok: true, draft });
@@ -109,9 +109,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/consolidate/apply', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/consolidate/apply', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const body = validateMemoryConsolidationApplyRequest(req.body);
       const result = await memoryMcp.applyMemoryConsolidation(hash, {
         summary: body.summary,
@@ -124,9 +124,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/consolidate/drafts/apply', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/consolidate/drafts/apply', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const body = validateMemoryConsolidationDraftApplyRequest(req.body);
       const result = await memoryMcp.applyMemoryConsolidationDraft(hash, {
         summary: body.summary,
@@ -139,9 +139,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.put('/workspaces/:hash/memory/entries/restore', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/memory/entries/restore', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { relPath } = validateMemoryEntryRestoreRequest(req.body);
 
       const restored = await chatService.restoreMemoryEntry(hash, relPath);
@@ -166,10 +166,10 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.put('/workspaces/:hash/memory/enabled', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/memory/enabled', csrfGuard, async (req: Request, res: Response) => {
     try {
       const { enabled } = validateMemoryEnabledRequest(req.body);
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const result = await chatService.setWorkspaceMemoryEnabled(hash, enabled);
       if (result === null) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ enabled: result });
@@ -181,9 +181,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.get('/workspaces/:hash/memory/review-schedule', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/memory/review-schedule', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const schedule = await chatService.getWorkspaceMemoryReviewSchedule(hash);
       const scheduleUpdatedAt = await chatService.getWorkspaceMemoryReviewScheduleUpdatedAt(hash);
       const status = await chatService.getMemoryReviewStatus(hash);
@@ -193,9 +193,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.put('/workspaces/:hash/memory/review-schedule', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/memory/review-schedule', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const body = (req.body || {}) as { schedule?: unknown };
       const result = validateMemoryReviewScheduleConfig(body.schedule || req.body);
       if (result.error || !result.config) return res.status(400).json({ error: result.error || 'Invalid schedule' });
@@ -209,9 +209,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/reviews', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/reviews', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const run = await memoryMcp.startMemoryReviewRun(hash, { source: 'manual', replaceExisting: true });
       const status = await chatService.getMemoryReviewStatus(hash);
       res.status(run.status === 'running' ? 202 : 200).json({ ok: true, run, status });
@@ -220,9 +220,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.get('/workspaces/:hash/memory/reviews', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/memory/reviews', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const pendingOnly = req.query.pending === '1' || req.query.pending === 'true';
       let runs = await chatService.listMemoryReviewRuns(hash);
       if (pendingOnly) {
@@ -235,9 +235,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.get('/workspaces/:hash/memory/reviews/pending', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/memory/reviews/pending', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const runs = (await chatService.listMemoryReviewRuns(hash))
         .filter((run) => run.status === 'running' || run.status === 'pending_review' || run.status === 'failed');
       const status = await chatService.getMemoryReviewStatus(hash);
@@ -247,9 +247,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.get('/workspaces/:hash/memory/reviews/:runId', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/memory/reviews/:runId', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const run = await chatService.getMemoryReviewRun(hash, param(req, 'runId'));
       if (!run) return res.status(404).json({ error: 'Memory Review not found' });
       const status = await chatService.getMemoryReviewStatus(hash);
@@ -259,9 +259,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/reviews/:runId/actions/:itemId/apply', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/reviews/:runId/actions/:itemId/apply', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const run = await memoryMcp.applyMemoryReviewSafeAction(hash, param(req, 'runId'), param(req, 'itemId'));
       const status = await chatService.getMemoryReviewStatus(hash);
       res.json({ ok: true, status, run });
@@ -271,9 +271,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/reviews/:runId/actions/:itemId/discard', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/reviews/:runId/actions/:itemId/discard', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const run = await memoryMcp.discardMemoryReviewItem(hash, param(req, 'runId'), param(req, 'itemId'));
       const status = await chatService.getMemoryReviewStatus(hash);
       res.json({ ok: true, status, run });
@@ -283,9 +283,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/reviews/:runId/drafts/:draftId/apply', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/reviews/:runId/drafts/:draftId/apply', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const body = validateMemoryReviewDraftApplyRequest(req.body);
       const run = await memoryMcp.applyMemoryReviewDraft(
         hash,
@@ -302,9 +302,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/reviews/:runId/drafts/:draftId/discard', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/reviews/:runId/drafts/:draftId/discard', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const run = await memoryMcp.discardMemoryReviewItem(hash, param(req, 'runId'), param(req, 'draftId'));
       const status = await chatService.getMemoryReviewStatus(hash);
       res.json({ ok: true, status, run });
@@ -314,9 +314,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/memory/reviews/:runId/drafts/:draftId/regenerate', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/memory/reviews/:runId/drafts/:draftId/regenerate', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const run = await memoryMcp.regenerateMemoryReviewDraft(hash, param(req, 'runId'), param(req, 'draftId'));
       const status = await chatService.getMemoryReviewStatus(hash);
       res.json({ ok: true, status, run });
@@ -326,9 +326,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.delete('/workspaces/:hash/memory/entries/:relpath(*)', csrfGuard, async (req: Request, res: Response) => {
+  router.delete('/workspaces/:workspaceId/memory/entries/:relpath(*)', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const relPath = decodeURIComponent(param(req, 'relpath'));
       if (!relPath) return res.status(400).json({ error: 'relpath required' });
 
@@ -354,9 +354,9 @@ export function createMemoryRouter(opts: MemoryRoutesOptions): express.Router {
     }
   });
 
-  router.delete('/workspaces/:hash/memory/entries', csrfGuard, async (req: Request, res: Response) => {
+  router.delete('/workspaces/:workspaceId/memory/entries', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const deleted = await chatService.clearWorkspaceMemory(hash);
       const snapshot = await chatService.getWorkspaceMemory(hash);
 

@@ -639,9 +639,17 @@
   /* Per-workspace settings — backs the Workspace Settings page (gear button
      in the sidebar workspace action buttons). Instructions are prepended
      to every new session's system prompt; Memory + KB enable flags gate the
-     respective pipelines for the workspace. All endpoints are scoped by the
-     workspace hash that came off the conversation row. */
+     respective pipelines for the workspace. Endpoints are scoped by the
+     stable workspace reference from the conversation row. */
   const WorkspaceApi = {
+    getLocation: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/location',
+      { cache: 'no-store' },
+    ).then(r => r.json()),
+    updateLocation: (hash, workspacePath) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/location',
+      { method: 'PUT', body: { workspacePath } },
+    ).then(r => r.json()),
     getInstructions: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/instructions'
     ).then(r => r.json()),

@@ -28,6 +28,7 @@ import type {
   ExplorerSaveFileRequest,
 } from '../../../src/contracts/explorer';
 import type { ConversationInputRequest, SendMessageRequest } from '../../../src/contracts/streams';
+import type { WorkspaceLocationResponse } from '../../../src/contracts/workspaces';
 
 type RequestOptions = {
   query?: Record<string, string | undefined>;
@@ -313,6 +314,19 @@ export class AgentCockpitAPI {
     });
   }
 
+  async getWorkspaceLocation(workspaceId: string): Promise<WorkspaceLocationResponse> {
+    return this.request<WorkspaceLocationResponse>('GET', `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/location`, {
+      csrf: true,
+    });
+  }
+
+  async updateWorkspaceLocation(workspaceId: string, workspacePath: string): Promise<WorkspaceLocationResponse> {
+    return this.request<WorkspaceLocationResponse>('PUT', `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/location`, {
+      csrf: true,
+      body: { workspacePath },
+    });
+  }
+
   conversationFileURL(conversationID: string, filename: string, mode?: 'view' | 'download'): string {
     return this.makeURL(`/api/chat/conversations/${encodeURIComponent(conversationID)}/files/${encodeURIComponent(filename)}`, { mode }).toString();
   }
@@ -324,34 +338,34 @@ export class AgentCockpitAPI {
     });
   }
 
-  async getExplorerTree(workspaceHash: string, path = ''): Promise<ExplorerTreeResponse> {
-    return this.request<ExplorerTreeResponse>('GET', `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/tree`, {
+  async getExplorerTree(workspaceId: string, path = ''): Promise<ExplorerTreeResponse> {
+    return this.request<ExplorerTreeResponse>('GET', `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/explorer/tree`, {
       query: { path },
       csrf: true,
     });
   }
 
-  async getExplorerPreview(workspaceHash: string, path: string): Promise<ExplorerPreviewResponse> {
-    const response = await this.request<ExplorerPreviewResponse>('GET', `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/preview`, {
+  async getExplorerPreview(workspaceId: string, path: string): Promise<ExplorerPreviewResponse> {
+    const response = await this.request<ExplorerPreviewResponse>('GET', `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/explorer/preview`, {
       query: { path, mode: 'view' },
       csrf: true,
     });
     return { ...response, path: response.path || path };
   }
 
-  explorerFileURL(workspaceHash: string, path: string, mode: 'raw' | 'download' = 'raw'): string {
-    return this.makeURL(`/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/preview`, {
+  explorerFileURL(workspaceId: string, path: string, mode: 'raw' | 'download' = 'raw'): string {
+    return this.makeURL(`/api/chat/workspaces/${encodeURIComponent(workspaceId)}/explorer/preview`, {
       path,
       mode,
     }).toString();
   }
 
-  workspaceFileURL(workspaceHash: string, path: string, mode?: 'view' | 'download'): string {
-    return this.makeURL(`/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/files`, { path, mode }).toString();
+  workspaceFileURL(workspaceId: string, path: string, mode?: 'view' | 'download'): string {
+    return this.makeURL(`/api/chat/workspaces/${encodeURIComponent(workspaceId)}/files`, { path, mode }).toString();
   }
 
-  async getWorkspaceFilePreview(workspaceHash: string, path: string): Promise<FilePreviewResponse> {
-    const response = await this.request<FilePreviewResponse>('GET', `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/files`, {
+  async getWorkspaceFilePreview(workspaceId: string, path: string): Promise<FilePreviewResponse> {
+    const response = await this.request<FilePreviewResponse>('GET', `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/files`, {
       query: { path, mode: 'view' },
       csrf: true,
     });
@@ -370,55 +384,55 @@ export class AgentCockpitAPI {
     return { ...response, path: response.path || path };
   }
 
-  async createExplorerFolder(workspaceHash: string, parent: string, name: string): Promise<BasicOKResponse & { path?: string; name?: string }> {
+  async createExplorerFolder(workspaceId: string, parent: string, name: string): Promise<BasicOKResponse & { path?: string; name?: string }> {
     const body: ExplorerMkdirRequest = { parent, name };
     return this.request<BasicOKResponse & { path?: string; name?: string }>(
       'POST',
-      `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/mkdir`,
+      `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/explorer/mkdir`,
       { csrf: true, body },
     );
   }
 
-  async createExplorerFile(workspaceHash: string, parent: string, name: string, content = ''): Promise<BasicOKResponse & { path?: string; name?: string }> {
+  async createExplorerFile(workspaceId: string, parent: string, name: string, content = ''): Promise<BasicOKResponse & { path?: string; name?: string }> {
     const body: ExplorerCreateFileRequest = { parent, name, content };
     return this.request<BasicOKResponse & { path?: string; name?: string }>(
       'POST',
-      `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/file`,
+      `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/explorer/file`,
       { csrf: true, body },
     );
   }
 
-  async saveExplorerFile(workspaceHash: string, path: string, content: string): Promise<BasicOKResponse> {
+  async saveExplorerFile(workspaceId: string, path: string, content: string): Promise<BasicOKResponse> {
     const body: ExplorerSaveFileRequest = { path, content };
-    return this.request<BasicOKResponse>('PUT', `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/file`, {
+    return this.request<BasicOKResponse>('PUT', `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/explorer/file`, {
       csrf: true,
       body,
     });
   }
 
-  async renameExplorerEntry(workspaceHash: string, from: string, to: string, overwrite = false): Promise<BasicOKResponse> {
+  async renameExplorerEntry(workspaceId: string, from: string, to: string, overwrite = false): Promise<BasicOKResponse> {
     const body: ExplorerRenameRequest = { from, to, overwrite };
-    return this.request<BasicOKResponse>('PATCH', `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/rename`, {
+    return this.request<BasicOKResponse>('PATCH', `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/explorer/rename`, {
       csrf: true,
       body,
     });
   }
 
-  async deleteExplorerEntry(workspaceHash: string, path: string): Promise<BasicOKResponse> {
-    return this.request<BasicOKResponse>('DELETE', `/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/entry`, {
+  async deleteExplorerEntry(workspaceId: string, path: string): Promise<BasicOKResponse> {
+    return this.request<BasicOKResponse>('DELETE', `/api/chat/workspaces/${encodeURIComponent(workspaceId)}/explorer/entry`, {
       query: { path },
       csrf: true,
     });
   }
 
   async uploadExplorerFile(
-    workspaceHash: string,
+    workspaceId: string,
     targetPath: string,
     file: File,
     overwrite = false,
     options: UploadOptions = {},
   ): Promise<{ name: string; size?: number; overwrote?: boolean }> {
-    const url = this.makeURL(`/api/chat/workspaces/${encodeURIComponent(workspaceHash)}/explorer/upload`, {
+    const url = this.makeURL(`/api/chat/workspaces/${encodeURIComponent(workspaceId)}/explorer/upload`, {
       path: targetPath,
       overwrite: overwrite ? 'true' : undefined,
     });

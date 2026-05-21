@@ -1814,6 +1814,53 @@ describe('POST /rmdir', () => {
   });
 });
 
+// ── Workspace location API ──────────────────────────────────────────────────
+
+describe('Workspace location API', () => {
+  test('returns and updates workspace location by workspace id', async () => {
+    const originalPath = path.join(env.tmpDir, 'workspace-location-original');
+    const movedPath = path.join(env.tmpDir, 'workspace-location-moved');
+    fs.mkdirSync(originalPath, { recursive: true });
+    fs.mkdirSync(movedPath, { recursive: true });
+    const conv = await env.chatService.createConversation('Workspace Location', originalPath);
+
+    const getRes = await env.request('GET', `/api/chat/workspaces/${conv.workspaceId}/location`);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body).toMatchObject({
+      workspaceId: conv.workspaceId,
+      workspacePath: originalPath,
+    });
+
+    const putRes = await env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/location`, {
+      workspacePath: movedPath,
+    });
+    expect(putRes.status).toBe(200);
+    expect(putRes.body).toMatchObject({
+      workspaceId: conv.workspaceId,
+      workspacePath: movedPath,
+      previousPaths: [originalPath],
+    });
+
+    const loaded = await env.chatService.getConversation(conv.id);
+    expect(loaded?.workingDir).toBe(movedPath);
+    expect(loaded?.workspaceId).toBe(conv.workspaceId);
+  });
+
+  test('rejects non-directory workspace locations', async () => {
+    const originalPath = path.join(env.tmpDir, 'workspace-location-original');
+    const filePath = path.join(env.tmpDir, 'not-a-workspace');
+    fs.mkdirSync(originalPath, { recursive: true });
+    fs.writeFileSync(filePath, 'not a directory');
+    const conv = await env.chatService.createConversation('Workspace Location', originalPath);
+
+    const res = await env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/location`, {
+      workspacePath: filePath,
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('not_directory');
+  });
+});
+
 // ── Workspace instructions API ─────────────────────────────────────────────
 
 describe('GET /workspaces/:hash/instructions', () => {

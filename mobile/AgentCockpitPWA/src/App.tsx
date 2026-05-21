@@ -69,6 +69,10 @@ const STREAM_RECONNECT_MAX_MS = 15_000;
 const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
 const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
 
+function workspaceRef(conversation: Pick<Conversation, 'workspaceId' | 'workspaceHash'> | Pick<ConversationListItem, 'workspaceId' | 'workspaceHash'>): string {
+  return conversation.workspaceId || conversation.workspaceHash;
+}
+
 type Screen = 'list' | 'chat';
 type SessionViewerState = { session: SessionHistoryItem; messages: Message[] };
 type MarkdownShareScope = 'all' | 'current';
@@ -318,7 +322,7 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (workspaceFilter !== ALL_WORKSPACES && conversations.every((conversation) => conversation.workspaceHash !== workspaceFilter)) {
+    if (workspaceFilter !== ALL_WORKSPACES && conversations.every((conversation) => workspaceRef(conversation) !== workspaceFilter)) {
       setWorkspaceFilter(ALL_WORKSPACES);
     }
   }, [conversations, workspaceFilter]);
@@ -1635,7 +1639,7 @@ export default function App() {
       return;
     }
     try {
-      const tree = await clientRef.current.getExplorerTree(conversation.workspaceHash, path);
+      const tree = await clientRef.current.getExplorerTree(workspaceRef(conversation), path);
       setExplorerPath(tree.path || '');
       setExplorerParent(tree.parent ?? null);
       setExplorerEntries(tree.entries || []);
@@ -1657,16 +1661,16 @@ export default function App() {
       return;
     }
     if (isImageFileName(entry.name)) {
-      await openFileReference(makeExplorerFileReference(clientRef.current, conversation.workspaceHash, entryPath));
+      await openFileReference(makeExplorerFileReference(clientRef.current, workspaceRef(conversation), entryPath));
       return;
     }
     try {
-      const preview = await clientRef.current.getExplorerPreview(conversation.workspaceHash, entryPath);
+      const preview = await clientRef.current.getExplorerPreview(workspaceRef(conversation), entryPath);
       setExplorerPreview(preview);
       setExplorerEditContent(preview.content);
     } catch (error) {
       if (error instanceof AgentAPIError && (error.status === 413 || error.status === 415)) {
-        await openFileReference(makeExplorerFileReference(clientRef.current, conversation.workspaceHash, entryPath));
+        await openFileReference(makeExplorerFileReference(clientRef.current, workspaceRef(conversation), entryPath));
         return;
       }
       handleError(error);
@@ -1680,7 +1684,7 @@ export default function App() {
       return;
     }
     try {
-      await clientRef.current.createExplorerFolder(conversation.workspaceHash, explorerPath, name.trim());
+      await clientRef.current.createExplorerFolder(workspaceRef(conversation), explorerPath, name.trim());
       await loadExplorer(explorerPath);
     } catch (error) {
       handleError(error);
@@ -1694,10 +1698,10 @@ export default function App() {
       return;
     }
     try {
-      const created = await clientRef.current.createExplorerFile(conversation.workspaceHash, explorerPath, name.trim());
+      const created = await clientRef.current.createExplorerFile(workspaceRef(conversation), explorerPath, name.trim());
       await loadExplorer(explorerPath);
       if (created.path) {
-        const preview = await clientRef.current.getExplorerPreview(conversation.workspaceHash, created.path);
+        const preview = await clientRef.current.getExplorerPreview(workspaceRef(conversation), created.path);
         setExplorerPreview(preview);
         setExplorerEditContent(preview.content);
       }
@@ -1712,8 +1716,8 @@ export default function App() {
       return;
     }
     try {
-      await clientRef.current.saveExplorerFile(conversation.workspaceHash, explorerPreview.path, explorerEditContent);
-      const preview = await clientRef.current.getExplorerPreview(conversation.workspaceHash, explorerPreview.path);
+      await clientRef.current.saveExplorerFile(workspaceRef(conversation), explorerPreview.path, explorerEditContent);
+      const preview = await clientRef.current.getExplorerPreview(workspaceRef(conversation), explorerPreview.path);
       setExplorerPreview(preview);
       setExplorerEditContent(preview.content);
       await loadExplorer(explorerPath);
@@ -1729,11 +1733,11 @@ export default function App() {
       return;
     }
     try {
-      await clientRef.current.renameExplorerEntry(conversation.workspaceHash, fromPath, nextPath.trim());
+      await clientRef.current.renameExplorerEntry(workspaceRef(conversation), fromPath, nextPath.trim());
       await loadExplorer(parentExplorerPath(nextPath.trim()));
     } catch (error) {
       if (error instanceof AgentAPIError && error.status === 409 && window.confirm('Destination exists. Overwrite it?')) {
-        await clientRef.current.renameExplorerEntry(conversation.workspaceHash, fromPath, nextPath.trim(), true);
+        await clientRef.current.renameExplorerEntry(workspaceRef(conversation), fromPath, nextPath.trim(), true);
         await loadExplorer(parentExplorerPath(nextPath.trim()));
         return;
       }
@@ -1747,7 +1751,7 @@ export default function App() {
       return;
     }
     try {
-      await clientRef.current.deleteExplorerEntry(conversation.workspaceHash, path);
+      await clientRef.current.deleteExplorerEntry(workspaceRef(conversation), path);
       await loadExplorer(explorerPath);
     } catch (error) {
       handleError(error);
@@ -1779,7 +1783,7 @@ export default function App() {
       setExplorerUploads((current) => current.map((item) => (item.id === id ? { ...item, status: 'uploading', progress: 0, error: undefined } : item)));
     }
     try {
-      await clientRef.current.uploadExplorerFile(conversation.workspaceHash, explorerPath, file, overwrite, {
+      await clientRef.current.uploadExplorerFile(workspaceRef(conversation), explorerPath, file, overwrite, {
         onProgress: (progress) => setExplorerUploads((current) => current.map((item) => (item.id === id ? { ...item, progress } : item))),
         onXhr: (xhr) => setExplorerUploads((current) => current.map((item) => (item.id === id ? { ...item, xhr } : item))),
       });
@@ -2093,12 +2097,12 @@ export default function App() {
           onDeletePreview={() => (explorerPreview ? void deleteExplorerPath(explorerPreview.path) : undefined)}
           onOpenPreviewFile={() => {
             if (activeConversation && explorerPreview) {
-              void openFileReference(makeExplorerFileReference(clientRef.current, activeConversation.workspaceHash, explorerPreview.path));
+              void openFileReference(makeExplorerFileReference(clientRef.current, workspaceRef(activeConversation), explorerPreview.path));
             }
           }}
           onSharePreviewFile={() => {
             if (activeConversation && explorerPreview) {
-              void shareFileReference(makeExplorerFileReference(clientRef.current, activeConversation.workspaceHash, explorerPreview.path));
+              void shareFileReference(makeExplorerFileReference(clientRef.current, workspaceRef(activeConversation), explorerPreview.path));
             }
           }}
           onCancelUpload={clearOrCancelExplorerUpload}
@@ -2146,14 +2150,14 @@ function ConversationListScreen(props: {
   errorMessage: string | null;
   onRefresh: () => void;
   onToggleArchived: () => void;
-  onWorkspaceFilter: (workspaceHash: string) => void;
+  onWorkspaceFilter: (workspaceId: string) => void;
   onOpenConversation: (id: string) => void;
   onNewConversation: (initialPath?: string) => void;
 }) {
   const workspaces = useMemo(() => workspaceOptions(props.conversations), [props.conversations]);
   const visibleConversations = props.workspaceFilter === ALL_WORKSPACES
     ? props.conversations
-    : props.conversations.filter((conversation) => conversation.workspaceHash === props.workspaceFilter);
+    : props.conversations.filter((conversation) => workspaceRef(conversation) === props.workspaceFilter);
   const selectedWorkspace = props.workspaceFilter === ALL_WORKSPACES
     ? null
     : workspaces.find((workspace) => workspace.hash === props.workspaceFilter) || null;

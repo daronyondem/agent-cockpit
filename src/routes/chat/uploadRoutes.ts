@@ -173,9 +173,9 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
     }
   });
 
-  router.get('/workspaces/:hash/files', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/files', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const filePath = req.query.path as string | undefined;
       const mode = (req.query.mode as string) || 'download';
 

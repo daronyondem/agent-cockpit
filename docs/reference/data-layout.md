@@ -10,7 +10,7 @@ the data directory outside the replaceable app release directory.
 data/
 ├── auth/                  # First-party owner auth state
 ├── chat/
-│   ├── workspaces/{hash}/ # Workspace-scoped storage
+│   ├── workspaces/{storageKey}/ # Workspace-scoped storage
 │   │   ├── index.json
 │   │   ├── {conversationId}/
 │   │   ├── memory/
@@ -27,8 +27,9 @@ data/
 ## Workspace Scope
 
 Conversations, session files, memory, Knowledge Base artifacts, and Workspace
-Context state are scoped by workspace directory. The workspace path is hashed
-before it becomes an on-disk directory name.
+Context state are scoped by stable workspace identity. `data/chat/workspaces.json`
+maps each immutable `workspaceId` to mutable path metadata and to the on-disk
+`storageKey`; legacy workspaces keep their original path hash as the storage key.
 
 ## Production Install Metadata
 

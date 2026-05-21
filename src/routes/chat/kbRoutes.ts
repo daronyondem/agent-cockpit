@@ -91,9 +91,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   //   - folder: virtual folder to scope the raw listing to (default root)
   //   - limit:  page size for the raw listing (default 500)
   //   - offset: page offset for the raw listing (default 0)
-  router.get('/workspaces/:hash/kb', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/kb', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const enabled = await chatService.getWorkspaceKbEnabled(hash);
       const folderParam = typeof req.query.folder === 'string' ? req.query.folder : undefined;
       const limitParam = typeof req.query.limit === 'string' ? Number(req.query.limit) : undefined;
@@ -113,10 +113,10 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.put('/workspaces/:hash/kb/enabled', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/kb/enabled', csrfGuard, async (req: Request, res: Response) => {
     try {
       const { enabled } = validateKbEnabledRequest(req.body);
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const result = await chatService.setWorkspaceKbEnabled(hash, enabled);
       if (result === null) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ enabled: result });
@@ -170,12 +170,12 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   };
 
   router.post(
-    '/workspaces/:hash/kb/raw',
+    '/workspaces/:workspaceId/kb/raw',
     csrfGuard,
     kbUploadMiddleware,
     async (req: Request, res: Response) => {
       try {
-        const hash = param(req, 'hash');
+        const hash = param(req, 'workspaceId');
         const file = (req as unknown as { file?: Express.Multer.File }).file;
         if (!file) return res.status(400).json({ error: 'Missing "file" form field.' });
 
@@ -234,9 +234,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     },
   );
 
-  router.delete('/workspaces/:hash/kb/raw/:rawId', csrfGuard, async (req: Request, res: Response) => {
+  router.delete('/workspaces/:workspaceId/kb/raw/:rawId', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const rawId = param(req, 'rawId');
       // `?folder=...&filename=...` scopes the delete to one location
       // and respects ref-counting (other locations + raw row survive).
@@ -259,9 +259,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/kb/structure/backfill', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/kb/structure/backfill', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const force = Boolean((req.body as { force?: unknown } | undefined)?.force);
       const result = await kbIngestion.backfillDocumentStructures(hash, { force });
       res.json(result);
@@ -273,9 +273,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/kb/raw/:rawId/structure', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/kb/raw/:rawId/structure', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const rawId = param(req, 'rawId');
       if (!/^[a-f0-9]{1,64}$/i.test(rawId)) {
         return res.status(400).json({ error: 'Invalid rawId.' });
@@ -298,10 +298,10 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // files are automatically fed through the digestion CLI as soon as
   // conversion completes. When false, the KB Browser exposes a "Digest
   // All Pending" button instead. The flag lives on the workspace index.
-  router.put('/workspaces/:hash/kb/auto-digest', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/kb/auto-digest', csrfGuard, async (req: Request, res: Response) => {
     try {
       const { autoDigest } = validateKbAutoDigestRequest(req.body);
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const result = await chatService.setWorkspaceKbAutoDigest(hash, autoDigest);
       if (result === null) return res.status(404).json({ error: 'Workspace not found' });
       res.json({ autoDigest: result });
@@ -313,14 +313,14 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.put('/workspaces/:hash/kb/auto-dream', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/kb/auto-dream', csrfGuard, async (req: Request, res: Response) => {
     try {
       const body = req.body as { autoDream?: unknown };
       const validation = validateKbAutoDreamConfig(body.autoDream ?? req.body);
       if (!validation.config) {
         return res.status(400).json({ error: validation.error || 'Invalid autoDream config' });
       }
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const result = await chatService.setWorkspaceKbAutoDream(hash, validation.config);
       if (result === null) return res.status(404).json({ error: 'Workspace not found' });
       broadcastKbStateUpdate(hash, {
@@ -355,9 +355,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     return db;
   }
 
-  router.get('/workspaces/:hash/kb/glossary', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/kb/glossary', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const db = await openEnabledKbDb(hash, res);
       if (!db) return;
       res.json({ glossary: db.listGlossary() });
@@ -366,10 +366,10 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/kb/glossary', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/kb/glossary', csrfGuard, async (req: Request, res: Response) => {
     try {
       const { term, expansion } = validateKbGlossaryTermRequest(req.body);
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const db = await openEnabledKbDb(hash, res);
       if (!db) return;
       const row = db.addGlossaryTerm(term, expansion);
@@ -386,14 +386,14 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.put('/workspaces/:hash/kb/glossary/:id', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/kb/glossary/:id', csrfGuard, async (req: Request, res: Response) => {
     try {
       const id = Number(param(req, 'id'));
       if (!Number.isInteger(id) || id < 1) {
         return res.status(400).json({ error: 'Invalid glossary term id' });
       }
       const { term, expansion } = validateKbGlossaryTermRequest(req.body);
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const db = await openEnabledKbDb(hash, res);
       if (!db) return;
       const row = db.updateGlossaryTerm(id, term, expansion);
@@ -411,13 +411,13 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.delete('/workspaces/:hash/kb/glossary/:id', csrfGuard, async (req: Request, res: Response) => {
+  router.delete('/workspaces/:workspaceId/kb/glossary/:id', csrfGuard, async (req: Request, res: Response) => {
     try {
       const id = Number(param(req, 'id'));
       if (!Number.isInteger(id) || id < 1) {
         return res.status(400).json({ error: 'Invalid glossary term id' });
       }
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const db = await openEnabledKbDb(hash, res);
       if (!db) return;
       if (!db.deleteGlossaryTerm(id)) {
@@ -431,9 +431,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
 
   // ── KB embedding config ─────────────────────────────────────────────────────
 
-  router.get('/workspaces/:hash/kb/embedding-config', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/kb/embedding-config', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const cfg = await chatService.getWorkspaceKbEmbeddingConfig(hash);
       res.json({ embeddingConfig: cfg ?? null });
     } catch (err: unknown) {
@@ -441,10 +441,10 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.put('/workspaces/:hash/kb/embedding-config', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/kb/embedding-config', csrfGuard, async (req: Request, res: Response) => {
     try {
       const { model, ollamaHost, dimensions } = validateKbEmbeddingConfigRequest(req.body);
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const result = await chatService.setWorkspaceKbEmbeddingConfig(hash, {
         model, ollamaHost, dimensions,
       });
@@ -458,9 +458,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.post('/workspaces/:hash/kb/embedding-health', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/kb/embedding-health', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const cfg = await chatService.getWorkspaceKbEmbeddingConfig(hash);
       const result = await checkOllamaHealth(cfg);
       res.json(result);
@@ -474,11 +474,11 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // Fire-and-forget: returns 202 immediately; progress is streamed via
   // `kb_state_update` WS frames. Errors land on the raw row's errorClass.
   router.post(
-    '/workspaces/:hash/kb/raw/:rawId/digest',
+    '/workspaces/:workspaceId/kb/raw/:rawId/digest',
     csrfGuard,
     async (req: Request, res: Response) => {
       try {
-        const hash = param(req, 'hash');
+        const hash = param(req, 'workspaceId');
         const rawId = param(req, 'rawId');
         kbDigestion.enqueueDigest(hash, rawId).catch((err) => {
           log.error('KB digest failed', { rawId, error: err });
@@ -499,9 +499,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // `digestProgress: { done, total, avgMsPerItem, etaMs? }` as the run
   // proceeds (unified across batch, single-file, and auto-digest runs)
   // so the toolbar can render live `N / M — ~X min remaining`.
-  router.post('/workspaces/:hash/kb/digest-all', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/kb/digest-all', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       kbDigestion.enqueueBatchDigest(hash).catch((err) => {
         log.error('KB digest-all failed', { error: err });
       });
@@ -522,9 +522,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // semantics — an entry must carry every tag in the `tags` csv. The
   // response includes a `total` count (pre-pagination) so the UI can
   // render pagination controls.
-  router.get('/workspaces/:hash/kb/entries', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/kb/entries', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const enabled = await chatService.getWorkspaceKbEnabled(hash);
       if (!enabled) return res.json({ entries: [], total: 0 });
       const db = chatService.getKbDb(hash);
@@ -569,9 +569,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
 
   // GET /tags returns every distinct tag in the KB with its entry count,
   // ordered most-used first. Feeds the entries-tab tag picker.
-  router.get('/workspaces/:hash/kb/tags', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/kb/tags', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const enabled = await chatService.getWorkspaceKbEnabled(hash);
       if (!enabled) return res.json({ tags: [] });
       const db = chatService.getKbDb(hash);
@@ -585,9 +585,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // GET /entries/:entryId returns a single entry's metadata + full body
   // read from disk. The body is the rendered `entry.md` (YAML frontmatter
   // + markdown) — the UI strips the frontmatter for preview.
-  router.get('/workspaces/:hash/kb/entries/:entryId', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/kb/entries/:entryId', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const entryId = param(req, 'entryId');
       if (!/^[a-zA-Z0-9_.-]+$/.test(entryId)) {
         return res.status(400).json({ error: 'Invalid entryId.' });
@@ -614,9 +614,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // ── KB folders ──────────────────────────────────────────────────────────────
   // Create a virtual folder. Idempotent — re-creating an existing folder
   // is a no-op and returns 200 with the normalized path.
-  router.post('/workspaces/:hash/kb/folders', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/workspaces/:workspaceId/kb/folders', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { folderPath } = validateKbFolderCreateRequest(req.body);
       const normalized = await kbIngestion.createFolder(hash, folderPath);
       res.json({ folderPath: normalized });
@@ -630,9 +630,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
 
   // Rename a folder subtree in-place. All files under the old path move
   // to the new path via a single raw_locations update (no disk moves).
-  router.put('/workspaces/:hash/kb/folders', csrfGuard, async (req: Request, res: Response) => {
+  router.put('/workspaces/:workspaceId/kb/folders', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const { fromPath, toPath } = validateKbFolderRenameRequest(req.body);
       await kbIngestion.renameFolder(hash, fromPath, toPath);
       res.json({ ok: true });
@@ -647,9 +647,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // Delete a folder subtree. `?cascade=true` removes every location
   // under the subtree (following ref-counted raw delete rules). Without
   // cascade the call errors if the subtree contains any files.
-  router.delete('/workspaces/:hash/kb/folders', csrfGuard, async (req: Request, res: Response) => {
+  router.delete('/workspaces/:workspaceId/kb/folders', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const folderPath = typeof req.query.folder === 'string' ? req.query.folder : undefined;
       if (!folderPath) return res.status(400).json({ error: 'folder query parameter is required.' });
       const cascade = req.query.cascade === 'true' || req.query.cascade === '1';
@@ -662,9 +662,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
     }
   });
 
-  router.get('/workspaces/:hash/kb/raw/:rawId/trace', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/kb/raw/:rawId/trace', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const rawId = param(req, 'rawId');
       if (!/^[a-f0-9]{1,64}$/i.test(rawId)) {
         return res.status(400).json({ error: 'Invalid rawId.' });
@@ -839,9 +839,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // the ingestion path already guarantees this shape, but belt-and-braces
   // here because this endpoint reads from disk and returns whatever it
   // finds under the safely-joined path.
-  router.get('/workspaces/:hash/kb/raw/:rawId', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/kb/raw/:rawId', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const rawId = param(req, 'rawId');
       if (!/^[a-f0-9]{1,64}$/i.test(rawId)) {
         return res.status(400).json({ error: 'Invalid rawId.' });
@@ -870,9 +870,9 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // pages with relative paths like `media/Slide123.jpg` or
   // `slides/slide-001.png`, all rooted at the per-raw converted directory.
   // The frontend rewrites those into URLs that hit this endpoint.
-  router.get('/workspaces/:hash/kb/raw/:rawId/media/:mediapath(*)', async (req: Request, res: Response) => {
+  router.get('/workspaces/:workspaceId/kb/raw/:rawId/media/:mediapath(*)', async (req: Request, res: Response) => {
     try {
-      const hash = param(req, 'hash');
+      const hash = param(req, 'workspaceId');
       const rawId = param(req, 'rawId');
       if (!/^[a-f0-9]{1,64}$/i.test(rawId)) {
         return res.status(400).json({ error: 'Invalid rawId.' });
@@ -905,8 +905,8 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
 
   // Start an incremental dreaming run. Returns 202 immediately; the run
   // progresses in the background with WS frames for progress.
-  router.post('/workspaces/:hash/kb/dream', csrfGuard, async (req: Request, res: Response) => {
-    const hash = param(req, 'hash');
+  router.post('/workspaces/:workspaceId/kb/dream', csrfGuard, async (req: Request, res: Response) => {
+    const hash = param(req, 'workspaceId');
     try {
       if (kbDreaming.isRunning(hash)) {
         res.status(409).json({ error: 'A dreaming run is already in progress.' });
@@ -928,8 +928,8 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   });
 
   // Wipe all synthesis and run a full rebuild.
-  router.post('/workspaces/:hash/kb/redream', csrfGuard, async (req: Request, res: Response) => {
-    const hash = param(req, 'hash');
+  router.post('/workspaces/:workspaceId/kb/redream', csrfGuard, async (req: Request, res: Response) => {
+    const hash = param(req, 'workspaceId');
     try {
       if (kbDreaming.isRunning(hash)) {
         res.status(409).json({ error: 'A dreaming run is already in progress.' });
@@ -952,8 +952,8 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // Cooperatively stop an in-progress dream run. Honored at the next
   // batch/phase boundary; already-committed work is preserved. Returns 404
   // if no run is in progress.
-  router.post('/workspaces/:hash/kb/dream/stop', csrfGuard, async (req: Request, res: Response) => {
-    const hash = param(req, 'hash');
+  router.post('/workspaces/:workspaceId/kb/dream/stop', csrfGuard, async (req: Request, res: Response) => {
+    const hash = param(req, 'workspaceId');
     try {
       if (!kbDreaming.isRunning(hash)) {
         res.status(404).json({ ok: false, error: 'No dreaming run in progress.' });
@@ -967,8 +967,8 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   });
 
   // Synthesis state: topics, connections, status for the KB Browser synthesis tab.
-  router.get('/workspaces/:hash/kb/synthesis', async (req: Request, res: Response) => {
-    const hash = param(req, 'hash');
+  router.get('/workspaces/:workspaceId/kb/synthesis', async (req: Request, res: Response) => {
+    const hash = param(req, 'workspaceId');
     try {
       const db = chatService.getKbDb(hash);
       if (!db) {
@@ -1016,8 +1016,8 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   });
 
   // Single topic detail: prose + entries + connections.
-  router.get('/workspaces/:hash/kb/synthesis/:topicId', async (req: Request, res: Response) => {
-    const hash = param(req, 'hash');
+  router.get('/workspaces/:workspaceId/kb/synthesis/:topicId', async (req: Request, res: Response) => {
+    const hash = param(req, 'workspaceId');
     const topicId = param(req, 'topicId');
     try {
       const db = chatService.getKbDb(hash);
@@ -1065,8 +1065,8 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   // ── KB Reflections ──────────────────────────────────────────────────────
 
   // List all reflections with stale detection.
-  router.get('/workspaces/:hash/kb/reflections', async (req: Request, res: Response) => {
-    const hash = param(req, 'hash');
+  router.get('/workspaces/:workspaceId/kb/reflections', async (req: Request, res: Response) => {
+    const hash = param(req, 'workspaceId');
     try {
       const db = chatService.getKbDb(hash);
       if (!db) {
@@ -1093,8 +1093,8 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
   });
 
   // Single reflection detail: full content + cited entries.
-  router.get('/workspaces/:hash/kb/reflections/:reflectionId', async (req: Request, res: Response) => {
-    const hash = param(req, 'hash');
+  router.get('/workspaces/:workspaceId/kb/reflections/:reflectionId', async (req: Request, res: Response) => {
+    const hash = param(req, 'workspaceId');
     const reflectionId = param(req, 'reflectionId');
     try {
       const db = chatService.getKbDb(hash);

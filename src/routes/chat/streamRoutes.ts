@@ -263,18 +263,18 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
 
     const isNewSession = conv.messages.length === 0;
 
-    const wsHashForSend = chatService.getWorkspaceHashForConv(convId);
-    const memoryEnabledForSend = wsHashForSend
-      ? await chatService.getWorkspaceMemoryEnabled(wsHashForSend)
+    const workspaceIdForSend = chatService.getWorkspaceIdForConv(convId);
+    const memoryEnabledForSend = workspaceIdForSend
+      ? await chatService.getWorkspaceMemoryEnabled(workspaceIdForSend)
       : false;
     // All memory-enabled sessions get the Memory MCP stub so they can
     // search memory and persist notes. Kiro spawns it over ACP's
     // `mcpServers`; Claude Code spawns it via `--mcp-config`.
-    const needsMemoryMcp = memoryEnabledForSend && !!wsHashForSend;
-    const kbEnabledForSend = wsHashForSend
-      ? await chatService.getWorkspaceKbEnabled(wsHashForSend)
+    const needsMemoryMcp = memoryEnabledForSend && !!workspaceIdForSend;
+    const kbEnabledForSend = workspaceIdForSend
+      ? await chatService.getWorkspaceKbEnabled(workspaceIdForSend)
       : false;
-    const needsKbMcp = kbEnabledForSend && !!wsHashForSend;
+    const needsKbMcp = kbEnabledForSend && !!workspaceIdForSend;
     let cliMessage = content.trim();
     if (isNewSession) {
       // Build the user-message prefix: workspace discussion history
@@ -287,10 +287,10 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       const prefixes: string[] = [];
       const ctx = chatService.getWorkspaceDiscussionHistoryPointer(convId);
       if (ctx) prefixes.push(ctx);
-      if (wsHashForSend) {
-        const memPointer = await chatService.getWorkspaceMemoryPointer(wsHashForSend);
+      if (workspaceIdForSend) {
+        const memPointer = await chatService.getWorkspaceMemoryPointer(workspaceIdForSend);
         if (memPointer) prefixes.push(memPointer);
-        const kbPointer = await chatService.getWorkspaceKbPointer(wsHashForSend);
+        const kbPointer = await chatService.getWorkspaceKbPointer(workspaceIdForSend);
         if (kbPointer) prefixes.push(kbPointer);
       }
       if (prefixes.length > 0) {
@@ -304,7 +304,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     if (isNewSession) {
       const settings = await chatService.getSettings();
       const globalPrompt = settings.systemPrompt || '';
-      const wsInstructions = wsHashForSend ? (await chatService.getWorkspaceInstructions(wsHashForSend)) || '' : '';
+      const wsInstructions = workspaceIdForSend ? (await chatService.getWorkspaceInstructions(workspaceIdForSend)) || '' : '';
       // Append an addendum that teaches the CLI to use memory MCP tools
       // for targeted recall and durable writes. Runs for
       // Claude Code too: its native `#` flow covers explicit saves, but
@@ -313,7 +313,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       const memoryMcpAddendum = needsMemoryMcp ? buildMemoryMcpAddendum() : '';
       const kbMcpAddendum = needsKbMcp
         ? (() => {
-            const kbPath = path.resolve(chatService.getKbKnowledgeDir(wsHashForSend!));
+            const kbPath = path.resolve(chatService.getKbKnowledgeDir(workspaceIdForSend!));
             return [
               '# Knowledge Base',
               'You have access to a workspace knowledge base via MCP tools (from the `agent-cockpit-kb-search` server) and the local filesystem.',
@@ -368,13 +368,13 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
     // features are enabled. Both use the same pattern: session-scoped
     // bearer tokens revoked on session reset or conversation delete.
     let mcpServers: McpServerConfig[] | undefined;
-    if (needsMemoryMcp && wsHashForSend) {
-      const issued = memoryMcp.issueMemoryMcpSession(convId, wsHashForSend, { activeChatRuntime: runtime });
+    if (needsMemoryMcp && workspaceIdForSend) {
+      const issued = memoryMcp.issueMemoryMcpSession(convId, workspaceIdForSend, { activeChatRuntime: runtime });
       mcpServers = issued.mcpServers;
       log.debug('Issued memory MCP token', { conversationId: convId, backend: backendId });
     }
-    if (needsKbMcp && wsHashForSend) {
-      const kbIssued = kbSearchMcp.issueKbSearchSession(convId, wsHashForSend);
+    if (needsKbMcp && workspaceIdForSend) {
+      const kbIssued = kbSearchMcp.issueKbSearchSession(convId, workspaceIdForSend);
       mcpServers = [...(mcpServers || []), ...kbIssued.mcpServers];
       log.debug('Issued KB Search MCP token', { conversationId: convId, backend: backendId });
     }

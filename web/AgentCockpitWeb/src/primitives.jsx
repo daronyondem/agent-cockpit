@@ -83,7 +83,7 @@ function workspaceLabelForConv(c){
 }
 
 function workspaceKeyForConv(c){
-  return c.workspaceHash || `path:${c.workingDir || ''}`;
+  return c.workspaceId || c.workspaceHash || `path:${c.workingDir || ''}`;
 }
 
 function buildWorkspaceOptions(convs){
@@ -93,7 +93,7 @@ function buildWorkspaceOptions(convs){
     if (!byKey.has(key)) {
       byKey.set(key, {
         key,
-        hash: c.workspaceHash || '',
+        hash: c.workspaceId || c.workspaceHash,
         label: workspaceLabelForConv(c),
         fullPath: c.workingDir || '',
         kbEnabled: false,
@@ -336,11 +336,12 @@ export function Sidebar({ activeId = null, onSelect = null, onMarkUnread = null,
     ? null
     : workspaceByKey.get(selectedWorkspaceKey) || null;
   const activeConversationWorkspace = React.useMemo(() => {
-    if (!activeConversation || !activeConversation.workspaceHash) return null;
+    if (!activeConversation || !(activeConversation.workspaceId || activeConversation.workspaceHash)) return null;
     const key = workspaceKeyForConv(activeConversation);
+    const workspaceRef = activeConversation.workspaceId || activeConversation.workspaceHash;
     return workspaceByKey.get(key) || {
       key,
-      hash: activeConversation.workspaceHash || '',
+      hash: workspaceRef,
       label: workspaceLabelForConv(activeConversation),
       fullPath: activeConversation.workingDir || '',
       kbEnabled: !!activeConversation.workspaceKbEnabled,

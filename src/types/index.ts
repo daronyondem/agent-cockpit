@@ -335,6 +335,8 @@ export interface ConversationCheckout {
 }
 
 export interface WorkspaceIndex {
+  /** Stable workspace identity. Generated once and preserved across path moves. */
+  workspaceId: string;
   workspacePath: string;
   instructions?: string;
   /**
@@ -403,6 +405,21 @@ export interface WorkspaceIndex {
   conversations: ConversationEntry[];
 }
 
+export interface WorkspaceIdentityRecord {
+  workspaceId: string;
+  storageKey: string;
+  currentPath: string;
+  legacyHash: string;
+  previousPaths: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceIdentityRegistry {
+  schemaVersion: 1;
+  workspaces: WorkspaceIdentityRecord[];
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -415,6 +432,9 @@ export interface Conversation {
   workingDir: string;
   executionDir?: string;
   checkout?: ConversationCheckout;
+  /** Stable workspace identity. Prefer this over legacy workspaceHash for grouping and workspace routes. */
+  workspaceId: string;
+  /** Legacy path-derived storage alias. Retained for migration/debug metadata. */
   workspaceHash: string;
   currentSessionId: string;
   sessionNumber: number;
@@ -528,6 +548,9 @@ export interface ConversationListItem {
   workingDir: string;
   executionDir?: string;
   checkout?: ConversationCheckout;
+  /** Stable workspace identity. Prefer this over legacy workspaceHash for grouping and workspace routes. */
+  workspaceId: string;
+  /** Legacy path-derived storage alias. Retained for migration/debug metadata. */
   workspaceHash: string;
   /** Per-workspace Knowledge Base toggle. Defaults to false for legacy workspaces. */
   workspaceKbEnabled: boolean;
@@ -571,6 +594,7 @@ export interface WorkspaceInstructionPointerResult {
 }
 
 export interface WorkspaceInstructionCompatibilityStatus {
+  workspaceId: string;
   workspaceHash: string;
   workspacePath: string;
   sources: WorkspaceInstructionSourceStatus[];

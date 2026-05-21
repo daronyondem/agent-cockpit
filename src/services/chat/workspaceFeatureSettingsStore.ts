@@ -23,6 +23,7 @@ const WORKSPACE_CONTEXT_EFFORT_LEVELS = new Set<EffortLevel>([
 
 interface WorkspaceFeatureSettingsStoreDeps {
   workspacesDir: string;
+  getWorkspaceDir?(hash: string): string;
   indexLock: { run<T>(key: string, fn: () => Promise<T>): Promise<T> };
   readWorkspaceIndex(hash: string): Promise<WorkspaceIndex | null>;
   writeWorkspaceIndex(hash: string, index: WorkspaceIndex): Promise<void>;
@@ -194,7 +195,8 @@ export class WorkspaceFeatureSettingsStore {
     }
     delete legacy.contextMapEnabled;
     delete legacy.contextMap;
-    await fsp.rm(path.join(this.deps.workspacesDir, hash, 'context-map'), { recursive: true, force: true });
+    const workspaceDir = this.deps.getWorkspaceDir ? this.deps.getWorkspaceDir(hash) : path.join(this.deps.workspacesDir, hash);
+    await fsp.rm(path.join(workspaceDir, 'context-map'), { recursive: true, force: true });
     await this.deps.writeWorkspaceIndex(hash, index);
     return index;
   }
@@ -212,7 +214,7 @@ export class WorkspaceFeatureSettingsStore {
     for (const hash of dirs) {
       if (hash.startsWith('.')) continue;
       const index = await this.readMigratedWorkspaceIndex(hash);
-      if (index && predicate(index)) hashes.push(hash);
+      if (index && predicate(index)) hashes.push(index.workspaceId || hash);
     }
     return hashes;
   }
