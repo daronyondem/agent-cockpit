@@ -28,6 +28,7 @@ function createRepoWithRemote(name: string): string {
   git(env.tmpDir, ['init', '--bare', remote]);
   git(repo, ['remote', 'add', 'origin', remote]);
   git(repo, ['push', '-u', 'origin', 'main']);
+  git(remote, ['symbolic-ref', 'HEAD', 'refs/heads/main']);
   return repo;
 }
 
