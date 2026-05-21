@@ -43,6 +43,7 @@ import { buildMemoryMcpAddendum } from './chat/memoryPrompt';
 import { createStreamRouter } from './chat/streamRoutes';
 import { createUploadRouter } from './chat/uploadRoutes';
 import { createWorkspaceInstructionRouter } from './chat/workspaceInstructionRoutes';
+import { createWorktreeIsolationRouter } from './chat/worktreeIsolationRoutes';
 import { clearGoalEvent, formatGoalEventMessage, goalEventDedupeKey, goalEventFromStatus, normalizeGoalSnapshot } from '../services/chat/goalEventMessages';
 
 const log = logger.child({ module: 'chat-routes' });
@@ -658,6 +659,16 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     return streamSupervisor.hasAnyInFlightTurn();
   }
 
+  function hasInFlightTurnForWorkspace(hash: string): boolean {
+    for (const convId of activeStreams.keys()) {
+      if (chatService.getWorkspaceHashForConv(convId) === hash) return true;
+    }
+    for (const convId of pendingMessageSends.keys()) {
+      if (chatService.getWorkspaceHashForConv(convId) === hash) return true;
+    }
+    return false;
+  }
+
   async function requestPendingAbort(convId: string): Promise<boolean> {
     return streamSupervisor.requestPendingAbort(convId);
   }
@@ -1098,6 +1109,16 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     enqueueWorkspaceContextFinalizer,
   }));
   router.use(createWorkspaceContextRouter({ chatService, workspaceContextService, emitFreshWorkspaceContextUpdate }));
+  router.use(createWorktreeIsolationRouter(chatService, {
+    hasInFlightTurnForWorkspace,
+    clearWsBuffer: (convId) => { if (wsFns) wsFns.clearBuffer(convId); },
+    backendRegistry,
+    memoryMcp,
+    kbSearchMcp,
+    enqueueSessionSummaryFinalizer,
+    enqueueMemoryFinalizer,
+    enqueueWorkspaceContextFinalizer,
+  }));
   router.use(createExplorerRouter(chatService));
   router.use(createGitRouter(chatService));
   router.use(createGoalRouter({
@@ -1215,7 +1236,7 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
       const memoryOnForWatch = watchWorkspaceHash
         ? await chatService.getWorkspaceMemoryEnabled(watchWorkspaceHash)
         : false;
-      const watchWorkspacePath = conv.workingDir || adapter.workingDir || null;
+      const watchWorkspacePath = conv.executionDir || conv.workingDir || adapter.workingDir || null;
       if (memoryOnForWatch && watchWorkspaceHash && watchWorkspacePath) {
         const memDir = adapter.getMemoryDir(watchWorkspacePath, { cliProfile: runtime.profile });
         if (memDir) {

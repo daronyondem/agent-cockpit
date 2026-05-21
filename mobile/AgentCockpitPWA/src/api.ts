@@ -358,6 +358,18 @@ export class AgentCockpitAPI {
     return { ...response, path: response.path || path };
   }
 
+  conversationWorkspaceFileURL(conversationID: string, path: string, mode?: 'view' | 'download'): string {
+    return this.makeURL(`/api/chat/conversations/${encodeURIComponent(conversationID)}/workspace-file`, { path, mode }).toString();
+  }
+
+  async getConversationWorkspaceFilePreview(conversationID: string, path: string): Promise<FilePreviewResponse> {
+    const response = await this.request<FilePreviewResponse>('GET', `/api/chat/conversations/${encodeURIComponent(conversationID)}/workspace-file`, {
+      query: { path, mode: 'view' },
+      csrf: true,
+    });
+    return { ...response, path: response.path || path };
+  }
+
   async createExplorerFolder(workspaceHash: string, parent: string, name: string): Promise<BasicOKResponse & { path?: string; name?: string }> {
     const body: ExplorerMkdirRequest = { parent, name };
     return this.request<BasicOKResponse & { path?: string; name?: string }>(

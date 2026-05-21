@@ -158,7 +158,7 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
         effort: conv.effort || undefined,
         timeoutMs: 90_000,
         allowTools: true,
-        workingDir: conv.workingDir || undefined,
+        workingDir: conv.executionDir || conv.workingDir || undefined,
         cliProfile: runtime.profile,
         serviceTier: conv.serviceTier || undefined,
       });
@@ -188,40 +188,65 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
         return res.status(404).json({ error: 'Workspace not found' });
       }
 
-      const resolved = path.resolve(filePath);
-      const wsRoot = path.resolve(workspacePath);
-      if (!resolved.startsWith(wsRoot + path.sep) && resolved !== wsRoot) {
-        return res.status(403).json({ error: 'Access denied: path is outside workspace' });
+      return serveScopedFile(res, workspacePath, filePath, mode);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.get('/conversations/:id/workspace-file', async (req: Request, res: Response) => {
+    try {
+      const convId = param(req, 'id');
+      const filePath = req.query.path as string | undefined;
+      const mode = (req.query.mode as string) || 'download';
+
+      if (!filePath) {
+        return res.status(400).json({ error: 'path query parameter is required' });
       }
 
-      let stat: fs.Stats;
-      try {
-        stat = fs.statSync(resolved);
-      } catch {
-        return res.status(404).json({ error: 'File not found' });
-      }
-      if (!stat.isFile()) {
-        return res.status(400).json({ error: 'Path is not a file' });
+      const executionDir = await chatService.getConversationExecutionDir(convId);
+      if (!executionDir) {
+        return res.status(404).json({ error: 'Conversation not found' });
       }
 
-      const filename = path.basename(resolved);
-
-      if (mode === 'view') {
-        if (stat.size > 2 * 1024 * 1024) {
-          return res.status(413).json({ error: 'File too large to view (max 2 MB). Use download instead.' });
-        }
-        const content = fs.readFileSync(resolved, 'utf8');
-        const ext = path.extname(filename).replace('.', '');
-        return res.json({ content, filename, language: ext });
-      }
-
-      res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '\\"')}"`);
-      res.setHeader('Content-Type', 'application/octet-stream');
-      fs.createReadStream(resolved).pipe(res);
+      return serveScopedFile(res, executionDir, filePath, mode);
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }
   });
 
   return router;
+}
+
+function serveScopedFile(res: Response, rootPath: string, filePath: string, mode: string) {
+  const resolved = path.resolve(filePath);
+  const root = path.resolve(rootPath);
+  if (!resolved.startsWith(root + path.sep) && resolved !== root) {
+    return res.status(403).json({ error: 'Access denied: path is outside workspace' });
+  }
+
+  let stat: fs.Stats;
+  try {
+    stat = fs.statSync(resolved);
+  } catch {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  if (!stat.isFile()) {
+    return res.status(400).json({ error: 'Path is not a file' });
+  }
+
+  const filename = path.basename(resolved);
+
+  if (mode === 'view') {
+    if (stat.size > 2 * 1024 * 1024) {
+      return res.status(413).json({ error: 'File too large to view (max 2 MB). Use download instead.' });
+    }
+    const content = fs.readFileSync(resolved, 'utf8');
+    const ext = path.extname(filename).replace('.', '');
+    return res.json({ content, filename, path: resolved, language: ext });
+  }
+
+  res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '\\"')}"`);
+  res.setHeader('Content-Type', 'application/octet-stream');
+  return fs.createReadStream(resolved).pipe(res);
 }

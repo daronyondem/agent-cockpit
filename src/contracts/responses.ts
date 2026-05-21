@@ -140,6 +140,8 @@ export interface ConversationListItem {
   effort?: EffortLevel;
   serviceTier?: ServiceTier;
   workingDir: string;
+  executionDir?: string;
+  checkout?: ConversationCheckout;
   workspaceHash: string;
   workspaceKbEnabled: boolean;
   messageCount: number;
@@ -158,6 +160,8 @@ export interface Conversation {
   effort?: EffortLevel;
   serviceTier?: ServiceTier;
   workingDir: string;
+  executionDir?: string;
+  checkout?: ConversationCheckout;
   workspaceHash: string;
   currentSessionId: string;
   sessionNumber: number;
@@ -169,6 +173,17 @@ export interface Conversation {
   externalSessionId?: string;
   messageQueue?: QueuedMessage[];
   archived?: boolean;
+}
+
+export interface ConversationCheckout {
+  mode: 'shared' | 'worktree';
+  repoRoot?: string;
+  worktreeRoot?: string;
+  executionDir?: string;
+  workspaceRelPath?: string;
+  currentBranch?: string;
+  remoteBaseRef?: string;
+  updatedAt?: string;
 }
 
 export interface SessionHistoryItem {

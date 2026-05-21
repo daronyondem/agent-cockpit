@@ -722,6 +722,50 @@ import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goal
     }
   }
 
+  async function refreshLoadedConversations(convIds){
+    const ids = Array.from(new Set((convIds || []).filter(Boolean)));
+    await Promise.all(ids.map(async (convId) => {
+      const s = states.get(convId);
+      if (!s || !s.loaded) return false;
+      try {
+        const data = await fetchConversationTail(convId);
+        const messages = readWindowMessages(data);
+        const messageWindow = normalizeMessageWindow(data, messages);
+        const pinnedMessages = normalizePinnedMessages(data, messages);
+        const persistedStreamError = activeStreamErrorFromMessages(messages);
+        update(convId, cur => ({
+          ...cur,
+          conv: data,
+          messages,
+          messageWindow,
+          pinnedMessages,
+          loadingOlder: false,
+          loadingAround: false,
+          queue: Array.isArray(data.messageQueue) ? data.messageQueue : [],
+          usage: data.sessionUsage || null,
+          streamError: persistedStreamError ? persistedStreamError.message : null,
+          streamErrorSource: persistedStreamError ? persistedStreamError.source : null,
+          streaming: false,
+          streamingMsgId: null,
+          pendingInteraction: null,
+          goal: null,
+          goalMode: false,
+          uiState: persistedStreamError ? 'error' : null,
+          loadError: null,
+          loaded: true,
+        }));
+        if (data && typeof data.title === 'string') {
+          patchConvListItem(convId, { title: data.title });
+        }
+        applyGoalSnapshot(convId, null);
+        return true;
+      } catch (err) {
+        update(convId, { loadError: err.message || String(err) });
+        return false;
+      }
+    }));
+  }
+
   async function refreshGoal(convId){
     const s = states.get(convId);
     if (!s || !AgentApi.conv || !AgentApi.conv.getGoal) return null;
@@ -2783,6 +2827,7 @@ export const StreamStore = {
     getConvList,
     loadConvList,
     refreshConvList,
+    refreshLoadedConversations,
     hydrateActiveStreams,
     patchConvListItem,
     removeConvListItem,

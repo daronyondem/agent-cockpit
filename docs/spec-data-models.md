@@ -35,6 +35,7 @@ agent-cockpit/
 │   │   ├── gitChanges.ts              # Workspace Git status/diff response contracts
 │   │   ├── uploads.ts                 # Attachment/OCR mutation contracts
 │   │   ├── memory.ts                  # Workspace memory enablement/review mutation contracts
+│   │   ├── worktreeIsolation.ts       # Workspace worktree-isolation status/toggle contracts
 │   │   ├── workspaceContext.ts        # Workspace Context settings mutation contracts
 │   │   ├── knowledgeBase.ts           # KB enablement/folder/glossary/embedding mutation contracts
 │   │   ├── settings.ts                # Global settings mutation contract helpers
@@ -49,7 +50,7 @@ agent-cockpit/
 │   │   └── security.ts                 # Helmet CSP configuration
 │   ├── routes/
 │   │   ├── chat.ts                     # Chat API composition root and stream orchestration
-│   │   └── chat/                       # Focused chat route modules: status, CLI profile, conversation, stream, goal, upload, filesystem, instructions, explorer, Git changes, memory, Workspace Context, KB, shared helpers
+│   │   └── chat/                       # Focused chat route modules: status, CLI profile, conversation, stream, goal, upload, filesystem, instructions, explorer, Git changes, worktree isolation, memory, Workspace Context, KB, shared helpers
 │   ├── utils/
 │   │   ├── atomicWrite.ts              # Atomic JSON/file write helper
 │   │   ├── keyedMutex.ts               # FIFO per-key async mutex
@@ -92,6 +93,7 @@ agent-cockpit/
 │       ├── chat/
 │       │   ├── attachments.ts          # Attachment/artifact metadata helpers used by ChatService
 │       │   ├── messageQueueStore.ts    # Private ChatService queue store + legacy queue normalization
+│       │   ├── worktreeIsolationService.ts # Private ChatService Git worktree lifecycle helper
 │       │   └── workspaceInstructionStore.ts # Private ChatService workspace instruction compatibility/pointer store
 │       ├── usagePricing/               # Built-in pricing JSON, validator, estimator, and override store
 │       ├── chatService.ts              # Conversation CRUD, messages, sessions
@@ -122,7 +124,7 @@ agent-cockpit/
     ├── chat/
     │   ├── stream-jobs.json            # Durable active CLI turn registry for server-restart reconciliation
     │   ├── workspaces/{hash}/          # Workspace-based storage (see below)
-    │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled`, `kbEnabled`, and `workspaceContextEnabled` flags)
+    │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled`, `kbEnabled`, `workspaceContextEnabled`, and optional `worktreeIsolation`)
     │   │   ├── session-finalizers.json # Persisted background jobs for reset/archive finalizers
     │   │   ├── memory/                 # Per-workspace memory store (opt-in per workspace)
     │   │   │   ├── snapshot.json       # Merged snapshot: claude captures + notes (parsed metadata + content)
@@ -391,6 +393,16 @@ Together these guarantee that a workspace index always parses on disk and that c
     scanIntervalMinutes?: number,   // Optional workspace scan cadence override, clamped to 1..1440 minutes.
     maintenanceIntervalHours?: number, // Optional workspace maintenance cadence override, clamped to 1..8760 hours.
   } | undefined,
+  worktreeIsolation: {               // Optional per-workspace Git worktree isolation. Absent/disabled for non-Git/shared-folder workspaces.
+    enabled: boolean,                // true means each conversation has a dedicated checkout worktree.
+    repoRoot: string,                // Canonical base checkout Git repository root.
+    workspaceRelPath: string,        // Workspace path relative to repoRoot; empty string for repo-root workspaces.
+    worktreeBaseDir: string,         // Parent directory for Agent Cockpit-created conversation worktrees.
+    remoteName: string,              // Currently "origin".
+    baseBranch: string,              // Currently "main".
+    remoteBaseRef: string,           // Currently "origin/main"; fetched on enable and reset.
+    enabledAt: string                // ISO 8601 timestamp.
+  } | undefined,
   conversations: [{
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
@@ -401,6 +413,16 @@ Together these guarantee that a workspace index always parses on disk and that c
     effort?: string,            // Adaptive reasoning effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'; absent = model default. Supported values are backend/model-specific. Stale unsupported values are reconciled to `high` when available, then the first supported level, or removed when the model has no effort support.
     serviceTier?: string,       // Codex-only service tier override. Current value: 'fast'. Absent = use the selected Codex profile/config default.
     currentSessionId: string,   // UUID of the active CLI session
+    checkout: {                 // Present when a conversation has explicit checkout metadata.
+      mode: 'shared' | 'worktree',
+      repoRoot?: string,        // Git top-level inside the worktree.
+      worktreeRoot?: string,    // Root of the Git worktree checkout.
+      executionDir?: string,    // Directory used as cwd for this conversation's CLI turns and one-shot work.
+      workspaceRelPath?: string,// Workspace subdirectory inside the repo/worktree.
+      currentBranch?: string,   // Current session branch checked out in this worktree.
+      remoteBaseRef?: string,   // Remote base ref used to create/reset the current session branch.
+      updatedAt?: string
+    } | undefined,
     lastActivity: string,       // ISO 8601, updated on every message and on session reset
     lastMessage: string|null,   // First 100 chars of last active-session message content; reset to null when a new session starts
     usage: {                     // Cumulative token/cost tracking (null until first result)
@@ -451,11 +473,22 @@ Together these guarantee that a workspace index always parses on disk and that c
       endedAt: string|null,     // ISO 8601 (null for active session)
       usage: Usage|null,        // Per-session token/cost totals (same shape as conversation usage)
       usageByBackend: { [backendId]: Usage }|null,  // Per-backend usage for this session
-      externalSessionId: string|null  // Backend-managed session ID (e.g. Kiro ACP session ID); null for backends that don't need it
+      externalSessionId: string|null, // Backend-managed session ID (e.g. Kiro ACP session ID); null for backends that don't need it
+      branchName: string|undefined,   // Worktree isolation branch for this session, e.g. ac/<conversation>/session-3.
+      baseRef: string|undefined       // Remote base ref used when this session branch was created.
     }]
   }]
 }
 ```
+
+When `worktreeIsolation.enabled` is true, `workspacePath` remains the canonical
+workspace identity and every conversation still lives in the same
+`workspaces/{hash}/index.json`. `checkout.executionDir` is the runtime cwd for
+that conversation; response contracts expose it as `executionDir` while keeping
+`workingDir` set to the canonical workspace path. Existing clients that group
+by `workspaceHash` or `workingDir` therefore continue to see one workspace,
+while CLI execution, OCR, goal work, delivered-file preview, and
+conversation-scoped Git status/diff read from the isolated checkout.
 
 ## Session Finalizer Store (`workspaces/{hash}/session-finalizers.json`)
 

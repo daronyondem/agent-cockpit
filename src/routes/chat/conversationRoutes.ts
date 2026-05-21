@@ -7,6 +7,7 @@ import type { KbSearchMcpServer } from '../../services/kbSearchMcp';
 import type { MemoryMcpServer } from '../../services/memoryMcp';
 import type { MemoryWatcher } from '../../services/memoryWatcher';
 import { StreamJobSupervisor, type PendingMessageSend } from '../../services/streamJobSupervisor';
+import { isWorktreeIsolationError } from '../../services/chat/worktreeIsolationService';
 import { validateQueueUpdateRequest } from '../../contracts/chat';
 import {
   validateCreateConversationRequest,
@@ -140,6 +141,9 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       const queued = await chatService.getQueue(convId);
       res.json({ queue: queued });
     } catch (err: unknown) {
+      if (isWorktreeIsolationError(err)) {
+        return res.status(err.status).json({ error: err.message, code: err.code, blockers: err.blockers });
+      }
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -267,6 +271,9 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       if (!ok) return res.status(404).json({ error: 'Conversation not found' });
       res.json({ ok: true });
     } catch (err: unknown) {
+      if (isWorktreeIsolationError(err)) {
+        return res.status(err.status).json({ error: err.message, code: err.code, blockers: err.blockers });
+      }
       res.status(500).json({ error: (err as Error).message });
     }
   });
@@ -444,6 +451,9 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
     } catch (err: unknown) {
       if (isCliProfileResolutionError(err)) {
         return res.status(400).json({ error: (err as Error).message });
+      }
+      if (isWorktreeIsolationError(err)) {
+        return res.status(err.status).json({ error: err.message, code: err.code, blockers: err.blockers });
       }
       res.status(500).json({ error: (err as Error).message });
     }

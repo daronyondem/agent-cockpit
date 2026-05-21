@@ -395,6 +395,36 @@ test('load hydrates active Codex goal and notifies sidebar subscribers', async (
   expect(listener).toHaveBeenCalled();
 });
 
+test('refreshLoadedConversations refetches already-loaded reset sessions', async () => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    id: 'c1',
+    title: 'Claude Test',
+    backend: 'claude-code',
+    messages: [{ id: 'm1', role: 'user', content: 'old session' }],
+    messageQueue: [],
+  }));
+  await Store.load('c1');
+  expect(Store.getState('c1').messages).toHaveLength(1);
+
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    id: 'c1',
+    title: 'Claude Test',
+    backend: 'claude-code',
+    messages: [],
+    messageQueue: [],
+  }));
+  await Store.refreshLoadedConversations(['c1']);
+
+  const state = Store.getState('c1');
+  expect(state.conv.title).toBe('Claude Test');
+  expect(state.messages).toEqual([]);
+  expect(state.uiState).toBeNull();
+  expect(api.fetch).toHaveBeenLastCalledWith('conversations/c1');
+});
+
 test('done frame preserves pendingInteraction and sets uiState=awaiting', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;
