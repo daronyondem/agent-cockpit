@@ -9,6 +9,7 @@ const COMPATIBILITY_SOURCE = path.join(ROOT, 'src', 'services', 'backends', 'cla
 const CLAUDE_CODE_NPM_PACKAGE = '@anthropic-ai/claude-code';
 const ISSUE_MARKER_PREFIX = 'agent-cockpit:claude-code-interactive-version';
 const ISSUE_TITLE_PREFIX = 'Support Claude Code Interactive for Claude Code';
+const ISSUE_SEARCH_QUERY = `"${ISSUE_TITLE_PREFIX}" in:title state:open`;
 const EXEC_TIMEOUT_MS = 30_000;
 const MAX_BUFFER = 2 * 1024 * 1024;
 
@@ -88,6 +89,10 @@ function parseIssueVersion(issue) {
   return titleMatch ? titleMatch[1] : null;
 }
 
+function isOpenIssue(issue) {
+  return String(issue?.state || '').toUpperCase() === 'OPEN';
+}
+
 function execFileText(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     execFile(command, args, {
@@ -123,9 +128,9 @@ async function listOpenSupportIssues({ runner = execFileText, root = ROOT, env =
     '--limit',
     '100',
     '--json',
-    'number,title,body,url',
+    'number,title,body,url,state',
     '--search',
-    `"${ISSUE_TITLE_PREFIX}" in:title`,
+    ISSUE_SEARCH_QUERY,
     ...repoArgs(repo),
   ], { cwd: root, env });
 
@@ -136,7 +141,7 @@ async function listOpenSupportIssues({ runner = execFileText, root = ROOT, env =
     throw new Error(`Could not parse gh issue list output: ${err.message}`);
   }
 
-  return issues;
+  return issues.filter((issue) => isOpenIssue(issue) && parseIssueVersion(issue));
 }
 
 function findMatchingIssue(issues, { title, marker }) {
@@ -176,7 +181,7 @@ async function closeSupersededIssues({
 
   const candidates = issues
     .map((issue) => ({ ...issue, version: parseIssueVersion(issue) }))
-    .filter((issue) => issue.number && issue.version && compareSemver(issue.version, latestVersion) < 0)
+    .filter((issue) => isOpenIssue(issue) && issue.number && issue.version && compareSemver(issue.version, latestVersion) < 0)
     .sort((a, b) => compareSemver(a.version, b.version) || a.number - b.number);
 
   const closed = [];
@@ -285,6 +290,7 @@ if (require.main === module) {
 
 module.exports = {
   CLAUDE_CODE_NPM_PACKAGE,
+  ISSUE_SEARCH_QUERY,
   ISSUE_MARKER_PREFIX,
   ISSUE_TITLE_PREFIX,
   buildIssueBody,
@@ -294,6 +300,7 @@ module.exports = {
   compareSemver,
   findExistingIssue,
   findMatchingIssue,
+  isOpenIssue,
   issueMarker,
   latestClaudeCodeVersion,
   listOpenSupportIssues,

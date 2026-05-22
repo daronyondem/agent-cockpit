@@ -150,7 +150,8 @@ tool is unavailable.
 - The Claude Interactive Version GitHub Actions monitor should keep only the
   latest open support-validation issue for a newer Claude Code CLI version. When
   a newer issue exists, lower-version open support-validation issues should be
-  closed with a comment referencing the current issue.
+  closed with a comment referencing the current issue. Closed or unrelated
+  GitHub search results must not receive comments or close attempts.
 - Claude/Codex install/auth flows should promote a created account profile when
   no default exists or when replacing that vendor's server-configured default.
 - Welcome setup auth for Claude/Codex should use the user's normal system CLI

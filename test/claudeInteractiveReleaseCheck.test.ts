@@ -5,6 +5,7 @@ import path from 'path';
 const releaseCheck = require('../scripts/check-claude-interactive-release.js');
 
 type CommandCall = { command: string; args: string[] };
+const ISSUE_LIST_COMMAND = `gh issue list --state open --limit 100 --json number,title,body,url,state --search ${releaseCheck.ISSUE_SEARCH_QUERY} --repo daronyondem/agent-cockpit`;
 
 function makeRoot(testedVersion: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-interactive-release-'));
@@ -65,7 +66,7 @@ describe('Claude Code Interactive release check script', () => {
     const root = makeRoot('2.1.141');
     const { runner, calls } = makeRunner({
       'npm view @anthropic-ai/claude-code version': '2.1.142',
-      'gh issue list --state open --limit 100 --json number,title,body,url --search "Support Claude Code Interactive for Claude Code" in:title --repo daronyondem/agent-cockpit': '[]',
+      [ISSUE_LIST_COMMAND]: '[]',
     });
 
     try {
@@ -110,11 +111,12 @@ describe('Claude Code Interactive release check script', () => {
       number: 42,
       title: 'Support Claude Code Interactive for Claude Code 2.1.142',
       body: releaseCheck.issueMarker('2.1.142'),
+      state: 'OPEN',
       url: 'https://github.com/daronyondem/agent-cockpit/issues/42',
     }];
     const { runner, calls } = makeRunner({
       'npm view @anthropic-ai/claude-code version': '2.1.142',
-      'gh issue list --state open --limit 100 --json number,title,body,url --search "Support Claude Code Interactive for Claude Code" in:title --repo daronyondem/agent-cockpit': JSON.stringify(existing),
+      [ISSUE_LIST_COMMAND]: JSON.stringify(existing),
     });
 
     try {
@@ -143,11 +145,12 @@ describe('Claude Code Interactive release check script', () => {
       number: 41,
       title: 'Support Claude Code Interactive for Claude Code 2.1.141',
       body: releaseCheck.issueMarker('2.1.141'),
+      state: 'OPEN',
       url: 'https://github.com/daronyondem/agent-cockpit/issues/41',
     }];
     const { runner, calls } = makeRunner({
       'npm view @anthropic-ai/claude-code version': '2.1.142',
-      'gh issue list --state open --limit 100 --json number,title,body,url --search "Support Claude Code Interactive for Claude Code" in:title --repo daronyondem/agent-cockpit': JSON.stringify(existing),
+      [ISSUE_LIST_COMMAND]: JSON.stringify(existing),
     });
 
     try {
@@ -195,16 +198,18 @@ describe('Claude Code Interactive release check script', () => {
       number: 41,
       title: 'Support Claude Code Interactive for Claude Code 2.1.141',
       body: releaseCheck.issueMarker('2.1.141'),
+      state: 'OPEN',
       url: 'https://github.com/daronyondem/agent-cockpit/issues/41',
     }, {
       number: 42,
       title: 'Support Claude Code Interactive for Claude Code 2.1.142',
       body: releaseCheck.issueMarker('2.1.142'),
+      state: 'OPEN',
       url: 'https://github.com/daronyondem/agent-cockpit/issues/42',
     }];
     const { runner, calls } = makeRunner({
       'npm view @anthropic-ai/claude-code version': '2.1.142',
-      'gh issue list --state open --limit 100 --json number,title,body,url --search "Support Claude Code Interactive for Claude Code" in:title --repo daronyondem/agent-cockpit': JSON.stringify(existing),
+      [ISSUE_LIST_COMMAND]: JSON.stringify(existing),
     });
 
     try {
@@ -229,6 +234,52 @@ describe('Claude Code Interactive release check script', () => {
       expect(calls.some((call) => call.command === 'gh' && call.args[1] === 'create')).toBe(false);
       const closeCall = calls.find((call) => call.command === 'gh' && call.args[1] === 'close');
       expect(closeCall?.args).toContain('Superseded by #42 for Claude Code 2.1.142.');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('ignores closed and unrelated issues returned by GitHub search', async () => {
+    const root = makeRoot('2.1.141');
+    const existing = [{
+      number: 40,
+      title: 'Support Claude Code Interactive for Claude Code 2.1.140',
+      body: releaseCheck.issueMarker('2.1.140'),
+      state: 'CLOSED',
+      url: 'https://github.com/daronyondem/agent-cockpit/issues/40',
+    }, {
+      number: 41,
+      title: 'Support Claude Code Interactive for Claude Code without a version',
+      body: 'No workflow marker.',
+      state: 'OPEN',
+      url: 'https://github.com/daronyondem/agent-cockpit/issues/41',
+    }, {
+      number: 42,
+      title: 'Support Claude Code Interactive for Claude Code 2.1.142',
+      body: releaseCheck.issueMarker('2.1.142'),
+      state: 'OPEN',
+      url: 'https://github.com/daronyondem/agent-cockpit/issues/42',
+    }];
+    const { runner, calls } = makeRunner({
+      'npm view @anthropic-ai/claude-code version': '2.1.142',
+      [ISSUE_LIST_COMMAND]: JSON.stringify(existing),
+    });
+
+    try {
+      const result = await releaseCheck.checkClaudeInteractiveRelease({
+        root,
+        repo: 'daronyondem/agent-cockpit',
+        runner,
+        log: jest.fn(),
+      });
+
+      expect(result).toMatchObject({
+        status: 'existing',
+        issueNumber: 42,
+        closedIssueNumbers: [],
+      });
+      expect(calls.some((call) => call.command === 'gh' && call.args[1] === 'create')).toBe(false);
+      expect(calls.some((call) => call.command === 'gh' && call.args[1] === 'close')).toBe(false);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
