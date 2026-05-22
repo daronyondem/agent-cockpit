@@ -12,6 +12,7 @@ import type {
   PendingAttachment,
   QueuedMessage,
   ResetSessionResponse,
+  ServiceTier,
   SessionHistoryItem,
   ThreadGoal,
 } from './types';
@@ -178,6 +179,29 @@ export function conversationListItemFromConversation(conversation: Conversation)
     lastMessage: conversation.messages.at(-1)?.content || null,
     usage: conversation.usage || null,
     archived: conversation.archived,
+  };
+}
+
+export type ConversationRuntimeSelection = {
+  backend?: string | null;
+  cliProfileId?: string | null;
+  model?: string | null;
+  effort?: EffortLevel | null;
+  serviceTier?: ServiceTier | 'default' | null;
+};
+
+export function applyConversationRuntimeSelection<T extends Pick<Conversation, 'backend' | 'cliProfileId' | 'model' | 'effort' | 'serviceTier'>>(
+  conversation: T,
+  selection: ConversationRuntimeSelection,
+): T {
+  const backend = selection.backend || conversation.backend;
+  return {
+    ...conversation,
+    backend,
+    cliProfileId: selection.cliProfileId || conversation.cliProfileId,
+    model: selection.model || conversation.model,
+    effort: selection.effort || conversation.effort,
+    serviceTier: backend === 'codex' && selection.serviceTier === 'fast' ? 'fast' : undefined,
   };
 }
 

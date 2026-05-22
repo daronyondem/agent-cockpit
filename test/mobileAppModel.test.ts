@@ -135,6 +135,57 @@ describe('mobile app model helpers', () => {
     expect(model.removeMessagesByID([pendingUser, assistantMessage], ['pending-user-1'])).toEqual([assistantMessage]);
   });
 
+  test('applies selected runtime metadata to optimistic mobile sends', () => {
+    const conversation = {
+      id: 'conv-1',
+      title: 'New Chat',
+      backend: 'codex',
+      cliProfileId: 'profile-codex',
+      model: 'gpt-5.5',
+      effort: 'xhigh',
+      serviceTier: 'fast',
+    };
+
+    expect(model.applyConversationRuntimeSelection(conversation, {
+      backend: 'claude-code',
+      cliProfileId: 'profile-claude',
+      model: 'claude-opus-4-6',
+      effort: 'max',
+      serviceTier: undefined,
+    })).toEqual({
+      ...conversation,
+      backend: 'claude-code',
+      cliProfileId: 'profile-claude',
+      model: 'claude-opus-4-6',
+      effort: 'max',
+      serviceTier: undefined,
+    });
+  });
+
+  test('normalizes Codex service tier when applying mobile runtime metadata', () => {
+    const conversation = {
+      backend: 'codex',
+      cliProfileId: 'profile-codex',
+      model: 'gpt-5.5',
+      effort: 'xhigh',
+      serviceTier: 'fast',
+    };
+
+    expect(model.applyConversationRuntimeSelection(conversation, {
+      backend: 'codex',
+      cliProfileId: 'profile-codex',
+      serviceTier: 'default',
+    })).toEqual({
+      ...conversation,
+      serviceTier: undefined,
+    });
+    expect(model.applyConversationRuntimeSelection(conversation, {
+      backend: 'codex',
+      cliProfileId: 'profile-codex',
+      serviceTier: 'fast',
+    })).toEqual(conversation);
+  });
+
   test('normalizes backend-neutral goal elapsed time, actions, and status labels for mobile UI', () => {
     const activeGoal = {
       backend: 'codex',

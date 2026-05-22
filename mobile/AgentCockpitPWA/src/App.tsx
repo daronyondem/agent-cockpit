@@ -4,6 +4,7 @@ import { marked } from 'marked';
 import { AgentAPIError, AgentCockpitAPI } from './api';
 import {
   ALL_WORKSPACES,
+  applyConversationRuntimeSelection,
   cleanGoalObjectiveText,
   completedAttachmentMetas,
   conversationListItemFromConversation,
@@ -684,13 +685,20 @@ export default function App() {
     }
     const content = wireContent(message);
     const attachmentsSnapshot = pendingAttachments;
+    const runtimeSelection = {
+      backend: selectedBackendID || selectedBackend || conversation.backend || '',
+      cliProfileId: selectedCliProfileId,
+      model: selectedModel,
+      effort: selectedEffort,
+      serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
+    };
     const optimisticID = `${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
     const optimisticUserID = `pending-user-${optimisticID}`;
     const optimisticUserMessage: Message = {
       id: optimisticUserID,
       role: 'user',
       content,
-      backend: selectedBackend || conversation.backend || '',
+      backend: runtimeSelection.backend || '',
       timestamp: new Date().toISOString(),
     };
     try {
@@ -704,7 +712,10 @@ export default function App() {
       setActiveStreamIDs((current) => new Set(current).add(conversation.id));
       setActiveConversation((current) => {
         if (!current || current.id !== conversation.id) return current;
-        const next = { ...current, messages: [...current.messages, optimisticUserMessage] };
+        const next = applyConversationRuntimeSelection(
+          { ...current, messages: [...current.messages, optimisticUserMessage] },
+          runtimeSelection,
+        );
         activeConversationRef.current = next;
         return next;
       });
@@ -716,14 +727,12 @@ export default function App() {
         effort: selectedEffort,
         serviceTier: serviceTierEnabled ? selectedServiceTier : undefined,
       });
-      const responseServiceTier: Conversation['serviceTier'] = selectedServiceTier === 'fast' ? 'fast' : undefined;
       setActiveConversation((current) => {
         if (!current || current.id !== conversation.id) return current;
-        const next = {
-          ...current,
-          serviceTier: responseServiceTier,
-          messages: replaceMessageByID(current.messages, optimisticUserID, response.userMessage),
-        };
+        const next = applyConversationRuntimeSelection(
+          { ...current, messages: replaceMessageByID(current.messages, optimisticUserID, response.userMessage) },
+          runtimeSelection,
+        );
         activeConversationRef.current = next;
         return next;
       });
@@ -737,7 +746,15 @@ export default function App() {
       setPendingAttachments(attachmentsSnapshot);
       setActiveConversation((current) => {
         if (!current || current.id !== conversation.id) return current;
-        const next = { ...current, messages: removeMessagesByID(current.messages, [optimisticUserID]) };
+        const next = {
+          ...current,
+          backend: conversation.backend,
+          cliProfileId: conversation.cliProfileId,
+          model: conversation.model,
+          effort: conversation.effort,
+          serviceTier: conversation.serviceTier,
+          messages: removeMessagesByID(current.messages, [optimisticUserID]),
+        };
         activeConversationRef.current = next;
         return next;
       });
