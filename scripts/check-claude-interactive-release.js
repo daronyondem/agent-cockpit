@@ -75,6 +75,19 @@ function repoArgs(repo) {
   return repo ? ['--repo', repo] : [];
 }
 
+function parseIssueNumberFromUrl(url) {
+  const match = String(url || '').match(/\/issues\/(\d+)(?:$|[/?#])/);
+  return match ? Number(match[1]) : null;
+}
+
+function parseIssueVersion(issue) {
+  const markerMatch = String(issue?.body || '').match(new RegExp(`${ISSUE_MARKER_PREFIX}:(\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?)`));
+  if (markerMatch) return markerMatch[1];
+
+  const titleMatch = String(issue?.title || '').match(new RegExp(`^${ISSUE_TITLE_PREFIX}\\s+(\\d+\\.\\d+\\.\\d+(?:[-+][0-9A-Za-z.-]+)?)$`));
+  return titleMatch ? titleMatch[1] : null;
+}
+
 function execFileText(command, args, options = {}) {
   return new Promise((resolve, reject) => {
     execFile(command, args, {
@@ -101,7 +114,7 @@ async function latestClaudeCodeVersion(runner = execFileText, root = ROOT, env =
   return version;
 }
 
-async function findExistingIssue({ runner = execFileText, root = ROOT, env = process.env, repo, title, marker }) {
+async function listOpenSupportIssues({ runner = execFileText, root = ROOT, env = process.env, repo }) {
   const output = await runner('gh', [
     'issue',
     'list',
@@ -123,7 +136,16 @@ async function findExistingIssue({ runner = execFileText, root = ROOT, env = pro
     throw new Error(`Could not parse gh issue list output: ${err.message}`);
   }
 
+  return issues;
+}
+
+function findMatchingIssue(issues, { title, marker }) {
   return issues.find((issue) => issue.title === title || String(issue.body || '').includes(marker)) || null;
+}
+
+async function findExistingIssue({ runner = execFileText, root = ROOT, env = process.env, repo, title, marker }) {
+  const issues = await listOpenSupportIssues({ runner, root, env, repo });
+  return findMatchingIssue(issues, { title, marker });
 }
 
 async function createIssue({ runner = execFileText, root = ROOT, env = process.env, repo, title, body }) {
@@ -136,6 +158,43 @@ async function createIssue({ runner = execFileText, root = ROOT, env = process.e
     body,
     ...repoArgs(repo),
   ], { cwd: root, env });
+}
+
+async function closeSupersededIssues({
+  runner = execFileText,
+  root = ROOT,
+  env = process.env,
+  repo,
+  issues,
+  latestVersion,
+  latestIssueNumber,
+  latestIssueUrl,
+  log = console.log,
+}) {
+  const reference = latestIssueNumber ? `#${latestIssueNumber}` : latestIssueUrl;
+  if (!reference) return [];
+
+  const candidates = issues
+    .map((issue) => ({ ...issue, version: parseIssueVersion(issue) }))
+    .filter((issue) => issue.number && issue.version && compareSemver(issue.version, latestVersion) < 0)
+    .sort((a, b) => compareSemver(a.version, b.version) || a.number - b.number);
+
+  const closed = [];
+  for (const issue of candidates) {
+    const comment = `Superseded by ${reference} for Claude Code ${latestVersion}.`;
+    await runner('gh', [
+      'issue',
+      'close',
+      String(issue.number),
+      '--comment',
+      comment,
+      ...repoArgs(repo),
+    ], { cwd: root, env });
+    closed.push(issue.number);
+    log(`Closed superseded Claude Code Interactive support issue #${issue.number} for Claude Code ${issue.version}.`);
+  }
+
+  return closed;
 }
 
 async function checkClaudeInteractiveRelease({
@@ -157,22 +216,47 @@ async function checkClaudeInteractiveRelease({
   const title = buildIssueTitle(latestVersion);
   const marker = issueMarker(latestVersion);
   const body = buildIssueBody({ latestVersion, testedVersion });
-  const existing = await findExistingIssue({ runner, root, env, repo, title, marker });
+  const openIssues = await listOpenSupportIssues({ runner, root, env, repo });
+  const existing = findMatchingIssue(openIssues, { title, marker });
 
   if (existing) {
     log(`Open issue already exists for Claude Code ${latestVersion}: #${existing.number}`);
+    const closedIssueNumbers = await closeSupersededIssues({
+      runner,
+      root,
+      env,
+      repo,
+      issues: openIssues.filter((issue) => issue.number !== existing.number),
+      latestVersion,
+      latestIssueNumber: existing.number,
+      latestIssueUrl: existing.url || null,
+      log,
+    });
     return {
       status: 'existing',
       testedVersion,
       latestVersion,
       issueNumber: existing.number,
       issueUrl: existing.url || null,
+      closedIssueNumbers,
     };
   }
 
   const issueUrl = (await createIssue({ runner, root, env, repo, title, body })).trim();
+  const issueNumber = parseIssueNumberFromUrl(issueUrl);
   log(`Created Claude Code Interactive support issue for Claude Code ${latestVersion}: ${issueUrl}`);
-  return { status: 'created', testedVersion, latestVersion, issueUrl };
+  const closedIssueNumbers = await closeSupersededIssues({
+    runner,
+    root,
+    env,
+    repo,
+    issues: openIssues,
+    latestVersion,
+    latestIssueNumber: issueNumber,
+    latestIssueUrl: issueUrl,
+    log,
+  });
+  return { status: 'created', testedVersion, latestVersion, issueNumber, issueUrl, closedIssueNumbers };
 }
 
 function writeGithubOutput(result, outputFile = process.env.GITHUB_OUTPUT) {
@@ -184,6 +268,7 @@ function writeGithubOutput(result, outputFile = process.env.GITHUB_OUTPUT) {
   ];
   if (result.issueNumber) lines.push(`issue_number=${result.issueNumber}`);
   if (result.issueUrl) lines.push(`issue_url=${result.issueUrl}`);
+  if (result.closedIssueNumbers?.length) lines.push(`closed_issue_numbers=${result.closedIssueNumbers.join(',')}`);
   fs.appendFileSync(outputFile, `${lines.join('\n')}\n`);
 }
 
@@ -205,10 +290,15 @@ module.exports = {
   buildIssueBody,
   buildIssueTitle,
   checkClaudeInteractiveRelease,
+  closeSupersededIssues,
   compareSemver,
   findExistingIssue,
+  findMatchingIssue,
   issueMarker,
   latestClaudeCodeVersion,
+  listOpenSupportIssues,
+  parseIssueNumberFromUrl,
+  parseIssueVersion,
   parseVersion,
   readTestedVersion,
 };

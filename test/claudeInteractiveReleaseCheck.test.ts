@@ -86,7 +86,9 @@ describe('Claude Code Interactive release check script', () => {
         status: 'created',
         testedVersion: '2.1.141',
         latestVersion: '2.1.142',
+        issueNumber: 999,
         issueUrl: 'https://github.com/daronyondem/agent-cockpit/issues/999',
+        closedIssueNumbers: [],
       });
 
       const createCall = calls.find((call) => call.command === 'gh' && call.args[1] === 'create');
@@ -129,6 +131,104 @@ describe('Claude Code Interactive release check script', () => {
         issueUrl: 'https://github.com/daronyondem/agent-cockpit/issues/42',
       });
       expect(calls.some((call) => call.command === 'gh' && call.args[1] === 'create')).toBe(false);
+      expect(calls.some((call) => call.command === 'gh' && call.args[1] === 'close')).toBe(false);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('closes older support issues after creating a newer Claude Code issue', async () => {
+    const root = makeRoot('2.1.141');
+    const existing = [{
+      number: 41,
+      title: 'Support Claude Code Interactive for Claude Code 2.1.141',
+      body: releaseCheck.issueMarker('2.1.141'),
+      url: 'https://github.com/daronyondem/agent-cockpit/issues/41',
+    }];
+    const { runner, calls } = makeRunner({
+      'npm view @anthropic-ai/claude-code version': '2.1.142',
+      'gh issue list --state open --limit 100 --json number,title,body,url --search "Support Claude Code Interactive for Claude Code" in:title --repo daronyondem/agent-cockpit': JSON.stringify(existing),
+    });
+
+    try {
+      const result = await releaseCheck.checkClaudeInteractiveRelease({
+        root,
+        repo: 'daronyondem/agent-cockpit',
+        runner: async (command: string, args: string[]) => {
+          if (command === 'gh' && args[0] === 'issue' && args[1] === 'create') {
+            calls.push({ command, args });
+            return 'https://github.com/daronyondem/agent-cockpit/issues/999';
+          }
+          if (command === 'gh' && args[0] === 'issue' && args[1] === 'close') {
+            calls.push({ command, args });
+            return '';
+          }
+          return runner(command, args);
+        },
+        log: jest.fn(),
+      });
+
+      expect(result).toMatchObject({
+        status: 'created',
+        issueNumber: 999,
+        closedIssueNumbers: [41],
+      });
+
+      const closeCall = calls.find((call) => call.command === 'gh' && call.args[1] === 'close');
+      expect(closeCall?.args).toEqual([
+        'issue',
+        'close',
+        '41',
+        '--comment',
+        'Superseded by #999 for Claude Code 2.1.142.',
+        '--repo',
+        'daronyondem/agent-cockpit',
+      ]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('closes older support issues when the latest issue already exists', async () => {
+    const root = makeRoot('2.1.141');
+    const existing = [{
+      number: 41,
+      title: 'Support Claude Code Interactive for Claude Code 2.1.141',
+      body: releaseCheck.issueMarker('2.1.141'),
+      url: 'https://github.com/daronyondem/agent-cockpit/issues/41',
+    }, {
+      number: 42,
+      title: 'Support Claude Code Interactive for Claude Code 2.1.142',
+      body: releaseCheck.issueMarker('2.1.142'),
+      url: 'https://github.com/daronyondem/agent-cockpit/issues/42',
+    }];
+    const { runner, calls } = makeRunner({
+      'npm view @anthropic-ai/claude-code version': '2.1.142',
+      'gh issue list --state open --limit 100 --json number,title,body,url --search "Support Claude Code Interactive for Claude Code" in:title --repo daronyondem/agent-cockpit': JSON.stringify(existing),
+    });
+
+    try {
+      const result = await releaseCheck.checkClaudeInteractiveRelease({
+        root,
+        repo: 'daronyondem/agent-cockpit',
+        runner: async (command: string, args: string[]) => {
+          if (command === 'gh' && args[0] === 'issue' && args[1] === 'close') {
+            calls.push({ command, args });
+            return '';
+          }
+          return runner(command, args);
+        },
+        log: jest.fn(),
+      });
+
+      expect(result).toMatchObject({
+        status: 'existing',
+        issueNumber: 42,
+        closedIssueNumbers: [41],
+      });
+      expect(calls.some((call) => call.command === 'gh' && call.args[1] === 'create')).toBe(false);
+      const closeCall = calls.find((call) => call.command === 'gh' && call.args[1] === 'close');
+      expect(closeCall?.args).toContain('Superseded by #42 for Claude Code 2.1.142.');
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }
