@@ -288,7 +288,7 @@ test.describe('Claude Code Interactive UI', () => {
     await page.getByPlaceholder(/Message Agent Cockpit/).fill([
       'Use Claude Code plan mode before answering.',
       'If the plan tools are deferred, first use ToolSearch with query select:EnterPlanMode,ExitPlanMode.',
-      'Do not write or edit files for this test.',
+      'Do not write or edit workspace files for this test.',
       'Call EnterPlanMode, then immediately call ExitPlanMode.',
       `The ExitPlanMode plan text must include this marker: ${planToken}.`,
       `After approval, reply with exactly this token and no other text: ${finalToken}`,
@@ -392,10 +392,11 @@ test.describe('Claude Code Interactive UI', () => {
     await page.getByPlaceholder(/Message Agent Cockpit/).fill([
       'Use Claude Code plan mode before answering.',
       'If the plan tools are deferred, first use ToolSearch with query select:EnterPlanMode,ExitPlanMode.',
-      'Do not write or edit files for this test.',
-      'Call EnterPlanMode, then immediately call ExitPlanMode.',
+      'Do not write or edit workspace files for this test.',
+      'Call EnterPlanMode, then create only the required Claude plan file if needed and immediately call ExitPlanMode.',
       `The ExitPlanMode plan text must include this marker: ${planToken}.`,
-      'Wait for approval before doing anything else.',
+      'Approval is only available after ExitPlanMode, so do not pause or wait before ExitPlanMode.',
+      'After ExitPlanMode returns the plan for approval, wait for approval before doing anything else.',
     ].join('\n'));
     await page.getByLabel('Send').click();
 
