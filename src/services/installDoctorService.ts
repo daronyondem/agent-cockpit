@@ -7,7 +7,7 @@ import type { InstallStateService } from './installStateService';
 import type { UpdateService } from './updateService';
 import { windowsCliCommandCandidates, windowsCmdCommandLine } from './cliCommandResolver';
 import { ensureWindowsCliToolWrappersForInstall } from './windowsCliToolWrappers';
-import { persistWindowsUserPathEntry } from './windowsUserPath';
+import { persistWindowsUserPathEntry, prependProcessPathEntry } from './windowsUserPath';
 import { detectLibreOffice, resetLibreOfficeDetection, type LibreOfficeStatus } from './knowledgeBase/libreOffice';
 import { detectPandoc, resetPandocDetection, type PandocStatus } from './knowledgeBase/pandoc';
 
@@ -130,6 +130,8 @@ type CommandRunner = (command: string, args: string[], options?: { cwd?: string;
 interface InstallActionDefinition {
   action: InstallDoctorAction;
   command?: string[];
+  name?: string;
+  handler?: () => Promise<CommandResult>;
 }
 
 interface InstallDoctorServiceOptions {
@@ -268,17 +270,19 @@ export class InstallDoctorService {
     if (!definition) {
       return { success: false, steps: [], error: 'Install action not found.' };
     }
-    if (definition.action.kind !== 'command' || !definition.command || definition.command.length === 0) {
+    if (definition.action.kind !== 'command' || ((!definition.command || definition.command.length === 0) && !definition.handler)) {
       return { success: false, action: definition.action, steps: [], error: 'This install action opens a download page instead of running on the server.' };
     }
 
     this.installInProgress.add(actionId);
     const steps = [];
     try {
-      const [command, ...args] = definition.command;
-      const result = await this.installRunner(command, args, { cwd: this.appRoot, timeoutMs: INSTALL_TIMEOUT_MS });
+      const [command, ...args] = definition.command || [];
+      const result = definition.handler
+        ? await definition.handler()
+        : await this.installRunner(command, args, { cwd: this.appRoot, timeoutMs: INSTALL_TIMEOUT_MS });
       const output = commandOutput(result);
-      steps.push({ name: definition.command.join(' '), success: result.ok, output });
+      steps.push({ name: definition.name || definition.command?.join(' ') || definition.action.label, success: result.ok, output });
       if (!result.ok) {
         return {
           success: false,
@@ -415,7 +419,7 @@ export class InstallDoctorService {
   private async checkLibreOffice(homebrewAvailable: boolean): Promise<InstallDoctorCheck> {
     const status = await this.libreOfficeDetector({ refresh: true });
     if (status.available) {
-      return check('libreoffice', 'LibreOffice', 'ok', false, 'LibreOffice is available.', status.binaryPath || undefined);
+      return check('libreoffice', 'LibreOffice', 'ok', false, 'LibreOffice is available.', status.binaryPath || undefined, undefined, this.libreOfficePathActions(status));
     }
     return check('libreoffice', 'LibreOffice', 'warning', false, 'LibreOffice is not installed.', undefined, libreOfficeRemediation(), this.actionsForCheck('libreoffice', homebrewAvailable));
   }
@@ -452,6 +456,7 @@ export class InstallDoctorService {
   private actionsForCheck(checkId: string, homebrewAvailable: boolean, install?: InstallStatus): InstallDoctorAction[] {
     return [...this.actionDefinitions(homebrewAvailable, install).values()]
       .filter((definition) => definition.action.id.startsWith(`${checkId}:`))
+      .filter((definition) => definition.action.id !== 'libreoffice:add-to-path')
       .map((definition) => definition.action)
       .sort((a, b) => {
         if (a.kind === b.kind) return 0;
@@ -476,6 +481,11 @@ export class InstallDoctorService {
       { action: { id: 'kiro-cli:docs', kind: 'link', label: 'Open docs', href: 'https://kiro.dev/docs/cli/installation/' } },
       { action: { id: 'pandoc:official-download', kind: 'link', label: 'Open installer', href: 'https://pandoc.org/installing.html' } },
       { action: { id: 'libreoffice:official-download', kind: 'link', label: 'Open download', href: 'https://www.libreoffice.org/download/download-libreoffice/' } },
+      {
+        action: { id: 'libreoffice:add-to-path', kind: 'command', label: 'Add to PATH', description: 'Adds the detected LibreOffice soffice directory to Agent Cockpit runtime PATH.' },
+        name: 'Add LibreOffice to PATH',
+        handler: () => this.addLibreOfficeToPath(),
+      },
     ];
 
     if (process.platform !== 'win32') {
@@ -502,6 +512,75 @@ export class InstallDoctorService {
   private invalidateDetectionForAction(actionId: string): void {
     if (actionId.startsWith('pandoc:')) this.resetPandocDetector();
     if (actionId.startsWith('libreoffice:')) this.resetLibreOfficeDetector();
+  }
+
+  private libreOfficePathActions(status: LibreOfficeStatus): InstallDoctorAction[] {
+    if (!status.binaryPath) return [];
+    const dir = path.dirname(status.binaryPath);
+    if (pathIncludesDir(dir)) return [];
+    const definition = this.actionDefinitions(false, this.installStateService.getStatus()).get('libreoffice:add-to-path');
+    return definition ? [definition.action] : [];
+  }
+
+  private async addLibreOfficeToPath(): Promise<CommandResult> {
+    const status = await this.libreOfficeDetector({ refresh: true });
+    if (!status.available || !status.binaryPath) {
+      return { ok: false, stdout: '', stderr: '', error: 'LibreOffice is not currently detected.' };
+    }
+    const dir = path.dirname(status.binaryPath);
+    const output = [`Detected LibreOffice at ${status.binaryPath}.`];
+    prependProcessPathEntry(dir);
+    output.push(`Added ${dir} to the current Agent Cockpit PATH.`);
+
+    try {
+      const runtimeOutput = this.persistRuntimePathEntry(dir);
+      if (runtimeOutput) output.push(runtimeOutput);
+    } catch (err: unknown) {
+      return { ok: false, stdout: output.filter(Boolean).join('\n'), stderr: '', error: (err as Error).message || 'Failed to persist Agent Cockpit runtime PATH.' };
+    }
+
+    if (process.platform === 'win32') {
+      const userPath = await persistWindowsUserPathEntry(dir, this.commandRunner);
+      output.push(commandOutput(userPath));
+      if (!userPath.ok) {
+        return { ok: false, stdout: output.filter(Boolean).join('\n'), stderr: userPath.stderr, error: userPath.error || 'Failed to update current user PATH.' };
+      }
+    }
+
+    return { ok: true, stdout: output.filter(Boolean).join('\n'), stderr: '' };
+  }
+
+  private persistRuntimePathEntry(dir: string): string {
+    const outputs: string[] = [];
+    const envPath = path.join(this.appRoot, '.env');
+    if (fs.existsSync(envPath)) {
+      const raw = fs.readFileSync(envPath, 'utf8');
+      const current = readEnvValue(raw, 'PATH') || process.env.PATH || '';
+      const nextPath = prependPathValue(current, dir);
+      const line = `PATH=${dotenvQuote(nextPath)}`;
+      const next = /^PATH=.*$/m.test(raw)
+        ? raw.replace(/^PATH=.*$/m, line)
+        : `${raw.replace(/\s*$/, '')}\n${line}\n`;
+      fs.writeFileSync(envPath, next);
+      outputs.push('Updated .env PATH.');
+    }
+
+    const ecosystemPath = path.join(this.appRoot, 'ecosystem.config.js');
+    if (fs.existsSync(ecosystemPath)) {
+      const source = fs.readFileSync(ecosystemPath, 'utf8');
+      const mod: { exports: unknown } = { exports: {} };
+      new Function('module', 'exports', '__dirname', source)(mod, mod.exports, this.appRoot);
+      const config = mod.exports as { apps?: Array<{ env?: Record<string, unknown> }> };
+      if (!config || !Array.isArray(config.apps) || !config.apps[0]) {
+        throw new Error('Current ecosystem.config.js does not export an app config.');
+      }
+      const env = config.apps[0].env || {};
+      config.apps[0].env = { ...env, PATH: prependPathValue(typeof env.PATH === 'string' ? env.PATH : process.env.PATH || '', dir) };
+      fs.writeFileSync(ecosystemPath, `module.exports = ${JSON.stringify(config, null, 2)};\n`);
+      outputs.push('Updated ecosystem.config.js PATH.');
+    }
+
+    return outputs.length > 0 ? outputs.join('\n') : 'No runtime config files were present; live PATH was updated for this server process.';
   }
 
   private async persistWindowsCliToolsPath(actionId: string): Promise<CommandResult | null> {
@@ -534,4 +613,31 @@ function commandOutput(result: CommandResult): string {
   const parts = [result.stdout, result.stderr, result.error].filter(Boolean);
   const output = parts.join('\n').trim();
   return output.length > 12_000 ? `${output.slice(0, 12_000)}\n...` : output;
+}
+
+function pathIncludesDir(dir: string): boolean {
+  const key = pathPartKey(dir);
+  return (process.env.PATH || '')
+    .split(process.platform === 'win32' ? ';' : path.delimiter)
+    .some(part => pathPartKey(part) === key);
+}
+
+function prependPathValue(current: string, dir: string): string {
+  const delimiter = process.platform === 'win32' ? ';' : path.delimiter;
+  const key = pathPartKey(dir);
+  const parts = current.split(delimiter).filter(Boolean);
+  return [dir, ...parts.filter(part => pathPartKey(part) !== key)].join(delimiter);
+}
+
+function pathPartKey(value: string): string {
+  return value.trim().replace(/[\\/]+$/, '').toLowerCase();
+}
+
+function readEnvValue(raw: string, name: string): string | null {
+  const match = raw.match(new RegExp(`^${name}=(.*)$`, 'm'));
+  return match?.[1]?.trim().replace(/^[`'"]|[`'"]$/g, '') || null;
+}
+
+function dotenvQuote(value: string): string {
+  return JSON.stringify(value);
 }

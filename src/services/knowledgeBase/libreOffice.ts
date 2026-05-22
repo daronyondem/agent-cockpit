@@ -2,13 +2,15 @@
 // Optional dependency used by the Knowledge Base PPTX ingestion path to
 // rasterize slides as PNGs for high-fidelity extraction. When
 // `Settings.knowledgeBase.convertSlidesToImages` is enabled and LibreOffice
-// is present on PATH, the ingestion step shells out to `soffice --headless`
-// to convert the deck to PDF and then rasterizes via unpdf. When
-// LibreOffice is missing but the setting is on, we log a warning once and
-// fall back to text + speaker notes + embedded media only.
+// is present, the ingestion step shells out to `soffice --headless` to convert
+// the deck to PDF and then rasterizes via unpdf. When LibreOffice is missing
+// but the setting is on, we log a warning once and fall back to text + speaker
+// notes + embedded media only.
 //
 // Status checks can force a fresh probe so users who install LibreOffice after
 // startup can refresh the UI without restarting Agent Cockpit.
+
+import fs from 'fs';
 
 import { resolveCommandOnPath, windowsPath } from './externalToolDetection';
 
@@ -17,7 +19,7 @@ export interface LibreOfficeDetectionOptions {
 }
 
 export interface LibreOfficeStatus {
-  /** True iff `which soffice` (or equivalent) succeeded. */
+  /** True iff `soffice` was found on PATH or at a platform install location. */
   available: boolean;
   /** Absolute path to the detected binary, or null. */
   binaryPath: string | null;
@@ -29,7 +31,8 @@ let cached: LibreOfficeStatus | null = null;
 
 /**
  * Resolve the `soffice` binary on PATH using the platform's "where is
- * this command" shell built-in. Returns `null` if missing.
+ * this command" shell built-in, then known platform install locations.
+ * Returns `null` if missing.
  *
  * We deliberately use `which`/`where` rather than trying to invoke
  * `soffice --version` to keep startup fast and side-effect-free: the
@@ -37,7 +40,18 @@ let cached: LibreOfficeStatus | null = null;
  * is noisy and slow.
  */
 async function whichSoffice(): Promise<string | null> {
-  return resolveCommandOnPath('soffice', windowsLibreOfficeFallbacks());
+  const pathMatch = await resolveCommandOnPath('soffice', windowsLibreOfficeFallbacks());
+  if (pathMatch) return pathMatch;
+  if (process.platform !== 'darwin') return null;
+  return macLibreOfficeFallbacks().find(candidate => fs.existsSync(candidate)) || null;
+}
+
+function macLibreOfficeFallbacks(): string[] {
+  return [
+    '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+    ...(process.env.HOME ? [`${process.env.HOME}/Applications/LibreOffice.app/Contents/MacOS/soffice`] : []),
+    '/System/Applications/LibreOffice.app/Contents/MacOS/soffice',
+  ];
 }
 
 function windowsLibreOfficeFallbacks(): string[] {

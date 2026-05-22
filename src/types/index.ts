@@ -714,9 +714,9 @@ export interface Settings {
      * When true, PPTX ingestion shells out to LibreOffice to render each
      * slide as a PNG (better fidelity for decks that rely on visual
      * layout). When false, only extracted text, speaker notes, and
-     * embedded media are captured. Requires LibreOffice on PATH; if
-     * missing, a warning is logged and the pipeline falls back to
-     * text-only.
+     * embedded media are captured. Requires a detectable LibreOffice install
+     * (`soffice` on PATH or a standard platform install location); if missing,
+     * a warning is logged and the pipeline falls back to text-only.
      */
     convertSlidesToImages?: boolean;
     /**
