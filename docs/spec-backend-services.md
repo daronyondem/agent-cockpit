@@ -1404,13 +1404,15 @@ update-channel check to warning while still returning inferred install metadata.
 `overallStatus` is `error` when any required check errors, `warning` when any
 check warns/errors but required checks are usable, and `ok` otherwise.
 
-Missing optional dependency checks can also include install actions. Command
-actions are fixed server-side allowlist entries; the browser receives the
-command array for transparency but can only execute it by POSTing the action id
-to `/api/chat/install/actions/:id/run`. The service never accepts arbitrary
-command text from the browser, refuses duplicate action runs, and refuses all
-install commands while any conversation turn is active or pending. Supported
-command actions are:
+Optional dependency checks can also include install actions, including follow-up
+actions on an `ok` check when the detected tool would benefit from runtime
+configuration. Command actions are fixed server-side allowlist entries; the
+browser receives the command array for transparency when an external command is
+run, but can only execute an action by POSTing the action id to
+`/api/chat/install/actions/:id/run`. The service never accepts arbitrary command
+text from the browser, refuses duplicate action runs, and refuses all install
+commands while any conversation turn is active or pending. Supported command
+actions are:
 
 - `claude-cli:npm-install` -> `npm i -g @anthropic-ai/claude-code@latest`
   (Windows adds `--prefix <installDir>\cli-tools` and uses the installer
@@ -1421,6 +1423,12 @@ command actions are:
 - `kiro-cli:official-install` -> `sh -c "curl -fsSL https://cli.kiro.dev/install | bash"`, exposed only outside Windows
 - `pandoc:brew-install` -> `brew install pandoc`, exposed only when Homebrew is detected
 - `libreoffice:brew-install` -> `brew install --cask libreoffice`, exposed only when Homebrew is detected
+- `libreoffice:add-to-path` -> internal action exposed only when LibreOffice is
+  detected but its `soffice` directory is not already on the current Agent
+  Cockpit `PATH`; it prepends that directory to the live server process `PATH`,
+  persists the updated value into `.env` and `ecosystem.config.js` when those
+  runtime files exist so PM2 restarts inherit it, and on Windows also persists
+  the directory to the current user's `Path`.
 
 Link actions open official documentation/download pages and are not runnable on
 the server. Pandoc and LibreOffice always expose official download link actions
@@ -1428,7 +1436,9 @@ when missing so fresh Macs without Homebrew still have a first-class path.
 Successful command actions return the captured step output and a refreshed
 install-doctor payload. Pandoc/LibreOffice doctor checks force fresh binary
 detection every time, so official installer link actions can be followed by the
-Welcome screen's Refresh button without requiring a server restart.
+Welcome screen's Refresh button without requiring a server restart. LibreOffice
+detection checks `soffice` on PATH, common Windows install locations, and the
+standard macOS app bundle locations under `/Applications` and `~/Applications`.
 
 ## 4.3.3 WebBuildService
 

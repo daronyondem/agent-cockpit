@@ -1017,7 +1017,7 @@ function WelcomeDoctorLine({
   onStartCliAuth,
   onCancelCliAuth,
 }){
-  const actions = item.status === 'ok' || !Array.isArray(item.installActions) ? [] : item.installActions;
+  const actions = Array.isArray(item.installActions) ? item.installActions : [];
   const results = Object.entries(installResults || {})
     .filter(([id, result]) => Boolean(result) && id.startsWith(item.id + ':'))
     .map(([id, result]) => ({ id, result }));

@@ -226,6 +226,54 @@ describe('InstallDoctorService', () => {
     expect(after.checks.find(item => item.id === 'libreoffice')).toEqual(expect.objectContaining({ status: 'ok', detail: '/usr/local/bin/soffice' }));
   });
 
+  test('offers and runs a LibreOffice PATH action when detected outside PATH', async () => {
+    const resetPlatform = mockProcessPlatform('darwin');
+    const root = makeRoot();
+    roots.push(root);
+    const originalPath = process.env.PATH;
+    const libreOfficeDir = path.join(root, 'LibreOffice.app', 'Contents', 'MacOS');
+    const libreOfficeBinary = path.join(libreOfficeDir, 'soffice');
+    fs.mkdirSync(libreOfficeDir, { recursive: true });
+    fs.writeFileSync(path.join(root, '.env'), 'PORT=3334\nPATH="/usr/bin:/bin"\n');
+    fs.writeFileSync(path.join(root, 'ecosystem.config.js'), 'module.exports = { apps: [{ name: "agent-cockpit", env: { PATH: "/usr/bin:/bin" } }] };\n');
+    process.env.PATH = '/usr/bin:/bin';
+    try {
+      const service = new InstallDoctorService({
+        appRoot: root,
+        dataRoot: path.join(root, 'data'),
+        installStateService: makeInstallState(root),
+        commandRunner: async () => ({ ok: true, stdout: '1.0.0', stderr: '' }),
+        detectHomebrew: async () => false,
+        detectPandoc: async () => ({ available: true, binaryPath: '/usr/local/bin/pandoc', version: '3.1.1', checkedAt: '2026-05-12T00:00:00.000Z' }),
+        detectLibreOffice: async () => ({ available: true, binaryPath: libreOfficeBinary, checkedAt: '2026-05-12T00:00:00.000Z' }),
+      });
+
+      const before = await service.getStatus();
+      const libreOffice = before.checks.find(item => item.id === 'libreoffice');
+      expect(libreOffice).toEqual(expect.objectContaining({ status: 'ok', detail: libreOfficeBinary }));
+      expect(libreOffice?.installActions).toEqual([
+        expect.objectContaining({ id: 'libreoffice:add-to-path', kind: 'command', label: 'Add to PATH' }),
+      ]);
+
+      const result = await service.runInstallAction('libreoffice:add-to-path');
+
+      expect(result.success).toBe(true);
+      expect(result.steps[0]).toEqual(expect.objectContaining({
+        name: 'Add LibreOffice to PATH',
+        success: true,
+        output: expect.stringContaining('Updated ecosystem.config.js PATH.'),
+      }));
+      expect(process.env.PATH?.split(':')[0]).toBe(libreOfficeDir);
+      expect(fs.readFileSync(path.join(root, '.env'), 'utf8')).toContain(`PATH="${libreOfficeDir}:/usr/bin:/bin"`);
+      const ecosystemSource = fs.readFileSync(path.join(root, 'ecosystem.config.js'), 'utf8');
+      expect(ecosystemSource).toContain(JSON.stringify(`${libreOfficeDir}:/usr/bin:/bin`));
+      expect(result.doctor?.checks.find(item => item.id === 'libreoffice')).toEqual(expect.objectContaining({ status: 'ok' }));
+    } finally {
+      process.env.PATH = originalPath;
+      resetPlatform();
+    }
+  });
+
   test('rejects links and active-stream installs', async () => {
     const root = makeRoot();
     roots.push(root);

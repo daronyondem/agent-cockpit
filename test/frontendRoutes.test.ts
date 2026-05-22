@@ -184,6 +184,7 @@ describe('frontend routes', () => {
     expect(shellSrc).toContain("confirmLabel: 'Open CLI Profiles'");
     expect(shellSrc).toContain('Install only the backend CLIs you plan to use.');
     expect(shellSrc).toContain('item.installActions');
+    expect(shellSrc).toContain("const actions = Array.isArray(item.installActions) ? item.installActions : []");
     expect(shellSrc).toContain('welcome-install-actions');
     expect(shellSrc).toContain('welcome-install-result');
     expect(shellSrc).toContain('welcome-cli-auth');
