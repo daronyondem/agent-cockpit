@@ -121,39 +121,22 @@
     return res;
   }
 
-  async function chatUpload(path, form, opts){
+  async function chatUploadChunk(path, body, opts){
     opts = opts || {};
     if (!state.csrfToken) await fetchCsrfToken();
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
-      let uploadFinished = false;
-      const markUploadFinished = () => {
-        if (uploadFinished) return;
-        uploadFinished = true;
-        if (typeof opts.onUploadComplete === 'function') opts.onUploadComplete();
-      };
-      xhr.open(opts.method || 'POST', chatUrl(path), true);
+      xhr.open(opts.method || 'PUT', chatUrl(path), true);
       xhr.withCredentials = true;
       if (state.csrfToken) xhr.setRequestHeader('x-csrf-token', state.csrfToken);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
       xhr.upload.onprogress = (event) => {
         if (typeof opts.onProgress !== 'function') return;
-        const fallbackTotal = Number(opts.totalBytes) || 0;
-        const total = event.lengthComputable ? event.total : fallbackTotal;
-        const rawPercent = total > 0 && event.loaded > 0
-          ? Math.max(1, Math.min(99, Math.round((event.loaded / total) * 100)))
-          : null;
-        const percent = rawPercent && rawPercent > 1 ? rawPercent : null;
         opts.onProgress({
           loaded: event.loaded,
-          total,
-          percent,
-          computable: percent != null,
+          total: event.lengthComputable ? event.total : null,
         });
       };
-      xhr.upload.onload = () => {
-        markUploadFinished();
-      };
-      xhr.upload.onloadend = () => markUploadFinished();
       xhr.onload = () => {
         let body = null;
         try {
@@ -179,7 +162,7 @@
       };
       xhr.onerror = () => reject(new Error('Upload failed'));
       xhr.onabort = () => reject(new Error('Upload cancelled'));
-      xhr.send(form);
+      xhr.send(body);
     });
   }
 
@@ -940,15 +923,44 @@
       blob: await r.blob(),
       filename: filenameFromContentDisposition(r.headers.get('content-disposition'), 'agent-cockpit-export.acexport'),
     })),
-    previewMigrationImport: (file, options = {}) => {
-      const form = new FormData();
-      form.append('bundle', file);
-      return chatUpload('migration/import/preview', form, {
+    previewMigrationImport: async (file, options = {}) => {
+      const total = file && Number(file.size) || 0;
+      const started = await chatFetch('migration/import/uploads/start', {
         method: 'POST',
-        totalBytes: file && file.size,
-        onProgress: options.onProgress,
-        onUploadComplete: options.onUploadComplete,
-      });
+        body: { filename: file && file.name, size: total },
+      }).then(r => r.json());
+      const uploadId = started.uploadId;
+      const chunkSize = Number(started.chunkSize) || (512 * 1024);
+      let uploaded = 0;
+      try {
+        while (uploaded < total) {
+          const end = Math.min(total, uploaded + chunkSize);
+          const chunk = file.slice(uploaded, end);
+          const chunkOffset = uploaded;
+          await chatUploadChunk(`migration/import/uploads/${encodeURIComponent(uploadId)}/chunk?offset=${chunkOffset}`, chunk, {
+            onProgress: (progress) => {
+              const loaded = Math.min(total, chunkOffset + Math.max(0, Number(progress.loaded) || 0));
+              const rawPercent = total > 0 ? Math.max(1, Math.min(99, Math.round((loaded / total) * 100))) : null;
+              const percent = rawPercent && rawPercent > 1 ? rawPercent : null;
+              options.onProgress?.({ loaded, total, percent, computable: percent != null });
+            },
+          });
+          uploaded = end;
+          const rawPercent = total > 0 ? Math.max(1, Math.min(99, Math.round((uploaded / total) * 100))) : null;
+          const percent = rawPercent && rawPercent > 1 ? rawPercent : null;
+          options.onProgress?.({ loaded: uploaded, total, percent, computable: percent != null });
+        }
+        options.onUploadComplete?.();
+        return chatFetch(`migration/import/uploads/${encodeURIComponent(uploadId)}/finish`, {
+          method: 'POST',
+          body: {},
+        }).then(r => r.json());
+      } catch (err) {
+        if (uploadId) {
+          await chatFetch(`migration/import/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE', body: {} }).catch(() => {});
+        }
+        throw err;
+      }
     },
     confirmMigrationImport: (uploadId, confirmation) => chatFetch(
       'migration/import/confirm',

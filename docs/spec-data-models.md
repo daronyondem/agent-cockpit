@@ -293,7 +293,7 @@ directory named `<dataRoot>.migration`. For the default `data` root this is
 ```text
 <dataRoot>.migration/
 ├── exports/                # Temporary export bundles removed after download
-├── uploads/                # Uploaded .acexport files awaiting preview/confirm; successful imports remove their upload best-effort
+├── uploads/                # Uploaded .acexport files plus chunk metadata awaiting preview/confirm; successful imports remove their upload best-effort
 ├── staging/<importId>/data # Verified replacement data root before restart
 ├── backups/<importId>-...  # Previous active data root after import apply
 ├── pending-import.json     # Startup apply marker

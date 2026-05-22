@@ -30,6 +30,7 @@ const UPLOAD_EXTENSION = '.acexport';
 const MAX_IMPORT_UPLOAD_BYTES = 20 * 1024 * 1024 * 1024;
 const MAX_BUNDLE_UNCOMPRESSED_BYTES = 20 * 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 10 * 1024 * 1024;
+const CHUNKED_UPLOAD_META_EXTENSION = '.json';
 
 interface DataMigrationServiceOptions {
   dataRoot: string;
@@ -88,6 +89,23 @@ export interface DataMigrationCheckResult {
     libreOffice: CheckStatus;
     cliProfiles: CheckStatus[];
   };
+}
+
+export interface ChunkedImportUploadStartResult {
+  uploadId: string;
+  receivedBytes: number;
+  totalBytes: number;
+}
+
+interface ChunkedImportUploadRecord {
+  schemaVersion: 1;
+  uploadId: string;
+  originalName: string;
+  totalBytes: number;
+  receivedBytes: number;
+  filePath: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface CheckStatus {
@@ -296,6 +314,62 @@ export class DataMigrationService {
     return uploadId;
   }
 
+  async startChunkedImportUpload(originalName = 'agent-cockpit-import.acexport', totalBytes: number): Promise<ChunkedImportUploadStartResult> {
+    if (!Number.isSafeInteger(totalBytes) || totalBytes <= 0) {
+      throw new Error('Import bundle size is invalid.');
+    }
+    if (totalBytes > MAX_IMPORT_UPLOAD_BYTES) {
+      throw new Error('Import bundle is too large.');
+    }
+    await fsp.mkdir(this.uploadDir(), { recursive: true });
+    const uploadId = this.newId('upload');
+    const ext = path.extname(originalName).toLowerCase() || UPLOAD_EXTENSION;
+    const filePath = this.uploadPath(uploadId, ext === '.zip' ? '.zip' : UPLOAD_EXTENSION);
+    const now = this.now().toISOString();
+    const record: ChunkedImportUploadRecord = {
+      schemaVersion: 1,
+      uploadId,
+      originalName,
+      totalBytes,
+      receivedBytes: 0,
+      filePath,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await fsp.writeFile(filePath, '');
+    await this.writeChunkedUploadRecord(record);
+    return { uploadId, receivedBytes: 0, totalBytes };
+  }
+
+  async appendImportUploadChunk(uploadId: string, offset: number, chunk: Buffer): Promise<{ uploadId: string; receivedBytes: number; totalBytes: number }> {
+    if (!Buffer.isBuffer(chunk) || chunk.length === 0) throw new Error('Import upload chunk is required.');
+    if (!Number.isSafeInteger(offset) || offset < 0) throw new Error('Import upload chunk offset is invalid.');
+    const record = this.readChunkedUploadRecord(uploadId);
+    if (offset !== record.receivedBytes) {
+      throw new Error('Import upload chunk offset does not match the expected upload position.');
+    }
+    if (record.receivedBytes + chunk.length > record.totalBytes) {
+      throw new Error('Import upload exceeds the expected bundle size.');
+    }
+    await fsp.appendFile(record.filePath, chunk);
+    record.receivedBytes += chunk.length;
+    record.updatedAt = this.now().toISOString();
+    await this.writeChunkedUploadRecord(record);
+    return { uploadId: record.uploadId, receivedBytes: record.receivedBytes, totalBytes: record.totalBytes };
+  }
+
+  async finishChunkedImportUpload(uploadId: string): Promise<void> {
+    const record = this.readChunkedUploadRecord(uploadId);
+    if (record.receivedBytes !== record.totalBytes) {
+      throw new Error('Import upload is incomplete.');
+    }
+    const stat = await fsp.stat(record.filePath);
+    if (stat.size !== record.totalBytes) {
+      throw new Error('Import upload size does not match the expected bundle size.');
+    }
+    await fsp.rm(this.chunkedUploadRecordPath(uploadId), { force: true });
+  }
+
   async previewImportUpload(uploadId: string): Promise<{ uploadId: string; manifest: DataExportManifest; warnings: string[] }> {
     const filePath = this.resolveUploadPath(uploadId);
     const { manifest } = await this.openAndValidateBundle(filePath);
@@ -311,6 +385,7 @@ export class DataMigrationService {
     await Promise.all([
       fsp.rm(path.join(this.uploadDir(), `${safe}${UPLOAD_EXTENSION}`), { force: true }),
       fsp.rm(path.join(this.uploadDir(), `${safe}.zip`), { force: true }),
+      fsp.rm(path.join(this.uploadDir(), `${safe}${CHUNKED_UPLOAD_META_EXTENSION}`), { force: true }),
     ]);
   }
 
@@ -428,6 +503,35 @@ export class DataMigrationService {
 
   private uploadPath(uploadId: string, ext = UPLOAD_EXTENSION): string {
     return path.join(this.uploadDir(), `${safeId(uploadId)}${ext}`);
+  }
+
+  private chunkedUploadRecordPath(uploadId: string): string {
+    return path.join(this.uploadDir(), `${safeId(uploadId)}${CHUNKED_UPLOAD_META_EXTENSION}`);
+  }
+
+  private readChunkedUploadRecord(uploadId: string): ChunkedImportUploadRecord {
+    const record = readJsonIfExists(this.chunkedUploadRecordPath(uploadId)) as ChunkedImportUploadRecord | null;
+    if (!record || record.schemaVersion !== 1 || record.uploadId !== safeId(uploadId)) {
+      throw new Error('Import upload not found. Upload the export bundle again.');
+    }
+    if (
+      !Number.isSafeInteger(record.totalBytes) ||
+      !Number.isSafeInteger(record.receivedBytes) ||
+      record.totalBytes <= 0 ||
+      record.receivedBytes < 0 ||
+      record.receivedBytes > record.totalBytes
+    ) {
+      throw new Error('Import upload metadata is invalid.');
+    }
+    const resolvedFile = path.resolve(record.filePath);
+    if (!isPathInside(resolvedFile, this.uploadDir())) {
+      throw new Error('Import upload metadata points outside the upload directory.');
+    }
+    return { ...record, filePath: resolvedFile };
+  }
+
+  private async writeChunkedUploadRecord(record: ChunkedImportUploadRecord): Promise<void> {
+    await fsp.writeFile(this.chunkedUploadRecordPath(record.uploadId), JSON.stringify(record, null, 2) + '\n');
   }
 
   private resolveUploadPath(uploadId: string): string {
@@ -1128,6 +1232,7 @@ function removeUploadFilesSync(controlDir: string, uploadId: string): void {
   const safe = safeId(uploadId);
   fs.rmSync(path.join(controlDir, 'uploads', `${safe}${UPLOAD_EXTENSION}`), { force: true });
   fs.rmSync(path.join(controlDir, 'uploads', `${safe}.zip`), { force: true });
+  fs.rmSync(path.join(controlDir, 'uploads', `${safe}${CHUNKED_UPLOAD_META_EXTENSION}`), { force: true });
 }
 
 function publicExportJob(job: ExportJobRecord): DataExportJobStatusResponse {

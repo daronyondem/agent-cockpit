@@ -238,6 +238,10 @@ principle:
 | `DELETE /workspaces/:workspaceId/explorer/entry` | traversal; root-delete refusal |
 | `GET /workspaces/:workspaceId/git/status` | workspace reference lookup; Git top-level realpath must contain the workspace root realpath; changed paths are filtered and rewritten to the workspace subtree before being returned |
 | `GET /workspaces/:workspaceId/git/diff` | traversal on `path` under the workspace root; Git top-level realpath must contain the workspace root realpath; diff content capped at 2 MB per side; binary content withheld |
+| `POST /migration/import/uploads/start` | CSRF; declared import size must be positive and ≤ 20 GB; upload file and metadata are created only under `<dataRoot>.migration/uploads/` |
+| `PUT /migration/import/uploads/:uploadId/chunk` | CSRF; raw `application/octet-stream` chunk parser capped at 768 KB; upload ids are sanitized; offset must match current received byte count so chunks append in order and cannot seek/write arbitrary positions |
+| `POST /migration/import/uploads/:uploadId/finish` | CSRF; verifies received byte count and final file size before preview validation; ZIP entry paths and manifest paths are confined to the exported `data/` tree |
+| `DELETE /migration/import/uploads/:uploadId` | CSRF; sanitized upload-id cleanup only under `<dataRoot>.migration/uploads/` |
 | `GET /conversations/:id/git/status` | conversation lookup; resolves the conversation execution directory, then applies the same Git top-level containment and path filtering as workspace Git status |
 | `GET /conversations/:id/git/diff` | traversal on `path` under the conversation execution directory; Git top-level realpath must contain the execution root realpath; diff content capped at 2 MB per side; binary content withheld |
 | `GET /workspaces/:workspaceId/files` | traversal (pre-existing file-delivery route) |

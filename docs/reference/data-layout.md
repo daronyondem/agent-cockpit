@@ -29,7 +29,7 @@ The migration control directory is a sibling of the data root, not a child:
 ```text
 data.migration/
 ├── exports/                # Temporary .acexport bundles
-├── uploads/                # Uploaded bundles awaiting preview/confirm; successful imports remove their upload best-effort
+├── uploads/                # Uploaded bundles plus chunk metadata awaiting preview/confirm; successful imports remove their upload best-effort
 ├── staging/<importId>/data # Verified replacement data root
 ├── backups/                # Previous data roots after successful imports
 ├── pending-import.json

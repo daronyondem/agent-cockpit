@@ -7,8 +7,11 @@ import { isContractValidationError } from '../../contracts/validation';
 import type { ChatService } from '../../services/chatService';
 import { DataMigrationService } from '../../services/dataMigrationService';
 import type { UpdateService } from '../../services/updateService';
-import type { Request, Response } from '../../types';
+import type { Request, Response, NextFunction } from '../../types';
 import { sendError } from './routeUtils';
+
+const IMPORT_UPLOAD_CHUNK_BYTES = 512 * 1024;
+const IMPORT_UPLOAD_CHUNK_LIMIT = '768kb';
 
 export interface DataMigrationRoutesOptions {
   chatService: ChatService;
@@ -24,6 +27,10 @@ export function createDataMigrationRouter(opts: DataMigrationRoutesOptions): exp
   const upload = multer({
     dest: dataMigrationService.uploadDir(),
     limits: { fileSize: 20 * 1024 * 1024 * 1024 },
+  });
+  const chunkUpload = express.raw({
+    type: 'application/octet-stream',
+    limit: IMPORT_UPLOAD_CHUNK_LIMIT,
   });
 
   router.get('/migration/status', (_req: Request, res: Response) => {
@@ -79,6 +86,43 @@ export function createDataMigrationRouter(opts: DataMigrationRoutesOptions): exp
     } catch (err: unknown) {
       sendError(res, statusForExportError(err), err);
     }
+  });
+
+  router.post('/migration/import/uploads/start', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const filename = typeof req.body?.filename === 'string' ? req.body.filename : 'agent-cockpit-import.acexport';
+      const size = Number(req.body?.size);
+      const started = await dataMigrationService.startChunkedImportUpload(filename, size);
+      res.json({ ...started, chunkSize: IMPORT_UPLOAD_CHUNK_BYTES });
+    } catch (err: unknown) {
+      sendError(res, statusForImportUploadError(err), err);
+    }
+  });
+
+  router.put('/migration/import/uploads/:uploadId/chunk', csrfGuard, parseImportChunk(chunkUpload), async (req: Request, res: Response) => {
+    try {
+      const offset = Number(req.query.offset);
+      const chunk = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      res.json(await dataMigrationService.appendImportUploadChunk(String(req.params.uploadId || ''), offset, chunk));
+    } catch (err: unknown) {
+      sendError(res, statusForImportUploadError(err), err);
+    }
+  });
+
+  router.post('/migration/import/uploads/:uploadId/finish', csrfGuard, async (req: Request, res: Response) => {
+    const uploadId = String(req.params.uploadId || '');
+    try {
+      await dataMigrationService.finishChunkedImportUpload(uploadId);
+      res.json(await dataMigrationService.previewImportUpload(uploadId));
+    } catch (err: unknown) {
+      await dataMigrationService.deleteUpload(uploadId).catch(() => {});
+      sendError(res, statusForImportUploadError(err), err);
+    }
+  });
+
+  router.delete('/migration/import/uploads/:uploadId', csrfGuard, async (req: Request, res: Response) => {
+    await dataMigrationService.deleteUpload(String(req.params.uploadId || '')).catch(() => {});
+    res.json({ ok: true });
   });
 
   router.post('/migration/import/preview', csrfGuard, upload.single('bundle'), async (req: Request, res: Response) => {
@@ -148,11 +192,39 @@ export function createDataMigrationRouter(opts: DataMigrationRoutesOptions): exp
   return router;
 }
 
+function parseImportChunk(parser: express.RequestHandler): express.RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    parser(req, res, (err: unknown) => {
+      if (!err) return next();
+      const code = (err as { type?: string; code?: string }).type || (err as { code?: string }).code;
+      if (code === 'entity.too.large' || code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'Import upload chunk is too large. Refresh and try the import again.' });
+      }
+      next(err);
+    });
+  };
+}
+
 function statusForExportError(err: unknown): number {
   const message = ((err as Error).message || String(err)).toLowerCase();
   if (message.includes('already running')) return 409;
   if (message.includes('not found')) return 404;
   if (message.includes('not ready')) return 409;
+  return 500;
+}
+
+function statusForImportUploadError(err: unknown): number {
+  const message = ((err as Error).message || String(err)).toLowerCase();
+  if (message.includes('too large')) return 413;
+  if (
+    message.includes('invalid') ||
+    message.includes('not found') ||
+    message.includes('incomplete') ||
+    message.includes('offset') ||
+    message.includes('expected')
+  ) {
+    return 400;
+  }
   return 500;
 }
 

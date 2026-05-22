@@ -1,9 +1,10 @@
 import fs from 'fs';
 import fsp from 'fs/promises';
+import http from 'http';
 import path from 'path';
 import { DATA_IMPORT_CONFIRMATION } from '../src/contracts/dataMigration';
 import { DataMigrationService } from '../src/services/dataMigrationService';
-import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
+import { createChatRouterEnv, destroyChatRouterEnv, CSRF_TOKEN, type ChatRouterEnv, type HttpResult } from './helpers/chatEnv';
 
 let env: ChatRouterEnv;
 
@@ -37,6 +38,37 @@ describe('chat data migration routes', () => {
     expect(download.status).toBe(200);
     expect(download.headers['content-disposition']).toContain('.acexport');
     expect(download.headers['content-type']).toBe('application/octet-stream');
+  });
+
+  test('previews a chunked uploaded export bundle', async () => {
+    env = await createChatRouterEnv();
+    const bundle = await createBundle(env.tmpDir);
+    const content = await fsp.readFile(bundle);
+    const started = await env.request('POST', '/api/chat/migration/import/uploads/start', {
+      filename: 'agent-cockpit-export.acexport',
+      size: content.length,
+    });
+
+    expect(started.status).toBe(200);
+    expect(started.body.uploadId).toMatch(/^upload-/);
+    expect(started.body.chunkSize).toBeGreaterThan(0);
+
+    const uploadId = started.body.uploadId;
+    const chunkSize = Math.max(1, Math.min(64 * 1024, started.body.chunkSize));
+    for (let offset = 0; offset < content.length; offset += chunkSize) {
+      const chunk = content.subarray(offset, Math.min(content.length, offset + chunkSize));
+      const uploaded = await rawRequest('PUT', `/api/chat/migration/import/uploads/${uploadId}/chunk?offset=${offset}`, chunk);
+      expect(uploaded.status).toBe(200);
+      expect(uploaded.body.uploadId).toBe(uploadId);
+    }
+
+    const preview = await env.request('POST', `/api/chat/migration/import/uploads/${uploadId}/finish`, {});
+    expect(preview.status).toBe(200);
+    expect(preview.body.uploadId).toBe(uploadId);
+    expect(preview.body.manifest.counts.files).toBe(1);
+    expect(preview.body.manifest.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: 'chat/settings.json' }),
+    ]));
   });
 
   test('previews an uploaded export bundle and stages replacement only after REPLACE confirmation', async () => {
@@ -148,6 +180,37 @@ async function waitForExportJob(jobId: string) {
     latest = await env.request('GET', `/api/chat/migration/export/${jobId}/status`);
   }
   return latest;
+}
+
+function rawRequest(method: string, urlPath: string, body: Buffer): Promise<HttpResult> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlPath, env.baseUrl);
+    const req = http.request({
+      method,
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname + url.search,
+      headers: {
+        'x-csrf-token': CSRF_TOKEN,
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': body.length,
+      },
+    }, (res) => {
+      let data = '';
+      res.on('data', (chunk: Buffer) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode!, body: JSON.parse(data), headers: res.headers });
+        } catch {
+          resolve({ status: res.statusCode!, body: data, headers: res.headers });
+        }
+      });
+    });
+    req.setTimeout(2000, () => req.destroy(new Error(`Timed out waiting for ${method} ${urlPath}`)));
+    req.on('error', reject);
+    req.write(body);
+    req.end();
+  });
 }
 
 async function createBundle(tmpDir: string): Promise<string> {
