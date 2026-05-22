@@ -126,20 +126,34 @@
     if (!state.csrfToken) await fetchCsrfToken();
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();
+      let uploadFinished = false;
+      const markUploadFinished = () => {
+        if (uploadFinished) return;
+        uploadFinished = true;
+        if (typeof opts.onUploadComplete === 'function') opts.onUploadComplete();
+      };
       xhr.open(opts.method || 'POST', chatUrl(path), true);
       xhr.withCredentials = true;
       if (state.csrfToken) xhr.setRequestHeader('x-csrf-token', state.csrfToken);
       xhr.upload.onprogress = (event) => {
-        if (!event.lengthComputable || typeof opts.onProgress !== 'function') return;
+        if (typeof opts.onProgress !== 'function') return;
+        const fallbackTotal = Number(opts.totalBytes) || 0;
+        const total = event.lengthComputable ? event.total : fallbackTotal;
+        const rawPercent = total > 0 && event.loaded > 0
+          ? Math.max(1, Math.min(99, Math.round((event.loaded / total) * 100)))
+          : null;
+        const percent = rawPercent && rawPercent > 1 ? rawPercent : null;
         opts.onProgress({
           loaded: event.loaded,
-          total: event.total,
-          percent: Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100))),
+          total,
+          percent,
+          computable: percent != null,
         });
       };
       xhr.upload.onload = () => {
-        if (typeof opts.onUploadComplete === 'function') opts.onUploadComplete();
+        markUploadFinished();
       };
+      xhr.upload.onloadend = () => markUploadFinished();
       xhr.onload = () => {
         let body = null;
         try {
@@ -931,6 +945,7 @@
       form.append('bundle', file);
       return chatUpload('migration/import/preview', form, {
         method: 'POST',
+        totalBytes: file && file.size,
         onProgress: options.onProgress,
         onUploadComplete: options.onUploadComplete,
       });

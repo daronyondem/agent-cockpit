@@ -2625,7 +2625,7 @@ function MigrationTab(){
     setImportProgress(null);
     if (!file) return;
     setBusy('preview');
-    setImportProgress({ step: 'uploading', phase: 'Uploading', progress: 1 });
+    setImportProgress({ step: 'uploading', phase: 'Uploading', progress: null });
     try {
       const data = await AgentApi.settings.previewMigrationImport(file, {
         onProgress: (progress) => {
@@ -2633,6 +2633,9 @@ function MigrationTab(){
             step: 'uploading',
             phase: 'Uploading',
             progress: progress.percent,
+            loaded: progress.loaded,
+            total: progress.total,
+            computable: progress.computable,
           });
         },
         onUploadComplete: () => {
@@ -2703,9 +2706,10 @@ function MigrationTab(){
   const pendingImport = status && status.pendingImport;
   const canImport = !!(preview && preview.uploadId && confirmation === 'REPLACE' && !busy && !pendingImport);
   const exportPercent = exportProgress ? Math.max(1, Math.min(100, Math.round(Number(exportProgress.progress) || 1))) : 0;
-  const importPercent = importProgress ? Math.max(1, Math.min(100, Math.round(Number(importProgress.progress) || 1))) : 0;
+  const hasMeasuredImportProgress = !!(importProgress && Number.isFinite(Number(importProgress.progress)));
+  const importPercent = hasMeasuredImportProgress ? Math.max(1, Math.min(100, Math.round(Number(importProgress.progress)))) : null;
   const importButtonLabel = busy === 'preview'
-    ? importProgress && importProgress.step === 'uploading' ? `Uploading ${importPercent}%` : 'Processing…'
+    ? importProgress && importProgress.step === 'uploading' ? importPercent ? `Uploading ${importPercent}%` : 'Uploading…' : 'Processing…'
     : 'Choose export';
 
   return (
@@ -2731,7 +2735,7 @@ function MigrationTab(){
             <div className="migration-danger">{Ico.alert(13)} Import replaces everything in this installation.</div>
           </div>
           <button className={`btn migration-progress-button ${busy === 'preview' ? 'is-running' : ''}`} disabled={!!busy} onClick={() => fileInputRef.current && fileInputRef.current.click()}>
-            {busy === 'preview' ? <span className="migration-button-progress" style={{ width: `${importPercent}%` }} /> : null}
+            {busy === 'preview' ? <span className={`migration-button-progress ${hasMeasuredImportProgress ? '' : 'indeterminate'}`} style={hasMeasuredImportProgress ? { width: `${importPercent}%` } : undefined} /> : null}
             <span className="migration-button-label">{Ico.upload(13)} {importButtonLabel}</span>
           </button>
         </div>
@@ -2832,8 +2836,9 @@ function summaryLabel(summary){
 function MigrationImportProgress({ progress, percent }){
   if (!progress) return null;
   const currentStep = progress.step || 'uploading';
+  const hasPercent = Number.isFinite(Number(percent));
   const steps = [
-    { id: 'uploading', label: currentStep === 'uploading' ? `Uploading ${percent}%` : 'Uploading' },
+    { id: 'uploading', label: currentStep === 'uploading' && hasPercent ? `Uploading ${percent}%` : 'Uploading' },
     { id: 'processing', label: 'Processing' },
     { id: 'restoring', label: 'Restoring' },
   ];
@@ -2848,7 +2853,7 @@ function MigrationImportProgress({ progress, percent }){
           {step.label}
         </span>
       ))}
-      <div className="migration-progress-line">{progress.phase || 'Working'}{currentStep === 'uploading' ? ` · ${percent}%` : '…'}</div>
+      <div className="migration-progress-line">{progress.phase || 'Working'}{currentStep === 'uploading' && hasPercent ? ` · ${percent}%` : '…'}</div>
     </div>
   );
 }

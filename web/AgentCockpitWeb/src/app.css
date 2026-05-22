@@ -7202,6 +7202,14 @@ body{
   transition: width .25s ease;
   pointer-events: none;
 }
+.migration-button-progress.indeterminate{
+  width: 45%;
+  animation: migration-progress-indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes migration-progress-indeterminate{
+  0%{ transform: translateX(-120%); }
+  100%{ transform: translateX(230%); }
+}
 .migration-button-label{
   position: relative;
   z-index: 1;

@@ -623,6 +623,9 @@ describe('frontend routes', () => {
     expect(apiSrc).toContain('new XMLHttpRequest()');
     expect(apiSrc).toContain('xhr.upload.onprogress');
     expect(apiSrc).toContain('xhr.upload.onload');
+    expect(apiSrc).toContain('xhr.upload.onloadend');
+    expect(apiSrc).toContain('totalBytes: file && file.size');
+    expect(apiSrc).toContain('computable: percent != null');
     expect(apiSrc).toContain("return chatUpload('migration/import/preview'");
     expect(apiSrc).toContain("chatFetch(\n      'migration/import/confirm'");
     expect(apiSrc).toContain("chatFetch(`migration/checks${deep ? '?deep=true' : ''}`)");
@@ -635,6 +638,8 @@ describe('frontend routes', () => {
     expect(settingsSrc).toContain('AgentApi.settings.migrationExportJob(job.jobId)');
     expect(settingsSrc).toContain('AgentApi.settings.migrationExportJobDownloadUrl(job.jobId)');
     expect(settingsSrc).toContain('migration-button-progress');
+    expect(settingsSrc).toContain('hasMeasuredImportProgress');
+    expect(settingsSrc).toContain('Uploading…');
     expect(settingsSrc).toContain('function MigrationImportProgress');
     expect(settingsSrc).toContain('Uploading ${percent}%');
     expect(settingsSrc).toContain('Processing');
@@ -647,6 +652,8 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.migration-panel');
     expect(cssSrc).toContain('.migration-progress-button');
     expect(cssSrc).toContain('.migration-button-progress');
+    expect(cssSrc).toContain('.migration-button-progress.indeterminate');
+    expect(cssSrc).toContain('@keyframes migration-progress-indeterminate');
     expect(cssSrc).toContain('.migration-import-progress');
     expect(cssSrc).toContain('.migration-import-step.active');
     expect(cssSrc).toContain('.migration-check-row');
