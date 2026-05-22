@@ -1127,16 +1127,16 @@ button {
 }
 
 .thinking {
-  align-items: center;
   border: 1px dashed var(--border-strong);
   border-radius: 7px;
+  box-sizing: border-box;
   color: var(--text-3);
-  display: inline-flex;
+  display: block;
   font-family: var(--mono-font);
   font-size: 12px;
-  gap: 7px;
   margin-top: 6px;
   padding: 6px 10px;
+  width: 100%;
 }
 
 .tool-block,

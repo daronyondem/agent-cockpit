@@ -253,6 +253,18 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
   });
 
+  test('mobile PWA renders thinking Markdown blocks without flex-column squeeze', () => {
+    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+    const thinkingRule = cssSrc.match(/\.thinking \{[^}]+\}/)?.[0] || '';
+
+    expect(appSrc).toContain("thinking={props.block.type === 'thinking'}");
+    expect(appSrc).toContain("className={props.thinking ? 'thinking' : undefined}");
+    expect(thinkingRule).toContain('display: block;');
+    expect(thinkingRule).toContain('width: 100%;');
+    expect(thinkingRule).not.toContain('display: inline-flex;');
+  });
+
   test('mobile PWA treats stream socket loss as reconnectable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
 
