@@ -1,0 +1,247 @@
+import express from 'express';
+import fs from 'fs';
+import multer from 'multer';
+import { csrfGuard } from '../../middleware/csrf';
+import { validateDataImportConfirmRequest, DATA_IMPORT_CONFIRMATION } from '../../contracts/dataMigration';
+import { isContractValidationError } from '../../contracts/validation';
+import type { ChatService } from '../../services/chatService';
+import { DataMigrationService } from '../../services/dataMigrationService';
+import type { UpdateService } from '../../services/updateService';
+import type { Request, Response, NextFunction } from '../../types';
+import { sendError } from './routeUtils';
+
+const IMPORT_UPLOAD_CHUNK_BYTES = 512 * 1024;
+const IMPORT_UPLOAD_CHUNK_LIMIT = '768kb';
+
+export interface DataMigrationRoutesOptions {
+  chatService: ChatService;
+  dataMigrationService: DataMigrationService;
+  updateService: UpdateService | null;
+  hasAnyInFlightTurn: () => boolean;
+}
+
+export function createDataMigrationRouter(opts: DataMigrationRoutesOptions): express.Router {
+  const { chatService, dataMigrationService, updateService, hasAnyInFlightTurn } = opts;
+  const router = express.Router();
+  fs.mkdirSync(dataMigrationService.uploadDir(), { recursive: true });
+  const upload = multer({
+    dest: dataMigrationService.uploadDir(),
+    limits: { fileSize: 20 * 1024 * 1024 * 1024 },
+  });
+  const chunkUpload = express.raw({
+    type: 'application/octet-stream',
+    limit: IMPORT_UPLOAD_CHUNK_LIMIT,
+  });
+
+  router.get('/migration/status', (_req: Request, res: Response) => {
+    res.json(dataMigrationService.getStatus());
+  });
+
+  router.get('/migration/export', async (_req: Request, res: Response) => {
+    if (hasAnyInFlightTurn()) {
+      return res.status(409).json({ error: 'Cannot export while conversations are actively running. Please wait for them to complete or abort them first.' });
+    }
+    try {
+      chatService.closeKbDatabases();
+      await chatService.closeKbVectorStores();
+      const bundle = await dataMigrationService.createExportBundle();
+      res.download(bundle.filePath, bundle.filename, (err) => {
+        fs.rm(bundle.filePath, { force: true }, () => {});
+        if (err && !res.headersSent) res.status(500).json({ error: err.message });
+      });
+    } catch (err: unknown) {
+      sendError(res, 500, err);
+    }
+  });
+
+  router.post('/migration/export/start', csrfGuard, async (_req: Request, res: Response) => {
+    if (hasAnyInFlightTurn()) {
+      return res.status(409).json({ error: 'Cannot export while conversations are actively running. Please wait for them to complete or abort them first.' });
+    }
+    try {
+      chatService.closeKbDatabases();
+      await chatService.closeKbVectorStores();
+      res.status(202).json(dataMigrationService.startExportJob());
+    } catch (err: unknown) {
+      sendError(res, statusForExportError(err), err);
+    }
+  });
+
+  router.get('/migration/export/:jobId/status', async (req: Request, res: Response) => {
+    try {
+      res.json(dataMigrationService.getExportJob(String(req.params.jobId || '')));
+    } catch (err: unknown) {
+      sendError(res, 404, err);
+    }
+  });
+
+  router.get('/migration/export/:jobId/download', async (req: Request, res: Response) => {
+    const jobId = String(req.params.jobId || '');
+    try {
+      const bundle = dataMigrationService.getExportJobDownload(jobId);
+      res.download(bundle.filePath, bundle.filename, (err) => {
+        dataMigrationService.deleteExportJob(jobId);
+        if (err && !res.headersSent) res.status(500).json({ error: err.message });
+      });
+    } catch (err: unknown) {
+      sendError(res, statusForExportError(err), err);
+    }
+  });
+
+  router.post('/migration/import/uploads/start', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const filename = typeof req.body?.filename === 'string' ? req.body.filename : 'agent-cockpit-import.acexport';
+      const size = Number(req.body?.size);
+      const started = await dataMigrationService.startChunkedImportUpload(filename, size);
+      res.json({ ...started, chunkSize: IMPORT_UPLOAD_CHUNK_BYTES });
+    } catch (err: unknown) {
+      sendError(res, statusForImportUploadError(err), err);
+    }
+  });
+
+  router.put('/migration/import/uploads/:uploadId/chunk', csrfGuard, parseImportChunk(chunkUpload), async (req: Request, res: Response) => {
+    try {
+      const offset = Number(req.query.offset);
+      const chunk = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      res.json(await dataMigrationService.appendImportUploadChunk(String(req.params.uploadId || ''), offset, chunk));
+    } catch (err: unknown) {
+      sendError(res, statusForImportUploadError(err), err);
+    }
+  });
+
+  router.post('/migration/import/uploads/:uploadId/finish', csrfGuard, async (req: Request, res: Response) => {
+    const uploadId = String(req.params.uploadId || '');
+    try {
+      await dataMigrationService.finishChunkedImportUpload(uploadId);
+      res.json(await dataMigrationService.previewImportUpload(uploadId));
+    } catch (err: unknown) {
+      await dataMigrationService.deleteUpload(uploadId).catch(() => {});
+      sendError(res, statusForImportUploadError(err), err);
+    }
+  });
+
+  router.delete('/migration/import/uploads/:uploadId', csrfGuard, async (req: Request, res: Response) => {
+    await dataMigrationService.deleteUpload(String(req.params.uploadId || '')).catch(() => {});
+    res.json({ ok: true });
+  });
+
+  router.post('/migration/import/preview', csrfGuard, upload.single('bundle'), async (req: Request, res: Response) => {
+    const file = req.file;
+    if (!file) return res.status(400).json({ error: 'bundle file is required' });
+    let uploadId: string | null = null;
+    try {
+      uploadId = await dataMigrationService.saveImportUpload(file.path, file.originalname);
+      const preview = await dataMigrationService.previewImportUpload(uploadId);
+      res.json(preview);
+    } catch (err: unknown) {
+      if (uploadId) {
+        await dataMigrationService.deleteUpload(uploadId).catch(() => {});
+      } else {
+        fs.rm(file.path, { force: true }, () => {});
+      }
+      sendError(res, 400, err);
+    }
+  });
+
+  router.post('/migration/import/confirm', csrfGuard, async (req: Request, res: Response) => {
+    if (!updateService) return res.status(501).json({ error: 'Restart service not available' });
+    if (hasAnyInFlightTurn()) {
+      return res.status(409).json({ error: 'Cannot import while conversations are actively running. Please wait for them to complete or abort them first.' });
+    }
+    try {
+      const request = validateDataImportConfirmRequest(req.body);
+      if (request.confirmation !== DATA_IMPORT_CONFIRMATION) {
+        return res.status(400).json({ error: `Type ${DATA_IMPORT_CONFIRMATION} to confirm replacement.` });
+      }
+      const scheduled = await dataMigrationService.scheduleImport(request.uploadId);
+      const restart = await updateService.restart({ hasActiveStreams: hasAnyInFlightTurn });
+      if (!restart.success) {
+        await dataMigrationService.cancelPendingImport(scheduled.importId).catch(() => {});
+        return res.status(409).json({
+          ok: false,
+          pending: false,
+          error: restart.error || 'Restart failed. Import was not applied.',
+          importId: scheduled.importId,
+          backupPath: scheduled.backupPath,
+          restart,
+        });
+      }
+      res.json({
+        ok: true,
+        pending: true,
+        restart,
+        backupPath: scheduled.backupPath,
+        importId: scheduled.importId,
+        message: 'Import is staged and will replace this installation data root on restart.',
+      });
+    } catch (err: unknown) {
+      if (isContractValidationError(err)) return sendError(res, 400, err);
+      sendError(res, statusForImportConfirmError(err), err);
+    }
+  });
+
+  router.get('/migration/checks', async (req: Request, res: Response) => {
+    try {
+      const deep = req.query.deep === 'true';
+      res.json(await dataMigrationService.runPostImportChecks({ deep }));
+    } catch (err: unknown) {
+      sendError(res, 500, err);
+    }
+  });
+
+  return router;
+}
+
+function parseImportChunk(parser: express.RequestHandler): express.RequestHandler {
+  return (req: Request, res: Response, next: NextFunction) => {
+    parser(req, res, (err: unknown) => {
+      if (!err) return next();
+      const code = (err as { type?: string; code?: string }).type || (err as { code?: string }).code;
+      if (code === 'entity.too.large' || code === 'LIMIT_FILE_SIZE') {
+        return res.status(413).json({ error: 'Import upload chunk is too large. Refresh and try the import again.' });
+      }
+      next(err);
+    });
+  };
+}
+
+function statusForExportError(err: unknown): number {
+  const message = ((err as Error).message || String(err)).toLowerCase();
+  if (message.includes('already running')) return 409;
+  if (message.includes('not found')) return 404;
+  if (message.includes('not ready')) return 409;
+  return 500;
+}
+
+function statusForImportUploadError(err: unknown): number {
+  const message = ((err as Error).message || String(err)).toLowerCase();
+  if (message.includes('too large')) return 413;
+  if (
+    message.includes('invalid') ||
+    message.includes('not found') ||
+    message.includes('incomplete') ||
+    message.includes('offset') ||
+    message.includes('expected')
+  ) {
+    return 400;
+  }
+  return 500;
+}
+
+function statusForImportConfirmError(err: unknown): number {
+  const message = ((err as Error).message || String(err)).toLowerCase();
+  if (message.includes('already pending')) return 409;
+  if (
+    message.includes('upload not found') ||
+    message.includes('import bundle') ||
+    message.includes('import manifest') ||
+    message.includes('unsafe import') ||
+    message.includes('checksum mismatch') ||
+    message.includes('file size mismatch') ||
+    message.includes('unexpected data file') ||
+    message.includes('missing manifest file')
+  ) {
+    return 400;
+  }
+  return 500;
+}

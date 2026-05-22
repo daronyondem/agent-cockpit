@@ -128,6 +128,7 @@ The PWA intentionally does not yet cover:
 - Memory and Knowledge Base mobile panels/live update bubbles.
 - Cross-CLI instruction compatibility notifications and pointer creation.
 - CLI update notifications and update actions. This is an intentional web-only parity decision because CLI binary updates are server-administration controls; see [parity-decisions.md](parity-decisions.md) and [ADR-0027](adr/0027-manage-cli-updates-from-web-cockpit.md).
+- Data-root export/import migration. This is an installation-administration workflow that can destructively replace all active Agent Cockpit data after backup, so it remains in the desktop web Settings → Migration tab. The PWA continues to use the same server/data root after a desktop-triggered import restart.
 - Workspace Git Changes status/diff view. This is currently a deliberate desktop-web-only slice because the shipped UI is a side-by-side code review surface that needs wide panes; see [parity-decisions.md](parity-decisions.md), [API spec](spec-api-endpoints.md#313-workspace-git-changes), and [Frontend spec](spec-frontend.md).
 - Workspace Worktrees settings. The PWA consumes worktree-aware conversation metadata and delivered-file endpoints, but enabling/disabling worktree isolation remains a desktop Workspace Settings workflow.
 - Service worker offline caching. The app is server-backed and currently requires network access to the Agent Cockpit host.

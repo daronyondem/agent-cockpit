@@ -7143,6 +7143,273 @@ body{
   border-radius: var(--r-sm);
 }
 
+.migration-form{
+  gap: 16px;
+}
+.migration-panel{
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  padding: 14px;
+}
+.migration-panel-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+}
+.migration-panel-head .settings-section-title{
+  margin-top: 0;
+}
+.migration-path,
+.migration-file-row{
+  font-size: 11px;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+.migration-file-row{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.migration-danger{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--status-error);
+}
+.migration-progress-button{
+  position: relative;
+  overflow: hidden;
+}
+.migration-progress-button.is-running{
+  min-width: 96px;
+}
+.migration-button-progress{
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 0;
+  background: color-mix(in oklch, var(--accent), transparent 70%);
+  transition: width .25s ease;
+  pointer-events: none;
+}
+.migration-button-progress.indeterminate{
+  width: 45%;
+  animation: migration-progress-indeterminate 1.2s ease-in-out infinite;
+}
+@keyframes migration-progress-indeterminate{
+  0%{ transform: translateX(-120%); }
+  100%{ transform: translateX(230%); }
+}
+.migration-button-label{
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.migration-progress-line{
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.migration-progress-button.btn.danger .migration-button-progress{
+  background: color-mix(in oklch, var(--status-error), transparent 72%);
+}
+.migration-import-progress{
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.migration-import-progress .migration-progress-line{
+  flex-basis: 100%;
+}
+.migration-import-step{
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-3);
+  background: var(--surface);
+}
+.migration-import-step.done{
+  color: var(--status-ok);
+  border-color: color-mix(in oklch, var(--status-ok), transparent 65%);
+  background: color-mix(in oklch, var(--status-ok), transparent 92%);
+}
+.migration-import-step.active{
+  color: var(--accent);
+  border-color: color-mix(in oklch, var(--accent), transparent 58%);
+  background: color-mix(in oklch, var(--accent), transparent 90%);
+}
+.migration-preview{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.migration-kv{
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.migration-kv span{
+  color: var(--text-3);
+}
+.migration-kv b{
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.migration-warnings,
+.migration-preview .settings-field,
+.migration-preview .settings-actions,
+.migration-preview .settings-warning{
+  grid-column: 1 / -1;
+}
+.migration-warnings{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in oklch, var(--status-warning), transparent 65%);
+  border-radius: var(--r-sm);
+  background: color-mix(in oklch, var(--status-warning), transparent 92%);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.migration-actions{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.migration-action-with-help{
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.migration-help-btn{
+  flex: 0 0 auto;
+}
+.migration-summary{
+  margin-top: 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.migration-summary.ok{ color: var(--status-ok); }
+.migration-summary.warning{ color: var(--status-warning); }
+.migration-summary.error{ color: var(--status-error); }
+.migration-checks{
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.migration-check-group{
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.migration-check-title{
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 700;
+}
+.migration-check-title span{
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.migration-check-row{
+  display: grid;
+  grid-template-columns: 70px 92px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  padding: 7px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  font-size: 12px;
+}
+.migration-check-row.warning{
+  border-color: color-mix(in oklch, var(--status-error), transparent 65%);
+  background: color-mix(in oklch, var(--status-error), transparent 94%);
+}
+.migration-check-row.warning .migration-check-label,
+.migration-check-row.warning .migration-check-message,
+.migration-check-row.warning .migration-check-path{
+  color: var(--status-error);
+}
+.migration-pill{
+  justify-self: start;
+  min-width: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+.migration-pill.ok{
+  color: var(--status-ok);
+  border-color: color-mix(in oklch, var(--status-ok), transparent 65%);
+  background: color-mix(in oklch, var(--status-ok), transparent 92%);
+}
+.migration-pill.warning{
+  color: var(--status-error);
+  border-color: color-mix(in oklch, var(--status-error), transparent 65%);
+  background: color-mix(in oklch, var(--status-error), transparent 92%);
+}
+.migration-pill.error{
+  color: var(--status-error);
+  border-color: color-mix(in oklch, var(--status-error), transparent 65%);
+  background: color-mix(in oklch, var(--status-error), transparent 92%);
+}
+.migration-pill.skipped{
+  color: var(--text-3);
+}
+.migration-check-label{
+  font-weight: 600;
+  color: var(--text);
+}
+.migration-check-message{
+  min-width: 0;
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.migration-check-path{
+  grid-column: 3;
+  min-width: 0;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+  font-size: 10.5px;
+}
+
 .memory-processor-status{
   display: flex;
   flex-direction: column;
@@ -8119,6 +8386,25 @@ body{
   }
   .kb-raw-row .btn{
     min-height: 32px;
+  }
+  .migration-panel-head{
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .migration-panel-head > .btn,
+  .migration-actions,
+  .migration-actions .btn{
+    width: 100%;
+    justify-content: center;
+  }
+  .migration-preview{
+    grid-template-columns: 1fr;
+  }
+  .migration-check-row{
+    grid-template-columns: 1fr;
+  }
+  .migration-check-path{
+    grid-column: 1;
   }
 
   /* Sidebar footer avatar nudge so the close hamburger doesn't overlap. */

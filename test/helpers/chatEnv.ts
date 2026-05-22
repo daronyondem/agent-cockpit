@@ -7,6 +7,7 @@ import path from 'path';
 import os from 'os';
 import WebSocket from 'ws';
 import { ChatService } from '../../src/services/chatService';
+import { DataMigrationService } from '../../src/services/dataMigrationService';
 import { createChatRouter } from '../../src/routes/chat';
 import { attachWebSocket, type WsFunctions } from '../../src/ws';
 import { BackendRegistry } from '../../src/services/backends/registry';
@@ -104,6 +105,10 @@ export async function createChatRouterEnv(opts: CreateChatRouterEnvOpts = {}): P
     chatService,
     backendRegistry,
     updateService: opts.updateService ?? null as any,
+    dataMigrationService: new DataMigrationService({
+      dataRoot: path.join(tmpDir, 'data'),
+      appVersion: '0.0.0-test',
+    }),
     installStateService: opts.installStateService ?? {
       getStatus: () => ({
         schemaVersion: 1,

@@ -6,6 +6,8 @@ import { useDialog } from '../dialog.jsx';
 import { useToasts } from '../toast.jsx';
 import { CliUpdateStore } from '../cliUpdateStore.js';
 
+const MigrationTab = React.lazy(() => import('./settingsMigrationTab.jsx').then(mod => ({ default: mod.MigrationTab })));
+
 /* SettingsScreen — full-screen V2 app settings page.
    Mirrors the V1 layout (General / CLI Config / Memory / Knowledge Base /
    Workspace Context / Security / Usage / Server) backed by `GET/PUT /settings` plus `GET /backends`,
@@ -23,6 +25,7 @@ const SETTINGS_TABS = [
   { id: 'workspaceContext', label: 'Workspace Context' },
   { id: 'security', label: 'Security' },
   { id: 'usage',   label: 'Usage' },
+  { id: 'migration', label: 'Migration' },
   { id: 'server',  label: 'Server' },
 ];
 
@@ -377,6 +380,11 @@ export function SettingsScreen({ onClose, initialTab }){
             : tab === 'workspaceContext' ? <SettingsWorkspaceContextTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'security' ? <SecurityTab/>
             : tab === 'usage'   ? <UsageTab/>
+            : tab === 'migration' ? (
+              <React.Suspense fallback={<div className="u-dim" style={{padding:'16px'}}>Loading migration...</div>}>
+                <MigrationTab/>
+              </React.Suspense>
+            )
             : tab === 'server'  ? <ServerTab/>
             : null}
       </div>

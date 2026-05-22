@@ -45,6 +45,20 @@
     return u.toString();
   }
 
+  function filenameFromContentDisposition(value, fallback){
+    const header = value || '';
+    const utf8 = header.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8 && utf8[1]) {
+      try {
+        return decodeURIComponent(utf8[1].replace(/"/g, ''));
+      } catch {
+        return fallback;
+      }
+    }
+    const plain = header.match(/filename="?([^";]+)"?/i);
+    return plain && plain[1] ? plain[1] : fallback;
+  }
+
   const state = {
     csrfToken: null,
     onSessionExpired: null,
@@ -105,6 +119,51 @@
       throw e;
     }
     return res;
+  }
+
+  async function chatUploadChunk(path, body, opts){
+    opts = opts || {};
+    if (!state.csrfToken) await fetchCsrfToken();
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(opts.method || 'PUT', chatUrl(path), true);
+      xhr.withCredentials = true;
+      if (state.csrfToken) xhr.setRequestHeader('x-csrf-token', state.csrfToken);
+      xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+      xhr.upload.onprogress = (event) => {
+        if (typeof opts.onProgress !== 'function') return;
+        opts.onProgress({
+          loaded: event.loaded,
+          total: event.lengthComputable ? event.total : null,
+        });
+      };
+      xhr.onload = () => {
+        let body = null;
+        try {
+          body = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+        } catch {
+          body = xhr.responseText;
+        }
+        if (xhr.status === 401) {
+          if (state.onSessionExpired) state.onSessionExpired();
+          const e = new Error('Session expired');
+          e.status = xhr.status;
+          reject(e);
+          return;
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const e = new Error((body && body.error) || xhr.statusText || `HTTP ${xhr.status}`);
+          e.status = xhr.status;
+          e.body = body;
+          reject(e);
+          return;
+        }
+        resolve(body);
+      };
+      xhr.onerror = () => reject(new Error('Upload failed'));
+      xhr.onabort = () => reject(new Error('Upload cancelled'));
+      xhr.send(body);
+    });
   }
 
   async function authFetch(path, opts){
@@ -855,6 +914,59 @@
     saveUsagePricingOverrides: (entries) => chatFetch('usage-pricing/overrides', { method: 'PUT', body: { entries: entries || [] } }).then(r => r.json()),
     clearUsagePricingOverrides: () => chatFetch('usage-pricing/overrides', { method: 'DELETE' }).then(r => r.json()),
     restartServer: () => chatFetch('server/restart', { method: 'POST', body: {} }).then(r => r.json()),
+    migrationStatus: () => chatFetch('migration/status').then(r => r.json()),
+    migrationExportUrl: () => chatUrl('migration/export'),
+    startMigrationExport: () => chatFetch('migration/export/start', { method: 'POST', body: {} }).then(r => r.json()),
+    migrationExportJob: (jobId) => chatFetch(`migration/export/${encodeURIComponent(jobId)}/status`).then(r => r.json()),
+    migrationExportJobDownloadUrl: (jobId) => chatUrl(`migration/export/${encodeURIComponent(jobId)}/download`),
+    migrationExport: () => chatFetch('migration/export').then(async r => ({
+      blob: await r.blob(),
+      filename: filenameFromContentDisposition(r.headers.get('content-disposition'), 'agent-cockpit-export.acexport'),
+    })),
+    previewMigrationImport: async (file, options = {}) => {
+      const total = file && Number(file.size) || 0;
+      const started = await chatFetch('migration/import/uploads/start', {
+        method: 'POST',
+        body: { filename: file && file.name, size: total },
+      }).then(r => r.json());
+      const uploadId = started.uploadId;
+      const chunkSize = Number(started.chunkSize) || (512 * 1024);
+      let uploaded = 0;
+      try {
+        while (uploaded < total) {
+          const end = Math.min(total, uploaded + chunkSize);
+          const chunk = file.slice(uploaded, end);
+          const chunkOffset = uploaded;
+          await chatUploadChunk(`migration/import/uploads/${encodeURIComponent(uploadId)}/chunk?offset=${chunkOffset}`, chunk, {
+            onProgress: (progress) => {
+              const loaded = Math.min(total, chunkOffset + Math.max(0, Number(progress.loaded) || 0));
+              const rawPercent = total > 0 ? Math.max(1, Math.min(99, Math.round((loaded / total) * 100))) : null;
+              const percent = rawPercent && rawPercent > 1 ? rawPercent : null;
+              options.onProgress?.({ loaded, total, percent, computable: percent != null });
+            },
+          });
+          uploaded = end;
+          const rawPercent = total > 0 ? Math.max(1, Math.min(99, Math.round((uploaded / total) * 100))) : null;
+          const percent = rawPercent && rawPercent > 1 ? rawPercent : null;
+          options.onProgress?.({ loaded: uploaded, total, percent, computable: percent != null });
+        }
+        options.onUploadComplete?.();
+        return chatFetch(`migration/import/uploads/${encodeURIComponent(uploadId)}/finish`, {
+          method: 'POST',
+          body: {},
+        }).then(r => r.json());
+      } catch (err) {
+        if (uploadId) {
+          await chatFetch(`migration/import/uploads/${encodeURIComponent(uploadId)}`, { method: 'DELETE', body: {} }).catch(() => {});
+        }
+        throw err;
+      }
+    },
+    confirmMigrationImport: (uploadId, confirmation) => chatFetch(
+      'migration/import/confirm',
+      { method: 'POST', body: { uploadId, confirmation } },
+    ).then(r => r.json()),
+    migrationChecks: (deep) => chatFetch(`migration/checks${deep ? '?deep=true' : ''}`).then(r => r.json()),
     testCliProfile: (profileId) => chatFetch(
       'cli-profiles/' + encodeURIComponent(profileId) + '/test',
       { method: 'POST', body: {} },
