@@ -45,6 +45,20 @@
     return u.toString();
   }
 
+  function filenameFromContentDisposition(value, fallback){
+    const header = value || '';
+    const utf8 = header.match(/filename\*=UTF-8''([^;]+)/i);
+    if (utf8 && utf8[1]) {
+      try {
+        return decodeURIComponent(utf8[1].replace(/"/g, ''));
+      } catch {
+        return fallback;
+      }
+    }
+    const plain = header.match(/filename="?([^";]+)"?/i);
+    return plain && plain[1] ? plain[1] : fallback;
+  }
+
   const state = {
     csrfToken: null,
     onSessionExpired: null,
@@ -855,6 +869,25 @@
     saveUsagePricingOverrides: (entries) => chatFetch('usage-pricing/overrides', { method: 'PUT', body: { entries: entries || [] } }).then(r => r.json()),
     clearUsagePricingOverrides: () => chatFetch('usage-pricing/overrides', { method: 'DELETE' }).then(r => r.json()),
     restartServer: () => chatFetch('server/restart', { method: 'POST', body: {} }).then(r => r.json()),
+    migrationStatus: () => chatFetch('migration/status').then(r => r.json()),
+    migrationExportUrl: () => chatUrl('migration/export'),
+    startMigrationExport: () => chatFetch('migration/export/start', { method: 'POST', body: {} }).then(r => r.json()),
+    migrationExportJob: (jobId) => chatFetch(`migration/export/${encodeURIComponent(jobId)}/status`).then(r => r.json()),
+    migrationExportJobDownloadUrl: (jobId) => chatUrl(`migration/export/${encodeURIComponent(jobId)}/download`),
+    migrationExport: () => chatFetch('migration/export').then(async r => ({
+      blob: await r.blob(),
+      filename: filenameFromContentDisposition(r.headers.get('content-disposition'), 'agent-cockpit-export.acexport'),
+    })),
+    previewMigrationImport: (file) => {
+      const form = new FormData();
+      form.append('bundle', file);
+      return chatFetch('migration/import/preview', { method: 'POST', body: form }).then(r => r.json());
+    },
+    confirmMigrationImport: (uploadId, confirmation) => chatFetch(
+      'migration/import/confirm',
+      { method: 'POST', body: { uploadId, confirmation } },
+    ).then(r => r.json()),
+    migrationChecks: (deep) => chatFetch(`migration/checks${deep ? '?deep=true' : ''}`).then(r => r.json()),
     testCliProfile: (profileId) => chatFetch(
       'cli-profiles/' + encodeURIComponent(profileId) + '/test',
       { method: 'POST', body: {} },

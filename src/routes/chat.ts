@@ -31,6 +31,7 @@ import { logger } from '../utils/logger';
 import type { WsFunctions } from '../ws';
 import { createChatStatusRouter } from './chat/statusRoutes';
 import { createCliProfileRouter } from './chat/cliProfileRoutes';
+import { createDataMigrationRouter } from './chat/dataMigrationRoutes';
 import { createWorkspaceContextRouter } from './chat/workspaceContextRoutes';
 import { createConversationRouter } from './chat/conversationRoutes';
 import { createExplorerRouter } from './chat/explorerRoutes';
@@ -46,6 +47,7 @@ import { createWorkspaceInstructionRouter } from './chat/workspaceInstructionRou
 import { createWorkspaceLocationRouter } from './chat/workspaceLocationRoutes';
 import { createWorktreeIsolationRouter } from './chat/worktreeIsolationRoutes';
 import { clearGoalEvent, formatGoalEventMessage, goalEventDedupeKey, goalEventFromStatus, normalizeGoalSnapshot } from '../services/chat/goalEventMessages';
+import type { DataMigrationService } from '../services/dataMigrationService';
 
 const log = logger.child({ module: 'chat-routes' });
 
@@ -629,6 +631,7 @@ interface ChatRouterDeps {
   chatService: ChatService;
   backendRegistry: BackendRegistry;
   updateService: UpdateService;
+  dataMigrationService?: DataMigrationService | null;
   installStateService?: InstallStateService | null;
   installDoctorService?: InstallDoctorService | null;
   cliUpdateService?: CliUpdateService | null;
@@ -637,7 +640,7 @@ interface ChatRouterDeps {
   codexPlanUsageService: CodexPlanUsageService;
 }
 
-export function createChatRouter({ chatService, backendRegistry, updateService, installStateService = null, installDoctorService = null, cliUpdateService = null, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService }: ChatRouterDeps) {
+export function createChatRouter({ chatService, backendRegistry, updateService, dataMigrationService = null, installStateService = null, installDoctorService = null, cliUpdateService = null, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService }: ChatRouterDeps) {
   const router = express.Router();
 
   const streamSupervisor = new StreamJobSupervisor(chatService.baseDir);
@@ -1165,6 +1168,14 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
   }));
   router.use(createUploadRouter({ chatService, backendRegistry }));
   router.use(createWorkspaceInstructionRouter(chatService));
+  if (dataMigrationService) {
+    router.use(createDataMigrationRouter({
+      chatService,
+      dataMigrationService,
+      updateService,
+      hasAnyInFlightTurn,
+    }));
+  }
   router.use(createChatStatusRouter({
     chatService,
     backendRegistry,

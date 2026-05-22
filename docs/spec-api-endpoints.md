@@ -373,6 +373,32 @@ and use `src/contracts/workspaces.ts`.
 
 Conversation responses from `POST /conversations`, `GET /conversations/:id`, and rows returned by `GET /conversations` include `cliProfileId` and Codex-only `serviceTier` when present. When an explicit backend or legacy `defaultBackend` is used without a profile, the server derives the physical profile as `server-configured-<vendor>`. When a profile is present, runtime adapter selection resolves through that profile's vendor while the `backend` field remains synchronized for compatibility.
 
+## 3.9.1 Data Migration
+
+Data migration routes live in `src/routes/chat/dataMigrationRoutes.ts` and are
+backed by `DataMigrationService`. Shared request/response contracts live in
+`src/contracts/dataMigration.ts`. See
+[ADR-0074](adr/0074-use-data-root-bundles-for-migration.md).
+
+Migration uses complete data-root bundles. Export packages the active
+`AGENT_COCKPIT_DATA_DIR` into one `.acexport` ZIP containing `manifest.json` and
+`data/...`. Import works on any installation, but it is intentionally
+destructive: after the user confirms with the exact text `REPLACE`, the next
+server restart renames the current data root into a sibling backup directory and
+renames the staged import into the active data-root path. There is no merge
+mode.
+
+| Method | Path | CSRF | Description |
+|--------|------|------|-------------|
+| GET | `/migration/status` | — | Returns `DataMigrationStatusResponse`: `{ dataRoot, controlDir, pendingImport, lastImport }`. `controlDir` is the sibling migration control directory (`<dataRoot>.migration`). `pendingImport` is a boolean that reports whether a restart-time import marker exists. `lastImport` is the last successful import metadata when present. |
+| GET | `/migration/export` | — | Legacy/direct attachment path. Closes open KB SQLite/vector stores, rejects with `409` if any chat turn is active or still preparing, writes a temporary `.acexport` bundle under `<dataRoot>.migration/exports/` with streamed file reads, verifies the finished ZIP against `manifest.json`, and streams it as an attachment. The bundle includes user settings, workspace registry, conversations, Memory, Workspace Context, Knowledge Base SQLite/PGLite data, first-party auth when stored under the data root, install metadata, and plan-usage caches. It excludes transient runtime/session files such as `sessions/`, `chat/stream-jobs.json`, temporary files, `.DS_Store`, symlinks, and stale Postgres runtime files such as `postmaster.pid`. Included uncompressed files are capped at 20 GB. |
+| POST | `/migration/export/start` | Yes | Preferred browser export path. Closes open KB SQLite/vector stores, rejects with `409` if any chat turn is active or still preparing or if another export job is already running, starts an in-memory export-preparation job, and returns `202 DataExportJobStatusResponse` with `status:"running"`, a `jobId`, phase text, and percent progress. |
+| GET | `/migration/export/:jobId/status` | — | Returns the current `DataExportJobStatusResponse`. Running jobs report phase/progress; ready jobs include `filename`, `manifest`, `status:"ready"`, and `progress:100`; failed jobs include `error`. Unknown jobs return `404`. |
+| GET | `/migration/export/:jobId/download` | — | Streams a ready export job as the `.acexport` attachment and removes the temporary bundle/job record after the response callback. Returns `404` for unknown jobs and `409` when the job exists but is not ready. |
+| POST | `/migration/import/preview` | Yes | Multipart upload with field `bundle`. Saves the file under `<dataRoot>.migration/uploads/`, opens the ZIP with lazy entry reads, validates path confinement, rejects duplicate/encrypted entries, validates manifest schema version, rejects manifests declaring more than 20 GB of included uncompressed data, summarizes workspace records, and returns `DataImportPreviewResponse`: `{ uploadId, manifest, warnings }`. Preview does not mutate the active data root and deletes the uploaded file on validation failure. The upload cap is 20 GB. |
+| POST | `/migration/import/confirm` | Yes | Body `{ uploadId: string, confirmation: "REPLACE" }`. Rejects invalid confirmation, rejects missing/invalid uploaded bundles with `400`, rejects active/preparing chat turns or another pending import with `409`, streams the uploaded bundle into `<dataRoot>.migration/staging/<importId>/data`, rejects undeclared data entries before writing them, removes excluded runtime files from staging, verifies every staged file against manifest size and SHA-256, writes `pending-import.json`, and calls `UpdateService.restart()`. A successful response is `DataImportConfirmResponse` with `{ ok:true, pending:true, importId, backupPath, restart, message }`; the browser shows a restart overlay and reloads. If restart fails, the route cancels the pending import so an unrelated later restart cannot apply it, and returns `409 { ok:false, pending:false, importId, backupPath, restart, error }`. |
+| GET | `/migration/checks?deep=true` | — | Runs post-import checks and returns `{ checkedAt, summary, checks }`. Checks cover workspace storage folders, missing `currentPath` directories that may need remapping, Memory folders, KB SQLite `state.db` with `schema_version` metadata, PGLite vector directories, stale `postmaster.pid`, CLI profile auth/config hints, Pandoc, and LibreOffice. Shallow checks report Ollama embedding availability as skipped; `?deep=true` additionally calls the configured Ollama host for each workspace KB embedding config. |
+
 ## 3.10 Usage Statistics
 
 | Method | Path | CSRF | Description |

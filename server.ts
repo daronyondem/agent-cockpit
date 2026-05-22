@@ -22,13 +22,23 @@ import { KiroPlanUsageService } from './src/services/kiroPlanUsageService';
 import { CodexPlanUsageService } from './src/services/codexPlanUsageService';
 import { InstallStateService } from './src/services/installStateService';
 import { InstallDoctorService } from './src/services/installDoctorService';
+import { DataMigrationService } from './src/services/dataMigrationService';
 import { detectLibreOffice } from './src/services/knowledgeBase/libreOffice';
 import { detectPandoc } from './src/services/knowledgeBase/pandoc';
 import { WebBuildService } from './src/services/webBuildService';
 import { MobileBuildService } from './src/services/mobileBuildService';
+import { logger } from './src/utils/logger';
 import type { Request, Response, NextFunction } from './src/types';
 
 const FileStore = FileStoreFactory(session);
+const log = logger.child({ module: 'server' });
+
+const pendingImport = DataMigrationService.applyPendingImport(config.AGENT_COCKPIT_DATA_DIR);
+if (pendingImport.applied) {
+  log.info('Applied pending data import', { backupPath: pendingImport.backupPath });
+} else if (pendingImport.error) {
+  log.error('Pending data import failed', { error: pendingImport.error });
+}
 
 const app = express();
 
@@ -123,13 +133,18 @@ const updateService = new UpdateService(__dirname, {
   dataRoot: config.AGENT_COCKPIT_DATA_DIR,
   installStateService,
 });
+const dataMigrationService = new DataMigrationService({
+  dataRoot: config.AGENT_COCKPIT_DATA_DIR,
+  authDataDir: config.AUTH_DATA_DIR,
+  appVersion: require(path.join(__dirname, 'package.json')).version,
+});
 const installDoctorService = new InstallDoctorService({
   appRoot: __dirname,
   dataRoot: config.AGENT_COCKPIT_DATA_DIR,
   installStateService,
   updateService,
 });
-const chatResult = createChatRouter({ chatService, backendRegistry, updateService, installStateService, installDoctorService, cliUpdateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
+const chatResult = createChatRouter({ chatService, backendRegistry, updateService, dataMigrationService, installStateService, installDoctorService, cliUpdateService, claudePlanUsageService, kiroPlanUsageService, codexPlanUsageService });
 const { router: chatRouter, shutdown: chatShutdown, activeStreams, setWsFunctions } = chatResult;
 app.use('/api/chat', chatRouter);
 

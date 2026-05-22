@@ -706,6 +706,64 @@ On first startup after upgrade, `initialize()` detects legacy `conversations/` d
 2. Writes workspace index + session files to `workspaces/{storageKey}/`
 3. Renames old dirs to `*_backup/`
 
+### DataMigrationService
+
+**File:** `src/services/dataMigrationService.ts`
+
+`DataMigrationService` owns full-install export/import for the configured
+`AGENT_COCKPIT_DATA_DIR`. It deliberately sits outside `ChatService`: migration
+packages and replaces the entire data root, not just chat state. Contracts live
+in `src/contracts/dataMigration.ts`; routes live in
+`src/routes/chat/dataMigrationRoutes.ts`; the architecture decision is recorded
+in [ADR-0074](adr/0074-use-data-root-bundles-for-migration.md).
+
+Constructor options are `{ dataRoot, authDataDir?, appVersion }`. `dataRoot` is
+the active `AGENT_COCKPIT_DATA_DIR`. `authDataDir` lets manifest warnings explain
+when first-party auth is outside the exported root. `appVersion` is embedded in
+the export manifest.
+
+Static methods:
+
+| Method | Description |
+|--------|-------------|
+| `controlDirForDataRoot(dataRoot)` | Returns the sibling migration control directory (`<dataRoot>.migration`). |
+| `applyPendingImport(dataRoot)` | Startup-only pending import applier. Reads `<dataRoot>.migration/pending-import.json`, validates recorded paths stay inside the control directory, renames the current data root to the recorded backup path, renames staged `data/` into `dataRoot`, writes `last-import.json` best-effort, and removes the pending marker, staging parent, and original uploaded bundle best-effort. Failures before swap are recorded in `failed-import.json` and the pending marker is moved aside or removed so later startups do not retry forever. |
+
+Instance methods:
+
+| Method | Description |
+|--------|-------------|
+| `getStatus()` | Returns `dataRoot`, `controlDir`, pending import metadata, and last successful import metadata. Corrupt/missing marker files are treated as absent for status display. |
+| `createExportBundle()` | Walks the data root, skips transient/runtime exclusions, streams a `.acexport` ZIP under `exports/`, computes SHA-256 checksums and sizes for every file, writes `manifest.json`, verifies the finished ZIP back against the manifest, and returns the bundle path/filename/manifest. Symlinks are excluded rather than followed. Archive creation must stream file contents from disk and must not load the whole data root into memory. Exports are capped at 20 GB of included uncompressed files. |
+| `startExportJob()` | Creates one in-memory export job at a time and starts `createExportBundle()` asynchronously with progress callbacks. Running jobs expose phase/progress; ready jobs expose filename and manifest; failed jobs expose an error. Jobs older than one hour are cleaned up on the next start request. |
+| `getExportJob(jobId)` | Returns the public `DataExportJobStatusResponse` for an export job. The public response never exposes the temporary server file path. |
+| `getExportJobDownload(jobId)` | Returns `{ filePath, filename }` only when the job is ready. Unknown jobs throw `Export job not found`; running or failed jobs throw `Export job is not ready for download`. |
+| `deleteExportJob(jobId)` | Removes the in-memory export job and best-effort deletes the temporary bundle. The download route calls this from the `res.download()` callback. |
+| `saveImportUpload(sourcePath, originalName)` | Moves a route-uploaded file into `uploads/` with an internal upload id and preserves the display filename. Upload size is capped at 20 GB by the route. |
+| `previewImportUpload(uploadId)` | Opens the uploaded ZIP with lazy/streamed entry reads, validates safe entry paths, rejects duplicate/encrypted entries, reads only `manifest.json` with a 10 MB cap, validates manifest schema version, and returns `{ uploadId, manifest, warnings }` without extracting into the active data root. |
+| `deleteUpload(uploadId)` | Removes an uploaded bundle from `uploads/`; used after preview validation failure and available for explicit cleanup. Successful startup apply removes the original uploaded bundle best-effort using the pending import's `uploadId`. |
+| `scheduleImport(uploadId)` | Rejects when another pending import exists, streams `data/...` entries into `staging/<importId>/data`, rejects entries not declared in the manifest before writing them, removes excluded runtime paths from staging, verifies every staged file against manifest size and checksum, rejects unexpected staged files, writes `pending-import.json`, and returns `{ importId, backupPath }`. On scheduling failure, removes the staging directory before rethrowing. |
+| `cancelPendingImport(importId?)` | Removes a staged pending import marker and staging directory. If `importId` is supplied, it only cancels the matching import. The confirm route uses this when restart launch fails so a later unrelated restart does not activate a stale destructive import. |
+| `runPostImportChecks({ deep? })` | Checks migrated data and destination environment health. Shallow checks verify workspace registry/storage/current paths, Memory directories, KB SQLite `schema_version`, PGLite vector directories, stale `postmaster.pid`, CLI profile auth/config hints, Pandoc, and LibreOffice. Deep checks additionally call each workspace embedding config's Ollama host through `checkOllamaHealth()`. |
+| `uploadDir()` | Returns and creates the upload directory so multer can stream/move files there before service methods run. |
+
+Export and import both use the versioned manifest as the integrity boundary.
+The archive reader/writer is streaming: export streams source files into the ZIP
+and import streams ZIP entries out to staging. Export verifies the finished ZIP
+back against the manifest before returning it for download. Import rejects
+manifests whose declared included bytes exceed 20 GB, which keeps compressed ZIP
+bombs from expanding indefinitely during staging. `scheduleImport()` verifies
+each staged file's size and SHA-256 before writing the pending marker. Runtime
+data that should not survive migration is removed from staging even if a
+hand-built bundle contains it.
+
+The route layer closes Knowledge Base SQLite/vector stores before export so the
+bundle does not capture partially-open DB state. Export and confirm both reject
+while any chat turn is active or preparing. This guard prevents package/replace
+operations from racing with live CLI writes, but it does not freeze every
+settings or browser request in the process. The manifest checksum pass is the
+final source of truth for what was actually staged.
+
 ## 4.2 Backend Adapter System
 
 The CLI backend layer uses a **pluggable adapter pattern**. New CLI tools can be added without modifying routes, chat service, or frontend.

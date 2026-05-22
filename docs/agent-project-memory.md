@@ -169,6 +169,11 @@ tool is unavailable.
   paths are mutable metadata in `data/chat/workspaces.json`; legacy
   `workspaceHash` values and storage keys are compatibility/storage details, not
   the identity current clients should use.
+- Data migration uses complete `AGENT_COCKPIT_DATA_DIR` bundles. Import is a
+  destructive replace after backup, requires exact `REPLACE` confirmation, and
+  does not merge destination conversations, settings, Memory, Workspace Context,
+  KB SQLite/PGLite, or auth state. Keep migration specs/tests aligned when
+  changing data-root layout or runtime-file exclusions.
 - Workspace Context is the workspace-level operating memory feature. Its
   canonical data is markdown under `workspace-context/context/`, maintained by a
   configured CLI processor and exposed to active chat CLIs through an `AGENTS.md`

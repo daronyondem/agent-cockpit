@@ -28,6 +28,7 @@ agent-cockpit/
 ├── src/
 │   ├── contracts/
 │   │   ├── chat.ts                    # Chat API request/response contracts and runtime validators
+│   │   ├── dataMigration.ts           # Browser-safe data export/import contracts and validators
 │   │   ├── usagePricing.ts            # Browser-safe usage pricing catalog/override contracts
 │   │   ├── conversations.ts           # Browser-safe conversation mutation contracts
 │   │   ├── streams.ts                 # Browser-safe message/input mutation contracts
@@ -50,7 +51,7 @@ agent-cockpit/
 │   │   └── security.ts                 # Helmet CSP configuration
 │   ├── routes/
 │   │   ├── chat.ts                     # Chat API composition root and stream orchestration
-│   │   └── chat/                       # Focused chat route modules: status, CLI profile, conversation, stream, goal, upload, filesystem, instructions, explorer, Git changes, worktree isolation, memory, Workspace Context, KB, shared helpers
+│   │   └── chat/                       # Focused chat route modules: status, CLI profile, conversation, stream, goal, upload, filesystem, instructions, explorer, Git changes, worktree isolation, memory, Workspace Context, KB, data migration, shared helpers
 │   ├── utils/
 │   │   ├── atomicWrite.ts              # Atomic JSON/file write helper
 │   │   ├── keyedMutex.ts               # FIFO per-key async mutex
@@ -90,6 +91,7 @@ agent-cockpit/
 │       │       └── passthrough.ts      # Text (md/txt/json/...) + hybrid image passthrough (per-image AI description, SVG bypass)
 │       ├── cliProfiles.ts              # CLI profile helpers: server-configured profile IDs/defaults and runtime resolver
 │       ├── cliUpdateService.ts         # In-memory local CLI version checks and supported CLI update commands
+│       ├── dataMigrationService.ts      # Full data-root export/import bundle staging, verification, startup apply, and post-import checks
 │       ├── chat/
 │       │   ├── attachments.ts          # Attachment/artifact metadata helpers used by ChatService
 │       │   ├── messageQueueStore.ts    # Private ChatService queue store + legacy queue normalization
@@ -177,6 +179,144 @@ agent-cockpit/
     ├── restart.ps1                     # Windows PM2 restart script written by UpdateService when restart/update is requested
     └── update-restart.log              # Restart script output
 ```
+
+## Data Migration Bundles
+
+Agent Cockpit exports and imports complete data roots. The export file extension
+is `.acexport`; the file is a ZIP with this top-level shape:
+
+```text
+manifest.json
+data/
+  ...files copied from AGENT_COCKPIT_DATA_DIR...
+```
+
+`manifest.json` uses schema version `1` and is described by
+`DataExportManifest` in `src/contracts/dataMigration.ts`:
+
+```typescript
+{
+  schemaVersion: 1;
+  appVersion: string;
+  exportedAt: string;
+  sourcePlatform: NodeJS.Platform;
+  dataRootName: string;
+  includedRoot: 'AGENT_COCKPIT_DATA_DIR';
+  auth: {
+    included: boolean;
+    path: string | null;
+    warning?: string;
+  };
+  counts: {
+    workspaces: number;
+    files: number;
+    bytes: number;
+  };
+  files: [{
+    path: string;      // POSIX-style relative path under data/
+    bytes: number;
+    sha256: string;
+  }];
+  workspaces: [{
+    workspaceId: string;
+    storageKey: string;
+    currentPath: string | null;
+    previousPaths: string[];
+    memory: { present: boolean; enabled?: boolean | null };
+    knowledge: {
+      present: boolean;
+      enabled?: boolean | null;
+      stateDb: boolean;
+      vectors: boolean;
+      embeddingConfig?: {
+        model?: string;
+        ollamaHost?: string;
+        dimensions?: number;
+      } | null;
+    };
+    workspaceContext: { present: boolean; enabled?: boolean | null };
+  }];
+  excluded: string[];
+  warnings: string[];
+}
+```
+
+The bundle is meant to preserve everything user-owned under the data root:
+settings, workspace identity registry, conversations and sessions, uploaded and
+generated artifacts, Memory files and sidecars, Workspace Context markdown,
+Knowledge Base SQLite metadata and PGLite vectors, plan-usage caches, install
+metadata, and first-party auth when `AUTH_DATA_DIR` stays under the data root.
+
+The preferred browser export path uses `DataExportJobStatusResponse` while the
+server prepares the bundle:
+
+```typescript
+{
+  jobId: string;
+  status: 'running' | 'ready' | 'failed';
+  phase: string;
+  progress: number; // integer percent, 1-99 while running, 100 when ready/failed
+  createdAt: string;
+  updatedAt: string;
+  filename?: string;              // ready jobs only
+  manifest?: DataExportManifest;  // ready jobs only
+  error?: string;                 // failed jobs only
+}
+```
+
+Exports intentionally exclude transient process state that should not survive a
+migration: Express `sessions/`, `chat/stream-jobs.json`, temporary/staging
+files, `.DS_Store`, symlinks, and stale Postgres/PGLite runtime files such as
+`postmaster.pid` and `pg_stat_tmp`. Imported data starts without browser
+sessions or abandoned active CLI turns.
+
+Archive I/O is streaming. Export streams source files into the `.acexport` ZIP
+instead of buffering the data root in memory, then verifies the finished ZIP
+back against the manifest before returning it for download. Import reads entries
+lazily, caps `manifest.json` at 10 MB, rejects unsafe, duplicate, encrypted, or
+undeclared data entries, and then verifies staged file size plus SHA-256 before
+writing a pending import marker. Both export and import limit included
+uncompressed data bytes to 20 GB.
+
+Import confirmation responses are represented by
+`DataImportConfirmResponse = DataImportConfirmSuccessResponse |
+DataImportConfirmFailureResponse`. Success is
+`{ ok:true, pending:true, restart, backupPath, importId, message }`. The
+structured restart-failure response is
+`{ ok:false, pending:false, error, restart?, backupPath?, importId? }`; ordinary
+validation failures still use the route's standard `{ error }` response body.
+
+`DataMigrationService.controlDirForDataRoot(dataRoot)` returns a sibling control
+directory named `<dataRoot>.migration`. For the default `data` root this is
+`data.migration/`, not `data/.migration/`. Its layout is:
+
+```text
+<dataRoot>.migration/
+├── exports/                # Temporary export bundles removed after download
+├── uploads/                # Uploaded .acexport files awaiting preview/confirm; successful imports remove their upload best-effort
+├── staging/<importId>/data # Verified replacement data root before restart
+├── backups/<importId>-...  # Previous active data root after import apply
+├── pending-import.json     # Startup apply marker
+├── last-import.json        # Best-effort metadata for last successful import
+└── failed-import.json      # Last failed startup apply metadata, when any
+```
+
+Import works on any installation, not only a fresh install. It never merges.
+`POST /api/chat/migration/import/confirm` requires the exact confirmation text
+`REPLACE`, stages and verifies the bundle, writes `pending-import.json`, and
+requests a server restart. On the next startup, before Express sessions,
+`ChatService`, KB databases, or plan-usage services open files,
+`DataMigrationService.applyPendingImport(dataRoot)` renames the current data
+root to the recorded backup path and renames the staged `data/` directory into
+the active `dataRoot` path. Successful metadata cleanup is best effort after the
+swap. If startup apply fails before a swap, the pending marker is moved aside or
+removed so the server does not retry the same failed import forever.
+
+After import, the server can run post-import checks that verify workspace
+storage directories, missing absolute workspace paths, Memory directories, KB
+SQLite `state.db` schema metadata, PGLite vector directories, stale
+`postmaster.pid`, CLI profile auth/config hints, Pandoc, LibreOffice, and
+optionally Ollama embedding availability.
 
 ## Workspace Identity
 

@@ -608,6 +608,44 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.state-memory-review');
   });
 
+  test('Settings exposes data migration export/import controls', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+
+    expect(apiSrc).toContain("chatFetch('migration/status')");
+    expect(apiSrc).toContain("migrationExportUrl: () => chatUrl('migration/export')");
+    expect(apiSrc).toContain("startMigrationExport: () => chatFetch('migration/export/start'");
+    expect(apiSrc).toContain("migrationExportJob: (jobId) => chatFetch(`migration/export/${encodeURIComponent(jobId)}/status`)");
+    expect(apiSrc).toContain("migrationExportJobDownloadUrl: (jobId) => chatUrl(`migration/export/${encodeURIComponent(jobId)}/download`)");
+    expect(apiSrc).toContain("chatFetch('migration/export')");
+    expect(apiSrc).toContain("chatFetch('migration/import/preview'");
+    expect(apiSrc).toContain("chatFetch(\n      'migration/import/confirm'");
+    expect(apiSrc).toContain("chatFetch(`migration/checks${deep ? '?deep=true' : ''}`)");
+    expect(settingsSrc).toContain("{ id: 'migration', label: 'Migration' }");
+    expect(settingsSrc).toContain('function MigrationTab()');
+    expect(settingsSrc).toContain("confirmation !== 'REPLACE'");
+    expect(settingsSrc).toContain('Replace all Agent Cockpit data?');
+    expect(settingsSrc).toContain('Import replaces everything in this installation.');
+    expect(settingsSrc).toContain('AgentApi.settings.startMigrationExport()');
+    expect(settingsSrc).toContain('AgentApi.settings.migrationExportJob(job.jobId)');
+    expect(settingsSrc).toContain('AgentApi.settings.migrationExportJobDownloadUrl(job.jobId)');
+    expect(settingsSrc).toContain('migration-button-progress');
+    expect(settingsSrc).toContain('function MigrationChecks');
+    expect(settingsSrc).toContain('Run checks help');
+    expect(settingsSrc).toContain('Deep checks help');
+    expect(settingsSrc).toContain('They do not contact Ollama.');
+    expect(settingsSrc).toContain('also contact each configured Ollama embedding host/model');
+    expect(cssSrc).toContain('.migration-panel');
+    expect(cssSrc).toContain('.migration-progress-button');
+    expect(cssSrc).toContain('.migration-button-progress');
+    expect(cssSrc).toContain('.migration-check-row');
+    expect(cssSrc).toContain('.migration-check-row.warning');
+    expect(cssSrc).toContain('.migration-pill.error');
+    expect(cssSrc).toContain('.migration-pill.warning');
+    expect(cssSrc).toContain('.migration-action-with-help');
+  });
+
   test('V2 frontend uses module imports instead of app-local window globals', () => {
     const srcRoot = path.join(ROOT, 'web/AgentCockpitWeb/src');
     const mainSrc = fs.readFileSync(path.join(srcRoot, 'main.jsx'), 'utf8');

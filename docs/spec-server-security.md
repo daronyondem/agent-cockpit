@@ -55,6 +55,15 @@ Server logging is migrating to `src/utils/logger.ts`. The logger writes one stru
 
 **File:** `server.ts`
 
+Before creating the Express app, startup calls
+`DataMigrationService.applyPendingImport(config.AGENT_COCKPIT_DATA_DIR)`. This
+is intentionally earlier than session-store, `ChatService`, KB, plan-usage, or
+settings initialization so a confirmed import replaces the data root before any
+file-backed service opens handles under the old root. Successful apply logs the
+backup path and imported data path. A pre-swap failure is logged and the pending
+marker is moved aside by the service so the server does not enter an endless
+restart/import retry loop.
+
 1. Create Express app, set `trust proxy: 1`
 2. Apply Helmet security headers via `applySecurity(app)`
 3. Configure express-session with FileStore (`<AGENT_COCKPIT_DATA_DIR>/sessions/`, 24h TTL, `retries: 0` on non-Windows and `retries: 3` on Windows). `cookie.maxAge` is 24h and `rolling: true` is set — every request re-issues the cookie with a fresh 24h expiry, so active users never hit the wall mid-workflow while idle users still expire after 24h of no activity.
@@ -68,7 +77,7 @@ Server logging is migrating to `src/utils/logger.ts`. The logger writes one stru
 9a. Mount current-user endpoint at `GET /api/me`
 10. Create BackendRegistry, register ClaudeCodeAdapter, KiroAdapter, and CodexAdapter
 11. Initialize ChatService
-12. Initialize InstallStateService, UpdateService, InstallDoctorService, CliUpdateService, Claude/Kiro/Codex plan usage services, `WebBuildService`, `MobileBuildService`, and the chat router dependencies, including the Claude Code Interactive adapter registration
+12. Initialize InstallStateService, UpdateService, InstallDoctorService, CliUpdateService, DataMigrationService, Claude/Kiro/Codex plan usage services, `WebBuildService`, `MobileBuildService`, and the chat router dependencies, including the Claude Code Interactive adapter registration
 13. Mount chat router at `/api/chat`
 14. Mount root redirect `/` -> `/v2/`
 15. Mount `/v2/src` as an explicit 404 guard so raw V2 source files are not served

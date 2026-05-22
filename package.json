@@ -57,7 +57,9 @@
     "react-dom": "^19.2.6",
     "session-file-store": "^1.5.0",
     "unpdf": "^1.4.0",
-    "ws": "^8.20.0"
+    "ws": "^8.20.1",
+    "yauzl": "^3.3.1",
+    "yazl": "^3.3.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.60.0",
@@ -75,6 +77,8 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
+    "@types/yauzl": "^2.10.3",
+    "@types/yazl": "^3.3.1",
     "@vitejs/plugin-react": "^6.0.1",
     "jest": "^30.3.0",
     "jest-environment-jsdom": "^30.3.0",
