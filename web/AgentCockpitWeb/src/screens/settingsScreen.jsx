@@ -2568,6 +2568,7 @@ function MigrationTab(){
   const [busy, setBusy] = React.useState('');
   const [message, setMessage] = React.useState('');
   const [exportProgress, setExportProgress] = React.useState(null);
+  const [importProgress, setImportProgress] = React.useState(null);
   const [overlay, setOverlay] = React.useState(false);
 
   React.useEffect(() => {
@@ -2621,15 +2622,30 @@ function MigrationTab(){
     setPreview(null);
     setConfirmation('');
     setMessage('');
+    setImportProgress(null);
     if (!file) return;
     setBusy('preview');
+    setImportProgress({ step: 'uploading', phase: 'Uploading', progress: 1 });
     try {
-      const data = await AgentApi.settings.previewMigrationImport(file);
+      const data = await AgentApi.settings.previewMigrationImport(file, {
+        onProgress: (progress) => {
+          setImportProgress({
+            step: 'uploading',
+            phase: 'Uploading',
+            progress: progress.percent,
+          });
+        },
+        onUploadComplete: () => {
+          setImportProgress({ step: 'processing', phase: 'Processing', progress: 100 });
+        },
+      });
       setPreview(data);
+      setImportProgress(null);
       await refreshStatus().catch(() => {});
     } catch (err) {
       await dialog.alert({ anchor, variant: 'error', title: 'Import preview failed', body: err.message || String(err) });
       setSelectedFile(null);
+      setImportProgress(null);
       if (fileInputRef.current) fileInputRef.current.value = '';
     } finally {
       setBusy('');
@@ -2647,16 +2663,18 @@ function MigrationTab(){
     });
     if (!ok) return;
     setBusy('import');
-    setMessage('Staging import…');
+    setMessage('Restoring import…');
+    setImportProgress({ step: 'restoring', phase: 'Restoring', progress: 100 });
     try {
       const res = await AgentApi.settings.confirmMigrationImport(preview.uploadId, confirmation);
       if (res && res.ok) {
-        setMessage('Import staged. Restarting…');
+        setMessage('Restore staged. Restarting…');
         setOverlay(true);
         setTimeout(() => window.location.reload(), 6500);
       } else {
         setMessage((res && res.error) || 'Import was not applied.');
         setBusy('');
+        setImportProgress(null);
       }
     } catch (err) {
       if (err && (err.message === 'Failed to fetch' || err.name === 'TypeError')) {
@@ -2666,6 +2684,7 @@ function MigrationTab(){
       }
       await dialog.alert({ anchor, variant: 'error', title: 'Import failed', body: err.message || String(err) });
       setBusy('');
+      setImportProgress(null);
     }
   }
 
@@ -2684,6 +2703,10 @@ function MigrationTab(){
   const pendingImport = status && status.pendingImport;
   const canImport = !!(preview && preview.uploadId && confirmation === 'REPLACE' && !busy && !pendingImport);
   const exportPercent = exportProgress ? Math.max(1, Math.min(100, Math.round(Number(exportProgress.progress) || 1))) : 0;
+  const importPercent = importProgress ? Math.max(1, Math.min(100, Math.round(Number(importProgress.progress) || 1))) : 0;
+  const importButtonLabel = busy === 'preview'
+    ? importProgress && importProgress.step === 'uploading' ? `Uploading ${importPercent}%` : 'Processing…'
+    : 'Choose export';
 
   return (
     <div className="settings-form settings-form-wide migration-form">
@@ -2707,8 +2730,9 @@ function MigrationTab(){
             <div className="settings-section-title">Import</div>
             <div className="migration-danger">{Ico.alert(13)} Import replaces everything in this installation.</div>
           </div>
-          <button className="btn" disabled={!!busy} onClick={() => fileInputRef.current && fileInputRef.current.click()}>
-            {Ico.upload(13)} {busy === 'preview' ? 'Reading…' : 'Choose export'}
+          <button className={`btn migration-progress-button ${busy === 'preview' ? 'is-running' : ''}`} disabled={!!busy} onClick={() => fileInputRef.current && fileInputRef.current.click()}>
+            {busy === 'preview' ? <span className="migration-button-progress" style={{ width: `${importPercent}%` }} /> : null}
+            <span className="migration-button-label">{Ico.upload(13)} {importButtonLabel}</span>
           </button>
         </div>
         <input
@@ -2724,6 +2748,7 @@ function MigrationTab(){
             <span className="u-dim">{fmtBytes(selectedFile.size)}</span>
           </div>
         ) : null}
+        {importProgress ? <MigrationImportProgress progress={importProgress} percent={importPercent}/> : null}
         {manifest ? (
           <div className="migration-preview">
             <div className="migration-kv"><span>Exported</span><b>{fmtDateTime(manifest.exportedAt)}</b></div>
@@ -2746,8 +2771,9 @@ function MigrationTab(){
             </Field>
             {pendingImport ? <div className="settings-warning">A data import is already pending. Restart before staging another import.</div> : null}
             <div className="settings-actions">
-              <button className="btn danger" disabled={!canImport} onClick={(e) => onImport(e.currentTarget)}>
-                {Ico.alert(13)} {busy === 'import' ? 'Importing…' : 'Replace and restart'}
+              <button className={`btn danger migration-progress-button ${busy === 'import' ? 'is-running' : ''}`} disabled={!canImport} onClick={(e) => onImport(e.currentTarget)}>
+                {busy === 'import' ? <span className="migration-button-progress" style={{ width: '100%' }} /> : null}
+                <span className="migration-button-label">{Ico.alert(13)} {busy === 'import' ? 'Restoring…' : 'Replace and restart'}</span>
               </button>
             </div>
           </div>
@@ -2801,6 +2827,30 @@ function summaryLabel(summary){
   if (summary.errors) parts.push(`${summary.errors} error${summary.errors === 1 ? '' : 's'}`);
   if (summary.warnings) parts.push(`${summary.warnings} warning${summary.warnings === 1 ? '' : 's'}`);
   return parts.length ? parts.join(' · ') : 'All checks passed';
+}
+
+function MigrationImportProgress({ progress, percent }){
+  if (!progress) return null;
+  const currentStep = progress.step || 'uploading';
+  const steps = [
+    { id: 'uploading', label: currentStep === 'uploading' ? `Uploading ${percent}%` : 'Uploading' },
+    { id: 'processing', label: 'Processing' },
+    { id: 'restoring', label: 'Restoring' },
+  ];
+  const currentIndex = Math.max(0, steps.findIndex(step => step.id === currentStep));
+  return (
+    <div className="migration-import-progress" role="status" aria-live="polite">
+      {steps.map((step, index) => (
+        <span
+          key={step.id}
+          className={`migration-import-step ${index < currentIndex ? 'done' : index === currentIndex ? 'active' : 'pending'}`}
+        >
+          {step.label}
+        </span>
+      ))}
+      <div className="migration-progress-line">{progress.phase || 'Working'}{currentStep === 'uploading' ? ` · ${percent}%` : '…'}</div>
+    </div>
+  );
 }
 
 function MigrationChecks({ checks }){

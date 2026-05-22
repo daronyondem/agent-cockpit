@@ -619,7 +619,11 @@ describe('frontend routes', () => {
     expect(apiSrc).toContain("migrationExportJob: (jobId) => chatFetch(`migration/export/${encodeURIComponent(jobId)}/status`)");
     expect(apiSrc).toContain("migrationExportJobDownloadUrl: (jobId) => chatUrl(`migration/export/${encodeURIComponent(jobId)}/download`)");
     expect(apiSrc).toContain("chatFetch('migration/export')");
-    expect(apiSrc).toContain("chatFetch('migration/import/preview'");
+    expect(apiSrc).toContain('function chatUpload(path, form, opts)');
+    expect(apiSrc).toContain('new XMLHttpRequest()');
+    expect(apiSrc).toContain('xhr.upload.onprogress');
+    expect(apiSrc).toContain('xhr.upload.onload');
+    expect(apiSrc).toContain("return chatUpload('migration/import/preview'");
     expect(apiSrc).toContain("chatFetch(\n      'migration/import/confirm'");
     expect(apiSrc).toContain("chatFetch(`migration/checks${deep ? '?deep=true' : ''}`)");
     expect(settingsSrc).toContain("{ id: 'migration', label: 'Migration' }");
@@ -631,6 +635,10 @@ describe('frontend routes', () => {
     expect(settingsSrc).toContain('AgentApi.settings.migrationExportJob(job.jobId)');
     expect(settingsSrc).toContain('AgentApi.settings.migrationExportJobDownloadUrl(job.jobId)');
     expect(settingsSrc).toContain('migration-button-progress');
+    expect(settingsSrc).toContain('function MigrationImportProgress');
+    expect(settingsSrc).toContain('Uploading ${percent}%');
+    expect(settingsSrc).toContain('Processing');
+    expect(settingsSrc).toContain('Restoring');
     expect(settingsSrc).toContain('function MigrationChecks');
     expect(settingsSrc).toContain('Run checks help');
     expect(settingsSrc).toContain('Deep checks help');
@@ -639,6 +647,8 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.migration-panel');
     expect(cssSrc).toContain('.migration-progress-button');
     expect(cssSrc).toContain('.migration-button-progress');
+    expect(cssSrc).toContain('.migration-import-progress');
+    expect(cssSrc).toContain('.migration-import-step.active');
     expect(cssSrc).toContain('.migration-check-row');
     expect(cssSrc).toContain('.migration-check-row.warning');
     expect(cssSrc).toContain('.migration-pill.error');

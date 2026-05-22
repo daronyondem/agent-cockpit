@@ -121,6 +121,54 @@
     return res;
   }
 
+  async function chatUpload(path, form, opts){
+    opts = opts || {};
+    if (!state.csrfToken) await fetchCsrfToken();
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open(opts.method || 'POST', chatUrl(path), true);
+      xhr.withCredentials = true;
+      if (state.csrfToken) xhr.setRequestHeader('x-csrf-token', state.csrfToken);
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable || typeof opts.onProgress !== 'function') return;
+        opts.onProgress({
+          loaded: event.loaded,
+          total: event.total,
+          percent: Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100))),
+        });
+      };
+      xhr.upload.onload = () => {
+        if (typeof opts.onUploadComplete === 'function') opts.onUploadComplete();
+      };
+      xhr.onload = () => {
+        let body = null;
+        try {
+          body = xhr.responseText ? JSON.parse(xhr.responseText) : null;
+        } catch {
+          body = xhr.responseText;
+        }
+        if (xhr.status === 401) {
+          if (state.onSessionExpired) state.onSessionExpired();
+          const e = new Error('Session expired');
+          e.status = xhr.status;
+          reject(e);
+          return;
+        }
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const e = new Error((body && body.error) || xhr.statusText || `HTTP ${xhr.status}`);
+          e.status = xhr.status;
+          e.body = body;
+          reject(e);
+          return;
+        }
+        resolve(body);
+      };
+      xhr.onerror = () => reject(new Error('Upload failed'));
+      xhr.onabort = () => reject(new Error('Upload cancelled'));
+      xhr.send(form);
+    });
+  }
+
   async function authFetch(path, opts){
     opts = opts || {};
     const method = (opts.method || 'GET').toUpperCase();
@@ -878,10 +926,14 @@
       blob: await r.blob(),
       filename: filenameFromContentDisposition(r.headers.get('content-disposition'), 'agent-cockpit-export.acexport'),
     })),
-    previewMigrationImport: (file) => {
+    previewMigrationImport: (file, options = {}) => {
       const form = new FormData();
       form.append('bundle', file);
-      return chatFetch('migration/import/preview', { method: 'POST', body: form }).then(r => r.json());
+      return chatUpload('migration/import/preview', form, {
+        method: 'POST',
+        onProgress: options.onProgress,
+        onUploadComplete: options.onUploadComplete,
+      });
     },
     confirmMigrationImport: (uploadId, confirmation) => chatFetch(
       'migration/import/confirm',
