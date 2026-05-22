@@ -1,5 +1,6 @@
 node_modules/
 data/
+data.migration/
 .env
 *.log
 TASK.md
