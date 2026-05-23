@@ -4,7 +4,7 @@ import { buildCliCommandInvocation } from '../cliCommandResolver';
 import type { CliCompatibilityStatus } from '../../types';
 import type { ClaudeCliRuntime } from './claudeCode';
 
-export const CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION = '2.1.149';
+export const CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION = '2.1.150';
 
 const EXEC_TIMEOUT_MS = 15_000;
 const MAX_BUFFER = 256 * 1024;
