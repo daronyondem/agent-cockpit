@@ -41,7 +41,10 @@ Optional checks include:
 - LibreOffice;
 - mobile PWA build;
 - update-channel metadata;
-- Windows logon startup registration.
+- platform startup registration.
+
+Startup checks are platform-specific: macOS checks the LaunchAgent, Linux checks
+the systemd user unit, and Windows checks the ONLOGON scheduled task.
 
 Missing optional tools produce warnings, not hard install failures. Users only
 need to install the backend CLIs and document tools they plan to use.

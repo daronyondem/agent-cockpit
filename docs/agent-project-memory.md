@@ -44,6 +44,12 @@ tool is unavailable.
 - Linux production release support targets Ubuntu 24.04 LTS x64/glibc first.
   Keep Alpine/musl, NixOS, WSL, Linux arm64, and 32-bit Linux unsupported unless
   a later tested decision changes the support matrix.
+- macOS and Linux installers register current-user session startup by default
+  while keeping PM2 as the app supervisor. macOS uses
+  `~/Library/LaunchAgents/com.agent-cockpit.server.plist`; Linux uses the
+  `agent-cockpit.service` systemd user unit. `--no-auto-start` records
+  intentional manual startup. Do not replace this with privileged LaunchDaemons,
+  system services, or no-login operation without a new ADR.
 - POSIX self-update restart launchers must not depend on the executable bit of
   `<dataDir>/restart.sh`. Launch through `sh`, chmod after every write, repair
   stale restart scripts on fixed-server startup, and have macOS/Linux installer

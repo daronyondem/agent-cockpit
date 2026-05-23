@@ -15,6 +15,7 @@ describe('macOS installer script', () => {
     expect(help).toContain('--channel production|dev');
     expect(help).toContain('--install-node');
     expect(help).toContain('--no-install-node');
+    expect(help).toContain('--no-auto-start');
     expect(help).toContain('--skip-open');
   });
 
@@ -77,6 +78,17 @@ describe('macOS installer script', () => {
     expect(source).toContain('repair_restart_script_permissions()');
     expect(source).toContain('chmod 755 "$restart_script"');
     expect(source).toContain('repair_restart_script_permissions "$data_dir"');
+    expect(source).toContain('LAUNCH_AGENT_LABEL="com.agent-cockpit.server"');
+    expect(source).toContain('startup_kind()');
+    expect(source).toContain("printf 'launch-agent'");
+    expect(source).toContain('write_helper_scripts "$current_link" "$NODE_RUNTIME_PATH"');
+    expect(source).toContain('write_helper_scripts "$DEV_DIR" "$NODE_RUNTIME_PATH"');
+    expect(source).toContain('start-agent-cockpit.sh');
+    expect(source).toContain('stop-agent-cockpit.sh');
+    expect(source).toContain('${HOME}/Library/LaunchAgents');
+    expect(source).toContain('<key>RunAtLoad</key>');
+    expect(source).toContain('launchctl load -w "$plist_path"');
+    expect(source).toContain('register_login_startup');
     expect(source).toContain('npx pm2 startOrRestart ecosystem.config.js --update-env');
     expect(source).toContain('npx pm2 save');
     expect(source).toContain('wait_for_server "$current_link"');

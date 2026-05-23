@@ -113,4 +113,46 @@ describe('InstallStateService', () => {
     expect(JSON.parse(fs.readFileSync(service.getManifestPath(), 'utf8')).welcomeCompletedAt)
       .toBe('2026-05-12T00:00:00.000Z');
   });
+
+  test('normalizes POSIX startup metadata', async () => {
+    await service.writeState({
+      channel: 'production',
+      source: 'github-release',
+      version: '3.0.0',
+      installDir: path.join(tmpDir, 'install'),
+      appDir: path.join(tmpDir, 'install', 'current'),
+      dataDir: dataRoot,
+      startup: {
+        kind: 'launch-agent',
+        name: 'com.agent-cockpit.server',
+        scope: 'current-user',
+      },
+    });
+
+    expect(service.getStatus().startup).toEqual({
+      kind: 'launch-agent',
+      name: 'com.agent-cockpit.server',
+      scope: 'current-user',
+    });
+
+    await service.writeState({
+      channel: 'production',
+      source: 'github-release',
+      version: '3.0.0',
+      installDir: path.join(tmpDir, 'install'),
+      appDir: path.join(tmpDir, 'install', 'current'),
+      dataDir: dataRoot,
+      startup: {
+        kind: 'systemd-user',
+        name: 'agent-cockpit.service',
+        scope: 'current-user',
+      },
+    });
+
+    expect(service.getStatus().startup).toEqual({
+      kind: 'systemd-user',
+      name: 'agent-cockpit.service',
+      scope: 'current-user',
+    });
+  });
 });

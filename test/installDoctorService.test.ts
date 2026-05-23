@@ -378,6 +378,106 @@ describe('InstallDoctorService', () => {
     }
   });
 
+  test('reports macOS LaunchAgent startup remediation', async () => {
+    const restorePlatform = mockProcessPlatform('darwin');
+    const root = makeRoot();
+    roots.push(root);
+    const commands: Array<{ command: string; args: string[] }> = [];
+    try {
+      const service = new InstallDoctorService({
+        appRoot: root,
+        dataRoot: path.join(root, 'data'),
+        installStateService: makeInstallState(root, {
+          startup: { kind: 'launch-agent', name: 'com.agent-cockpit.server', scope: 'current-user' },
+        }),
+        commandRunner: async (command, args) => {
+          commands.push({ command, args });
+          if (command === 'launchctl') return { ok: false, stdout: '', stderr: '', error: 'not loaded' };
+          if (['claude', 'codex', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
+          return { ok: true, stdout: '1.0.0', stderr: '' };
+        },
+        detectHomebrew: async () => false,
+        detectPandoc: async () => ({ available: true, binaryPath: '/usr/local/bin/pandoc', version: '3.1.1', checkedAt: '2026-05-15T00:00:00.000Z' }),
+        detectLibreOffice: async () => ({ available: true, binaryPath: '/usr/local/bin/soffice', checkedAt: '2026-05-15T00:00:00.000Z' }),
+      });
+
+      const status = await service.getStatus();
+
+      expect(commands).toEqual(expect.arrayContaining([
+        expect.objectContaining({ command: 'launchctl', args: expect.arrayContaining(['print']) }),
+      ]));
+      expect(status.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'macos-login-startup',
+          status: 'warning',
+          remediation: expect.stringContaining('LaunchAgent'),
+        }),
+      ]));
+    } finally {
+      restorePlatform();
+    }
+  });
+
+  test('reports Linux systemd user startup and manual opt-out', async () => {
+    const restorePlatform = mockProcessPlatform('linux');
+    const root = makeRoot();
+    roots.push(root);
+    const commands: Array<{ command: string; args: string[] }> = [];
+    try {
+      const service = new InstallDoctorService({
+        appRoot: root,
+        dataRoot: path.join(root, 'data'),
+        installStateService: makeInstallState(root, {
+          startup: { kind: 'systemd-user', name: 'agent-cockpit.service', scope: 'current-user' },
+        }),
+        commandRunner: async (command, args) => {
+          commands.push({ command, args });
+          if (command === 'systemctl') return { ok: true, stdout: 'enabled', stderr: '' };
+          if (['claude', 'codex', 'kiro-cli'].includes(command)) return { ok: false, stdout: '', stderr: '', error: 'not found' };
+          return { ok: true, stdout: '1.0.0', stderr: '' };
+        },
+        detectHomebrew: async () => false,
+        detectPandoc: async () => ({ available: true, binaryPath: '/usr/bin/pandoc', version: '3.1.1', checkedAt: '2026-05-15T00:00:00.000Z' }),
+        detectLibreOffice: async () => ({ available: true, binaryPath: '/usr/bin/soffice', checkedAt: '2026-05-15T00:00:00.000Z' }),
+      });
+
+      let status = await service.getStatus();
+
+      expect(commands).toEqual(expect.arrayContaining([
+        { command: 'systemctl', args: ['--user', 'is-enabled', 'agent-cockpit.service'] },
+      ]));
+      expect(status.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'linux-user-startup',
+          status: 'ok',
+          detail: 'enabled',
+        }),
+      ]));
+
+      const manualService = new InstallDoctorService({
+        appRoot: root,
+        dataRoot: path.join(root, 'data'),
+        installStateService: makeInstallState(root, {
+          startup: { kind: 'manual', name: null, scope: 'current-user' },
+        }),
+        commandRunner: async () => ({ ok: true, stdout: '1.0.0', stderr: '' }),
+        detectPandoc: async () => ({ available: true, binaryPath: '/usr/bin/pandoc', version: '3.1.1', checkedAt: '2026-05-15T00:00:00.000Z' }),
+        detectLibreOffice: async () => ({ available: true, binaryPath: '/usr/bin/soffice', checkedAt: '2026-05-15T00:00:00.000Z' }),
+      });
+
+      status = await manualService.getStatus();
+      expect(status.checks).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'linux-user-startup',
+          status: 'ok',
+          summary: expect.stringContaining('disabled'),
+        }),
+      ]));
+    } finally {
+      restorePlatform();
+    }
+  });
+
   test('uses installer-recorded Windows Node runtime for npm and PM2 checks', async () => {
     const restorePlatform = mockProcessPlatform('win32');
     const root = makeRoot();

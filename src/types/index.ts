@@ -1962,7 +1962,7 @@ export interface InstallNodeRuntime {
 }
 
 export interface InstallStartup {
-  kind: 'scheduled-task' | 'manual' | 'unknown';
+  kind: 'scheduled-task' | 'launch-agent' | 'systemd-user' | 'manual' | 'unknown';
   name: string | null;
   scope: 'current-user' | 'unknown';
 }

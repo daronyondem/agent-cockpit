@@ -83,8 +83,9 @@ update-service tests, builds the web and mobile assets required by release
 packaging, packages the release on `ubuntu-latest`, verifies macOS, Linux, and
 Windows manifest entries, runs `install-linux.sh` in dev mode against a
 temporary checkout and install root, probes `/auth/setup`, confirms Install
-Doctor reports `node`, `npm`, and `pm2` as ready, and deletes the PM2 process
-before the publish job can start.
+Doctor reports `node`, `npm`, and `pm2` as ready, verifies and removes the
+test systemd user unit, and deletes the PM2 process before the publish job can
+start.
 
 ## Post-Release Checks
 

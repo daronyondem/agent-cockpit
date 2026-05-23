@@ -9,6 +9,7 @@ INSTALL_DIR="${XDG_DATA_HOME:-${HOME}/.local/share}/agent-cockpit"
 DEV_DIR="${HOME}/agent-cockpit"
 INSTALL_NODE="auto"
 OPEN_BROWSER="true"
+AUTO_START="true"
 NODE_MAJOR="22"
 NODE_BIN_DIR=""
 NODE_RUNTIME_PATH=""
@@ -16,6 +17,7 @@ NODE_RUNTIME_SOURCE=""
 NODE_RUNTIME_VERSION=""
 NODE_RUNTIME_NPM_VERSION=""
 NODE_RUNTIME_DIR=""
+SYSTEMD_SERVICE_NAME="agent-cockpit.service"
 export NPM_CONFIG_AUDIT=false
 export NPM_CONFIG_FUND=false
 export NPM_CONFIG_LOGLEVEL=error
@@ -34,6 +36,7 @@ Options:
   --port <port>              Local HTTP port. Default: 3334.
   --install-node             Install a private Node.js runtime when Node 22+ is missing. Default.
   --no-install-node          Fail instead of installing a private Node.js runtime.
+  --no-auto-start            Do not register Agent Cockpit to start at user login.
   --skip-open                Do not open the browser after PM2 starts.
   -h, --help                 Show this help.
 
@@ -89,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-open)
       OPEN_BROWSER="false"
+      shift
+      ;;
+    --no-auto-start)
+      AUTO_START="false"
       shift
       ;;
     -h|--help)
@@ -259,6 +266,14 @@ json_string() {
   node -e "process.stdout.write(JSON.stringify(process.argv[1]))" "$1"
 }
 
+shell_quote() {
+  node -e "process.stdout.write(\"'\" + process.argv[1].replace(/'/g, \"'\\\\''\") + \"'\")" "$1"
+}
+
+systemd_quote() {
+  node -e "process.stdout.write('\"' + process.argv[1].replace(/\\\\/g, '\\\\\\\\').replace(/\"/g, '\\\\\"') + '\"')" "$1"
+}
+
 json_read() {
   local file="$1"
   local expression="$2"
@@ -377,9 +392,11 @@ write_install_manifest() {
   local node_runtime_npm_version="${10}"
   local node_runtime_bin_dir="${11}"
   local node_runtime_dir="${12}"
+  local startup_kind="${13}"
+  local startup_name="${14}"
 
   mkdir -p "$data_dir"
-  node - "$data_dir/install.json" "$channel" "$source" "$REPO" "$version" "$branch" "$install_dir" "$app_dir" "$data_dir" "$node_runtime_source" "$node_runtime_version" "$node_runtime_npm_version" "$node_runtime_bin_dir" "$node_runtime_dir" "$NODE_MAJOR" <<'NODE'
+  node - "$data_dir/install.json" "$channel" "$source" "$REPO" "$version" "$branch" "$install_dir" "$app_dir" "$data_dir" "$node_runtime_source" "$node_runtime_version" "$node_runtime_npm_version" "$node_runtime_bin_dir" "$node_runtime_dir" "$NODE_MAJOR" "$startup_kind" "$startup_name" <<'NODE'
 const fs = require('fs');
 const [
   manifestPath,
@@ -397,6 +414,8 @@ const [
   nodeRuntimeBinDir,
   nodeRuntimeDir,
   nodeRuntimeRequiredMajor,
+  startupKind,
+  startupName,
 ] = process.argv.slice(2);
 
 const manifest = {
@@ -419,6 +438,11 @@ const manifest = {
     runtimeDir: nodeRuntimeDir || null,
     requiredMajor: Number(nodeRuntimeRequiredMajor) || null,
     updatedAt: new Date().toISOString(),
+  } : null,
+  startup: startupKind ? {
+    kind: startupKind,
+    name: startupName || null,
+    scope: 'current-user',
   } : null,
 };
 
@@ -459,6 +483,105 @@ repair_restart_script_permissions() {
   local restart_script="${data_dir}/restart.sh"
   if [[ -f "$restart_script" ]]; then
     chmod 755 "$restart_script" || log "Warning: unable to repair self-update restart script permissions at ${restart_script}."
+  fi
+}
+
+startup_kind() {
+  if [[ "$AUTO_START" == "true" ]]; then
+    printf 'systemd-user'
+  else
+    printf 'manual'
+  fi
+}
+
+startup_name() {
+  if [[ "$AUTO_START" == "true" ]]; then
+    printf '%s' "$SYSTEMD_SERVICE_NAME"
+  fi
+}
+
+write_helper_scripts() {
+  local app_dir="$1"
+  local runtime_path="$2"
+  local bin_dir="${INSTALL_DIR}/bin"
+  local log_dir="${INSTALL_DIR}/pm2/logs"
+  local app_dir_q
+  local runtime_path_q
+  app_dir_q="$(shell_quote "$app_dir")"
+  runtime_path_q="$(shell_quote "$runtime_path")"
+  mkdir -p "$bin_dir" "$log_dir"
+
+  cat > "${bin_dir}/start-agent-cockpit.sh" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+APP_DIR=${app_dir_q}
+RUNTIME_PATH=${runtime_path_q}
+if [[ -n "\$RUNTIME_PATH" ]]; then
+  export PATH="\$RUNTIME_PATH"
+fi
+cd "\$APP_DIR"
+npx pm2 startOrRestart ecosystem.config.js --update-env
+npx pm2 save
+SCRIPT
+
+  cat > "${bin_dir}/stop-agent-cockpit.sh" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+APP_DIR=${app_dir_q}
+RUNTIME_PATH=${runtime_path_q}
+if [[ -n "\$RUNTIME_PATH" ]]; then
+  export PATH="\$RUNTIME_PATH"
+fi
+cd "\$APP_DIR"
+npx pm2 delete agent-cockpit >/dev/null 2>&1 || true
+npx pm2 save >/dev/null 2>&1 || true
+SCRIPT
+
+  chmod 755 "${bin_dir}/start-agent-cockpit.sh" "${bin_dir}/stop-agent-cockpit.sh"
+}
+
+register_user_startup() {
+  if [[ "$AUTO_START" != "true" ]]; then
+    log "Skipping user startup registration."
+    return
+  fi
+
+  local systemd_user_dir="${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user"
+  local unit_path="${systemd_user_dir}/${SYSTEMD_SERVICE_NAME}"
+  local start_script="${INSTALL_DIR}/bin/start-agent-cockpit.sh"
+  local stop_script="${INSTALL_DIR}/bin/stop-agent-cockpit.sh"
+  local start_script_unit
+  local stop_script_unit
+  start_script_unit="$(systemd_quote "$start_script")"
+  stop_script_unit="$(systemd_quote "$stop_script")"
+  mkdir -p "$systemd_user_dir"
+
+  cat > "$unit_path" <<UNIT
+[Unit]
+Description=Agent Cockpit local server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=${start_script_unit}
+ExecStop=${stop_script_unit}
+
+[Install]
+WantedBy=default.target
+UNIT
+
+  if ! command -v systemctl >/dev/null 2>&1; then
+    log "Warning: systemctl is unavailable; wrote ${unit_path}, but could not enable user startup."
+    return
+  fi
+
+  systemctl --user daemon-reload >/dev/null 2>&1 || log "Warning: systemd user daemon-reload failed; user startup may require a new login."
+  if systemctl --user enable "$SYSTEMD_SERVICE_NAME" >/dev/null 2>&1; then
+    log "Registered Linux systemd user unit ${SYSTEMD_SERVICE_NAME}."
+  else
+    log "Warning: failed to enable ${SYSTEMD_SERVICE_NAME}; Agent Cockpit may not start automatically until user systemd is available."
   fi
 }
 
@@ -553,8 +676,10 @@ install_production() {
   ensure_built_assets "$current_link" "false"
   write_env_file "$current_link" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_ecosystem_config "$current_link" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
-  write_install_manifest "$data_dir" "production" "github-release" "$release_version" "" "$INSTALL_DIR" "$current_link" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
+  write_install_manifest "$data_dir" "production" "github-release" "$release_version" "" "$INSTALL_DIR" "$current_link" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR" "$(startup_kind)" "$(startup_name)"
   repair_restart_script_permissions "$data_dir"
+  write_helper_scripts "$current_link" "$NODE_RUNTIME_PATH"
+  register_user_startup
   start_pm2 "$current_link"
   wait_for_server "$current_link"
 
@@ -588,8 +713,10 @@ install_dev() {
   ensure_built_assets "$DEV_DIR" "true"
   write_env_file "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_ecosystem_config "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
-  write_install_manifest "$data_dir" "dev" "git-main" "$dev_version" "main" "$INSTALL_DIR" "$DEV_DIR" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
+  write_install_manifest "$data_dir" "dev" "git-main" "$dev_version" "main" "$INSTALL_DIR" "$DEV_DIR" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR" "$(startup_kind)" "$(startup_name)"
   repair_restart_script_permissions "$data_dir"
+  write_helper_scripts "$DEV_DIR" "$NODE_RUNTIME_PATH"
+  register_user_startup
   start_pm2 "$DEV_DIR"
   wait_for_server "$DEV_DIR"
 

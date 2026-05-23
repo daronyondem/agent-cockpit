@@ -234,7 +234,7 @@ export class InstallDoctorService {
     checks.push(await this.checkCommand('pm2', 'PM2', pm2Command.command, true, pm2Command.summary, 'Run npm ci in the app directory, then retry.'));
     checks.push(await this.checkDataDir());
     checks.push(this.checkAppDir());
-    const startupCheck = await this.checkWindowsStartup(install);
+    const startupCheck = await this.checkStartup(install);
     if (startupCheck) checks.push(startupCheck);
     checks.push(this.checkBuildAsset('web-build', 'Desktop web build', 'public/v2-built/index.html', true));
     checks.push(this.checkBuildAsset('mobile-build', 'Mobile PWA build', 'public/mobile-built/index.html', false));
@@ -385,8 +385,18 @@ export class InstallDoctorService {
     }
   }
 
-  private async checkWindowsStartup(install: InstallStatus): Promise<InstallDoctorCheck | null> {
-    if (process.platform !== 'win32') return null;
+  private async checkStartup(install: InstallStatus): Promise<InstallDoctorCheck | null> {
+    if (process.platform === 'win32') return this.checkWindowsStartup(install);
+    if (process.platform === 'darwin') return this.checkMacOSStartup(install);
+    if (process.platform === 'linux') return this.checkLinuxStartup(install);
+    return null;
+  }
+
+  private startupManualCheck(id: string, label: string, remediation: string): InstallDoctorCheck {
+    return check(id, label, 'ok', false, 'User startup is disabled for this install.', undefined, remediation);
+  }
+
+  private async checkWindowsStartup(install: InstallStatus): Promise<InstallDoctorCheck> {
     if (install.startup?.kind === 'manual') {
       return check('windows-logon-startup', 'Windows logon startup', 'ok', false, 'Logon startup is disabled for this install.', undefined, 'Rerun the Windows installer without -NoAutoStart to enable startup on login.');
     }
@@ -396,6 +406,32 @@ export class InstallDoctorService {
       return check('windows-logon-startup', 'Windows logon startup', 'ok', false, 'Agent Cockpit is registered to start when this Windows user logs in.', firstLine(result.stdout) || taskName);
     }
     return check('windows-logon-startup', 'Windows logon startup', 'warning', false, 'Agent Cockpit is not registered to start on Windows login.', result.error || firstLine(result.stderr) || firstLine(result.stdout), 'Rerun the Windows installer to repair the current-user ONLOGON scheduled task.');
+  }
+
+  private async checkMacOSStartup(install: InstallStatus): Promise<InstallDoctorCheck> {
+    if (install.startup?.kind === 'manual') {
+      return this.startupManualCheck('macos-login-startup', 'macOS login startup', 'Rerun the macOS installer without --no-auto-start to enable startup on login.');
+    }
+    const label = install.startup?.name || 'com.agent-cockpit.server';
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null;
+    const args = uid === null ? ['list', label] : ['print', `gui/${uid}/${label}`];
+    const result = await this.commandRunner('launchctl', args, { cwd: this.appRoot, timeoutMs: 5_000 });
+    if (result.ok) {
+      return check('macos-login-startup', 'macOS login startup', 'ok', false, 'Agent Cockpit is registered to start when this macOS user logs in.', firstLine(result.stdout) || label);
+    }
+    return check('macos-login-startup', 'macOS login startup', 'warning', false, 'Agent Cockpit is not registered to start on macOS login.', result.error || firstLine(result.stderr) || firstLine(result.stdout), 'Rerun the macOS installer to repair the LaunchAgent.');
+  }
+
+  private async checkLinuxStartup(install: InstallStatus): Promise<InstallDoctorCheck> {
+    if (install.startup?.kind === 'manual') {
+      return this.startupManualCheck('linux-user-startup', 'Linux user startup', 'Rerun the Linux installer without --no-auto-start to enable startup on login.');
+    }
+    const serviceName = install.startup?.name || 'agent-cockpit.service';
+    const result = await this.commandRunner('systemctl', ['--user', 'is-enabled', serviceName], { cwd: this.appRoot, timeoutMs: 5_000 });
+    if (result.ok) {
+      return check('linux-user-startup', 'Linux user startup', 'ok', false, 'Agent Cockpit is registered to start when this Linux user session starts.', firstLine(result.stdout) || serviceName);
+    }
+    return check('linux-user-startup', 'Linux user startup', 'warning', false, 'Agent Cockpit is not registered to start with the Linux user session.', result.error || firstLine(result.stderr) || firstLine(result.stdout), 'Rerun the Linux installer to repair the systemd user unit.');
   }
 
   private checkBuildAsset(id: string, label: string, relPath: string, required: boolean): InstallDoctorCheck {
