@@ -99,7 +99,7 @@ interface StreamState {
 export class ClaudeCodeAdapter extends BaseBackendAdapter {
   constructor(options: { workingDir?: string } = {}) {
     super(options);
-    this.workingDir = options.workingDir || path.resolve(os.homedir(), '.openclaw', 'workspace');
+    this.workingDir = options.workingDir || path.resolve(os.homedir(), '.agent-cockpit', 'workspace');
   }
 
   get metadata(): BackendMetadata {

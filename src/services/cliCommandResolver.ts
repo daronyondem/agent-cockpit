@@ -26,13 +26,23 @@ const VENDOR_PACKAGES: Partial<Record<CliVendor, string[]>> = {
   codex: ['node_modules', '@openai', 'codex', 'bin', 'codex.js'],
 };
 
+const POSIX_USER_BIN_DIRS = [
+  '.local/bin',
+  '.npm-global/bin',
+  '.npm/bin',
+  '.bun/bin',
+  '.yarn/bin',
+];
+
 export function resolveCliCommandForRuntime(
   vendor: CliVendor,
   command: string,
   env: NodeJS.ProcessEnv = process.env,
 ): CliCommandResolution {
   if (process.platform !== 'win32') {
-    return { command, displayCommand: command };
+    const candidates = nonWindowsCliCommandCandidates(vendor, command, env);
+    const existing = candidates.find(candidate => candidateExists(candidate, env));
+    return existing || { command, displayCommand: command };
   }
 
   const explicit = resolveExplicitWindowsCommand(command, vendor, env);
@@ -88,6 +98,31 @@ export function windowsCliCommandCandidates(
     windowsCmdShim: true,
     displayCommand: `${defaultCommand}.cmd`,
   });
+  return dedupeCandidates(candidates);
+}
+
+export function nonWindowsCliCommandCandidates(
+  vendor: CliVendor,
+  command: string = VENDOR_COMMANDS[vendor] || '',
+  env: NodeJS.ProcessEnv = process.env,
+): CliCommandResolution[] {
+  if (process.platform === 'win32') return [{ command, displayCommand: command }];
+  if (command.includes('/') || command.includes('\\')) {
+    return [{ command, displayCommand: command }];
+  }
+
+  const candidates: CliCommandResolution[] = [{ command, displayCommand: command }];
+  for (const dir of nonWindowsCliSearchDirs(env)) {
+    const candidate = path.join(dir, command);
+    candidates.push({ command: candidate, displayCommand: candidate });
+  }
+  if (vendor === 'claude-code') {
+    const home = env.HOME;
+    if (home) {
+      const candidate = path.join(home, '.claude', 'local', command);
+      candidates.push({ command: candidate, displayCommand: candidate });
+    }
+  }
   return dedupeCandidates(candidates);
 }
 
@@ -226,7 +261,7 @@ function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {
   if (command.includes('/') || command.includes('\\')) {
     return fs.existsSync(command);
   }
-  for (const dir of windowsPathDirs(env)) {
+  for (const dir of pathDirs(env)) {
     if (fs.existsSync(joinForBase(dir, command))) return true;
   }
   return false;
@@ -235,6 +270,22 @@ function commandExists(command: string, env: NodeJS.ProcessEnv): boolean {
 function windowsPathDirs(env: NodeJS.ProcessEnv): string[] {
   const pathValue = env.PATH || env.Path || '';
   return uniqueDirs(pathValue.split(';').map(dir => dir.trim().replace(/^"+|"+$/g, '')).filter(Boolean));
+}
+
+function pathDirs(env: NodeJS.ProcessEnv): string[] {
+  const pathValue = env.PATH || env.Path || '';
+  const delimiter = process.platform === 'win32' ? ';' : path.delimiter;
+  return uniqueDirs(pathValue.split(delimiter).map(dir => dir.trim().replace(/^"+|"+$/g, '')).filter(Boolean));
+}
+
+function nonWindowsCliSearchDirs(env: NodeJS.ProcessEnv): string[] {
+  const home = env.HOME;
+  const homeDirs = home ? POSIX_USER_BIN_DIRS.map(dir => path.join(home, dir)) : [];
+  return uniqueDirs([
+    ...homeDirs,
+    '/opt/homebrew/bin',
+    '/usr/local/bin',
+  ]);
 }
 
 function dedupeCandidates(values: CliCommandResolution[]): CliCommandResolution[] {

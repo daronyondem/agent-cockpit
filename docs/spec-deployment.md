@@ -238,10 +238,15 @@ architecture from `https://nodejs.org/dist/latest-v22.x/`, downloads
 `SHASUMS256.txt`, verifies the tarball with `shasum -a 256`, extracts it under
 `<install-root>/runtime/node-v<version>`, and points
 `<install-root>/runtime/node` at that runtime. It prepends the private
-`runtime/node/bin` directory for install-time `node`, `npm`, and `npx` commands
-and persists that `PATH` in generated `.env` and `ecosystem.config.js` so the
-PM2-managed server and restart/update scripts continue to use the private
-runtime. The installer records `nodeRuntime` ownership/version metadata in
+`runtime/node/bin` directory for install-time `node`, `npm`, and `npx` commands,
+then builds the persisted runtime `PATH` by keeping that private Node directory
+first and adding common per-user CLI install locations such as
+`~/.local/bin`, `~/.npm-global/bin`, `~/.npm/bin`, `~/.bun/bin`,
+`~/.yarn/bin`, and macOS `/opt/homebrew/bin`. Generated `.env` and
+`ecosystem.config.js` always persist this runtime `PATH` so PM2, launchd
+resurrect, restart/update scripts, and backend CLI spawns can find CLIs
+installed by their own vendor installers even when the launchd environment does
+not match an interactive shell. The installer records `nodeRuntime` ownership/version metadata in
 `install.json` so later production updates know whether Agent Cockpit may update
 that runtime. `--install-node` keeps this default behavior explicit;
 `--no-install-node` makes missing/old Node.js a hard error for users who want to
@@ -273,9 +278,9 @@ Both channels generate `.env`, `ecosystem.config.js`, and
 `<AGENT_COCKPIT_DATA_DIR>/install.json`. Generated runtime config sets `PORT`,
 secure random `SESSION_SECRET`, secure random `AUTH_SETUP_TOKEN`,
 `AGENT_COCKPIT_DATA_DIR`, `WEB_BUILD_MODE=auto`, and
-`AUTH_ENABLE_LEGACY_OAUTH=false`. When the installer had to install the private
-Node.js runtime, generated config also persists `PATH` with that runtime's
-`bin` directory first. The PM2 ecosystem file uses the local
+`AUTH_ENABLE_LEGACY_OAUTH=false`. Generated config also persists `PATH` with
+the private Node.js runtime `bin` directory first when present, followed by
+common user CLI install locations and the inherited install-time PATH. The PM2 ecosystem file uses the local
 `./node_modules/.bin/tsx` interpreter, `cwd` set to the selected app directory,
 and app name `agent-cockpit`. The install manifest records production as
 `channel: "production", source: "github-release"` and dev as
@@ -338,10 +343,13 @@ latest official Node.js 22 Linux x64 tarball from
 the tarball with `sha256sum`, extracts it under
 `<install-root>/runtime/node-v<version>`, and points
 `<install-root>/runtime/node` at that runtime. It prepends the private
-`runtime/node/bin` directory for install-time `node`, `npm`, and `npx` commands
-and persists that `PATH` in generated `.env` and `ecosystem.config.js` so the
-PM2-managed server and restart/update scripts continue to use the private
-runtime. The installer records `nodeRuntime` ownership/version metadata in
+`runtime/node/bin` directory for install-time `node`, `npm`, and `npx` commands,
+then builds the persisted runtime `PATH` by keeping that private Node directory
+first and adding common per-user CLI install locations such as `~/.local/bin`,
+`~/.npm-global/bin`, `~/.npm/bin`, `~/.bun/bin`, and `~/.yarn/bin`. Generated
+`.env` and `ecosystem.config.js` always persist this runtime `PATH` so the
+PM2-managed server and restart/update scripts can find vendor-installed CLIs
+without relying on an interactive shell PATH. The installer records `nodeRuntime` ownership/version metadata in
 `install.json` so later production updates know whether Agent Cockpit may update
 that runtime.
 

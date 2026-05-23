@@ -408,13 +408,14 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       if (hasInFlightTurn(convId)) {
         return res.status(409).json({ error: 'Cannot reset session while streaming' });
       }
-      // Capture the current backend BEFORE resetting the session, so
-      // memory is extracted from whichever CLI the ending session used.
+      // Capture a usable runtime BEFORE resetting the session, so finalizers and
+      // adapter cleanup use the reset-selected replacement when the stored
+      // conversation profile has been deleted.
       const preConv = await chatService.getConversation(convId);
-      let endingRuntime: Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>> | null = null;
+      let endingRuntime: Awaited<ReturnType<ChatService['resolveCliProfileRuntimeForSessionReset']>> | null = null;
       if (preConv) {
         try {
-          endingRuntime = await chatService.resolveCliProfileRuntime(preConv.cliProfileId, preConv.backend);
+          endingRuntime = await chatService.resolveCliProfileRuntimeForSessionReset(preConv.cliProfileId, preConv.backend);
         } catch (err: unknown) {
           if (isCliProfileResolutionError(err)) {
             return res.status(400).json({ error: (err as Error).message });
@@ -426,7 +427,9 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       // Clear any stale event buffer so a subsequent WS connection
       // doesn't replay old-session events into the new session.
       clearWsBuffer(convId);
-      const result = await chatService.resetSession(convId);
+      const result = await chatService.resetSession(convId, {
+        ...(endingRuntime ? { runtime: endingRuntime } : {}),
+      });
       if (!result) return res.status(404).json({ error: 'Conversation not found' });
 
       const resetWorkspaceId = chatService.getWorkspaceIdForConv(convId);

@@ -12,7 +12,7 @@ and [spec-server-security.md](../spec-server-security.md).
 | `AUTH_DATA_DIR` | No | `data/auth` | First-party owner auth state directory. |
 | `AUTH_SETUP_TOKEN` | Recommended for remote setup | none | Token required to create the first owner account from a non-localhost request. |
 | `AUTH_ENABLE_LEGACY_OAUTH` | No | `false` | Enables legacy Google/GitHub OAuth routes. |
-| `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes. |
+| `DEFAULT_WORKSPACE` | No | `~/.agent-cockpit/workspace` | Default working directory for CLI processes. |
 | `BASE_PATH` | No | empty | URL base path for reverse proxy deployments. |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout before killing the Kiro ACP process. |
 | `CODEX_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout before killing the Codex app-server process. |

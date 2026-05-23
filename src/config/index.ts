@@ -30,7 +30,7 @@ const config: AppConfig = {
   AUTH_DATA_DIR: process.env.AUTH_DATA_DIR || path.join(AGENT_COCKPIT_DATA_DIR, 'auth'),
   AUTH_SETUP_TOKEN: process.env.AUTH_SETUP_TOKEN || '',
   AUTH_ENABLE_LEGACY_OAUTH: process.env.AUTH_ENABLE_LEGACY_OAUTH === 'true',
-  DEFAULT_WORKSPACE: process.env.DEFAULT_WORKSPACE || `${process.env.HOME}/.openclaw/workspace`,
+  DEFAULT_WORKSPACE: process.env.DEFAULT_WORKSPACE || `${process.env.HOME}/.agent-cockpit/workspace`,
   BASE_PATH: process.env.BASE_PATH || '',
   CODEX_APPROVAL_POLICY: parseEnum(process.env.CODEX_APPROVAL_POLICY, CODEX_APPROVAL_POLICIES, 'never', 'CODEX_APPROVAL_POLICY'),
   CODEX_SANDBOX_MODE: parseEnum(process.env.CODEX_SANDBOX_MODE, CODEX_SANDBOX_MODES, 'danger-full-access', 'CODEX_SANDBOX_MODE'),

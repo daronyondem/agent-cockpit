@@ -3685,8 +3685,12 @@ function formatMsgElapsed(ms){
    UX, keyboard/a11y for free, and the chip's styled shell. */
 function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, composerBackend, composerModel, composerEffort, composerServiceTier, profileLocked, disabled }){
   const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled) : [];
-  const selectedProfile = activeProfiles.find(p => p.id === composerCliProfileId)
-    || (composerBackend ? activeProfiles.find(p => p.vendor === cliVendorForBackend(composerBackend)) : null)
+  const exactProfile = activeProfiles.find(p => p.id === composerCliProfileId) || null;
+  const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;
+  const canChangeProfile = !profileLocked || canRepairMissingProfile;
+  const selectedProfile = exactProfile
+    || (canChangeProfile && composerBackend ? activeProfiles.find(p => p.vendor === cliVendorForBackend(composerBackend)) : null)
+    || (canChangeProfile && activeProfiles.length === 1 ? activeProfiles[0] : null)
     || null;
   const effectiveBackendId = selectedProfile
     ? backendIdForProfile(selectedProfile)
@@ -3710,11 +3714,11 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
     return () => { cancelled = true; };
   }, [selectedProfile && selectedProfile.id]);
   React.useEffect(() => {
-    if (profileLocked || !selectedProfile || !effectiveBackendId) return;
+    if (!canChangeProfile || !selectedProfile || !effectiveBackendId) return;
     if (composerCliProfileId !== selectedProfile.id || composerBackend !== effectiveBackendId) {
       StreamStore.setComposerCliProfile(convId, selectedProfile.id, effectiveBackendId);
     }
-  }, [convId, profileLocked, selectedProfile && selectedProfile.id, effectiveBackendId, composerCliProfileId, composerBackend]);
+  }, [convId, canChangeProfile, selectedProfile && selectedProfile.id, effectiveBackendId, composerCliProfileId, composerBackend]);
 
   const backend = (selectedProfile && profileBackend && profileBackend.id === effectiveBackendId)
     ? profileBackend
@@ -3751,9 +3755,12 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
       {activeProfiles.length > 0 ? (
         <PickChip
           label="Profile"
-          value={selectedProfile ? selectedProfile.name : (composerCliProfileId || '—')}
-          disabled={disabled || profileLocked}
-          options={activeProfiles.map(p => ({ value: p.id, label: p.name }))}
+          value={selectedProfile ? selectedProfile.name : 'Select profile'}
+          disabled={disabled || !canChangeProfile}
+          options={[
+            ...(!selectedProfile ? [{ value: '', label: 'Select profile', disabled: true }] : []),
+            ...activeProfiles.map(p => ({ value: p.id, label: p.name })),
+          ]}
           currentValue={selectedProfile ? selectedProfile.id : ''}
           icon={selectedProfile ? <BackendInlineIcon backends={backends} backendId={effectiveBackendId}/> : null}
           onChange={v => {
@@ -3763,7 +3770,7 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
               StreamStore.setComposerCliProfile(convId, profile.id, nextBackend);
             }
           }}
-          title={profileLocked ? 'CLI profile locked for this session' : 'CLI Profile'}
+          title={canRepairMissingProfile ? 'Select replacement CLI profile' : (profileLocked ? 'CLI profile locked for this session' : 'CLI Profile')}
         />
       ) : (
         <PickChip
@@ -3838,7 +3845,7 @@ function PickChip({ label, value, options, currentValue, onChange, disabled, tit
         aria-label={accessibleLabel}
       >
         {options.map(o => (
-          <option key={o.value} value={o.value}>{o.label}</option>
+          <option key={o.value} value={o.value} disabled={!!o.disabled}>{o.label}</option>
         ))}
       </select>
     </span>

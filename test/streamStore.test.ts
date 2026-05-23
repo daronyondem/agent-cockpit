@@ -521,6 +521,51 @@ test('send() posts selected CLI profile with its vendor backend', async () => {
   });
 });
 
+test('reset() replaces stale composer profile selections with the reset conversation profile', async () => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    id: 'c1',
+    cliProfileId: 'server-configured-claude-code',
+    backend: 'claude-code',
+    model: 'claude-sonnet-4-5',
+    effort: 'high',
+    serviceTier: null,
+    messages: [],
+    messageQueue: [],
+    sessionUsage: null,
+  }));
+  await Store.load('c1');
+  Store.setComposerCliProfile('c1', 'server-configured-claude-code', 'claude-code');
+  api.fetch.mockReset();
+  api.fetch
+    .mockResolvedValueOnce(makeResponse({ ok: true }))
+    .mockResolvedValueOnce(makeResponse({
+      id: 'c1',
+      cliProfileId: 'profile-codex-main',
+      backend: 'codex',
+      model: 'gpt-5',
+      effort: 'medium',
+      serviceTier: 'fast',
+      messages: [],
+      messageQueue: [],
+      sessionUsage: null,
+    }));
+
+  const ok = await Store.reset('c1');
+
+  expect(ok).toBe(true);
+  expect(api.fetch.mock.calls[0][0]).toBe('conversations/c1/reset');
+  expect(api.fetch.mock.calls[1][0]).toBe('conversations/c1');
+  expect(Store.getState('c1')).toMatchObject({
+    composerCliProfileId: 'profile-codex-main',
+    composerBackend: 'codex',
+    composerModel: 'gpt-5',
+    composerEffort: 'medium',
+    composerServiceTier: 'fast',
+  });
+});
+
 test('replay_start wipes placeholder contentBlocks so replayed frames rebuild cleanly', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;

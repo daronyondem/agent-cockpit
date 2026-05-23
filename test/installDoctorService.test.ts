@@ -303,6 +303,8 @@ describe('InstallDoctorService', () => {
     const commands: string[] = [];
     const originalAppData = process.env.APPDATA;
     const originalLocalAppData = process.env.LOCALAPPDATA;
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
     delete process.env.APPDATA;
     delete process.env.LOCALAPPDATA;
     try {
@@ -367,6 +369,11 @@ describe('InstallDoctorService', () => {
       } else {
         process.env.LOCALAPPDATA = originalLocalAppData;
       }
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
+      }
       restorePlatform();
     }
   });
@@ -379,6 +386,8 @@ describe('InstallDoctorService', () => {
     const cliToolsDir = path.join(root, 'cli-tools');
     const originalAppData = process.env.APPDATA;
     const originalLocalAppData = process.env.LOCALAPPDATA;
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
+    process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
     delete process.env.APPDATA;
     delete process.env.LOCALAPPDATA;
     const npmCli = path.join(runtimeBinDir, 'node_modules', 'npm', 'bin', 'npm-cli.js');
@@ -462,6 +471,11 @@ describe('InstallDoctorService', () => {
         delete process.env.LOCALAPPDATA;
       } else {
         process.env.LOCALAPPDATA = originalLocalAppData;
+      }
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
       }
       restorePlatform();
     }
@@ -681,8 +695,10 @@ describe('InstallDoctorService', () => {
     const originalPath = process.env.PATH;
     const originalAppData = process.env.APPDATA;
     const originalLocalAppData = process.env.LOCALAPPDATA;
+    const originalDataDir = process.env.AGENT_COCKPIT_DATA_DIR;
     process.env.PATH = userBin;
     process.env.APPDATA = appData;
+    process.env.AGENT_COCKPIT_DATA_DIR = path.join(root, 'data');
     delete process.env.LOCALAPPDATA;
     const commands: string[] = [];
     try {
@@ -727,6 +743,11 @@ describe('InstallDoctorService', () => {
         delete process.env.LOCALAPPDATA;
       } else {
         process.env.LOCALAPPDATA = originalLocalAppData;
+      }
+      if (originalDataDir === undefined) {
+        delete process.env.AGENT_COCKPIT_DATA_DIR;
+      } else {
+        process.env.AGENT_COCKPIT_DATA_DIR = originalDataDir;
       }
       restorePlatform();
     }

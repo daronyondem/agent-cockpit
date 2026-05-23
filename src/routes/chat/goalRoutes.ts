@@ -18,7 +18,7 @@ import {
   normalizeGoalSnapshot,
   supportedActionsFromGoalCapability,
 } from '../../services/chat/goalEventMessages';
-import { isCliProfileResolutionError, param } from './routeUtils';
+import { conversationHasMissingCliProfile, isCliProfileResolutionError, param } from './routeUtils';
 
 const log = logger.child({ module: 'goal-routes' });
 
@@ -216,7 +216,10 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         if (cliProfileId) {
           const profileOrProviderChanged = cliProfileId !== conv.cliProfileId || (backend && backend !== conv.backend);
           if (profileOrProviderChanged) {
-            if (conv.messages.length > 0) {
+            const canRepairMissingProfile = conv.messages.length > 0
+              ? await conversationHasMissingCliProfile(chatService, conv)
+              : false;
+            if (conv.messages.length > 0 && !canRepairMissingProfile) {
               return res.status(409).json({ error: 'Cannot switch CLI profile after the active session has messages' });
             }
             await chatService.updateConversationCliProfile(convId, cliProfileId, backend || conv.backend);

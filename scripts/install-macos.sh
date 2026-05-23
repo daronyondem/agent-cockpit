@@ -218,6 +218,39 @@ install_private_node() {
   log "Using private Node.js $("${NODE_BIN_DIR}/node" -v) and npm $("${NODE_BIN_DIR}/npm" -v)."
 }
 
+path_contains_dir() {
+  local path_value="$1"
+  local dir="$2"
+  [[ ":${path_value}:" == *":${dir}:"* ]]
+}
+
+runtime_path_with_user_cli_bins() {
+  local base_path="$1"
+  local result="$base_path"
+  local node_prefix=""
+  if [[ -n "${NODE_BIN_DIR:-}" && "$result" == "${NODE_BIN_DIR}:"* ]]; then
+    node_prefix="${NODE_BIN_DIR}:"
+    result="${result#${NODE_BIN_DIR}:}"
+  fi
+
+  local dirs=(
+    "${HOME}/.local/bin"
+    "${HOME}/.npm-global/bin"
+    "${HOME}/.npm/bin"
+    "${HOME}/.bun/bin"
+    "${HOME}/.yarn/bin"
+    "/opt/homebrew/bin"
+  )
+  local i
+  for (( i=${#dirs[@]}-1; i>=0; i-- )); do
+    local dir="${dirs[$i]}"
+    if ! path_contains_dir "${node_prefix}${result}" "$dir"; then
+      result="${dir}:${result}"
+    fi
+  done
+  printf '%s%s' "$node_prefix" "$result"
+}
+
 random_hex() {
   node -e "process.stdout.write(require('crypto').randomBytes(Number(process.argv[1])).toString('hex'))" "$1"
 }
@@ -546,6 +579,8 @@ require_command curl "Install curl through Xcode Command Line Tools or Homebrew.
 require_command tar "Install tar through Xcode Command Line Tools."
 require_command shasum "Install Perl shasum through Xcode Command Line Tools."
 ensure_node
+NODE_RUNTIME_PATH="$(runtime_path_with_user_cli_bins "$PATH")"
+export PATH="$NODE_RUNTIME_PATH"
 
 if [[ "$CHANNEL" == "production" ]]; then
   install_production

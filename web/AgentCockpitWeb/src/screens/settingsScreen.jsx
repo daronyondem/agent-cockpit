@@ -730,10 +730,17 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
 
   function deleteProfile(id){
     onPatch(prev => {
+      const profiles = Array.isArray(prev.cliProfiles) ? prev.cliProfiles : [];
+      const deletedProfile = profiles.find(profile => profile.id === id);
       const next = {
-        cliProfiles: (Array.isArray(prev.cliProfiles) ? prev.cliProfiles : []).filter(profile => profile.id !== id),
+        cliProfiles: profiles.filter(profile => profile.id !== id),
       };
-      if (prev.defaultCliProfileId === id) next.defaultCliProfileId = undefined;
+      if (prev.defaultCliProfileId === id) {
+        next.defaultCliProfileId = undefined;
+        next.defaultBackend = undefined;
+      } else if (!prev.defaultCliProfileId && deletedProfile && backendIdForProfile(deletedProfile) === prev.defaultBackend) {
+        next.defaultBackend = undefined;
+      }
       return next;
     });
   }
@@ -971,8 +978,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
                   <button
                     type="button"
                     className="iconbtn-lg cli-del"
-                    title={isServerProfile ? 'Server-configured profiles cannot be deleted' : 'Delete profile'}
-                    disabled={isServerProfile}
+                    title="Delete profile"
                     onClick={() => deleteProfile(profile.id)}
                   >
                     {Ico.trash(13)}
