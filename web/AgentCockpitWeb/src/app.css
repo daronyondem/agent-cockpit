@@ -4675,7 +4675,7 @@ body{
 }
 .kb-raw-row{
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto auto auto auto;
+  grid-template-columns: 18px minmax(0, 1fr) auto auto auto auto auto;
   align-items: center;
   gap: 10px;
   padding: 8px 12px;
@@ -4683,6 +4683,7 @@ body{
   border-radius: var(--r-sm);
   background: var(--surface);
 }
+.kb-raw-row a.btn{ text-decoration: none; }
 .kb-raw-select{
   display: inline-flex;
   align-items: center;

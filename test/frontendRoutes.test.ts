@@ -764,6 +764,9 @@ describe('frontend routes', () => {
     expect(kbBrowserSrc).toContain('Redigest Selected');
     expect(kbBrowserSrc).toContain('Select Visible');
     expect(kbBrowserSrc).toContain('AgentApi.kb.getState(hash, { folder: currentFolder, limit: 100000 })');
+    expect(kbBrowserSrc).toContain('rawDownloadUrl={AgentApi.kb.rawDownloadUrl(hash, r.rawId)}');
+    expect(kbBrowserSrc).toContain("download={raw.filename || ''}");
+    expect(kbBrowserSrc).toContain('>Download</a>');
   });
 
   test('kb pipeline marks queued digest work as waiting', () => {
