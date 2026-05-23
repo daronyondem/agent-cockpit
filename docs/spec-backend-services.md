@@ -1218,14 +1218,14 @@ Production-channel sequence:
 13. Update `install.json` through `InstallStateService.writeState()` when the
     service is available, including the current `nodeRuntime` metadata and the
     release version.
-14. Launch `_launchRestartScript({ appRoot, healthUrl, rollbackTarget })`. The
+14. Launch `_launchRestartScript({ appRoot, healthUrl, rollbackTarget, expectedVersion })`. The
     health URL is derived from the new release `.env` `PORT` value and defaults
-    to `3334`. Windows also passes the target `expectedVersion` and the previous
-    install status so the generated PowerShell rollback script can require the
-    live `/api/chat/version.version` response to match the target release before
-    it accepts the update, then restore `install.json` before restarting the old
-    app if the target restart fails or a stale old process keeps answering the
-    port.
+    to `3334`. The generated restart script requires the live
+    `/api/chat/version.version` response to match the target release before it
+    accepts the update. Windows also passes the previous install status so the
+    generated PowerShell rollback script can restore `install.json` before
+    restarting the old app if the target restart fails or a stale old process
+    keeps answering the port.
 
 - `restart({ hasActiveStreams })` — plain server restart (no git pull / npm install / interpreter verification). Applies the same concurrent + active/pending turn guards as `triggerUpdate()`, then calls `_launchRestartScript()`. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. The guard delegates to the stream supervisor's in-flight check and still treats accepted/preparing sends as active even though they now have durable stream jobs; planned/manual restarts should be blocked before work is interrupted.
 - Constructor startup repair — on POSIX, if `<dataRoot>/restart.sh` already
@@ -1251,12 +1251,12 @@ Production-channel sequence:
   and rollback target; the script probes the health URL for up to 20 seconds and
   rolls back (relinking `current` on macOS/Linux, restoring the previous install
   manifest and starting the old versioned app on Windows) before exiting with
-  failure. Windows production updates additionally parse the health JSON and
-  require `version` to match the target release, so an older stale server on the
-  same port cannot satisfy the health check. Windows rollback switches the script
-  PATH and PM2 CLI invocation back to the previous install runtime and previous
-  release's app-local `pm2.cmd` when that runtime was recorded, then saves PM2
-  state after restarting the old ecosystem config.
+  failure. Production updates require `version` to match the target release, so
+  an older stale server on the same port cannot satisfy the health check.
+  Windows rollback switches the script PATH and PM2 CLI invocation back to the
+  previous install runtime and previous release's app-local `pm2.cmd` when that
+  runtime was recorded, then saves PM2 state after restarting the old ecosystem
+  config.
 
 Both `triggerUpdate()` and `restart()` return `{ success, steps: [{ name, success, output }] }`. On failure, includes `error` field.
 

@@ -1042,6 +1042,8 @@ describe('UpdateService', () => {
         expect(restartScript).toContain('http://127.0.0.1:4444/api/chat/version');
         expect(restartScript).toContain(`ln -s "${fs.realpathSync(install.previousDir)}" "${install.currentLink}"`);
         expect(restartScript).toContain('curl -fsS');
+        expect(restartScript).toContain(`grep -F '"version":"1.1.0"'`);
+        expect(restartScript).toContain('Health check returned');
         expect(mockSpawnFn).toHaveBeenCalledWith('sh', expect.arrayContaining(['-c']), expect.objectContaining({
           cwd: install.currentLink,
           stdio: 'ignore',

@@ -91,10 +91,13 @@ check the latest GitHub Release manifest, verify release checksums, stage the
 next release under the platform install root, activate it, and restart through
 PM2 with health-check rollback. macOS and Linux write `<dataRoot>/restart.sh`,
 repair its mode to `0755`, and launch it through `nohup sh` so stale
-non-executable restart artifacts cannot block future self-updates. macOS and
-Linux installer repair runs also chmod any existing `<dataRoot>/restart.sh`
-before PM2 starts Agent Cockpit, so rerunning the installer repairs older
-non-executable restart artifacts before the old runtime tries to use them.
+non-executable restart artifacts cannot block future self-updates. Production
+restart health accepts only `/api/chat/version` responses that contain the
+target release version, so stale server processes cannot satisfy update health.
+macOS and Linux installer repair runs also chmod any existing
+`<dataRoot>/restart.sh` before PM2 starts Agent Cockpit, so rerunning the
+installer repairs older non-executable restart artifacts before the old runtime
+tries to use them.
 macOS and Linux activate releases by switching the `current` symlink. Windows
 activates releases by writing the active versioned `appDir` to `install.json`
 and restarting from that directory. Dev installs keep the git/main update
@@ -505,9 +508,11 @@ release before it treats the update as healthy. If the target restart fails, or
 if an older server process is still answering the port with a different version,
 the script restores the previous `install.json`, restarts the previous release
 with that release's app-local `pm2.cmd`, saves PM2 state, and exits with
-failure. The old running Windows process does not change its in-memory local
-version before the restart handoff, so a failed handoff continues to advertise
-the old running version rather than hiding the still-available update.
+failure. macOS and Linux use the same target-version health rule in
+`restart.sh` before accepting a production update. The old running Windows
+process does not change its in-memory local version before the restart handoff,
+so a failed handoff continues to advertise the old running version rather than
+hiding the still-available update.
 
 `AGENT_COCKPIT_DATA_DIR` controls the mutable data root. When unset, runtime
 state stays under `<repo>/data` for compatibility with existing development
@@ -528,7 +533,7 @@ npm run mobile:build
 
 `WEB_BUILD_MODE=skip` disables both main V2 web and mobile startup preflights for tests or unusual deployments that provision assets out of band. If no previous build exists and the build fails, startup fails. If a previous build exists and a rebuild fails, the server logs the error and serves the previous build.
 
-Dev self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. Production self-update checks the release manifest's required Node runtime before dependency installation. When a release raises the required Node major, the updater installs or refreshes a checksum-verified private Node runtime from Node.org under the Agent Cockpit install root before running `npm ci`; installs that previously used system Node migrate to this private runtime instead of mutating global Node. macOS private runtime updates use Node's Darwin tarball and stable private-runtime symlink. Linux private runtime updates use Node's Linux x64 `tar.xz` archive and the same stable private-runtime symlink. Windows private runtime updates use Node's Windows ZIP and a versioned runtime directory. Production then runs root/mobile `npm ci` inside the extracted release, then runs the V2/mobile build preflight there only when markers or assets require it. macOS and Linux switch the `current` symlink before PM2 restart; Windows writes the active versioned `appDir` to `install.json` and launches a PowerShell restart script with health-check rollback. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md), [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md), [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md), [ADR-0059](adr/0059-install-private-node-runtime-on-macos.md), [ADR-0063](adr/0063-adopt-per-user-windows-installer.md), and [ADR-0071](adr/0071-support-linux-production-installs.md).
+Dev self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. Production self-update checks the release manifest's required Node runtime before dependency installation. When a release raises the required Node major, the updater installs or refreshes a checksum-verified private Node runtime from Node.org under the Agent Cockpit install root before running `npm ci`; installs that previously used system Node migrate to this private runtime instead of mutating global Node. macOS private runtime updates use Node's Darwin tarball and stable private-runtime symlink. Linux private runtime updates use Node's Linux x64 `tar.xz` archive and the same stable private-runtime symlink. Windows private runtime updates use Node's Windows ZIP and a versioned runtime directory. Production then runs root/mobile `npm ci` inside the extracted release, then runs the V2/mobile build preflight there only when markers or assets require it. macOS and Linux switch the `current` symlink before PM2 restart and require target-version health before accepting the update; Windows writes the active versioned `appDir` to `install.json` and launches a PowerShell restart script with health-check rollback. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md), [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md), [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md), [ADR-0059](adr/0059-install-private-node-runtime-on-macos.md), [ADR-0063](adr/0063-adopt-per-user-windows-installer.md), and [ADR-0071](adr/0071-support-linux-production-installs.md).
 
 **Remote access via ngrok:**
 ```bash

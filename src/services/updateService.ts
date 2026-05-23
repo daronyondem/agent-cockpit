@@ -430,7 +430,13 @@ export class UpdateService {
         'ok=0',
         'i=0',
         'while [ "$i" -lt 20 ]; do',
-        `  if curl -fsS "${options.healthUrl}" >/dev/null 2>&1; then ok=1; break; fi`,
+        ...(options.expectedVersion ? [
+          `  response="$(curl -fsS "${options.healthUrl}" 2>/dev/null)" || response=""`,
+          `  if printf '%s' "$response" | grep -F ${this._shQuote(`"version":"${options.expectedVersion}"`)} >/dev/null 2>&1; then ok=1; break; fi`,
+          `  if [ -n "$response" ]; then printf 'Health check returned: %s\\n' "$response"; fi`,
+        ] : [
+          `  if curl -fsS "${options.healthUrl}" >/dev/null 2>&1; then ok=1; break; fi`,
+        ]),
         '  i=$((i + 1))',
         '  sleep 1',
         'done',
@@ -1449,6 +1455,10 @@ export class UpdateService {
 
   private _psQuote(value: string): string {
     return `'${value.replace(/'/g, "''")}'`;
+  }
+
+  private _shQuote(value: string): string {
+    return `'${value.replace(/'/g, `'\\''`)}'`;
   }
 
   private _psWriteFileCommand(filePath: string, content: string): string {
