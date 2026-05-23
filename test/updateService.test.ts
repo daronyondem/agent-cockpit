@@ -40,6 +40,8 @@ function mockWriteFileSyncNoop(...args: Parameters<typeof fs.writeFileSync>) {
   }
 }
 const mockWriteFileSync = jest.spyOn(fs, 'writeFileSync').mockImplementation(mockWriteFileSyncNoop);
+const originalChmodSync = fs.chmodSync.bind(fs);
+const mockChmodSync = jest.spyOn(fs, 'chmodSync').mockImplementation(() => undefined);
 
 import { UpdateService } from '../src/services/updateService';
 
@@ -346,6 +348,8 @@ describe('UpdateService', () => {
     mockSpawnFn.mockClear();
     mockWriteFileSync.mockClear();
     mockWriteFileSync.mockImplementation(mockWriteFileSyncNoop);
+    mockChmodSync.mockClear();
+    mockChmodSync.mockImplementation(() => undefined);
     mockExistsSyncOverrides = {};
     mockReadFileSyncOverrides = {};
     // Default: interpreter exists
@@ -894,6 +898,32 @@ describe('UpdateService', () => {
       expect(shellCmd).toContain('nohup');
       expect(shellCmd).toContain('restart.sh');
       expect(shellCmd).toContain('update-restart.log');
+    });
+
+    test('repairs a stale non-executable restart script before launching it', async () => {
+      mockWriteFileSync.mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => originalWriteFileSync(...args));
+      mockChmodSync.mockImplementation((...args: Parameters<typeof fs.chmodSync>) => originalChmodSync(...args));
+      const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'update-restart-mode-'));
+      try {
+        const scriptPath = path.join(dataRoot, 'restart.sh');
+        writeText(scriptPath, '#!/bin/sh\nexit 0\n');
+        fs.chmodSync(scriptPath, 0o644);
+        service = new UpdateService(appRoot, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot,
+        });
+
+        const result = await service.restart({ hasActiveStreams: () => false });
+
+        expect(result.success).toBe(true);
+        expect(fs.statSync(scriptPath).mode & 0o777).toBe(0o755);
+        const spawnArgs = mockSpawnFn.mock.calls[0] as unknown[];
+        const shellCmd = (spawnArgs[1] as string[])[1];
+        expect(shellCmd).toContain(`nohup sh "${scriptPath}"`);
+      } finally {
+        fs.rmSync(dataRoot, { recursive: true, force: true });
+      }
     });
 
     test('applies a production GitHub Release update and writes rollback restart script', async () => {

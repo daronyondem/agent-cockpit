@@ -1230,9 +1230,12 @@ Production-channel sequence:
 - `restart({ hasActiveStreams })` — plain server restart (no git pull / npm install / interpreter verification). Applies the same concurrent + active/pending turn guards as `triggerUpdate()`, then calls `_launchRestartScript()`. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. The guard delegates to the stream supervisor's in-flight check and still treats accepted/preparing sends as active even though they now have durable stream jobs; planned/manual restarts should be blocked before work is interrupted.
 - `_launchRestartScript()` (private) — on POSIX writes
   `<dataRoot>/restart.sh` (sets PATH to `node_modules/.bin`, sleeps 2s,
-  `pm2 delete` + `pm2 start` against `ecosystem.config.js`), then launches it
-  via double-fork (`nohup ... &` in subshell) to survive PM2 treekill. On
-  Windows it writes `<dataRoot>/restart.ps1`, sets install-local `PM2_HOME`,
+  `pm2 delete` + `pm2 start` against `ecosystem.config.js`), forces the file
+  mode to `0755` after every write so stale non-executable restart scripts are
+  repaired, then launches it through `sh` via double-fork (`nohup sh ... &` in
+  subshell) to survive PM2 treekill without depending on the script file's
+  executable bit. On Windows it writes `<dataRoot>/restart.ps1`, sets
+  install-local `PM2_HOME`,
   prepends the private runtime path when present, resolves the active release's
   app-local `node_modules\.bin\pm2.cmd`, restarts the app through a checked
   native-command wrapper that deletes the existing PM2 entry before

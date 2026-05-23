@@ -448,9 +448,10 @@ export class UpdateService {
     const scriptContent = scriptLines.join('\n');
     fs.mkdirSync(this._dataRoot, { recursive: true });
     fs.writeFileSync(scriptFile, scriptContent, { mode: 0o755 });
+    fs.chmodSync(scriptFile, 0o755);
     // Double-fork: subshell backgrounds nohup, then exits immediately.
     // The nohup process gets reparented to init, surviving treekill.
-    spawn('sh', ['-c', `(nohup "${scriptFile}" >> "${logFile}" 2>&1 &)`], {
+    spawn('sh', ['-c', `(nohup sh "${scriptFile}" >> "${logFile}" 2>&1 &)`], {
       cwd: appRoot,
       stdio: 'ignore',
     });
