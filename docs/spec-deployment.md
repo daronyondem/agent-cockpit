@@ -92,10 +92,13 @@ next release under the platform install root, activate it, and restart through
 PM2 with health-check rollback. macOS and Linux write `<dataRoot>/restart.sh`,
 repair its mode to `0755`, and launch it through `nohup sh` so stale
 non-executable restart artifacts cannot block future self-updates. macOS and
-Linux activate releases by switching the `current` symlink. Windows activates
-releases by writing the active versioned `appDir` to `install.json` and
-restarting from that directory. Dev installs keep the git/main update behavior
-described below.
+Linux installer repair runs also chmod any existing `<dataRoot>/restart.sh`
+before PM2 starts Agent Cockpit, so rerunning the installer repairs older
+non-executable restart artifacts before the old runtime tries to use them.
+macOS and Linux activate releases by switching the `current` symlink. Windows
+activates releases by writing the active versioned `appDir` to `install.json`
+and restarting from that directory. Dev installs keep the git/main update
+behavior described below.
 
 ## Production Release Packaging
 

@@ -135,6 +135,10 @@ Always use pm2:
 - Windows production self-update restart health must prove the target release is actually serving `/api/chat/version` with the expected version, not merely that some process answers the port. Use app-local PM2 commands for the target and rollback releases; do not reintroduce `npx pm2` into Windows restart/rollback paths.
 - Windows installer ZIP extraction should remain non-interactive in user-facing PowerShell. Use the installer `System.IO.Compression.ZipFile` helper instead of `Expand-Archive` when editing `scripts/install-windows.ps1`, unless a later tested implementation proves it does not reintroduce console progress stalls.
 - Windows installer readiness probing should avoid `Invoke-WebRequest` against HTML pages; use a raw .NET HTTP request so PowerShell page parsing/security prompts cannot pause the install while waiting for `/auth/setup`.
+- POSIX self-update restart launchers must not depend on the executable bit of
+  `<dataDir>/restart.sh`: invoke through `sh`, chmod after every write, and keep
+  macOS/Linux installer repair runs chmodding stale restart scripts before PM2
+  starts the app.
 - Release preparation is agent-owned: generate `docs/releases/v<version>.md` from commits, merged PRs, closed issues, and code changes between release versions, then share it with the human for review.
 - Use [`docs/release-notes-prompt.md`](docs/release-notes-prompt.md) when generating the per-release document. Do not ask the human to draft release notes from scratch.
 - Validate the GitHub Release body with `npm run release:notes -- --version <version> --out /tmp/agent-cockpit-release-notes.md` before triggering `.github/workflows/release.yml`.

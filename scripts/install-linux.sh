@@ -454,6 +454,14 @@ start_pm2() {
   (cd "$app_dir" && npx pm2 save)
 }
 
+repair_restart_script_permissions() {
+  local data_dir="$1"
+  local restart_script="${data_dir}/restart.sh"
+  if [[ -f "$restart_script" ]]; then
+    chmod 755 "$restart_script" || log "Warning: unable to repair self-update restart script permissions at ${restart_script}."
+  fi
+}
+
 pm2_logs_command() {
   local app_dir="$1"
   if [[ -n "$NODE_BIN_DIR" ]]; then
@@ -546,6 +554,7 @@ install_production() {
   write_env_file "$current_link" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_ecosystem_config "$current_link" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_install_manifest "$data_dir" "production" "github-release" "$release_version" "" "$INSTALL_DIR" "$current_link" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
+  repair_restart_script_permissions "$data_dir"
   start_pm2 "$current_link"
   wait_for_server "$current_link"
 
@@ -580,6 +589,7 @@ install_dev() {
   write_env_file "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_ecosystem_config "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_install_manifest "$data_dir" "dev" "git-main" "$dev_version" "main" "$INSTALL_DIR" "$DEV_DIR" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
+  repair_restart_script_permissions "$data_dir"
   start_pm2 "$DEV_DIR"
   wait_for_server "$DEV_DIR"
 

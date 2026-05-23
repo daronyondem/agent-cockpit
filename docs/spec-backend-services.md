@@ -1228,6 +1228,10 @@ Production-channel sequence:
     port.
 
 - `restart({ hasActiveStreams })` — plain server restart (no git pull / npm install / interpreter verification). Applies the same concurrent + active/pending turn guards as `triggerUpdate()`, then calls `_launchRestartScript()`. Used by the Server tab in Global Settings so users can re-trigger startup-time detection (e.g. pandoc) after installing external binaries. The guard delegates to the stream supervisor's in-flight check and still treats accepted/preparing sends as active even though they now have durable stream jobs; planned/manual restarts should be blocked before work is interrupted.
+- Constructor startup repair — on POSIX, if `<dataRoot>/restart.sh` already
+  exists, `UpdateService` chmods it to `0755` during construction. This repairs
+  stale non-executable restart artifacts as soon as a fixed server starts,
+  without requiring a user to trigger another update first.
 - `_launchRestartScript()` (private) — on POSIX writes
   `<dataRoot>/restart.sh` (sets PATH to `node_modules/.bin`, sleeps 2s,
   `pm2 delete` + `pm2 start` against `ecosystem.config.js`), forces the file

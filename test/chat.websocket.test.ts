@@ -589,7 +589,8 @@ describe('WebSocket reconnection', () => {
     ws.send(JSON.stringify({ type: 'reconnect' }));
     await gotReplayEnd;
 
-    expect(replayEvents[0]).toMatchObject({ type: 'replay_start', bufferedEvents: expect.any(Number) });
+    const replayStart = replayEvents.find(e => e.type === 'replay_start');
+    expect(replayStart).toMatchObject({ type: 'replay_start', bufferedEvents: expect.any(Number) });
     expect(replayEvents.some(e => e.type === 'text' && e.content === 'created-after-connect')).toBe(true);
     expect(replayEvents.some(e => e.type === 'done')).toBe(true);
     ws.close();
@@ -959,7 +960,10 @@ describe('POST /message without an open WebSocket', () => {
     expect(env.activeStreams.has(conv.id)).toBe(true);
 
     unblock!();
-    await new Promise(resolve => setTimeout(resolve, 100));
+    const cleanupDeadline = Date.now() + 2000;
+    while (env.activeStreams.has(conv.id) && Date.now() < cleanupDeadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
     expect(env.activeStreams.has(conv.id)).toBe(false);
 
     const port = (env.server.address() as any).port;

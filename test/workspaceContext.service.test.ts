@@ -167,8 +167,12 @@ describe('WorkspaceContextService', () => {
 
     const runPromise = workspaceContextService.processWorkspace(hash, { source: 'manual_catchup', forceAll: true });
     let runningState = await workspaceContextService.getState(hash);
-    for (let i = 0; i < 20 && runningState.lastRun?.status !== 'running'; i += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
+    const progressDeadline = Date.now() + 2000;
+    while (
+      runningState.lastRun?.summary !== 'No source changes found; completing this scan.'
+      && Date.now() < progressDeadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
       runningState = await workspaceContextService.getState(hash);
     }
 

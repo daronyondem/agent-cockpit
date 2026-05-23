@@ -77,6 +77,7 @@ export class UpdateService {
     this._webBuildService = opts.webBuildService || this._createWebBuildService(appRoot, null);
     this._mobileBuildService = opts.mobileBuildService || this._createMobileBuildService(appRoot, null);
     this._localVersion = require(path.join(appRoot, 'package.json')).version;
+    this._repairExistingPosixRestartScript();
   }
 
   start(): void {
@@ -455,6 +456,18 @@ export class UpdateService {
       cwd: appRoot,
       stdio: 'ignore',
     });
+  }
+
+  private _repairExistingPosixRestartScript(): void {
+    if (process.platform === 'win32') return;
+    const scriptFile = path.join(this._dataRoot, 'restart.sh');
+    try {
+      if (fs.existsSync(scriptFile)) {
+        fs.chmodSync(scriptFile, 0o755);
+      }
+    } catch {
+      // A stale restart artifact must not prevent the server from starting.
+    }
   }
 
   private _launchWindowsRestartScript(options: {
