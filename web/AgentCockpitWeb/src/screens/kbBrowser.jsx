@@ -2938,6 +2938,7 @@ function KbRawTab({ hash, kbState, onStateUpdate }){
                 onTrace={() => setTraceRawId(r.rawId)}
                 onDigest={() => onDigestRow(r.rawId)}
                 onDelete={(anchor) => onDeleteRow(r, anchor)}
+                rawDownloadUrl={AgentApi.kb.rawDownloadUrl(hash, r.rawId)}
               />
             ))}
           </div>
@@ -2992,7 +2993,7 @@ function KbUploadRow({ item, onDismiss }){
   );
 }
 
-function KbRawRow({ raw, selected, canSelect, onSelectChange, onTrace, onDigest, onDelete }){
+function KbRawRow({ raw, selected, canSelect, onSelectChange, onTrace, onDigest, onDelete, rawDownloadUrl }){
   const canDigest = rawCanDigest(raw);
   const digestLabel = rawDigestLabel(raw);
   const statusClass = `kb-raw-status kb-raw-status-${raw.status || 'unknown'}`;
@@ -3025,6 +3026,13 @@ function KbRawRow({ raw, selected, canSelect, onSelectChange, onTrace, onDigest,
         onClick={(e) => onDelete(e.currentTarget)}
         title="Delete this file"
       >Delete</button>
+      <a
+        className="btn ghost"
+        href={rawDownloadUrl}
+        download={raw.filename || ''}
+        title="Download this file"
+        aria-label={`Download ${raw.filename || 'file'}`}
+      >Download</a>
       {raw.errorMessage ? (
         <div className="kb-raw-error u-err">{raw.errorMessage}</div>
       ) : null}
