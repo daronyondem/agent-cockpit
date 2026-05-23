@@ -31,6 +31,34 @@ const MAX_IMPORT_UPLOAD_BYTES = 20 * 1024 * 1024 * 1024;
 const MAX_BUNDLE_UNCOMPRESSED_BYTES = 20 * 1024 * 1024 * 1024;
 const MAX_MANIFEST_BYTES = 10 * 1024 * 1024;
 const CHUNKED_UPLOAD_META_EXTENSION = '.json';
+const PGLITE_RUNTIME_DIRS = [
+  'pg_commit_ts',
+  'pg_dynshmem',
+  'pg_logical/mappings',
+  'pg_logical/snapshots',
+  'pg_notify',
+  'pg_replslot',
+  'pg_serial',
+  'pg_snapshots',
+  'pg_stat',
+  'pg_stat_tmp',
+  'pg_tblspc',
+  'pg_twophase',
+  'pg_wal/archive_status',
+  'pg_wal/summaries',
+] as const;
+const PGLITE_REQUIRED_DIRS = [
+  'base',
+  'global',
+  'pg_logical',
+  'pg_multixact',
+  'pg_multixact/members',
+  'pg_multixact/offsets',
+  'pg_subtrans',
+  'pg_wal',
+  'pg_xact',
+  ...PGLITE_RUNTIME_DIRS,
+] as const;
 
 interface DataMigrationServiceOptions {
   dataRoot: string;
@@ -420,6 +448,7 @@ export class DataMigrationService {
       await fsp.mkdir(stagingRoot, { recursive: true });
       await this.extractBundleData(filePath, stagingRoot, manifest);
       removeKnownRuntimeFiles(stagingDataDir);
+      await ensurePgliteRuntimeDirectories(manifest, stagingDataDir);
 
       if (!fs.existsSync(stagingDataDir) || !fs.statSync(stagingDataDir).isDirectory()) {
         throw new Error('Import bundle did not contain a data directory.');
@@ -855,6 +884,9 @@ async function writeExportZip(filePath: string, manifest: DataExportManifest, fi
   try {
     zip.outputStream.pipe(output);
     zip.addBuffer(Buffer.from(JSON.stringify(manifest, null, 2) + '\n', 'utf8'), MANIFEST_PATH);
+    for (const dir of pgliteZipDirectoryEntries(files)) {
+      zip.addEmptyDirectory(dir);
+    }
     for (const file of files) {
       zip.addFile(file.absolutePath, file.zipPath);
     }
@@ -1136,6 +1168,41 @@ async function verifyStagedData(manifest: DataExportManifest, stagingDataDir: st
   }
 }
 
+async function ensurePgliteRuntimeDirectories(manifest: DataExportManifest, stagingDataDir: string): Promise<void> {
+  for (const vectorDir of pgliteVectorDirsFromPaths(manifest.files.map(file => file.path))) {
+    const absoluteVectorDir = path.resolve(stagingDataDir, vectorDir);
+    if (!isPathInside(absoluteVectorDir, stagingDataDir)) {
+      throw new Error(`Unsafe import manifest path: ${vectorDir}`);
+    }
+    if (!fs.existsSync(path.join(absoluteVectorDir, 'PG_VERSION'))) continue;
+    await Promise.all(
+      PGLITE_RUNTIME_DIRS.map(dir => fsp.mkdir(path.join(absoluteVectorDir, dir), { recursive: true })),
+    );
+  }
+}
+
+function pgliteZipDirectoryEntries(files: CollectedFile[]): string[] {
+  const dirs = new Set<string>();
+  for (const vectorDir of pgliteVectorDirsFromPaths(files.map(file => file.relativePath))) {
+    for (const dir of PGLITE_RUNTIME_DIRS) {
+      dirs.add(`${DATA_PREFIX}${vectorDir}/${dir}`);
+    }
+  }
+  return Array.from(dirs).sort();
+}
+
+function pgliteVectorDirsFromPaths(paths: string[]): string[] {
+  const dirs = new Set<string>();
+  for (const rawPath of paths) {
+    const relativePath = toPosix(rawPath);
+    const suffix = '/knowledge/vectors/PG_VERSION';
+    if (relativePath.endsWith(suffix)) {
+      dirs.add(relativePath.slice(0, -'/PG_VERSION'.length));
+    }
+  }
+  return Array.from(dirs).sort();
+}
+
 async function collectRelativeFiles(root: string): Promise<string[]> {
   const files: string[] = [];
   const walk = async (dir: string): Promise<void> => {
@@ -1313,6 +1380,12 @@ function checkSqliteDb(dbPath: string): CheckStatus {
 function checkPgliteDirectory(vectorsPath: string): CheckStatus {
   if (!fs.existsSync(path.join(vectorsPath, 'PG_VERSION'))) {
     return error('PGLite vector directory is missing PG_VERSION.', vectorsPath);
+  }
+  const missingDirs = PGLITE_REQUIRED_DIRS.filter(dir => !fs.existsSync(path.join(vectorsPath, dir)));
+  if (missingDirs.length > 0) {
+    const sample = missingDirs.slice(0, 4).join(', ');
+    const suffix = missingDirs.length > 4 ? `, and ${missingDirs.length - 4} more` : '';
+    return error(`PGLite vector directory is missing required directories: ${sample}${suffix}.`, vectorsPath);
   }
   if (fs.existsSync(path.join(vectorsPath, 'postmaster.pid'))) {
     return warn('PGLite vector directory has a stale postmaster.pid; restart/check may clear it.', vectorsPath);

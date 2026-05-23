@@ -267,8 +267,12 @@ server prepares the bundle:
 Exports intentionally exclude transient process state that should not survive a
 migration: Express `sessions/`, `chat/stream-jobs.json`, temporary/staging
 files, `.DS_Store`, symlinks, and stale Postgres/PGLite runtime files such as
-`postmaster.pid` and `pg_stat_tmp`. Imported data starts without browser
-sessions or abandoned active CLI turns.
+`postmaster.pid` and `pg_stat_tmp`. Export still emits required empty PGLite
+directory entries such as `pg_notify/`, `pg_logical/snapshots/`, and
+`pg_wal/summaries/`, and import staging recreates those runtime directories
+from any manifest that includes a `knowledge/vectors/PG_VERSION` file so vector
+stores restored from older bundles can boot. Imported data starts without
+browser sessions or abandoned active CLI turns.
 
 Archive I/O is streaming. Export streams source files into the `.acexport` ZIP
 instead of buffering the data root in memory, then verifies the finished ZIP
@@ -314,9 +318,9 @@ removed so the server does not retry the same failed import forever.
 
 After import, the server can run post-import checks that verify workspace
 storage directories, missing absolute workspace paths, Memory directories, KB
-SQLite `state.db` schema metadata, PGLite vector directories, stale
-`postmaster.pid`, CLI profile auth/config hints, Pandoc, LibreOffice, and
-optionally Ollama embedding availability.
+SQLite `state.db` schema metadata, PGLite vector directories including required
+empty runtime subdirectories, stale `postmaster.pid`, CLI profile auth/config
+hints, Pandoc, LibreOffice, and optionally Ollama embedding availability.
 
 ## Workspace Identity
 
