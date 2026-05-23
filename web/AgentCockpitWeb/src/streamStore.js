@@ -858,6 +858,11 @@ function workspaceRefForConv(conv) {
       streamError,
       streamErrorSource: streamErrorInfo ? streamErrorInfo.source : null,
       uiState: streamError ? 'error' : null,
+      composerCliProfileId: freshSession ? (data.cliProfileId || null) : next.composerCliProfileId,
+      composerBackend: freshSession ? (data.backend || null) : next.composerBackend,
+      composerModel: freshSession ? (data.model || null) : next.composerModel,
+      composerEffort: freshSession ? (data.effort || null) : next.composerEffort,
+      composerServiceTier: freshSession ? (data.serviceTier || null) : next.composerServiceTier,
     }));
     if (data && typeof data.title === 'string') {
       patchConvListItem(convId, { title: data.title });

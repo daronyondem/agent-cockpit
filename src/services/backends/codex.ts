@@ -2579,10 +2579,10 @@ export class CodexAdapter extends BaseBackendAdapter {
   /**
    * Run a one-shot prompt against `codex exec` and return the final answer.
    *
-   * `codex exec` is a dedicated non-interactive subcommand that prints the
-   * model's final text answer on stdout (no streaming protocol parsing
-   * needed). It uses the selected profile's runtime env; account profiles set
-   * `CODEX_HOME` so OAuth/API-key state is isolated.
+   * `codex exec` is a dedicated non-interactive subcommand. Current Codex
+   * versions print transcript/status text to stdout, so we ask it to write the
+   * final assistant message to a temp file and return that clean payload.
+   * Account profiles set `CODEX_HOME` so OAuth/API-key state is isolated.
    */
   private async _execOneShot(prompt: string, options: RunOneShotOptions = {}): Promise<string> {
     const { timeoutMs = 60000, abortSignal, workingDir, model, effort, serviceTier, mcpServers, cliProfile } = options;
@@ -2590,6 +2590,8 @@ export class CodexAdapter extends BaseBackendAdapter {
     const runtime = resolveCodexCliRuntime(cliProfile);
     const cwd = workingDir || this.workingDir || os.homedir();
     const mcpServersForCodex: McpServerConfig[] = Array.isArray(mcpServers) ? mcpServers : [];
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-cockpit-codex-'));
+    const outputLastMessagePath = path.join(outputDir, 'last-message.txt');
 
     const configArgs = await buildCodexConfigArgs(mcpServersForCodex, runtime);
 
@@ -2599,7 +2601,7 @@ export class CodexAdapter extends BaseBackendAdapter {
     } else {
       args.push('--ask-for-approval', this.approvalPolicy, '--sandbox', this.sandbox);
     }
-    args.push('--skip-git-repo-check', '-C', cwd, ...buildCodexServiceTierArgs(serviceTier), ...configArgs);
+    args.push('--skip-git-repo-check', '-C', cwd, '-o', outputLastMessagePath, ...buildCodexServiceTierArgs(serviceTier), ...configArgs);
     const modelCatalog = this._cachedModels(runtime) || FALLBACK_MODELS;
     if (codexModelSupportsEffort(modelCatalog, model, effort)) {
       args.push('-c', `model_reasoning_effort=${tomlEscapeString(effort!)}`);
@@ -2647,15 +2649,30 @@ export class CodexAdapter extends BaseBackendAdapter {
           clearTimeout(timeoutTimer);
           if (killTimer) clearTimeout(killTimer);
           abortSignal?.removeEventListener('abort', onAbort);
+          const readFinalOutput = () => {
+            try {
+              const fromFile = fs.readFileSync(outputLastMessagePath, 'utf8').trim();
+              if (fromFile) return fromFile;
+            } catch {}
+            return (stdout || '').trim();
+          };
+          const cleanupOutput = () => {
+            try {
+              fs.rmSync(outputDir, { recursive: true, force: true });
+            } catch {}
+          };
           if (aborted || abortSignal?.aborted) {
+            cleanupOutput();
             reject(new Error('codex exec failed: Process stopped by caller'));
             return;
           }
           if (timedOut) {
+            cleanupOutput();
             reject(new Error(`codex exec failed: Process killed (timeout after ${timeoutMs / 1000}s)`));
             return;
           }
           if (err) {
+            cleanupOutput();
             const execErr = err as NodeJS.ErrnoException & { killed?: boolean; code?: number | string };
             if (execErr.code === 'ENOENT') {
               reject(new Error('Codex CLI is not installed. Install with `npm install -g @openai/codex`'));
@@ -2672,11 +2689,8 @@ export class CodexAdapter extends BaseBackendAdapter {
             reject(new Error(`codex exec failed: ${msg}`));
             return;
           }
-          // `codex exec` prints status lines (e.g. session id, version) on
-          // stderr but its final answer goes to stdout. The output may
-          // contain a leading banner — we trim and return as-is. Callers
-          // that need to strip a banner do their own slicing.
-          resolve((stdout || '').trim());
+          resolve(readFinalOutput());
+          cleanupOutput();
         },
       );
       child.stdin?.end();

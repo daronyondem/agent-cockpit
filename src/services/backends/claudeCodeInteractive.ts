@@ -100,7 +100,7 @@ export class ClaudeCodeInteractiveAdapter extends BaseBackendAdapter {
 
   constructor(options: ClaudeCodeInteractiveAdapterOptions = {}) {
     super(options);
-    this.workingDir = options.workingDir || path.resolve(os.homedir(), '.openclaw', 'workspace');
+    this.workingDir = options.workingDir || path.resolve(os.homedir(), '.agent-cockpit', 'workspace');
     this._delegate = new ClaudeCodeAdapter({ workingDir: this.workingDir || undefined });
     this._ptyFactory = options.ptyFactory;
     this._hookFactory = options.hookFactory;

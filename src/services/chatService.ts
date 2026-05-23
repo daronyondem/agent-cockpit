@@ -5,6 +5,7 @@ import crypto from 'crypto';
 import type { BackendRegistry } from './backends/registry';
 import { SettingsService } from './settingsService';
 import {
+  backendForCliProfile,
   cliVendorForBackend,
   cliProfileIdForBackend,
   type CliProfileRuntime,
@@ -511,8 +512,8 @@ export class ChatService {
       for (const conv of index.conversations) {
         const vendor = cliVendorForBackend(conv.backend);
         if (!vendor) continue;
-        usedVendors.add(vendor);
         if (!conv.cliProfileId) {
+          usedVendors.add(vendor);
           conv.cliProfileId = serverConfiguredCliProfileId(vendor);
           changed = true;
         }
@@ -548,6 +549,34 @@ export class ChatService {
       throw new Error(resolved.error || 'Unable to resolve CLI profile');
     }
     return resolved.runtime;
+  }
+
+  async resolveCliProfileRuntimeForSessionReset(
+    cliProfileId: string | undefined | null,
+    fallbackBackend?: string | null,
+  ): Promise<CliProfileRuntime> {
+    const settings = await this._settingsService.getSettings();
+    const resolved = resolveCliProfileRuntime(settings, cliProfileId, fallbackBackend);
+    if (!resolved.error && resolved.runtime) {
+      return resolved.runtime;
+    }
+
+    const enabledProfiles = Array.isArray(settings.cliProfiles)
+      ? settings.cliProfiles.filter((profile) => profile && !profile.disabled)
+      : [];
+    if (enabledProfiles.length === 0) {
+      throw new Error('CLI profile is required to reset this conversation because no enabled CLI profiles are configured. Configure a CLI profile in Global Settings before resetting this conversation.');
+    }
+    if (enabledProfiles.length === 1) {
+      const profile = enabledProfiles[0];
+      return {
+        backendId: backendForCliProfile(profile, fallbackBackend || settings.defaultBackend),
+        cliProfileId: profile.id,
+        profile,
+      };
+    }
+
+    throw new Error(`${resolved.error || 'Unable to resolve CLI profile'}. Multiple CLI profiles are configured, so choose a replacement profile before resetting this conversation.`);
   }
 
   private async _resolveRuntimeForConversation(
@@ -1547,7 +1576,10 @@ export class ChatService {
 
   // ── Session Management ─────────────────────────────────────────────────────
 
-  async resetSession(convId: string): Promise<ResetSessionResult | null> {
+  async resetSession(
+    convId: string,
+    opts: { runtime?: CliProfileRuntime } = {},
+  ): Promise<ResetSessionResult | null> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return null;
     const summarySnapshot = await this._indexLock.run(hash, async () => {
@@ -1558,6 +1590,22 @@ export class ChatService {
       const now = new Date();
       const activeSession = convEntry.sessions.find(s => s.active);
       if (!activeSession) return null;
+
+      const runtime = opts.runtime || await this.resolveCliProfileRuntimeForSessionReset(convEntry.cliProfileId, convEntry.backend);
+      const previousBackend = convEntry.backend;
+      convEntry.backend = runtime.backendId;
+      if (runtime.cliProfileId) {
+        convEntry.cliProfileId = runtime.cliProfileId;
+      } else {
+        delete convEntry.cliProfileId;
+      }
+      if (previousBackend !== runtime.backendId) {
+        if (convEntry.usage) convEntry.usage.contextUsagePercentage = undefined;
+        if (activeSession.usage) activeSession.usage.contextUsagePercentage = undefined;
+      }
+      if (runtime.backendId !== 'codex') {
+        delete convEntry.serviceTier;
+      }
 
       const currentSessionNumber = activeSession.number;
       const newSessionNumber = currentSessionNumber + 1;

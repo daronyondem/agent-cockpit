@@ -222,6 +222,27 @@ describe('memoryMcp.extractMemoryFromSession', () => {
     expect(stubCli._oneShotCalls).toHaveLength(1);
   });
 
+  test('runs the Memory CLI in the conversation workspace when extracting', async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(tmpDir, 'conversation-workspace-'));
+    const hash = workspaceHash(workspaceDir);
+    const conversation = await service.createConversation('extract cwd', workspaceDir);
+    await service.setWorkspaceMemoryEnabled(hash, true);
+
+    stubCli.queueResponse('NONE');
+
+    await memoryMcp.extractMemoryFromSession({
+      workspaceHash: hash,
+      conversationId: conversation.id,
+      messages: [
+        { role: 'user', content: 'remember this workspace detail' } as any,
+        { role: 'assistant', content: 'noted' } as any,
+      ],
+    });
+
+    expect(stubCli._oneShotCalls).toHaveLength(1);
+    expect(stubCli._oneShotCalls[0].options?.workingDir).toBe(workspaceDir);
+  });
+
   test('parses a single entry response and saves it', async () => {
     const hash = workspaceHash('/tmp/mem-extract-one');
     await service.createConversation('one', '/tmp/mem-extract-one');
@@ -491,6 +512,32 @@ User stated they prefer TypeScript.
       status: 'last_succeeded',
       backendId: 'stub-memory-cli',
     });
+  });
+
+  test('runs the Memory CLI in the conversation workspace when writing a note', async () => {
+    const workspaceDir = fs.mkdtempSync(path.join(tmpDir, 'conversation-workspace-'));
+    const hash = workspaceHash(workspaceDir);
+    const conversation = await service.createConversation('post cwd', workspaceDir);
+    await service.setWorkspaceMemoryEnabled(hash, true);
+    const session = memoryMcp.issueMemoryMcpSession(conversation.id, hash);
+
+    stubCli.queueResponse(`---
+name: workspace_cwd_note
+description: workspace cwd note
+type: project
+---
+
+Body.
+`);
+
+    await startHttpServer(memoryMcp.router);
+    const res = await makeRequest('POST', '/mcp/memory/notes', { content: 'remember cwd' }, {
+      'x-memory-token': session.token,
+    });
+
+    expect(res.status).toBe(200);
+    expect(stubCli._oneShotCalls).toHaveLength(1);
+    expect(stubCli._oneShotCalls[0].options?.workingDir).toBe(workspaceDir);
   });
 
   test('classifies Memory processor auth failures with memory and chat profile context', async () => {

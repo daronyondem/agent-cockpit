@@ -390,6 +390,52 @@ describe('createConversation', () => {
       fs.rmSync(migrateTmp, { recursive: true, force: true });
     }
   });
+
+  test('does not recreate a deleted server-configured profile for already-migrated conversations on initialize', async () => {
+    const migrateTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-cli-profile-deleted-'));
+    try {
+      const ws = '/tmp/cli-profile-deleted';
+      const hash = workspaceHash(ws);
+      const workspaceDir = path.join(migrateTmp, 'data', 'chat', 'workspaces', hash);
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      fs.writeFileSync(path.join(workspaceDir, 'index.json'), JSON.stringify({
+        workspacePath: ws,
+        conversations: [
+          {
+            id: 'conv-claude',
+            title: 'Claude migrated',
+            backend: 'claude-code',
+            cliProfileId: serverConfiguredCliProfileId('claude-code'),
+            currentSessionId: 'session-claude',
+            lastActivity: '2026-04-29T00:00:00.000Z',
+            lastMessage: null,
+            sessions: [{
+              number: 1,
+              sessionId: 'session-claude',
+              summary: null,
+              active: true,
+              messageCount: 0,
+              startedAt: '2026-04-29T00:00:00.000Z',
+              endedAt: null,
+            }],
+          },
+        ],
+      }, null, 2));
+
+      const migrating = new ChatService(migrateTmp, { defaultWorkspace: DEFAULT_WORKSPACE });
+      await migrating.initialize();
+
+      const settings = await migrating.getSettings();
+      expect(settings.cliProfiles || []).not.toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: serverConfiguredCliProfileId('claude-code') }),
+        ]),
+      );
+      expect(settings.defaultCliProfileId).toBeUndefined();
+    } finally {
+      fs.rmSync(migrateTmp, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('getConversation', () => {
@@ -470,6 +516,81 @@ describe('listConversations', () => {
     expect(afterReset.messageCount).toBe(0);
     expect(afterReset.lastMessage).toBeNull();
     expect(new Date(afterReset.updatedAt).getTime()).toBeGreaterThanOrEqual(new Date(beforeReset.updatedAt).getTime());
+  });
+
+  test('resetSession reassigns a deleted profile conversation to the only enabled profile', async () => {
+    const now = '2026-05-22T00:00:00.000Z';
+    const deletedProfile: CliProfile = {
+      id: 'profile-codex-deleted',
+      name: 'Deleted Codex',
+      vendor: 'codex',
+      authMode: 'account',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const fallbackProfile: CliProfile = {
+      id: 'profile-claude-fallback',
+      name: 'Fallback Claude',
+      vendor: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await service.getSettings();
+    await service.saveSettings({
+      ...settings,
+      defaultCliProfileId: deletedProfile.id,
+      cliProfiles: [deletedProfile, fallbackProfile],
+    });
+
+    const conv = await service.createConversation('Deleted Profile Reset', undefined, undefined, undefined, undefined, deletedProfile.id);
+    expect(conv.backend).toBe('codex');
+    expect(conv.cliProfileId).toBe(deletedProfile.id);
+
+    const saved = await service.getSettings();
+    await service.saveSettings({
+      ...saved,
+      defaultCliProfileId: fallbackProfile.id,
+      defaultBackend: 'claude-code',
+      cliProfiles: [fallbackProfile],
+    });
+
+    const result = await service.resetSession(conv.id);
+
+    expect(result!.conversation.backend).toBe('claude-code');
+    expect(result!.conversation.cliProfileId).toBe(fallbackProfile.id);
+    expect(result!.newSessionNumber).toBe(2);
+  });
+
+  test('resetSession fails clearly when the assigned profile was deleted and no profiles remain', async () => {
+    const now = '2026-05-22T00:00:00.000Z';
+    const deletedProfile: CliProfile = {
+      id: 'profile-codex-deleted',
+      name: 'Deleted Codex',
+      vendor: 'codex',
+      authMode: 'account',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await service.getSettings();
+    await service.saveSettings({
+      ...settings,
+      defaultCliProfileId: deletedProfile.id,
+      cliProfiles: [deletedProfile],
+    });
+    const conv = await service.createConversation('No Profiles Reset', undefined, undefined, undefined, undefined, deletedProfile.id);
+    const saved = await service.getSettings();
+    await service.saveSettings({
+      ...saved,
+      defaultCliProfileId: undefined,
+      defaultBackend: undefined,
+      cliProfiles: [],
+    });
+
+    await expect(service.resetSession(conv.id)).rejects.toThrow(
+      'CLI profile is required to reset this conversation because no enabled CLI profiles are configured.',
+    );
   });
 
   test('includes workingDir in listing', async () => {

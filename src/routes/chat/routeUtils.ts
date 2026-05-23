@@ -1,4 +1,7 @@
 import type { Request, Response } from '../../types';
+import type { ChatService } from '../../services/chatService';
+
+type Conversation = NonNullable<Awaited<ReturnType<ChatService['getConversation']>>>;
 
 /** Extract a named route param as a string (Express 5 types them as string | string[]). */
 export function param(req: Request, name: string): string {
@@ -17,6 +20,20 @@ export function queryStrings(value: unknown): string[] {
 export function isCliProfileResolutionError(err: unknown): boolean {
   const message = (err as Error).message || '';
   return message.startsWith('CLI profile') || message.includes('CLI profile vendor');
+}
+
+export async function conversationHasMissingCliProfile(
+  chatService: ChatService,
+  conv: Conversation,
+): Promise<boolean> {
+  if (!conv.cliProfileId) return false;
+  try {
+    await chatService.resolveCliProfileRuntime(conv.cliProfileId, conv.backend);
+    return false;
+  } catch (err: unknown) {
+    if (isCliProfileResolutionError(err)) return true;
+    throw err;
+  }
 }
 
 export function sendError(res: Response, status: number, err: unknown): void {

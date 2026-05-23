@@ -342,6 +342,32 @@ describe('ClaudeCodeAdapter', () => {
     }
   });
 
+  test('resolveClaudeCliRuntime discovers Claude Code in the default user-local install path on macOS/Linux', () => {
+    const restorePlatform = mockProcessPlatform('darwin');
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-runtime-posix-'));
+    const originalHome = process.env.HOME;
+    const originalPath = process.env.PATH;
+    try {
+      process.env.HOME = root;
+      process.env.PATH = '/usr/bin:/bin';
+      const claudeBin = path.join(root, '.local', 'bin', 'claude');
+      fs.mkdirSync(path.dirname(claudeBin), { recursive: true });
+      fs.writeFileSync(claudeBin, '');
+
+      const runtime = resolveClaudeCliRuntime();
+
+      expect(runtime.command).toBe(claudeBin);
+      expect(runtime.displayCommand).toBe(claudeBin);
+      expect(runtime.argsPrefix).toBeUndefined();
+      expect(runtime.windowsCmdShim).toBeUndefined();
+    } finally {
+      process.env.HOME = originalHome;
+      process.env.PATH = originalPath;
+      fs.rmSync(root, { recursive: true, force: true });
+      restorePlatform();
+    }
+  });
+
   test('resolveClaudeCliRuntime rejects non-Claude profiles', () => {
     expect(() => resolveClaudeCliRuntime({
       id: 'profile-codex',
@@ -355,7 +381,7 @@ describe('ClaudeCodeAdapter', () => {
 
   test('uses default working directory', () => {
     const adapter = new ClaudeCodeAdapter();
-    expect(adapter.workingDir).toContain('.openclaw');
+    expect(adapter.workingDir).toContain('.agent-cockpit');
   });
 
   test('accepts custom working directory', () => {

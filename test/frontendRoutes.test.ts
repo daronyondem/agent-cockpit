@@ -214,6 +214,31 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.btn.primary:disabled');
   });
 
+  test('CLI profile settings allow deleting server-configured profiles', () => {
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+
+    expect(settingsSrc).toContain("title=\"Delete profile\"");
+    expect(settingsSrc).toContain("next.defaultBackend = undefined;");
+    expect(settingsSrc).not.toContain('Server-configured profiles cannot be deleted');
+    expect(settingsSrc).not.toMatch(/className="iconbtn-lg cli-del"[\s\S]{0,200}disabled=\{isServerProfile\}/);
+  });
+
+  test('composer profile picker recovers reset sessions with stale profile ids', () => {
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
+
+    expect(storeSrc).toContain('composerCliProfileId: freshSession ? (data.cliProfileId || null) : next.composerCliProfileId');
+    expect(storeSrc).toContain('composerBackend: freshSession ? (data.backend || null) : next.composerBackend');
+    expect(shellSrc).toContain('const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;');
+    expect(shellSrc).toContain('const canChangeProfile = !profileLocked || canRepairMissingProfile;');
+    expect(shellSrc).toContain('canChangeProfile && activeProfiles.length === 1 ? activeProfiles[0] : null');
+    expect(shellSrc).toContain("value={selectedProfile ? selectedProfile.name : 'Select profile'}");
+    expect(shellSrc).toContain('disabled={disabled || !canChangeProfile}');
+    expect(shellSrc).toContain("title={canRepairMissingProfile ? 'Select replacement CLI profile'");
+    expect(shellSrc).toContain("...(!selectedProfile ? [{ value: '', label: 'Select profile', disabled: true }] : [])");
+    expect(shellSrc).toContain('disabled={!!o.disabled}');
+  });
+
   test('desktop Usage settings separate reported and estimated cost with pricing override controls', () => {
     const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
     const chipSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chip-renderers.jsx'), 'utf8');

@@ -2157,6 +2157,40 @@ describe('CodexAdapter.runOneShot', () => {
     expect(result).toBe('the answer is 42');
   });
 
+  test('prefers --output-last-message file over codex exec transcript stdout', async () => {
+    let capturedArgs: string[] | null = null;
+    let resultPromise!: Promise<string>;
+
+    jest.isolateModules(() => {
+      jest.mock('child_process', () => ({
+        spawn: () => ({
+          on: () => {},
+          stdout: { on: () => {} },
+          stderr: { on: () => {} },
+          stdin: { write: () => true, end: () => {} },
+          kill: () => {},
+          killed: false,
+          exitCode: null,
+        }),
+        execFile: (_cmd: string, args: string[], _opts: object, cb: (err: NodeJS.ErrnoException | null, stdout: string, stderr: string) => void) => {
+          capturedArgs = args;
+          const outputIdx = args.indexOf('-o');
+          fs.writeFileSync(args[outputIdx + 1], '  clean final answer\n');
+          setImmediate(() => cb(null, 'codex\nnoisy transcript\nclean final answer\ntokens used\n123', ''));
+          return { stdin: { end: () => {} } };
+        },
+      }));
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      resultPromise = adapter.runOneShot('what is the answer?', { workingDir: '/tmp' });
+    });
+
+    const result = await resultPromise;
+    expect(result).toBe('clean final answer');
+    expect(capturedArgs).not.toBeNull();
+    expect(capturedArgs).toContain('-o');
+  });
+
   test('rejects with friendly error on ENOENT', async () => {
     let resultPromise!: Promise<string>;
 

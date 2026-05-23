@@ -1980,6 +1980,58 @@ describe('CLI profile runtime selection', () => {
     expect(blocked.status).toBe(409);
     expect(blocked.body.error).toBe('Cannot switch CLI profile after the active session has messages');
   });
+
+  test('allows repairing a missing conversation CLI profile after messages exist', async () => {
+    const conv = await env.chatService.createConversation('Missing Profile Repair');
+
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'First response', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+    const ws = await env.connectWs(conv.id);
+    const eventsPromise = env.readWsEvents(ws);
+    const firstSend = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'First message',
+    });
+    await eventsPromise;
+    expect(firstSend.status).toBe(200);
+
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: 'profile-claude-repair',
+      cliProfiles: [
+        ...(settings.cliProfiles || []).filter(profile => profile.id !== 'server-configured-claude-code'),
+        {
+          id: 'profile-claude-repair',
+          name: 'Claude Repair',
+          vendor: 'claude-code',
+          authMode: 'server-configured',
+          createdAt: '2026-04-29T00:00:00.000Z',
+          updatedAt: '2026-04-29T00:00:00.000Z',
+        },
+      ],
+    });
+
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'Repair response', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+    const repairWs = await env.connectWs(conv.id);
+    const repairEventsPromise = env.readWsEvents(repairWs);
+    const repairSend = await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Continue after repair',
+      cliProfileId: 'profile-claude-repair',
+      backend: 'claude-code',
+    });
+    await repairEventsPromise;
+
+    expect(repairSend.status).toBe(200);
+    expect(env.mockBackend._lastOptions!.cliProfileId).toBe('profile-claude-repair');
+    const loaded = await env.chatService.getConversation(conv.id);
+    expect(loaded?.backend).toBe('claude-code');
+    expect(loaded?.cliProfileId).toBe('profile-claude-repair');
+  });
 });
 
 // ── PATCH /conversations/:id/archive ─────────────────────────────────────────

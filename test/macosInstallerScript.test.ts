@@ -31,6 +31,10 @@ describe('macOS installer script', () => {
     expect(source).toContain('node_arch="x64"');
     expect(source).toContain('darwin-${node_arch}.tar.gz');
     expect(source).toContain('NODE_RUNTIME_PATH="$PATH"');
+    expect(source).toContain('runtime_path_with_user_cli_bins');
+    expect(source).toContain('${HOME}/.local/bin');
+    expect(source).toContain('/opt/homebrew/bin');
+    expect(source).toContain('NODE_RUNTIME_PATH="$(runtime_path_with_user_cli_bins "$PATH")"');
     expect(source).toContain('INSTALL_NODE" != "false"');
   });
 

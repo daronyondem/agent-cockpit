@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
-import type { StreamEvent } from '../src/types';
+import type { CliProfile, StreamEvent } from '../src/types';
 
 let env: ChatRouterEnv;
 
@@ -414,6 +414,79 @@ describe('POST /conversations/:id/reset', () => {
 
     // Clean up
     env.activeStreams.delete(conv.id);
+  });
+
+  test('returns 400 when reset cannot recover a deleted profile because no profiles remain', async () => {
+    const now = '2026-05-22T00:00:00.000Z';
+    const deletedProfile: CliProfile = {
+      id: 'profile-codex-deleted',
+      name: 'Deleted Codex',
+      vendor: 'codex',
+      authMode: 'account',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: deletedProfile.id,
+      cliProfiles: [deletedProfile],
+    });
+    const conv = await env.chatService.createConversation('No Profiles Reset', undefined, undefined, undefined, undefined, deletedProfile.id);
+    const saved = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...saved,
+      defaultCliProfileId: undefined,
+      defaultBackend: undefined,
+      cliProfiles: [],
+    });
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/reset`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('no enabled CLI profiles are configured');
+  });
+
+  test('uses the only enabled profile when resetting a conversation whose stored profile was deleted', async () => {
+    const now = '2026-05-22T00:00:00.000Z';
+    const deletedProfile: CliProfile = {
+      id: 'profile-codex-deleted',
+      name: 'Deleted Codex',
+      vendor: 'codex',
+      authMode: 'account',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const fallbackProfile: CliProfile = {
+      id: 'profile-claude-fallback',
+      name: 'Fallback Claude',
+      vendor: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: deletedProfile.id,
+      cliProfiles: [deletedProfile, fallbackProfile],
+    });
+    const conv = await env.chatService.createConversation('Deleted Profile Reset', undefined, undefined, undefined, undefined, deletedProfile.id);
+    const saved = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...saved,
+      defaultCliProfileId: fallbackProfile.id,
+      defaultBackend: 'claude-code',
+      cliProfiles: [fallbackProfile],
+    });
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/reset`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.conversation.backend).toBe('claude-code');
+    expect(res.body.conversation.cliProfileId).toBe(fallbackProfile.id);
+    expect(res.body.newSessionNumber).toBe(2);
   });
 
   test('clears messages from the active session', async () => {

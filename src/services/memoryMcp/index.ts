@@ -38,6 +38,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import path from 'path';
+import fs from 'fs';
 import type {
   CliProfile,
   Request,
@@ -102,6 +103,30 @@ export const MEMORY_MCP_STUB_PATH = path.resolve(__dirname, 'stub.cjs');
 
 function mintToken(): string {
   return crypto.randomBytes(24).toString('hex');
+}
+
+function existingDirectory(candidate?: string | null): string | undefined {
+  if (!candidate || typeof candidate !== 'string' || !candidate.trim()) return undefined;
+  try {
+    return fs.statSync(candidate).isDirectory() ? candidate : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function resolveMemoryProcessorWorkingDir(
+  chatService: ChatService,
+  conversationId: string,
+): Promise<string | undefined> {
+  let conversation: Awaited<ReturnType<ChatService['getConversation']>> | null = null;
+  try {
+    conversation = await chatService.getConversation(conversationId);
+  } catch {
+    conversation = null;
+  }
+  return existingDirectory(conversation?.executionDir)
+    || existingDirectory(conversation?.workingDir)
+    || existingDirectory(process.cwd());
 }
 
 /**
@@ -1524,9 +1549,11 @@ export function createMemoryMcpServer({
 
       let rawOutput: string;
       try {
+        const workingDir = await resolveMemoryProcessorWorkingDir(chatService, session.conversationId);
         rawOutput = await adapter.runOneShot(prompt, {
           model: settings.memory?.cliModel,
           effort: settings.memory?.cliEffort,
+          workingDir,
           timeoutMs: 90_000,
           cliProfile: memoryRuntime.profile,
         });
@@ -1763,9 +1790,11 @@ export function createMemoryMcpServer({
       const prompt = buildExtractionPrompt({ transcript, existing });
       let rawOutput: string;
       try {
+        const workingDir = await resolveMemoryProcessorWorkingDir(chatService, conversationId);
         rawOutput = await adapter.runOneShot(prompt, {
           model: settings.memory?.cliModel,
           effort: settings.memory?.cliEffort,
+          workingDir,
           timeoutMs: 120_000,
           cliProfile: memoryRuntime.profile,
         });

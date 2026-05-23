@@ -23,7 +23,7 @@
 | `AUTH_DATA_DIR` | No | `<AGENT_COCKPIT_DATA_DIR>/auth` | Directory for first-party local auth state. The owner account is stored in `owner.json`. Overrides only auth storage when set. |
 | `AUTH_SETUP_TOKEN` | Recommended for exposed first-run setup | `''` | Secret token required to create the first owner account from a non-localhost request. Localhost setup is allowed without the token for server-console access. |
 | `AUTH_ENABLE_LEGACY_OAUTH` | No | `false` | Transitional flag that registers the old Google/GitHub OAuth routes when set to `true`. Third-party auth is disabled by default. |
-| `DEFAULT_WORKSPACE` | No | `~/.openclaw/workspace` | Default working directory for CLI processes |
+| `DEFAULT_WORKSPACE` | No | `~/.agent-cockpit/workspace` | Default working directory for CLI processes |
 | `KIRO_ACP_IDLE_TIMEOUT_MS` | No | `3600000` | Idle timeout (ms) before killing the Kiro ACP process |
 | `CODEX_IDLE_TIMEOUT_MS` | No | `600000` | Idle timeout (ms) before killing an idle Codex `app-server` process |
 | `CODEX_APPROVAL_POLICY` | No | `never` | Codex approval policy for interactive threads. Valid values: `untrusted`, `on-failure`, `on-request`, `never`. The default treats Agent Cockpit as a trusted local agent and does not ask before Codex runs tools. Invalid values are ignored with a startup warning and the default is used. |
