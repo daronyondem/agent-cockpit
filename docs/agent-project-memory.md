@@ -44,6 +44,10 @@ tool is unavailable.
 - Linux production release support targets Ubuntu 24.04 LTS x64/glibc first.
   Keep Alpine/musl, NixOS, WSL, Linux arm64, and 32-bit Linux unsupported unless
   a later tested decision changes the support matrix.
+- POSIX self-update restart launchers must not depend on the executable bit of
+  `<dataDir>/restart.sh`. Launch through `sh`, chmod after every write, repair
+  stale restart scripts on fixed-server startup, and have macOS/Linux installer
+  repair runs chmod stale restart scripts before PM2 starts the app.
 
 ## macOS Install Path
 

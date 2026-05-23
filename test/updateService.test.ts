@@ -330,9 +330,17 @@ describe('UpdateService', () => {
   const ecosystemExists = originalExistsSync(ecosystemPath);
 
   beforeEach(() => {
+    mockExecFileFn.mockReset();
+    mockSpawnFn.mockClear();
+    mockWriteFileSync.mockClear();
+    mockWriteFileSync.mockImplementation(mockWriteFileSyncNoop);
+    mockChmodSync.mockClear();
+    mockChmodSync.mockImplementation(() => undefined);
+    mockExistsSyncOverrides = {};
+    mockReadFileSyncOverrides = {};
     // Ensure ecosystem.config.js exists for tests (it's gitignored, so absent in CI)
     if (!ecosystemExists) {
-      fs.writeFileSync(ecosystemPath, `module.exports = { apps: [{ script: 'server.ts', interpreter: './node_modules/.bin/tsx' }] };`);
+      originalWriteFileSync(ecosystemPath, `module.exports = { apps: [{ script: 'server.ts', interpreter: './node_modules/.bin/tsx' }] };`);
     }
     mockWebBuildEnsureBuilt = jest.fn().mockResolvedValue(makeWebBuildStatus());
     mockMobileBuildEnsureBuilt = jest.fn().mockResolvedValue(makeWebBuildStatus({
@@ -344,14 +352,6 @@ describe('UpdateService', () => {
       webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
       mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
     });
-    mockExecFileFn.mockReset();
-    mockSpawnFn.mockClear();
-    mockWriteFileSync.mockClear();
-    mockWriteFileSync.mockImplementation(mockWriteFileSyncNoop);
-    mockChmodSync.mockClear();
-    mockChmodSync.mockImplementation(() => undefined);
-    mockExistsSyncOverrides = {};
-    mockReadFileSyncOverrides = {};
     // Default: interpreter exists
     mockExistsSyncOverrides[interpreterPath] = true;
   });
@@ -921,6 +921,26 @@ describe('UpdateService', () => {
         const spawnArgs = mockSpawnFn.mock.calls[0] as unknown[];
         const shellCmd = (spawnArgs[1] as string[])[1];
         expect(shellCmd).toContain(`nohup sh "${scriptPath}"`);
+      } finally {
+        fs.rmSync(dataRoot, { recursive: true, force: true });
+      }
+    });
+
+    test('repairs a stale non-executable restart script on startup', () => {
+      mockChmodSync.mockImplementation((...args: Parameters<typeof fs.chmodSync>) => originalChmodSync(...args));
+      const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'update-restart-startup-mode-'));
+      try {
+        const scriptPath = path.join(dataRoot, 'restart.sh');
+        writeText(scriptPath, '#!/bin/sh\nexit 0\n');
+        fs.chmodSync(scriptPath, 0o644);
+
+        service = new UpdateService(appRoot, {
+          webBuildService: { ensureBuilt: mockWebBuildEnsureBuilt },
+          mobileBuildService: { ensureBuilt: mockMobileBuildEnsureBuilt },
+          dataRoot,
+        });
+
+        expect(fs.statSync(scriptPath).mode & 0o777).toBe(0o755);
       } finally {
         fs.rmSync(dataRoot, { recursive: true, force: true });
       }

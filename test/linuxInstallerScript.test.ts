@@ -78,6 +78,9 @@ describe('Linux installer script', () => {
     expect(source).toContain('NPM_CONFIG_LOGLEVEL=error');
     expect(source).toContain('npm ci --no-audit --no-fund --loglevel=error');
     expect(source).toContain('npm --prefix mobile/AgentCockpitPWA ci --no-audit --no-fund --loglevel=error');
+    expect(source).toContain('repair_restart_script_permissions()');
+    expect(source).toContain('chmod 755 "$restart_script"');
+    expect(source).toContain('repair_restart_script_permissions "$data_dir"');
     expect(source).toContain('npx pm2 startOrRestart ecosystem.config.js --update-env');
     expect(source).toContain('npx pm2 save');
     expect(source).toContain('wait_for_server "$current_link"');
