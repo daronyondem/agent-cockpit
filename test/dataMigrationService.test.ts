@@ -92,6 +92,8 @@ describe('DataMigrationService', () => {
     });
     expect(entryNames).toContain(`data/chat/workspaces/${workspaceStorageKey}/knowledge/state.db`);
     expect(entryNames).toContain(`data/chat/workspaces/${workspaceStorageKey}/knowledge/vectors/PG_VERSION`);
+    expect(entryNames).toContain(`data/chat/workspaces/${workspaceStorageKey}/knowledge/vectors/pg_notify/`);
+    expect(entryNames).toContain(`data/chat/workspaces/${workspaceStorageKey}/knowledge/vectors/pg_logical/snapshots/`);
     expect(entryNames).toContain('data/chat/usage-ledger.json');
     expect(entryNames).toContain('data/chat/usage-pricing-overrides.json');
     expect(entryNames).toContain('data/claude-plan-usage.json');
@@ -263,6 +265,35 @@ describe('DataMigrationService', () => {
     expect(fs.readdirSync(controlDir).some(name => name.startsWith('failed-') && name.endsWith('pending-import.json'))).toBe(true);
   });
 
+  test('restores required PGLite runtime directories while staging legacy imports', async () => {
+    const dataRoot = path.join(tmpDir, 'destination');
+    const uploadSource = path.join(tmpDir, 'legacy-vector.acexport');
+    const manifest = manifestForFiles([
+      {
+        path: 'chat/workspaces/storage-key/knowledge/vectors/PG_VERSION',
+        bytes: 2,
+        sha256: sha256('17'),
+      },
+    ]);
+    const zip = new AdmZip();
+    zip.addFile('manifest.json', Buffer.from(JSON.stringify(manifest, null, 2) + '\n'));
+    zip.addFile('data/chat/workspaces/storage-key/knowledge/vectors/PG_VERSION', Buffer.from('17'));
+    zip.writeZip(uploadSource);
+    const service = new DataMigrationService({
+      dataRoot,
+      appVersion: '0.0.0-test',
+      now: () => NOW,
+    });
+
+    const result = await service.scheduleImport(await service.saveImportUpload(uploadSource, 'legacy-vector.acexport'));
+    const pending = JSON.parse(await fsp.readFile(result.pendingPath, 'utf8')) as { stagingDataDir: string };
+    const vectorsPath = path.join(pending.stagingDataDir, 'chat', 'workspaces', 'storage-key', 'knowledge', 'vectors');
+
+    expect(fs.existsSync(path.join(vectorsPath, 'pg_notify'))).toBe(true);
+    expect(fs.existsSync(path.join(vectorsPath, 'pg_logical', 'snapshots'))).toBe(true);
+    expect(fs.existsSync(path.join(vectorsPath, 'pg_wal', 'summaries'))).toBe(true);
+  });
+
   test('post-import checks report workspace storage, KB SQLite, and PGLite vector state', async () => {
     const dataRoot = path.join(tmpDir, 'data');
     const workspaceRoot = path.join(dataRoot, 'chat', 'workspaces', 'storage-key');
@@ -279,6 +310,7 @@ describe('DataMigrationService', () => {
       kbEmbedding: { model: 'nomic-embed-text' },
     }));
     await fsp.writeFile(path.join(workspaceRoot, 'knowledge', 'vectors', 'PG_VERSION'), '16');
+    createPgliteRequiredDirs(path.join(workspaceRoot, 'knowledge', 'vectors'));
     createKbDatabase(path.join(workspaceRoot, 'knowledge', 'state.db'));
     const service = new DataMigrationService({
       dataRoot,
@@ -296,6 +328,33 @@ describe('DataMigrationService', () => {
     expect(checks.workspaces[0].knowledge.embedding?.status).toBe('warning');
     expect(checks.summary.status).toBe('warning');
   });
+
+  test('post-import checks flag incomplete PGLite vector directories', async () => {
+    const dataRoot = path.join(tmpDir, 'data');
+    const workspaceRoot = path.join(dataRoot, 'chat', 'workspaces', 'storage-key');
+    await fsp.mkdir(path.join(workspaceRoot, 'knowledge', 'vectors'), { recursive: true });
+    await fsp.writeFile(path.join(dataRoot, 'chat', 'workspaces.json'), JSON.stringify({
+      workspaces: [{
+        workspaceId: 'workspace-id',
+        storageKey: 'storage-key',
+        currentPath: path.join(tmpDir, 'workspace-path'),
+      }],
+    }));
+    await fsp.writeFile(path.join(workspaceRoot, 'index.json'), JSON.stringify({ kbEnabled: true }));
+    await fsp.writeFile(path.join(workspaceRoot, 'knowledge', 'vectors', 'PG_VERSION'), '16');
+    createKbDatabase(path.join(workspaceRoot, 'knowledge', 'state.db'));
+    const service = new DataMigrationService({
+      dataRoot,
+      appVersion: '0.0.0-test',
+      now: () => NOW,
+    });
+
+    const checks = await service.runPostImportChecks();
+
+    expect(checks.workspaces[0].knowledge.vectors?.status).toBe('error');
+    expect(checks.workspaces[0].knowledge.vectors?.message).toContain('missing required directories');
+    expect(checks.summary.status).toBe('error');
+  });
 });
 
 function createKbDatabase(dbPath: string): void {
@@ -306,6 +365,33 @@ function createKbDatabase(dbPath: string): void {
     db.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run('schema_version', '8');
   } finally {
     db.close();
+  }
+}
+
+function createPgliteRequiredDirs(vectorsPath: string): void {
+  for (const dir of [
+    'base',
+    'global',
+    'pg_commit_ts',
+    'pg_dynshmem',
+    'pg_logical/mappings',
+    'pg_logical/snapshots',
+    'pg_multixact/members',
+    'pg_multixact/offsets',
+    'pg_notify',
+    'pg_replslot',
+    'pg_serial',
+    'pg_snapshots',
+    'pg_stat',
+    'pg_stat_tmp',
+    'pg_subtrans',
+    'pg_tblspc',
+    'pg_twophase',
+    'pg_wal/archive_status',
+    'pg_wal/summaries',
+    'pg_xact',
+  ]) {
+    fs.mkdirSync(path.join(vectorsPath, dir), { recursive: true });
   }
 }
 
