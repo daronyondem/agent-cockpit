@@ -63,7 +63,7 @@ continue to force `npm --prefix mobile/AgentCockpitPWA install` plus
 The PWA runs in the phone browser or as an installed home-screen web app. It does not need a separate pairing flow because it is same-origin with the server:
 
 1. The user opens `/mobile/` on the Agent Cockpit server.
-2. `requireAuth` protects `/mobile/` like `/v2/`. If no session exists, the user goes through the existing browser auth flow.
+2. `requireAuth` protects `/mobile/` like `/v2/`. If no session exists, the browser is redirected to `/auth/login?next=<encoded /mobile/... path>`; successful password, passkey, or recovery-code login returns to that safe relative `/mobile/...` target instead of falling through `/` to the desktop `/v2/` UI. If the already-loaded PWA receives a `401` from an API request, its `loginURL()` helper also sends the current `/mobile/...` path as `next`.
 3. Once loaded, the PWA calls same-origin `/api/me`, `/api/chat/settings`, `/api/chat/backends`, `/api/chat/active-streams`, and `/api/chat/conversations`.
 4. REST calls use `credentials: "same-origin"`, the browser's `connect.sid` cookie, and CSRF tokens from `GET /api/csrf-token`.
 5. Streaming uses `ws(s)://<same-origin>/api/chat/conversations/:id/ws` and sends `{ "type": "reconnect" }` on open.

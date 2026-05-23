@@ -24,8 +24,8 @@ through `data/chat/workspaces.json`; current web/mobile clients send
 | GET | `/api/auth/passkeys` | Yes | Lists passkeys as `{ passkeys: [{ id, name, transports?, createdAt, lastUsedAt? }] }`; public credential material and counters are not returned. |
 | POST | `/api/auth/passkeys/register/options` | Yes + CSRF | Body `{ name? }`. Generates WebAuthn registration options for the current origin/RP ID, stores the challenge in session, and excludes already-registered credentials. |
 | POST | `/api/auth/passkeys/register/verify` | Yes + CSRF | Body `{ name?, response }`, where `response` is the JSON-encoded credential from `navigator.credentials.create`. Verifies the WebAuthn response and stores credential id, public key, counter, transports, and timestamps. Returns `{ passkey, passkeys }`. |
-| POST | `/api/auth/passkeys/login/options` | Public | Body `{ popup? }`. Generates WebAuthn assertion options for registered credentials and stores challenge/mode in the anonymous session. Returns 409 when no passkeys exist. |
-| POST | `/api/auth/passkeys/login/verify` | Public | Body `{ response }`, where `response` is the JSON-encoded credential from `navigator.credentials.get`. Verifies the assertion, updates passkey counter/last-used metadata, creates the normal server session, and returns `{ redirectTo, user }`. |
+| POST | `/api/auth/passkeys/login/options` | Public | Body `{ popup?, next? }`. Generates WebAuthn assertion options for registered credentials and stores challenge/mode plus any safe same-origin relative `next` path in the anonymous session. Returns 409 when no passkeys exist. |
+| POST | `/api/auth/passkeys/login/verify` | Public | Body `{ response }`, where `response` is the JSON-encoded credential from `navigator.credentials.get`. Verifies the assertion, updates passkey counter/last-used metadata, creates the normal server session, and returns `{ redirectTo, user }`; `redirectTo` is `/auth/popup-done` for popup re-auth, a preserved safe `next` path when supplied, or `/`. |
 | PATCH | `/api/auth/passkeys/:id` | Yes + CSRF | Body `{ name }`. Renames a passkey and returns `{ passkey, passkeys }`. |
 | DELETE | `/api/auth/passkeys/:id` | Yes + CSRF | Deletes a passkey and returns `{ passkeys }`. Returns 409 if deleting the last passkey while passkey-required mode is enabled. |
 | POST | `/api/auth/recovery/regenerate` | Yes + CSRF | Regenerates the owner's recovery codes. Returns `{ recoveryCodes, recovery }`; `recoveryCodes` are plaintext one-time codes and are shown only in this response. Stored recovery codes are scrypt-hashed. |
@@ -37,10 +37,10 @@ Non-API first-party auth pages:
 |--------|------|-------------|
 | GET | `/auth/setup` | First-run local owner setup page. |
 | POST | `/auth/setup` | Creates owner from `{ email, displayName, password, setupToken? }` and signs in. |
-| GET | `/auth/login` | First-party password/passkey login page. Redirects to setup when no owner exists. |
-| POST | `/auth/login/password` | Password login; blocks with 403 when `policy.passkeyRequired` is true. |
+| GET | `/auth/login` | First-party password/passkey login page. Redirects to setup when no owner exists. Accepts `?popup=1` and safe same-origin relative `?next=/path` values, carrying both through password, passkey, and recovery login surfaces. |
+| POST | `/auth/login/password` | Password login; accepts `{ email, password, popup?, next? }`, redirects to safe `next` when supplied, and blocks with 403 when `policy.passkeyRequired` is true. |
 | GET | `/auth/recovery` | Recovery-code login page. |
-| POST | `/auth/recovery/login` | Consumes one recovery code, signs in, and disables `passkeyRequired`. |
+| POST | `/auth/recovery/login` | Consumes one recovery code, signs in, disables `passkeyRequired`, and redirects to safe `next` when supplied. |
 | GET | `/auth/popup-done` | Terminal popup re-auth page. Posts `{ type: 'ac-reauth-ok' }` to the opener with same-origin `targetOrigin` and closes itself. |
 | GET | `/auth/google` | Legacy OAuth only when `AUTH_ENABLE_LEGACY_OAUTH=true`. Starts Google OAuth; supports `?popup=1`. |
 | GET | `/auth/google/callback` | Legacy OAuth callback. Finishes normal or popup auth on success; redirects to `/auth/denied` on failure. |
