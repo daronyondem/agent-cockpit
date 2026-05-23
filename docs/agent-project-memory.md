@@ -111,11 +111,11 @@ tool is unavailable.
   paths should all repair stale npm-generated wrappers. Do not depend on a
   global `node.exe`, and do not add the private runtime directory to the user's
   Windows `Path` unless that product decision changes.
-- Windows production self-update must not accept generic HTTP liveness as
-  success. The generated PowerShell restart script must use the target release's
-  app-local `pm2.cmd`, require `/api/chat/version.version` to match the target
-  release version, and use the rollback release's app-local `pm2.cmd` if it has
-  to restore the previous release.
+- Production self-update must not accept generic HTTP liveness as success. The
+  generated restart script must require `/api/chat/version.version` to match the
+  target release version. Windows restart/rollback must use the target and
+  rollback releases' app-local `pm2.cmd` paths if it has to restore the previous
+  release.
 - Windows installer ZIP extraction should stay non-interactive. Prefer the
   script's `System.IO.Compression.ZipFile` helper over `Expand-Archive` in the
   user-facing installer so PowerShell archive progress cannot pause installs in
