@@ -1310,7 +1310,7 @@ Status shape:
   installedAt: string | null,
   welcomeCompletedAt: string | null,
   nodeRuntime: InstallNodeRuntime | null,
-  startup?: { kind: 'scheduled-task' | 'manual' | 'unknown', name: string | null, scope: 'current-user' | 'unknown' } | null,
+  startup?: { kind: 'scheduled-task' | 'launch-agent' | 'systemd-user' | 'manual' | 'unknown', name: string | null, scope: 'current-user' | 'unknown' } | null,
   stateSource: 'stored' | 'inferred' | 'legacy' | 'corrupt',
   stateError: string | null,
 }
@@ -1356,7 +1356,7 @@ does not execute real local CLIs.
 Required checks currently cover Node.js 22+, npm, local PM2, writable
 `<AGENT_COCKPIT_DATA_DIR>`, and the desktop V2 build shell at
 `public/v2-built/index.html`. Optional/warning checks cover app-directory
-writability for future updates, Windows logon startup when running on Windows,
+writability for future updates, platform user-session startup registration,
 the mobile PWA build shell, Claude Code CLI, Codex CLI, Kiro CLI, Pandoc,
 LibreOffice, and install/update channel metadata. Windows PM2 probes run
 `node.exe <activeAppDir>\node_modules\pm2\bin\pm2 --version` directly, preferring
@@ -1395,10 +1395,12 @@ Windows PATH. The
 fallback Windows command runner still launches
 `.cmd` shims through `cmd.exe /d /s /c` and wraps the full command line in outer
 quotes so absolute runtime paths under `Agent Cockpit` directories survive
-`cmd.exe /s` quote stripping. The Windows logon startup check queries the
-`AgentCockpit` scheduled task unless
-`install.startup.kind` is `manual`, in which case the disabled startup state is
-reported as intentional. Missing CLI warnings are optional and tell the user to
+`cmd.exe /s` quote stripping. Startup checks are platform-specific: Windows
+queries the `AgentCockpit` scheduled task, macOS queries the configured
+LaunchAgent with `launchctl`, and Linux queries `systemctl --user is-enabled`
+for the configured user unit. When `install.startup.kind` is `manual`, the
+disabled startup state is reported as intentional. Missing CLI warnings are
+optional and tell the user to
 install only the backend they plan to use; Claude Code remediation includes
 `npm i -g @anthropic-ai/claude-code`, Codex remediation includes
 `npm i -g @openai/codex`, and Kiro remediation uses the official docs on

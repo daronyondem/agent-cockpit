@@ -386,7 +386,11 @@ Current schema:
     "requiredMajor": 22,
     "updatedAt": "2026-05-11T00:00:00.000Z"
   },
-  "startup": null
+  "startup": {
+    "kind": "launch-agent",
+    "name": "com.agent-cockpit.server",
+    "scope": "current-user"
+  }
 }
 ```
 
@@ -395,11 +399,16 @@ Read responses add operational metadata that is not persisted:
 - `stateSource`: `"stored"`, `"inferred"`, `"legacy"`, or `"corrupt"`
 - `stateError`: `null` or a read/parse error string for corrupt manifests
 
-`startup` is optional. Windows installer manifests write
+`startup` is optional. macOS installer manifests write
+`{ "kind": "launch-agent", "name": "com.agent-cockpit.server", "scope": "current-user" }`
+when the LaunchAgent is registered. Linux installer manifests write
+`{ "kind": "systemd-user", "name": "agent-cockpit.service", "scope": "current-user" }`
+when the systemd user unit is written. Windows installer manifests write
 `{ "kind": "scheduled-task", "name": "AgentCockpit", "scope": "current-user" }`
-when logon startup is registered, or `{ "kind": "manual", ... }` when the user
-supplied `-NoAutoStart`. Older manifests omit it and readers normalize that as
-`null`.
+when logon startup is registered. Installers write `{ "kind": "manual", ... }`
+when the user supplied the platform opt-out (`--no-auto-start` on POSIX,
+`-NoAutoStart` on Windows). Older manifests omit `startup` and readers normalize
+that as `null`.
 
 `nodeRuntime` is `null` for older/inferred manifests. New macOS, Linux, and Windows
 installer manifests record whether Agent Cockpit is using a host-managed

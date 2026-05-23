@@ -62,8 +62,9 @@ function normalizeNodeRuntime(value: unknown): InstallNodeRuntime | null {
 function normalizeStartup(value: unknown): InstallStartup | null {
   if (!value || typeof value !== 'object') return null;
   const raw = value as Partial<InstallStartup>;
+  const knownKinds: InstallStartup['kind'][] = ['scheduled-task', 'launch-agent', 'systemd-user', 'manual', 'unknown'];
   return {
-    kind: raw.kind === 'scheduled-task' || raw.kind === 'manual' || raw.kind === 'unknown' ? raw.kind : 'unknown',
+    kind: raw.kind && knownKinds.includes(raw.kind) ? raw.kind : 'unknown',
     name: stringOrNull(raw.name),
     scope: raw.scope === 'current-user' || raw.scope === 'unknown' ? raw.scope : 'unknown',
   };

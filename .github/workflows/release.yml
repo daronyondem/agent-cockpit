@@ -145,9 +145,13 @@ jobs:
               (cd "$devDir" && npx pm2 delete agent-cockpit >/dev/null 2>&1 || true)
               (cd "$devDir" && npx pm2 kill >/dev/null 2>&1 || true)
             fi
+            systemctl --user disable agent-cockpit.service >/dev/null 2>&1 || true
+            rm -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-cockpit.service"
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
           ./scripts/install-linux.sh --channel dev --dev-dir "$devDir" --install-dir "$installDir" --install-node --skip-open --port "$port"
+          test -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-cockpit.service"
           curl -fsS --max-time 5 "http://127.0.0.1:$port/auth/setup" >/dev/null
           node - "$port" <<'NODE'
           const port = Number(process.argv[2]);

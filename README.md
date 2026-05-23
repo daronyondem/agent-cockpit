@@ -181,7 +181,8 @@ This has three important consequences:
 The recommended production path on macOS is the release installer. It downloads
 the latest GitHub Release, verifies checksums, installs dependencies, writes
 local runtime config, starts Agent Cockpit through local PM2, and opens
-first-run owner setup in the browser.
+first-run owner setup in the browser. It also registers a current-user
+LaunchAgent so Agent Cockpit starts again when you log in after a restart.
 
 ```bash
 curl -fsSL https://github.com/daronyondem/agent-cockpit/releases/latest/download/install-macos.sh -o /tmp/install-agent-cockpit.sh
@@ -199,7 +200,8 @@ bash /tmp/install-agent-cockpit.sh --channel dev
 The validated Linux production path is the release installer on Ubuntu 24.04 LTS
 x64. It uses the same local server model as macOS, installs a private Node.js
 runtime when needed, starts Agent Cockpit through local PM2, and opens or prints
-the first-run setup URL.
+the first-run setup URL. It also writes a systemd user unit so Agent Cockpit
+starts again when your user session starts after a restart.
 
 ```bash
 curl -fsSL https://github.com/daronyondem/agent-cockpit/releases/latest/download/install-linux.sh -o /tmp/install-agent-cockpit.sh

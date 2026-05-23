@@ -37,6 +37,8 @@ describe('release workflow', () => {
     expect(source).toContain('Exercise Linux installer');
     expect(source).toContain('bash -n scripts/install-linux.sh');
     expect(source).toContain('./scripts/install-linux.sh --channel dev --dev-dir "$devDir" --install-dir "$installDir" --install-node --skip-open --port "$port"');
+    expect(source).toContain('test -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-cockpit.service"');
+    expect(source).toContain('systemctl --user disable agent-cockpit.service');
     expect(source).toContain("node - \"$port\" <<'NODE'");
     expect(source).toContain("for (const id of ['node', 'npm', 'pm2'])");
     expect(source).toContain('Install doctor request timed out');

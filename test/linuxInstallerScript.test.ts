@@ -15,6 +15,7 @@ describe('Linux installer script', () => {
     expect(help).toContain('--channel production|dev');
     expect(help).toContain('--install-node');
     expect(help).toContain('--no-install-node');
+    expect(help).toContain('--no-auto-start');
     expect(help).toContain('--skip-open');
   });
 
@@ -81,6 +82,17 @@ describe('Linux installer script', () => {
     expect(source).toContain('repair_restart_script_permissions()');
     expect(source).toContain('chmod 755 "$restart_script"');
     expect(source).toContain('repair_restart_script_permissions "$data_dir"');
+    expect(source).toContain('SYSTEMD_SERVICE_NAME="agent-cockpit.service"');
+    expect(source).toContain('startup_kind()');
+    expect(source).toContain("printf 'systemd-user'");
+    expect(source).toContain('write_helper_scripts "$current_link" "$NODE_RUNTIME_PATH"');
+    expect(source).toContain('write_helper_scripts "$DEV_DIR" "$NODE_RUNTIME_PATH"');
+    expect(source).toContain('start-agent-cockpit.sh');
+    expect(source).toContain('stop-agent-cockpit.sh');
+    expect(source).toContain('${XDG_CONFIG_HOME:-${HOME}/.config}/systemd/user');
+    expect(source).toContain('WantedBy=default.target');
+    expect(source).toContain('systemctl --user enable "$SYSTEMD_SERVICE_NAME"');
+    expect(source).toContain('register_user_startup');
     expect(source).toContain('npx pm2 startOrRestart ecosystem.config.js --update-env');
     expect(source).toContain('npx pm2 save');
     expect(source).toContain('wait_for_server "$current_link"');

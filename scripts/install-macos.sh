@@ -9,6 +9,7 @@ INSTALL_DIR="${HOME}/Library/Application Support/Agent Cockpit"
 DEV_DIR="${HOME}/agent-cockpit"
 INSTALL_NODE="auto"
 OPEN_BROWSER="true"
+AUTO_START="true"
 NODE_MAJOR="22"
 NODE_BIN_DIR=""
 NODE_RUNTIME_PATH=""
@@ -16,6 +17,7 @@ NODE_RUNTIME_SOURCE=""
 NODE_RUNTIME_VERSION=""
 NODE_RUNTIME_NPM_VERSION=""
 NODE_RUNTIME_DIR=""
+LAUNCH_AGENT_LABEL="com.agent-cockpit.server"
 export NPM_CONFIG_AUDIT=false
 export NPM_CONFIG_FUND=false
 export NPM_CONFIG_LOGLEVEL=error
@@ -34,6 +36,7 @@ Options:
   --port <port>              Local HTTP port. Default: 3334.
   --install-node             Install a private Node.js runtime when Node 22+ is missing. Default.
   --no-install-node          Fail instead of installing a private Node.js runtime.
+  --no-auto-start            Do not register Agent Cockpit to start at user login.
   --skip-open                Do not open the browser after PM2 starts.
   -h, --help                 Show this help.
 
@@ -89,6 +92,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-open)
       OPEN_BROWSER="false"
+      shift
+      ;;
+    --no-auto-start)
+      AUTO_START="false"
       shift
       ;;
     -h|--help)
@@ -259,6 +266,14 @@ json_string() {
   node -e "process.stdout.write(JSON.stringify(process.argv[1]))" "$1"
 }
 
+shell_quote() {
+  node -e "process.stdout.write(\"'\" + process.argv[1].replace(/'/g, \"'\\\\''\") + \"'\")" "$1"
+}
+
+xml_escape() {
+  node -e "process.stdout.write(process.argv[1].replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;').replace(/'/g, '&apos;'))" "$1"
+}
+
 json_read() {
   local file="$1"
   local expression="$2"
@@ -368,9 +383,11 @@ write_install_manifest() {
   local node_runtime_npm_version="${10}"
   local node_runtime_bin_dir="${11}"
   local node_runtime_dir="${12}"
+  local startup_kind="${13}"
+  local startup_name="${14}"
 
   mkdir -p "$data_dir"
-  node - "$data_dir/install.json" "$channel" "$source" "$REPO" "$version" "$branch" "$install_dir" "$app_dir" "$data_dir" "$node_runtime_source" "$node_runtime_version" "$node_runtime_npm_version" "$node_runtime_bin_dir" "$node_runtime_dir" "$NODE_MAJOR" <<'NODE'
+  node - "$data_dir/install.json" "$channel" "$source" "$REPO" "$version" "$branch" "$install_dir" "$app_dir" "$data_dir" "$node_runtime_source" "$node_runtime_version" "$node_runtime_npm_version" "$node_runtime_bin_dir" "$node_runtime_dir" "$NODE_MAJOR" "$startup_kind" "$startup_name" <<'NODE'
 const fs = require('fs');
 const [
   manifestPath,
@@ -388,6 +405,8 @@ const [
   nodeRuntimeBinDir,
   nodeRuntimeDir,
   nodeRuntimeRequiredMajor,
+  startupKind,
+  startupName,
 ] = process.argv.slice(2);
 
 const manifest = {
@@ -410,6 +429,11 @@ const manifest = {
     runtimeDir: nodeRuntimeDir || null,
     requiredMajor: Number(nodeRuntimeRequiredMajor) || null,
     updatedAt: new Date().toISOString(),
+  } : null,
+  startup: startupKind ? {
+    kind: startupKind,
+    name: startupName || null,
+    scope: 'current-user',
   } : null,
 };
 
@@ -450,6 +474,109 @@ repair_restart_script_permissions() {
   local restart_script="${data_dir}/restart.sh"
   if [[ -f "$restart_script" ]]; then
     chmod 755 "$restart_script" || log "Warning: unable to repair self-update restart script permissions at ${restart_script}."
+  fi
+}
+
+startup_kind() {
+  if [[ "$AUTO_START" == "true" ]]; then
+    printf 'launch-agent'
+  else
+    printf 'manual'
+  fi
+}
+
+startup_name() {
+  if [[ "$AUTO_START" == "true" ]]; then
+    printf '%s' "$LAUNCH_AGENT_LABEL"
+  fi
+}
+
+write_helper_scripts() {
+  local app_dir="$1"
+  local runtime_path="$2"
+  local bin_dir="${INSTALL_DIR}/bin"
+  local log_dir="${INSTALL_DIR}/pm2/logs"
+  local app_dir_q
+  local runtime_path_q
+  app_dir_q="$(shell_quote "$app_dir")"
+  runtime_path_q="$(shell_quote "$runtime_path")"
+  mkdir -p "$bin_dir" "$log_dir"
+
+  cat > "${bin_dir}/start-agent-cockpit.sh" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+APP_DIR=${app_dir_q}
+RUNTIME_PATH=${runtime_path_q}
+if [[ -n "\$RUNTIME_PATH" ]]; then
+  export PATH="\$RUNTIME_PATH"
+fi
+cd "\$APP_DIR"
+npx pm2 startOrRestart ecosystem.config.js --update-env
+npx pm2 save
+SCRIPT
+
+  cat > "${bin_dir}/stop-agent-cockpit.sh" <<SCRIPT
+#!/usr/bin/env bash
+set -euo pipefail
+APP_DIR=${app_dir_q}
+RUNTIME_PATH=${runtime_path_q}
+if [[ -n "\$RUNTIME_PATH" ]]; then
+  export PATH="\$RUNTIME_PATH"
+fi
+cd "\$APP_DIR"
+npx pm2 delete agent-cockpit >/dev/null 2>&1 || true
+npx pm2 save >/dev/null 2>&1 || true
+SCRIPT
+
+  chmod 755 "${bin_dir}/start-agent-cockpit.sh" "${bin_dir}/stop-agent-cockpit.sh"
+}
+
+register_login_startup() {
+  if [[ "$AUTO_START" != "true" ]]; then
+    log "Skipping login startup registration."
+    return
+  fi
+
+  local launch_agents_dir="${HOME}/Library/LaunchAgents"
+  local plist_path="${launch_agents_dir}/${LAUNCH_AGENT_LABEL}.plist"
+  local start_script="${INSTALL_DIR}/bin/start-agent-cockpit.sh"
+  local log_dir="${INSTALL_DIR}/pm2/logs"
+  mkdir -p "$launch_agents_dir" "$log_dir"
+
+  local label_xml
+  local start_script_xml
+  local stdout_xml
+  local stderr_xml
+  label_xml="$(xml_escape "$LAUNCH_AGENT_LABEL")"
+  start_script_xml="$(xml_escape "$start_script")"
+  stdout_xml="$(xml_escape "${log_dir}/autostart-out.log")"
+  stderr_xml="$(xml_escape "${log_dir}/autostart-error.log")"
+
+  cat > "$plist_path" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${label_xml}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>${start_script_xml}</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${stdout_xml}</string>
+  <key>StandardErrorPath</key>
+  <string>${stderr_xml}</string>
+</dict>
+</plist>
+PLIST
+
+  launchctl unload "$plist_path" >/dev/null 2>&1 || true
+  log "Registering macOS LaunchAgent ${LAUNCH_AGENT_LABEL}."
+  if ! launchctl load -w "$plist_path"; then
+    fail "Failed to register macOS LaunchAgent at ${plist_path}."
   fi
 }
 
@@ -540,8 +667,10 @@ install_production() {
   ensure_built_assets "$current_link" "false"
   write_env_file "$current_link" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_ecosystem_config "$current_link" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
-  write_install_manifest "$data_dir" "production" "github-release" "$release_version" "" "$INSTALL_DIR" "$current_link" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
+  write_install_manifest "$data_dir" "production" "github-release" "$release_version" "" "$INSTALL_DIR" "$current_link" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR" "$(startup_kind)" "$(startup_name)"
   repair_restart_script_permissions "$data_dir"
+  write_helper_scripts "$current_link" "$NODE_RUNTIME_PATH"
+  register_login_startup
   start_pm2 "$current_link"
   wait_for_server "$current_link"
 
@@ -575,8 +704,10 @@ install_dev() {
   ensure_built_assets "$DEV_DIR" "true"
   write_env_file "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
   write_ecosystem_config "$DEV_DIR" "$data_dir" "$session_secret" "$setup_token" "$NODE_RUNTIME_PATH"
-  write_install_manifest "$data_dir" "dev" "git-main" "$dev_version" "main" "$INSTALL_DIR" "$DEV_DIR" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR"
+  write_install_manifest "$data_dir" "dev" "git-main" "$dev_version" "main" "$INSTALL_DIR" "$DEV_DIR" "$NODE_RUNTIME_SOURCE" "$NODE_RUNTIME_VERSION" "$NODE_RUNTIME_NPM_VERSION" "$NODE_BIN_DIR" "$NODE_RUNTIME_DIR" "$(startup_kind)" "$(startup_name)"
   repair_restart_script_permissions "$data_dir"
+  write_helper_scripts "$DEV_DIR" "$NODE_RUNTIME_PATH"
+  register_login_startup
   start_pm2 "$DEV_DIR"
   wait_for_server "$DEV_DIR"
 

@@ -70,12 +70,17 @@ Mac-first packaging direction,
 [ADR-0063](adr/0063-adopt-per-user-windows-installer.md) adds the supported
 Windows path, and
 [ADR-0071](adr/0071-support-linux-production-installs.md) adds the validated
-Linux path. Production installs are local server-agent installs: Agent Cockpit
+Linux path. [ADR-0075](adr/0075-register-user-session-autostart-for-posix-installers.md)
+adds macOS/Linux current-user startup registration. Production installs are
+local server-agent installs: Agent Cockpit
 runs locally under PM2 and opens the browser for first-run setup. Electron/Tauri
 wrappers, Homebrew formulae, code signing, notarization, Linux distro packages,
 automatic Cloudflare tunnel provisioning, multi-user hosting, hosted SaaS, and
-unattended Windows service/no-login operation are outside the supported
-installer scope.
+unattended service/no-login operation are outside the supported installer scope.
+Platform installers register current-user session startup by default: macOS uses
+a LaunchAgent, Linux uses a systemd user unit, and Windows uses an ONLOGON
+Scheduled Task. These startup entries launch PM2 as the installing user; they do
+not run Agent Cockpit as a privileged system service.
 
 Agent Cockpit has two release/update channels:
 
@@ -143,7 +148,9 @@ Windows app/installer artifacts. It then creates a temporary Git origin, runs
 `scripts/install-linux.sh --channel dev` against a temporary checkout with a
 temporary install root, `--skip-open`, and a fixed high port, probes
 `/auth/setup`, verifies `/api/chat/install/doctor` reports `node`, `npm`, and
-`pm2` as `ok`, and deletes the PM2 process before the publish job starts.
+`pm2` as `ok`, verifies the systemd user unit file was written, disables/removes
+that test unit during cleanup, and deletes the PM2 process before the publish
+job starts.
 
 When `smoke_only` is false, the Ubuntu publish job then runs the release gate in
 this order:
@@ -233,7 +240,8 @@ scripts/install-macos.sh --channel dev
 
 Supported options are `--channel production|dev`, `--version <version>`,
 `--repo <owner/name>`, `--install-dir <path>`, `--dev-dir <path>`,
-`--port <port>`, `--install-node`, `--no-install-node`, and `--skip-open`. The
+`--port <port>`, `--install-node`, `--no-install-node`, `--no-auto-start`, and
+`--skip-open`. The
 default install root is `~/Library/Application Support/Agent Cockpit`;
 production releases are extracted under `releases/agent-cockpit-v<version>`,
 and `current` is a symlink to the active release. Mutable runtime data lives
@@ -284,16 +292,20 @@ or update an existing checkout with `fetch origin main`, `checkout main`, and
 both web/mobile builds so the dev checkout is immediately runnable.
 
 Both channels generate `.env`, `ecosystem.config.js`, and
-`<AGENT_COCKPIT_DATA_DIR>/install.json`. Generated runtime config sets `PORT`,
-secure random `SESSION_SECRET`, secure random `AUTH_SETUP_TOKEN`,
-`AGENT_COCKPIT_DATA_DIR`, `WEB_BUILD_MODE=auto`, and
-`AUTH_ENABLE_LEGACY_OAUTH=false`. Generated config also persists `PATH` with
-the private Node.js runtime `bin` directory first when present, followed by
-common user CLI install locations and the inherited install-time PATH. The PM2 ecosystem file uses the local
+`<AGENT_COCKPIT_DATA_DIR>/install.json`, plus helper scripts under
+`<install-root>/bin/`. Generated runtime config sets `PORT`, secure random
+`SESSION_SECRET`, secure random `AUTH_SETUP_TOKEN`, `AGENT_COCKPIT_DATA_DIR`,
+`WEB_BUILD_MODE=auto`, and `AUTH_ENABLE_LEGACY_OAUTH=false`. Generated config
+also persists `PATH` with the private Node.js runtime `bin` directory first when
+present, followed by common user CLI install locations and the inherited
+install-time PATH. The PM2 ecosystem file uses the local
 `./node_modules/.bin/tsx` interpreter, `cwd` set to the selected app directory,
 and app name `agent-cockpit`. The install manifest records production as
 `channel: "production", source: "github-release"` and dev as
-`channel: "dev", source: "git-main", branch: "main"`.
+`channel: "dev", source: "git-main", branch: "main"`. By default it also
+records `startup: { kind: "launch-agent", name: "com.agent-cockpit.server",
+scope: "current-user" }`; with `--no-auto-start`, it records
+`startup: { kind: "manual", name: null, scope: "current-user" }`.
 
 The installer starts the app with local PM2 through:
 
@@ -303,9 +315,7 @@ npx pm2 save
 ```
 
 It does not require global PM2. After PM2 starts, the installer probes
-`http://127.0.0.1:<port>/auth/setup` for up to 90 seconds with a raw .NET HTTP
-request rather than `Invoke-WebRequest`, so PowerShell page parsing and security
-prompts cannot pause the install while waiting for the HTML setup page. If the
+`http://127.0.0.1:<port>/auth/setup` for up to 90 seconds with `curl`. If the
 server does not answer, the installer fails with a local
 PM2 logs command. When the installer is using a private Node.js runtime, that
 printed command prepends the private runtime `bin` directory and calls the
@@ -317,6 +327,14 @@ Successful owner creation redirects to `/v2/?welcome=1`, where the authenticated
 welcome flow reads install/doctor status, links to Security and CLI Settings,
 offers workspace selection, and calls `POST /api/chat/install/welcome-complete`
 to persist `welcomeCompletedAt`.
+
+Unless `--no-auto-start` is supplied, the macOS installer writes
+`~/Library/LaunchAgents/com.agent-cockpit.server.plist` and loads it with
+`launchctl load -w`. The LaunchAgent has `RunAtLoad=true`, writes stdout/stderr
+to `<install-root>/pm2/logs/autostart-*.log`, and runs
+`<install-root>/bin/start-agent-cockpit.sh`. That helper exports the persisted
+runtime `PATH`, changes into the active app directory, runs
+`npx pm2 startOrRestart ecosystem.config.js --update-env`, and saves PM2 state.
 
 ## Linux Installer
 
@@ -336,7 +354,8 @@ scripts/install-linux.sh --channel dev
 
 Supported options are `--channel production|dev`, `--version <version>`,
 `--repo <owner/name>`, `--install-dir <path>`, `--dev-dir <path>`,
-`--port <port>`, `--install-node`, `--no-install-node`, and `--skip-open`. The
+`--port <port>`, `--install-node`, `--no-install-node`, `--no-auto-start`, and
+`--skip-open`. The
 default install root is `${XDG_DATA_HOME:-$HOME/.local/share}/agent-cockpit`;
 production releases are extracted under `releases/agent-cockpit-v<version>`,
 and `current` is a symlink to the active release. Mutable runtime data lives
@@ -371,11 +390,25 @@ same quiet npm settings as macOS, verify prebuilt `public/v2-built/` and
 Dev installs clone or update `main` under `--dev-dir`, install dependencies, and
 force both builds.
 
-Both Linux channels generate `.env`, `ecosystem.config.js`, and
-`<AGENT_COCKPIT_DATA_DIR>/install.json` with the same runtime config fields as
-macOS. The PM2 ecosystem file uses the local `./node_modules/.bin/tsx`
-interpreter, `cwd` set to the selected app directory, and app name
-`agent-cockpit`. The installer starts the app with local PM2 through
+Both Linux channels generate `.env`, `ecosystem.config.js`,
+`<AGENT_COCKPIT_DATA_DIR>/install.json`, and helper scripts under
+`<install-root>/bin/` with the same runtime config fields as macOS. The PM2
+ecosystem file uses the local `./node_modules/.bin/tsx` interpreter, `cwd` set
+to the selected app directory, and app name `agent-cockpit`. The install
+manifest records `startup: { kind: "systemd-user", name:
+"agent-cockpit.service", scope: "current-user" }` by default, or
+`startup: { kind: "manual", name: null, scope: "current-user" }` when
+`--no-auto-start` is supplied. Unless startup is disabled, the installer writes
+`${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/agent-cockpit.service` as a
+`Type=oneshot`, `RemainAfterExit=yes` user unit for `default.target`. The unit
+runs `<install-root>/bin/start-agent-cockpit.sh`, which exports the persisted
+runtime `PATH`, changes into the active app directory, runs
+`npx pm2 startOrRestart ecosystem.config.js --update-env`, and saves PM2 state.
+The unit uses the matching stop helper for `ExecStop`. When `systemctl --user`
+is available, the installer reloads and enables the unit; when user systemd is
+not available in the install environment, it leaves the unit file in place and
+prints a warning rather than failing the entire install. The installer starts the
+current session with local PM2 through
 `npx pm2 startOrRestart ecosystem.config.js --update-env` and `npx pm2 save`,
 then probes `http://127.0.0.1:<port>/auth/setup` for up to 90 seconds. Once the
 setup endpoint is ready, it prints the first-run setup token and opens
@@ -533,7 +566,7 @@ npm run mobile:build
 
 `WEB_BUILD_MODE=skip` disables both main V2 web and mobile startup preflights for tests or unusual deployments that provision assets out of band. If no previous build exists and the build fails, startup fails. If a previous build exists and a rebuild fails, the server logs the error and serves the previous build.
 
-Dev self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. Production self-update checks the release manifest's required Node runtime before dependency installation. When a release raises the required Node major, the updater installs or refreshes a checksum-verified private Node runtime from Node.org under the Agent Cockpit install root before running `npm ci`; installs that previously used system Node migrate to this private runtime instead of mutating global Node. macOS private runtime updates use Node's Darwin tarball and stable private-runtime symlink. Linux private runtime updates use Node's Linux x64 `tar.xz` archive and the same stable private-runtime symlink. Windows private runtime updates use Node's Windows ZIP and a versioned runtime directory. Production then runs root/mobile `npm ci` inside the extracted release, then runs the V2/mobile build preflight there only when markers or assets require it. macOS and Linux switch the `current` symlink before PM2 restart and require target-version health before accepting the update; Windows writes the active versioned `appDir` to `install.json` and launches a PowerShell restart script with health-check rollback. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md), [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md), [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md), [ADR-0059](adr/0059-install-private-node-runtime-on-macos.md), [ADR-0063](adr/0063-adopt-per-user-windows-installer.md), and [ADR-0071](adr/0071-support-linux-production-installs.md).
+Dev self-update runs root `npm install`, mobile `npm --prefix mobile/AgentCockpitPWA install`, the V2 web build, and the mobile PWA build before PM2 restart. If either dependency install or either build fails, the update returns a failed result and does not restart; startup preflight remains the fallback for manual git operations or interrupted updates. This keeps every generated asset tree served by Express (`/v2/` and `/mobile/`) in sync with the pulled source. Production self-update checks the release manifest's required Node runtime before dependency installation. When a release raises the required Node major, the updater installs or refreshes a checksum-verified private Node runtime from Node.org under the Agent Cockpit install root before running `npm ci`; installs that previously used system Node migrate to this private runtime instead of mutating global Node. macOS private runtime updates use Node's Darwin tarball and stable private-runtime symlink. Linux private runtime updates use Node's Linux x64 `tar.xz` archive and the same stable private-runtime symlink. Windows private runtime updates use Node's Windows ZIP and a versioned runtime directory. Production then runs root/mobile `npm ci` inside the extracted release, then runs the V2/mobile build preflight there only when markers or assets require it. macOS and Linux switch the `current` symlink before PM2 restart and require target-version health before accepting the update; Windows writes the active versioned `appDir` to `install.json` and launches a PowerShell restart script with health-check rollback. See [ADR-0049](adr/0049-retire-v2-globals-and-build-mobile-assets-during-updates.md), [ADR-0050](adr/0050-serve-mobile-pwa-from-ignored-build-output.md), [ADR-0054](adr/0054-adopt-mac-installer-and-release-channels.md), [ADR-0059](adr/0059-install-private-node-runtime-on-macos.md), [ADR-0063](adr/0063-adopt-per-user-windows-installer.md), [ADR-0071](adr/0071-support-linux-production-installs.md), and [ADR-0075](adr/0075-register-user-session-autostart-for-posix-installers.md).
 
 **Remote access via ngrok:**
 ```bash

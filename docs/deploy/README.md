@@ -1,7 +1,8 @@
 # Agent Cockpit Deploy Guide
 
 Agent Cockpit is a local server application. The production installers set up
-that server, write runtime config, start PM2, and open first-run owner setup.
+that server, write runtime config, register current-user session startup, start
+PM2, and open first-run owner setup.
 
 ## Install
 
@@ -29,3 +30,5 @@ that server, write runtime config, start PM2, and open first-run owner setup.
 - The first owner account should be created before exposing the server. If it
   must be exposed first, configure `AUTH_SETUP_TOKEN`.
 - PM2 is the supported process manager for persistent local server operation.
+- Platform startup entries launch PM2 as the installing user: macOS LaunchAgent,
+  Linux systemd user unit, and Windows ONLOGON scheduled task.

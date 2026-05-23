@@ -40,7 +40,9 @@ claude
 On macOS, the release installer is the easiest production path. It downloads the
 latest GitHub Release, verifies checksums, installs dependencies, writes `.env`,
 creates `ecosystem.config.js`, writes the install manifest under the data
-directory, starts Agent Cockpit with local PM2, and opens first-run setup.
+directory, registers a current-user LaunchAgent, starts Agent Cockpit with
+local PM2, and opens first-run setup. Pass `--no-auto-start` to skip login
+startup registration.
 
 ```bash
 curl -fsSL https://github.com/daronyondem/agent-cockpit/releases/latest/download/install-macos.sh -o /tmp/install-agent-cockpit.sh
@@ -58,7 +60,8 @@ bash /tmp/install-agent-cockpit.sh --channel dev
 On Linux, the validated production path is Ubuntu 24.04 LTS x64 with
 `install-linux.sh`. The installer downloads the latest GitHub Release, verifies
 checksums, installs a private Node.js runtime when needed, writes runtime config,
-starts Agent Cockpit with local PM2, and opens or prints first-run setup.
+writes a systemd user unit, starts Agent Cockpit with local PM2, and opens or
+prints first-run setup. Pass `--no-auto-start` to skip user-unit registration.
 
 ```bash
 curl -fsSL https://github.com/daronyondem/agent-cockpit/releases/latest/download/install-linux.sh -o /tmp/install-agent-cockpit.sh
