@@ -393,6 +393,7 @@ interface AuthFormBody {
   setupToken?: unknown;
   recoveryCode?: unknown;
   popup?: unknown;
+  next?: unknown;
 }
 
 interface PasskeyRegistrationOptionsBody {
@@ -406,6 +407,7 @@ interface PasskeyRegistrationVerifyBody {
 
 interface PasskeyAuthenticationOptionsBody {
   popup?: unknown;
+  next?: unknown;
 }
 
 interface PasskeyAuthenticationVerifyBody {
@@ -441,10 +443,56 @@ function escapeHtml(value: string): string {
 
 function hiddenModeInputs(req: Request): string {
   const fields: string[] = [];
-  if (req.query.popup === '1') {
+  if (modeField(req, 'popup') === '1') {
     fields.push('<input type="hidden" name="popup" value="1">');
   }
+  const next = requestedNextPath(req);
+  if (next) {
+    fields.push(`<input type="hidden" name="next" value="${escapeHtml(next)}">`);
+  }
   return fields.join('');
+}
+
+function modeField(req: Request, name: 'popup' | 'next'): string {
+  const fromQuery = req.query[name];
+  if (typeof fromQuery === 'string') {
+    return fromQuery;
+  }
+  const body = (req.body ?? {}) as AuthFormBody;
+  return stringField(body[name]);
+}
+
+function requestedNextPath(req: Request): string | undefined {
+  return safeNextPath(modeField(req, 'next'));
+}
+
+function safeNextPath(value: string): string | undefined {
+  if (!value || !value.startsWith('/') || value.startsWith('//') || value.includes('\\') || /[\u0000-\u001F\u007F]/.test(value)) {
+    return undefined;
+  }
+  try {
+    const base = 'http://agent-cockpit.local';
+    const parsed = new URL(value, base);
+    if (parsed.origin !== base) {
+      return undefined;
+    }
+    return `${parsed.pathname}${parsed.search}${parsed.hash}`;
+  } catch {
+    return undefined;
+  }
+}
+
+function authModeHref(path: string, req: Request): string {
+  const params = new URLSearchParams();
+  if (modeField(req, 'popup') === '1') {
+    params.set('popup', '1');
+  }
+  const next = requestedNextPath(req);
+  if (next) {
+    params.set('next', next);
+  }
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 function renderAuthShell(options: {
@@ -561,6 +609,7 @@ function renderSetupPage(req: Request, error?: string): string {
 }
 
 function renderLoginPage(req: Request, error?: string): string {
+  const recoveryHref = authModeHref('/auth/recovery', req);
   return renderAuthShell({
     title: 'Sign in to Agent Cockpit',
     eyebrow: 'Ready',
@@ -641,12 +690,15 @@ function renderLoginPage(req: Request, error?: string): string {
           setStatus('Waiting for passkey...');
           try {
             var params = new URLSearchParams(window.location.search);
+            var popupInput = document.querySelector('input[name="popup"]');
+            var nextInput = document.querySelector('input[name="next"]');
             var options = await readJson(await fetch('/api/auth/passkeys/login/options', {
               method: 'POST',
               credentials: 'same-origin',
               headers: { 'content-type': 'application/json' },
               body: JSON.stringify({
-                popup: params.get('popup') === '1' ? '1' : undefined
+                popup: (popupInput && popupInput.value === '1') || params.get('popup') === '1' ? '1' : undefined,
+                next: nextInput && nextInput.value ? nextInput.value : (params.get('next') || undefined)
               })
             }));
             var assertion = await navigator.credentials.get({ publicKey: decodeOptions(options) });
@@ -665,11 +717,12 @@ function renderLoginPage(req: Request, error?: string): string {
         });
       })();
       </script>`,
-    footer: '<p class="login-legal"><a href="/auth/recovery">Use a recovery code</a>. The mobile PWA signs in through this same page.</p>',
+    footer: `<p class="login-legal"><a href="${escapeHtml(recoveryHref)}">Use a recovery code</a>. The mobile PWA signs in through this same page.</p>`,
   });
 }
 
 function renderRecoveryPage(req: Request, error?: string): string {
+  const loginHref = authModeHref('/auth/login', req);
   return renderAuthShell({
     title: 'Use a recovery code',
     eyebrow: 'Recovery',
@@ -689,7 +742,7 @@ function renderRecoveryPage(req: Request, error?: string): string {
           <button class="auth-submit" type="submit"><span>Recover session</span><span>${ARROW_SVG}</span></button>
         </div>
       </form>`,
-    footer: '<p class="login-legal"><a href="/auth/login">Return to password login</a>.</p>',
+    footer: `<p class="login-legal"><a href="${escapeHtml(loginHref)}">Return to password login</a>.</p>`,
   });
 }
 
@@ -822,13 +875,13 @@ export function setupAuth(app: Express, config: AppConfig): void {
     });
   };
 
-  const loginAndFinishJson = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { popup?: boolean } = {}): void => {
+  const loginAndFinishJson = (req: Request, res: Response, next: NextFunction, user: AuthUser, mode: { popup?: boolean; redirectTo?: string } = {}): void => {
     req.login(user, (loginErr) => {
       if (loginErr) {
         next(loginErr);
         return;
       }
-      const redirectTo = mode.popup ? '/auth/popup-done' : '/';
+      const redirectTo = mode.popup ? '/auth/popup-done' : mode.redirectTo || '/';
       req.session.save((saveErr) => {
         if (saveErr) {
           next(saveErr);
@@ -927,6 +980,7 @@ export function setupAuth(app: Express, config: AppConfig): void {
       }
       loginAndFinish(req, res, next, localUserFromOwner(owner), {
         popup: body.popup === '1',
+        redirectTo: safeNextPath(stringField(body.next)),
       });
     } catch (err) {
       if (err instanceof LocalAuthError && err.code === 'owner-missing') {
@@ -968,6 +1022,7 @@ export function setupAuth(app: Express, config: AppConfig): void {
       }
       loginAndFinish(req, res, next, localUserFromOwner(recoveredOwner), {
         popup: body.popup === '1',
+        redirectTo: safeNextPath(stringField(body.next)),
       });
     } catch (err) {
       next(err);
@@ -1104,6 +1159,7 @@ export function setupAuth(app: Express, config: AppConfig): void {
         rpId,
         origin,
         popup: body.popup === '1',
+        next: safeNextPath(stringField(body.next)),
       };
       req.session.save((saveErr) => {
         if (saveErr) {
@@ -1159,6 +1215,7 @@ export function setupAuth(app: Express, config: AppConfig): void {
       delete req.session.passkeyAuthentication;
       loginAndFinishJson(req, res, next, localUserFromOwner(owner), {
         popup: ceremony.popup,
+        redirectTo: ceremony.next,
       });
     } catch (err) {
       next(err);
@@ -1317,7 +1374,8 @@ export function requireAuth(req: Request, res: Response, next: NextFunction): vo
     res.status(401).json({ error: 'Not authenticated' });
     return;
   }
-  res.redirect('/auth/login');
+  const params = new URLSearchParams({ next: req.originalUrl || req.url || req.path || '/' });
+  res.redirect(`/auth/login?${params.toString()}`);
 }
 
 // Returns the logged-in user's display name + identity provider for the

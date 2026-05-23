@@ -86,12 +86,12 @@ describe('requireAuth middleware', () => {
     });
   });
 
-  test('unauthenticated request to non-API path redirects to /auth/login', async () => {
+  test('unauthenticated request to non-API path redirects to /auth/login with a return target', async () => {
     const app = buildApp(false);
     await withServer(app, async (server) => {
-      const res = await makeRequest(server, 'GET', '/ping', 'example.com');
+      const res = await makeRequest(server, 'GET', '/ping?from=mobile', 'example.com');
       expect(res.status).toBe(302);
-      expect(res.headers.location).toBe('/auth/login');
+      expect(res.headers.location).toBe('/auth/login?next=%2Fping%3Ffrom%3Dmobile');
     });
   });
 
@@ -254,6 +254,30 @@ describe('setupAuth — /auth/login', () => {
       expect(res.body).not.toContain('name="popup" value="1"');
     });
   });
+
+  test('propagates safe next targets through the password and recovery forms', async () => {
+    const app = buildAuthApp();
+    await withServer(app, async (server) => {
+      await setupOwner(server);
+      const res = await makeRequest(server, 'GET', '/auth/login?next=%2Fmobile%2F%3Fconversation%3Dabc', 'example.com');
+      expect(res.body).toContain('name="next" value="/mobile/?conversation=abc"');
+      expect(res.body).toContain('href="/auth/recovery?next=%2Fmobile%2F%3Fconversation%3Dabc"');
+
+      const recovery = await makeRequest(server, 'GET', '/auth/recovery?next=%2Fmobile%2F%3Fconversation%3Dabc', 'example.com');
+      expect(recovery.body).toContain('name="next" value="/mobile/?conversation=abc"');
+      expect(recovery.body).toContain('href="/auth/login?next=%2Fmobile%2F%3Fconversation%3Dabc"');
+    });
+  });
+
+  test('omits unsafe next targets from auth forms', async () => {
+    const app = buildAuthApp();
+    await withServer(app, async (server) => {
+      await setupOwner(server);
+      const res = await makeRequest(server, 'GET', '/auth/login?next=https%3A%2F%2Fevil.test%2F', 'example.com');
+      expect(res.body).not.toContain('type="hidden" name="next"');
+      expect(res.body).toContain('href="/auth/recovery"');
+    });
+  });
 });
 
 describe('setupAuth — /auth/setup', () => {
@@ -377,6 +401,42 @@ describe('setupAuth — /auth/login/password', () => {
     });
   });
 
+  test('redirects password login to a safe next path', async () => {
+    const app = buildAuthApp();
+    await withServer(app, async (server) => {
+      await setupOwner(server);
+      const body = new URLSearchParams({
+        email: 'owner@example.com',
+        password: 'correct horse battery staple',
+        next: '/mobile/?conversation=abc',
+      }).toString();
+      const res = await makeRequest(server, 'POST', '/auth/login/password', 'example.com', {
+        body,
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      });
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe('/mobile/?conversation=abc');
+    });
+  });
+
+  test('falls back to root for unsafe password login next paths', async () => {
+    const app = buildAuthApp();
+    await withServer(app, async (server) => {
+      await setupOwner(server);
+      const body = new URLSearchParams({
+        email: 'owner@example.com',
+        password: 'correct horse battery staple',
+        next: 'https://evil.test/',
+      }).toString();
+      const res = await makeRequest(server, 'POST', '/auth/login/password', 'example.com', {
+        body,
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      });
+      expect(res.status).toBe(302);
+      expect(res.headers.location).toBe('/');
+    });
+  });
+
 });
 
 describe('setupAuth — /api/auth/status', () => {
@@ -465,13 +525,14 @@ describe('setupAuth — recovery codes and policy', () => {
       const body = new URLSearchParams({
         email: 'owner@example.com',
         recoveryCode: code,
+        next: '/mobile/',
       }).toString();
       const recovered = await makeRequest(server, 'POST', '/auth/recovery/login', 'example.com', {
         body,
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
       });
       expect(recovered.status).toBe(302);
-      expect(recovered.headers.location).toBe('/');
+      expect(recovered.headers.location).toBe('/mobile/');
       expect(String(recovered.headers['set-cookie'] || '')).toContain('connect.sid');
 
       const reused = await makeRequest(server, 'POST', '/auth/recovery/login', 'example.com', {

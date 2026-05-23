@@ -1939,6 +1939,7 @@ declare module 'express-session' {
       rpId: string;
       origin: string;
       popup?: boolean;
+      next?: string;
     };
   }
 }
