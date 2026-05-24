@@ -37,6 +37,7 @@ Optional checks include:
 - Claude Code CLI;
 - OpenAI Codex CLI;
 - Kiro CLI;
+- OpenCode CLI;
 - Pandoc;
 - LibreOffice;
 - mobile PWA build;

@@ -13,7 +13,7 @@ const DEFAULT_BUDGETS = {
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,
   assets: {
-    'index.js': 211 * KIB,
+    'index.js': 212 * KIB,
     'react-vendor.js': 230 * KIB,
     'markdown-vendor.js': 160 * KIB,
     'kbBrowser.js': 115 * KIB,

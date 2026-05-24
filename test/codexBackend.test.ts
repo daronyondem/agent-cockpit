@@ -134,6 +134,9 @@ describe('CodexAdapter', () => {
       toolActivity: true,
       userQuestions: true,
       stdinInput: true,
+      oneShotMediaInput: {
+        image: ['native-file-tool'],
+      },
       goals: {
         set: true,
         clear: true,
@@ -274,6 +277,7 @@ describe('CodexAdapter', () => {
     const gpt55 = models!.find((m) => m.id === 'gpt-5.5');
     expect(gpt55).toBeDefined();
     expect(gpt55!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh']);
+    expect(gpt55!.capabilities?.input?.image).toBe(true);
   });
 
   test('getMetadata falls back when a Windows cmd shim exits before stdin writes complete', async () => {
@@ -399,6 +403,7 @@ describe('CodexAdapter', () => {
     expect(capturedEnv?.CODEX_HOME).toBe('/tmp/codex-models-home');
     expect(metadata.models?.map((m) => m.id)).toEqual(['gpt-profile-only']);
     expect(metadata.models?.[0].supportedEffortLevels).toEqual(['minimal']);
+    expect(metadata.models?.[0].capabilities?.input?.image).toBe(true);
   });
 
   test('normalizes Codex model/list reasoning effort metadata', () => {
@@ -425,6 +430,10 @@ describe('CodexAdapter', () => {
       costTier: 'medium',
       default: true,
       supportedEffortLevels: ['none', 'minimal', 'low', 'high', 'xhigh'],
+      capabilities: {
+        input: { text: true, image: true },
+        output: { text: true },
+      },
     });
   });
 

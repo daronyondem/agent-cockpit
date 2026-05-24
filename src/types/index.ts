@@ -564,7 +564,7 @@ export interface ConversationListItem {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
-export type CliVendor = 'codex' | 'claude-code' | 'kiro';
+export type CliVendor = 'codex' | 'claude-code' | 'kiro' | 'opencode';
 export type CliAuthMode = 'server-configured' | 'account';
 export type CliCommunicationProtocol = 'standard' | 'interactive';
 
@@ -615,6 +615,11 @@ export interface CliProfile {
   vendor: CliVendor;
   /** Claude Code only: how Agent Cockpit communicates with the shared Claude CLI. */
   protocol?: CliCommunicationProtocol;
+  /** OpenCode only: provider choice for this logical profile. model is retained for legacy saved profiles; new UI selections happen in the composer. */
+  opencode?: {
+    provider?: string;
+    model?: string;
+  };
   /** Optional executable override. When omitted, the vendor default command is used. */
   command?: string;
   /** Server-configured keeps current server-side CLI state; account means Cockpit owns setup for this profile. */
@@ -1786,7 +1791,21 @@ export interface BackendCapabilities {
   toolActivity: boolean;
   userQuestions: boolean;
   stdinInput: boolean;
+  oneShotMediaInput?: OneShotMediaInputCapabilities;
   goals?: boolean | BackendGoalCapability;
+}
+
+export type ModelInputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
+export type ModelOutputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
+export type OneShotMediaTransport = 'explicit-attachment' | 'native-file-tool';
+export type OneShotMediaInputCapabilities = Partial<Record<ModelInputModality, OneShotMediaTransport[]>>;
+
+export interface ModelCapabilities {
+  input?: Partial<Record<ModelInputModality, boolean>>;
+  output?: Partial<Record<ModelOutputModality, boolean>>;
+  attachment?: boolean;
+  toolcall?: boolean;
+  reasoning?: boolean;
 }
 
 export interface BackendGoalCapability {
@@ -1832,6 +1851,7 @@ export interface ModelOption {
    * `max` on supported Opus models.
    */
   supportedEffortLevels?: EffortLevel[];
+  capabilities?: ModelCapabilities;
 }
 
 export interface BackendMetadata {

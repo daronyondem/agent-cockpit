@@ -5,6 +5,7 @@ import multer from 'multer';
 import { csrfGuard } from '../../middleware/csrf';
 import { attachmentFromPath, type ChatService } from '../../services/chatService';
 import type { BackendRegistry } from '../../services/backends/registry';
+import { checkOneShotMediaInput } from '../../services/backends/mediaCapabilities';
 import { validateAttachmentOcrRequest } from '../../contracts/uploads';
 import { isContractValidationError } from '../../contracts/validation';
 import type { Request, Response } from '../../types';
@@ -144,6 +145,11 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
     if (!adapter) {
       return res.status(500).json({ error: `Backend not registered: ${backendId}` });
     }
+    const metadata = await adapter.getMetadata({ cliProfile: runtime.profile });
+    const mediaCheck = checkOneShotMediaInput(metadata, conv.model || undefined, 'image');
+    if (!mediaCheck.ok) {
+      return res.status(400).json({ error: mediaCheck.message });
+    }
 
     const prompt = [
       `Read the image at ${resolved} and convert its contents to clean Markdown.`,
@@ -161,6 +167,7 @@ export function createUploadRouter(opts: UploadRoutesOptions): express.Router {
         workingDir: conv.executionDir || conv.workingDir || undefined,
         cliProfile: runtime.profile,
         serviceTier: conv.serviceTier || undefined,
+        attachments: [{ path: resolved, kind: 'image', name: meta.name }],
       });
       const cleaned = (markdown || '').trim();
       if (!cleaned) {

@@ -85,6 +85,36 @@ describe('frontend routes', () => {
     expect(shellSrc).toContain('dangerouslySetInnerHTML={{ __html: html }}');
   });
 
+  test('OpenCode provider profiles use provider assistant avatars', () => {
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const shellStateSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shellState.jsx'), 'utf8');
+    const appCss = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+
+    expect(fs.existsSync(path.join(ROOT, 'public/icons/deepseek-logo.svg'))).toBe(true);
+    expect(fs.existsSync(path.join(ROOT, 'public/icons/opencode-logo-light.svg'))).toBe(true);
+    expect(fs.existsSync(path.join(ROOT, 'public/icons/opencode-logo-dark.svg'))).toBe(true);
+    expect(shellStateSrc).toContain('profile.opencode && profile.opencode.provider');
+    expect(shellStateSrc).toContain("provider === 'deepseek'");
+    expect(shellStateSrc).toContain("provider === 'opencode'");
+    expect(shellStateSrc).toContain('avatar-provider-${provider}');
+    expect(shellStateSrc).toContain('export function assistantDisplayNameFor');
+    expect(shellStateSrc).toContain('return providerLabel;');
+    expect(appCss).toContain("url('/icons/deepseek-logo.svg')");
+    expect(appCss).toContain("url('/icons/opencode-logo-light.svg')");
+    expect(appCss).toContain('#root[data-theme="dark"] .msg-agent .avatar.avatar-provider-opencode');
+    expect(appCss).toContain("url('/icons/opencode-logo-dark.svg')");
+    expect(shellSrc).toContain('const assistantName = useAssistantDisplayName(message.backend, cliProfileId);');
+    expect(shellSrc).toContain('const entryCliProfileId = entry.message.cliProfileId');
+    expect(shellSrc).toContain('|| (isEntryStreaming ? state.composerCliProfileId : null)');
+    expect(shellSrc).toContain('<AssistantAvatar backend={message.backend} cliProfileId={cliProfileId}/>');
+    const mobileApp = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const mobileCss = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+    expect(mobileApp).toContain('opencodeProviderLabel');
+    expect(mobileApp).toContain('provider-avatar provider-${providerAvatar}');
+    expect(mobileCss).toContain("url('/icons/deepseek-logo.svg')");
+    expect(mobileCss).toContain("url('/icons/opencode-logo-light.svg')");
+  });
+
   test('desktop and mobile file surfaces understand conversation worktrees', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
     const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
@@ -221,6 +251,34 @@ describe('frontend routes', () => {
     expect(settingsSrc).toContain("next.defaultBackend = undefined;");
     expect(settingsSrc).not.toContain('Server-configured profiles cannot be deleted');
     expect(settingsSrc).not.toMatch(/className="iconbtn-lg cli-del"[\s\S]{0,200}disabled=\{isServerProfile\}/);
+  });
+
+  test('OpenCode profile settings use draft checks and provider-only profile controls', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+    const appCss = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+
+    expect(apiSrc).toContain('cli-profiles/opencode/draft/metadata');
+    expect(apiSrc).toContain('cli-profiles/opencode/draft/test');
+    expect(settingsSrc).toContain('AgentApi.settings.testOpenCodeDraftProfile(openCodeDraftProfile(profile))');
+    expect(settingsSrc).toContain('providerOptionsFromModels');
+    expect(settingsSrc).toContain('cli-provider-${opencodeProviderId}');
+    expect(appCss).toContain('.cli-vendor-icon.cli-provider-deepseek');
+    expect(appCss).toContain('.cli-vendor-icon.cli-provider-opencode');
+    expect(appCss).toContain('#root[data-theme="dark"] .cli-vendor-icon.cli-provider-opencode');
+    expect(settingsSrc).not.toContain('Composer models');
+    expect(settingsSrc).not.toContain('preview composer models');
+    expect(settingsSrc).not.toContain('the model is selected in the message composer');
+    expect(settingsSrc).toContain('usesGeneratedCliProfileName(current) ? defaultCliProfileName(vendor) : current.name');
+  });
+
+  test('instruction compatibility popover separates covered vendors from pointer needs', () => {
+    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+
+    expect(shellSrc).toContain('const coveredLabels = (status.vendors || []).filter(item => item.covered)');
+    expect(shellSrc).toContain('<div className="tt-kv"><span>Covered</span>');
+    expect(shellSrc).toContain('<div className="tt-kv"><span>Needs pointers</span>');
+    expect(shellSrc).not.toContain('<div className="tt-kv"><span>Missing</span>');
   });
 
   test('composer profile picker recovers reset sessions with stale profile ids', () => {

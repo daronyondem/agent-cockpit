@@ -253,6 +253,68 @@ describe('settings', () => {
     expect(profile.env).toBeUndefined();
   });
 
+  test('saving an OpenCode profile preserves provider metadata only', async () => {
+    const settings = await service.getSettings();
+    const saved = await service.saveSettings({
+      ...settings,
+      cliProfiles: [
+        ...(settings.cliProfiles || []),
+        {
+          id: 'profile-opencode-deepseek',
+          name: 'OpenCode DeepSeek',
+          vendor: 'opencode',
+          authMode: 'account',
+          command: '/Users/test/.opencode/bin/opencode',
+          configDir: '/tmp/opencode-account',
+          env: { OPENCODE_CONFIG_CONTENT: '{"theme":"dark"}' },
+          protocol: 'interactive',
+          opencode: {
+            provider: ' deepseek ',
+            model: ' deepseek/deepseek-v4-pro ',
+          },
+          createdAt: '2026-05-24T00:00:00.000Z',
+          updatedAt: '2026-05-24T00:00:00.000Z',
+        },
+      ],
+    } as any);
+
+    const profile = saved.cliProfiles!.find((p) => p.id === 'profile-opencode-deepseek')!;
+    expect(profile.vendor).toBe('opencode');
+    expect(profile.authMode).toBe('server-configured');
+    expect(profile.protocol).toBeUndefined();
+    expect(profile.command).toBe('/Users/test/.opencode/bin/opencode');
+    expect(profile.configDir).toBeUndefined();
+    expect(profile.env).toBeUndefined();
+    expect(profile.opencode).toEqual({
+      provider: 'deepseek',
+    });
+    expect(saved.defaultCliProfileId).toBe(profile.id);
+    expect(saved.defaultBackend).toBe('opencode');
+  });
+
+  test('saving a non-OpenCode profile drops OpenCode metadata', async () => {
+    const settings = await service.getSettings();
+    const saved = await service.saveSettings({
+      ...settings,
+      cliProfiles: [
+        {
+          id: 'profile-claude-with-opencode',
+          name: 'Claude',
+          vendor: 'claude-code',
+          authMode: 'server-configured',
+          opencode: {
+            provider: 'deepseek',
+            model: 'deepseek/deepseek-chat',
+          },
+          createdAt: '2026-05-24T00:00:00.000Z',
+          updatedAt: '2026-05-24T00:00:00.000Z',
+        },
+      ],
+    } as any);
+
+    expect(saved.cliProfiles![0].opencode).toBeUndefined();
+  });
+
   test('saving setup account profiles strips isolated auth homes', async () => {
     const settings = await service.getSettings();
     const saved = await service.saveSettings({

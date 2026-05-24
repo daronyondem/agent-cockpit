@@ -3,6 +3,7 @@ import { csrfGuard } from '../../middleware/csrf';
 import type { BackendRegistry } from '../../services/backends/registry';
 import type { ChatService } from '../../services/chatService';
 import type { CliProfileAuthService } from '../../services/cliProfileAuthService';
+import { validateCliProfileDraftRequest } from '../../contracts/chat';
 import { backendForCliProfile, cliProtocolForBackend, cliVendorForBackend } from '../../services/cliProfiles';
 import type { CliProfile, CliVendor, Request, Response, Settings } from '../../types';
 import { isCliProfileResolutionError, param, sendError } from './routeUtils';
@@ -36,10 +37,47 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
     }
   });
 
+  router.post('/cli-profiles/opencode/draft/metadata', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { profile } = validateCliProfileDraftRequest(req.body);
+      const draft = normalizeOpenCodeDraftProfile(profile);
+      const adapter = backendRegistry.get('opencode');
+      if (!adapter) {
+        return res.status(500).json({ error: 'CLI profile backend not registered: opencode' });
+      }
+      const backend = await adapter.getMetadata({ cliProfile: draft });
+      res.json({ profile: draft, backend });
+    } catch (err: unknown) {
+      sendError(res, 400, err);
+    }
+  });
+
+  router.post('/cli-profiles/opencode/draft/test', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const { profile } = validateCliProfileDraftRequest(req.body);
+      const draft = normalizeOpenCodeDraftProfile(profile);
+      const result = await cliProfileAuth.checkProfile(draft);
+      try {
+        const adapter = backendRegistry.get('opencode');
+        if (adapter) {
+          const metadata = await adapter.getMetadata({ cliProfile: draft });
+          const modelCount = Array.isArray(metadata.models) ? metadata.models.length : 0;
+          result.modelsAvailable = modelCount > 0;
+          result.modelCount = modelCount;
+        }
+      } catch (metadataErr: unknown) {
+        result.modelListError = (metadataErr as Error).message || String(metadataErr);
+      }
+      res.json({ result, profile: draft });
+    } catch (err: unknown) {
+      sendError(res, 400, err);
+    }
+  });
+
   router.post('/cli-profiles/:id/test', csrfGuard, async (req: Request, res: Response) => {
     try {
       const settings = await chatService.getSettings();
-      const prepared = cliProfileAuth.profileWithAuthDefaults(settings, param(req, 'id'));
+      const prepared = prepareProfileForTest(cliProfileAuth, settings, param(req, 'id'));
       const savedSettings = prepared.changed
         ? await chatService.saveSettings(prepared.settings)
         : settings;
@@ -138,6 +176,40 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   });
 
   return router;
+}
+
+function normalizeOpenCodeDraftProfile(profile: CliProfile): CliProfile {
+  if (!profile || profile.vendor !== 'opencode') {
+    throw new Error('OpenCode draft profile must use vendor opencode.');
+  }
+  const now = new Date().toISOString();
+  const id = String(profile.id || 'draft-opencode').trim() || 'draft-opencode';
+  const provider = typeof profile.opencode?.provider === 'string' ? profile.opencode.provider.trim() : '';
+  const command = typeof profile.command === 'string' ? profile.command.trim() : '';
+  return {
+    id,
+    name: String(profile.name || 'OpenCode Profile').trim() || 'OpenCode Profile',
+    vendor: 'opencode',
+    authMode: 'server-configured',
+    ...(command ? { command } : {}),
+    ...(provider ? { opencode: { provider } } : {}),
+    createdAt: typeof profile.createdAt === 'string' && profile.createdAt ? profile.createdAt : now,
+    updatedAt: now,
+    ...(profile.disabled ? { disabled: true } : {}),
+  };
+}
+
+function prepareProfileForTest(
+  cliProfileAuth: CliProfileAuthService,
+  settings: Settings,
+  profileId: string,
+): { settings: Settings; profile: CliProfile; changed: boolean } {
+  const profile = settings.cliProfiles?.find(candidate => candidate.id === profileId);
+  if (!profile) throw new Error(`CLI profile not found: ${profileId}`);
+  if (profile.authMode === 'account' && (profile.vendor === 'codex' || profile.vendor === 'claude-code')) {
+    return cliProfileAuth.profileWithAuthDefaults(settings, profileId);
+  }
+  return { settings, profile, changed: false };
 }
 
 type SetupAuthVendor = Extract<CliVendor, 'codex' | 'claude-code'>;

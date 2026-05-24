@@ -220,8 +220,11 @@ export interface CurrentUserResponse {
 export interface CliProfile {
   id: string;
   name: string;
-  vendor: 'codex' | 'claude-code' | 'kiro';
+  vendor: 'codex' | 'claude-code' | 'kiro' | 'opencode';
   protocol?: 'standard' | 'interactive';
+  opencode?: {
+    provider?: string;
+  };
   disabled?: boolean;
 }
 
@@ -230,6 +233,7 @@ export interface ModelOption {
   label: string;
   default?: boolean;
   supportedEffortLevels?: EffortLevel[];
+  capabilities?: ModelCapabilities;
 }
 
 export interface BackendGoalCapability {
@@ -240,6 +244,19 @@ export interface BackendGoalCapability {
   status: 'native' | 'transcript' | 'none';
 }
 
+export type ModelInputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
+export type ModelOutputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
+export type OneShotMediaTransport = 'explicit-attachment' | 'native-file-tool';
+export type OneShotMediaInputCapabilities = Partial<Record<ModelInputModality, OneShotMediaTransport[]>>;
+
+export interface ModelCapabilities {
+  input?: Partial<Record<ModelInputModality, boolean>>;
+  output?: Partial<Record<ModelOutputModality, boolean>>;
+  attachment?: boolean;
+  toolcall?: boolean;
+  reasoning?: boolean;
+}
+
 export interface BackendCapabilities {
   thinking?: boolean;
   planMode?: boolean;
@@ -247,6 +264,7 @@ export interface BackendCapabilities {
   toolActivity?: boolean;
   userQuestions?: boolean;
   stdinInput?: boolean;
+  oneShotMediaInput?: OneShotMediaInputCapabilities;
   goals?: boolean | BackendGoalCapability;
 }
 

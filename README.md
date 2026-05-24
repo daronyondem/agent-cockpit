@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  <em>A local browser cockpit for Claude Code, OpenAI Codex, Kiro, and future command-line AI agents.</em>
+  <em>A local browser cockpit for Claude Code, OpenAI Codex, Kiro, OpenCode, and future command-line AI agents.</em>
 </p>
 
 <p align="center">
@@ -42,7 +42,7 @@
 
 Agent Cockpit is an open source, local-first web UI for command-line AI agents.
 It runs on your machine, talks to local CLIs such as Claude Code, OpenAI Codex,
-and Kiro, streams their work into a browser interface, and stores your
+Kiro, and OpenCode, streams their work into a browser interface, and stores your
 conversations, memory, and knowledge base on disk.
 
 The core idea is simple: models and vendors will keep changing, but your working
@@ -55,7 +55,7 @@ data from the vendor interface you happen to use today.
   them.
 - You want conversations, memory, knowledge-base entries, and workspace context
   on a machine you control.
-- You want to switch from Claude Code to Codex or Kiro without losing the
+- You want to switch from Claude Code to Codex, Kiro, or OpenCode without losing the
   workspace understanding built up over time.
 - You use AI for coding, writing, research, planning, operations, or other
   knowledge work.
@@ -75,7 +75,7 @@ data from the vendor interface you happen to use today.
 
 | Without Agent Cockpit | With Agent Cockpit |
 | --- | --- |
-| AI work is scattered across terminal tabs and vendor apps. | Claude Code, Codex, and Kiro run from one browser UI. |
+| AI work is scattered across terminal tabs and vendor apps. | Claude Code, Codex, Kiro, and OpenCode run from one browser UI. |
 | Each vendor owns its own memory and history. | Conversations, memory, KB, and Workspace Context live locally. |
 | Switching vendors means starting over. | Provider-neutral workspace context follows the next backend. |
 | Remote access requires SSHing into a terminal. | Use the desktop web UI or mobile PWA through your own secure access path. |
@@ -84,7 +84,7 @@ data from the vendor interface you happen to use today.
 ## Core Capabilities
 
 **Unified CLI interface**
-Run Claude Code, OpenAI Codex, and Kiro from a browser-based chat surface. Switch
+Run Claude Code, OpenAI Codex, Kiro, and OpenCode from a browser-based chat surface. Switch
 backends per conversation while keeping the same workspace and interaction
 model.
 
@@ -138,6 +138,7 @@ passkeys, recovery codes, and optional legacy OAuth compatibility.
 | **Claude Code** | `claude` | Fully supported |
 | **OpenAI Codex** | `codex` | Fully supported |
 | **Kiro** | `kiro-cli` | Fully supported |
+| **OpenCode** | `opencode` | Fully supported, self-configured provider credentials |
 
 See [BACKENDS.md](BACKENDS.md) and [docs/user/backends.md](docs/user/backends.md)
 for feature differences, auth notes, and setup guidance.
@@ -168,6 +169,7 @@ This has three important consequences:
   - [OpenAI Codex CLI](https://github.com/openai/codex) (`codex`, install with
     `npm install -g @openai/codex`)
   - [Kiro CLI](https://kiro.dev) (`kiro-cli`)
+  - [OpenCode CLI](https://opencode.ai/docs/cli/) (`opencode`)
 - Optional: [LibreOffice](https://www.libreoffice.org/) and/or
   [Pandoc](https://pandoc.org/) on `PATH` for broader Knowledge Base document
   conversion.

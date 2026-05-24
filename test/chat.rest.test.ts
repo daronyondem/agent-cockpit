@@ -1522,6 +1522,24 @@ describe('POST /conversations/:id/attachments/ocr', () => {
     const call = env.mockBackend._oneShotCalls[env.mockBackend._oneShotCalls.length - 1];
     expect(call.prompt).toContain(imagePath);
     expect(call.options?.allowTools).toBe(true);
+    expect(call.options?.attachments).toEqual([
+      { path: imagePath, kind: 'image', name: 'screenshot.png' },
+    ]);
+  });
+
+  test('rejects OCR when selected model image support cannot be verified', async () => {
+    const conv = await env.chatService.createConversation('Test', undefined, 'claude-code', 'stale-model');
+    const artifactDir = path.join(env.chatService.artifactsDir, conv.id);
+    fs.mkdirSync(artifactDir, { recursive: true });
+    const imagePath = path.join(artifactDir, 'screenshot.png');
+    fs.writeFileSync(imagePath, 'fakeimage');
+
+    env.mockBackend.setOneShotImpl(async () => 'should not be called');
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/attachments/ocr`, { path: imagePath });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/stale-model/);
+    expect(env.mockBackend._oneShotCalls).toHaveLength(0);
   });
 
   test('rejects paths outside the conversation artifacts dir', async () => {

@@ -85,6 +85,15 @@ type GoalCapability = {
   resume: boolean;
   status: 'native' | 'transcript' | 'none';
 };
+type CliProfileSummary = {
+  id: string;
+  name: string;
+  vendor: string;
+  protocol?: string;
+  opencode?: {
+    provider?: string;
+  };
+};
 
 function isChatScrolledToEnd(element: HTMLElement): boolean {
   return element.scrollHeight - element.clientHeight - element.scrollTop <= CHAT_SCROLL_BOTTOM_THRESHOLD_PX;
@@ -94,6 +103,29 @@ function backendIdForProfile(profile?: { vendor: string; protocol?: string } | n
   if (!profile) return undefined;
   if (profile.vendor === 'claude-code' && profile.protocol === 'interactive') return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
   return profile.vendor;
+}
+
+const OPENCODE_PROVIDER_LABELS: Record<string, string> = {
+  deepseek: 'DeepSeek',
+  opencode: 'OpenCode',
+  openrouter: 'OpenRouter',
+  groq: 'Groq',
+};
+
+function opencodeProviderLabel(provider?: string | null): string | null {
+  const id = String(provider || '').trim().toLowerCase();
+  if (!id) return null;
+  if (OPENCODE_PROVIDER_LABELS[id]) return OPENCODE_PROVIDER_LABELS[id];
+  return id
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+function profileForID(profiles: CliProfileSummary[] | undefined, profileID?: string | null): CliProfileSummary | null {
+  if (!profileID) return null;
+  return profiles?.find((profile) => profile.id === profileID) || null;
 }
 
 function isClaudeBackend(backendID?: string | null): boolean {
@@ -1946,6 +1978,8 @@ export default function App() {
         <ChatScreen
           conversation={activeConversation}
           backends={backends}
+          cliProfiles={availableProfiles}
+          selectedCliProfileId={selectedCliProfileId}
           draft={draft}
           setDraft={setDraft}
           streamText={streamText}
@@ -2270,6 +2304,8 @@ function ConversationListScreen(props: {
 function ChatScreen(props: {
   conversation: Conversation | null;
   backends: BackendMetadata[];
+  cliProfiles: CliProfileSummary[];
+  selectedCliProfileId?: string;
   draft: string;
   setDraft: (value: string) => void;
   streamText: string;
@@ -2438,7 +2474,14 @@ function ChatScreen(props: {
         </button>
       </header>
       {props.errorMessage ? <ErrorBanner message={props.errorMessage} /> : null}
-      <MobilePinStrip messages={pinnedMessages} backends={props.backends} currentIndex={pinStripIndex} onSelect={jumpToPinnedMessage} />
+      <MobilePinStrip
+        messages={pinnedMessages}
+        backends={props.backends}
+        cliProfiles={props.cliProfiles}
+        cliProfileId={conversation.cliProfileId || props.selectedCliProfileId}
+        currentIndex={pinStripIndex}
+        onSelect={jumpToPinnedMessage}
+      />
       <div className="transcript-wrap">
         <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
           {conversation.messages.map((message) => (
@@ -2448,6 +2491,7 @@ function ChatScreen(props: {
               conversation={conversation}
               client={props.client}
               backends={props.backends}
+              cliProfiles={props.cliProfiles}
               focused={focusedPinID === message.id}
               messageRef={(node) => setMessageRef(message.id, node)}
               onTogglePin={(pinned) => props.onTogglePin(message.id, pinned)}
@@ -2458,7 +2502,12 @@ function ChatScreen(props: {
           {props.isStreaming && (props.streamText || props.showStreamPlaceholder) ? (
             <div className={`message assistant${props.streamText ? '' : ' stream-placeholder'}`}>
               <div className="message-heading">
-                <AssistantIdentity backend={conversation.backend} backends={props.backends} />
+                <AssistantIdentity
+                  backend={conversation.backend}
+                  backends={props.backends}
+                  cliProfiles={props.cliProfiles}
+                  cliProfileId={conversation.cliProfileId || props.selectedCliProfileId}
+                />
               </div>
               {props.streamText ? (
                 <MarkdownContent content={props.streamText} />
@@ -2646,6 +2695,8 @@ function GoalEventView(props: { message: Message }) {
 function MobilePinStrip(props: {
   messages: Message[];
   backends: BackendMetadata[];
+  cliProfiles: CliProfileSummary[];
+  cliProfileId?: string;
   currentIndex: number;
   onSelect: (message: Message, index: number) => void;
 }) {
@@ -2668,7 +2719,9 @@ function MobilePinStrip(props: {
         <span className="pin-strip-count">{props.messages.length}</span>
       </button>
       <button className="pin-strip-item" onClick={() => select(currentIndex)}>
-        <span className="pin-strip-source">{current.role === 'user' ? 'You' : cliDisplayName(props.backends, current.backend)}</span>
+        <span className="pin-strip-source">
+          {current.role === 'user' ? 'You' : cliDisplayName(props.backends, props.cliProfiles, current.backend, props.cliProfileId)}
+        </span>
         <span>{displayMessagePreview(current.content).replace(/\s+/g, ' ').trim() || 'Pinned message'}</span>
       </button>
       <div className="pin-strip-nav">
@@ -2684,19 +2737,39 @@ function MobilePinStrip(props: {
   );
 }
 
-function cliDisplayName(backends: BackendMetadata[], backend?: string | null): string {
+function cliDisplayName(
+  backends: BackendMetadata[],
+  cliProfiles: CliProfileSummary[] | undefined,
+  backend?: string | null,
+  cliProfileId?: string | null,
+): string {
   if (!backend) {
     return 'Agent Cockpit';
+  }
+  if (backend === 'opencode') {
+    const providerLabel = opencodeProviderLabel(profileForID(cliProfiles, cliProfileId)?.opencode?.provider);
+    if (providerLabel) return providerLabel;
   }
   return backends.find((item) => item.id === backend)?.label || backend;
 }
 
-function AssistantIdentity(props: { backend?: string | null; backends: BackendMetadata[] }) {
+function AssistantIdentity(props: {
+  backend?: string | null;
+  backends: BackendMetadata[];
+  cliProfiles?: CliProfileSummary[];
+  cliProfileId?: string | null;
+}) {
   const icon = props.backend ? props.backends.find((item) => item.id === props.backend)?.icon : null;
-  const label = cliDisplayName(props.backends, props.backend);
+  const provider = props.backend === 'opencode'
+    ? String(profileForID(props.cliProfiles, props.cliProfileId)?.opencode?.provider || '').trim().toLowerCase()
+    : '';
+  const providerAvatar = provider === 'deepseek' || provider === 'opencode' ? provider : '';
+  const label = cliDisplayName(props.backends, props.cliProfiles, props.backend, props.cliProfileId);
   return (
     <>
-      {icon ? (
+      {providerAvatar ? (
+        <span className={`assistant-avatar provider-avatar provider-${providerAvatar}`} aria-hidden="true" />
+      ) : icon ? (
         <span className="assistant-avatar backend-avatar" aria-hidden="true" dangerouslySetInnerHTML={{ __html: icon }} />
       ) : (
         <span className="assistant-avatar cockpit-avatar" aria-hidden="true">
@@ -2955,6 +3028,7 @@ function MessageBubble(props: {
   conversation: Conversation;
   client: AgentCockpitAPI;
   backends: BackendMetadata[];
+  cliProfiles: CliProfileSummary[];
   focused?: boolean;
   messageRef?: (node: HTMLDivElement | null) => void;
   onTogglePin?: (pinned: boolean) => void;
@@ -2981,7 +3055,14 @@ function MessageBubble(props: {
     <div ref={props.messageRef} className={`message ${isUser ? 'user' : 'assistant'}${isGoalEvent ? ' goal-event' : ''}${isPinned ? ' pinned' : ''}${props.focused ? ' focused' : ''}`}>
       <div className="message-heading">
         <span className="message-author">
-          {isUser ? <strong>You</strong> : isGoalEvent ? <strong>Goal</strong> : <AssistantIdentity backend={props.message.backend} backends={props.backends} />}
+          {isUser ? <strong>You</strong> : isGoalEvent ? <strong>Goal</strong> : (
+            <AssistantIdentity
+              backend={props.message.backend}
+              backends={props.backends}
+              cliProfiles={props.cliProfiles}
+              cliProfileId={props.conversation.cliProfileId}
+            />
+          )}
         </span>
         <div className="message-actions" role="group" aria-label="Message actions">
           <button title="Copy" aria-label={copied === 'text' ? 'Copied' : 'Copy'} className={copied === 'text' ? 'copied' : ''} onClick={() => copy('text')}>

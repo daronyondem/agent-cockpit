@@ -9,6 +9,7 @@ import type {
   ServiceTier,
   CliProfile,
   ThreadGoal,
+  ModelInputModality,
 } from '../../types';
 
 export interface BackendCallOptions {
@@ -46,6 +47,20 @@ export interface RunOneShotOptions {
   mcpServers?: McpServerConfig[];
   /** Full CLI profile for adapters that support profile-isolated runtimes. */
   cliProfile?: CliProfile;
+  /**
+   * Explicit files to attach through a backend's one-shot media transport.
+   * Existing native-file-tool backends can ignore this and keep reading paths
+   * mentioned in the prompt; explicit-attachment backends should pass these
+   * files through their structured attachment channel.
+   */
+  attachments?: RunOneShotAttachment[];
+}
+
+export interface RunOneShotAttachment {
+  path: string;
+  kind: ModelInputModality;
+  mimeType?: string;
+  name?: string;
 }
 
 /**

@@ -5,6 +5,7 @@ import path from 'path';
 import { EventEmitter } from 'events';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
 import { CliProfileAuthService, redactCliAuthText } from '../src/services/cliProfileAuthService';
+import { OpenCodeAdapter } from '../src/services/backends/opencode';
 
 let env: ChatRouterEnv;
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
@@ -190,6 +191,146 @@ describe('CLI profile auth endpoints', () => {
       }
       restorePlatform();
     }
+  });
+
+  test('checks a self-configured OpenCode profile without creating an auth config directory', async () => {
+    const command = writeExecutable('fake-opencode.sh', [
+      '#!/bin/sh',
+      'if [ "$1" = "--version" ]; then',
+      '  echo "opencode 1.15.10"',
+      '  exit 0',
+      'fi',
+      'if [ "$1" = "models" ]; then',
+      '  echo "deepseek/deepseek-chat"',
+      '  echo "deepseek/deepseek-reasoner"',
+      '  exit 0',
+      'fi',
+      'echo "unexpected opencode command: $*" >&2',
+      'exit 2',
+      '',
+    ].join('\n'));
+    await addProfile({
+      id: 'profile-opencode-deepseek',
+      name: 'OpenCode DeepSeek',
+      vendor: 'opencode',
+      authMode: 'server-configured',
+      command,
+      opencode: { provider: 'deepseek', model: 'deepseek/deepseek-chat' },
+      createdAt: '2026-05-24T00:00:00.000Z',
+      updatedAt: '2026-05-24T00:00:00.000Z',
+    });
+    env.backendRegistry.register(new OpenCodeAdapter({ workingDir: env.tmpDir }));
+
+    const res = await env.request('POST', '/api/chat/cli-profiles/profile-opencode-deepseek/test', {});
+
+    expect(res.status).toBe(200);
+    expect(res.body.profile.configDir).toBeUndefined();
+    expect(res.body.result.status).toBe('ok');
+    expect(res.body.result.available).toBe(true);
+    expect(res.body.result.authenticated).toBeNull();
+    expect(res.body.result.output).toContain('opencode 1.15.10');
+    expect(res.body.result.modelsAvailable).toBe(true);
+    expect(res.body.result.modelCount).toBe(2);
+  });
+
+  test('checks an unsaved OpenCode draft profile without saving settings', async () => {
+    const command = writeExecutable('fake-opencode-draft.sh', [
+      '#!/bin/sh',
+      'if [ "$1" = "--version" ]; then',
+      '  echo "opencode 1.15.10"',
+      '  exit 0',
+      'fi',
+      'if [ "$1" = "models" ]; then',
+      '  if [ "$2" = "deepseek" ]; then',
+      '    echo "deepseek/deepseek-chat"',
+      '    echo "deepseek/deepseek-reasoner"',
+      '    exit 0',
+      '  fi',
+      '  echo "opencode/big-pickle"',
+      '  echo "deepseek/deepseek-chat"',
+      '  echo "deepseek/deepseek-reasoner"',
+      '  exit 0',
+      'fi',
+      'echo "unexpected opencode command: $*" >&2',
+      'exit 2',
+      '',
+    ].join('\n'));
+    env.backendRegistry.register(new OpenCodeAdapter({ workingDir: env.tmpDir }));
+
+    const metadata = await env.request('POST', '/api/chat/cli-profiles/opencode/draft/metadata', {
+      profile: {
+        id: 'draft-opencode',
+        name: 'Draft OpenCode',
+        vendor: 'opencode',
+        authMode: 'server-configured',
+        command,
+        createdAt: '2026-05-24T00:00:00.000Z',
+        updatedAt: '2026-05-24T00:00:00.000Z',
+      },
+    });
+    expect(metadata.status).toBe(200);
+    expect(metadata.body.backend.models.map((model: any) => model.id)).toEqual([
+      'opencode/big-pickle',
+      'deepseek/deepseek-chat',
+      'deepseek/deepseek-reasoner',
+    ]);
+
+    const res = await env.request('POST', '/api/chat/cli-profiles/opencode/draft/test', {
+      profile: {
+        id: 'draft-opencode',
+        name: 'Draft OpenCode',
+        vendor: 'opencode',
+        authMode: 'account',
+        command,
+        configDir: '/tmp/should-not-persist',
+        env: { OPENCODE_CONFIG_CONTENT: '{}' },
+        opencode: { provider: 'deepseek', model: 'deepseek/deepseek-chat' },
+        createdAt: '2026-05-24T00:00:00.000Z',
+        updatedAt: '2026-05-24T00:00:00.000Z',
+      },
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.profile).toEqual(expect.objectContaining({
+      id: 'draft-opencode',
+      vendor: 'opencode',
+      authMode: 'server-configured',
+      command,
+      opencode: { provider: 'deepseek' },
+    }));
+    expect(res.body.profile.configDir).toBeUndefined();
+    expect(res.body.profile.env).toBeUndefined();
+    expect(res.body.result.status).toBe('ok');
+    expect(res.body.result.authenticated).toBeNull();
+    expect(res.body.result.modelCount).toBe(2);
+
+    const settings = await env.chatService.getSettings();
+    expect(settings.cliProfiles?.some((profile: any) => profile.id === 'draft-opencode')).toBe(false);
+  });
+
+  test('reports a failed OpenCode version check as an error instead of authenticated', async () => {
+    const command = writeExecutable('fake-opencode-fail.sh', [
+      '#!/bin/sh',
+      'echo "missing provider config" >&2',
+      'exit 2',
+      '',
+    ].join('\n'));
+    const service = new CliProfileAuthService(env.tmpDir);
+
+    const result = await service.checkProfile({
+      id: 'profile-opencode-fail',
+      name: 'OpenCode Fail',
+      vendor: 'opencode',
+      authMode: 'server-configured',
+      command,
+      createdAt: '2026-05-24T00:00:00.000Z',
+      updatedAt: '2026-05-24T00:00:00.000Z',
+    } as any);
+
+    expect(result.status).toBe('error');
+    expect(result.available).toBe(true);
+    expect(result.authenticated).toBeNull();
+    expect(result.error).toContain('missing provider config');
   });
 
   test('rejects Kiro auth jobs while Kiro is self-configured only', async () => {

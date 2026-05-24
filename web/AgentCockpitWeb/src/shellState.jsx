@@ -139,6 +139,41 @@ function backendIconFor(backends, backendId){
   return (b && b.icon) || null;
 }
 
+const OPENCODE_PROVIDER_LABELS = {
+  deepseek: 'DeepSeek',
+  opencode: 'OpenCode',
+  openrouter: 'OpenRouter',
+  groq: 'Groq',
+};
+
+export function opencodeProviderLabel(provider){
+  const id = String(provider || '').trim().toLowerCase();
+  if (!id) return null;
+  if (OPENCODE_PROVIDER_LABELS[id]) return OPENCODE_PROVIDER_LABELS[id];
+  return id
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+export function assistantDisplayNameFor(backends, profiles, backend, cliProfileId, fallback = 'assistant'){
+  if (!backend) return fallback;
+  if (backend === 'opencode' && cliProfileId) {
+    const profile = (profiles || []).find(p => p && p.id === cliProfileId);
+    const providerLabel = opencodeProviderLabel(profile && profile.opencode && profile.opencode.provider);
+    if (providerLabel) return providerLabel;
+  }
+  const b = (backends || []).find(x => x.id === backend);
+  return (b && b.label) || backend || fallback;
+}
+
+export function useAssistantDisplayName(backend, cliProfileId, fallback){
+  const backends = useBackendList();
+  const { profiles } = useCliProfileSettings();
+  return assistantDisplayNameFor(backends, profiles, backend, cliProfileId, fallback);
+}
+
 export function BackendInlineIcon({ backends, backendId, className }){
   const icon = backendIconFor(backends, backendId);
   if (!icon) return null;
@@ -148,8 +183,16 @@ export function BackendInlineIcon({ backends, backendId, className }){
 /* Renders the avatar for an assistant message. When the backend exposes an
    inline SVG icon (claude-code, kiro), render that. Otherwise fall back to
    the Agent Cockpit logo. */
-export function AssistantAvatar({ backend }){
+export function AssistantAvatar({ backend, cliProfileId }){
   const backends = useBackendList();
+  const { profiles } = useCliProfileSettings();
+  const profile = backend === 'opencode' && cliProfileId
+    ? (profiles || []).find(p => p && p.id === cliProfileId)
+    : null;
+  const provider = profile ? String(profile.opencode && profile.opencode.provider || '').trim().toLowerCase() : '';
+  if (provider === 'deepseek' || provider === 'opencode') {
+    return <span className={`avatar avatar-provider-${provider}`}/>;
+  }
   const icon = backendIconFor(backends, backend);
   if (icon) {
     return <span className="avatar avatar-svg" dangerouslySetInnerHTML={{__html: icon}}/>;

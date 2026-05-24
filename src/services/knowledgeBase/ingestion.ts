@@ -43,10 +43,14 @@ import type { KbDatabase } from './db';
 import { normalizeFolderPath } from './db';
 import { buildDocumentStructure } from './documentStructure';
 import type { BackendRegistry } from '../backends/registry';
+import { checkOneShotMediaInput } from '../backends/mediaCapabilities';
 import type { CliProfileRuntime } from '../cliProfiles';
 import type { WorkspaceTaskQueueRegistry } from './workspaceTaskQueue';
 import { resolveConfig, type EmbeddingConfig } from './embeddings';
 import type { KbVectorStore } from './vectorStore';
+import { logger } from '../../utils/logger';
+
+const kbIngestionLog = logger.child({ module: 'kb-ingestion' });
 
 /** Subset of chatService the orchestrator depends on — keeps tests light. */
 export interface KbIngestionChatService {
@@ -829,6 +833,7 @@ export class KbIngestionService {
       let ingestionRuntime: CliProfileRuntime | null = null;
       let ingestionAdapter =
         undefined as ReturnType<BackendRegistry['get']> | undefined;
+      let ingestionBackendRegistered = false;
       if ((ingestionCliProfileId || ingestionCliBackend) && this.backendRegistry) {
         try {
           ingestionRuntime = this.chatService.resolveCliProfileRuntime
@@ -838,18 +843,34 @@ export class KbIngestionService {
             )
             : { backendId: ingestionCliBackend || '' };
           ingestionAdapter = this.backendRegistry.get(ingestionRuntime.backendId) ?? undefined;
+          ingestionBackendRegistered = !!ingestionAdapter;
+          if (ingestionAdapter) {
+            const metadata = await ingestionAdapter.getMetadata({ cliProfile: ingestionRuntime.profile });
+            const mediaCheck = checkOneShotMediaInput(metadata, settings.knowledgeBase?.ingestionCliModel, 'image');
+            if (!mediaCheck.ok) {
+              kbIngestionLog.warn('Configured Ingestion CLI profile cannot process image input; skipping AI conversion for this raw.', {
+                cliProfileId: ingestionRuntime.cliProfileId,
+                backendId: ingestionRuntime.backendId,
+                reason: mediaCheck.reason,
+                message: mediaCheck.message,
+                rawId,
+              });
+              ingestionAdapter = undefined;
+            }
+          }
         } catch (err: unknown) {
-          console.warn(
-            `[kb/ingest] Configured Ingestion CLI profile could not be resolved: ${(err as Error).message}; ` +
-            `skipping AI conversion for this raw.`,
-          );
+          kbIngestionLog.warn('Configured Ingestion CLI profile could not be prepared; skipping AI conversion for this raw.', {
+            error: (err as Error).message,
+            rawId,
+          });
         }
       }
-      if (ingestionRuntime && !ingestionAdapter) {
-        console.warn(
-          `[kb/ingest] Configured Ingestion CLI profile "${ingestionRuntime.cliProfileId || ingestionRuntime.backendId}" ` +
-          `uses unregistered backend "${ingestionRuntime.backendId}"; skipping AI conversion for this raw.`,
-        );
+      if (ingestionRuntime && !ingestionBackendRegistered) {
+        kbIngestionLog.warn('Configured Ingestion CLI profile uses an unregistered backend; skipping AI conversion for this raw.', {
+          cliProfileId: ingestionRuntime.cliProfileId,
+          backendId: ingestionRuntime.backendId,
+          rawId,
+        });
       }
 
       this._emitChange(hash, new Date().toISOString(), {

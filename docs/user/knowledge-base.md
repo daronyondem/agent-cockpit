@@ -10,6 +10,10 @@ Agent Cockpit can ingest PDFs, Word documents, PowerPoints, images, CSV/TSV
 files, Markdown, and text-like files. Optional tools such as LibreOffice and
 Pandoc expand conversion coverage for office and document formats.
 
+Image conversion and attachment OCR require the selected backend and model to
+report image input support. Text-only models can still use text-based Knowledge
+Base entries after ingestion.
+
 ## What Happens During Ingestion
 
 Agent Cockpit stores the raw file, converts it when needed, extracts structured

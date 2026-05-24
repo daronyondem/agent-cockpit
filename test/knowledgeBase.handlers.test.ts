@@ -1147,6 +1147,9 @@ describe('passthroughHandler', () => {
     expect(adapterCalls[0].prompt).toContain('sketch.png');
     expect(adapterCalls[0].opts.model).toBe('claude-sonnet-4-6');
     expect(adapterCalls[0].opts.allowTools).toBe(true);
+    expect(adapterCalls[0].opts.attachments).toEqual([
+      { path: path.join(outDir, 'media', 'sketch.png'), kind: 'image', name: 'sketch.png' },
+    ]);
     expect(result.text).toMatch(/^> source: artificial-intelligence$/m);
     expect(result.text).toContain('Whiteboard sketch');
     expect(result.text).toContain('A blue rectangle');
@@ -1224,6 +1227,9 @@ describe('passthroughHandler', () => {
     expect(adapterCalls).toHaveLength(1);
     expect(adapterCalls[0].prompt).toContain('huge.png.ai.png');
     expect(adapterCalls[0].opts.workingDir).toBe(path.join(outDir, 'media'));
+    expect(adapterCalls[0].opts.attachments).toEqual([
+      { path: path.join(outDir, 'media', 'huge.png.ai.png'), kind: 'image', name: 'huge.png.ai.png' },
+    ]);
 
     // Both files reported in mediaFiles so the orchestrator/UI tracks both.
     expect(result.mediaFiles).toEqual(['media/huge.png', 'media/huge.png.ai.png']);

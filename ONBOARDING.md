@@ -21,17 +21,26 @@ Install the following before you begin:
 |---|---|---|
 | **Node.js 22+** | [nodejs.org](https://nodejs.org/) or `brew install node` | `node -v` |
 | **Claude Code CLI** | `npm install -g @anthropic-ai/claude-code` | `claude --version` |
+| **OpenAI Codex CLI** | `npm install -g @openai/codex` | `codex --version` |
+| **Kiro CLI** | [kiro.dev](https://kiro.dev) | `kiro-cli version` |
+| **OpenCode CLI** | [OpenCode CLI docs](https://opencode.ai/docs/cli/) | `opencode --version` |
 | **cloudflared** | `brew install cloudflared` | `cloudflared --version` |
 | **PM2** | Installed as a project dependency | `npx pm2 --version` after Agent Cockpit dependencies are installed |
 
 You will also need a Cloudflare account with a domain managed by Cloudflare DNS.
 
-Make sure the CLI backends you plan to use are authenticated on the same machine that runs Agent Cockpit. For Claude Code:
+Make sure the CLI backends you plan to use are authenticated or configured on
+the same machine that runs Agent Cockpit. For Claude Code:
 
 ```bash
 claude
 # Follow the prompts to log in with your Anthropic account
 ```
+
+For OpenCode, configure provider credentials and model routing in OpenCode
+itself before selecting an OpenCode profile in Agent Cockpit. Agent Cockpit can
+check the `opencode` command, but it does not manage OpenCode provider
+authentication.
 
 ---
 
@@ -283,32 +292,16 @@ This requires local filesystem/server access. It is intentionally not exposed ov
 
 ---
 
-## 9. Recommended Claude Code CLI Settings
+## 9. CLI Profile Notes
 
-Agent Cockpit spawns Claude Code CLI processes on your behalf. Since there is no interactive terminal to approve actions, add these settings to `~/.claude/settings.json`:
+Agent Cockpit runs the selected CLI profile on the server machine. Keep each CLI
+working in a normal terminal first, then use Agent Cockpit Settings to choose
+the profile, protocol, provider, model, and auth mode that match that CLI.
 
-```json
-{
-  "permissions": {
-    "allow": [
-      "Edit(**)"
-    ]
-  }
-}
-```
-
-Without this, file edit requests can hang waiting for terminal input.
-
-Optionally, to remove Claude attribution from git commits and pull requests:
-
-```json
-{
-  "attribution": {
-    "gitCommit": "",
-    "pullRequest": ""
-  }
-}
-```
+Claude Code and Codex can use Cockpit-managed account profiles. Kiro and
+OpenCode are self-configured in Agent Cockpit: configure their provider or
+account state in the CLI's own tools, then select the matching profile in
+Agent Cockpit.
 
 ---
 
@@ -322,7 +315,7 @@ Open `https://chat.yourdomain.com` in your browser and confirm:
 - [ ] Recovery codes have been generated and stored
 - [ ] **Require passkey for login** can be enabled only after passkey and recovery-code setup
 - [ ] You can create a new conversation and send a message
-- [ ] Claude Code responds with streamed output
+- [ ] At least one selected CLI backend responds with streamed output
 - [ ] `npx pm2 list` shows both `agent-cockpit` and `cf-tunnel` as `online`
 - [ ] Reboot your machine and verify both services come back up automatically
 
@@ -393,7 +386,9 @@ Run `cloudflared tunnel info my-tunnel` and verify `~/.cloudflared/config.yml` h
 
 **CLI backend does not respond**
 
-Make sure the CLI is authenticated on the server machine. For Claude Code, run `claude` in a terminal and confirm it works. Also check that `DEFAULT_WORKSPACE` points to a valid directory.
+Make sure the selected CLI is authenticated or configured on the server
+machine. Run the CLI directly in a terminal and confirm it works. Also check
+that `DEFAULT_WORKSPACE` points to a valid directory.
 
 **Mobile PWA cannot connect**
 

@@ -337,7 +337,7 @@ export class SettingsService {
       ...(vendor === 'claude-code'
         ? { protocol: profile.protocol === 'interactive' ? 'interactive' : profile.protocol === 'standard' ? 'standard' : cliProtocolForBackend(defaultBackend, vendor) || 'standard' }
         : {}),
-      authMode: vendor === 'kiro'
+      authMode: vendor === 'kiro' || vendor === 'opencode'
         ? 'server-configured'
         : profile.authMode === 'account' ? 'account' : 'server-configured',
       createdAt: typeof profile.createdAt === 'string' && profile.createdAt ? profile.createdAt : now,
@@ -347,11 +347,18 @@ export class SettingsService {
     const command = profile.command?.trim();
     if (command && vendor !== 'kiro') normalized.command = command;
 
+    if (vendor === 'opencode' && profile.opencode && typeof profile.opencode === 'object') {
+      const provider = typeof profile.opencode.provider === 'string' ? profile.opencode.provider.trim() : '';
+      if (provider) {
+        normalized.opencode = { provider };
+      }
+    }
+
     const isSetupAccount = isSetupAccountCliProfile(normalized);
     const configDir = profile.configDir?.trim();
-    if (configDir && vendor !== 'kiro' && !isSetupAccount) normalized.configDir = configDir;
+    if (configDir && vendor !== 'kiro' && vendor !== 'opencode' && !isSetupAccount) normalized.configDir = configDir;
 
-    if (profile.env && vendor !== 'kiro') {
+    if (profile.env && vendor !== 'kiro' && vendor !== 'opencode') {
       const env: Record<string, string> = {};
       for (const [key, value] of Object.entries(profile.env)) {
         if (!key || typeof value !== 'string') continue;

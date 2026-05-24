@@ -2264,6 +2264,20 @@ body{
 .msg-agent .avatar.avatar-cockpit > img{
   width: 100%; height: 100%; display: block; border-radius: 7px;
 }
+.msg-agent .avatar.avatar-provider-deepseek,
+.msg-agent .avatar.avatar-provider-opencode{
+  color: transparent;
+  background: center / contain no-repeat;
+}
+.msg-agent .avatar.avatar-provider-deepseek{
+  background-image: url('/icons/deepseek-logo.svg');
+}
+.msg-agent .avatar.avatar-provider-opencode{
+  background-image: url('/icons/opencode-logo-light.svg');
+}
+#root[data-theme="dark"] .msg-agent .avatar.avatar-provider-opencode{
+  background-image: url('/icons/opencode-logo-dark.svg');
+}
 .msg-agent .body{ min-width: 0; }
 .msg-agent.msg-stream-error .body{
   border-left: 3px solid var(--status-error);
@@ -6860,6 +6874,19 @@ body{
   display: block;
   width: 16px;
   height: 16px;
+}
+.cli-vendor-icon.cli-provider-icon{
+  color: transparent;
+  background: center / contain no-repeat;
+}
+.cli-vendor-icon.cli-provider-deepseek{
+  background-image: url('/icons/deepseek-logo.svg');
+}
+.cli-vendor-icon.cli-provider-opencode{
+  background-image: url('/icons/opencode-logo-light.svg');
+}
+#root[data-theme="dark"] .cli-vendor-icon.cli-provider-opencode{
+  background-image: url('/icons/opencode-logo-dark.svg');
 }
 .cli-card-name .chev{
   display: inline-flex;

@@ -35,12 +35,14 @@ const INSTRUCTION_VENDOR_LABELS: Record<CliVendor, string> = {
   'claude-code': 'Claude Code',
   kiro: 'Kiro',
   codex: 'Codex',
+  opencode: 'OpenCode',
 };
 
 const VENDOR_INSTRUCTION_SOURCE: Record<CliVendor, WorkspaceInstructionSourceId> = {
   codex: 'agents',
   'claude-code': 'claude',
   kiro: 'kiro',
+  opencode: 'agents',
 };
 
 function relPath(absPath: string, workspacePath: string): string {

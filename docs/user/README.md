@@ -7,8 +7,8 @@ installed and the first owner account exists.
 
 - [Quickstart](quickstart.md) explains the first run from install to first
   conversation.
-- [Supported backends](backends.md) explains Claude Code, OpenAI Codex, and Kiro
-  setup differences.
+- [Supported backends](backends.md) explains Claude Code, OpenAI Codex, Kiro,
+  and OpenCode setup differences.
 
 ## Core Workflows
 

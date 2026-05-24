@@ -64,7 +64,7 @@ Enabling worktree isolation does four things in sequence:
    hidden sibling directory next to the repo. Each worktree gets a deterministic
    session branch derived from `origin/main`.
 3. **Reset.** Archive each conversation's active CLI session and reset
-   backend runtime state so cached Codex, Kiro, and Claude Code Interactive
+   backend runtime state so cached Codex, Kiro, OpenCode, and Claude Code Interactive
    sessions cannot keep using the pre-isolation checkout.
 4. **Route.** Future chat sends, goals, OCR, delivered file previews,
    conversation-scoped Git status and diff, memory capture, and mobile file

@@ -1,6 +1,6 @@
 import type { CliCommunicationProtocol, CliProfile, CliVendor, Settings } from '../types';
 
-export const SUPPORTED_CLI_VENDORS: CliVendor[] = ['claude-code', 'kiro', 'codex'];
+export const SUPPORTED_CLI_VENDORS: CliVendor[] = ['claude-code', 'kiro', 'codex', 'opencode'];
 export const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
 export const CLAUDE_CODE_STANDARD_PROTOCOL: CliCommunicationProtocol = 'standard';
 export const CLAUDE_CODE_INTERACTIVE_PROTOCOL: CliCommunicationProtocol = 'interactive';
@@ -11,6 +11,7 @@ const VENDOR_LABELS: Record<CliVendor, string> = {
   'claude-code': 'Claude Code',
   kiro: 'Kiro',
   codex: 'Codex',
+  opencode: 'OpenCode',
 };
 
 export function isCliVendor(value: string | undefined | null): value is CliVendor {

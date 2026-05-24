@@ -19,6 +19,7 @@ const WINDOWS_CLI_TOOLS_DIR = 'cli-tools';
 const VENDOR_COMMANDS: Partial<Record<CliVendor, string>> = {
   'claude-code': 'claude',
   codex: 'codex',
+  opencode: 'opencode',
 };
 
 const VENDOR_PACKAGES: Partial<Record<CliVendor, string[]>> = {
@@ -120,6 +121,13 @@ export function nonWindowsCliCommandCandidates(
     const home = env.HOME;
     if (home) {
       const candidate = path.join(home, '.claude', 'local', command);
+      candidates.push({ command: candidate, displayCommand: candidate });
+    }
+  }
+  if (vendor === 'opencode') {
+    const home = env.HOME;
+    if (home) {
+      const candidate = path.join(home, '.opencode', 'bin', command);
       candidates.push({ command: candidate, displayCommand: candidate });
     }
   }

@@ -9,6 +9,7 @@ import {
   CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION,
 } from './backends/claudeInteractiveCompatibility';
 import { resolveCodexCliRuntime } from './backends/codex';
+import { resolveOpenCodeCliRuntime } from './backends/opencode';
 import { buildCliCommandInvocation, windowsCmdCommandLine, type CliCommandResolution } from './cliCommandResolver';
 import { serverConfiguredCliProfileId } from './cliProfiles';
 import { ensureWindowsCliToolWrappers } from './windowsCliToolWrappers';
@@ -32,12 +33,14 @@ const VENDOR_LABELS: Record<CliVendor, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   kiro: 'Kiro',
+  opencode: 'OpenCode',
 };
 
 const VENDOR_DEFAULT_COMMANDS: Record<CliVendor, string> = {
   'claude-code': 'claude',
   codex: 'codex',
   kiro: 'kiro-cli',
+  opencode: 'opencode',
 };
 
 const VENDOR_NPM_PACKAGES: Partial<Record<CliVendor, string>> = {
@@ -242,6 +245,7 @@ export class CliUpdateService {
   private _runtimeForProfile(profile: CliProfile): CliCommandResolution & { command: string; env: NodeJS.ProcessEnv } {
     if (profile.vendor === 'codex') return resolveCodexCliRuntime(profile);
     if (profile.vendor === 'claude-code') return resolveClaudeCliRuntime(profile);
+    if (profile.vendor === 'opencode') return resolveOpenCodeCliRuntime(profile);
     return {
       command: VENDOR_DEFAULT_COMMANDS.kiro,
       env: { ...process.env },
@@ -349,7 +353,7 @@ export class CliUpdateService {
         }
       }
     }
-    if (target.vendor === 'kiro') {
+    if (target.vendor === 'kiro' || target.vendor === 'opencode') {
       return { installMethod: 'self-update', resolvedPath };
     }
     return { installMethod: resolvedPath ? 'unknown' : 'missing', resolvedPath };
@@ -374,7 +378,10 @@ export class CliUpdateService {
       return ['npm', 'i', '-g', `${npmPackage}@latest`];
     }
     if (target.vendor === 'kiro' && probe.installMethod === 'self-update') {
-      return [target.command, 'update', '--non-interactive'];
+      return [target.command, ...(target.argsPrefix || []), 'update', '--non-interactive'];
+    }
+    if (target.vendor === 'opencode' && probe.installMethod === 'self-update') {
+      return [target.command, ...(target.argsPrefix || []), 'upgrade'];
     }
     return null;
   }
@@ -457,7 +464,7 @@ export class CliUpdateService {
 }
 
 function isCliVendorValue(value: unknown): value is CliVendor {
-  return value === 'codex' || value === 'claude-code' || value === 'kiro';
+  return value === 'codex' || value === 'claude-code' || value === 'kiro' || value === 'opencode';
 }
 
 function inferNpmPrefixFromPackagePath(resolvedPath: string, npmPackage: string): string | null {

@@ -838,6 +838,20 @@ button {
   overflow: visible;
 }
 
+.provider-avatar {
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.provider-avatar.provider-deepseek {
+  background-image: url('/icons/deepseek-logo.svg');
+}
+
+.provider-avatar.provider-opencode {
+  background-image: url('/icons/opencode-logo-light.svg');
+}
+
 .message strong {
   color: inherit;
   font-size: inherit;

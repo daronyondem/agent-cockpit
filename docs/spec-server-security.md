@@ -181,7 +181,7 @@ Re-entrancy is guarded by a `reAuthInFlightRef` — overlapping 401s on concurre
 - `GET /api/csrf-token`: returns `{ csrfToken }` from session
 - `GET /api/me`: returns `{ displayName, email, provider }` (all nullable) from `req.user`. Same auth gating as other `/api/*` routes.
 
-CLI profile remote-auth endpoints that spawn local CLI processes are CSRF-protected (`POST /api/chat/cli-profiles/:id/test`, `POST /api/chat/cli-profiles/:id/auth/start`, and auth-job cancel). They only accept saved Codex/Claude Code account profiles, run with that profile's command/env/config directory, and redact common bearer/access/refresh/API-key patterns from stdout/stderr before exposing job events to the browser. Kiro remote auth is intentionally blocked while Kiro lacks a safe dedicated config-home override.
+CLI profile status/auth endpoints that spawn local CLI processes are CSRF-protected (`POST /api/chat/cli-profiles/:id/test`, `POST /api/chat/cli-profiles/:id/auth/start`, OpenCode draft metadata/check routes, and auth-job cancel). Auth jobs only accept saved Codex/Claude Code account profiles, run with that profile's command/env/config directory, and redact common bearer/access/refresh/API-key patterns from stdout/stderr before exposing job events to the browser. Status checks also support saved and draft self-configured OpenCode profiles by running `opencode --version`; they report availability without claiming Cockpit-managed authentication, normalize draft profiles to provider-only self-configured shape, and do not create a profile auth directory. Kiro remote auth/status is intentionally blocked while Kiro lacks a safe dedicated config-home override.
 
 ## 6.5 Security Headers
 

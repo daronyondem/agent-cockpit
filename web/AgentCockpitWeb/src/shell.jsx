@@ -26,6 +26,7 @@ import {
   CliProfilesProvider,
   ScreenLoading,
   useBackendList,
+  useAssistantDisplayName,
   useCliProfileSettings,
   useCliUpdates,
   useConversationSelector,
@@ -1971,11 +1972,17 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                       />
                     );
                   }
+                  const isEntryStreaming = streaming && streamingMsgId === entry.message.id;
+                  const entryCliProfileId = entry.message.cliProfileId
+                    || (isEntryStreaming ? state.composerCliProfileId : null)
+                    || conv.cliProfileId
+                    || null;
                   return (
                     <MessageBubble
                       key={entry.message.id}
                       message={entry.message}
-                      isStreaming={streaming && streamingMsgId === entry.message.id}
+                      cliProfileId={entryCliProfileId}
+                      isStreaming={isEntryStreaming}
                       elapsedMs={elapsedByMsgId.get(entry.message.id)}
                       onPinToggle={toggleMessagePin}
                       setMessageRef={setMessageRef}
@@ -1984,11 +1991,17 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                   );
                 }
                 if (entry.kind === 'final-with-progress') {
+                  const isEntryStreaming = streaming && streamingMsgId === entry.message.id;
+                  const entryCliProfileId = entry.message.cliProfileId
+                    || (isEntryStreaming ? state.composerCliProfileId : null)
+                    || conv.cliProfileId
+                    || null;
                   return (
                     <MessageBubble
                       key={entry.message.id}
                       message={entry.message}
-                      isStreaming={streaming && streamingMsgId === entry.message.id}
+                      cliProfileId={entryCliProfileId}
+                      isStreaming={isEntryStreaming}
                       attachedProgress={entry.progressRun}
                       elapsedMs={elapsedByMsgId.get(entry.message.id)}
                       onPinToggle={toggleMessagePin}
@@ -2002,6 +2015,7 @@ function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemoryUpdate
                   <ProgressBreadcrumbBubble
                     key={entry.progressRun[0].id}
                     progressRun={entry.progressRun}
+                    cliProfileId={conv.cliProfileId || null}
                   />
                 );
               })}
@@ -2731,9 +2745,10 @@ function GoalEventCard({ message }){
   );
 }
 
-const MessageBubble = React.memo(function MessageBubble({ message, isStreaming, attachedProgress, elapsedMs, onPinToggle, setMessageRef, pinFocused }){
+const MessageBubble = React.memo(function MessageBubble({ message, cliProfileId, isStreaming, attachedProgress, elapsedMs, onPinToggle, setMessageRef, pinFocused }){
   const isUser = message.role === 'user';
   const isGoalEvent = !!message.goalEvent;
+  const assistantName = useAssistantDisplayName(message.backend, cliProfileId);
   const contentRef = React.useRef(null);
   const [copied, setCopied] = React.useState(null);
   const hasContent = !!(message.content && message.content.trim());
@@ -2772,7 +2787,7 @@ const MessageBubble = React.memo(function MessageBubble({ message, isStreaming, 
       {isUser ? (
         <span className="avatar">DY</span>
       ) : (
-        <AssistantAvatar backend={message.backend}/>
+        <AssistantAvatar backend={message.backend} cliProfileId={cliProfileId}/>
       )}
       <div className="body">
         {isUser ? (
@@ -2785,7 +2800,7 @@ const MessageBubble = React.memo(function MessageBubble({ message, isStreaming, 
         ) : (
           <>
             <div className="head">
-              <span className="who">{isGoalEvent ? 'Goal' : (message.backend || 'assistant')}</span>
+              <span className="who">{isGoalEvent ? 'Goal' : assistantName}</span>
               <span>·</span>
               <span>{isStreaming ? 'streaming…' : msgTime(message.timestamp)}</span>
               {isPinned ? <PinnedTag/> : null}
@@ -2841,11 +2856,11 @@ const MessageBubble = React.memo(function MessageBubble({ message, isStreaming, 
   );
 });
 
-const ProgressBreadcrumbBubble = React.memo(function ProgressBreadcrumbBubble({ progressRun }){
+const ProgressBreadcrumbBubble = React.memo(function ProgressBreadcrumbBubble({ progressRun, cliProfileId }){
   const firstBackend = (progressRun && progressRun[0] && progressRun[0].backend) || null;
   return (
     <div className="msg msg-agent">
-      <AssistantAvatar backend={firstBackend}/>
+      <AssistantAvatar backend={firstBackend} cliProfileId={cliProfileId}/>
       <div className="body">
         <div className="head">
           <span className="who">progress</span>
@@ -4022,6 +4037,7 @@ function ComposerInstructionCompatibilityIcon({ workspaceHash, workspaceLabel, o
 
   if (!status || !status.shouldNotify) return null;
 
+  const coveredLabels = (status.vendors || []).filter(item => item.covered).map(item => item.label).join(', ') || 'None';
   const missingLabels = (status.missingVendors || []).map(item => item.label).join(', ');
   const presentSources = (status.sources || []).filter(source => source.present);
   const sourceLabel = presentSources.map(source => source.label).join(', ') || 'project instructions';
@@ -4103,7 +4119,8 @@ function ComposerInstructionCompatibilityIcon({ workspaceHash, workspaceLabel, o
           <div className="tt-section">
             <div className="tt-rows">
               <div className="tt-kv"><span>Found</span><b title={sourceLabel}>{sourceLabel}</b></div>
-              <div className="tt-kv"><span>Missing</span><b title={missingLabels}>{missingLabels}</b></div>
+              <div className="tt-kv"><span>Covered</span><b title={coveredLabels}>{coveredLabels}</b></div>
+              <div className="tt-kv"><span>Needs pointers</span><b title={missingLabels}>{missingLabels}</b></div>
             </div>
           </div>
           <div className="tt-section">
