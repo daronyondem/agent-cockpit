@@ -5,8 +5,8 @@
 //
 //   `convertImageToMarkdown`: thin retry-once wrapper over a stubbed
 //   `BaseBackendAdapter.runOneShot`. We verify happy path, retry-once on
-//   throw / empty output, two-failure throws, prompt+workingDir+allowTools
-//   plumbing, and option passthrough.
+//   throw / empty output, two-failure throws, prompt+workingDir+allowTools+
+//   attachment plumbing, and option passthrough.
 //
 //   `ensureAiReadyImage`: writes a downscaled `.ai.png` sibling beside an
 //   oversized image and returns the new path; passes through small/undecodable
@@ -133,7 +133,7 @@ describe('convertImageToMarkdown', () => {
     expect(prompt).toMatch(/Output Markdown only/);
   });
 
-  test('sets workingDir to the image parent directory and allowTools=true', async () => {
+  test('sets workingDir to the image parent directory, allowTools=true, and image attachment', async () => {
     const adapter = new StubAdapter(async () => 'ok');
 
     await convertImageToMarkdown(IMAGE_PATH, { adapter });
@@ -141,6 +141,9 @@ describe('convertImageToMarkdown', () => {
     const { opts } = adapter.calls[0];
     expect(opts?.workingDir).toBe(path.dirname(IMAGE_PATH));
     expect(opts?.allowTools).toBe(true);
+    expect(opts?.attachments).toEqual([
+      { path: IMAGE_PATH, kind: 'image', name: 'page-0042.png' },
+    ]);
   });
 
   test('passes model/effort/timeoutMs through to the adapter', async () => {

@@ -28,7 +28,15 @@ export class MockBackendAdapter extends BaseBackendAdapter {
       id: 'claude-code',
       label: 'Claude Code',
       icon: null,
-      capabilities: { thinking: true, planMode: true, agents: true, toolActivity: true, userQuestions: true, stdinInput: true },
+      capabilities: {
+        thinking: true,
+        planMode: true,
+        agents: true,
+        toolActivity: true,
+        userQuestions: true,
+        stdinInput: true,
+        oneShotMediaInput: { image: ['native-file-tool'] },
+      },
       resumeCapabilities: {
         activeTurnResume: 'unsupported',
         activeTurnResumeReason: 'Mock backend does not model reattaching to an in-flight turn.',
@@ -36,9 +44,9 @@ export class MockBackendAdapter extends BaseBackendAdapter {
         sessionResumeReason: 'Mock backend can reuse the cockpit session id for follow-up test turns.',
       },
       models: [
-        { id: 'opus', label: 'Opus', family: 'opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'] },
-        { id: 'sonnet', label: 'Sonnet', family: 'sonnet', default: true, supportedEffortLevels: ['low', 'medium', 'high'] },
-        { id: 'haiku', label: 'Haiku', family: 'haiku' },
+        { id: 'opus', label: 'Opus', family: 'opus', supportedEffortLevels: ['low', 'medium', 'high', 'max'], capabilities: { input: { text: true, image: true }, output: { text: true } } },
+        { id: 'sonnet', label: 'Sonnet', family: 'sonnet', default: true, supportedEffortLevels: ['low', 'medium', 'high'], capabilities: { input: { text: true, image: true }, output: { text: true } } },
+        { id: 'haiku', label: 'Haiku', family: 'haiku', capabilities: { input: { text: true, image: true }, output: { text: true } } },
       ],
     };
   }

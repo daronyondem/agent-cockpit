@@ -33,6 +33,7 @@ const CLI_VENDOR_OPTIONS = [
   { id: 'codex', label: 'Codex' },
   { id: 'claude-code', label: 'Claude Code' },
   { id: 'kiro', label: 'Kiro' },
+  { id: 'opencode', label: 'OpenCode' },
 ];
 
 function cliVendorForBackend(backendId){
@@ -76,16 +77,36 @@ function normalizeUiProfile(profile){
     delete next.configDir;
     delete next.env;
   }
+  if (next.vendor === 'opencode') {
+    next.authMode = 'server-configured';
+    delete next.configDir;
+    delete next.env;
+    next.opencode = next.opencode && next.opencode.provider
+      ? { provider: next.opencode.provider }
+      : undefined;
+  } else {
+    delete next.opencode;
+  }
   return next;
 }
 
 function cliDefaultCommand(vendor){
-  return vendor === 'codex' ? 'codex' : vendor === 'kiro' ? 'kiro-cli' : 'claude';
+  return vendor === 'codex' ? 'codex' : vendor === 'kiro' ? 'kiro-cli' : vendor === 'opencode' ? 'opencode' : 'claude';
+}
+
+function defaultCliProfileName(vendor){
+  return `${cliVendorLabel(vendor)} Profile`;
+}
+
+function usesGeneratedCliProfileName(profile){
+  const name = String(profile && profile.name || '').trim();
+  return !name || name === defaultCliProfileName(profile.vendor);
 }
 
 function cliSelfConfiguredHome(vendor){
   if (vendor === 'codex') return '~/.codex';
   if (vendor === 'claude-code') return '~/.claude';
+  if (vendor === 'opencode') return '~/.local/share/opencode and ~/.config/opencode';
   return 'the server Kiro CLI account';
 }
 
@@ -170,6 +191,29 @@ function backendForProfile(backends, profileBackends, profile){
 function modelsForProfile(backends, profileBackends, profile){
   const b = backendForProfile(backends, profileBackends, profile);
   return (b && Array.isArray(b.models)) ? b.models : [];
+}
+function backendSupportsOneShotInput(backend, modality){
+  const transports = backend && backend.capabilities && backend.capabilities.oneShotMediaInput
+    ? backend.capabilities.oneShotMediaInput[modality]
+    : null;
+  return Array.isArray(transports) && transports.length > 0;
+}
+function modelSupportsInput(model, modality){
+  return !!(model && model.capabilities && model.capabilities.input && model.capabilities.input[modality] === true);
+}
+function modelsForProfileInput(backends, profileBackends, profile, modality){
+  const b = backendForProfile(backends, profileBackends, profile);
+  if (!backendSupportsOneShotInput(b, modality)) return [];
+  return ((b && Array.isArray(b.models)) ? b.models : []).filter(model => modelSupportsInput(model, modality));
+}
+function providerOptionsFromModels(models){
+  const seen = new Map();
+  for (const model of models || []) {
+    const id = String(model && model.id || '');
+    const provider = String(model && model.family || (id.includes('/') ? id.split('/')[0] : '')).trim();
+    if (provider && !seen.has(provider)) seen.set(provider, { id: provider, label: provider });
+  }
+  return Array.from(seen.values());
 }
 function effortLevelsForProfile(backends, profileBackends, profile, modelId){
   const models = modelsForProfile(backends, profileBackends, profile);
@@ -374,7 +418,7 @@ export function SettingsScreen({ onClose, initialTab }){
           : loadError
             ? <div className="u-err" style={{padding:'16px'}}>{loadError}</div>
             : tab === 'general' ? <GeneralTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
-            : tab === 'cli'     ? <CliProfilesTab settings={settings} backends={backends} onPatch={patch} onSave={save} saving={saving}/>
+            : tab === 'cli'     ? <CliProfilesTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'memory'  ? <SettingsMemoryTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'kb'      ? <SettingsKbTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
             : tab === 'workspaceContext' ? <SettingsWorkspaceContextTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
@@ -583,7 +627,7 @@ function CliUpdatesPanel(){
         <div>
           <div className="settings-section-title">CLI updates</div>
           <p className="settings-desc u-dim">
-            Detects local CLI versions used by configured profiles. Supported npm-installed CLIs can be updated from the web UI when no conversation is running.
+            Detects local CLI versions used by configured profiles. Supported npm-installed and self-updating CLIs can be updated from the web UI when no conversation is running.
           </p>
         </div>
         <button type="button" className="btn" disabled={checking} onClick={(e) => onCheck(e.currentTarget)}>
@@ -644,13 +688,14 @@ function CliUpdatesPanel(){
   );
 }
 
-function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
+function CliProfilesTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
   const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
   const [expandedProfileId, setExpandedProfileId] = React.useState(() => (profiles[0] && profiles[0].id) || null);
   const [envTextById, setEnvTextById] = React.useState({});
   const [envErrorsById, setEnvErrorsById] = React.useState({});
   const [authStateById, setAuthStateById] = React.useState({});
   const [authBusyById, setAuthBusyById] = React.useState({});
+  const [opencodeCatalogById, setOpenCodeCatalogById] = React.useState({});
   const mountedRef = React.useRef(true);
   const hasEnvErrors = Object.values(envErrorsById).some(Boolean);
   const enabledCount = profiles.filter(profile => profile && !profile.disabled).length;
@@ -686,6 +731,13 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
     });
   }, [profiles.map(p => p.id).join('|')]);
 
+  const expandedProfile = profiles.find(profile => profile.id === expandedProfileId);
+  React.useEffect(() => {
+    if (expandedProfile && expandedProfile.vendor === 'opencode') {
+      loadOpenCodeCatalog(expandedProfile);
+    }
+  }, [expandedProfile && expandedProfile.id, expandedProfile && expandedProfile.vendor, expandedProfile && expandedProfile.command]);
+
   function patchProfile(id, updater){
     onPatch(prev => {
       const list = Array.isArray(prev.cliProfiles) ? prev.cliProfiles : [];
@@ -715,7 +767,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
     const id = `profile-${vendor}-${Date.now().toString(36)}`;
     const profile = {
       id,
-      name: `${cliVendorLabel(vendor)} Profile`,
+      name: defaultCliProfileName(vendor),
       vendor,
       protocol: 'standard',
       authMode: 'server-configured',
@@ -757,22 +809,33 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
 
   function onVendorChange(profile, vendor){
     setEnvErrorsById(prev => ({ ...prev, [profile.id]: '' }));
-    if (vendor === 'kiro') {
+    if (vendor === 'kiro' || vendor === 'opencode') {
       setEnvTextById(prev => ({ ...prev, [profile.id]: '' }));
     }
     patchProfile(profile.id, current => {
       const next = {
         vendor,
+        name: usesGeneratedCliProfileName(current) ? defaultCliProfileName(vendor) : current.name,
         protocol: vendor === 'claude-code' ? (current.protocol || 'standard') : undefined,
-        authMode: vendor === 'kiro' ? 'server-configured' : current.authMode,
+        authMode: (vendor === 'kiro' || vendor === 'opencode') ? 'server-configured' : current.authMode,
+        opencode: vendor === 'opencode' ? (current.opencode || {}) : undefined,
       };
-      if (vendor === 'kiro') {
+      if (vendor === 'kiro' || vendor === 'opencode') {
         next.command = undefined;
         next.configDir = undefined;
         next.env = undefined;
       }
       return next;
     });
+  }
+
+  function patchOpenCode(profile, patch){
+    patchProfile(profile.id, current => ({
+      opencode: {
+        ...(current.opencode || {}),
+        ...patch,
+      },
+    }));
   }
 
   function onSetupModeChange(profile, authMode){
@@ -808,13 +871,56 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
     setAuthBusyById(prev => ({ ...prev, [profileId]: busy }));
   }
 
+  function openCodeDraftProfile(profile, includeProvider = true){
+    const draft = normalizeUiProfile(profile);
+    if (draft.vendor !== 'opencode') return draft;
+    const provider = includeProvider && draft.opencode && draft.opencode.provider
+      ? String(draft.opencode.provider).trim()
+      : '';
+    return {
+      ...draft,
+      opencode: provider ? { provider } : undefined,
+    };
+  }
+
+  async function loadOpenCodeCatalog(profile){
+    if (!profile || profile.vendor !== 'opencode') return;
+    const profileId = profile.id;
+    setOpenCodeCatalogById(prev => ({
+      ...prev,
+      [profileId]: {
+        ...(prev[profileId] || {}),
+        loading: true,
+        error: '',
+      },
+    }));
+    try {
+      const backend = await AgentApi.settings.getOpenCodeDraftProfileMetadata(openCodeDraftProfile(profile, false));
+      if (!mountedRef.current) return;
+      setOpenCodeCatalogById(prev => ({
+        ...prev,
+        [profileId]: { loading: false, backend, error: '' },
+      }));
+    } catch (err) {
+      if (!mountedRef.current) return;
+      setOpenCodeCatalogById(prev => ({
+        ...prev,
+        [profileId]: { loading: false, backend: null, error: err.message || String(err) },
+      }));
+    }
+  }
+
   async function checkProfileAuth(profile){
     if (hasEnvErrors || saving || authBusyById[profile.id]) return;
     setProfileAuthBusy(profile.id, true);
     setProfileAuthState(profile.id, { kind: 'check', status: 'running', message: 'Checking CLI status…' });
     try {
-      await onSave(null);
-      const response = await AgentApi.settings.testCliProfile(profile.id);
+      const response = profile.vendor === 'opencode'
+        ? await AgentApi.settings.testOpenCodeDraftProfile(openCodeDraftProfile(profile))
+        : await (async () => {
+            await onSave(null);
+            return AgentApi.settings.testCliProfile(profile.id);
+          })();
       mergeSettingsFromAuthResponse(response);
       setProfileAuthState(profile.id, { kind: 'check', status: response.result.status, result: response.result });
     } catch (err) {
@@ -920,9 +1026,9 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
           <div className="settings-empty u-dim">No CLI profiles are configured yet.</div>
         ) : profiles.map(profile => {
           const isKiro = profile.vendor === 'kiro';
+          const isOpenCode = profile.vendor === 'opencode';
           const isServerProfile = isServerConfiguredProfile(profile);
-          const isAccount = !isKiro && profile.authMode === 'account';
-          const vendorIcon = backendIconFor(backends, backendIdForProfile(profile));
+          const isAccount = !isKiro && !isOpenCode && profile.authMode === 'account';
           const expanded = expandedProfileId === profile.id;
           const setupLabel = isAccount ? 'Account profile' : 'Self-configured';
           const envError = envErrorsById[profile.id];
@@ -931,6 +1037,20 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
           const authRunning = !!(authState && authState.job && authState.job.status === 'running');
           const authText = authStateText(authState);
           const protocol = protocolLabel(profile);
+          const opencodeProvider = (profile.opencode && profile.opencode.provider) || '';
+          const opencodeProviderId = isOpenCode ? String(opencodeProvider).trim().toLowerCase() : '';
+          const providerIconClass = opencodeProviderId === 'deepseek' || opencodeProviderId === 'opencode'
+            ? `cli-vendor-icon cli-provider-icon cli-provider-${opencodeProviderId}`
+            : null;
+          const vendorIcon = providerIconClass ? null : backendIconFor(backends, backendIdForProfile(profile));
+          const opencodeCatalog = isOpenCode ? (opencodeCatalogById[profile.id] || {}) : {};
+          const opencodeCatalogModels = opencodeCatalog.backend && Array.isArray(opencodeCatalog.backend.models)
+            ? opencodeCatalog.backend.models
+            : [];
+          const opencodeProviders = providerOptionsFromModels(opencodeCatalogModels);
+          const opencodeProviderChoices = opencodeProvider && !opencodeProviders.some(provider => provider.id === opencodeProvider)
+            ? [{ id: opencodeProvider, label: opencodeProvider }, ...opencodeProviders]
+            : opencodeProviders;
           return (
             <div className={`cli-card ${expanded ? 'is-open' : ''} ${profile.disabled ? 'is-off' : ''}`} key={profile.id}>
               <div
@@ -944,7 +1064,7 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
                 <div className="cli-card-head-main">
                   <div className="cli-card-name">
                     <span className="chev" data-open={expanded ? 'true' : 'false'}>{Ico.chev(12)}</span>
-                    {vendorIcon ? <span className="cli-vendor-icon" aria-hidden="true" dangerouslySetInnerHTML={{__html: vendorIcon}}/> : null}
+                    {providerIconClass ? <span className={providerIconClass} aria-hidden="true"/> : vendorIcon ? <span className="cli-vendor-icon" aria-hidden="true" dangerouslySetInnerHTML={{__html: vendorIcon}}/> : null}
                     <b>{profile.name || profile.id}</b>
                   </div>
                   <div className="cli-card-meta u-mono">
@@ -961,6 +1081,12 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
                       <>
                         <span className="sep">·</span>
                         <code>{profile.command}</code>
+                      </>
+                    ) : null}
+                    {isOpenCode && opencodeProvider ? (
+                      <>
+                        <span className="sep">·</span>
+                        <code>{opencodeProvider}</code>
                       </>
                     ) : null}
                   </div>
@@ -1022,13 +1148,37 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
                         </div>
                       </Field>
                     ) : null}
+                    {isOpenCode ? (
+                      <Field label="Provider" hint="Discovered from opencode models on this server.">
+                        {opencodeProviderChoices.length > 0 ? (
+                          <div className="settings-select-wrap">
+                            <select
+                              value={opencodeProvider}
+                              onChange={(e) => patchOpenCode(profile, { provider: e.target.value || undefined })}
+                            >
+                              <option value="">Choose provider</option>
+                              {opencodeProviderChoices.map(provider => <option key={provider.id} value={provider.id}>{provider.label}</option>)}
+                            </select>
+                            {Ico.chevD(12)}
+                          </div>
+                        ) : (
+                          <input
+                            className="inp u-mono"
+                            value={opencodeProvider}
+                            placeholder={opencodeCatalog.loading ? 'loading providers...' : 'deepseek'}
+                            onChange={(e) => patchOpenCode(profile, { provider: e.target.value || undefined })}
+                          />
+                        )}
+                        {opencodeCatalog.error ? <span className="settings-field-hint u-err">{opencodeCatalog.error}</span> : null}
+                      </Field>
+                    ) : null}
                   </div>
                   <div className="cli-profile-grid">
-                    <Field label="Setup mode" hint={isKiro ? 'Kiro is self-configured only for now.' : undefined}>
+                    <Field label="Setup mode" hint={isKiro ? 'Kiro is self-configured only for now.' : isOpenCode ? 'OpenCode provider credentials are managed by OpenCode for now.' : undefined}>
                       <div className="settings-select-wrap">
                         <select
-                          value={isKiro ? 'server-configured' : (profile.authMode || 'server-configured')}
-                          disabled={isKiro}
+                          value={(isKiro || isOpenCode) ? 'server-configured' : (profile.authMode || 'server-configured')}
+                          disabled={isKiro || isOpenCode}
                           onChange={(e) => onSetupModeChange(profile, e.target.value)}
                         >
                           <option value="server-configured">Self-configured</option>
@@ -1110,10 +1260,24 @@ function CliProfilesTab({ settings, backends, onPatch, onSave, saving }){
                         <div className="u-dim" style={{fontSize: 12, marginTop: 2}}>
                           {isKiro ? (
                             <>Configure Kiro on the server and use this self-configured profile. Kiro does not expose a dedicated account/config directory override yet.</>
+                          ) : isOpenCode ? (
+                            <>Configure OpenCode on the server with <code>opencode auth login</code>. This profile selects the OpenCode provider.</>
                           ) : (
                             <>Self-configured profiles inherit the host's existing <code>{cliSelfConfiguredHome(profile.vendor)}</code> directory and shell environment. No directory or env overrides needed.</>
                           )}
                         </div>
+                        {isOpenCode ? (
+                          <div className="cli-auth-actions" style={{marginTop: 10}}>
+                            <button
+                              type="button"
+                              className="btn"
+                              disabled={saving || authBusy}
+                              onClick={() => checkProfileAuth(profile)}
+                            >Check OpenCode</button>
+                            <span className={`cli-auth-status ${authRunning ? 'running' : ''}`}>{authStateLabel(authState)}</span>
+                          </div>
+                        ) : null}
+                        {isOpenCode && authText ? <pre className="cli-auth-log">{authText}</pre> : null}
                       </div>
                     </div>
                   )}
@@ -1260,8 +1424,22 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
   const igProfile = (kb.ingestionCliProfileId || kb.ingestionCliBackend)
     ? profileForSetting(profiles, kb.ingestionCliProfileId, kb.ingestionCliBackend, '')
     : null;
-  const igModels = igProfile ? modelsForProfile(backends, profileBackends, igProfile) : [];
+  const imageProfiles = profiles.filter(profile => modelsForProfileInput(backends, profileBackends, profile, 'image').length > 0);
+  const igProfileOptions = igProfile && !imageProfiles.some(profile => profile.id === igProfile.id)
+    ? [igProfile, ...imageProfiles]
+    : imageProfiles;
+  const igModels = igProfile ? modelsForProfileInput(backends, profileBackends, igProfile, 'image') : [];
+  const igAllModels = igProfile ? modelsForProfile(backends, profileBackends, igProfile) : [];
   const igModel = kb.ingestionCliModel || defaultModelId(igModels) || '';
+  const selectedIgModel = igAllModels.find(model => model.id === igModel) || null;
+  const staleIgModel = !!(igModel && igAllModels.length > 0 && !selectedIgModel && !igModels.some(model => model.id === igModel));
+  const igModelOptions = selectedIgModel && !igModels.some(model => model.id === selectedIgModel.id)
+    ? [selectedIgModel, ...igModels]
+    : staleIgModel
+      ? [{ id: igModel, label: igModel, capabilities: { input: { image: false } } }, ...igModels]
+      : igModels;
+  const igProfileUnsupported = !!(igProfile && !imageProfiles.some(profile => profile.id === igProfile.id));
+  const igModelUnsupported = staleIgModel || !!(selectedIgModel && !modelSupportsInput(selectedIgModel, 'image'));
   const igEfforts = igProfile ? effortLevelsForProfile(backends, profileBackends, igProfile, igModel) : [];
   const igEffort = kb.ingestionCliEffort || defaultEffortFor(igEfforts) || '';
 
@@ -1300,10 +1478,10 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
     AgentApi.kb.libreOfficeStatus().then(setLibreOffice).catch(() => setLibreOffice({ available: false }));
   }, []);
   React.useEffect(() => {
-    [igProfile, dgProfile, drProfile].forEach(profile => {
+    [...profiles, dgProfile, drProfile].forEach(profile => {
       if (profile && loadProfileBackend) loadProfileBackend(profile.id);
     });
-  }, [igProfile && igProfile.id, dgProfile && dgProfile.id, drProfile && drProfile.id, loadProfileBackend]);
+  }, [profiles.map(profile => profile.id).join('|'), dgProfile && dgProfile.id, drProfile && drProfile.id, loadProfileBackend]);
 
   function patchKb(next){
     onPatch(prev => ({ knowledgeBase: { ...(prev.knowledgeBase || {}), ...next } }));
@@ -1320,7 +1498,7 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
     }
     const profile = profiles.find(p => p.id === v);
     if (!profile) return;
-    const m = modelsForProfile(backends, profileBackends, profile);
+    const m = modelsForProfileInput(backends, profileBackends, profile, 'image');
     const newModel = defaultModelId(m);
     const e = effortLevelsForProfile(backends, profileBackends, profile, newModel);
     patchKb({ ingestionCliProfileId: profile.id, ingestionCliBackend: backendIdForProfile(profile), ingestionCliModel: newModel, ingestionCliEffort: defaultEffortFor(e) });
@@ -1400,15 +1578,33 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
       <Field label="Ingestion CLI profile">
         <select value={igProfile ? igProfile.id : ''} onChange={(e) => onIgProfile(e.target.value)}>
           <option value="">— None (skip AI conversion) —</option>
-          {profiles.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          {igProfileOptions.map(p => (
+            <option key={p.id} value={p.id} disabled={igProfileUnsupported && igProfile && p.id === igProfile.id}>
+              {p.name}{igProfileUnsupported && igProfile && p.id === igProfile.id ? ' (not image-capable)' : ''}
+            </option>
+          ))}
         </select>
       </Field>
-      {igProfile && igModels.length ? (
+      {igProfileUnsupported ? (
+        <div className="settings-warning u-err">
+          This profile cannot be used for KB image conversion because its backend/model metadata does not report image input support.
+        </div>
+      ) : null}
+      {igProfile && igModelOptions.length ? (
         <Field label="Ingestion model">
           <select value={igModel} onChange={(e) => onIgModel(e.target.value)}>
-            {igModels.map(m => <option key={m.id} value={m.id}>{m.label || m.id}</option>)}
+            {igModelOptions.map(m => (
+              <option key={m.id} value={m.id} disabled={igModelUnsupported && m.id === igModel}>
+                {m.label || m.id}{igModelUnsupported && m.id === igModel ? ' (no image input)' : ''}
+              </option>
+            ))}
           </select>
         </Field>
+      ) : null}
+      {igModelUnsupported ? (
+        <div className="settings-warning u-err">
+          The selected ingestion model does not report image input support or is no longer in the profile model catalog. Pick an image-capable model or clear the ingestion profile.
+        </div>
       ) : null}
       {igProfile && igEfforts.length ? (
         <Field label="Ingestion effort">

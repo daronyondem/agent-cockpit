@@ -23,6 +23,9 @@ describe('KiroAdapter', () => {
       toolActivity: true,
       userQuestions: false,
       stdinInput: false,
+      oneShotMediaInput: {
+        image: ['explicit-attachment'],
+      },
     });
     expect(meta.resumeCapabilities.activeTurnResume).toBe('unsupported');
     expect(meta.resumeCapabilities.sessionResume).toBe('supported');
@@ -40,6 +43,7 @@ describe('KiroAdapter', () => {
     expect(auto!.default).toBe(true);
     expect(auto!.family).toBe('router');
     expect(auto!.costTier).toBe('medium');
+    expect(auto!.capabilities?.input?.image).toBe(true);
 
     // auto is the only default
     expect(models!.filter(m => m.default).length).toBe(1);
@@ -57,6 +61,11 @@ describe('KiroAdapter', () => {
     expect(sonnet46).toBeDefined();
     expect(sonnet46!.family).toBe('sonnet');
     expect(sonnet46!.costTier).toBe('medium');
+    expect(sonnet46!.capabilities?.input?.image).toBe(true);
+
+    const deepseek = models!.find(m => m.id === 'deepseek-3.2');
+    expect(deepseek).toBeDefined();
+    expect(deepseek!.capabilities?.input?.image).toBe(false);
 
     const sonnet40 = models!.find(m => m.id === 'claude-sonnet-4.0');
     expect(sonnet40).toBeDefined();
@@ -1410,6 +1419,51 @@ describe('KiroAdapter.runOneShot image attachment', () => {
     });
 
     sim.sessionUpdate('sess-img-1', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ok' } });
+    await new Promise((r) => setTimeout(r, 20));
+    sim.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    await expect(resultPromise).resolves.toBe('ok');
+  });
+
+  test('appends image content block from explicit runOneShot attachments', async () => {
+    const bytes = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xca, 0xfe, 0xba, 0xbe]);
+    const imagePath = path.join(tmpDir, 'unmentioned.png');
+    fs.writeFileSync(imagePath, bytes);
+
+    let resultPromise!: Promise<string>;
+    let sim!: ReturnType<typeof createKiroSimulator>;
+    const workingDir = tmpDir;
+
+    jest.isolateModules(() => {
+      sim = createKiroSimulator();
+      jest.mock('child_process', () => ({
+        spawn: () => sim.proc,
+        execFile: () => {},
+      }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir });
+      resultPromise = adapter.runOneShot('OCR this image', {
+        workingDir,
+        attachments: [{ path: imagePath, kind: 'image' }],
+      });
+    });
+
+    const initReq = await waitForRequest(sim, 'initialize');
+    sim.respond(initReq.id, {});
+    const newReq = await waitForRequest(sim, 'session/new');
+    sim.respond(newReq.id, { sessionId: 'sess-img-explicit' });
+    const promptReq = await waitForRequest(sim, 'session/prompt');
+
+    const promptArr = (promptReq.params as { prompt: Array<Record<string, unknown>> }).prompt;
+    expect(promptArr).toHaveLength(2);
+    expect(promptArr[0]).toEqual({ type: 'text', text: 'OCR this image' });
+    expect(promptArr[1]).toEqual({
+      type: 'image',
+      mimeType: 'image/png',
+      data: bytes.toString('base64'),
+    });
+
+    sim.sessionUpdate('sess-img-explicit', { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: 'ok' } });
     await new Promise((r) => setTimeout(r, 20));
     sim.respond(promptReq.id, { stopReason: 'end_turn' });
 

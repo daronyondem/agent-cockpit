@@ -36,6 +36,10 @@ export { sanitizeSystemPrompt, isApiError, shortenPath, extractToolDetails, extr
 
 export const CLAUDE_CODE_ICON = '<svg width="28" height="28" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg"><rect width="512" height="512" rx="128" fill="#D37D5B"/><path d="M256 220L285 85L305 92L275 225L380 145L395 165L285 245L440 265L435 290L285 275L390 380L365 400L265 295L295 440L265 445L245 295L180 420L155 405L230 280L100 340L90 315L225 260L70 250L75 225L225 235L110 145L130 130L235 215L170 85L195 80L245 210L256 220Z" fill="#F9EDE6"/></svg>';
 export const CLAUDE_GOAL_SUPPORTED_ACTIONS = { clear: true, stopTurn: true, pause: false, resume: false };
+const CLAUDE_MODEL_CAPABILITIES = {
+  input: { text: true, image: true },
+  output: { text: true },
+};
 
 function filterStdinWarning(stderr: string): string {
   return String(stderr || '')
@@ -114,6 +118,9 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
         toolActivity: true,
         userQuestions: true,
         stdinInput: true,
+        oneShotMediaInput: {
+          image: ['native-file-tool'],
+        },
         goals: {
           set: true,
           clear: true,
@@ -136,6 +143,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           description: 'Latest Opus — most capable, supports the new xhigh effort level',
           costTier: 'high',
           supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          capabilities: CLAUDE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-opus-4-6',
@@ -144,6 +152,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           description: 'Previous Opus — complex reasoning, architecture, nuanced tasks',
           costTier: 'high',
           supportedEffortLevels: ['low', 'medium', 'high', 'max'],
+          capabilities: CLAUDE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-sonnet-4-6',
@@ -153,6 +162,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           costTier: 'medium',
           default: true,
           supportedEffortLevels: ['low', 'medium', 'high'],
+          capabilities: CLAUDE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-haiku-4-5',
@@ -160,6 +170,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
           family: 'haiku',
           description: 'Fastest and cheapest — simple tasks, quick iterations',
           costTier: 'low',
+          capabilities: CLAUDE_MODEL_CAPABILITIES,
         },
       ],
     };

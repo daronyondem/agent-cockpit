@@ -15,6 +15,7 @@ import { ClaudeCodeAdapter } from './src/services/backends/claudeCode';
 import { ClaudeCodeInteractiveAdapter } from './src/services/backends/claudeCodeInteractive';
 import { KiroAdapter } from './src/services/backends/kiro';
 import { CodexAdapter } from './src/services/backends/codex';
+import { OpenCodeAdapter } from './src/services/backends/opencode';
 import { UpdateService } from './src/services/updateService';
 import { CliUpdateService } from './src/services/cliUpdateService';
 import { ClaudePlanUsageService } from './src/services/claudePlanUsageService';
@@ -111,6 +112,7 @@ backendRegistry.register(new CodexAdapter({
   approvalPolicy: config.CODEX_APPROVAL_POLICY,
   sandbox: config.CODEX_SANDBOX_MODE,
 }));
+backendRegistry.register(new OpenCodeAdapter({ workingDir: config.DEFAULT_WORKSPACE }));
 
 const chatService = new ChatService(__dirname, {
   defaultWorkspace: config.DEFAULT_WORKSPACE,

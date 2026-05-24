@@ -1,4 +1,4 @@
-import type { Settings } from '../types';
+import type { CliProfile, Settings } from '../types';
 import type {
   BackendMetadata,
   CliUpdatesResponse,
@@ -49,6 +49,17 @@ export interface QueueUpdateRequest {
 
 export interface SettingsResponse extends Settings {}
 
+export interface CliProfileDraftRequest {
+  profile: CliProfile;
+}
+
+export function validateCliProfileDraftRequest(body: unknown): CliProfileDraftRequest {
+  const record = asRecord(body, 'profile draft request must be an object');
+  const profile = asRecord(record.profile, 'profile must be an object');
+  validateCliProfileRecord(profile, 'profile');
+  return { profile: profile as unknown as CliProfile };
+}
+
 export function validateQueueUpdateRequest(body: unknown): QueueUpdateRequest {
   const record = asRecord(body, 'queue must be an array of QueuedMessage');
   const queue = record.queue;
@@ -86,10 +97,20 @@ function validateCliProfiles(value: unknown): void {
   if (!Array.isArray(value)) contractError('cliProfiles must be an array');
   for (const profile of value) {
     const record = asRecord(profile, 'cliProfiles entries must be objects');
-    optionalString(record, 'id', 'cliProfiles entries must have string ids');
-    optionalString(record, 'name', 'cliProfiles entries names must be strings');
-    optionalString(record, 'vendor', 'cliProfiles entries vendors must be strings');
-    optionalStringEnum(record, 'protocol', ['standard', 'interactive'], 'cliProfiles entries protocols must be standard or interactive');
+    validateCliProfileRecord(record, 'cliProfiles entries');
+  }
+}
+
+function validateCliProfileRecord(record: Record<string, unknown>, label: string): void {
+  optionalString(record, 'id', `${label} must have a string id`);
+  optionalString(record, 'name', `${label} name must be a string`);
+  optionalString(record, 'vendor', `${label} vendor must be a string`);
+  optionalString(record, 'command', `${label} command must be a string`);
+  optionalStringEnum(record, 'protocol', ['standard', 'interactive'], `${label} protocol must be standard or interactive`);
+  if (record.opencode !== undefined) {
+    const opencode = asRecord(record.opencode, `${label} opencode must be an object`);
+    optionalString(opencode, 'provider', `${label} opencode.provider must be a string`);
+    optionalString(opencode, 'model', `${label} opencode.model must be a string`);
   }
 }
 

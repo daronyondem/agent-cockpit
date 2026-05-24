@@ -120,6 +120,49 @@ describe('CliUpdateService', () => {
     });
   });
 
+  test('includes OpenCode profile targets and exposes its self-updater', async () => {
+    const opencodeBin = path.join(tmpDir, 'opencode');
+    fs.writeFileSync(opencodeBin, '#!/bin/sh\n');
+    settings = {
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
+      cliProfiles: [{
+        id: 'profile-opencode-deepseek',
+        name: 'DeepSeek',
+        vendor: 'opencode',
+        authMode: 'server-configured',
+        command: opencodeBin,
+        opencode: { provider: 'deepseek' },
+        createdAt: '2026-05-04T00:00:00.000Z',
+        updatedAt: '2026-05-04T00:00:00.000Z',
+      }],
+    };
+    const service = new CliUpdateService(tmpDir);
+    mockExecFile((cmd, args) => {
+      if (cmd === opencodeBin && args.join(' ') === '--version') return '1.15.10';
+      return new Error(`unexpected command: ${cmd} ${args.join(' ')}`);
+    });
+
+    const status = await service.checkNow(async () => settings);
+
+    expect(status.items).toHaveLength(1);
+    expect(status.items[0]).toMatchObject({
+      vendor: 'opencode',
+      label: 'OpenCode',
+      command: opencodeBin,
+      resolvedPath: opencodeBin,
+      profileIds: ['profile-opencode-deepseek'],
+      profileNames: ['DeepSeek'],
+      installMethod: 'self-update',
+      currentVersion: '1.15.10',
+      latestVersion: null,
+      updateAvailable: false,
+      updateSupported: true,
+      updateCommand: [opencodeBin, 'upgrade'],
+    });
+  });
+
   test('adds Claude Code Interactive compatibility caution to the shared Claude CLI target', async () => {
     settings = {
       ...settings,

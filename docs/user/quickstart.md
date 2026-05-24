@@ -9,6 +9,7 @@ authenticated, then start a conversation from the browser.
 Use the production installer for your platform:
 
 - [macOS install](../deploy/macos.md)
+- [Linux install](../deploy/linux.md)
 - [Windows install](../deploy/windows.md)
 
 For development from source, see [development setup](../reference/development.md).
@@ -32,6 +33,7 @@ least one of these should be installed and authenticated:
 | Claude Code | `claude` |
 | OpenAI Codex | `codex` |
 | Kiro | `kiro-cli` |
+| OpenCode | `opencode` |
 
 See [Supported Backends](backends.md) for setup notes and feature differences.
 
@@ -43,7 +45,7 @@ directory.
 
 ## 5. Send A Message
 
-Pick a backend from the composer, write a prompt, and send it. The response
+Pick a CLI profile from the composer, write a prompt, and send it. The response
 streams through the browser while the local CLI works on the server machine.
 
 Generated files and file-delivery references appear as cards in the

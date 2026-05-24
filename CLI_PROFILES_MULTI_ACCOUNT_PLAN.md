@@ -6,7 +6,7 @@ Status: Final implementation pass complete locally; not committed or pushed.
 
 ## Goal
 
-Add a global CLI Config settings section where users can create named CLI profiles for Codex, Claude Code, and Kiro. A profile represents the actual runnable CLI identity behind Agent Cockpit: vendor, executable, account/config home, runtime environment, auth state, and display name.
+Add a global CLI Config settings section where users can create named CLI profiles for Codex, Claude Code, Kiro, and OpenCode. A profile represents the actual runnable CLI identity behind Agent Cockpit: vendor, executable, account/config home, runtime environment, auth state, and display name.
 
 The conversation picker should list CLI profiles, not raw backend vendors. Profiles use the vendor icon, but the visible name comes from the user.
 
@@ -18,13 +18,14 @@ The conversation picker should list CLI profiles, not raw backend vendors. Profi
 - Account-based authentication should be launched from Agent Cockpit where possible.
 - Users can also choose Server Configured / I will configure it myself, where Cockpit assumes the server-side CLI is already configured.
 - Initial auth setup supports account-based auth and server-configured mode. API-key profile setup is not in the first scope.
-- Support all current vendors eventually: Codex, Claude Code, and Kiro.
+- Support all current vendors eventually: Codex, Claude Code, Kiro, and OpenCode.
 - Kiro needs a research step because its multiple-account isolation mechanism is not yet confirmed.
+- OpenCode is a CLI harness vendor; DeepSeek, Groq, xAI/Grok, Gemini, OpenRouter, and similar APIs stay provider/model choices under OpenCode. The CLI profile stores provider; model selection stays in the composer or feature-specific processor settings.
 
 ## Proposed Data Model
 
 ```ts
-type CliVendor = 'codex' | 'claude-code' | 'kiro';
+type CliVendor = 'codex' | 'claude-code' | 'kiro' | 'opencode';
 type CliAuthMode = 'server-configured' | 'account';
 
 interface CliProfile {
@@ -38,6 +39,7 @@ interface CliProfile {
   createdAt: string;
   updatedAt: string;
   disabled?: boolean;
+  opencode?: { provider?: string; model?: string };
 }
 
 interface ConversationEntry {
@@ -73,6 +75,16 @@ Keep `backend` during migration for compatibility, but new runtime resolution sh
 - Research required: confirm whether Kiro has a supported env var or setting to isolate auth/config/session state per profile.
 - If not supported, expose Kiro as server-configured only and explain the limitation in the UI.
 
+### OpenCode
+
+- Provider credentials and model-provider routing stay in OpenCode's own auth/config stores.
+- Cockpit profiles are self-configured in the first pass and may select `opencode.provider`.
+- Status check: `opencode --version`.
+- Model discovery: `opencode models [provider] --verbose`, with plain `opencode models [provider]` fallback for older OpenCode CLIs.
+- Streaming and one-shot calls: `opencode run --format json --dir <workspace> [--model provider/model] [--variant effort] [--session id] <prompt>`, where `--variant` is sent only when the selected model advertises that effort level.
+- Built-in and MCP `tool_use` JSON parts are mapped into Cockpit tool activity and outcome events.
+- Memory/KB MCP injection uses per-process `OPENCODE_CONFIG_CONTENT` and does not write conversation tokens to OpenCode global config files.
+
 ## Migration Plan
 
 On first run after this feature lands:
@@ -83,6 +95,7 @@ On first run after this feature lands:
    - `Claude Code (Server Configured)`
    - `Codex (Server Configured)`
    - `Kiro (Server Configured)`
+   - `OpenCode (Server Configured)`
 4. Attach `cliProfileId` to each existing conversation based on existing `backend`.
 5. Preserve existing `backend`, `model`, and `effort`.
 6. Do not create profile-specific config directories for server-configured profiles.
@@ -185,6 +198,7 @@ Update:
 - Codex receives profile env for app-server, exec, model discovery, MCP collision reads, and plan usage.
 - Claude Code receives profile env for streaming, one-shots, memory paths, and plan usage.
 - Kiro behavior covered based on research outcome.
+- OpenCode receives profile command plus provider metadata; provider authentication remains self-configured in OpenCode, and model choice remains in the composer/processor model pickers.
 - Auth job lifecycle: start, output events, polling, cancellation, timeout, redaction.
 - Frontend profile picker renders names and vendor icons.
 
@@ -197,6 +211,7 @@ Update:
 5. Kiro research and implementation or documented limitation. **Documented limitation locally: Kiro stays self-configured only.**
 6. Settings UI and profile picker. **Implemented locally on `feat/cli-profiles-foundation`.**
 7. Remote authentication jobs. **Implemented locally for Codex and Claude Code account profiles; Kiro remains blocked by the self-configured-only decision.**
+8. OpenCode harness support for provider/model profiles, metadata, streaming, one-shots, MCP injection, and status checks. **Implemented locally.**
 
 ## Current State
 
@@ -226,14 +241,15 @@ Update:
   - Native Claude memory extraction and real-time memory watching resolve paths under `<configDir>/projects/...` when supplied.
   - Claude plan usage caches are profile-aware and stored separately from the default server-configured cache.
 - Kiro research result: `kiro-cli` currently has device-flow login and account status commands, but no documented profile/config directory override. Empirical testing shows account isolation is possible only by changing `HOME`, which also changes unrelated filesystem behavior. We are not doing that. Kiro profiles are self-configured only for now, and Settings normalization strips Kiro `command`, `configDir`, and `env`.
-- The V2 Settings screen now has a CLI Config tab for adding/editing profiles. It follows the Agent Cockpit v2 design handoff: header copy with enabled/total counter, accordion profile cards, enabled toggle/delete icon in each card header, account-only config/env fields in the expanded body, self-configured explanatory note, and a dashed bottom add row. It exposes profile name, vendor, setup mode, optional command/config directory/environment overrides for Codex and Claude Code, and locks Kiro to self-configured mode.
+- OpenCode profiles are self-configured only in this pass. Settings preserves `opencode.provider`, strips profile-level OpenCode model defaults, the backend resolves `~/.opencode/bin/opencode` when PATH lacks it, metadata is discovered with `opencode models [provider] --verbose` plus a plain-command fallback, supported effort variants are passed to `opencode run --variant`, chat and one-shot calls use `opencode run --format json`, OpenCode `tool_use` JSON parts are mapped into Cockpit tool activity/outcome events, and Cockpit injects Memory/KB MCP servers through per-process `OPENCODE_CONFIG_CONTENT`. OpenCode has no confirmed native durable-memory directory for Cockpit to import/watch, so OpenCode workspace memory uses Cockpit's Memory MCP path rather than backend-native memory capture.
+- The V2 Settings screen now has a CLI Config tab for adding/editing profiles. It follows the Agent Cockpit v2 design handoff: header copy with enabled/total counter, accordion profile cards, enabled toggle/delete icon in each card header, account-only config/env fields in the expanded body, self-configured explanatory note, and a dashed bottom add row. It exposes profile name, vendor, setup mode, optional command/config directory/environment overrides for Codex and Claude Code, OpenCode provider selection populated from `opencode models`, and locks Kiro/OpenCode to self-configured mode.
 - CLI profile cards and the composer profile chip use the selected vendor's existing backend icon alongside the user-provided profile name.
 - Phase 7 adds `CliProfileAuthService` and chat routes for remote account auth:
   - `POST /api/chat/cli-profiles/:id/test`
   - `POST /api/chat/cli-profiles/:id/auth/start`
   - `GET /api/chat/cli-profiles/auth-jobs/:jobId`
   - `POST /api/chat/cli-profiles/auth-jobs/:jobId/cancel`
-  Codex account profiles run `codex login --device-auth` with `CODEX_HOME`; Claude Code account profiles run `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR`. Missing account-profile `configDir` values are filled with deterministic directories under `data/cli-profiles/`. Check CLI runs the vendor status command and warms/reads profile-specific backend metadata when the adapter is registered, so model discovery is exercised during the check. Job stdout/stderr is redacted before being exposed to the browser. Auth jobs enforce a 15-minute timeout, reject duplicate running jobs for the same profile, and verify the vendor status command before marking a login-process exit as successful.
+  Codex account profiles run `codex login --device-auth` with `CODEX_HOME`; Claude Code account profiles run `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR`. OpenCode profiles expose status checks but not Cockpit-managed auth jobs. Missing account-profile `configDir` values are filled with deterministic directories under `data/cli-profiles/`. Check CLI runs the vendor status command and warms/reads profile-specific backend metadata when the adapter is registered, so model discovery is exercised during the check. Job stdout/stderr is redacted before being exposed to the browser. Auth jobs enforce a 15-minute timeout, reject duplicate running jobs for the same profile, and verify the vendor status command before marking a login-process exit as successful.
 - The V2 Settings CLI Config account-profile cards now have an Account authentication panel with Check CLI, Authenticate, Cancel, status text, and a redacted log area for URLs/device codes emitted by the CLI.
 - The V2 topbar plan-usage tooltip now keys Claude Code and Codex account-limit snapshots by `cliProfileId`. Switching to a different Codex profile after reset clears the previous profile's account limits from the tooltip while the new profile cache loads, and Codex turn completion performs immediate plus delayed reads for the same profile key so the server-side refresh is observed after the `done` frame.
 - The V2 General tab now selects the default CLI profile when profiles exist, and saving a default profile keeps `defaultBackend` synchronized to the profile vendor.

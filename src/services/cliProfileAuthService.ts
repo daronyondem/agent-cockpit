@@ -5,6 +5,7 @@ import { spawn, type ChildProcess } from 'child_process';
 import type { CliProfile, Settings } from '../types';
 import { resolveClaudeCliRuntime } from './backends/claudeCode';
 import { resolveCodexCliRuntime } from './backends/codex';
+import { resolveOpenCodeCliRuntime } from './backends/opencode';
 import { buildCliCommandInvocation, type CliCommandResolution } from './cliCommandResolver';
 import { isSetupAccountCliProfile } from './cliProfiles';
 
@@ -138,7 +139,7 @@ export class CliProfileAuthService {
       const output = redactCliAuthText(rawOutput);
       const status = interpretCliAuthStatus(profile, result.code, rawOutput);
       let onboardingOutput = '';
-      if (status.authenticated) {
+      if (status.authenticated === true) {
         try {
           onboardingOutput = await ensureClaudeCodeWindowsOnboarding(profile, runtime, rawOutput) || '';
         } catch (err: unknown) {
@@ -155,16 +156,19 @@ export class CliProfileAuthService {
           };
         }
       }
+      const checkStatus = status.authenticated === false
+        ? 'not-authenticated'
+        : status.error ? 'error' : 'ok';
       return {
         profileId: profile.id,
         vendor: profile.vendor,
         command: runtime.displayCommand || runtime.command,
         available: result.spawned,
         authenticated: status.authenticated,
-        status: status.authenticated ? 'ok' : 'not-authenticated',
+        status: checkStatus,
         output: [output, onboardingOutput].filter(Boolean).join('\n'),
         exitCode: result.code,
-        ...(status.authenticated ? {} : { error: output || status.error || 'CLI status check reported that this profile is not authenticated.' }),
+        ...(checkStatus === 'ok' ? {} : { error: output || status.error || 'CLI status check reported that this profile is not authenticated.' }),
       };
     } catch (err: unknown) {
       const message = (err as Error).message || String(err);
@@ -275,13 +279,17 @@ export class CliProfileAuthService {
   }
 
   private _assertSupported(profile: CliProfile): void {
-    if (profile.vendor !== 'codex' && profile.vendor !== 'claude-code') {
-      throw new Error('Remote authentication is not supported for Kiro profiles yet.');
+    if (profile.vendor !== 'codex' && profile.vendor !== 'claude-code' && profile.vendor !== 'opencode') {
+      throw new Error('CLI status checks are not supported for Kiro profiles yet.');
     }
   }
 
   private _assertCanAuth(profile: CliProfile): void {
-    this._assertSupported(profile);
+    if (profile.vendor !== 'codex' && profile.vendor !== 'claude-code') {
+      throw new Error(profile.vendor === 'opencode'
+        ? 'Remote authentication is not supported for OpenCode profiles yet. Configure OpenCode with opencode auth login.'
+        : 'Remote authentication is not supported for Kiro profiles yet.');
+    }
     if (profile.disabled) {
       throw new Error(`CLI profile is disabled: ${profile.name}`);
     }
@@ -293,7 +301,9 @@ export class CliProfileAuthService {
   private async _runtimeFor(profile: CliProfile): Promise<CliAuthRuntime> {
     const runtime = profile.vendor === 'codex'
       ? resolveCodexCliRuntime(profile)
-      : resolveClaudeCliRuntime(profile);
+      : profile.vendor === 'opencode'
+        ? resolveOpenCodeCliRuntime(profile)
+        : resolveClaudeCliRuntime(profile);
     if (runtime.configDir) {
       await fsp.mkdir(runtime.configDir, { recursive: true });
     }
@@ -307,17 +317,19 @@ export class CliProfileAuthService {
 
   private _statusCommand(profile: CliProfile): { args: string[] } {
     if (profile.vendor === 'codex') return { args: ['login', 'status'] };
+    if (profile.vendor === 'opencode') return { args: ['--version'] };
     return { args: ['auth', 'status', '--json'] };
   }
 
   private _defaultCommand(profile: CliProfile): string {
     if (profile.vendor === 'codex') return 'codex';
     if (profile.vendor === 'claude-code') return 'claude';
+    if (profile.vendor === 'opencode') return 'opencode';
     return 'kiro-cli';
   }
 
   private _vendorLabel(profile: CliProfile): string {
-    return profile.vendor === 'codex' ? 'Codex' : profile.vendor === 'claude-code' ? 'Claude Code' : 'Kiro';
+    return profile.vendor === 'codex' ? 'Codex' : profile.vendor === 'claude-code' ? 'Claude Code' : profile.vendor === 'opencode' ? 'OpenCode' : 'Kiro';
   }
 
   private _addEvent(snapshot: CliAuthJobSnapshot, type: CliAuthEventType, text: string): void {
@@ -536,7 +548,12 @@ function interpretCliAuthStatus(
   profile: CliProfile,
   exitCode: number | null,
   rawOutput: string,
-): { authenticated: boolean; error?: string } {
+): { authenticated: boolean | null; error?: string } {
+  if (profile.vendor === 'opencode') {
+    return exitCode === 0
+      ? { authenticated: null }
+      : { authenticated: null, error: `OpenCode version check exited with code ${exitCode ?? 'unknown'}.` };
+  }
   if (profile.vendor !== 'claude-code') {
     return exitCode === 0
       ? { authenticated: true }

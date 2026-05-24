@@ -1,7 +1,7 @@
 # Agent Cockpit Documentation
 
 Agent Cockpit is a local browser cockpit for CLI-based AI agents. It gives you a
-browser interface for Claude Code, OpenAI Codex, and Kiro while keeping
+browser interface for Claude Code, OpenAI Codex, Kiro, and OpenCode while keeping
 conversations, memory, knowledge-base material, and workspace context on your
 machine.
 

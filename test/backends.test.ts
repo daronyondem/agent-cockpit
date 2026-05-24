@@ -172,6 +172,9 @@ describe('ClaudeCodeAdapter', () => {
       toolActivity: true,
       userQuestions: true,
       stdinInput: true,
+      oneShotMediaInput: {
+        image: ['native-file-tool'],
+      },
       goals: {
         set: true,
         clear: true,
@@ -194,6 +197,7 @@ describe('ClaudeCodeAdapter', () => {
     expect(opus47!.label).toBe('Opus 4.7');
     expect(opus47!.family).toBe('opus');
     expect(opus47!.costTier).toBe('high');
+    expect(opus47!.capabilities?.input?.image).toBe(true);
 
     const opus46 = meta.models!.find(m => m.id === 'claude-opus-4-6');
     expect(opus46).toBeDefined();
@@ -205,6 +209,7 @@ describe('ClaudeCodeAdapter', () => {
     expect(sonnet).toBeDefined();
     expect(sonnet!.default).toBe(true);
     expect(sonnet!.costTier).toBe('medium');
+    expect(sonnet!.capabilities?.input?.image).toBe(true);
 
     const haiku = meta.models!.find(m => m.id === 'claude-haiku-4-5');
     expect(haiku).toBeDefined();

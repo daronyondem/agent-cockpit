@@ -3,10 +3,11 @@ import { promises as fsp } from 'fs';
 import path from 'path';
 import os from 'os';
 import * as napiCanvas from '@napi-rs/canvas';
-import { BaseBackendAdapter, type RunOneShotOptions } from './base';
+import { BaseBackendAdapter, type RunOneShotAttachment, type RunOneShotOptions } from './base';
 import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUtils';
 import type {
   BackendMetadata,
+  ModelCapabilities,
   SendMessageOptions,
   SendMessageResult,
   StreamEvent,
@@ -22,6 +23,14 @@ const KIRO_ICON = '<svg width="28" height="28" viewBox="0 0 1200 1200" fill="non
 // ── Configuration ──────────���────────────────────────────────────────────────
 
 const ACP_IDLE_TIMEOUT_MS = parseInt(process.env.KIRO_ACP_IDLE_TIMEOUT_MS || '', 10) || 3_600_000;
+const TEXT_ONLY_MODEL_CAPABILITIES: ModelCapabilities = {
+  input: { text: true, image: false },
+  output: { text: true },
+};
+const TEXT_IMAGE_MODEL_CAPABILITIES: ModelCapabilities = {
+  input: { text: true, image: true },
+  output: { text: true },
+};
 
 // ── Kiro Tool Name Normalization ────────────���───────────────────────────────
 
@@ -373,20 +382,49 @@ export async function collectImageContentBlocks(
     if (!basenameAppearsAsToken(prompt, entry)) continue;
     try {
       const filePath = path.join(workingDir, entry);
-      const buf = await fsp.readFile(filePath);
-      let outBuf: Buffer = buf;
-      let outMime = mimeType;
-      const reencoded = await reencodeForKiro(buf);
-      if (reencoded) {
-        outBuf = reencoded.buffer;
-        outMime = reencoded.mimeType;
-      }
-      blocks.push({ type: 'image', mimeType: outMime, data: outBuf.toString('base64') });
+      const block = await imageContentBlockFromFile(filePath, mimeType);
+      if (block) blocks.push(block);
     } catch {
       // skip unreadable files
     }
   }
   return blocks;
+}
+
+export async function collectExplicitImageContentBlocks(
+  attachments: RunOneShotAttachment[] | undefined,
+): Promise<Array<{ type: 'image'; mimeType: string; data: string }>> {
+  const blocks: Array<{ type: 'image'; mimeType: string; data: string }> = [];
+  for (const attachment of attachments || []) {
+    if (blocks.length >= MAX_IMAGE_ATTACHMENTS) break;
+    if (attachment.kind !== 'image') continue;
+    const filePath = attachment.path?.trim();
+    if (!filePath) continue;
+    const mimeType = attachment.mimeType || IMAGE_MIME_BY_EXT[path.extname(filePath).toLowerCase()];
+    if (!mimeType) continue;
+    try {
+      const block = await imageContentBlockFromFile(filePath, mimeType);
+      if (block) blocks.push(block);
+    } catch {
+      // skip unreadable files
+    }
+  }
+  return blocks;
+}
+
+async function imageContentBlockFromFile(
+  filePath: string,
+  mimeType: string,
+): Promise<{ type: 'image'; mimeType: string; data: string } | null> {
+  const buf = await fsp.readFile(filePath);
+  let outBuf: Buffer = buf;
+  let outMime = mimeType;
+  const reencoded = await reencodeForKiro(buf);
+  if (reencoded) {
+    outBuf = reencoded.buffer;
+    outMime = reencoded.mimeType;
+  }
+  return { type: 'image', mimeType: outMime, data: outBuf.toString('base64') };
 }
 
 // ── Adapter ���────────────────────────────────────────────────────────────────
@@ -412,6 +450,9 @@ export class KiroAdapter extends BaseBackendAdapter {
         toolActivity: true,
         userQuestions: false,
         stdinInput: false,
+        oneShotMediaInput: {
+          image: ['explicit-attachment'],
+        },
       },
       resumeCapabilities: {
         activeTurnResume: 'unsupported',
@@ -427,6 +468,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           description: "Kiro's model router — picks the optimal model per task",
           costTier: 'medium',
           default: true,
+          capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-opus-4.7',
@@ -434,6 +476,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'opus',
           description: 'Latest Anthropic model — enhanced agentic capabilities and 3x higher resolution vision',
           costTier: 'high',
+          capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-opus-4.6',
@@ -441,6 +484,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'opus',
           description: 'State-of-the-art coding; strong on agentic tasks and large codebases',
           costTier: 'high',
+          capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-opus-4.5',
@@ -448,6 +492,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'opus',
           description: 'Maximum reasoning depth for complex multi-system problems and tradeoff analysis',
           costTier: 'high',
+          capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-sonnet-4.6',
@@ -455,6 +500,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'sonnet',
           description: 'Approaches Opus intelligence while being more token-efficient for iterative workflows',
           costTier: 'medium',
+          capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-sonnet-4.5',
@@ -462,6 +508,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'sonnet',
           description: 'Best model for complex agents with extended autonomous operation',
           costTier: 'medium',
+          capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-sonnet-4.0',
@@ -469,6 +516,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'sonnet',
           description: 'Consistent baseline Sonnet — no routing or optimization layers',
           costTier: 'medium',
+          capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
         },
         {
           id: 'claude-haiku-4.5',
@@ -476,6 +524,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'haiku',
           description: 'Fast — matches Sonnet 4 performance at roughly one-third the cost',
           costTier: 'low',
+          capabilities: TEXT_IMAGE_MODEL_CAPABILITIES,
         },
         {
           id: 'deepseek-3.2',
@@ -483,6 +532,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'other',
           description: 'Open-weight model optimized for agentic workflows and multi-step reasoning',
           costTier: 'low',
+          capabilities: TEXT_ONLY_MODEL_CAPABILITIES,
         },
         {
           id: 'minimax-m2.5',
@@ -490,6 +540,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'other',
           description: 'Open-weight model delivering frontier-class coding at reduced cost',
           costTier: 'low',
+          capabilities: TEXT_ONLY_MODEL_CAPABILITIES,
         },
         {
           id: 'minimax-m2.1',
@@ -497,6 +548,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'other',
           description: 'Open-weight model — strong multilingual programming across many languages',
           costTier: 'low',
+          capabilities: TEXT_ONLY_MODEL_CAPABILITIES,
         },
         {
           id: 'glm-5',
@@ -504,6 +556,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'other',
           description: 'Sparse mixture-of-experts — repository-scale context and long agentic tasks',
           costTier: 'low',
+          capabilities: TEXT_ONLY_MODEL_CAPABILITIES,
         },
         {
           id: 'qwen3-coder-next',
@@ -511,6 +564,7 @@ export class KiroAdapter extends BaseBackendAdapter {
           family: 'other',
           description: 'Purpose-built coding agent — 256K context and strong error recovery',
           costTier: 'low',
+          capabilities: TEXT_ONLY_MODEL_CAPABILITIES,
         },
       ],
     };
@@ -722,7 +776,10 @@ export class KiroAdapter extends BaseBackendAdapter {
             }
           }
 
-          const imageBlocks = await collectImageContentBlocks(prompt, cwd);
+          const explicitImageBlocks = Array.isArray(options.attachments)
+            ? await collectExplicitImageContentBlocks(options.attachments)
+            : null;
+          const imageBlocks = explicitImageBlocks || await collectImageContentBlocks(prompt, cwd);
           const promptArray: Array<Record<string, unknown>> = [
             { type: 'text', text: prompt },
             ...imageBlocks,

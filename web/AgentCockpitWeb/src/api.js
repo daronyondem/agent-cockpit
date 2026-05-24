@@ -978,6 +978,14 @@
       }
       return data;
     }),
+    getOpenCodeDraftProfileMetadata: (profile) => chatFetch(
+      'cli-profiles/opencode/draft/metadata',
+      { method: 'POST', body: { profile } },
+    ).then(r => r.json()).then(data => data && data.backend ? data.backend : null),
+    testOpenCodeDraftProfile: (profile) => chatFetch(
+      'cli-profiles/opencode/draft/test',
+      { method: 'POST', body: { profile } },
+    ).then(r => r.json()),
     startCliProfileAuth: (profileId) => chatFetch(
       'cli-profiles/' + encodeURIComponent(profileId) + '/auth/start',
       { method: 'POST', body: {} },

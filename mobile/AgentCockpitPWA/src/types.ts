@@ -73,6 +73,10 @@ export type CliProfile = {
   id: string;
   name: string;
   vendor: string;
+  protocol?: string;
+  opencode?: {
+    provider?: string;
+  };
   disabled?: boolean;
 };
 
@@ -81,6 +85,18 @@ export type ModelOption = {
   label: string;
   default?: boolean;
   supportedEffortLevels?: EffortLevel[];
+  capabilities?: ModelCapabilities;
+};
+
+export type ModelInputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
+export type ModelOutputModality = 'text' | 'image' | 'audio' | 'pdf' | 'video';
+
+export type ModelCapabilities = {
+  input?: Partial<Record<ModelInputModality, boolean>>;
+  output?: Partial<Record<ModelOutputModality, boolean>>;
+  attachment?: boolean;
+  toolcall?: boolean;
+  reasoning?: boolean;
 };
 
 export type InputResponse = ConversationInputResponse;

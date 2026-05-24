@@ -137,6 +137,7 @@ export async function convertImageToMarkdown(
     workingDir,
     allowTools: true,
     cliProfile: opts.cliProfile,
+    attachments: [{ path: imagePath, kind: 'image', name: basename }],
   };
 
   let lastError: unknown = null;

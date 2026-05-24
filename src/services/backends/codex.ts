@@ -8,6 +8,7 @@ import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUti
 import { logger } from '../../utils/logger';
 import type {
   BackendMetadata,
+  ModelCapabilities,
   ModelOption,
   McpServerConfig,
   SendMessageOptions,
@@ -40,6 +41,10 @@ const CODEX_SUPPORTED_EFFORTS: EffortLevel[] = ['none', 'minimal', 'low', 'mediu
 const CODEX_FALLBACK_EFFORTS: EffortLevel[] = ['low', 'medium', 'high', 'xhigh'];
 const CODEX_APP_SERVER_ARGS = ['app-server', '--enable', 'goals'];
 const CODEX_CLIENT_CAPABILITIES = { experimentalApi: true };
+const CODEX_MODEL_CAPABILITIES: ModelCapabilities = {
+  input: { text: true, image: true },
+  output: { text: true },
+};
 const CODEX_FAST_SERVICE_TIER_ARGS = ['-c', 'service_tier="fast"', '-c', 'features.fast_mode=true'];
 const codexLog = logger.child({ module: 'codex-backend' });
 const CODEX_GOAL_SUPPORTED_ACTIONS = { clear: true, stopTurn: true, pause: true, resume: true };
@@ -205,6 +210,7 @@ const FALLBACK_MODELS: ModelOption[] = [
     costTier: 'high',
     default: true,
     supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
+    capabilities: CODEX_MODEL_CAPABILITIES,
   },
   {
     id: 'gpt-5.5-codex',
@@ -213,6 +219,7 @@ const FALLBACK_MODELS: ModelOption[] = [
     description: 'Codex-tuned variant — optimized for agentic coding tasks',
     costTier: 'high',
     supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
+    capabilities: CODEX_MODEL_CAPABILITIES,
   },
   {
     id: 'gpt-5.5-mini',
@@ -221,6 +228,7 @@ const FALLBACK_MODELS: ModelOption[] = [
     description: 'Smaller and faster — good for simple tasks',
     costTier: 'low',
     supportedEffortLevels: CODEX_FALLBACK_EFFORTS,
+    capabilities: CODEX_MODEL_CAPABILITIES,
   },
 ];
 
@@ -867,6 +875,7 @@ export function normalizeCodexModelOption(m: CodexModelListEntry): ModelOption |
     costTier: 'medium',
     default: m.isDefault || m.is_default || false,
     ...(supportedEffortLevels ? { supportedEffortLevels } : {}),
+    capabilities: CODEX_MODEL_CAPABILITIES,
   };
 }
 
@@ -1140,6 +1149,9 @@ export class CodexAdapter extends BaseBackendAdapter {
         toolActivity: true,
         userQuestions: true,
         stdinInput: true,
+        oneShotMediaInput: {
+          image: ['native-file-tool'],
+        },
         goals: {
           set: true,
           clear: true,
