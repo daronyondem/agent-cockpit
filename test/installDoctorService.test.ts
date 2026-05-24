@@ -276,7 +276,7 @@ describe('InstallDoctorService', () => {
         output: expect.stringContaining('Updated ecosystem.config.js PATH.'),
       }));
       expect(process.env.PATH).toBe(`${libreOfficeDir}:/usr/bin:/bin`);
-      expect(fs.readFileSync(path.join(root, '.env'), 'utf8')).toContain(`PATH="${libreOfficeDir}:/usr/bin:/bin"`);
+      expect(fs.readFileSync(path.join(root, '.env'), 'utf8')).toContain(`PATH=${JSON.stringify(`${libreOfficeDir}:/usr/bin:/bin`)}`);
       const ecosystemSource = fs.readFileSync(path.join(root, 'ecosystem.config.js'), 'utf8');
       expect(ecosystemSource).toContain(JSON.stringify(`${libreOfficeDir}:/usr/bin:/bin`));
       expect(result.doctor?.checks.find(item => item.id === 'libreoffice')).toEqual(expect.objectContaining({ status: 'ok' }));
