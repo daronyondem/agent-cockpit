@@ -35,12 +35,24 @@ function makeInstallState(root: string, overrides: Record<string, unknown> = {})
 }
 
 const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+const originalGetuidDescriptor = Object.getOwnPropertyDescriptor(process, 'getuid');
 
 function mockProcessPlatform(platform: NodeJS.Platform): () => void {
   Object.defineProperty(process, 'platform', { value: platform });
   return () => {
     if (originalPlatformDescriptor) {
       Object.defineProperty(process, 'platform', originalPlatformDescriptor);
+    }
+  };
+}
+
+function mockProcessGetuid(uid: number): () => void {
+  Object.defineProperty(process, 'getuid', { value: () => uid, configurable: true });
+  return () => {
+    if (originalGetuidDescriptor) {
+      Object.defineProperty(process, 'getuid', originalGetuidDescriptor);
+    } else {
+      delete (process as NodeJS.Process & { getuid?: () => number }).getuid;
     }
   };
 }
@@ -380,6 +392,7 @@ describe('InstallDoctorService', () => {
 
   test('reports macOS LaunchAgent startup remediation', async () => {
     const restorePlatform = mockProcessPlatform('darwin');
+    const restoreGetuid = mockProcessGetuid(501);
     const root = makeRoot();
     roots.push(root);
     const commands: Array<{ command: string; args: string[] }> = [];
@@ -414,6 +427,7 @@ describe('InstallDoctorService', () => {
         }),
       ]));
     } finally {
+      restoreGetuid();
       restorePlatform();
     }
   });

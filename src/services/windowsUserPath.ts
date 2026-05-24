@@ -1,5 +1,4 @@
 import { execFile } from 'child_process';
-import path from 'path';
 import { promisify } from 'util';
 
 const execFileAsync = promisify(execFile);
@@ -61,7 +60,7 @@ if ($newPath -ne $current) {
 
 export function prependProcessPathEntry(dir: string, env: NodeJS.ProcessEnv = process.env): void {
   if (!dir) return;
-  const delimiter = process.platform === 'win32' ? ';' : path.delimiter;
+  const delimiter = runtimePathDelimiter();
   const parts = currentPathValue(env).split(delimiter).filter(Boolean);
   const key = pathPartKey(dir);
   env.PATH = [dir, ...parts.filter(part => pathPartKey(part) !== key)].join(delimiter);
@@ -114,6 +113,10 @@ function currentPathValue(env: NodeJS.ProcessEnv): string {
 
 function pathPartKey(value: string): string {
   return value.trim().replace(/[\\/]+$/, '').toLowerCase();
+}
+
+function runtimePathDelimiter(): string {
+  return process.platform === 'win32' ? ';' : ':';
 }
 
 function powershellSingleQuotedString(value: string): string {

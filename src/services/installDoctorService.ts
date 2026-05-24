@@ -654,15 +654,19 @@ function commandOutput(result: CommandResult): string {
 function pathIncludesDir(dir: string): boolean {
   const key = pathPartKey(dir);
   return (process.env.PATH || '')
-    .split(process.platform === 'win32' ? ';' : path.delimiter)
+    .split(runtimePathDelimiter())
     .some(part => pathPartKey(part) === key);
 }
 
 function prependPathValue(current: string, dir: string): string {
-  const delimiter = process.platform === 'win32' ? ';' : path.delimiter;
+  const delimiter = runtimePathDelimiter();
   const key = pathPartKey(dir);
   const parts = current.split(delimiter).filter(Boolean);
   return [dir, ...parts.filter(part => pathPartKey(part) !== key)].join(delimiter);
+}
+
+function runtimePathDelimiter(): string {
+  return process.platform === 'win32' ? ';' : ':';
 }
 
 function pathPartKey(value: string): string {
