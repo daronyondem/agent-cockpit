@@ -1,6 +1,7 @@
 import type { AgentCockpitAPI } from './api';
 import type {
   AttachmentMeta,
+  BackendMetadata,
   Conversation,
   ConversationArtifact,
   ConversationListItem,
@@ -18,8 +19,30 @@ import type {
 } from './types';
 
 export const ALL_WORKSPACES = 'all';
+export const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
+export const CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48;
 
 const effortOrder: EffortLevel[] = ['none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+
+type GoalCapabilityMetadata = NonNullable<NonNullable<BackendMetadata['capabilities']>['goals']>;
+
+export type GoalCapability = {
+  set: boolean;
+  clear: boolean;
+  pause: boolean;
+  resume: boolean;
+  status: 'native' | 'transcript' | 'none';
+};
+
+export type CliProfileSummary = {
+  id: string;
+  name: string;
+  vendor: string;
+  protocol?: string;
+  opencode?: {
+    provider?: string;
+  };
+};
 
 export type ExplorerUpload = {
   id: string;
@@ -50,6 +73,81 @@ export type FilePreviewState = {
   truncated?: boolean;
   error?: string;
 };
+
+export function workspaceRef(
+  conversation: Pick<Conversation, 'workspaceId' | 'workspaceHash'> | Pick<ConversationListItem, 'workspaceId' | 'workspaceHash'>,
+): string {
+  return conversation.workspaceId || conversation.workspaceHash;
+}
+
+export function isChatScrolledToEnd(element: Pick<HTMLElement, 'scrollHeight' | 'clientHeight' | 'scrollTop'>): boolean {
+  return element.scrollHeight - element.clientHeight - element.scrollTop <= CHAT_SCROLL_BOTTOM_THRESHOLD_PX;
+}
+
+export function backendIdForProfile(profile?: { vendor: string; protocol?: string } | null): string | undefined {
+  if (!profile) return undefined;
+  if (profile.vendor === 'claude-code' && profile.protocol === 'interactive') return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+  return profile.vendor;
+}
+
+const OPENCODE_PROVIDER_LABELS: Record<string, string> = {
+  deepseek: 'DeepSeek',
+  opencode: 'OpenCode',
+  openrouter: 'OpenRouter',
+  groq: 'Groq',
+};
+
+export function opencodeProviderLabel(provider?: string | null): string | null {
+  const id = String(provider || '').trim().toLowerCase();
+  if (!id) return null;
+  if (OPENCODE_PROVIDER_LABELS[id]) return OPENCODE_PROVIDER_LABELS[id];
+  return id
+    .split(/[-_\s]+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(' ');
+}
+
+export function profileForID(profiles: CliProfileSummary[] | undefined, profileID?: string | null): CliProfileSummary | null {
+  if (!profileID) return null;
+  return profiles?.find((profile) => profile.id === profileID) || null;
+}
+
+export function isClaudeBackend(backendID?: string | null): boolean {
+  return backendID === 'claude-code' || backendID === CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+}
+
+export function normalizeGoalCapability(capability: GoalCapabilityMetadata | undefined, backendID?: string): GoalCapability {
+  if (capability === true) {
+    return { set: true, clear: true, pause: true, resume: true, status: 'native' };
+  }
+  if (capability && typeof capability === 'object') {
+    return {
+      set: capability.set === true,
+      clear: capability.clear === true,
+      pause: capability.pause === true,
+      resume: capability.resume === true,
+      status: capability.status || 'none',
+    };
+  }
+  if (backendID === 'codex') return { set: true, clear: true, pause: true, resume: true, status: 'native' };
+  if (isClaudeBackend(backendID)) return { set: true, clear: true, pause: false, resume: false, status: 'transcript' };
+  return { set: false, clear: false, pause: false, resume: false, status: 'none' };
+}
+
+export function goalCapabilityForBackend(
+  backends: BackendMetadata[],
+  backendID?: string | null,
+  metadata?: BackendMetadata,
+): GoalCapability {
+  const backend = metadata || (backends || []).find((item) => item.id === backendID);
+  return normalizeGoalCapability(backend?.capabilities?.goals, backendID || backend?.id);
+}
+
+export function goalActionUnsupportedMessage(action: 'pause' | 'resume' | 'clear', backendID?: string | null): string {
+  const backendName = isClaudeBackend(backendID) ? 'Claude Code' : backendID === 'codex' ? 'Codex' : 'this backend';
+  return `Goal ${action} is not supported by ${backendName}.`;
+}
 
 export function parseMessageFiles(content: string): { text: string; uploadedPaths: string[]; deliveredPaths: string[] } {
   const deliveredPaths: string[] = [];
@@ -279,6 +377,27 @@ export function removeMessagesByID(messages: Message[], ids: string[]): Message[
   if (!ids.length) return messages;
   const blocked = new Set(ids);
   return messages.filter((message) => !blocked.has(message.id));
+}
+
+function messageWithPinned(message: Message, pinned: boolean): Message {
+  const next: Message = { ...message };
+  if (pinned) next.pinned = true;
+  else delete next.pinned;
+  return next;
+}
+
+export function patchConversationMessage(
+  conversation: Conversation,
+  messageID: string,
+  pinned: boolean,
+  replacement?: Message,
+): Conversation {
+  return {
+    ...conversation,
+    messages: conversation.messages.map((message) =>
+      message.id === messageID ? (replacement || messageWithPinned(message, pinned)) : message,
+    ),
+  };
 }
 
 export function userLabel(user: CurrentUser | null): string {

@@ -34,12 +34,28 @@ See [ADR-0025](adr/0025-use-mobile-pwa-as-sole-mobile-client.md).
 - `index.html` — PWA HTML shell with viewport-safe mobile metadata, `theme-color`, `apple-mobile-web-app-capable`, manifest link, SVG/PNG favicon links, explicit `apple-touch-icon`, design-font preconnects/stylesheets for General Sans, Instrument Serif, and JetBrains Mono, and root mount.
 - `public/manifest.webmanifest`, `public/icon.svg`, `public/icon-192.png`, `public/icon-512.png`, and `public/apple-touch-icon.png` — tracked source install metadata and icons copied into `public/mobile-built/` during build. iOS home-screen installs use the 180x180 PNG `apple-touch-icon`; the manifest also lists PNG icons because Safari is not reliable with SVG-only PWA icons.
 - `src/main.tsx` — React entrypoint.
-- `src/App.tsx` — mobile UI shell and state machine. It renders conversation list, chat transcript, composer, backend-neutral goal controls, queue stack/editor, run settings, conversation actions, sessions, workspace files, file preview/share, attachment tray, interaction cards, and stream controls.
-- `src/appModel.ts` — browser-only mobile app model helpers for file-delivery marker parsing, typed file preview references, reset-session list reconciliation, conversation-list projection, queue wire content, attachment filtering, backend-neutral goal timestamp/elapsed/status/action projection, accidental goal-card objective cleanup, workspace path formatting, and shared formatters. These helpers are covered separately so the main UI shell can stay focused on state orchestration.
+- `src/App.tsx` — mobile UI shell and state machine. It owns API orchestration, stream lifecycle, conversation/session/file state, modal visibility, and event handlers, then composes focused screen modules instead of declaring large render surfaces inline.
+- `src/mobileComponents.tsx` — stable re-export boundary for the mobile screens and modals consumed by `App.tsx`.
+- `src/mobileConversationListScreen.tsx` — conversation-list rendering, workspace filtering controls, live/goal row state, and conversation-card presentation.
+- `src/mobileChatScreen.tsx` — chat transcript rendering, composer shell, backend-neutral goal strip/event cards, assistant identity projection, message Markdown/file-card rendering, queue stack, usage meter, attachment tray, and interaction card.
+- `src/mobileModals.tsx` — stable re-export boundary for modal and secondary-screen modules.
+- `src/mobileConversationModals.tsx` — New Conversation/folder picker, conversation actions, Markdown sharing, and run settings sheets.
+- `src/mobileSessionScreens.tsx` — session list and read-only session viewer surfaces.
+- `src/mobileFileModals.tsx` — workspace files, file preview, and queue editor sheets.
+- `src/mobileIcons.tsx` and `src/mobilePrimitives.tsx` — shared mobile SVG icons and small UI primitives used by the screen modules. Deterministic projection/normalization helpers live in `appModel.ts`, and repeated lifecycle listener wiring lives in hooks.
+- `src/appModel.ts` — browser-only mobile app model helpers for file-delivery marker parsing, typed file preview references, reset-session list reconciliation, conversation-list projection, queue wire content, attachment filtering, backend/profile identity normalization, backend-neutral goal capability/timestamp/elapsed/status/action projection, accidental goal-card objective cleanup, workspace identity/path formatting, transcript pin patching, transcript scroll threshold checks, and shared formatters. These helpers are covered separately so the main UI shell can stay focused on state orchestration.
+- `src/useMobileLifecycle.ts` — small lifecycle hooks for mobile app-level event wiring. `useVisibleStreamResume()` owns focus/online/visibility listeners that ask the active stream to reconnect when the page becomes visible again. `useVisibleIntervalRefresh()` owns the list screen's focus/visibility/interval refresh loop while keeping the latest refresh callback in a ref.
 - `src/useViewportHeightVar.ts` — visual-viewport hook that owns the iOS Safari app-shell sizing variables (`--app-height`, `--app-width`, `--app-top`, and `--app-left`) and document scroll reset behavior.
 - `src/api.ts` — same-origin TypeScript API client for current-user, settings, backends, profile metadata, conversations, local directory browsing, message pinning, streams, backend-neutral goal fetch/set/resume/pause/clear, returned goal-event transcript messages, queue, sessions, attachments/OCR, workspace location reads/remaps, workspace and conversation-scoped file delivery, workspace explorer, and WebSocket URLs. Conversation create, message-pin, message send, stdin input, and explorer mutation bodies use type-only imports from browser-safe `src/contracts/*` files so mobile request shapes compile against the same contract types as the server. State-changing requests lazily fetch CSRF tokens and send `x-csrf-token`. Multipart uploads use `XMLHttpRequest` for progress and cancel.
 - `src/types.ts` — TypeScript mirrors for the PWA data models. Mobile imports the browser-safe `BrowserStreamFrame` and `StreamErrorSource` contracts from `src/contracts/streamFrames.ts` for WebSocket frames, while continuing to mirror local UI-only state shapes in the PWA package. The shared contract covers text/thinking/tool/artifact/assistant/title/usage/error/done/replay frames, goal frames, and live-only Memory, Memory Review, Workspace Context, and KB update frames. See [ADR-0077](adr/0077-keep-browser-stream-frames-in-a-shared-contract-and-reducer.md).
-- `src/styles.css` — mobile-first CSS for the PWA shell.
+- `src/styles.css` — mobile CSS aggregator. It imports the focused
+  `src/styles/mobile/*.css` modules in cascade order.
+- `src/styles/mobile/` — mobile-first CSS modules split by ownership: base
+  viewport/reset styles, conversation list, shared controls, modal shell,
+  conversation/settings modals, sessions, files, late list/navigation/composer/
+  action/file/status refinements, and responsive breakpoints. Chat transcript
+  CSS is further split under `src/styles/mobile/chat/` into layout, message,
+  goal-event, content, Markdown, and thinking-panel modules.
 
 **Served files:** `public/mobile-built/`
 

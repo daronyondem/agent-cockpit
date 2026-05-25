@@ -1,0 +1,96 @@
+.files-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+  margin: 0 -4px;
+  overflow-x: auto;
+  padding: 4px 4px 8px;
+  scrollbar-width: none;
+}
+
+.files-toolbar::-webkit-scrollbar {
+  display: none;
+}
+
+.ftb {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-1);
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 7px;
+  min-height: 34px;
+  padding: 7px 10px;
+  white-space: nowrap;
+}
+
+.ftb.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ftb.danger {
+  background: var(--red-bg);
+  border-color: rgba(229, 72, 77, 0.35);
+  color: var(--status-error);
+}
+
+.ftb.muted,
+.ftb:disabled {
+  color: var(--text-4);
+  opacity: 0.68;
+}
+
+.files-modal .file-entry {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 10px 12px;
+}
+
+.file-entry-main {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+}
+
+.file-entry-actions {
+  align-items: center;
+  display: flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
+
+.file-entry-action {
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+  width: 30px;
+}
+
+.file-entry-action.danger {
+  background: var(--red-bg);
+  border-color: rgba(229, 72, 77, 0.28);
+  color: var(--red);
+}

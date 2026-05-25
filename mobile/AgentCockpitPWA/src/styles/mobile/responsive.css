@@ -1,0 +1,57 @@
+@media (max-width: 420px) {
+  .topbar {
+    padding-left: 18px;
+    padding-right: 18px;
+  }
+
+  .toolbar {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .conversation-list {
+    padding-left: 14px;
+    padding-right: 14px;
+  }
+
+  .chat-topbar {
+    gap: 6px;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
+  .chat-topbar .btn,
+  .composer .btn {
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  .composer {
+    gap: 0;
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+}
+
+@media (min-width: 760px) and (hover: hover) and (pointer: fine) {
+  .app-shell {
+    left: 50%;
+    max-width: 860px;
+    transform: translateX(-50%);
+    width: min(var(--app-width, 100vw), 860px);
+  }
+
+  .chat-screen {
+    border-left: 1px solid var(--border);
+    border-right: 1px solid var(--border);
+  }
+
+  .modal-backdrop {
+    align-items: center;
+  }
+
+  .modal {
+    border-radius: 24px;
+    max-height: 88vh;
+  }
+}

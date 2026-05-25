@@ -1,0 +1,77 @@
+/* ============================================================
+   Tweaks panel
+   ============================================================ */
+.tweaks{
+  position: fixed; bottom: 20px; right: 20px;
+  width: 260px;
+  background: #13151B;
+  color: #E6E9EF;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 14px;
+  box-shadow: 0 30px 60px -20px rgba(0,0,0,.55);
+  padding: 12px 14px;
+  font-family: "General Sans", system-ui, sans-serif;
+  font-size: 12px;
+  z-index: 100;
+}
+.tweaks h4{
+  font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+  color: #95A0B0;
+  margin: 0 0 10px;
+}
+.tweaks .row{
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid rgba(255,255,255,.06);
+}
+.tweaks .row:first-of-type{ border-top: 0; }
+.tweaks .row label{ color: #CFD5DF; font-weight: 500; }
+.tweaks .opts{ display: inline-flex; background: rgba(255,255,255,.05); border-radius: 6px; padding: 2px; gap: 2px; }
+.tweaks .opts button{
+  appearance: none; border: 0; background: transparent;
+  color: #AAB2BE; font: inherit; font-size: 11px;
+  padding: 4px 8px; border-radius: 4px; cursor: pointer;
+}
+.tweaks .opts button[aria-pressed="true"]{
+  background: #02A6F5; color: #fff;
+}
+
+/* utility */
+.u-mono{ font-family: var(--mono-font); }
+.u-dim{ color: var(--text-3); }
+.u-accent{ color: var(--accent); }
+.u-ok{ color: var(--status-done); }
+.u-warn{ color: var(--status-awaiting); }
+.u-err{ color: var(--status-error); }
+
+
+/* ============================================================
+   Appended: round-2 screens & shared bits
+   ============================================================ */
+
+.iconbtn-lg{
+  width: 26px; height: 26px; border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 0; background: transparent; color: var(--text-3); cursor: pointer;
+}
+.iconbtn-lg:hover{ background: var(--surface); color: var(--text); }
+
+/* ---------- Empty state ---------- */
+.empty-wrap{ max-width: 720px; padding: 0 28px; text-align: left; }
+.empty-mark{ color: var(--accent); margin-bottom: 16px; opacity: .9; }
+.empty-eyebrow{
+  font-size: 11px; letter-spacing: .18em; text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 10px;
+}
+.empty-title{
+  font-family: var(--prose-font);
+  font-size: 46px; letter-spacing: -.015em; font-weight: 500;
+  margin: 0 0 12px; line-height: 1.1; color: var(--text);
+}
+.empty-sub{
+  font-size: 14.5px; line-height: 1.6;
+  color: var(--text-2); max-width: 560px;
+  margin: 0 0 22px;
+}
+.empty-sub b{ color: var(--text); font-weight: 600; }

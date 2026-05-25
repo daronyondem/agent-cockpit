@@ -1,0 +1,351 @@
+.sessions-list {
+  gap: 10px;
+}
+
+.session-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px 14px;
+  position: relative;
+}
+
+.session-card.active {
+  border-left: 2px solid var(--accent);
+}
+
+.session-card-top {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  min-width: 0;
+}
+
+.session-index {
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.session-card.active .session-index {
+  color: var(--accent-ink);
+}
+
+.session-when {
+  color: var(--text-3);
+  flex: 0 0 auto;
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
+.session-card h3 {
+  color: var(--text);
+  font-family: var(--prose-font);
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.2;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-card p {
+  color: var(--text-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-card-foot {
+  align-items: center;
+  border-top: 1px dashed var(--border);
+  color: var(--text-3);
+  display: flex;
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+  gap: 10px;
+  margin-top: 4px;
+  min-width: 0;
+  padding-top: 8px;
+}
+
+.session-stat.live {
+  color: var(--status-running);
+  font-weight: 700;
+}
+
+.session-card-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.session-action {
+  appearance: none;
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 1;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  gap: 6px;
+  justify-content: center;
+  min-height: 36px;
+  padding: 8px 10px;
+}
+
+.session-action.view {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+
+.session-action.share {
+  background: rgba(2, 166, 245, 0.06);
+  border-color: rgba(2, 166, 245, 0.22);
+  color: var(--accent-ink);
+}
+
+.session-action svg {
+  flex: 0 0 auto;
+}
+
+.session-viewer-screen {
+  inset: 0;
+  position: absolute;
+  z-index: 25;
+}
+
+.session-viewer-nav {
+  align-items: center;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  flex: 0 0 auto;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: calc(10px + env(safe-area-inset-top)) 16px 12px;
+}
+
+.session-back,
+.session-share-icon {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: var(--shadow-1);
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 700;
+  gap: 5px;
+  height: 34px;
+  justify-content: center;
+  padding: 0 10px;
+}
+
+.session-share-icon {
+  width: 34px;
+}
+
+.session-viewer-title {
+  min-width: 0;
+  text-align: center;
+}
+
+.session-viewer-title h1 {
+  color: var(--text);
+  font-family: var(--prose-font);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.15;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-viewer-title p {
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 10.5px;
+  line-height: 1.4;
+  margin: 2px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-viewer-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+.session-feed {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  min-height: 0;
+  padding: 16px 18px 14px;
+}
+
+.session-turn-marker {
+  align-items: center;
+  color: var(--text-3);
+  display: flex;
+  font-family: var(--mono-font);
+  font-size: 10px;
+  font-weight: 600;
+  gap: 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.session-turn-marker .line {
+  background: var(--border);
+  flex: 1;
+  height: 1px;
+}
+
+.session-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.session-message.pinned {
+  box-shadow: -2px 0 0 var(--accent);
+  padding-left: 10px;
+}
+
+.session-message-heading {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.session-message-author {
+  align-items: center;
+  color: var(--text-3);
+  display: inline-flex;
+  flex: 1;
+  font-family: var(--mono-font);
+  font-size: 10px;
+  font-weight: 600;
+  gap: 7px;
+  letter-spacing: 0.14em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.session-message-author > strong,
+.session-message-author .assistant-avatar {
+  flex: 0 0 auto;
+}
+
+.session-avatar {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 5px;
+  color: #fff;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-family: var(--ui-font);
+  font-size: 10px;
+  font-weight: 700;
+  height: 16px;
+  justify-content: center;
+  letter-spacing: 0;
+  text-transform: none;
+  width: 16px;
+}
+
+.session-avatar.user {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+
+.session-avatar.goal {
+  background: var(--status-running);
+  color: #fff;
+}
+
+.session-user-message {
+  align-self: stretch;
+  background: var(--accent-soft);
+  border: 1px solid rgba(2, 166, 245, 0.22);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 14.5px;
+  line-height: 1.5;
+  padding: 10px 14px;
+}
+
+.session-message p,
+.session-user-message p {
+  margin: 0;
+}
+
+.session-message-body {
+  min-width: 0;
+}
+
+.session-user-message .message-content,
+.session-message-body .message-content {
+  gap: 8px;
+}
+
+.session-viewer-meter {
+  flex: 0 0 auto;
+}
+
+.session-readonly-bar {
+  background: var(--bg-sunk);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+  padding: 14px 14px calc(16px + env(safe-area-inset-bottom));
+}
+
+.session-readonly-bar > div {
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-3);
+  display: flex;
+  font-family: var(--mono-font);
+  font-size: 11px;
+  gap: 10px;
+  justify-content: center;
+  padding: 8px 12px;
+}

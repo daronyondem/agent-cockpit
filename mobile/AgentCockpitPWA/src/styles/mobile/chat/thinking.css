@@ -1,0 +1,12 @@
+.thinking {
+  border: 1px dashed var(--border-strong);
+  border-radius: 7px;
+  box-sizing: border-box;
+  color: var(--text-3);
+  display: block;
+  font-family: var(--mono-font);
+  font-size: 12px;
+  margin-top: 6px;
+  padding: 6px 10px;
+  width: 100%;
+}

@@ -1,0 +1,290 @@
+/* ============================================================
+   Reset-session progress bubble — shown at the foot of the feed
+   while StreamStore.reset is in flight. Three staggered dots plus
+   the label "Archiving session…".
+   ============================================================ */
+.reset-progress{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 2px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.processing-indicator{
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 2px;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.typing-dots{
+  display: inline-flex;
+  gap: 4px;
+}
+.typing-dot{
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing-dot:nth-child(2){ animation-delay: 0.2s; }
+.typing-dot:nth-child(3){ animation-delay: 0.4s; }
+@keyframes typing-bounce{
+  0%, 60%, 100% { opacity: 0.35; transform: scale(0.85); }
+  30%           { opacity: 1;    transform: scale(1); }
+}
+
+/* ============================================================
+   Server-restart overlay (Settings → Server tab). Full-viewport
+   scrim shown while pm2 cycles the process; the page reloads
+   itself after a fixed delay. Sits above dialogs/toasts so it
+   can't be dismissed or covered.
+   ============================================================ */
+.restart-overlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 2100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+}
+.restart-overlay .restart-dialog{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px 40px;
+  text-align: center;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  max-width: 360px;
+}
+.restart-overlay .restart-title{
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.restart-overlay .restart-sub{
+  font-size: 13px;
+  color: var(--text-3);
+}
+
+/* ============================================================
+   Folder picker — scrim + centered panel for the sidebar's
+   "New conversation" action. Navigates directories via the global
+   GET /browse endpoint, creates/deletes folders via /mkdir and
+   /rmdir. Sits below the Dialog scrim (2000/2001) and above toasts
+   (1900) at z-index 1950.
+   ============================================================ */
+.fp-scrim{
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(2px);
+  z-index: 1950;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  animation: toast-in 150ms ease;
+}
+.fp-panel{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg, 12px);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.35);
+  width: 100%;
+  max-width: 560px;
+  display: flex;
+  flex-direction: column;
+  max-height: 80vh;
+  color: var(--text);
+}
+.fp-head{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+.fp-title{
+  font-size: 14px;
+  font-weight: 600;
+}
+.fp-close{
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  background: transparent;
+  border: 0;
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.fp-close:hover{ background: var(--surface-2); color: var(--text); }
+.fp-pathrow{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 18px 6px;
+}
+.fp-path{
+  flex: 1; min-width: 0;
+  font-family: var(--mono-font, ui-monospace, "JetBrains Mono", monospace);
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fp-err{ color: #dc2626; }
+.fp-pathactions{
+  display: inline-flex;
+  gap: 6px;
+}
+.fp-iconbtn{
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 24px; height: 24px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-3);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.fp-iconbtn:hover{ background: var(--surface-2); color: var(--text); }
+.fp-iconbtn:disabled{ opacity: .5; cursor: not-allowed; }
+.fp-iconbtn-danger:hover{ color: #dc2626; border-color: #dc2626; }
+.fp-toolbar{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 18px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.fp-toggle{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.fp-newinput{
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.fp-newinput input{
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--r-sm);
+  padding: 4px 8px;
+  font: inherit; font-size: 12px;
+  min-width: 180px;
+}
+.fp-newinput button{
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-2);
+  border-radius: var(--r-sm);
+  padding: 2px 8px;
+  cursor: pointer;
+}
+.fp-newinput button:hover{ background: var(--surface-2); color: var(--text); }
+.fp-list{
+  flex: 1;
+  min-height: 200px;
+  max-height: 48vh;
+  overflow: auto;
+  padding: 6px 10px;
+}
+.fp-item{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: var(--r-sm);
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text);
+}
+.fp-item:hover{ background: var(--surface-2); }
+.fp-parent{ color: var(--text-2); font-style: italic; }
+.fp-item-glyph{
+  display: inline-flex; align-items: center; justify-content: center;
+  color: var(--accent);
+}
+.fp-item-name{
+  flex: 1; min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.fp-empty{
+  padding: 18px 10px;
+  text-align: center;
+  font-size: 12px;
+}
+.fp-confirm-delete{
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--text);
+}
+.fp-confirm-actions{
+  display: inline-flex;
+  gap: 8px;
+}
+.fp-foot{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+}
+.fp-btn-ghost{
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 6px 12px;
+  border-radius: var(--r-sm);
+  font: inherit; font-size: 13px;
+  cursor: pointer;
+}
+.fp-btn-ghost:hover:not(:disabled){ background: var(--surface-2); }
+.fp-btn-ghost:disabled{ opacity: .5; cursor: not-allowed; }
+.fp-btn-primary{
+  background: var(--text);
+  border: 1px solid var(--text);
+  color: var(--bg);
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  font: inherit; font-size: 13px; font-weight: 500;
+  cursor: pointer;
+}
+.fp-btn-primary:hover:not(:disabled){ opacity: .9; }
+.fp-btn-primary:disabled{ opacity: .5; cursor: not-allowed; }
+.fp-btn-danger{
+  background: #dc2626;
+  border: 1px solid #dc2626;
+  color: #fff;
+  padding: 6px 14px;
+  border-radius: var(--r-sm);
+  font: inherit; font-size: 13px; font-weight: 500;
+  cursor: pointer;
+}
+.fp-btn-danger:hover:not(:disabled){ opacity: .9; }
+
+/* ============================================================
+   Mobile-only affordances (hamburger + sidebar overlay + backdrop)
+   Hidden on desktop; activated inside the @media block below.
+   ============================================================ */
+.sb-backdrop,
+.nav-hamb{ display: none; }

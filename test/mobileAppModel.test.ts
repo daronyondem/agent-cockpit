@@ -162,6 +162,36 @@ describe('mobile app model helpers', () => {
     });
   });
 
+  test('normalizes mobile backend profile and workspace identity helpers', () => {
+    const profiles = [
+      { id: 'codex-profile', name: 'Codex', vendor: 'codex' },
+      { id: 'claude-profile', name: 'Claude Interactive', vendor: 'claude-code', protocol: 'interactive' },
+      { id: 'open-profile', name: 'OpenCode', vendor: 'opencode', opencode: { provider: 'openrouter' } },
+    ];
+
+    expect(model.workspaceRef({ workspaceId: 'workspace-1', workspaceHash: 'legacy-hash' })).toBe('workspace-1');
+    expect(model.workspaceRef({ workspaceHash: 'legacy-hash' })).toBe('legacy-hash');
+    expect(model.backendIdForProfile(profiles[1])).toBe('claude-code-interactive');
+    expect(model.backendIdForProfile(profiles[0])).toBe('codex');
+    expect(model.profileForID(profiles, 'open-profile')).toBe(profiles[2]);
+    expect(model.profileForID(profiles, 'missing')).toBeNull();
+    expect(model.opencodeProviderLabel('openrouter')).toBe('OpenRouter');
+    expect(model.opencodeProviderLabel('custom-provider')).toBe('Custom Provider');
+  });
+
+  test('keeps mobile transcript pin patching and scroll threshold deterministic', () => {
+    const first = { id: 'm1', role: 'assistant', content: 'First', timestamp: '2026-05-01T00:00:00.000Z' };
+    const second = { id: 'm2', role: 'assistant', content: 'Second', pinned: true, timestamp: '2026-05-01T00:00:01.000Z' };
+    const conversation = { id: 'conv-1', messages: [first, second] };
+    const replacement = { ...first, content: 'Updated', pinned: true };
+
+    expect(model.patchConversationMessage(conversation, 'm1', true).messages[0]).toEqual({ ...first, pinned: true });
+    expect(model.patchConversationMessage(conversation, 'm2', false).messages[1]).toEqual(expect.not.objectContaining({ pinned: true }));
+    expect(model.patchConversationMessage(conversation, 'm1', true, replacement).messages[0]).toBe(replacement);
+    expect(model.isChatScrolledToEnd({ scrollHeight: 1000, clientHeight: 500, scrollTop: 452 })).toBe(true);
+    expect(model.isChatScrolledToEnd({ scrollHeight: 1000, clientHeight: 500, scrollTop: 451 })).toBe(false);
+  });
+
   test('normalizes Codex service tier when applying mobile runtime metadata', () => {
     const conversation = {
       backend: 'codex',
@@ -219,6 +249,31 @@ describe('mobile app model helpers', () => {
     expect(model.cleanGoalObjectiveText('Goal setcodexShip mobile goals')).toBe('Ship mobile goals');
     expect(model.cleanGoalObjectiveText('Codex should keep this prefix')).toBe('Codex should keep this prefix');
     expect(model.cleanGoalObjectiveText('Goal settings should stay intact')).toBe('Goal settings should stay intact');
+  });
+
+  test('normalizes mobile goal capability metadata by backend', () => {
+    expect(model.goalCapabilityForBackend([{ id: 'codex', capabilities: { goals: true } }], 'codex')).toEqual({
+      set: true,
+      clear: true,
+      pause: true,
+      resume: true,
+      status: 'native',
+    });
+    expect(model.goalCapabilityForBackend([], 'claude-code-interactive')).toEqual({
+      set: true,
+      clear: true,
+      pause: false,
+      resume: false,
+      status: 'transcript',
+    });
+    expect(model.goalCapabilityForBackend([{ id: 'custom', capabilities: { goals: { set: true, clear: false, status: 'native' } } }], 'custom')).toEqual({
+      set: true,
+      clear: false,
+      pause: false,
+      resume: false,
+      status: 'native',
+    });
+    expect(model.goalActionUnsupportedMessage('resume', 'claude-code')).toBe('Goal resume is not supported by Claude Code.');
   });
 
   test('rejects stale replayed goal snapshots', () => {

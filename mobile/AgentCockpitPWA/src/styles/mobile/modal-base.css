@@ -1,0 +1,69 @@
+.modal-backdrop {
+  align-items: end;
+  background: rgba(0, 0, 0, 0.32);
+  display: flex;
+  height: var(--app-height, 100dvh);
+  justify-content: center;
+  left: var(--app-left, 0px);
+  max-width: var(--app-width, 100vw);
+  padding-top: env(safe-area-inset-top);
+  position: fixed;
+  top: var(--app-top, 0px);
+  width: var(--app-width, 100vw);
+  z-index: 20;
+}
+
+.modal {
+  background: var(--bg);
+  border-radius: 24px 24px 0 0;
+  box-shadow: 0 -20px 50px -20px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: min(86vh, calc(var(--app-height, 100dvh) - env(safe-area-inset-top)));
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  padding: 16px 20px 24px;
+  position: relative;
+  width: min(720px, 100%);
+}
+
+.modal::before {
+  align-self: center;
+  background: rgba(132, 125, 114, 0.5);
+  border-radius: 999px;
+  content: "";
+  display: block;
+  height: 5px;
+  margin-bottom: 2px;
+  width: 38px;
+}
+
+.modal-full {
+  height: min(92vh, calc(var(--app-height, 100dvh) - env(safe-area-inset-top)));
+}
+
+.modal-header {
+  align-items: center;
+  display: flex;
+  gap: 10px;
+  justify-content: space-between;
+  min-width: 0;
+  width: 100%;
+}
+
+.modal-header > div {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.modal h2 {
+  font-family: var(--prose-font);
+  font-size: 24px;
+  font-weight: 500;
+  line-height: 1.1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

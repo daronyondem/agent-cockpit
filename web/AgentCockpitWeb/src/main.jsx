@@ -1,5 +1,6 @@
 import './tokens.css';
 import './app.css';
+import './styles/desktop.css';
 import './dialog.css';
 import './tooltip.css';
 import './stepper.css';

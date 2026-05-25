@@ -1,0 +1,147 @@
+/* KB Settings tab — nested section navigation */
+.kb-settings-pane{ overflow: hidden; }
+.kb-settings-layout{
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.kb-settings-rail{
+  flex: 0 0 230px;
+  min-height: 0;
+  padding: 14px 12px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-sunk);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.kb-settings-nav{
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.kb-settings-nav span{
+  font-size: 13px;
+  font-weight: 600;
+  color: inherit;
+}
+.kb-settings-nav small{
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.kb-settings-nav:hover{
+  color: var(--text);
+  background: var(--surface);
+}
+.kb-settings-nav.active{
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.kb-settings-content{
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+.kb-settings-section{
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.kb-settings-title{
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.kb-settings-desc{
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: 560px;
+}
+.kb-settings-desc a{ color: var(--accent); text-decoration: underline; }
+.kb-settings-form{
+  display: flex; flex-direction: column; gap: 12px;
+  max-width: 480px;
+  margin-top: 4px;
+}
+.kb-settings-field{
+  display: flex; flex-direction: column; gap: 4px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.kb-settings-field input,
+.kb-settings-field select{
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.kb-settings-field input:focus,
+.kb-settings-field select:focus{ border-color: var(--accent); }
+.kb-settings-time-row{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.kb-settings-info{
+  max-width: 560px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in oklch, var(--accent), transparent 70%);
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.kb-settings-list{
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.kb-settings-row{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+}
+.kb-settings-row strong{
+  display: block;
+  font-size: 13px;
+  color: var(--text);
+}
+.kb-settings-actions{
+  display: flex; align-items: center; gap: 10px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.kb-settings-health{
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+}
+.kb-settings-health.checking{ color: var(--text-2); }
+.kb-settings-health.ok{ color: var(--status-done); border-color: var(--status-done); }
+.kb-settings-health.err{ color: var(--status-error); border-color: var(--status-error); }

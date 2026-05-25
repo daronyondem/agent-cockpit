@@ -1,0 +1,121 @@
+:root {
+  color-scheme: light;
+  --brand-cyan: #02a6f5;
+  --bg: #faf8f4;
+  --bg-sunk: #f3efe8;
+  --surface: #ffffff;
+  --surface-2: #f7f3ec;
+  --surface-alt: #f7f3ec;
+  --border: rgba(30, 25, 18, 0.09);
+  --border-strong: rgba(30, 25, 18, 0.16);
+  --text: #1a1613;
+  --text-2: #4a453e;
+  --text-3: #847d72;
+  --text-4: #b2ab9f;
+  --muted: var(--text-3);
+  --accent: var(--brand-cyan);
+  --accent-dark: #0587c3;
+  --accent-ink: #0587c3;
+  --accent-soft: rgba(2, 166, 245, 0.1);
+  --red: #e5484d;
+  --red-bg: #fff0ed;
+  --green-bg: #e8f6ee;
+  --status-running: #02a6f5;
+  --status-awaiting: #e8a33d;
+  --status-done: #3fb27f;
+  --status-error: #e5484d;
+  --status-subagent: #8b72e0;
+  --shadow-1: 0 1px 0 rgba(30, 25, 18, 0.04), 0 1px 2px rgba(30, 25, 18, 0.04);
+  --shadow-2: 0 2px 6px rgba(30, 25, 18, 0.06), 0 10px 24px -12px rgba(30, 25, 18, 0.1);
+  --ui-font: "General Sans", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --prose-font: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --mono-font: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--ui-font);
+  background: var(--bg);
+  color: var(--text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  max-width: 100vw;
+  overflow: hidden;
+  overflow-x: clip;
+  width: 100%;
+}
+
+body {
+  background: var(--bg);
+  inset: 0;
+  margin: 0;
+  max-width: 100vw;
+  min-height: 100%;
+  overscroll-behavior: none;
+  position: fixed;
+  touch-action: pan-y;
+  width: 100vw;
+}
+
+#root {
+  inset: 0;
+  position: fixed;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+button {
+  touch-action: manipulation;
+}
+
+.app-shell,
+.screen {
+  max-height: var(--app-height, 100dvh);
+  min-height: 0;
+}
+
+.app-shell {
+  height: var(--app-height, 100dvh);
+  left: var(--app-left, 0px);
+  max-width: var(--app-width, 100vw);
+  overflow: hidden;
+  overflow-x: clip;
+  position: fixed;
+  top: var(--app-top, 0px);
+  width: var(--app-width, 100vw);
+}
+
+.screen {
+  background: var(--bg);
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  overflow-x: clip;
+  position: relative;
+  width: 100%;
+}
+
+.center,
+.loading-screen {
+  align-items: center;
+  color: var(--muted);
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  padding: 24px;
+}
+
+.loading-screen {
+  min-height: var(--app-height, 100dvh);
+}

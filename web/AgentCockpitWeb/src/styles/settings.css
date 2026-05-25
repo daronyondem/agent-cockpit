@@ -1,0 +1,7 @@
+@import './settings/legacyModal.css';
+@import './settings/shellForms.css';
+@import './settings/cli.css';
+@import './settings/migration.css';
+@import './settings/memoryStatus.css';
+@import './settings/usage.css';
+@import './settings/security.css';

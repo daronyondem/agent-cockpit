@@ -1,0 +1,136 @@
+.actions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.action {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  display: grid;
+  font-size: 14px;
+  font-weight: 500;
+  gap: 12px;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  min-height: 54px;
+  padding: 12px 14px;
+  text-align: left;
+  width: 100%;
+}
+
+.action .ic {
+  align-items: center;
+  background: var(--surface-2);
+  border-radius: 8px;
+  color: var(--text-2);
+  display: inline-flex;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+
+.action-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.action-copy strong {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.action-copy small {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.action .chev {
+  color: var(--text-3);
+}
+
+.action.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 10px 24px -18px rgba(2, 166, 245, 0.85);
+  color: #fff;
+}
+
+.action.primary .ic {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+}
+
+.action.primary .chev {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.action.danger {
+  background: var(--red-bg);
+  border-color: rgba(229, 72, 77, 0.35);
+  color: var(--status-error);
+}
+
+.action.danger .ic {
+  background: rgba(229, 72, 77, 0.1);
+  color: var(--status-error);
+}
+
+.action:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.sheet-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.sheet-action,
+.directory-actions .btn {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-1);
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 6px;
+  min-height: 34px;
+  padding: 7px 11px;
+  white-space: nowrap;
+}
+
+.sheet-action.primary,
+.directory-actions .btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.sheet-action.danger,
+.directory-actions .btn.danger {
+  background: var(--red-bg);
+  border-color: rgba(229, 72, 77, 0.35);
+  color: var(--status-error);
+}
+
+.sheet-action:disabled,
+.directory-actions .btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}

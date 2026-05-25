@@ -1,0 +1,59 @@
+/* ============================================================
+   Toast notifications — corner-anchored, non-blocking, auto-dismiss.
+   Complements the Dialog system for transient confirmations (save,
+   copy, reset) that don't need to block the user. z-index sits below
+   the Dialog scrim (2000) so dialogs always win focus.
+   ============================================================ */
+.toast-stack{
+  position: fixed;
+  bottom: 20px; right: 20px;
+  display: flex; flex-direction: column;
+  gap: 8px;
+  z-index: 1900;
+  pointer-events: none;
+}
+.toast{
+  pointer-events: auto;
+  min-width: 260px; max-width: 400px;
+  display: flex; align-items: flex-start; gap: 10px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--r-md);
+  box-shadow: 0 8px 24px rgba(0,0,0,.18);
+  animation: toast-in 200ms ease-out;
+}
+.toast-info    { border-left-color: var(--status-running); }
+.toast-success { border-left-color: var(--status-done); }
+.toast-warn    { border-left-color: var(--status-awaiting); }
+.toast-error   { border-left-color: var(--status-error); }
+.toast-body{
+  flex: 1; min-width: 0;
+  font-size: 13px;
+  color: var(--text);
+}
+.toast-title{ font-weight: 500; line-height: 1.3; }
+.toast-msg{
+  color: var(--text-2);
+  margin-top: 3px;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+.toast-close{
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; border: none;
+  color: var(--text-3); cursor: pointer;
+  font-size: 18px; line-height: 1;
+  border-radius: var(--r-sm);
+}
+.toast-close:hover{
+  background: var(--surface-2);
+  color: var(--text);
+}
+@keyframes toast-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}

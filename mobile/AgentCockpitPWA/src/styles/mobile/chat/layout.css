@@ -1,0 +1,233 @@
+.chat-screen {
+  height: 100%;
+  max-height: 100%;
+}
+
+.chat-topbar {
+  align-items: center;
+  display: grid;
+  gap: 10px;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  padding: calc(10px + env(safe-area-inset-top)) 16px 12px;
+}
+
+.chat-title {
+  min-width: 0;
+  text-align: center;
+}
+
+.chat-title h1 {
+  font-family: var(--prose-font);
+  font-size: 18px;
+  font-weight: 500;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-title p {
+  margin-top: 2px;
+}
+
+.pin-strip {
+  align-items: center;
+  background: rgba(255, 255, 255, 0.88);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--border);
+  display: grid;
+  flex: 0 0 auto;
+  gap: 8px;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 42px;
+  padding: 8px 12px;
+  width: 100%;
+  z-index: 2;
+}
+
+.pin-strip button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  min-width: 0;
+  padding: 0;
+}
+
+.pin-strip-label {
+  align-items: center;
+  color: var(--text-3);
+  display: inline-flex;
+  font-family: var(--mono-font);
+  font-size: 10px;
+  font-weight: 700;
+  gap: 5px;
+}
+
+.pin-strip-arrow {
+  align-items: center;
+  background: var(--accent);
+  border-radius: 3px;
+  color: #fff;
+  display: inline-flex;
+  font-size: 10px;
+  height: 15px;
+  justify-content: center;
+  line-height: 1;
+  width: 15px;
+}
+
+.pin-strip-count {
+  align-items: center;
+  background: var(--text);
+  border-radius: 999px;
+  color: var(--surface);
+  display: inline-flex;
+  font-size: 10px;
+  height: 16px;
+  justify-content: center;
+  min-width: 16px;
+  padding: 0 4px;
+}
+
+.pin-strip-item {
+  color: var(--text);
+  font-size: 12px;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pin-strip-source {
+  color: var(--text-3);
+  font-family: var(--mono-font);
+  font-size: 10px;
+  font-weight: 600;
+  margin-right: 6px;
+}
+
+.pin-strip-nav,
+.button-row,
+.modal-actions {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.directory-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.directory-display {
+  appearance: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  color: var(--text);
+  cursor: pointer;
+  font-family: var(--mono-font);
+  font-size: 12.5px;
+  line-height: 1.35;
+  min-height: 42px;
+  overflow-wrap: anywhere;
+  padding: 10px 11px;
+  text-align: left;
+  white-space: normal;
+  width: 100%;
+}
+
+.directory-display.empty {
+  color: var(--text-3);
+  font-family: var(--ui-font);
+}
+
+.directory-display:disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+
+.directory-actions {
+  align-items: center;
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.pin-strip-nav button {
+  align-items: center;
+  border-radius: 6px;
+  color: var(--text-3);
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  width: 24px;
+}
+
+.pin-strip-dots {
+  align-items: center;
+  display: inline-flex;
+  gap: 3px;
+  max-width: 44px;
+  overflow: hidden;
+}
+
+.pin-strip-dots i {
+  background: var(--text-4);
+  border-radius: 999px;
+  flex: 0 0 auto;
+  height: 4px;
+  width: 4px;
+}
+
+.pin-strip-dots i.active {
+  background: var(--text);
+}
+
+.transcript-wrap {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+.transcript {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 16px 18px 14px;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mobile-back-to-end {
+  align-items: center;
+  appearance: none;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  bottom: 14px;
+  box-shadow: var(--shadow-2);
+  color: var(--text);
+  display: inline-flex;
+  font-family: var(--ui-font);
+  font-size: 12px;
+  font-weight: 700;
+  gap: 7px;
+  min-height: 38px;
+  padding: 8px 12px;
+  position: absolute;
+  right: 16px;
+  z-index: 5;
+}
