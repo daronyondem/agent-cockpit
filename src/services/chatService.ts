@@ -26,8 +26,6 @@ import type {
   ConversationEntry,
   WorkspaceIndex,
   Conversation,
-  ConversationMessageWindow,
-  ConversationPinnedMessage,
   ConversationListItem,
   Settings,
   MemorySnapshot,
@@ -63,7 +61,6 @@ import type {
   WorktreeIsolationSettings,
 } from '../types';
 import {
-  openKbDatabase,
   normalizeFolderPath,
   KbDatabase,
 } from './knowledgeBase/db';
@@ -79,8 +76,20 @@ import {
   MessageQueueStore,
   normalizeMessageQueue,
 } from './chat/messageQueueStore';
+import { WorkspaceSessionStore } from './chat/workspaceSessionStore';
+import { ConversationLifecycleStore } from './chat/conversationLifecycleStore';
+import {
+  buildMessageWindow,
+  collectPinnedMessages,
+  ConversationMessageStore,
+  type ConversationMessagesWindowResult,
+  type MessageWindowOptions,
+} from './chat/conversationMessageStore';
+import { WorkspaceMemoryStore } from './chat/workspaceMemoryStore';
+import { WorkspaceKnowledgeStore } from './chat/workspaceKnowledgeStore';
 import { WorkspaceInstructionStore } from './chat/workspaceInstructionStore';
-import { UsageLedgerStore, addToUsage, emptyUsage } from './chat/usageLedgerStore';
+import { UsageLedgerStore, emptyUsage } from './chat/usageLedgerStore';
+import { ConversationUsageStore } from './chat/conversationUsageStore';
 import { applyCostEstimate } from './usagePricing/estimator';
 import { UsagePricingStore } from './usagePricing/store';
 import type { UsagePricingEntry, UsagePricingResponse } from './usagePricing/types';
@@ -131,10 +140,6 @@ const KB_STATE_VERSION = 1;
 const KB_ENTRY_SCHEMA_VERSION = 1;
 
 const DEFAULT_WORKSPACE_FALLBACK = '/tmp/default-workspace';
-
-function usagePricingTierForConversation(backendId: string, serviceTier?: ServiceTier): string | undefined {
-  return backendId === 'codex' && serviceTier === 'fast' ? 'priority' : undefined;
-}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === 'object' && !Array.isArray(value));
@@ -200,10 +205,6 @@ function memoryFileFingerprint(file: MemoryFile): string {
     redaction: metadata?.redaction || [],
   };
   return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 24);
-}
-
-function validMemoryReviewRunId(value: string): boolean {
-  return /^[A-Za-z0-9_-]+$/.test(value);
 }
 
 function normalizeMemorySource(value: unknown, fallback: MemorySource): MemorySource {
@@ -357,28 +358,6 @@ interface EditMessageResult {
   message: Message;
 }
 
-type MessageWindowMode = 'tail' | 'before' | 'around';
-
-interface MessageWindowOptions {
-  mode?: MessageWindowMode;
-  limit?: number;
-  beforeMessageId?: string;
-  aroundMessageId?: string;
-  beforeCount?: number;
-  afterCount?: number;
-}
-
-interface ConversationMessagesWindowResult {
-  messages: Message[];
-  messageWindow: ConversationMessageWindow;
-  pinnedMessages: ConversationPinnedMessage[];
-}
-
-const DEFAULT_MESSAGE_WINDOW_LIMIT = 160;
-const DEFAULT_AROUND_MESSAGE_BEFORE = 80;
-const DEFAULT_AROUND_MESSAGE_AFTER = 80;
-const MAX_MESSAGE_WINDOW_LIMIT = 500;
-
 interface ChatServiceOptions {
   defaultWorkspace?: string;
   backendRegistry?: BackendRegistry;
@@ -393,9 +372,14 @@ export class ChatService {
   usageLedgerFile: string;
   usagePricingOverridesFile: string;
   private _settingsService: SettingsService;
+  private _workspaceSessionStore: WorkspaceSessionStore;
+  private _conversationLifecycleStore: ConversationLifecycleStore;
+  private _conversationMessageStore: ConversationMessageStore;
+  private _workspaceMemoryStore: WorkspaceMemoryStore;
   private _messageQueueStore: MessageQueueStore;
   private _workspaceInstructionStore: WorkspaceInstructionStore;
   private _usageLedgerStore: UsageLedgerStore;
+  private _conversationUsageStore: ConversationUsageStore;
   private _usagePricingStore: UsagePricingStore;
   private _artifactStore: ArtifactStore;
   private _workspaceIdentityStore: WorkspaceIdentityStore;
@@ -406,14 +390,7 @@ export class ChatService {
   private _convWorkspaceMap: Map<string, string>;
   private _legacyConversationsDir: string;
   private _legacyArchivesDir: string;
-  /**
-   * Per-workspace KB database cache. Opened on first access (or during
-   * enqueueUpload), reused for the lifetime of the process. Closed via
-   * `closeKbDatabases()` on shutdown.
-   */
-  private _kbDbs: Map<string, KbDatabase> = new Map();
-  /** Per-workspace PGLite vector store cache. Mirrors `_kbDbs` lifecycle. */
-  private _kbVectorStores: Map<string, KbVectorStore> = new Map();
+  private _workspaceKnowledgeStore: WorkspaceKnowledgeStore;
   /**
    * Serializes read-modify-write cycles on a workspace `index.json`. All
    * public methods that mutate the index acquire this lock keyed by workspace
@@ -437,9 +414,50 @@ export class ChatService {
     this._defaultWorkspace = options.defaultWorkspace || DEFAULT_WORKSPACE_FALLBACK;
     this._backendRegistry = options.backendRegistry || null;
     this._convWorkspaceMap = new Map();
+    this._conversationUsageStore = new ConversationUsageStore({
+      convWorkspaceMap: this._convWorkspaceMap,
+      indexLock: this._indexLock,
+      getConvFromIndex: (convId) => this._getConvFromIndex(convId),
+      writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
+    });
     this._workspaceIdentityStore = new WorkspaceIdentityStore({
       registryPath: this.workspaceRegistryFile,
       workspacesDir: this.workspacesDir,
+    });
+    this._workspaceSessionStore = new WorkspaceSessionStore({
+      workspacesDir: this.workspacesDir,
+      convWorkspaceMap: this._convWorkspaceMap,
+      resolveWorkspaceId: (ref) => this._workspaceIdentityStore.resolveWorkspaceId(ref),
+      resolveWorkspaceStorageKey: (ref) => this._workspaceIdentityStore.resolveStorageKey(ref),
+      resolveWorkspace: (ref) => this._workspaceIdentityStore.resolve(ref),
+      log,
+    });
+    this._conversationLifecycleStore = new ConversationLifecycleStore({
+      workspacesDir: this.workspacesDir,
+      convWorkspaceMap: this._convWorkspaceMap,
+      indexLock: this._indexLock,
+      readWorkspaceIndex: (hash) => this._readWorkspaceIndex(hash),
+      writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
+      getConvFromIndex: (convId) => this._getConvFromIndex(convId),
+      resolveWorkspaceId: (ref) => this._workspaceIdentityStore.resolveWorkspaceId(ref),
+      workspaceLegacyHashForRef: (ref) => this._workspaceLegacyHashForRef(ref),
+    });
+    this._conversationMessageStore = new ConversationMessageStore({
+      convWorkspaceMap: this._convWorkspaceMap,
+      indexLock: this._indexLock,
+      getConvFromIndex: (convId) => this._getConvFromIndex(convId),
+      readSessionFile: (hash, convId, sessionNumber) => this._readSessionFile(hash, convId, sessionNumber),
+      writeSessionFile: (hash, convId, sessionNumber, data) => this._writeSessionFile(hash, convId, sessionNumber, data),
+      writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
+      newId: () => this._newId(),
+    });
+    this._workspaceMemoryStore = new WorkspaceMemoryStore({
+      getWorkspaceDir: (hash) => this._workspaceDir(hash),
+    });
+    this._workspaceKnowledgeStore = new WorkspaceKnowledgeStore({
+      getWorkspaceDir: (hash) => this._workspaceDir(hash),
+      resolveWorkspaceId: (ref) => this._workspaceIdentityStore.resolveWorkspaceId(ref),
+      log,
     });
     this._messageQueueStore = new MessageQueueStore({
       convWorkspaceMap: this._convWorkspaceMap,
@@ -586,32 +604,7 @@ export class ChatService {
   }
 
   private async _buildLookupMap(): Promise<void> {
-    this._convWorkspaceMap.clear();
-    let dirs: string[];
-    try {
-      dirs = await fsp.readdir(this.workspacesDir);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
-      throw err;
-    }
-    for (const storageKey of dirs) {
-      if (storageKey.startsWith('.')) continue;
-      let index: WorkspaceIndex | null;
-      try {
-        index = await this._readWorkspaceIndex(storageKey);
-      } catch (err) {
-        // A corrupt index.json must not take the server down on startup.
-        // Log and skip — the affected workspace becomes invisible until the
-        // file is repaired, but every other workspace stays usable.
-        log.error('Skipping workspace because index.json could not be read', { workspaceStorageKey: storageKey, error: err });
-        continue;
-      }
-      if (!index || !index.conversations) continue;
-      const workspaceId = index.workspaceId || this._workspaceIdentityStore.resolveWorkspaceId(storageKey) || storageKey;
-      for (const conv of index.conversations) {
-        this._convWorkspaceMap.set(conv.id, workspaceId);
-      }
-    }
+    await this._workspaceSessionStore.rebuildConversationWorkspaceMap();
   }
 
   // ── Workspace helpers ──────────────────────────────────────────────────────
@@ -628,25 +621,17 @@ export class ChatService {
     return this._workspaceIdentityStore.resolveWorkspaceId(ref) || ref;
   }
 
-  private _workspaceStorageKeyForRef(ref: string): string {
-    return this._workspaceIdentityStore.resolveStorageKey(ref) || ref;
-  }
-
   private _workspaceLegacyHashForRef(ref: string): string {
     const record = this._workspaceIdentityStore.resolve(ref);
     return record?.legacyHash || ref;
   }
 
   private _workspaceDir(hash: string): string {
-    return path.join(this.workspacesDir, this._workspaceStorageKeyForRef(hash));
-  }
-
-  private _workspaceIndexPath(hash: string): string {
-    return path.join(this._workspaceDir(hash), 'index.json');
+    return this._workspaceSessionStore.workspaceDir(hash);
   }
 
   getWorkspaceContextDir(hash: string): string {
-    return path.join(this._workspaceDir(hash), 'workspace-context');
+    return this._workspaceSessionStore.workspaceContextDir(hash);
   }
 
   getConversationSessionFilePath(hash: string, convId: string, sessionNumber: number): string {
@@ -654,51 +639,27 @@ export class ChatService {
   }
 
   private _sessionFilePath(hash: string, convId: string, sessionNumber: number): string {
-    return path.join(this._workspaceDir(hash), convId, `session-${sessionNumber}.json`);
+    return this._workspaceSessionStore.sessionFilePath(hash, convId, sessionNumber);
   }
 
   private async _readWorkspaceIndex(hash: string): Promise<WorkspaceIndex | null> {
-    try {
-      const data = await fsp.readFile(this._workspaceIndexPath(hash), 'utf8');
-      return JSON.parse(data) as WorkspaceIndex;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw err;
-    }
+    return this._workspaceSessionStore.readWorkspaceIndex(hash);
   }
 
   private async _writeWorkspaceIndex(hash: string, index: WorkspaceIndex): Promise<void> {
-    const dir = this._workspaceDir(hash);
-    await fsp.mkdir(dir, { recursive: true });
-    const record = this._workspaceIdentityStore.resolve(hash);
-    if (record) index.workspaceId = record.workspaceId;
-    await atomicWriteFile(this._workspaceIndexPath(hash), JSON.stringify(index, null, 2));
+    await this._workspaceSessionStore.writeWorkspaceIndex(hash, index);
   }
 
   private async _readSessionFile(hash: string, convId: string, sessionNumber: number): Promise<SessionFile | null> {
-    try {
-      const data = await fsp.readFile(this._sessionFilePath(hash, convId, sessionNumber), 'utf8');
-      return JSON.parse(data) as SessionFile;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw err;
-    }
+    return this._workspaceSessionStore.readSessionFile(hash, convId, sessionNumber);
   }
 
   private async _writeSessionFile(hash: string, convId: string, sessionNumber: number, data: SessionFile): Promise<void> {
-    const filePath = this._sessionFilePath(hash, convId, sessionNumber);
-    await fsp.mkdir(path.dirname(filePath), { recursive: true });
-    await atomicWriteFile(filePath, JSON.stringify(data, null, 2));
+    await this._workspaceSessionStore.writeSessionFile(hash, convId, sessionNumber, data);
   }
 
   private async _getConvFromIndex(convId: string): Promise<ConvLookupResult | null> {
-    const hash = this._convWorkspaceMap.get(convId);
-    if (!hash) return null;
-    const index = await this._readWorkspaceIndex(hash);
-    if (!index) return null;
-    const convEntry = index.conversations.find(c => c.id === convId);
-    if (!convEntry) return null;
-    return { hash, index, convEntry };
+    return this._workspaceSessionStore.getConvFromIndex(convId);
   }
 
   private _checkoutForConversation(convEntry: ConversationEntry): ConversationCheckout | undefined {
@@ -931,71 +892,6 @@ export class ChatService {
     return requested === 'fast' ? 'fast' : undefined;
   }
 
-  private _messageWindowLimit(value: number | undefined, fallback = DEFAULT_MESSAGE_WINDOW_LIMIT): number {
-    if (!Number.isFinite(value) || !value) return fallback;
-    return Math.max(1, Math.min(MAX_MESSAGE_WINDOW_LIMIT, Math.floor(value)));
-  }
-
-  private _pinnedMessages(messages: Message[]): ConversationPinnedMessage[] {
-    return messages
-      .map((message, index) => message.pinned ? { index, message } : null)
-      .filter((item): item is ConversationPinnedMessage => item !== null);
-  }
-
-  private _messageWindow(messages: Message[], opts?: MessageWindowOptions): ConversationMessageWindow | null {
-    const total = messages.length;
-    if (total === 0) {
-      return {
-        messages: [],
-        total: 0,
-        startIndex: 0,
-        endIndex: 0,
-        hasOlder: false,
-        hasNewer: false,
-      };
-    }
-
-    const mode = opts?.mode || 'tail';
-    let startIndex = 0;
-    let endIndex = total;
-
-    if (mode === 'before') {
-      const anchorIndex = messages.findIndex(message => message.id === opts?.beforeMessageId);
-      if (anchorIndex < 0) return null;
-      const limit = this._messageWindowLimit(opts?.limit);
-      endIndex = anchorIndex;
-      startIndex = Math.max(0, endIndex - limit);
-    } else if (mode === 'around') {
-      const anchorIndex = messages.findIndex(message => message.id === opts?.aroundMessageId);
-      if (anchorIndex < 0) return null;
-      let beforeCount = this._messageWindowLimit(opts?.beforeCount, DEFAULT_AROUND_MESSAGE_BEFORE);
-      let afterCount = this._messageWindowLimit(opts?.afterCount, DEFAULT_AROUND_MESSAGE_AFTER);
-      const requested = beforeCount + afterCount + 1;
-      if (requested > MAX_MESSAGE_WINDOW_LIMIT) {
-        let overflow = requested - MAX_MESSAGE_WINDOW_LIMIT;
-        const trimAfter = Math.min(afterCount, overflow);
-        afterCount -= trimAfter;
-        overflow -= trimAfter;
-        beforeCount = Math.max(0, beforeCount - overflow);
-      }
-      startIndex = Math.max(0, anchorIndex - beforeCount);
-      endIndex = Math.min(total, anchorIndex + afterCount + 1);
-    } else {
-      const limit = this._messageWindowLimit(opts?.limit);
-      endIndex = total;
-      startIndex = Math.max(0, endIndex - limit);
-    }
-
-    return {
-      messages: messages.slice(startIndex, endIndex),
-      total,
-      startIndex,
-      endIndex,
-      hasOlder: startIndex > 0,
-      hasNewer: endIndex < total,
-    };
-  }
-
   async getConversation(id: string): Promise<Conversation | null> {
     const result = await this._getConvFromIndex(id);
     if (!result) return null;
@@ -1045,137 +941,48 @@ export class ChatService {
   async getConversationWithMessageWindow(id: string, opts?: MessageWindowOptions): Promise<Conversation | null> {
     const conv = await this.getConversation(id);
     if (!conv) return null;
-    const messageWindow = this._messageWindow(conv.messages, opts);
+    const messageWindow = buildMessageWindow(conv.messages, opts);
     if (!messageWindow) return null;
     return {
       ...conv,
       messages: messageWindow.messages,
       messageWindow,
-      pinnedMessages: this._pinnedMessages(conv.messages),
+      pinnedMessages: collectPinnedMessages(conv.messages),
     };
   }
 
   async getConversationMessages(id: string, opts?: MessageWindowOptions): Promise<ConversationMessagesWindowResult | null> {
     const conv = await this.getConversation(id);
     if (!conv) return null;
-    const messageWindow = this._messageWindow(conv.messages, opts);
+    const messageWindow = buildMessageWindow(conv.messages, opts);
     if (!messageWindow) return null;
     return {
       messages: messageWindow.messages,
       messageWindow,
-      pinnedMessages: this._pinnedMessages(conv.messages),
+      pinnedMessages: collectPinnedMessages(conv.messages),
     };
   }
 
   async listConversations(opts?: { archived?: boolean }): Promise<ConversationListItem[]> {
-    const wantArchived = opts?.archived === true;
-    const convs: ConversationListItem[] = [];
-    let dirs: string[];
-    try {
-      dirs = await fsp.readdir(this.workspacesDir);
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw err;
-    }
-
-    for (const storageKey of dirs) {
-      if (storageKey.startsWith('.')) continue;
-      const index = await this._readWorkspaceIndex(storageKey);
-      if (!index || !index.conversations) continue;
-      const workspaceId = index.workspaceId || this._workspaceIdentityStore.resolveWorkspaceId(storageKey) || storageKey;
-      const legacyHash = this._workspaceLegacyHashForRef(workspaceId);
-      for (const conv of index.conversations) {
-        const isArchived = !!conv.archived;
-        if (isArchived !== wantArchived) continue;
-        const activeSession = conv.sessions.find(s => s.active);
-        convs.push({
-          id: conv.id,
-          title: conv.title,
-          updatedAt: conv.lastActivity,
-          backend: conv.backend,
-          cliProfileId: conv.cliProfileId,
-          model: conv.model,
-          effort: conv.effort,
-          serviceTier: conv.serviceTier,
-          workingDir: index.workspacePath,
-          ...(this._checkoutForConversation(conv) ? {
-            executionDir: this._checkoutForConversation(conv)?.executionDir,
-            checkout: this._checkoutForConversation(conv),
-          } : {}),
-          workspaceId,
-          workspaceHash: legacyHash,
-          workspaceKbEnabled: Boolean(index.kbEnabled),
-          messageCount: activeSession ? activeSession.messageCount : 0,
-          lastMessage: conv.lastMessage,
-          usage: conv.usage || null,
-          archived: conv.archived,
-          unread: conv.unread,
-        });
-      }
-    }
-
-    convs.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-    return convs;
+    return this._conversationLifecycleStore.listConversations(opts);
   }
 
   async renameConversation(id: string, newTitle: string): Promise<Conversation | null> {
-    const hash = this._convWorkspaceMap.get(id);
-    if (!hash) return null;
-    await this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(id);
-      if (!result) return;
-      const { index, convEntry } = result;
-      convEntry.title = newTitle;
-      convEntry.titleManuallySet = true;
-      await this._writeWorkspaceIndex(hash, index);
-    });
+    const renamed = await this._conversationLifecycleStore.renameConversation(id, newTitle);
+    if (!renamed) return null;
     return this.getConversation(id);
   }
 
   async archiveConversation(id: string): Promise<boolean> {
-    const hash = this._convWorkspaceMap.get(id);
-    if (!hash) return false;
-    return this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(id);
-      if (!result) return false;
-      const { index, convEntry } = result;
-      convEntry.archived = true;
-      delete convEntry.messageQueue;
-      await this._writeWorkspaceIndex(hash, index);
-      return true;
-    });
+    return this._conversationLifecycleStore.archiveConversation(id);
   }
 
   async restoreConversation(id: string): Promise<boolean> {
-    const hash = this._convWorkspaceMap.get(id);
-    if (!hash) return false;
-    return this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(id);
-      if (!result) return false;
-      const { index, convEntry } = result;
-      delete convEntry.archived;
-      await this._writeWorkspaceIndex(hash, index);
-      return true;
-    });
+    return this._conversationLifecycleStore.restoreConversation(id);
   }
 
   async setConversationUnread(id: string, unread: boolean): Promise<boolean> {
-    const hash = this._convWorkspaceMap.get(id);
-    if (!hash) return false;
-    return this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(id);
-      if (!result) return false;
-      const { index, convEntry } = result;
-      if (unread) {
-        if (convEntry.unread === true) return true;
-        convEntry.unread = true;
-      } else {
-        if (!convEntry.unread) return true;
-        delete convEntry.unread;
-      }
-      await this._writeWorkspaceIndex(hash, index);
-      return true;
-    });
+    return this._conversationLifecycleStore.setConversationUnread(id, unread);
   }
 
   async deleteConversation(id: string): Promise<boolean> {
@@ -1281,18 +1088,7 @@ export class ChatService {
    * the same field.
    */
   async setExternalSessionId(convId: string, externalSessionId: string): Promise<void> {
-    const hash = this._convWorkspaceMap.get(convId);
-    if (!hash) return;
-    await this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(convId);
-      if (!result) return;
-      const { index, convEntry } = result;
-      const activeSession = convEntry.sessions.find(s => s.active);
-      if (!activeSession) return;
-      if (activeSession.externalSessionId === externalSessionId) return;
-      activeSession.externalSessionId = externalSessionId;
-      await this._writeWorkspaceIndex(hash, index);
-    });
+    await this._conversationLifecycleStore.setExternalSessionId(convId, externalSessionId);
   }
 
   async updateConversationModel(convId: string, model: string | null): Promise<void> {
@@ -1352,74 +1148,17 @@ export class ChatService {
     contentBlocks?: ContentBlock[],
     opts?: { streamError?: Message['streamError']; goalEvent?: Message['goalEvent'] },
   ): Promise<Message | null> {
-    const hash = this._convWorkspaceMap.get(convId);
-    if (!hash) return null;
-    return this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(convId);
-      if (!result) return null;
-      const { index, convEntry } = result;
-
-      const msg: Message = {
-        id: this._newId(),
-        role,
-        content,
-        backend: backend || convEntry.backend,
-        timestamp: new Date().toISOString(),
-      };
-
-      if (thinking) {
-        msg.thinking = thinking;
-      }
-
-      if (toolActivity && toolActivity.length > 0) {
-        msg.toolActivity = toolActivity;
-      }
-
-      if (contentBlocks && contentBlocks.length > 0 && role === 'assistant') {
-        msg.contentBlocks = contentBlocks;
-      }
-
-      if (opts?.streamError && role === 'assistant') {
-        msg.streamError = opts.streamError;
-      }
-
-      if (opts?.goalEvent && role === 'system') {
-        msg.goalEvent = opts.goalEvent;
-      }
-
-      if (turn && role === 'assistant') {
-        msg.turn = turn;
-      }
-
-      const activeSession = convEntry.sessions.find(s => s.active);
-      const sessionNumber = activeSession ? activeSession.number : 1;
-
-      if (role === 'user' && convEntry.title === 'New Chat' && sessionNumber <= 1 && !convEntry.titleManuallySet) {
-        convEntry.title = content.substring(0, 80).replace(/\n/g, ' ').trim() || 'New Chat';
-      }
-
-      let sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
-      if (!sessionFile) {
-        sessionFile = {
-          sessionNumber,
-          sessionId: convEntry.currentSessionId,
-          startedAt: msg.timestamp,
-          endedAt: null,
-          messages: [],
-        };
-      }
-      sessionFile.messages.push(msg);
-      await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
-
-      convEntry.lastActivity = msg.timestamp;
-      convEntry.lastMessage = content.substring(0, 100);
-      if (activeSession) {
-        activeSession.messageCount = sessionFile.messages.length;
-      }
-      await this._writeWorkspaceIndex(hash, index);
-
-      return msg;
-    });
+    return this._conversationMessageStore.addMessage(
+      convId,
+      role,
+      content,
+      backend,
+      thinking,
+      toolActivity,
+      turn,
+      contentBlocks,
+      opts,
+    );
   }
 
   async addStreamErrorMessage(
@@ -1443,43 +1182,7 @@ export class ChatService {
   }
 
   async updateMessageContent(convId: string, messageId: string, newContent: string): Promise<EditMessageResult | null> {
-    const hash = this._convWorkspaceMap.get(convId);
-    if (!hash) return null;
-    const msg = await this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(convId);
-      if (!result) return null;
-      const { index, convEntry } = result;
-
-      const activeSession = convEntry.sessions.find(s => s.active);
-      const sessionNumber = activeSession ? activeSession.number : 1;
-
-      const sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
-      if (!sessionFile) return null;
-
-      const msgIndex = sessionFile.messages.findIndex(m => m.id === messageId);
-      if (msgIndex === -1) return null;
-
-      sessionFile.messages = sessionFile.messages.slice(0, msgIndex);
-
-      const msg: Message = {
-        id: this._newId(),
-        role: 'user',
-        content: newContent,
-        backend: convEntry.backend,
-        timestamp: new Date().toISOString(),
-      };
-      sessionFile.messages.push(msg);
-      await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
-
-      if (activeSession) {
-        activeSession.messageCount = sessionFile.messages.length;
-      }
-      convEntry.lastActivity = msg.timestamp;
-      convEntry.lastMessage = newContent.substring(0, 100);
-      await this._writeWorkspaceIndex(hash, index);
-
-      return msg;
-    });
+    const msg = await this._conversationMessageStore.updateMessageContent(convId, messageId, newContent);
     if (!msg) return null;
 
     const conversation = await this.getConversation(convId);
@@ -1487,30 +1190,7 @@ export class ChatService {
   }
 
   async setMessagePinned(convId: string, messageId: string, pinned: boolean): Promise<EditMessageResult | null> {
-    const hash = this._convWorkspaceMap.get(convId);
-    if (!hash) return null;
-    const msg = await this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(convId);
-      if (!result) return null;
-      const { convEntry } = result;
-
-      const activeSession = convEntry.sessions.find(s => s.active);
-      const sessionNumber = activeSession ? activeSession.number : 1;
-
-      const sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
-      if (!sessionFile) return null;
-
-      const msg = sessionFile.messages.find(m => m.id === messageId);
-      if (!msg) return null;
-
-      if (pinned) {
-        msg.pinned = true;
-      } else {
-        delete msg.pinned;
-      }
-      await this._writeSessionFile(hash, convId, sessionNumber, sessionFile);
-      return msg;
-    });
+    const msg = await this._conversationMessageStore.setMessagePinned(convId, messageId, pinned);
     if (!msg) return null;
 
     const conversation = await this.getConversation(convId);
@@ -1684,28 +1364,11 @@ export class ChatService {
   }
 
   async getSessionHistory(convId: string): Promise<SessionHistoryItem[] | null> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return null;
-    const { convEntry } = result;
-
-    return convEntry.sessions.map(s => ({
-      number: s.number,
-      sessionId: s.active ? convEntry.currentSessionId : (s.sessionId || null),
-      startedAt: s.startedAt,
-      endedAt: s.endedAt,
-      messageCount: s.messageCount,
-      summary: s.summary || null,
-      isCurrent: s.active,
-    }));
+    return this._conversationMessageStore.getSessionHistory(convId);
   }
 
   async getSessionMessages(convId: string, sessionNumber: number): Promise<Message[] | null> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return null;
-    const { hash } = result;
-
-    const sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
-    return sessionFile ? sessionFile.messages : null;
+    return this._conversationMessageStore.getSessionMessages(convId, sessionNumber);
   }
 
   // ── Markdown Export ────────────────────────────────────────────────────────
@@ -2110,35 +1773,19 @@ export class ChatService {
   // notes subtree is left untouched and merged back into the snapshot.
 
   private _memoryDir(hash: string): string {
-    return path.join(this._workspaceDir(hash), 'memory');
-  }
-
-  private _memorySnapshotPath(hash: string): string {
-    return path.join(this._memoryDir(hash), 'snapshot.json');
-  }
-
-  private _memoryStatePath(hash: string): string {
-    return path.join(this._memoryDir(hash), 'state.json');
+    return this._workspaceMemoryStore.memoryDir(hash);
   }
 
   private _memoryFilesDir(hash: string): string {
-    return path.join(this._memoryDir(hash), 'files');
+    return this._workspaceMemoryStore.filesDir(hash);
   }
 
   private _memoryClaudeDir(hash: string): string {
-    return path.join(this._memoryFilesDir(hash), 'claude');
+    return this._workspaceMemoryStore.claudeDir(hash);
   }
 
   private _memoryNotesDir(hash: string): string {
-    return path.join(this._memoryFilesDir(hash), 'notes');
-  }
-
-  private _memoryReviewsDir(hash: string): string {
-    return path.join(this._memoryDir(hash), 'reviews');
-  }
-
-  private _memoryReviewRunPath(hash: string, runId: string): string {
-    return path.join(this._memoryReviewsDir(hash), `${runId}.json`);
+    return this._workspaceMemoryStore.notesDir(hash);
   }
 
   private _emptyMemoryMetadataIndex(): MemoryMetadataIndex {
@@ -2193,13 +1840,8 @@ export class ChatService {
   }
 
   private async _readMemoryMetadataIndex(hash: string): Promise<MemoryMetadataIndex> {
-    let raw: unknown;
-    try {
-      raw = JSON.parse(await fsp.readFile(this._memoryStatePath(hash), 'utf8'));
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return this._emptyMemoryMetadataIndex();
-      throw err;
-    }
+    const raw = await this._workspaceMemoryStore.readMetadataIndexFile(hash);
+    if (!raw) return this._emptyMemoryMetadataIndex();
 
     const now = new Date().toISOString();
     const entries: Record<string, MemoryEntryMetadata> = {};
@@ -2223,8 +1865,7 @@ export class ChatService {
   }
 
   private async _writeMemoryMetadataIndex(hash: string, index: MemoryMetadataIndex): Promise<void> {
-    await fsp.mkdir(this._memoryDir(hash), { recursive: true });
-    await atomicWriteFile(this._memoryStatePath(hash), JSON.stringify(index, null, 2));
+    await this._workspaceMemoryStore.writeMetadataIndex(hash, index);
   }
 
   private async _attachMemoryMetadata(
@@ -2393,10 +2034,7 @@ export class ChatService {
       files: mergedFiles,
     };
 
-    await atomicWriteFile(
-      this._memorySnapshotPath(hash),
-      JSON.stringify(merged, null, 2),
-    );
+    await this._workspaceMemoryStore.writeSnapshot(hash, merged);
   }
 
   /**
@@ -2406,14 +2044,7 @@ export class ChatService {
    * fresh merged view.
    */
   async getWorkspaceMemory(hash: string): Promise<MemorySnapshot | null> {
-    let snapshot: MemorySnapshot | null;
-    try {
-      const data = await fsp.readFile(this._memorySnapshotPath(hash), 'utf8');
-      snapshot = JSON.parse(data) as MemorySnapshot;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      snapshot = null;
-    }
+    const snapshot = await this._workspaceMemoryStore.readSnapshot(hash);
 
     // Even if there's no CLI-capture snapshot yet, notes alone can
     // constitute a memory store (non-Claude workspace that only uses
@@ -2805,23 +2436,7 @@ export class ChatService {
     hash: string,
     audit: Omit<MemoryConsolidationAudit, 'version' | 'createdAt'> & { createdAt?: string },
   ): Promise<string> {
-    const createdAt = audit.createdAt || new Date().toISOString();
-    const dir = path.join(this._memoryDir(hash), 'audits');
-    await fsp.mkdir(dir, { recursive: true });
-    const safeTimestamp = createdAt.replace(/[:.]/g, '-');
-    const name = `consolidation_${safeTimestamp}.json`;
-    const relPath = `audits/${name}`;
-    const payload: MemoryConsolidationAudit = {
-      version: 1,
-      createdAt,
-      summary: audit.summary,
-      applied: audit.applied,
-      skipped: audit.skipped,
-      appliedDraftOperations: audit.appliedDraftOperations,
-      skippedDraftOperations: audit.skippedDraftOperations,
-    };
-    await atomicWriteFile(path.join(dir, name), JSON.stringify(payload, null, 2));
-    return relPath;
+    return this._workspaceMemoryStore.saveConsolidationAudit(hash, audit);
   }
 
   /**
@@ -2830,13 +2445,8 @@ export class ChatService {
    * `getWorkspaceMemory()` stays consistent.
    */
   private async _refreshSnapshotIndex(hash: string): Promise<void> {
-    const snapshotPath = this._memorySnapshotPath(hash);
-    let snapshot: MemorySnapshot;
-    try {
-      const data = await fsp.readFile(snapshotPath, 'utf8');
-      snapshot = JSON.parse(data) as MemorySnapshot;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    let snapshot = await this._workspaceMemoryStore.readSnapshot(hash);
+    if (!snapshot) {
       // No prior snapshot — synthesize a minimal one keyed on the notes.
       snapshot = {
         capturedAt: new Date().toISOString(),
@@ -2878,7 +2488,7 @@ export class ChatService {
       capturedAt: new Date().toISOString(),
       files,
     };
-    await atomicWriteFile(snapshotPath, JSON.stringify(next, null, 2));
+    await this._workspaceMemoryStore.writeSnapshot(hash, next);
   }
 
   /** Per-workspace Memory enable/disable (stored on the workspace index). */
@@ -2951,44 +2561,15 @@ export class ChatService {
   }
 
   async saveMemoryReviewRun(hash: string, run: MemoryReviewRun): Promise<MemoryReviewRun> {
-    if (!validMemoryReviewRunId(run.id)) {
-      throw new Error('Invalid memory review run id');
-    }
-    await fsp.mkdir(this._memoryReviewsDir(hash), { recursive: true });
-    await atomicWriteFile(this._memoryReviewRunPath(hash, run.id), JSON.stringify(run, null, 2));
-    return run;
+    return this._workspaceMemoryStore.saveReviewRun(hash, run);
   }
 
   async getMemoryReviewRun(hash: string, runId: string): Promise<MemoryReviewRun | null> {
-    if (!validMemoryReviewRunId(runId)) return null;
-    try {
-      const raw = await fsp.readFile(this._memoryReviewRunPath(hash, runId), 'utf8');
-      return JSON.parse(raw) as MemoryReviewRun;
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      throw err;
-    }
+    return this._workspaceMemoryStore.getReviewRun(hash, runId);
   }
 
   async listMemoryReviewRuns(hash: string): Promise<MemoryReviewRun[]> {
-    let names: string[];
-    try {
-      names = await fsp.readdir(this._memoryReviewsDir(hash));
-    } catch (err: unknown) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return [];
-      throw err;
-    }
-
-    const runs: MemoryReviewRun[] = [];
-    for (const name of names) {
-      if (!name.endsWith('.json')) continue;
-      const runId = name.slice(0, -'.json'.length);
-      if (!validMemoryReviewRunId(runId)) continue;
-      const run = await this.getMemoryReviewRun(hash, runId);
-      if (run) runs.push(run);
-    }
-    runs.sort((a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id));
-    return runs;
+    return this._workspaceMemoryStore.listReviewRuns(hash);
   }
 
   async getMemoryReviewSourceFingerprints(
@@ -3181,9 +2762,9 @@ export class ChatService {
     if (!hash) return null;
     const enabled = await this.getWorkspaceMemoryEnabled(hash);
     if (!enabled) return null;
-    const filesDir = this._memoryFilesDir(hash);
+    let filesDir = this._memoryFilesDir(hash);
     try {
-      await fsp.mkdir(filesDir, { recursive: true });
+      filesDir = await this._workspaceMemoryStore.ensureFilesDir(hash);
     } catch (err: unknown) {
       log.warn('Could not create workspace memory pointer directory', { path: filesDir, error: err });
     }
@@ -3216,31 +2797,23 @@ export class ChatService {
   // filesystem stores only the actual file bytes.
 
   private _knowledgeDir(hash: string): string {
-    return path.join(this._workspaceDir(hash), 'knowledge');
-  }
-
-  private _kbDbPath(hash: string): string {
-    return path.join(this._knowledgeDir(hash), 'state.db');
-  }
-
-  private _kbLegacyStatePath(hash: string): string {
-    return path.join(this._knowledgeDir(hash), 'state.json');
+    return this._workspaceKnowledgeStore.knowledgeDir(hash);
   }
 
   private _kbRawDir(hash: string): string {
-    return path.join(this._knowledgeDir(hash), 'raw');
+    return this._workspaceKnowledgeStore.rawDir(hash);
   }
 
   private _kbConvertedDir(hash: string): string {
-    return path.join(this._knowledgeDir(hash), 'converted');
+    return this._workspaceKnowledgeStore.convertedDir(hash);
   }
 
   private _kbEntriesDir(hash: string): string {
-    return path.join(this._knowledgeDir(hash), 'entries');
+    return this._workspaceKnowledgeStore.entriesDir(hash);
   }
 
   private _kbSynthesisDir(hash: string): string {
-    return path.join(this._knowledgeDir(hash), 'synthesis');
+    return this._workspaceKnowledgeStore.synthesisDir(hash);
   }
 
   // ── Public KB directory accessors ────────────────────────────────────────
@@ -3264,62 +2837,26 @@ export class ChatService {
    * if they need that behaviour.
    */
   getKbDb(hash: string): KbDatabase | null {
-    if (!hash) return null;
-    const workspaceId = this._workspaceIdForRef(hash);
-    const cached = this._kbDbs.get(workspaceId);
-    if (cached) return cached;
-    // Ensure parent dirs exist before better-sqlite3 tries to open.
-    fs.mkdirSync(this._knowledgeDir(workspaceId), { recursive: true });
-    fs.mkdirSync(this._kbRawDir(workspaceId), { recursive: true });
-    const db = openKbDatabase({
-      dbPath: this._kbDbPath(workspaceId),
-      legacyJsonPath: this._kbLegacyStatePath(workspaceId),
-      rawDir: this._kbRawDir(workspaceId),
-    });
-    this._kbDbs.set(workspaceId, db);
-    return db;
+    return this._workspaceKnowledgeStore.getDb(hash);
   }
 
   /** Close every cached KB database. Call during graceful shutdown. */
   closeKbDatabases(): void {
-    for (const [hash, db] of this._kbDbs.entries()) {
-      try {
-        db.close();
-      } catch (err: unknown) {
-        log.warn('Failed to close KB database', { workspaceHash: hash, error: err });
-      }
-    }
-    this._kbDbs.clear();
+    this._workspaceKnowledgeStore.closeDatabases();
   }
 
   /**
    * Get or create a PGLite vector store for a workspace. Returns `null`
    * when `hash` is falsy. The store is cached for the process lifetime
-   * just like `_kbDbs`.
+   * by `WorkspaceKnowledgeStore`.
    */
   async getKbVectorStore(hash: string, dimensions?: number): Promise<KbVectorStore | null> {
-    if (!hash) return null;
-    const workspaceId = this._workspaceIdForRef(hash);
-    const cached = this._kbVectorStores.get(workspaceId);
-    if (cached) return cached;
-    const knowledgeDir = this._knowledgeDir(workspaceId);
-    fs.mkdirSync(knowledgeDir, { recursive: true });
-    const store = new KbVectorStore(knowledgeDir, dimensions);
-    await store.ready();
-    this._kbVectorStores.set(workspaceId, store);
-    return store;
+    return this._workspaceKnowledgeStore.getVectorStore(hash, dimensions);
   }
 
   /** Close every cached vector store. Call during graceful shutdown. */
   async closeKbVectorStores(): Promise<void> {
-    for (const [hash, store] of this._kbVectorStores.entries()) {
-      try {
-        await store.close();
-      } catch (err: unknown) {
-        log.warn('Failed to close KB vector store', { workspaceHash: hash, error: err });
-      }
-    }
-    this._kbVectorStores.clear();
+    await this._workspaceKnowledgeStore.closeVectorStores();
   }
 
   /** Per-workspace embedding config (stored on the workspace index). */
@@ -3353,12 +2890,8 @@ export class ChatService {
 
     // When model or dimensions change, wipe existing embeddings so they
     // get regenerated on the next digest/dream cycle.
-    if (updated.wipe && this._kbVectorStores.has(workspaceId)) {
-      try {
-        const store = this._kbVectorStores.get(workspaceId)!;
-        await store.close();
-        this._kbVectorStores.delete(workspaceId);
-      } catch { /* ignore close errors */ }
+    if (updated.wipe) {
+      await this._workspaceKnowledgeStore.closeVectorStore(workspaceId);
     }
 
     return updated.config;
@@ -3937,43 +3470,8 @@ export class ChatService {
 
   async addUsage(convId: string, usage: Usage, backend?: string, model?: string, options?: { skipLedger?: boolean }): Promise<{ conversationUsage: Usage; sessionUsage: Usage } | null> {
     if (!usage) return null;
-    const hash = this._convWorkspaceMap.get(convId);
-    if (!hash) return null;
     const pricingCatalog = (await this._usagePricingStore.getCatalogs()).effective;
-    const mutated = await this._indexLock.run(hash, async () => {
-      const result = await this._getConvFromIndex(convId);
-      if (!result) return null;
-      const { index, convEntry } = result;
-
-      // Conversation-level totals
-      const backendId = backend || convEntry.backend;
-      const modelId = model || convEntry.model || 'unknown';
-      const pricingTier = usage.pricingTier || usagePricingTierForConversation(backendId, convEntry.serviceTier);
-      const enrichedUsage = applyCostEstimate(backendId, modelId, usage, undefined, pricingCatalog.entries, pricingCatalog.version, pricingTier);
-      if (!convEntry.usage) convEntry.usage = emptyUsage();
-      addToUsage(convEntry.usage, enrichedUsage);
-
-      // Per-backend on conversation
-      if (!convEntry.usageByBackend) convEntry.usageByBackend = {};
-      if (!convEntry.usageByBackend[backendId]) convEntry.usageByBackend[backendId] = emptyUsage();
-      addToUsage(convEntry.usageByBackend[backendId], enrichedUsage);
-
-      // Session-level totals + per-backend
-      let sessionUsage = emptyUsage();
-      const activeSession = convEntry.sessions.find(s => s.active);
-      if (activeSession) {
-        if (!activeSession.usage) activeSession.usage = emptyUsage();
-        addToUsage(activeSession.usage, enrichedUsage);
-        sessionUsage = activeSession.usage;
-
-        if (!activeSession.usageByBackend) activeSession.usageByBackend = {};
-        if (!activeSession.usageByBackend[backendId]) activeSession.usageByBackend[backendId] = emptyUsage();
-        addToUsage(activeSession.usageByBackend[backendId], enrichedUsage);
-      }
-
-      await this._writeWorkspaceIndex(hash, index);
-      return { conversationUsage: convEntry.usage, sessionUsage, backendId, modelId, enrichedUsage, pricingTier };
-    });
+    const mutated = await this._conversationUsageStore.addUsage(convId, usage, pricingCatalog, backend, model);
     if (!mutated) return null;
 
     // Record to daily ledger (fire-and-forget, don't block the response)
@@ -3989,10 +3487,7 @@ export class ChatService {
   }
 
   async getUsage(convId: string): Promise<Usage | null> {
-    const result = await this._getConvFromIndex(convId);
-    if (!result) return null;
-    const { convEntry } = result;
-    return convEntry.usage || emptyUsage();
+    return this._conversationUsageStore.getUsage(convId);
   }
 
   async getUsageStats(): Promise<UsageLedger> {
