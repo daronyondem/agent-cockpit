@@ -71,6 +71,10 @@ OpenCode provider login or API keys. OpenCode does not currently support
 subagents, goal mode, plan mode, mid-turn user input, or interactive user
 questions through Agent Cockpit.
 
+For local open-source models, configure Ollama as a persistent OpenCode provider
+and use an Agent Cockpit OpenCode profile with provider `ollama`; see
+[Open Source Models With Ollama And OpenCode](ollama-opencode.md).
+
 Image and PDF one-shot workflows, including attachment OCR and Knowledge Base
 image conversion, require an OpenCode model that reports the required media
 input capability. Text-only OpenCode models still work for normal chat and

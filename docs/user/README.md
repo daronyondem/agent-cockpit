@@ -9,6 +9,8 @@ installed and the first owner account exists.
   conversation.
 - [Supported backends](backends.md) explains Claude Code, OpenAI Codex, Kiro,
   and OpenCode setup differences.
+- [Open source models with Ollama and OpenCode](ollama-opencode.md) explains
+  how to run local models through a persistent OpenCode provider profile.
 
 ## Core Workflows
 
