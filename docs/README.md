@@ -15,6 +15,7 @@ Start here if you are installing or using Agent Cockpit.
 - [User Guide](user/README.md)
 - [Quickstart](user/quickstart.md)
 - [Supported backends](user/backends.md)
+- [Open source models with Ollama and OpenCode](user/ollama-opencode.md)
 - [Memory](user/memory.md)
 - [Knowledge Base](user/knowledge-base.md)
 - [Workspace Context](user/workspace-context.md)

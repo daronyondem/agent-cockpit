@@ -26,7 +26,7 @@ diagrams line up so future changes can see what must be updated.
 
 | Documentation group | Files | Purpose |
 |---|---|---|
-| Project entry and setup | `README.md`, `ONBOARDING.md`, `BACKENDS.md` | Product overview, self-hosting, backend capability comparison. |
+| Project entry and setup | `README.md`, `ONBOARDING.md`, `BACKENDS.md`, `docs/README.md`, `docs/user/*.md` | Product overview, self-hosting, backend capability comparison, and end-user guides including local Ollama/OpenCode model setup. |
 | Agent guidance | `AGENTS.md`, `CLAUDE.md`, `.kiro/steering/claude-md.md` | Repository instructions for coding agents and cross-tool compatibility. |
 | Canonical spec index | `SPEC.md`, `docs/SPEC.md` | Thin root redirect plus the canonical spec table of contents. |
 | Canonical feature specs | `docs/spec-data-models.md`, `docs/spec-api-endpoints.md`, `docs/spec-backend-services.md`, `docs/spec-workspace-context.md`, `docs/spec-server-security.md`, `docs/spec-frontend.md`, `docs/spec-mobile-pwa.md`, `docs/spec-deployment.md`, `docs/spec-testing.md` | Current implemented behavior by area. |

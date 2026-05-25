@@ -37,7 +37,7 @@ Cockpit without reading the implementation specification:
 | Document | Description |
 |----------|-------------|
 | [README.md](README.md) | Public docs entry point that routes to user, deploy, and reference guides. |
-| [user/README.md](user/README.md) | User guide for quickstart, backends, Memory, Knowledge Base, Workspace Context, and mobile PWA. |
+| [user/README.md](user/README.md) | User guide for quickstart, backends, Ollama/OpenCode local models, Memory, Knowledge Base, Workspace Context, and mobile PWA. |
 | [deploy/README.md](deploy/README.md) | Deploy guide for platform installers, remote access, security, Install Doctor, and updates. |
 | [reference/README.md](reference/README.md) | Technical reference for environment variables, data layout, backend capabilities, development, and testing. |
 | [product-positioning.md](product-positioning.md) | Public-copy message architecture for keeping positioning provider-neutral and user-owned-context focused. |
