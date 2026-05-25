@@ -168,6 +168,100 @@ describe('OpenCode backend helpers', () => {
     ]);
   });
 
+  test('recovers missing OpenCode session with snapshot-read prompt', async () => {
+    let streamRef!: AsyncGenerator<StreamEvent>;
+    const spawnArgs: string[][] = [];
+    const createSnapshot = jest.fn(async () => ({
+      snapshotPath: '/tmp/opencode-recovery/session-1-latest.json',
+      sourceSessionPath: '/tmp/opencode-recovery/session-1.json',
+      sourceSessionNumber: 1,
+      messageCount: 3,
+      capturedAt: '2026-05-25T00:00:00.000Z',
+      recoveryCount: 1,
+    }));
+
+    jest.isolateModules(() => {
+      jest.doMock('child_process', () => {
+        const { EventEmitter } = require('events');
+        const { PassThrough } = require('stream');
+        return {
+          execFile: (_cmd: string, _args: string[], _opts: unknown, cb: (err: Error | null, stdout: string, stderr: string) => void) => {
+            cb(new Error('model discovery unavailable'), '', 'model discovery unavailable');
+          },
+          spawn: (_cmd: string, args: string[]) => {
+            spawnArgs.push(args);
+            const callIndex = spawnArgs.length;
+            const proc = new EventEmitter();
+            proc.pid = 8200 + callIndex;
+            proc.stdout = new PassThrough();
+            proc.stderr = new PassThrough();
+            proc.kill = () => {};
+            setImmediate(() => {
+              if (callIndex === 1) {
+                proc.stderr.end('session not found: old-opencode-session');
+                proc.stdout.end();
+                proc.emit('close', 1, null);
+                return;
+              }
+              proc.stdout.write(JSON.stringify({
+                type: 'text',
+                sessionID: 'new-opencode-session',
+                part: { type: 'text', text: 'recovered' },
+              }) + '\n');
+              proc.stdout.end();
+              proc.stderr.end();
+              proc.emit('close', 0, null);
+            });
+            return proc;
+          },
+        };
+      });
+      const { OpenCodeAdapter: IsolatedAdapter } = require('../src/services/backends/opencode');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      streamRef = adapter.sendMessage('current OpenCode question', {
+        sessionId: 'cockpit-session',
+        conversationId: 'conv-opencode-recovery',
+        isNewSession: false,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        externalSessionId: 'old-opencode-session',
+        sessionRecovery: { createSnapshot },
+      }).stream;
+    });
+
+    const events: StreamEvent[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(createSnapshot).toHaveBeenCalledWith({
+      previousNativeSessionId: 'old-opencode-session',
+      reason: 'session not found: old-opencode-session',
+    });
+    expect(spawnArgs[0]).toEqual(expect.arrayContaining(['--session', 'old-opencode-session']));
+    expect(spawnArgs[1]).not.toContain('--session');
+    const retryPrompt = spawnArgs[1][spawnArgs[1].length - 1];
+    expect(retryPrompt).toContain('You MUST read the prior Agent Cockpit conversation snapshot before answering');
+    expect(retryPrompt).toContain('/tmp/opencode-recovery/session-1-latest.json');
+    expect(retryPrompt).toContain('current OpenCode question');
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'session_recovery',
+        message: expect.stringContaining('Agent Cockpit recovered the conversation'),
+        metadata: expect.objectContaining({
+          backend: 'opencode',
+          previousNativeSessionId: 'old-opencode-session',
+          snapshotPath: '/tmp/opencode-recovery/session-1-latest.json',
+        }),
+      }),
+      { type: 'external_session', sessionId: 'new-opencode-session' },
+      expect.objectContaining({ type: 'text', content: 'recovered' }),
+      { type: 'done' },
+    ]));
+    jest.dontMock('child_process');
+  });
+
   test('converts ACP-shaped MCP servers to OpenCode local MCP config', () => {
     const config = __opencodeTestUtils.mcpServersToOpenCodeConfig([{
       name: 'agent-cockpit-memory',

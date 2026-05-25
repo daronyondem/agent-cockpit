@@ -5,6 +5,12 @@ import os from 'os';
 import path from 'path';
 import { BaseBackendAdapter, type BackendCallOptions, type RunOneShotAttachment, type RunOneShotOptions } from './base';
 import { extractToolOutcome, shortenPath } from './toolUtils';
+import {
+  buildNativeSessionRecovery,
+  buildSessionRecoveryEvent,
+  createRecoverySnapshot,
+  isMissingNativeSessionError,
+} from './sessionRecovery';
 import { buildCliCommandInvocation, resolveCliCommandForRuntime, type CliCommandResolution } from '../cliCommandResolver';
 import { logger } from '../../utils/logger';
 import type {
@@ -199,6 +205,15 @@ export class OpenCodeAdapter extends BaseBackendAdapter {
   }
 
   private async *_streamMessage(message: string, options: SendMessageOptions, state: StreamState): AsyncGenerator<StreamEvent> {
+    yield* this._streamMessageAttempt(message, options, state, false);
+  }
+
+  private async *_streamMessageAttempt(
+    message: string,
+    options: SendMessageOptions,
+    state: StreamState,
+    retryingAfterRecovery: boolean,
+  ): AsyncGenerator<StreamEvent> {
     let proc: ChildProcess;
     let exitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | null; error?: Error }>;
     let runtime: OpenCodeCliRuntime;
@@ -322,6 +337,41 @@ export class OpenCodeAdapter extends BaseBackendAdapter {
       }
       if (exit.code !== 0 && !state.aborted) {
         const stderr = stripAnsi(stderrChunks.join('\n')).trim();
+        if (
+          !retryingAfterRecovery
+          && !options.isNewSession
+          && options.externalSessionId
+          && isMissingNativeSessionError(stderr)
+        ) {
+          const reason = stderr || `OpenCode session not found: ${options.externalSessionId}`;
+          let snapshot = null;
+          try {
+            snapshot = await createRecoverySnapshot(options, {
+              previousNativeSessionId: options.externalSessionId,
+              reason,
+            });
+          } catch (snapshotErr) {
+            opencodeLog.warn('Failed to create OpenCode session recovery snapshot', {
+              sessionId: options.externalSessionId,
+              error: (snapshotErr as Error).message,
+            });
+          }
+          const recovery = buildNativeSessionRecovery({
+            backend: 'opencode',
+            previousNativeSessionId: options.externalSessionId,
+            newNativeSessionId: null,
+            reason,
+            snapshot,
+            currentPrompt: message,
+          });
+          yield buildSessionRecoveryEvent(recovery.metadata);
+          yield* this._streamMessageAttempt(recovery.prompt, {
+            ...options,
+            isNewSession: true,
+            externalSessionId: null,
+          }, state, true);
+          return;
+        }
         yield { type: 'error', error: stderr || `OpenCode exited with code ${exit.code ?? 'unknown'}` };
       }
       if (

@@ -130,6 +130,12 @@ export interface Message {
    */
   goalEvent?: GoalEvent;
   /**
+   * System messages only. Diagnostic metadata for a friendly Agent Cockpit
+   * recovery notice shown when a backend-native harness session could not be
+   * resumed and Agent Cockpit continued in a fresh native session.
+   */
+  sessionRecovery?: SessionRecoveryMetadata;
+  /**
    * Assistant messages only. `progress` = intermediate segment saved at a
    * `turn_boundary` (agent still has more tool work to do). `final` = last
    * segment of the agent run saved at `done`. Absent on user/system messages
@@ -968,6 +974,41 @@ export interface GoalClearedEvent {
   threadId?: string | null;
 }
 
+export interface SessionRecoveryMetadata {
+  backend: string;
+  reason: string;
+  previousNativeSessionId?: string | null;
+  newNativeSessionId?: string | null;
+  snapshotPath?: string | null;
+  sourceSessionPath?: string | null;
+  sourceSessionNumber?: number | null;
+  snapshotMessageCount?: number | null;
+  recoveryCount: number;
+  occurredAt: string;
+}
+
+export interface SessionRecoverySnapshot {
+  snapshotPath: string;
+  sourceSessionPath: string;
+  sourceSessionNumber: number;
+  messageCount: number;
+  capturedAt: string;
+  recoveryCount: number;
+}
+
+export interface SessionRecoveryOptions {
+  createSnapshot: (input: {
+    previousNativeSessionId: string;
+    reason: string;
+  }) => Promise<SessionRecoverySnapshot | null>;
+}
+
+export interface SessionRecoveryEvent {
+  type: 'session_recovery';
+  message: string;
+  metadata: SessionRecoveryMetadata;
+}
+
 /**
  * Emitted by a backend adapter as soon as it obtains a backend-managed
  * session ID that the cockpit needs to persist on the active `SessionEntry`
@@ -1047,6 +1088,7 @@ export type StreamEvent =
   | DoneEvent
   | GoalUpdatedEvent
   | GoalClearedEvent
+  | SessionRecoveryEvent
   | ExternalSessionEvent
   | BackendRuntimeEvent
   | MemoryUpdateEvent
@@ -1891,6 +1933,12 @@ export interface SendMessageOptions {
   systemPrompt: string;
   /** Backend-managed session ID from a previous session, for resume/rehydration. */
   externalSessionId?: string | null;
+  /**
+   * Lazy recovery hook used only when a backend-native session resume fails.
+   * Adapters call it after detecting a missing native session and before
+   * prompting the fresh native session.
+   */
+  sessionRecovery?: SessionRecoveryOptions;
   /** Full model ID (e.g., 'claude-opus-4-7', 'claude-sonnet-4-6'). Backends that don't support model selection ignore this. */
   model?: string;
   /**

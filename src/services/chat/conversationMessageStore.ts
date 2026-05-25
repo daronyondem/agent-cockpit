@@ -125,7 +125,11 @@ export class ConversationMessageStore {
     toolActivity?: ToolActivity[],
     turn?: 'progress' | 'final',
     contentBlocks?: ContentBlock[],
-    opts?: { streamError?: Message['streamError']; goalEvent?: Message['goalEvent'] },
+    opts?: {
+      streamError?: Message['streamError'];
+      goalEvent?: Message['goalEvent'];
+      sessionRecovery?: Message['sessionRecovery'];
+    },
   ): Promise<Message | null> {
     const hash = this.deps.convWorkspaceMap.get(convId);
     if (!hash) return null;
@@ -160,6 +164,10 @@ export class ConversationMessageStore {
 
       if (opts?.goalEvent && role === 'system') {
         msg.goalEvent = opts.goalEvent;
+      }
+
+      if (opts?.sessionRecovery && role === 'system') {
+        msg.sessionRecovery = opts.sessionRecovery;
       }
 
       if (turn && role === 'assistant') {

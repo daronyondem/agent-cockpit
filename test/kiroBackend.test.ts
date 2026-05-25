@@ -342,6 +342,156 @@ describe('KiroAdapter', () => {
     jest.dontMock('child_process');
   });
 
+  test('recovers missing session/load target with a new session and snapshot-read prompt', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+    const createSnapshot = jest.fn(async () => ({
+      snapshotPath: '/tmp/kiro-recovery/session-1-latest.json',
+      sourceSessionPath: '/tmp/kiro-recovery/session-1.json',
+      sourceSessionNumber: 1,
+      messageCount: 5,
+      capturedAt: '2026-05-25T00:00:00.000Z',
+      recoveryCount: 1,
+    }));
+    let sim!: {
+      proc: any;
+      requestLog: Array<{ id: number; method: string; params?: Record<string, unknown> }>;
+      respond: (id: number, result: unknown) => void;
+      rejectRequest: (id: number, message: string) => void;
+      sessionUpdate: (sessionId: string, update: Record<string, unknown>) => void;
+    };
+
+    function findRequest(method: string) {
+      return sim.requestLog.find((req) => req.method === method);
+    }
+
+    async function waitForRequest(method: string) {
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 1000) {
+        const req = findRequest(method);
+        if (req) return req;
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      }
+      throw new Error(`Timed out waiting for ${method}`);
+    }
+
+    jest.isolateModules(() => {
+      const { EventEmitter } = require('events');
+      const proc = new EventEmitter() as any;
+      proc.pid = 5153;
+      proc.stdout = new EventEmitter();
+      proc.stderr = new EventEmitter();
+      proc.killed = false;
+      proc.exitCode = null;
+      proc.kill = () => {
+        proc.killed = true;
+        proc.exitCode = 0;
+        setImmediate(() => proc.emit('close', 0, 'SIGTERM'));
+      };
+
+      let lineBuf = '';
+      const requestLog: Array<{ id: number; method: string; params?: Record<string, unknown> }> = [];
+      proc.stdin = {
+        write: (s: string) => {
+          lineBuf += s;
+          const lines = lineBuf.split('\n');
+          lineBuf = lines.pop()!;
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const msg = JSON.parse(line);
+            if (msg.method && msg.id != null) requestLog.push(msg);
+          }
+          return true;
+        },
+        destroyed: false,
+      };
+      sim = {
+        proc,
+        requestLog,
+        respond: (id, result) => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n'));
+        },
+        rejectRequest: (id, message) => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({
+            jsonrpc: '2.0',
+            id,
+            error: { code: -32603, message },
+          }) + '\n'));
+        },
+        sessionUpdate: (sessionId, update) => {
+          proc.stdout.emit('data', Buffer.from(JSON.stringify({
+            jsonrpc: '2.0',
+            method: 'session/update',
+            params: { sessionId, update },
+          }) + '\n'));
+        },
+      };
+
+      jest.doMock('child_process', () => ({ spawn: () => sim.proc }));
+      const { KiroAdapter: IsolatedAdapter } = require('../src/services/backends/kiro');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('current Kiro question', {
+        sessionId: 'cockpit-session',
+        conversationId: 'conv-kiro-recovery',
+        isNewSession: false,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        externalSessionId: 'kiro-old',
+        sessionRecovery: { createSnapshot },
+      });
+      streamRef = stream;
+    });
+
+    const eventsPromise = (async () => {
+      const events: any[] = [];
+      for await (const event of streamRef) {
+        events.push(event);
+        if (event.type === 'done') break;
+      }
+      return events;
+    })();
+
+    sim.respond((await waitForRequest('initialize')).id, {});
+    const loadReq = await waitForRequest('session/load');
+    sim.rejectRequest(loadReq.id, 'Session not found: kiro-old');
+    sim.respond((await waitForRequest('session/new')).id, { sessionId: 'kiro-new' });
+    const promptReq = await waitForRequest('session/prompt');
+    const promptText = ((promptReq.params as { prompt: Array<{ text: string }> }).prompt[0]).text;
+    expect(promptText).toContain('You MUST read the prior Agent Cockpit conversation snapshot before answering');
+    expect(promptText).toContain('/tmp/kiro-recovery/session-1-latest.json');
+    expect(promptText).toContain('current Kiro question');
+    sim.sessionUpdate('kiro-new', {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'recovered' },
+    });
+    sim.respond(promptReq.id, { stopReason: 'end_turn' });
+
+    const events = await eventsPromise;
+    expect(createSnapshot).toHaveBeenCalledWith({
+      previousNativeSessionId: 'kiro-old',
+      reason: 'Session not found: kiro-old',
+    });
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'session_recovery',
+        message: expect.stringContaining('Agent Cockpit recovered the conversation'),
+        metadata: expect.objectContaining({
+          backend: 'kiro',
+          previousNativeSessionId: 'kiro-old',
+          newNativeSessionId: 'kiro-new',
+          snapshotPath: '/tmp/kiro-recovery/session-1-latest.json',
+        }),
+      }),
+      { type: 'external_session', sessionId: 'kiro-new' },
+      { type: 'backend_runtime', externalSessionId: 'kiro-new', processId: 5153 },
+      { type: 'text', content: 'recovered', streaming: true },
+      { type: 'done' },
+    ]));
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
   test('abort terminates the active ACP process so the next message reloads the session on a fresh process', async () => {
     type Sim = ReturnType<typeof createSimulator>;
 

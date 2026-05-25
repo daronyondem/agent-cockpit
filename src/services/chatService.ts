@@ -54,6 +54,7 @@ import type {
   QueuedMessage,
   CliProfile,
   StreamErrorSource,
+  SessionRecoverySnapshot,
   WorkspaceInstructionCompatibilityStatus,
   WorkspaceInstructionPointerResult,
   WorkspaceContextWorkspaceSettings,
@@ -90,6 +91,7 @@ import { WorkspaceKnowledgeStore } from './chat/workspaceKnowledgeStore';
 import { WorkspaceInstructionStore } from './chat/workspaceInstructionStore';
 import { UsageLedgerStore, emptyUsage } from './chat/usageLedgerStore';
 import { ConversationUsageStore } from './chat/conversationUsageStore';
+import { writeSessionRecoverySnapshot } from './chat/sessionRecoveryStore';
 import { applyCostEstimate } from './usagePricing/estimator';
 import { UsagePricingStore } from './usagePricing/store';
 import type { UsagePricingEntry, UsagePricingResponse } from './usagePricing/types';
@@ -1091,6 +1093,51 @@ export class ChatService {
     await this._conversationLifecycleStore.setExternalSessionId(convId, externalSessionId);
   }
 
+  async createSessionRecoverySnapshot(
+    convId: string,
+    args: {
+      backend: string;
+      previousNativeSessionId: string;
+      reason: string;
+      messageLimit?: number;
+    },
+  ): Promise<SessionRecoverySnapshot | null> {
+    const hash = this._convWorkspaceMap.get(convId);
+    if (!hash) return null;
+    return this._indexLock.run(hash, async () => {
+      const result = await this._getConvFromIndex(convId);
+      if (!result) return null;
+      const { index, convEntry } = result;
+      const activeSession = convEntry.sessions.find(s => s.active);
+      const sessionNumber = activeSession ? activeSession.number : 1;
+      const sessionFile = await this._readSessionFile(hash, convId, sessionNumber);
+      if (!sessionFile) return null;
+
+      const limit = Number.isFinite(args.messageLimit)
+        ? Math.max(0, Math.min(sessionFile.messages.length, Math.floor(args.messageLimit!)))
+        : sessionFile.messages.length;
+      const messages = sessionFile.messages.slice(0, limit);
+      const recoveryCount = sessionFile.messages.filter(message => message.sessionRecovery).length + 1;
+      const sourceSessionPath = this._sessionFilePath(hash, convId, sessionNumber);
+
+      return writeSessionRecoverySnapshot({
+        conversationDir: path.join(this._workspaceDir(hash), convId),
+        conversationId: convId,
+        conversationTitle: convEntry.title,
+        workspaceId: index.workspaceId || hash,
+        workspacePath: index.workspacePath,
+        backend: args.backend,
+        previousNativeSessionId: args.previousNativeSessionId,
+        reason: args.reason,
+        sourceSessionId: sessionFile.sessionId,
+        sourceSessionNumber: sessionNumber,
+        sourceSessionPath,
+        messages,
+        recoveryCount,
+      });
+    });
+  }
+
   async updateConversationModel(convId: string, model: string | null): Promise<void> {
     const hash = this._convWorkspaceMap.get(convId);
     if (!hash) return;
@@ -1146,7 +1193,11 @@ export class ChatService {
     toolActivity?: ToolActivity[],
     turn?: 'progress' | 'final',
     contentBlocks?: ContentBlock[],
-    opts?: { streamError?: Message['streamError']; goalEvent?: Message['goalEvent'] },
+    opts?: {
+      streamError?: Message['streamError'];
+      goalEvent?: Message['goalEvent'];
+      sessionRecovery?: Message['sessionRecovery'];
+    },
   ): Promise<Message | null> {
     return this._conversationMessageStore.addMessage(
       convId,

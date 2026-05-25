@@ -5,6 +5,13 @@ import os from 'os';
 import * as napiCanvas from '@napi-rs/canvas';
 import { BaseBackendAdapter, type RunOneShotAttachment, type RunOneShotOptions } from './base';
 import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUtils';
+import {
+  buildNativeSessionRecovery,
+  buildSessionRecoveryEvent,
+  createRecoverySnapshot,
+  isMissingNativeSessionError,
+  type NativeSessionRecovery,
+} from './sessionRecovery';
 import type {
   BackendMetadata,
   ModelCapabilities,
@@ -986,17 +993,47 @@ export class KiroAdapter extends BaseBackendAdapter {
         return;
       }
 
+      let recovery: NativeSessionRecovery | null = null;
       // Load session if this is a different process than the one that created it
       const acpEntry = this.processes.get(convId);
       if (acpEntry && acpEntry.loadedSessionId !== kiroSessionId) {
         if (!isNewSession) {
-          await client.request('session/load', { sessionId: kiroSessionId, cwd, mcpServers: mcpServersForAcp });
-          // `session/load` replays the full session history as `session/update`
-          // notifications before returning. Drain them so they don't leak into
-          // the next `session/prompt`'s stream (which would concatenate prior
-          // assistant turns into the current response).
-          const drained = client.drainNotifications();
-          console.log(`[kiro] Loaded session: ${kiroSessionId} (drained ${drained} replayed notifications)`);
+          try {
+            await client.request('session/load', { sessionId: kiroSessionId, cwd, mcpServers: mcpServersForAcp });
+            // `session/load` replays the full session history as `session/update`
+            // notifications before returning. Drain them so they don't leak into
+            // the next `session/prompt`'s stream (which would concatenate prior
+            // assistant turns into the current response).
+            const drained = client.drainNotifications();
+            console.log(`[kiro] Loaded session: ${kiroSessionId} (drained ${drained} replayed notifications)`);
+          } catch (err) {
+            const reason = (err as Error).message;
+            if (!isMissingNativeSessionError(reason)) throw err;
+            const previousNativeSessionId = kiroSessionId;
+            console.warn(`[kiro] session/load failed for ${previousNativeSessionId}: ${reason}. Starting fresh session.`);
+            let snapshot = null;
+            try {
+              snapshot = await createRecoverySnapshot(options, {
+                previousNativeSessionId,
+                reason,
+              });
+            } catch (snapshotErr) {
+              console.warn(`[kiro] Failed to create session recovery snapshot for ${previousNativeSessionId}: ${(snapshotErr as Error).message}`);
+            }
+            const result = await client.request('session/new', { cwd, mcpServers: mcpServersForAcp }) as KiroSessionNewResult;
+            kiroSessionId = result.sessionId;
+            this.sessionMap.set(sessionId, kiroSessionId);
+            recovery = buildNativeSessionRecovery({
+              backend: 'kiro',
+              previousNativeSessionId,
+              newNativeSessionId: kiroSessionId,
+              reason,
+              snapshot,
+              currentPrompt: message,
+            });
+            yield buildSessionRecoveryEvent(recovery.metadata);
+            yield { type: 'external_session', sessionId: kiroSessionId };
+          }
         }
         acpEntry.loadedSessionId = kiroSessionId;
       }
@@ -1030,6 +1067,9 @@ export class KiroAdapter extends BaseBackendAdapter {
 
       // ── Build prompt ─────────────────��─────────────────────────────────
       let promptText = message;
+      if (recovery) {
+        promptText = recovery.prompt;
+      }
       if (isNewSession) {
         const cleanPrompt = sanitizeSystemPrompt(systemPrompt);
         if (cleanPrompt) {

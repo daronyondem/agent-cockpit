@@ -1222,6 +1222,16 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: false,
         workingDir: '/tmp',
         systemPrompt: 'You are a helpful assistant',
+        sessionRecovery: {
+          createSnapshot: async () => ({
+            snapshotPath: '/tmp/claude-recovery/session-1-latest.json',
+            sourceSessionPath: '/tmp/claude-recovery/session-1.json',
+            sourceSessionNumber: 1,
+            messageCount: 2,
+            capturedAt: '2026-05-25T00:00:00.000Z',
+            recoveryCount: 1,
+          }),
+        },
       });
       streamRef = stream;
     });
@@ -1237,6 +1247,17 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     expect(capturedArgs[1]).toContain('--session-id');
     expect(capturedArgs[1]).not.toContain('--resume');
     expect(events.some(e => e.type === 'error')).toBe(false);
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'session_recovery',
+        message: expect.stringContaining('Agent Cockpit recovered the conversation'),
+        metadata: expect.objectContaining({
+          backend: 'claude-code',
+          previousNativeSessionId: 'test-resume-missing',
+        }),
+      }),
+    ]));
+    expect(capturedArgs[1].join('\n')).toContain('You MUST');
     expect(events).toEqual(expect.arrayContaining([
       { type: 'text', content: 'recovered' },
     ]));
