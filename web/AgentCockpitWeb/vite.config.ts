@@ -14,12 +14,17 @@ export default defineConfig({
     rolldownOptions: {
       output: {
         codeSplitting: {
-          minSize: 20 * 1024,
+          minSize: 4 * 1024,
           groups: [
             {
               name: 'react-vendor',
               test: /node_modules[\\/](react|react-dom)[\\/]/,
               priority: 30,
+            },
+            {
+              name: 'stream-frame-reducer',
+              test: /src[\\/]stream[\\/]streamFrameReducer\.ts$/,
+              priority: 25,
             },
             {
               name: 'markdown-vendor',

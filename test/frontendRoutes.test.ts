@@ -571,6 +571,7 @@ describe('frontend routes', () => {
     const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
     const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
     const streamStoreSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
+    const streamFrameReducerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/stream/streamFrameReducer.ts'), 'utf8');
     const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
 
     expect(apiSrc).toContain('getWorkspaceContextSettings: (hash) =>');
@@ -647,7 +648,7 @@ describe('frontend routes', () => {
     expect(shellSrc).toContain("onOpenWorkspaceSettings(workspaceRef, workspaceLabel || 'workspace', 'workspaceContext', targetSection)");
     expect(shellSrc).toContain('Open context');
     expect(shellSrc).not.toContain('Open map');
-    expect(streamStoreSrc).toContain("frame.type === 'workspace_context_update'");
+    expect(streamFrameReducerSrc).toContain("frame.type === 'workspace_context_update'");
     expect(streamStoreSrc).toContain('ac:workspace-context-update');
 
     expect(cssSrc).toContain('.settings-form.ws-form-workspace-context');

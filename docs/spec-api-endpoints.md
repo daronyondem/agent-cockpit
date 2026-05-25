@@ -163,6 +163,8 @@ ws(s)://host/api/chat/conversations/:id/ws
 {"type":"<type>", ...fields}
 ```
 
+The browser-visible frame union is defined in browser-safe `src/contracts/streamFrames.ts` and re-exported from `src/contracts/responses.ts` as the legacy `StreamEvent` alias for clients that still import response contracts. Backend adapters use the broader server-side `src/types.StreamEvent` union, which also includes process-internal events such as `turn_boundary`, `result`, `external_session`, and `backend_runtime`; `processStream` consumes or converts those before emitting `WsServerFrame` values to the browser. This boundary is recorded in [ADR-0077](adr/0077-keep-browser-stream-frames-in-a-shared-contract-and-reducer.md).
+
 **Stream event types:**
 
 | Type | Fields | Description |
@@ -197,8 +199,8 @@ ws(s)://host/api/chat/conversations/:id/ws
 | `subagentType` | Agent tool | `'Explore'`, `'general-purpose'`, etc. |
 | `isPlanMode` | EnterPlanMode, ExitPlanMode | Plan mode state change |
 | `planAction` | EnterPlanMode, ExitPlanMode | `'enter'` or `'exit'` |
-| `planContent` | ExitPlanMode or `.claude/plans/` Write | Markdown body for a pending plan approval |
-| `planFilePath` | ExitPlanMode or `.claude/plans/` Write | Claude plan file path when the CLI exposes one |
+| `planContent` | ExitPlanMode | Markdown body for a pending plan approval. Backends may attach this to a `.claude/plans/` Write event internally; `processStream` withholds it from that Write frame, stores it until the matching successful `tool_outcomes`, and then emits a synthetic `ExitPlanMode` frame with the plan content. |
+| `planFilePath` | ExitPlanMode or `.claude/plans/` Write | Claude plan file path when the CLI exposes one. Plan-file Write frames may expose the path while still withholding `planContent` until approval is actionable. |
 | `isQuestion` | AskUserQuestion | Interactive question for user |
 | `questions` | AskUserQuestion | Array of question objects with options |
 | `isPlanFile` | Write tool | `true` when writing to `.claude/plans/` |

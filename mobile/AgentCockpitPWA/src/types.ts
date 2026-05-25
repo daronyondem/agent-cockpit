@@ -24,6 +24,7 @@ import type {
   ThreadGoalStatus,
   Usage,
 } from '../../../src/contracts/responses';
+import type { BrowserStreamFrame, StreamErrorSource } from '../../../src/contracts/streamFrames';
 
 export type {
   AttachmentKind,
@@ -64,7 +65,7 @@ export type PendingAttachment = {
 
 export type StreamError = {
   message: string;
-  source?: 'backend' | 'transport' | 'abort' | 'server';
+  source?: StreamErrorSource;
 };
 
 export type CurrentUser = CurrentUserResponse;
@@ -165,24 +166,4 @@ export type UserQuestion = {
   options?: Array<{ label: string; description?: string }>;
 };
 
-export type StreamEvent =
-  | { type: 'text'; content?: string; streaming?: boolean }
-  | { type: 'thinking'; content?: string; streaming?: boolean }
-  | ({ type: 'tool_activity' } & Partial<ToolActivity> & {
-      isPlanMode?: boolean;
-      planAction?: 'enter' | 'exit';
-      planContent?: string;
-      isQuestion?: boolean;
-      questions?: UserQuestion[];
-    })
-  | { type: 'artifact'; artifact?: ConversationArtifact }
-  | { type: 'assistant_message'; message: Message }
-  | { type: 'title_updated'; title?: string }
-  | { type: 'usage'; usage: Usage; sessionUsage?: Usage }
-  | { type: 'error'; error?: string; terminal?: boolean; source?: StreamError['source'] }
-  | { type: 'goal_updated'; goal: ThreadGoal }
-  | { type: 'goal_cleared'; threadId?: string | null }
-  | { type: 'done' }
-  | { type: 'replay_start'; bufferedEvents?: number }
-  | { type: 'replay_end' }
-  | { type: 'turn_complete' };
+export type StreamEvent = BrowserStreamFrame;
