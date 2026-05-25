@@ -16,10 +16,7 @@ import { PlanUsageStore } from './planUsageStore.js';
 import { KiroPlanUsageStore } from './kiroPlanUsageStore.js';
 import { CodexPlanUsageStore } from './codexPlanUsageStore.js';
 import { cleanGoalObjectiveText, goalSnapshotTimeMs, isActiveGoal } from './goalState.js';
-
-function workspaceRefForConv(conv) {
-  return conv ? (conv.workspaceId || conv.workspaceHash || null) : null;
-}
+import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
 
   /** @typedef {import('../../../src/contracts/streams').ConversationInputRequest} ConversationInputRequest */
   /** @typedef {import('../../../src/contracts/streams').SendMessageRequest} SendMessageRequest */
@@ -143,7 +140,6 @@ function workspaceRefForConv(conv) {
   const RECONNECT_BASE_MS = 1000;
   const RECONNECT_MAX_MS = 10000;
   const RECONCILE_AFTER_OPEN_MS = 150;
-  const RECONCILE_AFTER_ASSISTANT_MESSAGE_MS = 5000;
   const CHAT_WINDOW_TAIL_LIMIT = 160;
   const CHAT_WINDOW_PAGE_LIMIT = 80;
   const CHAT_WINDOW_AROUND_BEFORE = 80;
@@ -1066,107 +1062,96 @@ function workspaceRefForConv(conv) {
     }
   }
 
-  function ensurePlaceholder(convId){
-    const s = states.get(convId);
-    if (!s) return null;
-    if (s.streamingMsgId) return s.streamingMsgId;
-    const id = 'pending-assistant-' + Date.now() + '-' + Math.random().toString(16).slice(2, 6);
-    const backend = s.conv ? s.conv.backend : '';
-    const ts = new Date().toISOString();
-    update(convId, cur => ({
-      ...cur,
-      streamingMsgId: id,
-      messages: [...cur.messages, {
-        id, role: 'assistant', content: '', backend: backend || '',
-        timestamp: ts, contentBlocks: [],
-      }],
-    }));
-    return id;
+  function reducerInputFromState(state){
+    return {
+      ...state,
+      lastFrameAtMs: state.lastFrameAt ?? null,
+    };
   }
 
-  function appendTextOrThinking(convId, kind, content){
-    if (!content) return;
-    const id = ensurePlaceholder(convId);
-    if (!id) return;
-    update(convId, cur => ({
-      ...cur,
-      messages: cur.messages.map(m => {
-        if (m.id !== id) return m;
-        const blocks = Array.isArray(m.contentBlocks) ? [...m.contentBlocks] : [];
-        const last = blocks[blocks.length - 1];
-        if (last && last.type === kind) {
-          blocks[blocks.length - 1] = { type: kind, content: (last.content || '') + content };
-        } else {
-          blocks.push({ type: kind, content });
+  function storeStateFromReducerState(state){
+    const { lastFrameAtMs, ...rest } = state;
+    return {
+      ...rest,
+      lastFrameAt: lastFrameAtMs ?? null,
+    };
+  }
+
+  function placeholderId(nowMs){
+    return 'pending-assistant-' + nowMs + '-' + Math.random().toString(16).slice(2, 6);
+  }
+
+  function placeholderIdForFrame(frame, state, nowMs){
+    if (!frame || state.streamingMsgId) return undefined;
+    if ((frame.type === 'text' || frame.type === 'thinking') && typeof frame.content === 'string' && frame.content) {
+      return placeholderId(nowMs);
+    }
+    if (frame.type === 'tool_activity' && !frame.isPlanMode && !frame.isQuestion) {
+      return placeholderId(nowMs);
+    }
+    if (frame.type === 'artifact' && frame.artifact && frame.artifact.filename) {
+      return placeholderId(nowMs);
+    }
+    return undefined;
+  }
+
+  function memoryMessageId(frame, nowMs){
+    if (!frame || frame.type !== 'memory_update' || frame.displayInChat !== true) return undefined;
+    const capturedAt = typeof frame.capturedAt === 'string' ? frame.capturedAt : new Date(nowMs).toISOString();
+    return 'mem_' + capturedAt + '_' + Math.random().toString(36).slice(2, 8);
+  }
+
+  function dispatchWindowEvent(name, detail){
+    try {
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent(name, { detail: detail || {} }));
+      }
+    } catch {}
+  }
+
+  function executeStreamReducerEffects(convId, effects, snapshot){
+    for (const effect of effects) {
+      if (!effect || typeof effect !== 'object') continue;
+      if (effect.type === 'bumpConversationListActivity') {
+        bumpConvListActivity(convId, effect.timestamp);
+      } else if (effect.type === 'patchConversationListItem') {
+        patchConvListItem(convId, effect.patch || {});
+      } else if (effect.type === 'markConversationUnread') {
+        AgentApi.markConversationUnread(convId, true).catch(() => {});
+      } else if (effect.type === 'refreshPlanUsage') {
+        refreshPlanUsageForSnapshot(states.get(convId) || snapshot);
+      } else if (effect.type === 'drainQueue') {
+        drainQueueIfReady(convId);
+      } else if (effect.type === 'clearReconnectTimer') {
+        clearReconnectTimer(convId);
+      } else if (effect.type === 'clearReconcileTimer') {
+        clearReconcileTimer(convId);
+      } else if (effect.type === 'scheduleReconcile') {
+        const cur = states.get(convId);
+        if (cur && cur.ws && (cur.streaming || cur.uiState === 'streaming')) {
+          scheduleReconcileActiveStream(convId, cur.ws, effect.delayMs);
         }
-        const nextContent = blocks.filter(b => b.type === 'text').map(b => b.content).join('');
-        return { ...m, contentBlocks: blocks, content: nextContent };
-      }),
-    }));
-  }
-
-  function pushToolBlock(convId, activity){
-    const id = ensurePlaceholder(convId);
-    if (!id) return;
-    update(convId, cur => ({
-      ...cur,
-      messages: cur.messages.map(m => {
-        if (m.id !== id) return m;
-        const blocks = Array.isArray(m.contentBlocks) ? [...m.contentBlocks] : [];
-        blocks.push({ type: 'tool', activity });
-        return { ...m, contentBlocks: blocks };
-      }),
-    }));
-  }
-
-  function pushArtifactBlock(convId, artifact){
-    if (!artifact || !artifact.filename) return;
-    const id = ensurePlaceholder(convId);
-    if (!id) return;
-    update(convId, cur => ({
-      ...cur,
-      messages: cur.messages.map(m => {
-        if (m.id !== id) return m;
-        const blocks = Array.isArray(m.contentBlocks) ? [...m.contentBlocks] : [];
-        blocks.push({ type: 'artifact', artifact });
-        const nextContent = m.content || (artifact.title || artifact.filename || 'Generated file');
-        return { ...m, contentBlocks: blocks, content: nextContent };
-      }),
-    }));
-  }
-
-  function patchToolOutcomes(convId, outcomes){
-    const s = states.get(convId);
-    if (!s) return;
-    const id = s.streamingMsgId;
-    if (!id || !Array.isArray(outcomes) || !outcomes.length) return;
-    update(convId, cur => {
-      const next = cur.messages.map(m => {
-        if (m.id !== id) return m;
-        if (!Array.isArray(m.contentBlocks)) return m;
-        let changed = false;
-        const blocks = m.contentBlocks.map(b => {
-          if (b.type !== 'tool') return b;
-          const out = outcomes.find(o => o.toolUseId && b.activity.id === o.toolUseId);
-          if (!out) return b;
-          changed = true;
-          const duration = b.activity.duration != null
-            ? b.activity.duration
-            : (b.activity.startTime ? Math.max(0, Date.now() - b.activity.startTime) : null);
-          return {
-            type: 'tool',
-            activity: {
-              ...b.activity,
-              outcome: out.outcome || undefined,
-              status: out.status || undefined,
-              duration,
-            },
-          };
-        });
-        return changed ? { ...m, contentBlocks: blocks } : m;
-      });
-      return { ...cur, messages: next };
-    });
+      } else if (effect.type === 'dispatchMemoryUpdate') {
+        dispatchWindowEvent('ac:memory-update', effect.detail);
+      } else if (effect.type === 'dispatchMemoryReviewUpdate') {
+        dispatchWindowEvent('ac:memory-review-update', effect.detail);
+      } else if (effect.type === 'dispatchWorkspaceContextUpdate') {
+        dispatchWindowEvent('ac:workspace-context-update', effect.detail);
+      } else if (effect.type === 'dispatchKbStateUpdate') {
+        dispatchWindowEvent('ac:kb-state-update', effect.detail);
+      } else if (effect.type === 'refreshConversation') {
+        AgentApi.fetch('conversations/' + encodeURIComponent(convId))
+          .then(r => r.json())
+          .then(data => {
+            const cur = states.get(convId);
+            if (!cur) return;
+            update(convId, state => ({ ...state, conv: data }));
+          })
+          .catch(() => {});
+      } else if (effect.type === 'warn') {
+        console.warn('[stream-warning]', effect.message);
+      }
+    }
   }
 
   function refreshPlanUsageForSnapshot(snapshot){
@@ -1190,390 +1175,31 @@ function workspaceRefForConv(conv) {
     if (!frame || typeof frame !== 'object') return;
     const s = states.get(convId);
     if (!s) return;
-    update(convId, { lastFrameAt: Date.now() });
     if (frame.type !== 'text' && frame.type !== 'thinking') {
       console.log('[diag]', new Date().toISOString(), 'frame', 'conv=' + convId.slice(0,8), 'type=' + frame.type,
         frame.message ? ('msgId=' + String(frame.message.id || '').slice(0,16)) : '');
-    }
-
-    if (frame.type === 'text') {
-      appendTextOrThinking(convId, 'text', typeof frame.content === 'string' ? frame.content : '');
-      return;
-    }
-    if (frame.type === 'thinking') {
-      appendTextOrThinking(convId, 'thinking', typeof frame.content === 'string' ? frame.content : '');
-      return;
-    }
-    if (frame.type === 'tool_activity') {
-      if (frame.isPlanMode) {
-        if (frame.planAction === 'enter') {
-          update(convId, { planModeActive: true });
-        } else if (frame.planAction === 'exit') {
-          const planContent = typeof frame.planContent === 'string' ? frame.planContent : '';
-          update(convId, {
-            pendingInteraction: { type: 'planApproval', planContent },
-            planModeActive: false,
-            uiState: 'awaiting',
-          });
-        }
-        return;
-      }
-      if (frame.isQuestion) {
-        const qs = Array.isArray(frame.questions) ? frame.questions : [];
-        const first = qs[0] || {};
-        const questionText = typeof first === 'string'
-          ? first
-          : (first.question || frame.description || 'Input needed');
-        const options = first && typeof first === 'object' && Array.isArray(first.options)
-          ? first.options
-          : [];
-        update(convId, {
-          pendingInteraction: {
-            type: 'userQuestion',
-            question: questionText,
-            options,
-          },
-          uiState: 'awaiting',
-        });
-        return;
-      }
-      pushToolBlock(convId, {
-        tool: frame.tool,
-        description: frame.description || '',
-        id: frame.id || null,
-        duration: null,
-        startTime: Date.now(),
-        isAgent: frame.isAgent || undefined,
-        subagentType: frame.subagentType || undefined,
-        parentAgentId: frame.parentAgentId || undefined,
-      });
-      return;
-    }
-    if (frame.type === 'tool_outcomes') {
-      patchToolOutcomes(convId, frame.outcomes);
-      return;
-    }
-    if (frame.type === 'artifact') {
-      pushArtifactBlock(convId, frame.artifact);
-      return;
-    }
-    if (frame.type === 'goal_updated') {
-      applyGoalSnapshot(convId, frame.goal || null);
-      return;
-    }
-    if (frame.type === 'goal_cleared') {
-      applyGoalSnapshot(convId, null);
-      return;
-    }
-    if (frame.type === 'assistant_message' && frame.message) {
-      if (frame.message.goalEvent) {
-        update(convId, cur => {
-          const incomingId = frame.message.id;
-          const existing = incomingId ? cur.messages.findIndex(m => m.id === incomingId) : -1;
-          if (existing >= 0) {
-            const messages = cur.messages.slice();
-            messages[existing] = frame.message;
-            return { ...cur, messages };
-          }
-          const phId = cur.streamingMsgId;
-          const phIndex = phId ? cur.messages.findIndex(m => m.id === phId) : -1;
-          if (phIndex >= 0) {
-            const messages = cur.messages.slice();
-            messages.splice(phIndex, 0, frame.message);
-            return { ...cur, messages };
-          }
-          return { ...cur, messages: [...cur.messages, frame.message] };
-        });
-        bumpConvListActivity(convId, frame.message.timestamp);
-        return;
-      }
-      update(convId, cur => {
-        const phId = cur.streamingMsgId;
-        const matched = phId && cur.messages.some(m => m.id === phId);
-        const incomingId = frame.message.id;
-        /* Drop any prior message with the incoming id BEFORE deciding
-           replace-vs-append. The server's per-conv buffer replays every
-           past event whenever a fresh WS connects (page reload, sleep
-           wake, network change, `online` event, visibility revalidation
-           ≥30s). When that replay happens after a turn already completed,
-           the original final message is still in `messages`, the replayed
-           text deltas spin up a NEW placeholder via ensurePlaceholder
-           (because streamingMsgId was cleared by the prior `done`), and
-           the replayed assistant_message would replace that placeholder
-           with a frame whose id matches the original — leaving two
-           entries with the same id in the array. Filtering by id first
-           collapses both replay variants (with or without a fresh
-           placeholder) into a single entry. */
-        const dupExists = incomingId && cur.messages.some(m => m.id === incomingId && m.id !== phId);
-        const cleaned = dupExists
-          ? cur.messages.filter(m => m.id !== incomingId)
-          : cur.messages;
-        const phStillPresent = phId && cleaned.some(m => m.id === phId);
-        const mode = phStillPresent
-          ? (dupExists ? 'replace-placeholder+drop-dup' : 'replace-placeholder')
-          : (dupExists ? 'replace-duplicate' : 'append');
-        console.log('[diag]', new Date().toISOString(), 'assistant_message-apply',
-          'conv=' + convId.slice(0,8),
-          'phId=' + (phId ? String(phId).slice(0,16) : 'null'),
-          'matched=' + matched,
-          'incomingId=' + String(incomingId || '').slice(0,16),
-          'incomingTs=' + (frame.message.timestamp || 'null'),
-          'mode=' + mode);
-        const isFinalTurn = frame.message.turn === 'final';
-        const messages = phStillPresent
-          ? cleaned.map(m => m.id === phId ? frame.message : m)
-          : [...cleaned, frame.message];
-        return {
-          ...cur,
-          messages,
-          streamingMsgId: null,
-          pendingInteraction: isFinalTurn ? null : cur.pendingInteraction,
-          uiState: isFinalTurn && cur.pendingInteraction
-            ? (cur.streaming ? 'streaming' : (cur.streamError ? 'error' : null))
-            : cur.uiState,
-        };
-      });
-      diagSnap(convId, 'assistant_message-after');
-      const cur = states.get(convId);
-      if (cur && cur.ws && (cur.streaming || cur.uiState === 'streaming')) {
-        scheduleReconcileActiveStream(convId, cur.ws, RECONCILE_AFTER_ASSISTANT_MESSAGE_MS);
-      }
-      bumpConvListActivity(convId, frame.message.timestamp);
-      return;
-    }
-    if (frame.type === 'turn_complete') {
-      /* V1 uses this to archive active tools/agents into history. V2's
-         contentBlocks already live on the per-turn assistant message and tool
-         outcomes mutate in place, so the turn split from `assistant_message`
-         above is sufficient. Claude-Code-only frame; Kiro never emits it. */
-      return;
     }
     if (frame.type === 'replay_start') {
       console.log('[diag]', new Date().toISOString(), 'replay_start',
         'conv=' + convId.slice(0,8),
         'bufferedEvents=' + (frame.bufferedEvents ?? '?'));
       diagSnap(convId, 'replay_start-before');
-      clearReconcileTimer(convId);
-      /* Server is about to replay the full per-conv WS buffer (ws.ts
-         replayBuffer). Wipe the streaming placeholder's contentBlocks and
-         any partial accumulated interaction state so the replayed frames
-         rebuild cleanly instead of duplicating what we already have in
-         memory. Keep streamingMsgId so replayed text/tool frames land on
-         the same placeholder id. Backend-agnostic — buffer is transport
-         layer, affects both Claude Code and Kiro. */
-      update(convId, cur => {
-        if (!cur.streamingMsgId) return { ...cur, replayActive: true };
-        return {
-          ...cur,
-          replayActive: true,
-          messages: cur.messages.map(m =>
-            m.id === cur.streamingMsgId ? { ...m, contentBlocks: [], content: '' } : m
-          ),
-          pendingInteraction: null,
-          planModeActive: false,
-        };
-      });
-      return;
     }
-    if (frame.type === 'replay_end') {
+    const nowMs = Date.now();
+    const result = reduceStreamFrame(reducerInputFromState(s), frame, {
+      nowMs,
+      activeConvId,
+      hasActiveSocket: !!s.ws,
+      placeholderId: placeholderIdForFrame(frame, s, nowMs),
+      memoryMessageId: memoryMessageId(frame, nowMs),
+    });
+    update(convId, () => storeStateFromReducerState(result.state));
+    if (frame.type === 'assistant_message' && frame.message && !frame.message.goalEvent) {
+      diagSnap(convId, 'assistant_message-after');
+    } else if (frame.type === 'replay_end') {
       diagSnap(convId, 'replay_end-after');
-      update(convId, { replayActive: false });
-      const cur = states.get(convId);
-      if (cur && cur.ws && (cur.streaming || cur.uiState === 'streaming')) {
-        scheduleReconcileActiveStream(convId, cur.ws);
-      }
-      return;
     }
-    if (frame.type === 'title_updated' && typeof frame.title === 'string') {
-      update(convId, cur => ({
-        ...cur,
-        conv: cur.conv ? { ...cur.conv, title: frame.title } : cur.conv,
-      }));
-      patchConvListItem(convId, { title: frame.title });
-      return;
-    }
-    if (frame.type === 'usage') {
-      if (frame.sessionUsage) update(convId, { usage: frame.sessionUsage });
-      return;
-    }
-    if (frame.type === 'error') {
-      const msg = typeof frame.error === 'string' ? frame.error : 'Stream error';
-      if (frame.terminal === false) {
-        console.warn('[stream-warning]', msg);
-        return;
-      }
-      update(convId, {
-        streamError: msg,
-        streamErrorSource: typeof frame.source === 'string' ? frame.source : null,
-        uiState: 'error',
-        pendingInteraction: null,
-        planModeActive: false,
-      });
-      return;
-    }
-    if (frame.type === 'done') {
-      const wasLocallyStreaming = !!states.get(convId)?.streaming;
-      clearReconnectTimer(convId);
-      clearReconcileTimer(convId);
-      /* Flag conversation unread when a response completes on a non-active
-         conv and we're landing in the idle resting state (no error, no
-         pending interaction). The server persists via PATCH /unread so the
-         dot survives reload. */
-      const markUnreadNow = wasLocallyStreaming
-        && convId !== activeConvId
-        && !states.get(convId)?.streamError
-        && !states.get(convId)?.pendingInteraction;
-      update(convId, cur => ({
-        ...cur,
-        messages: cur.streamingMsgId
-          ? cur.messages.filter(m => (
-            m.id !== cur.streamingMsgId
-            || !!(m.content && String(m.content).trim())
-            || !!(Array.isArray(m.contentBlocks) && m.contentBlocks.length)
-            || !!m.streamError
-          ))
-          : cur.messages,
-        streaming: false,
-        streamingMsgId: null,
-        planModeActive: false,
-        replayActive: false,
-        wsReconnectAttempts: 0,
-        uiState: cur.streamError
-          ? 'error'
-          : cur.pendingInteraction ? 'awaiting' : null,
-        unread: markUnreadNow ? true : cur.unread,
-      }));
-      if (markUnreadNow) {
-        AgentApi.markConversationUnread(convId, true).catch(() => {});
-      }
-      /* Poll the profile-aware plan usage store once per turn. Server floors
-         actual upstream API calls; these reads only fan out cached snapshots. */
-      if (wasLocallyStreaming) refreshPlanUsageForSnapshot(states.get(convId) || s);
-      /* Auto-drain queue — if the just-finished run leaves us idle (no
-         pending plan/question, no stream error) and there's a queued
-         message, pop the head and send it. */
-      if (wasLocallyStreaming) drainQueueIfReady(convId);
-      return;
-    }
-    if (frame.type === 'memory_update') {
-      const changed = Array.isArray(frame.changedFiles) ? frame.changedFiles : [];
-      const writeOutcomes = Array.isArray(frame.writeOutcomes) ? frame.writeOutcomes : [];
-      const fileCount = typeof frame.fileCount === 'number' ? frame.fileCount : 0;
-      const capturedAt = typeof frame.capturedAt === 'string' ? frame.capturedAt : new Date().toISOString();
-      const sourceConversationId = typeof frame.sourceConversationId === 'string' ? frame.sourceConversationId : null;
-      const displayInChat = frame.displayInChat === true;
-      const cur = states.get(convId);
-      try {
-        const workspaceRef = cur && cur.conv ? workspaceRefForConv(cur.conv) : null;
-        if (typeof window !== 'undefined' && workspaceRef) {
-          window.dispatchEvent(new CustomEvent('ac:memory-update', {
-            detail: {
-              hash: workspaceRef,
-              capturedAt,
-              fileCount,
-              changedFiles: changed,
-              sourceConversationId,
-              displayInChat,
-              writeOutcomes,
-            },
-          }));
-        }
-      } catch {}
-      if (!displayInChat) return;
-      const synth = {
-        id: 'mem_' + capturedAt + '_' + Math.random().toString(36).slice(2, 8),
-        role: 'memory',
-        timestamp: capturedAt,
-        memoryUpdate: { capturedAt, fileCount, changedFiles: changed, sourceConversationId, writeOutcomes },
-      };
-      update(convId, cur => ({ ...cur, messages: [...cur.messages, synth] }));
-      return;
-    }
-    if (frame.type === 'memory_review_update') {
-      const review = frame.review || null;
-      const cur = states.get(convId);
-      if (!cur || !cur.conv) return;
-      try {
-        const workspaceRef = workspaceRefForConv(cur.conv);
-        if (typeof window !== 'undefined' && workspaceRef) {
-          window.dispatchEvent(new CustomEvent('ac:memory-review-update', {
-            detail: { hash: workspaceRef, review, updatedAt: frame.updatedAt || null },
-          }));
-        }
-      } catch (_) { /* noop */ }
-      update(convId, curState => ({
-        ...curState,
-        conv: { ...curState.conv, memoryReview: review },
-      }));
-      return;
-    }
-    if (frame.type === 'workspace_context_update') {
-      const workspaceContext = frame.workspaceContext || null;
-      const cur = states.get(convId);
-      if (!cur || !cur.conv) return;
-      try {
-        const workspaceRef = workspaceRefForConv(cur.conv);
-        if (typeof window !== 'undefined' && workspaceRef) {
-          window.dispatchEvent(new CustomEvent('ac:workspace-context-update', {
-            detail: { hash: workspaceRef, workspaceContext, updatedAt: frame.updatedAt || null },
-          }));
-        }
-      } catch (_) { /* noop */ }
-      update(convId, curState => ({
-        ...curState,
-        conv: { ...curState.conv, workspaceContext },
-      }));
-      return;
-    }
-    if (frame.type === 'kb_state_update') {
-      const changed = frame.changed || {};
-      const cur = states.get(convId);
-      if (!cur || !cur.conv) return;
-      /* Fan out workspace-scoped KB events so surfaces outside the chat
-         conv scope (KB Browser, etc.) can observe. Mirrors V1, where
-         `chatKbBrowserState` and the chat renderer both branch off the
-         same WS frame. `hash` is the conv's workspace reference so listeners
-         can filter to their own workspace. */
-      try {
-        const workspaceRef = workspaceRefForConv(cur.conv);
-        if (typeof window !== 'undefined' && workspaceRef) {
-          window.dispatchEvent(new CustomEvent('ac:kb-state-update', {
-            detail: { hash: workspaceRef, changed },
-          }));
-        }
-      } catch (_) { /* noop */ }
-      if (!cur.conv.kb) return;
-      const kb = { ...cur.conv.kb };
-      if (changed.stopping) kb.dreamingStopping = true;
-      if (changed.dreamProgress) {
-        kb.dreamingStatus = 'running';
-        kb._dreamProgress = changed.dreamProgress;
-      }
-      update(convId, curState => ({ ...curState, conv: { ...curState.conv, kb } }));
-      /* Any event that changes the count of pending-digestion or
-         pending-synthesis items requires a refetch so the composer's KB
-         status icon sees accurate `pendingDigestions` / `pendingEntries`.
-         `synthesis` covers dream completion, `raw` covers ingestion
-         add/delete, `entries` covers digest completion, and `digestion`
-         covers digestion-session transitions (active true↔false). */
-      const needsRefresh = (
-        (changed.synthesis && !changed.stopping) ||
-        (Array.isArray(changed.raw) && changed.raw.length > 0) ||
-        (Array.isArray(changed.entries) && changed.entries.length > 0) ||
-        (changed.digestion && typeof changed.digestion.active === 'boolean')
-      );
-      if (needsRefresh) {
-        AgentApi.fetch('conversations/' + encodeURIComponent(convId))
-          .then(r => r.json())
-          .then(data => {
-            const s2 = states.get(convId);
-            if (!s2) return;
-            update(convId, c => ({ ...c, conv: data }));
-          })
-          .catch(() => {});
-      }
-      return;
-    }
+    executeStreamReducerEffects(convId, result.effects, s);
   }
 
   /* Compose the outgoing content string from a QueuedMessage. Wire format is

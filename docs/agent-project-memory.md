@@ -24,6 +24,12 @@ tool is unavailable.
 - Public docs and issue/PR text should avoid leaking private workspace context.
 - If `memory_note` fails, do not create or edit local memory fallback files.
   Report the failure instead.
+- Browser-visible stream frames belong in browser-safe
+  `src/contracts/streamFrames.ts`. Backend adapters can use broader server-only
+  stream events, but web/mobile clients should consume only the shared browser
+  frame union. Desktop stream-frame state transitions belong in the pure reducer
+  under `web/AgentCockpitWeb/src/stream/`, with `streamStore.js` acting as the
+  socket/API/timer effect adapter.
 
 ## Releases And Installers
 

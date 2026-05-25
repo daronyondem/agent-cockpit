@@ -237,6 +237,17 @@ test('artifact frame appends a generated artifact block to the streaming placeho
   ]);
 });
 
+test('stream frames update lastFrameAt through the reducer adapter', async () => {
+  const ws = await openWs('c1');
+  const Store = (window as any).StreamStore;
+
+  const before = Store.getState('c1').lastFrameAt;
+  ws.dispatch({ type: 'text', content: 'hello' });
+
+  expect(typeof Store.getState('c1').lastFrameAt).toBe('number');
+  expect(Store.getState('c1').lastFrameAt).toBeGreaterThanOrEqual(before);
+});
+
 test('isQuestion frame sets pendingInteraction with first question + options', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;
@@ -854,7 +865,7 @@ test('replay after turn complete (text → assistant_message) does not duplicate
   expect(after.messages[0].id).toBe('msg-final-1');
 });
 
-test('replay_end is a no-op', async () => {
+test('replay_end preserves rebuilt placeholder content', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;
 
@@ -865,6 +876,7 @@ test('replay_end is a no-op', async () => {
 
   const after = Store.getState('c1');
   expect(after.streamingMsgId).toBe(before.streamingMsgId);
+  expect(after.replayActive).toBe(false);
   expect(after.messages[after.messages.length - 1].contentBlocks).toEqual(
     before.messages[before.messages.length - 1].contentBlocks
   );
