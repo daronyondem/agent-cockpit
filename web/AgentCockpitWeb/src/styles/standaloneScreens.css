@@ -1,0 +1,26 @@
+/* ============================================================
+   Sidebar screen (standalone)
+   ============================================================ */
+.sidebar-frame{
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ui-font);
+  font-size: calc(var(--t-14) * var(--density));
+}
+.sidebar-frame .sb{ width: 100%; }
+.sidebar-frame .hint{
+  padding: 40px;
+  color: var(--text-3);
+  font-size: 13px;
+  display: flex; flex-direction: column; gap: 8px;
+  line-height: 1.55;
+  background: var(--bg);
+}
+.sidebar-frame .hint h4{
+  font-family: var(--prose-font);
+  font-size: 22px; font-weight: 500; letter-spacing: -.01em;
+  color: var(--text); margin: 0 0 4px;
+}

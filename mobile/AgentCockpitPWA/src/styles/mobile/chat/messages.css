@@ -1,0 +1,229 @@
+.message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: min(100%, 100%);
+  min-width: 0;
+  overflow-wrap: anywhere;
+  padding: 2px 0;
+  position: relative;
+  scroll-margin-block: 78px;
+}
+
+.message.user {
+  align-self: flex-end;
+  background: var(--accent-soft);
+  border: 1px solid rgba(2, 166, 245, 0.22);
+  border-radius: 8px;
+  border-bottom-right-radius: 6px;
+  max-width: 88%;
+  padding: 10px 14px;
+}
+
+.message.assistant {
+  align-self: flex-start;
+  background: transparent;
+}
+
+.message.stream-placeholder {
+  gap: 7px;
+}
+
+.streaming-dots {
+  align-items: center;
+  display: inline-flex;
+  gap: 5px;
+  min-height: 22px;
+}
+
+.streaming-dots span {
+  animation: streaming-dot-bounce 1.15s infinite ease-in-out;
+  background: var(--text-3);
+  border-radius: 999px;
+  display: block;
+  height: 6px;
+  width: 6px;
+}
+
+.streaming-dots span:nth-child(2) {
+  animation-delay: 0.18s;
+}
+
+.streaming-dots span:nth-child(3) {
+  animation-delay: 0.36s;
+}
+
+@keyframes streaming-dot-bounce {
+  0%, 65%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  32% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+.message.goal-event {
+  max-width: min(100%, 680px);
+}
+
+.message.pinned {
+  box-shadow: -2px 0 0 var(--accent);
+  padding-left: 10px;
+}
+
+.message.focused {
+  outline: 2px solid rgba(2, 166, 245, 0.45);
+  outline-offset: 3px;
+}
+
+.message-heading {
+  align-items: center;
+  color: var(--text-3);
+  display: flex;
+  font-family: var(--mono-font);
+  font-size: 10px;
+  font-weight: 700;
+  gap: 8px;
+  letter-spacing: 0.12em;
+  min-width: 0;
+  text-transform: uppercase;
+}
+
+.message-author {
+  align-items: center;
+  display: inline-flex;
+  flex: 1 1 auto;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.message-author > strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.assistant-avatar {
+  align-items: center;
+  display: inline-flex;
+  flex: 0 0 auto;
+  height: 16px;
+  justify-content: center;
+  width: 16px;
+}
+
+.assistant-avatar svg,
+.assistant-avatar img {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  width: 100%;
+}
+
+.cockpit-avatar {
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.backend-avatar svg {
+  overflow: visible;
+}
+
+.provider-avatar {
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: contain;
+}
+
+.provider-avatar.provider-deepseek {
+  background-image: url('/icons/deepseek-logo.svg');
+}
+
+.provider-avatar.provider-opencode {
+  background-image: url('/icons/opencode-logo-light.svg');
+}
+
+.message strong {
+  color: inherit;
+  font-size: inherit;
+}
+
+.message-actions {
+  align-items: center;
+  align-self: flex-start;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: var(--shadow-1);
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 0;
+  margin-left: auto;
+  min-width: 0;
+  padding: 2px;
+}
+
+.message-actions button {
+  appearance: none;
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 999px;
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  height: 24px;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
+  position: relative;
+  width: 26px;
+}
+
+.message-actions button + button::before {
+  background: var(--border);
+  bottom: 5px;
+  content: "";
+  left: 0;
+  position: absolute;
+  top: 5px;
+  width: 1px;
+}
+
+.message-actions button:hover,
+.message-actions button:focus-visible {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.message-actions button.copied,
+.message-actions button.pinned {
+  background: rgba(2, 166, 245, 0.1);
+  color: var(--accent-ink);
+}
+
+.message-actions svg {
+  display: block;
+  opacity: 0.88;
+}
+
+.message-pin-strip {
+  align-items: center;
+  align-self: flex-start;
+  background: rgba(2, 166, 245, 0.08);
+  border: 1px dashed rgba(2, 166, 245, 0.28);
+  border-radius: 7px;
+  color: var(--accent-dark);
+  display: inline-flex;
+  font-family: var(--mono-font);
+  font-size: 10px;
+  font-weight: 700;
+  gap: 6px;
+  letter-spacing: 0.12em;
+  margin-top: 2px;
+  padding: 5px 10px;
+  text-transform: uppercase;
+}

@@ -1,0 +1,137 @@
+/* ---------- KB Upload, Entries, Reflections ---------- */
+.dropzone{
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg);
+  padding: 24px;
+  background: var(--surface);
+  text-align: center;
+}
+.dz-mark{ color: var(--text-3); margin-bottom: 8px; }
+.dz-title{ font-family: var(--prose-font); font-size: 20px; font-weight: 500; letter-spacing: -.01em; color: var(--text); }
+.dz-sub{ font-size: 12px; margin-top: 4px; }
+.kb-section{
+  font-family: var(--mono-font);
+  font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-3);
+  margin: 22px 0 8px;
+}
+.upload-row{
+  display: grid;
+  grid-template-columns: 16px 1fr auto 140px auto;
+  align-items: center; gap: 10px;
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.upload-row:last-child{ border-bottom: 0; }
+.upload-row .nm{ color: var(--text); font-size: 12px; }
+.upload-row .meta{ font-size: 11px; }
+.progress{
+  width: 140px; height: 4px; border-radius: 999px;
+  background: var(--surface-2); overflow: hidden;
+}
+.progress i{ display: block; height: 100%; }
+.entries-top{
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.search-input{
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  font-size: 12.5px; min-width: 280px;
+}
+.entries-topics{
+  display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-sunk);
+}
+.topic-chip{
+  font-family: var(--mono-font); font-size: 10.5px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+}
+.topic-chip.sm{ font-size: 10px; padding: 1px 6px; }
+.topic-chip.more{ color: var(--text-3); }
+.entry-row{
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  gap: 10px; align-items: start;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.entry-marker{
+  margin-top: 7px; width: 6px; height: 6px; border-radius: 999px;
+  background: var(--status-done);
+}
+.entry-text{
+  font-family: var(--prose-font);
+  font-size: 15px; line-height: 1.45; color: var(--text);
+}
+.entry-meta{
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 5px;
+  font-size: 11px;
+}
+.entries-foot{ padding: 12px 16px; font-size: 11px; }
+.reflect-card{
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--border);
+  max-width: 780px;
+}
+.r-head{ display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.r-title{
+  font-family: var(--prose-font);
+  font-size: 26px; line-height: 1.2; letter-spacing: -.01em; font-weight: 500;
+  color: var(--text); margin: 0 0 10px;
+}
+.r-foot{ font-size: 11px; margin-top: 12px; }
+
+/* ---------- Mobile narrow ---------- */
+.mobile-frame{
+  display: grid;
+  grid-template-rows: auto 1fr auto;
+  height: 100%; width: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--ui-font);
+}
+.m-top{
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+.m-top .m-title{
+  flex: 1; font-size: 13.5px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.m-top .m-elapsed{ font-size: 11px; }
+.m-feed{ overflow: auto; padding: 14px; }
+.m-composer{
+  border-top: 1px solid var(--border); padding: 10px; background: var(--bg);
+}
+.m-box{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+}
+.m-area{ padding: 10px 12px; color: var(--text-3); font-size: 13.5px; min-height: 32px; }
+.m-foot{
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.m-foot .send{
+  width: 28px; height: 28px; border-radius: 999px;
+  border: 0; color: #fff; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--accent);
+}

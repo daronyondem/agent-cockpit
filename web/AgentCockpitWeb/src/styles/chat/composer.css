@@ -1,0 +1,423 @@
+/* composer */
+.composer{
+  border-top: 1px solid var(--border);
+  background: var(--bg);
+  padding: 12px 20px 16px;
+}
+.composer-inner{
+  max-width: 760px; margin: 0 auto;
+}
+.feed.wide + .composer .composer-inner{ max-width: 880px; }
+.goal-strip{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 34px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: 12px;
+}
+.goal-strip-main{
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.goal-dot{
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--status-running);
+  flex: 0 0 auto;
+}
+.goal-strip.status-paused .goal-dot{ background: var(--status-awaiting); }
+.goal-strip.status-complete .goal-dot{ background: var(--status-success); }
+.goal-strip.status-budgetLimited .goal-dot{ background: var(--status-error); }
+.goal-status{
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.goal-elapsed{
+  font-family: var(--mono-font);
+  color: var(--text-3);
+  white-space: nowrap;
+}
+.goal-objective{
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-strip-actions{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+.goal-strip-actions button{
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text-2);
+  border-radius: var(--r-sm);
+  padding: 4px 7px;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.goal-strip-actions button:hover{ border-color: var(--border-strong); color: var(--text); }
+.goal-strip-actions button:disabled{ opacity: .5; cursor: not-allowed; }
+.composer-box{
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2);
+  overflow: hidden;
+}
+/* Composer notification icon — dashboard-style indicator rendered to
+   the left of the Send button when there is something to notify about.
+   Currently sourced from KB state (pending digestions / pending
+   synthesis / dreaming-in-progress); designed to grow additional
+   notification sources later. Hidden when there is nothing to notify
+   about. Replaces the former `.dream-banner` in-flow panel. Hover
+   surfaces a rich tooltip with the active notification details. */
+.composer-notif{
+  position: relative;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  cursor: pointer;
+  padding: 0;
+  transition: border-color .15s, color .15s, background .15s;
+}
+.composer-notif:hover{ border-color: var(--border-strong); color: var(--text); }
+.composer-notif.state-pending{ color: var(--accent, #6366f1); border-color: var(--accent-border, rgba(99,102,241,.45)); }
+.composer-notif.state-running{ color: var(--accent, #6366f1); border-color: var(--accent-border, rgba(99,102,241,.55)); background: var(--accent-bg, rgba(99,102,241,.08)); }
+.composer-notif.state-cli-update{
+  color: var(--status-awaiting);
+  border-color: color-mix(in oklch, var(--status-awaiting), transparent 52%);
+  background: color-mix(in oklch, var(--status-awaiting), transparent 92%);
+}
+.composer-notif.state-instruction-warning{
+  color: var(--status-error);
+  border-color: color-mix(in oklch, var(--status-error), transparent 56%);
+  background: color-mix(in oklch, var(--status-error), transparent 92%);
+}
+.composer-notif.state-memory-review{
+  color: var(--status-awaiting);
+  border-color: color-mix(in oklch, var(--status-awaiting), transparent 52%);
+  background: color-mix(in oklch, var(--status-awaiting), transparent 92%);
+}
+.composer-notif.state-workspace-context{
+  color: var(--accent, #6366f1);
+  border-color: color-mix(in oklch, var(--accent, #6366f1), transparent 52%);
+  background: color-mix(in oklch, var(--accent, #6366f1), transparent 93%);
+}
+.composer-notif.state-workspace-context.state-running{
+  border-color: color-mix(in oklch, var(--accent, #6366f1), transparent 45%);
+  background: color-mix(in oklch, var(--accent, #6366f1), transparent 90%);
+}
+.composer-notif-pulse{
+  position: absolute;
+  top: 2px; right: 2px;
+  width: 7px; height: 7px;
+  border-radius: 999px;
+  background: var(--accent, #6366f1);
+  box-shadow: 0 0 0 2px var(--surface);
+}
+.composer-notif.state-cli-update .composer-notif-pulse{ background: var(--status-awaiting); }
+.composer-notif.state-instruction-warning .composer-notif-pulse{ background: var(--status-error); }
+.composer-notif.state-memory-review .composer-notif-pulse{ background: var(--status-awaiting); }
+.composer-notif.state-workspace-context .composer-notif-pulse{ background: var(--accent, #6366f1); }
+.composer-notif-pulse.state-running{ animation: composer-notif-pulse 1.6s ease-in-out infinite; }
+@keyframes composer-notif-pulse{
+  0%,100% { transform: scale(1);   opacity: 1;   }
+  50%     { transform: scale(1.35); opacity: .55; }
+}
+.composer-action-popover{
+  z-index: 260;
+}
+.tt-error-text{
+  font-family: var(--mono-font);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--status-error);
+}
+.dream-stepper{
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  color: var(--text-3);
+  flex: 1;
+  overflow: hidden;
+}
+.dream-stepper-sep{ opacity: .5; }
+.dream-stepper-step{
+  padding: 2px 6px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.dream-stepper-step.active{
+  background: var(--accent-bg, rgba(99,102,241,.15));
+  color: var(--accent, #6366f1);
+  font-weight: 500;
+}
+.dream-stepper-step.done{ color: var(--text-2); }
+.composer-area{
+  padding: 12px 14px 4px;
+  color: var(--text-3);
+  font-size: 14px;
+  min-height: 38px;
+}
+.composer-foot{
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 10px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.composer-foot .picks{
+  display: inline-flex; gap: 6px;
+}
+.composer-foot .pick{
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; color: var(--text-2);
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  font-family: var(--mono-font);
+  position: relative;
+  cursor: pointer;
+}
+.composer-foot .pick:hover{ border-color: var(--border-strong); }
+.composer-foot .pick[aria-disabled="true"]{ opacity: .55; cursor: not-allowed; }
+.composer-foot .pick-icon{
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+}
+.composer-foot .backend-inline-icon,
+.composer-foot .backend-inline-icon svg{
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+.composer-foot .pick b{ color: var(--text); font-weight: 600; }
+.composer-foot .pick .chev{ opacity: .5; display: inline-flex; }
+/* Transparent native <select> overlay: lets the OS/browser render the
+   dropdown list while the chip keeps its styled shell. */
+.composer-foot .pick-select{
+  position: absolute; inset: 0;
+  width: 100%; height: 100%;
+  opacity: 0; cursor: pointer;
+  font: inherit; color: inherit; background: transparent;
+  border: 0; padding: 0; margin: 0;
+  appearance: none; -webkit-appearance: none;
+}
+.composer-foot .pick-select:disabled{ cursor: not-allowed; }
+.goal-toggle{
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-size: 11.5px;
+  cursor: pointer;
+  user-select: none;
+}
+.goal-toggle:hover{ border-color: var(--border-strong); color: var(--text); }
+.goal-toggle.active{
+  color: var(--text);
+  border-color: var(--accent-border);
+  background: var(--accent-bg);
+}
+.goal-toggle input{
+  width: 13px;
+  height: 13px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+.goal-toggle:has(input:disabled){
+  opacity: .55;
+  cursor: not-allowed;
+}
+/* Attachment tray (composer) — typed cards for images, PDFs, code, text,
+   markdown, and folders. Grid so cards reflow; image cards show a thumb,
+   others show an icon tile + meta. Uploading cards gain a dashed border
+   and a progress strip (non-images) or a spinner overlay (images). */
+.att-tray{
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  padding: 8px 10px 10px;
+  border-top: 1px dashed var(--border);
+}
+.att-card{
+  position: relative;
+  display: grid;
+  grid-template-columns: 40px 1fr;
+  align-items: center; gap: 10px;
+  padding: 8px 10px; padding-right: 24px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  border-radius: var(--r-sm);
+  min-width: 0;
+}
+.att-card.uploading{ border-style: dashed; }
+.att-card.att-error{ border-color: var(--status-error); }
+.att-card.att-image{
+  grid-template-columns: 50px 1fr;
+  padding: 6px 8px; padding-right: 22px;
+}
+.att-icon, .att-thumb{
+  width: 40px; height: 40px;
+  border-radius: var(--r-xs);
+  display: inline-flex; align-items: center; justify-content: center;
+  font-family: var(--mono-font); font-size: 10px;
+  flex-shrink: 0;
+  position: relative; overflow: hidden;
+}
+.att-thumb{ width: 50px; height: 36px; background-size: cover; background-position: center; }
+.att-label{ letter-spacing: .08em; font-weight: 600; }
+.att-kind-badge{
+  position: absolute; bottom: 3px; right: 3px;
+  font-family: var(--mono-font); font-size: 8.5px; letter-spacing: .08em;
+  padding: 1px 4px; border-radius: 3px;
+  background: rgba(0,0,0,.55); color: #fff;
+  font-weight: 600;
+}
+.att-card-meta{ display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.att-name{
+  font-size: 12.5px; color: var(--text); font-weight: 500;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.att-sub{
+  font-family: var(--mono-font);
+  font-size: 10.5px; color: var(--text-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.att-progress{
+  height: 3px; border-radius: 999px; overflow: hidden;
+  background: var(--surface);
+  margin-top: 2px;
+}
+.att-progress i{
+  display: block; height: 100%;
+  background: var(--accent);
+  transition: width .3s var(--easing);
+}
+.att-x{
+  position: absolute; top: 5px; right: 5px;
+  width: 18px; height: 18px; border-radius: 4px;
+  border: 0; background: transparent;
+  color: var(--text-3); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.att-x:hover{ background: var(--surface); color: var(--text); }
+.att-dissolve{
+  position: absolute; top: 5px; right: 26px;
+  width: 18px; height: 18px; border-radius: 4px;
+  border: 0; background: transparent;
+  color: var(--text-3); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.att-dissolve:hover{ background: var(--surface); color: var(--accent); }
+.att-card.has-dissolve{ padding-right: 46px; }
+.att-card.att-image.has-dissolve{ padding-right: 44px; }
+/* OCR button — image-only; sits in the same slot as dissolve since the
+   two never co-exist (dissolve is paste-text-only, OCR is image-only). */
+.att-ocr{
+  position: absolute; top: 5px; right: 26px;
+  width: 18px; height: 18px; border-radius: 4px;
+  border: 0; background: transparent;
+  color: var(--text-3); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.att-ocr:hover:not(:disabled){ background: var(--surface); color: var(--accent); }
+.att-ocr:disabled{ cursor: default; }
+.att-card.has-ocr{ padding-right: 46px; }
+.att-card.att-image.has-ocr{ padding-right: 44px; }
+.att-ocr-spin{
+  width: 11px; height: 11px; border-radius: 999px;
+  border: 1.5px solid var(--text-4);
+  border-top-color: var(--accent);
+  animation: spin 1.1s linear infinite;
+}
+.att-upload-ring{
+  position: absolute; inset: 0;
+  background: rgba(0,0,0,.35);
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.att-upload-ring .ring{
+  width: 16px; height: 16px; border-radius: 999px;
+  border: 2px solid rgba(255,255,255,.3);
+  border-top-color: #fff;
+  animation: spin 1.1s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.att-add{
+  display: inline-flex; align-items: center; justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  color: var(--text-3);
+  border-radius: var(--r-sm); cursor: pointer;
+  font: inherit; font-size: 12px;
+}
+.att-add:hover{ background: var(--surface-2); color: var(--text); border-color: var(--accent); }
+.att-add-icon{ color: var(--text-3); display: inline-flex; }
+
+/* Accepts-row below composer — shows typed-file legend. */
+.ca-hint-row{
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  margin-top: 8px; padding: 0 4px;
+  font-size: 11px; color: var(--text-3);
+}
+.ca-hint-row .u-mono{ font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+.ca-kind{ display: inline-flex; align-items: center; gap: 5px; }
+.ca-kind .dot{ width: 6px; height: 6px; border-radius: 999px; display: inline-block; }
+
+/* Small inline chip — queue rows, sent messages, anywhere an attachment
+   needs to ride with a text row without consuming real estate. */
+.att-chip{
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 8px 2px 2px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  font-size: 11.5px; color: var(--text-2);
+  max-width: 220px;
+  min-width: 0;
+}
+.att-chip-sm-tile{
+  width: 18px; height: 18px; border-radius: 999px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.att-label-sm{
+  font-family: var(--mono-font); font-size: 8px; font-weight: 700; letter-spacing: .04em;
+}
+.att-thumb-sm{
+  width: 18px; height: 18px; border-radius: 999px; display: inline-block;
+  background-size: cover; background-position: center;
+}
+.att-chip-sm-name{
+  font-family: var(--mono-font); font-size: 10.5px; color: var(--text-2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  max-width: 160px;
+}

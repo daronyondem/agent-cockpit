@@ -1,0 +1,268 @@
+/* ---------- Welcome ---------- */
+.main-welcome{
+  display: block;
+  overflow: auto;
+}
+.welcome-shell{
+  width: min(1120px, calc(100% - 48px));
+  margin: 0 auto;
+  padding: 40px 0;
+}
+.welcome-head{
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 18px;
+}
+.welcome-kicker{
+  font-family: var(--mono-font);
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+.welcome-head h1{
+  margin: 0;
+  font-family: var(--prose-font);
+  font-size: 34px;
+  line-height: 1.1;
+  font-weight: 500;
+  color: var(--text);
+}
+.welcome-head p{
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.welcome-error{
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1px solid color-mix(in oklch, var(--status-error), transparent 68%);
+  background: color-mix(in oklch, var(--status-error), transparent 92%);
+  color: var(--status-error);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+.welcome-error .btn{ margin-left: auto; }
+.welcome-grid{
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.welcome-panel{
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  min-width: 0;
+}
+.welcome-panel.tone-warning{ border-color: color-mix(in oklch, var(--status-awaiting), transparent 65%); }
+.welcome-panel.tone-error{ border-color: color-mix(in oklch, var(--status-error), transparent 65%); }
+.welcome-panel-head{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.welcome-panel-head h2{
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.25;
+  font-weight: 600;
+  color: var(--text);
+}
+.welcome-panel-body{
+  padding: 8px 12px 12px;
+}
+.welcome-line{
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+.welcome-line:last-child{ border-bottom: 0; }
+.welcome-line-icon{
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  color: var(--status-done);
+}
+.welcome-line.status-warning .welcome-line-icon{ color: var(--status-awaiting); }
+.welcome-line.status-error .welcome-line-icon{ color: var(--status-error); }
+.welcome-line-top{
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+  align-items: baseline;
+  min-width: 0;
+  font-size: 13px;
+}
+.welcome-line-top span{
+  color: var(--text);
+  min-width: 0;
+}
+.welcome-line-top b{
+  color: var(--text-2);
+  font-weight: 500;
+  text-align: right;
+}
+.welcome-line-detail{
+  margin-top: 2px;
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-3);
+  overflow-wrap: anywhere;
+}
+.welcome-doctor-item{
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+.welcome-doctor-item:last-child{ border-bottom: 0; padding-bottom: 0; }
+.welcome-doctor-item .welcome-line{
+  border-bottom: 0;
+}
+.welcome-install-actions{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 0 2px 26px;
+}
+.welcome-install-btn{
+  min-height: 28px;
+  padding: 5px 9px;
+  font-size: 12px;
+  line-height: 1.2;
+}
+.welcome-install-result{
+  margin: 6px 0 0 26px;
+  padding: 7px 9px;
+  border-radius: var(--r-xs);
+  font-family: var(--mono-font);
+  font-size: 11px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.welcome-install-result b{
+  display: block;
+  margin-bottom: 2px;
+  font-family: var(--ui-font);
+  font-size: 11.5px;
+}
+.welcome-install-result span{
+  display: block;
+  max-height: 98px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.welcome-install-result.ok{
+  color: var(--status-done);
+  background: color-mix(in oklch, var(--status-done), transparent 92%);
+  border: 1px solid color-mix(in oklch, var(--status-done), transparent 70%);
+}
+.welcome-install-result.error{
+  color: var(--status-error);
+  background: color-mix(in oklch, var(--status-error), transparent 92%);
+  border: 1px solid color-mix(in oklch, var(--status-error), transparent 70%);
+}
+.welcome-install-result.pending{
+  color: var(--text-2);
+  background: var(--bg-muted);
+  border: 1px solid var(--border);
+}
+.welcome-cli-auth{
+  margin-top: 7px;
+}
+.welcome-cli-auth-head{
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 0 0 6px 26px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+.welcome-cli-auth-head b{
+  color: var(--text-1);
+}
+.welcome-cli-auth-head span{
+  color: var(--text-3);
+}
+.welcome-cli-auth-note{
+  margin: 7px 0 0 26px;
+  color: var(--text-3);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.welcome-cli-auth-note code{
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.welcome-actions{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+}
+.welcome-note{
+  margin: 8px 0 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.welcome-foot{
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+@media (max-width: 860px){
+  .welcome-shell{
+    width: min(100% - 28px, 680px);
+    padding: 28px 0;
+  }
+  .welcome-head{
+    flex-direction: column;
+  }
+  .welcome-grid{
+    grid-template-columns: 1fr;
+  }
+}
+.suggest-grid{
+  display: grid; gap: 10px;
+  grid-template-columns: repeat(3, 1fr);
+  max-width: 720px;
+}
+.suggest{
+  text-align: left;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  border-radius: var(--r-md);
+  padding: 14px;
+  cursor: pointer; color: var(--text);
+  box-shadow: var(--shadow-1);
+  font: inherit;
+}
+.suggest:hover{ border-color: var(--border-strong); }
+.suggest .s-head{
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 11px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--text-3); font-family: var(--mono-font);
+  margin-bottom: 8px;
+}
+.suggest .s-body{
+  font-family: var(--prose-font);
+  font-size: 15.5px; line-height: 1.4; color: var(--text);
+  letter-spacing: -.005em;
+}

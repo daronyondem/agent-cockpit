@@ -6,6 +6,66 @@ import { execFileSync } from 'child_process';
 
 const ROOT = path.resolve(__dirname, '..');
 
+function readDesktopCss(): string {
+  const srcRoot = path.join(ROOT, 'web/AgentCockpitWeb/src');
+  const seen = new Set<string>();
+
+  function readCssFile(relativePath: string): string {
+    const normalizedPath = relativePath.split('/').join(path.sep);
+    if (seen.has(normalizedPath)) return '';
+    seen.add(normalizedPath);
+    const absolutePath = path.join(srcRoot, normalizedPath);
+    const source = fs.readFileSync(absolutePath, 'utf8');
+    const directory = path.dirname(normalizedPath);
+    const imported = [...source.matchAll(/^@import\s+['"]\.\/([^'"]+\.css)['"];/gm)]
+      .map((match) => readCssFile(path.join(directory, match[1]).split(path.sep).join('/')))
+      .join('\n');
+    const sourceWithoutImports = source.replace(/^@import\s+['"]\.\/[^'"]+\.css['"];\n?/gm, '');
+    return `${imported}\n${sourceWithoutImports}`;
+  }
+
+  const mainSrc = fs.readFileSync(path.join(srcRoot, 'main.jsx'), 'utf8');
+  const cssImports = [...mainSrc.matchAll(/^import\s+['"]\.\/([^'"]+\.css)['"];/gm)].map((match) => match[1]);
+  if (!cssImports.includes('styles/desktop.css')) {
+    throw new Error('desktop CSS aggregator is not imported by main.jsx');
+  }
+  return cssImports.map(readCssFile).join('\n');
+}
+
+function readMobileCss(): string {
+  const srcRoot = path.join(ROOT, 'mobile/AgentCockpitPWA/src');
+  const seen = new Set<string>();
+
+  function readCssFile(relativePath: string): string {
+    const normalizedPath = relativePath.split('/').join(path.sep);
+    if (seen.has(normalizedPath)) return '';
+    seen.add(normalizedPath);
+    const absolutePath = path.join(srcRoot, normalizedPath);
+    const source = fs.readFileSync(absolutePath, 'utf8');
+    const directory = path.dirname(normalizedPath);
+    const imported = [...source.matchAll(/^@import\s+['"]\.\/([^'"]+\.css)['"];/gm)]
+      .map((match) => readCssFile(path.join(directory, match[1]).split(path.sep).join('/')))
+      .join('\n');
+    const sourceWithoutImports = source.replace(/^@import\s+['"]\.\/[^'"]+\.css['"];\n?/gm, '');
+    return `${imported}\n${sourceWithoutImports}`;
+  }
+
+  const mainSrc = fs.readFileSync(path.join(srcRoot, 'styles.css'), 'utf8');
+  const cssImports = [...mainSrc.matchAll(/^@import\s+['"]\.\/([^'"]+\.css)['"];/gm)].map((match) => match[1]);
+  if (!cssImports.includes('styles/mobile/base.css')) {
+    throw new Error('mobile CSS module aggregator is not imported by styles.css');
+  }
+  return cssImports.map(readCssFile).join('\n');
+}
+
+function readMobileChatScreen(): string {
+  return fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/mobileChatScreen.tsx'), 'utf8');
+}
+
+function readMobileConversationModals(): string {
+  return fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/mobileConversationModals.tsx'), 'utf8');
+}
+
 interface HttpResult {
   status: number;
   headers: http.IncomingHttpHeaders;
@@ -67,28 +127,36 @@ describe('frontend routes', () => {
 
   test('desktop chat keeps composer typing out of the transcript render path', () => {
     const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
     const shellStateSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shellState.jsx'), 'utf8');
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
+    const messageContentSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/messageContent.jsx'), 'utf8');
+    const messageFeedSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/messageFeed.jsx'), 'utf8');
+    const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
 
     expect(shellStateSrc).toContain('export function useConversationSelector');
     expect(shellStateSrc).toContain('export function shallowEqual');
-    expect(shellSrc).toContain('const state = useConversationSelector(convId, selectChatLiveState, shallowEqual);');
-    expect(shellSrc).toContain('const ChatComposer = React.memo(function ChatComposer');
-    expect(shellSrc).toContain('const state = useConversationSelector(convId, selectChatComposerState, shallowEqual);');
-    expect(shellSrc).toContain('input: s.input');
-    expect(shellSrc).not.toMatch(/function selectChatLiveState[\s\S]*input: s\.input[\s\S]*function selectChatComposerState/);
-    expect(shellSrc).toContain('const messageFeedEntries = React.useMemo(');
-    expect(shellSrc).toContain('() => collapseProgressRuns(feedMessages)');
-    expect(shellSrc).toContain('const MessageBubble = React.memo(function MessageBubble');
-    expect(shellSrc).toContain('setMessageRef={setMessageRef}');
-    expect(shellSrc).toContain('const TextSegment = React.memo(function TextSegment');
-    expect(shellSrc).toContain('const html = React.useMemo(() => renderMarkdown(cleaned), [cleaned]);');
-    expect(shellSrc).toContain('dangerouslySetInnerHTML={{ __html: html }}');
+    expect(shellSrc).toContain("import { App } from './appShell.jsx';");
+    expect(appShellSrc).toContain("import { ChatLive } from './chat/chatLive.jsx';");
+    expect(chatLiveSrc).toContain('const state = useConversationSelector(convId, selectChatLiveState, shallowEqual);');
+    expect(composerSrc).toContain('export const ChatComposer = React.memo(function ChatComposer');
+    expect(composerSrc).toContain('const state = useConversationSelector(convId, selectChatComposerState, shallowEqual);');
+    expect(composerSrc).toContain('input: s.input');
+    expect(`${appShellSrc}\n${chatLiveSrc}`).not.toMatch(/function selectChatLiveState[\s\S]*input: s\.input[\s\S]*function selectChatComposerState/);
+    expect(chatLiveSrc).toContain('const messageFeedEntries = React.useMemo(');
+    expect(chatLiveSrc).toContain('() => collapseProgressRuns(feedMessages)');
+    expect(messageFeedSrc).toContain('export const MessageBubble = React.memo(function MessageBubble');
+    expect(chatLiveSrc).toContain('setMessageRef={setMessageRef}');
+    expect(messageContentSrc).toContain('export const TextSegment = React.memo(function TextSegment');
+    expect(messageContentSrc).toContain('const html = React.useMemo(() => renderMarkdown(cleaned), [cleaned]);');
+    expect(messageContentSrc).toContain('dangerouslySetInnerHTML={{ __html: html }}');
   });
 
   test('OpenCode provider profiles use provider assistant avatars', () => {
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
+    const messageFeedSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/messageFeed.jsx'), 'utf8');
     const shellStateSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shellState.jsx'), 'utf8');
-    const appCss = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const appCss = readDesktopCss();
 
     expect(fs.existsSync(path.join(ROOT, 'public/icons/deepseek-logo.svg'))).toBe(true);
     expect(fs.existsSync(path.join(ROOT, 'public/icons/opencode-logo-light.svg'))).toBe(true);
@@ -103,29 +171,30 @@ describe('frontend routes', () => {
     expect(appCss).toContain("url('/icons/opencode-logo-light.svg')");
     expect(appCss).toContain('#root[data-theme="dark"] .msg-agent .avatar.avatar-provider-opencode');
     expect(appCss).toContain("url('/icons/opencode-logo-dark.svg')");
-    expect(shellSrc).toContain('const assistantName = useAssistantDisplayName(message.backend, cliProfileId);');
-    expect(shellSrc).toContain('const entryCliProfileId = entry.message.cliProfileId');
-    expect(shellSrc).toContain('|| (isEntryStreaming ? state.composerCliProfileId : null)');
-    expect(shellSrc).toContain('<AssistantAvatar backend={message.backend} cliProfileId={cliProfileId}/>');
-    const mobileApp = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
-    const mobileCss = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
-    expect(mobileApp).toContain('opencodeProviderLabel');
-    expect(mobileApp).toContain('provider-avatar provider-${providerAvatar}');
+    expect(messageFeedSrc).toContain('const assistantName = useAssistantDisplayName(message.backend, cliProfileId);');
+    expect(chatLiveSrc).toContain('const entryCliProfileId = entry.message.cliProfileId');
+    expect(chatLiveSrc).toContain('|| (isEntryStreaming ? state.composerCliProfileId : null)');
+    expect(messageFeedSrc).toContain('<AssistantAvatar backend={message.backend} cliProfileId={cliProfileId}/>');
+    const mobileChatScreenSrc = readMobileChatScreen();
+    const mobileCss = readMobileCss();
+    expect(mobileChatScreenSrc).toContain('opencodeProviderLabel');
+    expect(mobileChatScreenSrc).toContain('provider-avatar provider-${providerAvatar}');
     expect(mobileCss).toContain("url('/icons/deepseek-logo.svg')");
     expect(mobileCss).toContain("url('/icons/opencode-logo-light.svg')");
   });
 
   test('desktop and mobile file surfaces understand conversation worktrees', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
+    const messageContentSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/messageContent.jsx'), 'utf8');
     const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
     const mobileApiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
     const mobileModelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
 
     expect(apiSrc).toContain("'/worktree-isolation'");
     expect(apiSrc).toContain('conversationStatus: (convId)');
-    expect(shellSrc).toContain("'/workspace-file?path='");
-    expect(shellSrc).toContain('executionDir: conv.executionDir || conv.workingDir || null');
+    expect(messageContentSrc).toContain("'/workspace-file?path='");
+    expect(chatLiveSrc).toContain('executionDir: conv.executionDir || conv.workingDir || null');
     expect(workspaceSettingsSrc).toContain("{ id: 'worktrees'");
     expect(workspaceSettingsSrc).toContain('Use one worktree per conversation');
     expect(workspaceSettingsSrc).toContain("import { StreamStore } from './streamStore.js'");
@@ -144,8 +213,9 @@ describe('frontend routes', () => {
 
   test('mobile PWA keeps iOS viewport and modal sheet content reachable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const componentsSrc = readMobileConversationModals();
     const viewportHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useViewportHeightVar.ts'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+    const cssSrc = readMobileCss();
 
     expect(appSrc).toContain("import { useViewportHeightVar } from './useViewportHeightVar'");
     expect(appSrc).toContain('useViewportHeightVar();');
@@ -173,7 +243,7 @@ describe('frontend routes', () => {
     expect(cssSrc).toMatch(/\.sheet-close \{[\s\S]*flex: 0 0 auto;/);
     expect(cssSrc).toMatch(/textarea, input \{[\s\S]*font-size: 16px;/);
     expect(cssSrc).toMatch(/\.editor \{[\s\S]*font-size: 16px;/);
-    expect(appSrc).toContain('className="modal-scroll run-settings-scroll"');
+    expect(componentsSrc).toContain('className="modal-scroll run-settings-scroll"');
     expect(cssSrc).toMatch(/\.run-settings-scroll \{[\s\S]*padding-bottom: calc\(16px \+ env\(safe-area-inset-bottom\)\);/);
     expect(cssSrc).toMatch(/\.filter-select \{[\s\S]*flex: 1 1 100%;/);
     expect(cssSrc).toMatch(/\.filter-select select \{[\s\S]*max-width: 100%;/);
@@ -181,9 +251,10 @@ describe('frontend routes', () => {
 
   test('welcome flow calls install doctor and completion APIs', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
+    const welcomeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/welcomeScreen.jsx'), 'utf8');
     const primitivesSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/primitives.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(apiSrc).toContain("chatFetch('install/doctor')");
     expect(apiSrc).toContain("chatFetch('install/welcome-complete', { method: 'POST'");
@@ -194,33 +265,33 @@ describe('frontend routes', () => {
     expect(apiSrc).toContain('runInstallAction');
     expect(apiSrc).toContain('startSetupCliAuth');
     expect(apiSrc).toContain('testSetupCliAuth');
-    expect(shellSrc).toContain("new URLSearchParams(window.location.search).get('welcome') === '1'");
-    expect(shellSrc).toContain('function WelcomeScreen');
-    expect(shellSrc).toContain('AgentApi.getInstallDoctor()');
-    expect(shellSrc).toContain('AgentApi.completeWelcome()');
-    expect(shellSrc).toContain('AgentApi.runInstallAction(action.id)');
-    expect(shellSrc).toContain('AgentApi.settings.startSetupCliAuth(vendor)');
-    expect(shellSrc).toContain('AgentApi.settings.testSetupCliAuth(vendor)');
-    expect(shellSrc).toContain('function WelcomeCliAuth');
-    expect(shellSrc).toContain('setInstallStatus(nextInstallStatus)');
-    expect(shellSrc).toContain("'welcomeCompletedAt' in nextInstallStatus");
-    expect(shellSrc).toContain('onClick={() => onDone(null)}');
-    expect(shellSrc).toContain('showWelcomeAction={Boolean(installStatus && !installStatus.welcomeCompletedAt && !welcomeOpen)}');
-    expect(shellSrc).toContain("['pandoc', 'libreoffice', 'mobile-build']");
-    expect(shellSrc).not.toContain(['cloud', 'flared'].join(''));
-    expect(shellSrc).toContain("onOpenSettings('security')");
-    expect(shellSrc).toContain("onOpenSettings('cli')");
-    expect(shellSrc).toContain("title: 'CLI profile required'");
-    expect(shellSrc).toContain("confirmLabel: 'Open CLI Profiles'");
-    expect(shellSrc).toContain('Install only the backend CLIs you plan to use.');
-    expect(shellSrc).toContain('item.installActions');
-    expect(shellSrc).toContain("const actions = Array.isArray(item.installActions) ? item.installActions : []");
-    expect(shellSrc).toContain('welcome-install-actions');
-    expect(shellSrc).toContain('welcome-install-result');
-    expect(shellSrc).toContain('welcome-cli-auth');
+    expect(appShellSrc).toContain("new URLSearchParams(window.location.search).get('welcome') === '1'");
+    expect(welcomeSrc).toContain('export function WelcomeScreen');
+    expect(welcomeSrc).toContain('AgentApi.getInstallDoctor()');
+    expect(welcomeSrc).toContain('AgentApi.completeWelcome()');
+    expect(welcomeSrc).toContain('AgentApi.runInstallAction(action.id)');
+    expect(welcomeSrc).toContain('AgentApi.settings.startSetupCliAuth(vendor)');
+    expect(welcomeSrc).toContain('AgentApi.settings.testSetupCliAuth(vendor)');
+    expect(welcomeSrc).toContain('function WelcomeCliAuth');
+    expect(appShellSrc).toContain('setInstallStatus(nextInstallStatus)');
+    expect(appShellSrc).toContain("'welcomeCompletedAt' in nextInstallStatus");
+    expect(welcomeSrc).toContain('onClick={() => onDone(null)}');
+    expect(appShellSrc).toContain('showWelcomeAction={Boolean(installStatus && !installStatus.welcomeCompletedAt && !welcomeOpen)}');
+    expect(welcomeSrc).toContain("['pandoc', 'libreoffice', 'mobile-build']");
+    expect(welcomeSrc).not.toContain(['cloud', 'flared'].join(''));
+    expect(welcomeSrc).toContain("onOpenSettings('security')");
+    expect(welcomeSrc).toContain("onOpenSettings('cli')");
+    expect(appShellSrc).toContain("title: 'CLI profile required'");
+    expect(appShellSrc).toContain("confirmLabel: 'Open CLI Profiles'");
+    expect(welcomeSrc).toContain('Install only the backend CLIs you plan to use.');
+    expect(welcomeSrc).toContain('item.installActions');
+    expect(welcomeSrc).toContain("const actions = Array.isArray(item.installActions) ? item.installActions : []");
+    expect(welcomeSrc).toContain('welcome-install-actions');
+    expect(welcomeSrc).toContain('welcome-install-result');
+    expect(welcomeSrc).toContain('welcome-cli-auth');
     expect(primitivesSrc).toContain('Welcome!');
     expect(primitivesSrc).toContain('showWelcomeAction');
-    expect(shellSrc).toContain('/mobile/');
+    expect(welcomeSrc).toContain('/mobile/');
     expect(cssSrc).toContain('.main-welcome');
     expect(cssSrc).toContain('.welcome-grid');
     expect(cssSrc).toContain('.sb-welcome-toggle');
@@ -232,7 +303,7 @@ describe('frontend routes', () => {
     const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
     const shellStateSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shellState.jsx'), 'utf8');
     const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/cliUpdateStore.js'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(storeSrc).toContain('function ensureFresh()');
     expect(storeSrc).toContain('needsInitialCheck(data) ? check() : data');
@@ -256,7 +327,7 @@ describe('frontend routes', () => {
   test('OpenCode profile settings use draft checks and provider-only profile controls', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
     const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
-    const appCss = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const appCss = readDesktopCss();
 
     expect(apiSrc).toContain('cli-profiles/opencode/draft/metadata');
     expect(apiSrc).toContain('cli-profiles/opencode/draft/test');
@@ -273,35 +344,35 @@ describe('frontend routes', () => {
   });
 
   test('instruction compatibility popover separates covered vendors from pointer needs', () => {
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const composerNotificationsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composerNotifications.jsx'), 'utf8');
 
-    expect(shellSrc).toContain('const coveredLabels = (status.vendors || []).filter(item => item.covered)');
-    expect(shellSrc).toContain('<div className="tt-kv"><span>Covered</span>');
-    expect(shellSrc).toContain('<div className="tt-kv"><span>Needs pointers</span>');
-    expect(shellSrc).not.toContain('<div className="tt-kv"><span>Missing</span>');
+    expect(composerNotificationsSrc).toContain('const coveredLabels = (status.vendors || []).filter(item => item.covered)');
+    expect(composerNotificationsSrc).toContain('<div className="tt-kv"><span>Covered</span>');
+    expect(composerNotificationsSrc).toContain('<div className="tt-kv"><span>Needs pointers</span>');
+    expect(composerNotificationsSrc).not.toContain('<div className="tt-kv"><span>Missing</span>');
   });
 
   test('composer profile picker recovers reset sessions with stale profile ids', () => {
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
     const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
 
     expect(storeSrc).toContain('composerCliProfileId: freshSession ? (data.cliProfileId || null) : next.composerCliProfileId');
     expect(storeSrc).toContain('composerBackend: freshSession ? (data.backend || null) : next.composerBackend');
-    expect(shellSrc).toContain('const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;');
-    expect(shellSrc).toContain('const canChangeProfile = !profileLocked || canRepairMissingProfile;');
-    expect(shellSrc).toContain('canChangeProfile && activeProfiles.length === 1 ? activeProfiles[0] : null');
-    expect(shellSrc).toContain("value={selectedProfile ? selectedProfile.name : 'Select profile'}");
-    expect(shellSrc).toContain('disabled={disabled || !canChangeProfile}');
-    expect(shellSrc).toContain("title={canRepairMissingProfile ? 'Select replacement CLI profile'");
-    expect(shellSrc).toContain("...(!selectedProfile ? [{ value: '', label: 'Select profile', disabled: true }] : [])");
-    expect(shellSrc).toContain('disabled={!!o.disabled}');
+    expect(composerSrc).toContain('const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;');
+    expect(composerSrc).toContain('const canChangeProfile = !profileLocked || canRepairMissingProfile;');
+    expect(composerSrc).toContain('canChangeProfile && activeProfiles.length === 1 ? activeProfiles[0] : null');
+    expect(composerSrc).toContain("value={selectedProfile ? selectedProfile.name : 'Select profile'}");
+    expect(composerSrc).toContain('disabled={disabled || !canChangeProfile}');
+    expect(composerSrc).toContain("title={canRepairMissingProfile ? 'Select replacement CLI profile'");
+    expect(composerSrc).toContain("...(!selectedProfile ? [{ value: '', label: 'Select profile', disabled: true }] : [])");
+    expect(composerSrc).toContain('disabled={!!o.disabled}');
   });
 
   test('desktop Usage settings separate reported and estimated cost with pricing override controls', () => {
     const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
     const chipSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chip-renderers.jsx'), 'utf8');
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(settingsSrc).toContain('usageEstimatedCost');
     expect(settingsSrc).toContain('fmtEstimatedCost');
@@ -327,23 +398,23 @@ describe('frontend routes', () => {
   });
 
   test('mobile Usage bar separates reported and estimated cost', () => {
-    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+    const componentsSrc = readMobileChatScreen();
+    const cssSrc = readMobileCss();
 
-    expect(appSrc).toContain('const estimatedCost = Number(usage.estimatedCostUsd) || 0;');
-    expect(appSrc).toContain('Math.ceil(estimatedCost).toLocaleString()');
-    expect(appSrc).toContain('<span className="usage-label">Estimated Cost</span>');
-    expect(appSrc).toContain('{estimatedCostLabel}');
+    expect(componentsSrc).toContain('const estimatedCost = Number(usage.estimatedCostUsd) || 0;');
+    expect(componentsSrc).toContain('Math.ceil(estimatedCost).toLocaleString()');
+    expect(componentsSrc).toContain('<span className="usage-label">Estimated Cost</span>');
+    expect(componentsSrc).toContain('{estimatedCostLabel}');
     expect(cssSrc).toContain('grid-template-columns: repeat(4, minmax(0, 1fr));');
   });
 
   test('mobile PWA renders thinking Markdown blocks without flex-column squeeze', () => {
-    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+    const componentsSrc = readMobileChatScreen();
+    const cssSrc = readMobileCss();
     const thinkingRule = cssSrc.match(/\.thinking \{[^}]+\}/)?.[0] || '';
 
-    expect(appSrc).toContain("thinking={props.block.type === 'thinking'}");
-    expect(appSrc).toContain("className={props.thinking ? 'thinking' : undefined}");
+    expect(componentsSrc).toContain("thinking={props.block.type === 'thinking'}");
+    expect(componentsSrc).toContain("className={props.thinking ? 'thinking' : undefined}");
     expect(thinkingRule).toContain('display: block;');
     expect(thinkingRule).toContain('width: 100%;');
     expect(thinkingRule).not.toContain('display: inline-flex;');
@@ -351,6 +422,7 @@ describe('frontend routes', () => {
 
   test('mobile PWA treats stream socket loss as reconnectable', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const lifecycleHookSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/useMobileLifecycle.ts'), 'utf8');
 
     expect(appSrc).toContain('const STREAM_RECONNECT_BASE_MS');
     expect(appSrc).toContain('const STREAM_RECONNECT_MAX_MS');
@@ -358,8 +430,10 @@ describe('frontend routes', () => {
     expect(appSrc).toContain('resumeStreamConnectionRef');
     expect(appSrc).toContain('function scheduleStreamReconnect');
     expect(appSrc).toContain('async function resumeStreamConnection');
-    expect(appSrc).toContain("window.addEventListener('online', resumeVisibleStream)");
-    expect(appSrc).toContain("document.addEventListener('visibilitychange', resumeVisibleStream)");
+    expect(appSrc).toContain('useVisibleStreamResume(() =>');
+    expect(lifecycleHookSrc).toContain("window.addEventListener('online', resumeVisibleStream)");
+    expect(lifecycleHookSrc).toContain("document.addEventListener('visibilitychange', resumeVisibleStream)");
+    expect(lifecycleHookSrc).toContain('function useVisibleIntervalRefresh');
     expect(appSrc).toContain('void resumeStreamConnectionRef.current(conversationID, true)');
     expect(appSrc).toContain('void resumeStreamConnectionRef.current(conversationID)');
     expect(appSrc).toContain('socket.onerror = () =>');
@@ -369,25 +443,28 @@ describe('frontend routes', () => {
   });
 
   test('desktop and mobile chat transcripts pause auto-follow when users scroll away', () => {
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
-    const webCssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
-    const mobileAppSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
-    const mobileCssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
+    const webCssSrc = readDesktopCss();
+    const mobileComponentsSrc = readMobileChatScreen();
+    const mobileModelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
+    const mobileCssSrc = readMobileCss();
 
-    expect(shellSrc).toContain('CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48');
-    expect(shellSrc).toContain('function isChatScrolledToEnd');
-    expect(shellSrc).toContain('feedAutoFollowRef');
-    expect(shellSrc).toContain('onScroll={handleFeedScroll}');
-    expect(shellSrc).toContain('className="chat-back-to-end"');
-    expect(shellSrc).toContain('scrollFeedToEnd()');
+    expect(chatLiveSrc).toContain('CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48');
+    expect(chatLiveSrc).toContain('function isChatScrolledToEnd');
+    expect(chatLiveSrc).toContain('feedAutoFollowRef');
+    expect(chatLiveSrc).toContain('onScroll={handleFeedScroll}');
+    expect(chatLiveSrc).toContain('className="chat-back-to-end"');
+    expect(chatLiveSrc).toContain('scrollFeedToEnd()');
     expect(webCssSrc).toContain('.feed-wrap');
     expect(webCssSrc).toContain('.chat-back-to-end');
 
-    expect(mobileAppSrc).toContain('CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48');
-    expect(mobileAppSrc).toContain('transcriptAutoFollowRef');
-    expect(mobileAppSrc).toContain('onScroll={handleTranscriptScroll}');
-    expect(mobileAppSrc).toContain('className="mobile-back-to-end"');
-    expect(mobileAppSrc).toContain('scrollTranscriptToEnd()');
+    expect(mobileModelSrc).toContain('CHAT_SCROLL_BOTTOM_THRESHOLD_PX = 48');
+    expect(mobileModelSrc).toContain('function isChatScrolledToEnd');
+    expect(mobileComponentsSrc).toContain('isChatScrolledToEnd(transcript)');
+    expect(mobileComponentsSrc).toContain('transcriptAutoFollowRef');
+    expect(mobileComponentsSrc).toContain('onScroll={handleTranscriptScroll}');
+    expect(mobileComponentsSrc).toContain('className="mobile-back-to-end"');
+    expect(mobileComponentsSrc).toContain('scrollTranscriptToEnd()');
     expect(mobileCssSrc).toContain('.transcript-wrap');
     expect(mobileCssSrc).toContain('.mobile-back-to-end');
   });
@@ -395,8 +472,9 @@ describe('frontend routes', () => {
   test('desktop transcript paging uses internal message windows without a virtualizer dependency', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
     const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
-    const webCssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
+    const messageFeedSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/messageFeed.jsx'), 'utf8');
+    const webCssSrc = readDesktopCss();
     const packageSrc = fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8');
     const packageLockSrc = fs.readFileSync(path.join(ROOT, 'package-lock.json'), 'utf8');
 
@@ -407,23 +485,23 @@ describe('frontend routes', () => {
     expect(storeSrc).toContain('loadOlderMessages');
     expect(storeSrc).toContain('loadAroundMessage');
     expect(storeSrc).toContain('loadTailMessages');
-    expect(shellSrc).toContain('StreamStore.loadOlderMessages(convId)');
-    expect(shellSrc).toContain('restore.scrollTop + Math.max(0, el.scrollHeight - restore.scrollHeight)');
-    expect(shellSrc).toContain('chatFeedScrollPositions');
-    expect(shellSrc).toContain('saveFeedPosition');
-    expect(shellSrc).toContain('restoreSavedFeedPosition');
-    expect(shellSrc).toContain('StreamStore.loadAroundMessage(convId, messageId)');
-    expect(shellSrc).toContain('pendingPinJumpRef');
-    expect(shellSrc).toContain('if (!feed || !node || !feed.contains(node)) return false;');
-    expect(shellSrc).toContain('forceBackToEndRef.current = true');
-    expect(shellSrc).toContain('setPinJumpToken(token => token + 1)');
-    expect(shellSrc).toContain('feed.scrollTo({ top: Math.max(0, targetTop), behavior })');
-    expect(shellSrc).toContain('requestAnimationFrame(() => setShowFeedBackToEnd(true))');
-    expect(shellSrc).toContain('const jumpIndex = messages.length > 1 ? nextIndex : safeIndex');
-    expect(shellSrc).toContain('Opening pinned message...');
-    expect(shellSrc).toContain('Loading earlier messages...');
-    expect(shellSrc).toContain('StreamStore.loadTailMessages(convId)');
-    expect(shellSrc).toContain('currentMessages={messageWindow && (messageWindow.hasOlder || messageWindow.hasNewer) ? null : messages}');
+    expect(chatLiveSrc).toContain('StreamStore.loadOlderMessages(convId)');
+    expect(chatLiveSrc).toContain('restore.scrollTop + Math.max(0, el.scrollHeight - restore.scrollHeight)');
+    expect(chatLiveSrc).toContain('chatFeedScrollPositions');
+    expect(chatLiveSrc).toContain('saveFeedPosition');
+    expect(chatLiveSrc).toContain('restoreSavedFeedPosition');
+    expect(chatLiveSrc).toContain('StreamStore.loadAroundMessage(convId, messageId)');
+    expect(chatLiveSrc).toContain('pendingPinJumpRef');
+    expect(chatLiveSrc).toContain('if (!feed || !node || !feed.contains(node)) return false;');
+    expect(chatLiveSrc).toContain('forceBackToEndRef.current = true');
+    expect(chatLiveSrc).toContain('setPinJumpToken(token => token + 1)');
+    expect(chatLiveSrc).toContain('feed.scrollTo({ top: Math.max(0, targetTop), behavior })');
+    expect(chatLiveSrc).toContain('requestAnimationFrame(() => setShowFeedBackToEnd(true))');
+    expect(messageFeedSrc).toContain('const jumpIndex = messages.length > 1 ? nextIndex : safeIndex');
+    expect(chatLiveSrc).toContain('Opening pinned message...');
+    expect(chatLiveSrc).toContain('Loading earlier messages...');
+    expect(chatLiveSrc).toContain('StreamStore.loadTailMessages(convId)');
+    expect(chatLiveSrc).toContain('currentMessages={messageWindow && (messageWindow.hasOlder || messageWindow.hasNewer) ? null : messages}');
     expect(webCssSrc).toContain('.feed-page-status');
     expect(webCssSrc).toContain('.feed-page-status-floating');
     expect(`${packageSrc}\n${packageLockSrc}`).not.toMatch(/react-virtuoso|@tanstack\/react-virtual|react-window/);
@@ -431,31 +509,32 @@ describe('frontend routes', () => {
 
   test('desktop chat download button offers all-session and current-session exports', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
 
     expect(apiSrc).toContain('conversationDownloadUrl: (convId) => chatUrl(');
     expect(apiSrc).toContain("'/download'");
     expect(apiSrc).toContain('sessionDownloadUrl: (convId, sessionNumber) => chatUrl(');
-    expect(shellSrc).toContain('dialog.choice({');
-    expect(shellSrc).toContain("label: 'All sessions'");
-    expect(shellSrc).toContain("label: 'Current session'");
-    expect(shellSrc).toContain('AgentApi.conv.sessionDownloadUrl(convId, sessionNumber)');
-    expect(shellSrc).toContain('AgentApi.conv.conversationDownloadUrl(convId)');
+    expect(chatLiveSrc).toContain('dialog.choice({');
+    expect(chatLiveSrc).toContain("label: 'All sessions'");
+    expect(chatLiveSrc).toContain("label: 'Current session'");
+    expect(chatLiveSrc).toContain('AgentApi.conv.sessionDownloadUrl(convId, sessionNumber)');
+    expect(chatLiveSrc).toContain('AgentApi.conv.conversationDownloadUrl(convId)');
   });
 
   test('mobile PWA Markdown action offers all-session and current-session exports', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const componentsSrc = readMobileConversationModals();
     const apiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+    const cssSrc = readMobileCss();
 
     expect(apiSrc).toContain('conversationMarkdownURL(conversationID: string)');
     expect(apiSrc).toContain('sessionMarkdownURL(conversationID: string, sessionNumber: number)');
     expect(appSrc).toContain('const [markdownShareVisible, setMarkdownShareVisible] = useState(false)');
     expect(appSrc).toContain('function openMarkdownSharePicker()');
     expect(appSrc).toContain('function shareMarkdown(scope: MarkdownShareScope)');
-    expect(appSrc).toContain('function MarkdownShareModal');
-    expect(appSrc).toContain('All sessions');
-    expect(appSrc).toContain('Current session');
+    expect(componentsSrc).toContain('function MarkdownShareModal');
+    expect(componentsSrc).toContain('All sessions');
+    expect(componentsSrc).toContain('Current session');
     expect(appSrc).toContain('clientRef.current.conversationMarkdownURL(conversation.id)');
     expect(appSrc).toContain('clientRef.current.sessionMarkdownURL(conversation.id, conversation.sessionNumber || 1)');
     expect(cssSrc).toContain('.action-copy');
@@ -463,9 +542,10 @@ describe('frontend routes', () => {
 
   test('mobile PWA exposes backend-neutral goal controls through the composer shell', () => {
     const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const componentsSrc = readMobileChatScreen();
     const apiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
     const modelSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/appModel.ts'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/styles.css'), 'utf8');
+    const cssSrc = readMobileCss();
 
     expect(apiSrc).toContain('async getGoal');
     expect(apiSrc).toContain('async setGoal');
@@ -475,32 +555,32 @@ describe('frontend routes', () => {
     expect(modelSrc).toContain('function goalElapsedSeconds');
     expect(modelSrc).toContain('function goalSupportsAction');
     expect(modelSrc).toContain('function shouldApplyGoalSnapshot');
-    expect(appSrc).toContain('function normalizeGoalCapability');
-    expect(appSrc).toContain('function goalCapabilityForBackend');
-    expect(appSrc).toContain('function GoalStrip');
-    expect(appSrc).toContain('function GoalEventView');
+    expect(modelSrc).toContain('function normalizeGoalCapability');
+    expect(modelSrc).toContain('function goalCapabilityForBackend');
+    expect(componentsSrc).toContain('function GoalStrip');
+    expect(componentsSrc).toContain('function GoalEventView');
     expect(appSrc).toContain('applyServerMessage(conversation.id, response.message)');
     expect(appSrc).toContain('function handleGoalSlash');
-    expect(appSrc).toContain("backendID === 'claude-code'");
+    expect(modelSrc).toContain("backendID === 'claude-code'");
     expect(appSrc).toContain("case 'goal_updated'");
     expect(appSrc).toContain("case 'goal_cleared'");
     expect(appSrc).toContain('activeGoalIDs');
-    expect(appSrc).toContain('aria-pressed={props.goalMode}');
-    expect(appSrc).toContain('Set a goal');
-    expect(appSrc).not.toContain(['Set a', 'Codex goal'].join(' '));
-    expect(appSrc).not.toContain(['Goals are only available for', 'Codex conversations.'].join(' '));
+    expect(componentsSrc).toContain('aria-pressed={props.goalMode}');
+    expect(componentsSrc).toContain('Set a goal');
+    expect(componentsSrc).not.toContain(['Set a', 'Codex goal'].join(' '));
+    expect(componentsSrc).not.toContain(['Goals are only available for', 'Codex conversations.'].join(' '));
     expect(cssSrc).toContain('.goal-strip');
     expect(cssSrc).toContain('.goal-event-card');
     expect(cssSrc).toContain('.goal-toggle.enabled');
   });
 
   test('desktop web renders persisted goal lifecycle messages', () => {
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const messageFeedSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/messageFeed.jsx'), 'utf8');
     const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
-    expect(shellSrc).toContain('function GoalEventCard');
-    expect(shellSrc).toContain('message.goalEvent');
+    expect(messageFeedSrc).toContain('function GoalEventCard');
+    expect(messageFeedSrc).toContain('message.goalEvent');
     expect(storeSrc).toContain('function upsertPersistedMessage');
     expect(storeSrc).toContain('if (data && data.goal) applyGoalSnapshot');
     expect(cssSrc).toContain('.msg-goal-event');
@@ -508,13 +588,14 @@ describe('frontend routes', () => {
   });
 
   test('memory update notifications open the focused memory-update modal first', () => {
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
     const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
-    expect(shellSrc).toContain('MemoryUpdateModal');
-    expect(shellSrc).toContain('onOpenMemoryUpdate(workspaceRef, wsLabel, entry.message.memoryUpdate || null)');
-    expect(shellSrc).toContain('WorkspaceSettingsPage');
+    expect(appShellSrc).toContain('MemoryUpdateModal');
+    expect(chatLiveSrc).toContain('onOpenMemoryUpdate(workspaceRef, wsLabel, entry.message.memoryUpdate || null)');
+    expect(appShellSrc).toContain('WorkspaceSettingsPage');
     expect(workspaceSettingsSrc).toContain('function MemoryUpdateModal');
     expect(workspaceSettingsSrc).toContain('export function MemoryUpdateModal');
     expect(workspaceSettingsSrc).toContain('View all memory items');
@@ -525,7 +606,7 @@ describe('frontend routes', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
     const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
     const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(apiSrc).toContain('searchMemory: (hash, opts) =>');
     expect(apiSrc).toContain('proposeMemoryConsolidation: (hash) =>');
@@ -569,10 +650,12 @@ describe('frontend routes', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
     const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
     const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
+    const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
+    const composerNotificationsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composerNotifications.jsx'), 'utf8');
     const streamStoreSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
     const streamFrameReducerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/stream/streamFrameReducer.ts'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(apiSrc).toContain('getWorkspaceContextSettings: (hash) =>');
     expect(apiSrc).toContain("{ cache: 'no-store' }");
@@ -642,12 +725,12 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).not.toContain('workspaceContextCandidateImpactPreview');
     expect(workspaceSettingsSrc).not.toContain('applyAllWorkspaceContextCandidates');
 
-    expect(shellSrc).toContain('ComposerWorkspaceContextIcon');
-    expect(shellSrc).toContain('initialWorkspaceContextSection');
-    expect(shellSrc).toContain("const targetSection = running || failures > 0 ? 'runs' : null");
-    expect(shellSrc).toContain("onOpenWorkspaceSettings(workspaceRef, workspaceLabel || 'workspace', 'workspaceContext', targetSection)");
-    expect(shellSrc).toContain('Open context');
-    expect(shellSrc).not.toContain('Open map');
+    expect(composerSrc).toContain('ComposerWorkspaceContextIcon');
+    expect(appShellSrc).toContain('initialWorkspaceContextSection');
+    expect(composerNotificationsSrc).toContain("const targetSection = running || failures > 0 ? 'runs' : null");
+    expect(composerNotificationsSrc).toContain("onOpenWorkspaceSettings(workspaceRef, workspaceLabel || 'workspace', 'workspaceContext', targetSection)");
+    expect(composerNotificationsSrc).toContain('Open context');
+    expect(`${appShellSrc}\n${composerSrc}\n${composerNotificationsSrc}`).not.toContain('Open map');
     expect(streamFrameReducerSrc).toContain("frame.type === 'workspace_context_update'");
     expect(streamStoreSrc).toContain('ac:workspace-context-update');
 
@@ -667,15 +750,17 @@ describe('frontend routes', () => {
   });
 
   test('Memory Review has a dedicated page and composer notification action', () => {
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
+    const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
+    const composerNotificationsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composerNotifications.jsx'), 'utf8');
     const reviewSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/memoryReview.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
-    expect(shellSrc).toContain("./screens/memoryReview.jsx");
-    expect(shellSrc).toContain('MemoryReviewPage');
-    expect(shellSrc).toContain('ComposerMemoryReviewIcon');
-    expect(shellSrc).toContain('onOpenMemoryReview(workspaceRef');
-    expect(shellSrc).not.toContain('Run now');
+    expect(appShellSrc).toContain("./screens/memoryReview.jsx");
+    expect(appShellSrc).toContain('MemoryReviewPage');
+    expect(composerSrc).toContain('ComposerMemoryReviewIcon');
+    expect(composerNotificationsSrc).toContain('onOpenMemoryReview(workspaceRef');
+    expect(`${appShellSrc}\n${composerSrc}\n${composerNotificationsSrc}`).not.toContain('Run now');
     expect(reviewSrc).toContain('export function MemoryReviewPage');
     expect(reviewSrc).toContain('MemoryReviewInlineProgress');
     expect(reviewSrc).toContain('MemoryReviewButtonProgress');
@@ -709,7 +794,7 @@ describe('frontend routes', () => {
     const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
     const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
     const migrationTabSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsMigrationTab.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(apiSrc).toContain("chatFetch('migration/status')");
     expect(apiSrc).toContain("migrationExportUrl: () => chatUrl('migration/export')");
@@ -766,6 +851,7 @@ describe('frontend routes', () => {
     const srcRoot = path.join(ROOT, 'web/AgentCockpitWeb/src');
     const mainSrc = fs.readFileSync(path.join(srcRoot, 'main.jsx'), 'utf8');
     const shellSrc = fs.readFileSync(path.join(srcRoot, 'shell.jsx'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(srcRoot, 'appShell.jsx'), 'utf8');
     const viteConfig = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/vite.config.ts'), 'utf8');
     const files = fs.readdirSync(srcRoot, { recursive: true })
       .filter((entry) => /\.(js|jsx|ts|tsx)$/.test(String(entry)))
@@ -777,9 +863,10 @@ describe('frontend routes', () => {
     }
     expect(mainSrc).toContain("import './shell.jsx'");
     expect(mainSrc).not.toContain('await import(');
-    expect(shellSrc).toContain("import { Tip } from './tooltip.jsx'");
-    expect(shellSrc).toContain("React.lazy(() => import('./screens/kbBrowser.jsx')");
-    expect(shellSrc).toContain("React.lazy(() => import('./workspaceSettings.jsx')");
+    expect(shellSrc).toContain("import { App } from './appShell.jsx'");
+    expect(fs.readFileSync(path.join(srcRoot, 'chat/contextChip.jsx'), 'utf8')).toContain("import { Tip } from '../tooltip.jsx'");
+    expect(appShellSrc).toContain("React.lazy(() => import('./screens/kbBrowser.jsx')");
+    expect(appShellSrc).toContain("React.lazy(() => import('./workspaceSettings.jsx')");
     expect(fs.readFileSync(path.join(srcRoot, 'screens/kbBrowser.jsx'), 'utf8')).toContain("import { Tip } from '../tooltip.jsx'");
     expect(viteConfig).toContain('codeSplitting');
     expect(viteConfig).toContain('react-vendor');
@@ -830,7 +917,7 @@ describe('frontend routes', () => {
 
   test('kb pipeline marks queued digest work as waiting', () => {
     const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(kbBrowserSrc).toContain('const digestQueueWaiting = awaitingDigestCount > 0 && !digestProgress && digestingCount === 0');
     expect(kbBrowserSrc).toContain("digestQueueWaiting ? 'wait'");
@@ -851,7 +938,7 @@ describe('frontend routes', () => {
 
   test('kb entries and reflections use side readers instead of tab popups', () => {
     const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(kbBrowserSrc).toContain('function KbEntryReader');
     expect(kbBrowserSrc).toContain('function KbReflectionReader');
@@ -875,7 +962,7 @@ describe('frontend routes', () => {
 
   test('kb settings uses an internal left-tab layout for settings sections', () => {
     const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(kbBrowserSrc).toContain("const [settingsSection, setSettingsSection] = React.useState('auto-dream')");
     expect(kbBrowserSrc).toContain('className="kb-settings-rail" role="tablist"');
@@ -890,9 +977,9 @@ describe('frontend routes', () => {
 
   test('desktop sidebar uses a workspace filter instead of workspace grouping', () => {
     const primitivesSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/primitives.jsx'), 'utf8');
-    const shellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/shell.jsx'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
     const folderPickerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/folderPicker.jsx'), 'utf8');
-    const cssSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/app.css'), 'utf8');
+    const cssSrc = readDesktopCss();
 
     expect(primitivesSrc).toContain('const ALL_WORKSPACES');
     expect(primitivesSrc).toContain('All Workspaces');
@@ -903,8 +990,8 @@ describe('frontend routes', () => {
     expect(primitivesSrc).toContain('newConversationInitialPath');
     expect(primitivesSrc).toContain('onNewConversation(newConversationInitialPath)');
     expect(primitivesSrc).toContain('className="sb-brand"');
-    expect(shellSrc).toContain('folderPickerInitialPath');
-    expect(shellSrc).toContain('initialPath={folderPickerInitialPath}');
+    expect(appShellSrc).toContain('folderPickerInitialPath');
+    expect(appShellSrc).toContain('initialPath={folderPickerInitialPath}');
     expect(folderPickerSrc).toContain("function FolderPicker({ open, initialPath = ''");
     expect(folderPickerSrc).toContain("load(initialPath || '')");
     expect(primitivesSrc).not.toContain('function groupByWorkspace');

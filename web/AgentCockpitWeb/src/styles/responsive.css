@@ -1,0 +1,316 @@
+/* ============================================================
+   Mobile breakpoint (≤ 768 px)
+   — Sidebar collapses into a slide-in overlay driven by App's sbOpen
+     state (class `.cockpit.sb-open`); a hamburger button at the top
+     left of the viewport toggles it, a tap on the backdrop closes it.
+   — Topbars gain left padding so their content clears the hamburger.
+   — Composer paddings shrink and the pickers wrap.
+   — Files browser + KB Raw tab: two-column tree/preview layouts
+     stack vertically and their resizers vanish.
+   — File tree rows become touch-friendly (larger tap targets).
+   ============================================================ */
+@media (max-width: 768px){
+  .cockpit{
+    grid-template-columns: 1fr;
+  }
+  .sb{
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    width: 85vw; max-width: 320px;
+    z-index: 1800;
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    box-shadow: 0 8px 32px rgba(0,0,0,.25);
+  }
+  .sb-resizer{ display: none; }
+  .cockpit.sb-open .sb{
+    transform: translateX(0);
+  }
+  .sb-backdrop{
+    display: block;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.45);
+    z-index: 1700;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .25s ease;
+  }
+  .cockpit.sb-open .sb-backdrop{
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .nav-hamb{
+    display: inline-flex;
+    position: fixed;
+    left: 10px; top: 10px;
+    width: 40px; height: 40px;
+    align-items: center; justify-content: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: var(--r-md);
+    color: var(--text);
+    cursor: pointer;
+    z-index: 1850;
+    box-shadow: 0 1px 3px rgba(0,0,0,.1);
+  }
+  .nav-hamb:hover,
+  .nav-hamb:active{ background: var(--surface); }
+  /* When the sidebar is open it covers the hamburger's spot (top-left),
+     so hide the button — the backdrop tap is the primary dismiss. */
+  .cockpit.sb-open .nav-hamb{ opacity: 0; pointer-events: none; }
+
+  /* Push each screen's top bar content to the right of the hamburger. */
+  .main .topbar,
+  .main .kb-top,
+  .main .fx-top,
+  .main .settings-top{
+    padding-left: 58px;
+  }
+  .topbar{
+    padding-top: 8px; padding-bottom: 8px;
+    gap: 6px;
+  }
+  .topbar .crumbs{
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1 1 auto;
+  }
+  .topbar .right{
+    gap: 6px; flex-shrink: 0;
+  }
+  .topbar .right .btn{
+    padding: 6px 8px;
+    font-size: 11.5px;
+  }
+
+  /* Composer — reduce chrome and let the pickers wrap on narrow widths. */
+  .composer{
+    padding: 8px 12px 12px;
+  }
+  .goal-strip{
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .goal-strip-actions{
+    justify-content: flex-end;
+  }
+  .composer-foot{
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px 8px;
+  }
+  .composer-foot .picks{
+    flex-wrap: wrap;
+  }
+
+  .cli-pane-head,
+  .cli-card-head,
+  .cli-updates-head,
+  .cli-update-row{
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .cli-card-head-side{
+    justify-content: space-between;
+  }
+  .cli-update-side{
+    justify-content: space-between;
+  }
+  .cli-update-method{
+    width: auto;
+    text-align: left;
+  }
+  .cli-profile-grid{
+    grid-template-columns: 1fr;
+  }
+  .cli-add{
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .cli-add-hint{
+    width: 100%;
+    margin-left: 24px;
+  }
+  .cli-auth-head{
+    flex-direction: column;
+  }
+  .cli-auth-status{
+    align-self: flex-start;
+  }
+  .settings-usage,
+  .settings-security{
+    padding: 14px;
+  }
+  .kb-settings-layout{
+    flex-direction: column;
+  }
+  .kb-settings-rail{
+    flex: 0 0 auto;
+    width: 100%;
+    padding: 10px 12px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    flex-direction: row;
+    overflow-x: auto;
+  }
+  .kb-settings-nav{
+    flex: 0 0 190px;
+  }
+  .kb-settings-nav.active{
+    box-shadow: inset 0 -3px 0 var(--accent);
+  }
+  .kb-settings-section{
+    padding: 16px;
+  }
+  .kb-settings-time-row{
+    grid-template-columns: 1fr;
+  }
+  .stat-grid,
+  .security-kv{
+    grid-template-columns: 1fr;
+  }
+
+  /* Files browser — stack tree + preview, hide resizer, bigger tap targets. */
+  .fx.fx-live{
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto 1fr;
+    grid-template-areas:
+      "top"
+      "tree"
+      "edit";
+  }
+  .fx-resizer{ display: none; }
+  .fx-tree{
+    max-height: 40vh;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .fx-tree-row,
+  .fx-tree .row{
+    padding: 10px 10px;
+    font-size: 13px;
+    min-height: 40px;
+  }
+  .fx-tree-row{
+    grid-template-columns: 14px 14px minmax(0, 1fr) 24px 134px;
+  }
+  .fx-tree-row .fx-tree-actions{
+    visibility: visible;
+    width: 134px;
+  }
+  .fx-tree-row .fx-tree-size{
+    visibility: hidden;
+  }
+  .fx-tree-row .fx-tree-actions .iconbtn{
+    width: 32px; height: 32px;
+  }
+
+  /* KB Browser Raw tab — stack tree rail + right column, hide resizer. */
+  .kb-raw-body{
+    flex-direction: column;
+  }
+  .kb-raw-tree-rail{
+    flex: 0 0 auto;
+    width: 100%;
+    max-height: 35vh;
+    border-bottom: 1px solid var(--border);
+  }
+  .kb-raw-resizer{ display: none; }
+  .kb-split{
+    flex-direction: column;
+  }
+  .kb-split-left,
+  .kb-split.browse-mode .kb-split-left,
+  .kb-split.reader-mode .kb-split-left{
+    flex: 0 0 auto;
+    width: 100%;
+    max-height: 45vh;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .syn-band,
+  .syn-toolbar,
+  .kb-synth-filter-row{
+    flex-wrap: wrap;
+  }
+  .syn-stats{
+    width: 100%;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .syn-search{
+    max-width: none;
+  }
+  .pipe-meter,
+  .ps-grid,
+  .kb-trace-section-body{
+    grid-template-columns: 1fr;
+  }
+  .ps-grid{
+    padding: 14px 16px;
+  }
+  .ps-col{
+    border-left: 0;
+    padding: 0 0 18px;
+  }
+  .pipe-arrow-h{
+    display: none;
+  }
+  .pn{
+    min-height: 78px;
+  }
+  .syn-area{
+    padding: 18px 16px 8px;
+  }
+  .syn-area-rule,
+  .syn-topic-row::before{
+    left: -16px;
+  }
+  .syn-area-head{
+    flex-direction: column;
+    gap: 8px;
+  }
+  .syn-area-metrics{
+    justify-content: flex-start;
+    max-width: none;
+  }
+  .syn-topic-button{
+    grid-template-columns: 24px 1fr;
+    row-gap: 4px;
+  }
+  .syn-topic-metrics{
+    grid-column: 2 / -1;
+    flex-wrap: wrap;
+    white-space: normal;
+  }
+  .kb-raw-row{
+    grid-template-columns: 18px minmax(0, 1fr) auto;
+  }
+  .kb-raw-row .btn{
+    min-height: 32px;
+  }
+  .migration-panel-head{
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .migration-panel-head > .btn,
+  .migration-actions,
+  .migration-actions .btn{
+    width: 100%;
+    justify-content: center;
+  }
+  .migration-preview{
+    grid-template-columns: 1fr;
+  }
+  .migration-check-row{
+    grid-template-columns: 1fr;
+  }
+  .migration-check-path{
+    grid-column: 1;
+  }
+
+  /* Sidebar footer avatar nudge so the close hamburger doesn't overlap. */
+  .sb-footer{ padding-bottom: 12px; }
+}

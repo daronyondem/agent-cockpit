@@ -1,0 +1,66 @@
+.chat-topbar {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.chat-topbar.has-stop {
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+}
+
+.nav-button,
+.nav-icon-button,
+.sheet-close,
+.modal-header .btn {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  box-shadow: var(--shadow-1);
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  font-size: 12px;
+  font-weight: 600;
+  gap: 4px;
+  height: 30px;
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 10px;
+  white-space: nowrap;
+}
+
+.sheet-close {
+  flex: 0 0 auto;
+}
+
+.nav-button svg,
+.nav-icon-button svg,
+.session-back svg,
+.session-share-icon svg {
+  opacity: 0.72;
+}
+
+.nav-icon-button {
+  padding: 0;
+  width: 30px;
+}
+
+.session-back,
+.session-share-icon {
+  font-size: 12px;
+  font-weight: 600;
+  gap: 4px;
+  height: 30px;
+  min-height: 30px;
+  padding: 0 10px;
+}
+
+.session-share-icon {
+  padding: 0;
+  width: 30px;
+}
+
+.nav-button.danger {
+  background: var(--red-bg);
+  border-color: rgba(229, 72, 77, 0.35);
+  color: var(--red);
+}

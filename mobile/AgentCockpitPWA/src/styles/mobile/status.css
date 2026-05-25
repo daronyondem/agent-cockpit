@@ -1,0 +1,25 @@
+.spinner,
+.mini-spinner {
+  animation: spin 0.9s linear infinite;
+  border: 3px solid var(--border);
+  border-radius: 999px;
+  border-top-color: var(--accent);
+  height: 28px;
+  width: 28px;
+}
+
+.mini-spinner {
+  height: 18px;
+  width: 18px;
+}
+
+.meta {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

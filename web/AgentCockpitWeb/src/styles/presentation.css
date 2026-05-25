@@ -1,0 +1,147 @@
+/* moodboard page background (outside the cockpit frames) */
+.page{
+  min-height: 100vh;
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(2,166,245,.05), transparent 60%),
+    #0A0A0B;
+  color: #CFCFD4;
+  padding: 36px 48px 120px;
+  font-family: "General Sans", system-ui, sans-serif;
+}
+.page.light-shell{
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(2,166,245,.05), transparent 60%),
+    #EFEBE4;
+  color: #1a1613;
+}
+.page-head{
+  display: flex; align-items: flex-end; justify-content: space-between;
+  padding-bottom: 20px; border-bottom: 1px solid rgba(255,255,255,.08);
+  margin-bottom: 28px;
+}
+.page.light-shell .page-head{ border-color: rgba(30,25,18,.10); }
+.page-title{
+  font-size: 20px; letter-spacing: -.01em; font-weight: 600; margin: 0;
+  display: flex; align-items: center; gap: 10px;
+}
+.page-title .brand-mark{
+  width: 22px; height: 22px;
+}
+.page-title small{
+  font-size: 12px; font-weight: 500; letter-spacing: .08em; text-transform: uppercase;
+  color: #7A7F88; margin-left: 10px;
+}
+.page-sub{
+  font-size: 13px; color: #8A8E98; max-width: 780px; margin: 6px 0 0;
+  line-height: 1.55;
+}
+.page.light-shell .page-sub{ color: #5a5a63; }
+
+/* top toolbar */
+.toolbar{
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: center;
+}
+.seg{
+  display: inline-flex; padding: 3px; gap: 2px;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px;
+}
+.page.light-shell .seg{ background: rgba(30,25,18,.04); border-color: rgba(30,25,18,.10); }
+.seg button{
+  appearance: none; border: 0; background: transparent; cursor: pointer;
+  font: inherit; font-size: 12px; font-weight: 500;
+  padding: 6px 12px; color: inherit; opacity: .7;
+  border-radius: 7px;
+  display: inline-flex; align-items: center; gap: 6px;
+}
+.seg button[aria-pressed="true"]{
+  background: #CFCFD4; color: #0A0A0B; opacity: 1;
+}
+.page.light-shell .seg button[aria-pressed="true"]{
+  background: #1A1613; color: #FAF8F4;
+}
+.seg button:hover{ opacity: 1; }
+
+/* direction section */
+.direction{
+  margin-top: 36px;
+}
+.direction-header{
+  display: flex; align-items: baseline; gap: 14px;
+  margin-bottom: 14px;
+}
+.direction-name{
+  font-size: 14px; letter-spacing: .18em; text-transform: uppercase;
+  color: #9BA0AA; font-weight: 600;
+}
+.page.light-shell .direction-name{ color: #5a5a63; }
+.direction-title{
+  font-family: "Instrument Serif", Georgia, serif;
+  font-size: 34px; letter-spacing: -.01em; font-weight: 400;
+  color: #F2ECE0; margin: 0;
+}
+.page.light-shell .direction-title{ color: #1A1613; }
+.direction-blurb{
+  margin: 4px 0 22px; max-width: 700px; line-height: 1.6;
+  font-size: 13.5px; color: #8A8E98;
+}
+.page.light-shell .direction-blurb{ color: #55555d; }
+
+/* the frame that holds a full-screen cockpit mock */
+.frame{
+  position: relative;
+  background: var(--bg);
+  color: var(--text);
+  border-radius: 16px;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.06);
+  box-shadow:
+    0 1px 0 rgba(255,255,255,.03) inset,
+    0 30px 60px -30px rgba(0,0,0,.55),
+    0 80px 120px -60px rgba(0,0,0,.4);
+  font-family: var(--ui-font);
+}
+.page.light-shell .frame{ border-color: rgba(30,25,18,.08); box-shadow: 0 20px 50px -20px rgba(30,25,18,.18), 0 60px 120px -40px rgba(30,25,18,.18); }
+
+.frame-caption{
+  position: absolute; top: 10px; left: 14px; z-index: 5;
+  display: inline-flex; align-items: center; gap: 8px;
+  font-family: var(--mono-font);
+  font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+  padding: 5px 9px; border-radius: 6px;
+  background: rgba(0,0,0,.45); color: #fff; backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+.page.light-shell .frame-caption{ background: rgba(30,25,18,.78); }
+
+/* grid of the 5 screens per direction */
+.screens{
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 20px;
+}
+
+/* screen slot sizing */
+.slot{
+  grid-column: span 12;
+  border-radius: 18px;
+  overflow: hidden;
+  position: relative;
+}
+.slot.chat     { grid-column: span 12; height: 780px; }
+.slot.plan     { grid-column: span 6;  height: 640px; }
+.slot.sidebar  { grid-column: span 6;  height: 640px; }
+.slot.kb       { grid-column: span 7;  height: 560px; }
+.slot.files    { grid-column: span 5;  height: 560px; }
+
+/* small label above each slot */
+.slot-label{
+  position: absolute; top: 12px; right: 14px; z-index: 6;
+  font-family: var(--mono-font);
+  font-size: 10px; letter-spacing: .14em; text-transform: uppercase;
+  color: rgba(255,255,255,.85);
+  background: rgba(0,0,0,.38); backdrop-filter: blur(4px);
+  padding: 4px 8px; border-radius: 5px;
+}
+.page.light-shell .slot-label{ color: rgba(255,255,255,.95); background: rgba(30,25,18,.72); }

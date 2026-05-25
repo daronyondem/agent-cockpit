@@ -1,0 +1,6 @@
+@import './chat/layout.css';
+@import './chat/messages.css';
+@import './chat/activity.css';
+@import './chat/composer.css';
+@import './chat/queue.css';
+@import './chat/rail.css';

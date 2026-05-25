@@ -1,0 +1,45 @@
+.filter-select {
+  flex-direction: row;
+  flex: 1 1 100%;
+  font-family: var(--ui-font);
+  gap: 10px;
+  letter-spacing: 0;
+  margin: 0;
+  min-height: 40px;
+  padding: 8px 12px;
+  text-transform: none;
+  width: 100%;
+}
+
+.filter-select span:first-child {
+  letter-spacing: 0.14em;
+}
+
+.workspace-value {
+  font-weight: 500;
+  gap: 6px;
+}
+
+.workspace-chevron {
+  color: var(--text-3);
+  flex: 0 0 auto;
+}
+
+.toolbar-icon {
+  align-items: center;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-1);
+  color: var(--text-2);
+  cursor: pointer;
+  display: inline-flex;
+  height: 30px;
+  justify-content: center;
+  padding: 0;
+  width: 30px;
+}
+
+.list-toolbar .toolbar-icon {
+  margin-left: auto;
+}
