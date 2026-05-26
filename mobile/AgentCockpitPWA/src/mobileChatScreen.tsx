@@ -511,7 +511,7 @@ export function AssistantIdentity(props: {
   const provider = props.backend === 'opencode'
     ? String(profileForID(props.cliProfiles, props.cliProfileId)?.opencode?.provider || '').trim().toLowerCase()
     : '';
-  const providerAvatar = provider === 'deepseek' || provider === 'opencode' ? provider : '';
+  const providerAvatar = provider === 'deepseek' || provider === 'ollama' || provider === 'opencode' ? provider : '';
   const label = cliDisplayName(props.backends, props.cliProfiles, props.backend, props.cliProfileId);
   return (
     <>
