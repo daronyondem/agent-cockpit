@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import type { CliVendor } from '../types';
+import type { CliHarness } from '../types';
 
 export interface CliCommandResolution {
   command: string;
@@ -16,13 +16,13 @@ export interface CliInvocation {
 
 const WINDOWS_CLI_TOOLS_DIR = 'cli-tools';
 
-const VENDOR_COMMANDS: Partial<Record<CliVendor, string>> = {
+const HARNESS_COMMANDS: Partial<Record<CliHarness, string>> = {
   'claude-code': 'claude',
   codex: 'codex',
   opencode: 'opencode',
 };
 
-const VENDOR_PACKAGES: Partial<Record<CliVendor, string[]>> = {
+const HARNESS_PACKAGES: Partial<Record<CliHarness, string[]>> = {
   'claude-code': ['node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'],
   codex: ['node_modules', '@openai', 'codex', 'bin', 'codex.js'],
 };
@@ -36,21 +36,21 @@ const POSIX_USER_BIN_DIRS = [
 ];
 
 export function resolveCliCommandForRuntime(
-  vendor: CliVendor,
+  harness: CliHarness,
   command: string,
   env: NodeJS.ProcessEnv = process.env,
 ): CliCommandResolution {
   if (process.platform !== 'win32') {
-    const candidates = nonWindowsCliCommandCandidates(vendor, command, env);
+    const candidates = nonWindowsCliCommandCandidates(harness, command, env);
     const existing = candidates.find(candidate => candidateExists(candidate, env));
     return existing || { command, displayCommand: command };
   }
 
-  const explicit = resolveExplicitWindowsCommand(command, vendor, env);
+  const explicit = resolveExplicitWindowsCommand(command, harness, env);
   if (explicit) return explicit;
 
-  const defaultCommand = VENDOR_COMMANDS[vendor] || command;
-  const candidates = windowsCliCommandCandidates(vendor, defaultCommand, env);
+  const defaultCommand = HARNESS_COMMANDS[harness] || command;
+  const candidates = windowsCliCommandCandidates(harness, defaultCommand, env);
   const existing = candidates.find(candidate => candidateExists(candidate, env));
   if (existing) return existing;
 
@@ -62,8 +62,8 @@ export function resolveCliCommandForRuntime(
 }
 
 export function windowsCliCommandCandidates(
-  vendor: CliVendor,
-  command: string = VENDOR_COMMANDS[vendor] || '',
+  harness: CliHarness,
+  command: string = HARNESS_COMMANDS[harness] || '',
   env: NodeJS.ProcessEnv = process.env,
   extraPrefixes: string[] = [],
 ): CliCommandResolution[] {
@@ -72,10 +72,10 @@ export function windowsCliCommandCandidates(
   const candidates: CliCommandResolution[] = [];
   const prefixes = windowsCliPrefixes(env, extraPrefixes);
   for (const prefix of prefixes) {
-    const packageCandidate = windowsPackageCandidate(vendor, prefix, env);
+    const packageCandidate = windowsPackageCandidate(harness, prefix, env);
     if (packageCandidate && candidateExists(packageCandidate, env)) candidates.push(packageCandidate);
   }
-  candidates.push(...windowsPathPackageCandidates(vendor, env));
+  candidates.push(...windowsPathPackageCandidates(harness, env));
   for (const prefix of prefixes) {
     const exe = joinForBase(prefix, `${defaultCommand}.exe`);
     if (fs.existsSync(exe)) {
@@ -103,8 +103,8 @@ export function windowsCliCommandCandidates(
 }
 
 export function nonWindowsCliCommandCandidates(
-  vendor: CliVendor,
-  command: string = VENDOR_COMMANDS[vendor] || '',
+  harness: CliHarness,
+  command: string = HARNESS_COMMANDS[harness] || '',
   env: NodeJS.ProcessEnv = process.env,
 ): CliCommandResolution[] {
   if (process.platform === 'win32') return [{ command, displayCommand: command }];
@@ -117,14 +117,14 @@ export function nonWindowsCliCommandCandidates(
     const candidate = path.join(dir, command);
     candidates.push({ command: candidate, displayCommand: candidate });
   }
-  if (vendor === 'claude-code') {
+  if (harness === 'claude-code') {
     const home = env.HOME;
     if (home) {
       const candidate = path.join(home, '.claude', 'local', command);
       candidates.push({ command: candidate, displayCommand: candidate });
     }
   }
-  if (vendor === 'opencode') {
+  if (harness === 'opencode') {
     const home = env.HOME;
     if (home) {
       const candidate = path.join(home, '.opencode', 'bin', command);
@@ -154,7 +154,7 @@ export function windowsCmdCommandLine(command: string, args: string[]): string {
 
 function resolveExplicitWindowsCommand(
   command: string,
-  vendor: CliVendor,
+  harness: CliHarness,
   env: NodeJS.ProcessEnv,
 ): CliCommandResolution | null {
   if (!command.includes('/') && !command.includes('\\')) return null;
@@ -168,7 +168,7 @@ function resolveExplicitWindowsCommand(
       displayCommand: command,
     };
   }
-  if (vendor === 'codex' && fs.existsSync(command) && /[.]js$/i.test(command)) {
+  if (harness === 'codex' && fs.existsSync(command) && /[.]js$/i.test(command)) {
     return {
       command: windowsNodeCommand(env),
       argsPrefix: [command],
@@ -178,11 +178,11 @@ function resolveExplicitWindowsCommand(
   return { command, displayCommand: command };
 }
 
-function windowsPackageCandidate(vendor: CliVendor, prefix: string, env: NodeJS.ProcessEnv): CliCommandResolution | null {
-  const rel = VENDOR_PACKAGES[vendor];
+function windowsPackageCandidate(harness: CliHarness, prefix: string, env: NodeJS.ProcessEnv): CliCommandResolution | null {
+  const rel = HARNESS_PACKAGES[harness];
   if (!rel) return null;
   const target = joinForBase(prefix, ...rel);
-  if (vendor === 'codex') {
+  if (harness === 'codex') {
     return {
       command: windowsNodeCommand(env),
       argsPrefix: [target],
@@ -192,10 +192,10 @@ function windowsPackageCandidate(vendor: CliVendor, prefix: string, env: NodeJS.
   return { command: target, displayCommand: target };
 }
 
-function windowsPathPackageCandidates(vendor: CliVendor, env: NodeJS.ProcessEnv): CliCommandResolution[] {
+function windowsPathPackageCandidates(harness: CliHarness, env: NodeJS.ProcessEnv): CliCommandResolution[] {
   const candidates: CliCommandResolution[] = [];
   for (const prefix of windowsPathDirs(env)) {
-    const packageCandidate = windowsPackageCandidate(vendor, prefix, env);
+    const packageCandidate = windowsPackageCandidate(harness, prefix, env);
     if (packageCandidate && candidateExists(packageCandidate, env)) candidates.push(packageCandidate);
   }
   return candidates;

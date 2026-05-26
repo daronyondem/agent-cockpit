@@ -99,7 +99,7 @@ function claudeProfile(configDir: string, protocol: CliProfile['protocol'] = 'st
   return {
     id: 'server-configured-claude-code',
     name: 'Claude Code (Server Configured)',
-    vendor: 'claude-code',
+    harness: 'claude-code',
     protocol,
     authMode: 'server-configured',
     command: 'claude-test',
@@ -988,7 +988,7 @@ describe('Claude interactive helpers', () => {
     expect(resolved.runtime).toMatchObject({
       backendId: 'claude-code-interactive',
       cliProfileId: profile.id,
-      profile: expect.objectContaining({ vendor: 'claude-code' }),
+      profile: expect.objectContaining({ harness: 'claude-code' }),
     });
   });
 

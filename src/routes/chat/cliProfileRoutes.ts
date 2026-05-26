@@ -4,8 +4,8 @@ import type { BackendRegistry } from '../../services/backends/registry';
 import type { ChatService } from '../../services/chatService';
 import type { CliProfileAuthService } from '../../services/cliProfileAuthService';
 import { validateCliProfileDraftRequest } from '../../contracts/chat';
-import { backendForCliProfile, cliProtocolForBackend, cliVendorForBackend } from '../../services/cliProfiles';
-import type { CliProfile, CliVendor, Request, Response, Settings } from '../../types';
+import { backendForCliProfile, cliProtocolForBackend, cliHarnessForBackend } from '../../services/cliProfiles';
+import type { CliProfile, CliHarness, Request, Response, Settings } from '../../types';
 import { isCliProfileResolutionError, param, sendError } from './routeUtils';
 
 export interface CliProfileRoutesOptions {
@@ -124,10 +124,10 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
     }
   });
 
-  router.post('/cli-profiles/setup-auth/:vendor/test', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/cli-profiles/setup-auth/:harness/test', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const vendor = setupAuthVendor(param(req, 'vendor'));
-      const prepared = await prepareSetupAuthProfile(chatService, vendor);
+      const harness = setupAuthHarness(param(req, 'harness'));
+      const prepared = await prepareSetupAuthProfile(chatService, harness);
       const result = await cliProfileAuth.checkProfile(prepared.profile);
       try {
         const runtime = await chatService.resolveCliProfileRuntime(prepared.profile.id);
@@ -147,10 +147,10 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
     }
   });
 
-  router.post('/cli-profiles/setup-auth/:vendor/start', csrfGuard, async (req: Request, res: Response) => {
+  router.post('/cli-profiles/setup-auth/:harness/start', csrfGuard, async (req: Request, res: Response) => {
     try {
-      const vendor = setupAuthVendor(param(req, 'vendor'));
-      const prepared = await prepareSetupAuthProfile(chatService, vendor);
+      const harness = setupAuthHarness(param(req, 'harness'));
+      const prepared = await prepareSetupAuthProfile(chatService, harness);
       const job = await cliProfileAuth.startAuth(prepared.profile);
       res.json({ job, profile: prepared.profile, settings: prepared.settings });
     } catch (err: unknown) {
@@ -178,24 +178,28 @@ export function createCliProfileRouter(opts: CliProfileRoutesOptions): express.R
   return router;
 }
 
+type DraftCliProfile = CliProfile & { vendor?: CliHarness };
+
 function normalizeOpenCodeDraftProfile(profile: CliProfile): CliProfile {
-  if (!profile || profile.vendor !== 'opencode') {
-    throw new Error('OpenCode draft profile must use vendor opencode.');
+  const draftProfile = profile as DraftCliProfile;
+  const harness = draftProfile?.harness || draftProfile?.vendor;
+  if (!draftProfile || harness !== 'opencode') {
+    throw new Error('OpenCode draft profile must use harness opencode.');
   }
   const now = new Date().toISOString();
-  const id = String(profile.id || 'draft-opencode').trim() || 'draft-opencode';
-  const provider = typeof profile.opencode?.provider === 'string' ? profile.opencode.provider.trim() : '';
-  const command = typeof profile.command === 'string' ? profile.command.trim() : '';
+  const id = String(draftProfile.id || 'draft-opencode').trim() || 'draft-opencode';
+  const provider = typeof draftProfile.opencode?.provider === 'string' ? draftProfile.opencode.provider.trim() : '';
+  const command = typeof draftProfile.command === 'string' ? draftProfile.command.trim() : '';
   return {
     id,
-    name: String(profile.name || 'OpenCode Profile').trim() || 'OpenCode Profile',
-    vendor: 'opencode',
+    name: String(draftProfile.name || 'OpenCode Profile').trim() || 'OpenCode Profile',
+    harness: 'opencode',
     authMode: 'server-configured',
     ...(command ? { command } : {}),
     ...(provider ? { opencode: { provider } } : {}),
-    createdAt: typeof profile.createdAt === 'string' && profile.createdAt ? profile.createdAt : now,
+    createdAt: typeof draftProfile.createdAt === 'string' && draftProfile.createdAt ? draftProfile.createdAt : now,
     updatedAt: now,
-    ...(profile.disabled ? { disabled: true } : {}),
+    ...(draftProfile.disabled ? { disabled: true } : {}),
   };
 }
 
@@ -206,26 +210,26 @@ function prepareProfileForTest(
 ): { settings: Settings; profile: CliProfile; changed: boolean } {
   const profile = settings.cliProfiles?.find(candidate => candidate.id === profileId);
   if (!profile) throw new Error(`CLI profile not found: ${profileId}`);
-  if (profile.authMode === 'account' && (profile.vendor === 'codex' || profile.vendor === 'claude-code')) {
+  if (profile.authMode === 'account' && (profile.harness === 'codex' || profile.harness === 'claude-code')) {
     return cliProfileAuth.profileWithAuthDefaults(settings, profileId);
   }
   return { settings, profile, changed: false };
 }
 
-type SetupAuthVendor = Extract<CliVendor, 'codex' | 'claude-code'>;
+type SetupAuthHarness = Extract<CliHarness, 'codex' | 'claude-code'>;
 
-function setupAuthVendor(value: string): SetupAuthVendor {
+function setupAuthHarness(value: string): SetupAuthHarness {
   if (value === 'codex' || value === 'claude-code') return value;
   if (value === 'kiro') throw new Error('Remote authentication is not supported for Kiro profiles yet.');
-  throw new Error(`Unsupported setup authentication vendor: ${value}`);
+  throw new Error(`Unsupported setup authentication harness: ${value}`);
 }
 
 async function prepareSetupAuthProfile(
   chatService: ChatService,
-  vendor: SetupAuthVendor,
+  harness: SetupAuthHarness,
 ): Promise<{ settings: Settings; profile: CliProfile }> {
   const settings = await chatService.getSettings();
-  const preparedProfile = setupAuthProfile(settings, vendor);
+  const preparedProfile = setupAuthProfile(settings, harness);
   const savedSettings = preparedProfile.changed
     ? await chatService.saveSettings(preparedProfile.settings)
     : settings;
@@ -233,24 +237,24 @@ async function prepareSetupAuthProfile(
   return { settings: savedSettings, profile };
 }
 
-function setupAuthProfile(settings: Settings, vendor: SetupAuthVendor): { settings: Settings; profile: CliProfile; changed: boolean } {
+function setupAuthProfile(settings: Settings, harness: SetupAuthHarness): { settings: Settings; profile: CliProfile; changed: boolean } {
   const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
-  const setupIdPrefix = `setup-${vendor}-account`;
+  const setupIdPrefix = `setup-${harness}-account`;
   const existingAccount = profiles.find(profile =>
-    profile.vendor === vendor
+    profile.harness === harness
     && profile.authMode === 'account'
     && !profile.disabled
-    && (!hasSetupAuthHome(profile, vendor) || profile.id.startsWith(setupIdPrefix))
+    && (!hasSetupAuthHome(profile, harness) || profile.id.startsWith(setupIdPrefix))
   );
   if (existingAccount) {
     const profile = existingAccount.id.startsWith(setupIdPrefix)
-      ? setupProfileWithoutAuthHome(existingAccount, vendor)
+      ? setupProfileWithoutAuthHome(existingAccount, harness)
       : existingAccount;
     const nextProfiles = profile === existingAccount
       ? profiles
       : profiles.map(candidate => candidate.id === profile.id ? profile : candidate);
     const baseSettings = nextProfiles === profiles ? settings : { ...settings, cliProfiles: nextProfiles };
-    const promoted = maybePromoteSetupProfile(baseSettings, nextProfiles, profile, vendor);
+    const promoted = maybePromoteSetupProfile(baseSettings, nextProfiles, profile, harness);
     return {
       settings: promoted || baseSettings,
       profile,
@@ -260,15 +264,15 @@ function setupAuthProfile(settings: Settings, vendor: SetupAuthVendor): { settin
 
   const now = new Date().toISOString();
   const profile: CliProfile = {
-    id: uniqueSetupProfileId(profiles, `setup-${vendor}-account`),
-    name: vendor === 'codex' ? 'Codex Account' : 'Claude Code Account',
-    vendor,
+    id: uniqueSetupProfileId(profiles, `setup-${harness}-account`),
+    name: harness === 'codex' ? 'Codex Account' : 'Claude Code Account',
+    harness,
     authMode: 'account',
     createdAt: now,
     updatedAt: now,
-    ...(vendor === 'claude-code' ? { protocol: cliProtocolForBackend(settings.defaultBackend, vendor) || 'standard' } : {}),
+    ...(harness === 'claude-code' ? { protocol: cliProtocolForBackend(settings.defaultBackend, harness) || 'standard' } : {}),
   };
-  const promoted = maybePromoteSetupProfile(settings, profiles, profile, vendor);
+  const promoted = maybePromoteSetupProfile(settings, profiles, profile, harness);
   const baseSettings = promoted || settings;
   return {
     settings: {
@@ -284,14 +288,14 @@ function maybePromoteSetupProfile(
   settings: Settings,
   profiles: CliProfile[],
   profile: CliProfile,
-  vendor: SetupAuthVendor,
+  harness: SetupAuthHarness,
 ): Settings | null {
   const defaultProfile = settings.defaultCliProfileId
     ? profiles.find(candidate => candidate.id === settings.defaultCliProfileId)
     : undefined;
-  const defaultVendor = cliVendorForBackend(settings.defaultBackend);
+  const defaultHarness = cliHarnessForBackend(settings.defaultBackend);
   const shouldMakeDefault = !settings.defaultCliProfileId
-    || (defaultVendor === vendor && (!defaultProfile || defaultProfile.authMode === 'server-configured'));
+    || (defaultHarness === harness && (!defaultProfile || defaultProfile.authMode === 'server-configured'));
   if (!shouldMakeDefault) return null;
   return {
     ...settings,
@@ -310,9 +314,9 @@ function uniqueSetupProfileId(profiles: CliProfile[], baseId: string): string {
   return `${baseId}-${Date.now().toString(36)}`;
 }
 
-function setupProfileWithoutAuthHome(profile: CliProfile, vendor: SetupAuthVendor): CliProfile {
+function setupProfileWithoutAuthHome(profile: CliProfile, harness: SetupAuthHarness): CliProfile {
   const { configDir: _configDir, env, ...rest } = profile;
-  const nextEnv = stripSetupAuthHomeEnv(vendor, env);
+  const nextEnv = stripSetupAuthHomeEnv(harness, env);
   const changed = Boolean(profile.configDir || nextEnv !== env);
   if (!changed) return profile;
   return {
@@ -322,20 +326,20 @@ function setupProfileWithoutAuthHome(profile: CliProfile, vendor: SetupAuthVendo
   };
 }
 
-function hasSetupAuthHome(profile: CliProfile, vendor: SetupAuthVendor): boolean {
+function hasSetupAuthHome(profile: CliProfile, harness: SetupAuthHarness): boolean {
   if (profile.configDir) return true;
-  const key = vendor === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
+  const key = harness === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
   return Boolean(Object.entries(profile.env || {}).some(([name, value]) =>
     name.toUpperCase() === key && String(value || '').trim().length > 0,
   ));
 }
 
 function stripSetupAuthHomeEnv(
-  vendor: SetupAuthVendor,
+  harness: SetupAuthHarness,
   env: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
   if (!env) return env;
-  const key = vendor === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
+  const key = harness === 'claude-code' ? 'CLAUDE_CONFIG_DIR' : 'CODEX_HOME';
   const stripped: Record<string, string> = {};
   let changed = false;
   for (const [name, value] of Object.entries(env)) {

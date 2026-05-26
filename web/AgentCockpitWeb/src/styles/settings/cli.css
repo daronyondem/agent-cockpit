@@ -206,7 +206,7 @@
 .cli-card-name b{
   font-weight: 600;
 }
-.cli-vendor-icon{
+.cli-harness-icon{
   display: inline-flex;
   width: 16px;
   height: 16px;
@@ -214,22 +214,22 @@
   justify-content: center;
   color: var(--text);
 }
-.cli-vendor-icon svg{
+.cli-harness-icon svg{
   display: block;
   width: 16px;
   height: 16px;
 }
-.cli-vendor-icon.cli-provider-icon{
+.cli-harness-icon.cli-provider-icon{
   color: transparent;
   background: center / contain no-repeat;
 }
-.cli-vendor-icon.cli-provider-deepseek{
+.cli-harness-icon.cli-provider-deepseek{
   background-image: url('/icons/deepseek-logo.svg');
 }
-.cli-vendor-icon.cli-provider-opencode{
+.cli-harness-icon.cli-provider-opencode{
   background-image: url('/icons/opencode-logo-light.svg');
 }
-#root[data-theme="dark"] .cli-vendor-icon.cli-provider-opencode{
+#root[data-theme="dark"] .cli-harness-icon.cli-provider-opencode{
   background-image: url('/icons/opencode-logo-dark.svg');
 }
 .cli-card-name .chev{

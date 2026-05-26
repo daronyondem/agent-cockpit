@@ -43,8 +43,8 @@ export interface OpenCodeCliRuntime extends CliCommandResolution {
 }
 
 export function resolveOpenCodeCliRuntime(profile?: CliProfile): OpenCodeCliRuntime {
-  if (profile && profile.vendor !== 'opencode') {
-    throw new Error(`CLI profile vendor ${profile.vendor} is not opencode`);
+  if (profile && profile.harness !== 'opencode') {
+    throw new Error(`CLI profile harness ${profile.harness} is not opencode`);
   }
 
   const requestedCommand = profile?.command?.trim() || 'opencode';

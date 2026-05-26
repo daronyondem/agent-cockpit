@@ -151,10 +151,10 @@ state-changing API calls require the `x-csrf-token` value from
 ```mermaid
 flowchart TD
   Request["conversation create/send/goal"] --> ResolveProfile["resolve cliProfileId or default profile"]
-  ResolveProfile --> Vendor{"vendor"}
-  Vendor -->|claude-code| ClaudeAdapter["ClaudeCodeAdapter: claude --print / --resume"]
-  Vendor -->|kiro| KiroAdapter["KiroAdapter: kiro-cli acp session new/load"]
-  Vendor -->|codex| CodexAdapter["CodexAdapter: codex app-server thread new/resume"]
+  ResolveProfile --> Harness{"harness"}
+  Harness -->|claude-code| ClaudeAdapter["ClaudeCodeAdapter: claude --print / --resume"]
+  Harness -->|kiro| KiroAdapter["KiroAdapter: kiro-cli acp session new/load"]
+  Harness -->|codex| CodexAdapter["CodexAdapter: codex app-server thread new/resume"]
   ResolveProfile --> Runtime["command + env + configDir"]
   Runtime --> ClaudeAdapter
   Runtime --> KiroAdapter
@@ -165,7 +165,7 @@ flowchart TD
   Events --> Router["processStream"]
 ```
 
-The adapter contract normalizes vendor-specific protocol events into shared
+The adapter contract normalizes harness-specific protocol events into shared
 `StreamEvent` values before persistence or frontend rendering. CLI profiles own
 runtime isolation (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, custom command/env) while
 the stored conversation keeps the compatible `backend` mirror.
@@ -275,7 +275,7 @@ flowchart LR
   Version --> Npm["npm install"]
   Version --> PM2["pm2 restart"]
   CliUpdates --> Probe["resolve CLI command + version"]
-  CliUpdates --> Updater["npm global install or vendor self-update"]
+  CliUpdates --> Updater["npm global install or harness self-update"]
   Updater --> Registry["BackendRegistry.shutdownAll"]
   ADR["ADR scripts"] --> ADRIndex["adr-index"]
   ADR --> ADRLint["adr-lint"]

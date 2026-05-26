@@ -37,7 +37,7 @@ export type GoalCapability = {
 export type CliProfileSummary = {
   id: string;
   name: string;
-  vendor: string;
+  harness: string;
   protocol?: string;
   opencode?: {
     provider?: string;
@@ -84,10 +84,10 @@ export function isChatScrolledToEnd(element: Pick<HTMLElement, 'scrollHeight' | 
   return element.scrollHeight - element.clientHeight - element.scrollTop <= CHAT_SCROLL_BOTTOM_THRESHOLD_PX;
 }
 
-export function backendIdForProfile(profile?: { vendor: string; protocol?: string } | null): string | undefined {
+export function backendIdForProfile(profile?: { harness: string; protocol?: string } | null): string | undefined {
   if (!profile) return undefined;
-  if (profile.vendor === 'claude-code' && profile.protocol === 'interactive') return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
-  return profile.vendor;
+  if (profile.harness === 'claude-code' && profile.protocol === 'interactive') return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
+  return profile.harness;
 }
 
 const OPENCODE_PROVIDER_LABELS: Record<string, string> = {

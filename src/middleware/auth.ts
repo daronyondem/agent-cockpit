@@ -565,7 +565,7 @@ function renderAuthShell(options: {
     <div class="preview-editorial">
       <p class="pe-quote">
         &ldquo;Keeping my entire <em>knowledge base</em>, <em>memory</em> in my hands, accessing from anywhere I need, using the
-        <em>multiple CLI vendors</em>, subscriptions I have. A central cockpit for my day to day AI work.&rdquo;
+        <em>multiple CLI harnesses</em>, subscriptions I have. A central cockpit for my day to day AI work.&rdquo;
       </p>
       <div class="pe-attr">Agent Cockpit · Local owner account</div>
     </div>

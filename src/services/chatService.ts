@@ -6,7 +6,7 @@ import type { BackendRegistry } from './backends/registry';
 import { SettingsService } from './settingsService';
 import {
   backendForCliProfile,
-  cliVendorForBackend,
+  cliHarnessForBackend,
   cliProfileIdForBackend,
   type CliProfileRuntime,
   ensureServerConfiguredCliProfiles,
@@ -514,7 +514,7 @@ export class ChatService {
   }
 
   private async _migrateCliProfiles(): Promise<void> {
-    const usedVendors = new Set<string>();
+    const usedHarnesses = new Set<string>();
     let dirs: string[];
     try {
       dirs = await fsp.readdir(this.workspacesDir);
@@ -530,11 +530,11 @@ export class ChatService {
 
       let changed = false;
       for (const conv of index.conversations) {
-        const vendor = cliVendorForBackend(conv.backend);
-        if (!vendor) continue;
+        const harness = cliHarnessForBackend(conv.backend);
+        if (!harness) continue;
         if (!conv.cliProfileId) {
-          usedVendors.add(vendor);
-          conv.cliProfileId = serverConfiguredCliProfileId(vendor);
+          usedHarnesses.add(harness);
+          conv.cliProfileId = serverConfiguredCliProfileId(harness);
           changed = true;
         }
       }
@@ -544,12 +544,12 @@ export class ChatService {
       }
     }
 
-    await this._ensureServerConfiguredCliProfiles(usedVendors);
+    await this._ensureServerConfiguredCliProfiles(usedHarnesses);
   }
 
-  private async _ensureServerConfiguredCliProfiles(vendors: Iterable<string | undefined | null>): Promise<void> {
+  private async _ensureServerConfiguredCliProfiles(harnesses: Iterable<string | undefined | null>): Promise<void> {
     const settings = await this._settingsService.getSettings();
-    const ensured = ensureServerConfiguredCliProfiles(settings, vendors);
+    const ensured = ensureServerConfiguredCliProfiles(settings, harnesses);
     if (ensured.changed) {
       await this._settingsService.saveSettings(ensured.settings);
     }
@@ -1086,7 +1086,7 @@ export class ChatService {
    * event (e.g. Kiro's ACP session ID after `session/new`). Stored on the
    * active session so `SendMessageOptions.externalSessionId` can rehydrate
    * the backend's in-memory session map after a cockpit server restart.
-   * Vendor-agnostic — any backend that manages its own session IDs uses
+   * Harness-agnostic — any backend that manages its own session IDs uses
    * the same field.
    */
   async setExternalSessionId(convId: string, externalSessionId: string): Promise<void> {

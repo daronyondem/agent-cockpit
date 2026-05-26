@@ -240,7 +240,7 @@ describe('ClaudePlanUsageService', () => {
       const profile = {
         id: 'server-configured-claude-code',
         name: 'Claude Code (Server Configured)',
-        vendor: 'claude-code' as const,
+        harness: 'claude-code' as const,
         authMode: 'server-configured' as const,
         createdAt: '2026-04-29T00:00:00.000Z',
         updatedAt: '2026-04-29T00:00:00.000Z',
@@ -269,7 +269,7 @@ describe('ClaudePlanUsageService', () => {
       const profile = {
         id: 'profile-claude-work',
         name: 'Claude Work',
-        vendor: 'claude-code' as const,
+        harness: 'claude-code' as const,
         command: '/opt/claude/bin/claude',
         authMode: 'account' as const,
         configDir: profileConfigDir,

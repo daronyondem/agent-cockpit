@@ -450,7 +450,7 @@ describe('CodexPlanUsageService', () => {
       const profile = {
         id: 'profile-codex-work',
         name: 'Codex Work',
-        vendor: 'codex' as const,
+        harness: 'codex' as const,
         command: '/opt/codex/bin/codex',
         authMode: 'account' as const,
         configDir: '/tmp/codex-work-home',
@@ -489,7 +489,7 @@ describe('CodexPlanUsageService', () => {
       const profile = {
         id: 'server-configured-codex',
         name: 'Codex (Server Configured)',
-        vendor: 'codex' as const,
+        harness: 'codex' as const,
         authMode: 'server-configured' as const,
         createdAt: '2026-04-29T00:00:00.000Z',
         updatedAt: '2026-04-29T00:00:00.000Z',

@@ -58,7 +58,7 @@ Install and configure [OpenCode](https://opencode.ai/docs/cli/) on the server
 machine before selecting OpenCode as a backend. OpenCode is a CLI harness:
 providers such as DeepSeek, Groq, Gemini, and OpenRouter stay inside OpenCode's
 own provider/model configuration instead of becoming separate Agent Cockpit
-vendors.
+harnesses.
 
 Agent Cockpit profiles can select an OpenCode provider and discover models with
 `opencode models`. Conversations stream through `opencode run --format json`,

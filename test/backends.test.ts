@@ -245,7 +245,7 @@ describe('ClaudeCodeAdapter', () => {
     const runtime = resolveClaudeCliRuntime({
       id: 'profile-claude-work',
       name: 'Claude Work',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       command: '/opt/claude/bin/claude',
       authMode: 'account',
       configDir: '/tmp/claude-work-home',
@@ -377,11 +377,11 @@ describe('ClaudeCodeAdapter', () => {
     expect(() => resolveClaudeCliRuntime({
       id: 'profile-codex',
       name: 'Codex',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'server-configured',
       createdAt: '2026-04-29T00:00:00.000Z',
       updatedAt: '2026-04-29T00:00:00.000Z',
-    })).toThrow('CLI profile vendor codex is not claude-code');
+    })).toThrow('CLI profile harness codex is not claude-code');
   });
 
   test('uses default working directory', () => {
@@ -507,7 +507,7 @@ describe('Claude Code goals', () => {
       cliProfile: {
         id: 'profile-claude',
         name: 'Claude',
-        vendor: 'claude-code',
+        harness: 'claude-code',
         authMode: 'account',
         configDir,
         createdAt: '2026-05-13T00:00:00.000Z',
@@ -697,7 +697,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         cliProfile: {
           id: 'profile-claude-work',
           name: 'Claude Work',
-          vendor: 'claude-code',
+          harness: 'claude-code',
           command: '/opt/claude/bin/claude',
           authMode: 'account',
           configDir: '/tmp/claude-work-home',
@@ -1931,7 +1931,7 @@ describe('ClaudeCodeAdapter runOneShot', () => {
         cliProfile: {
           id: 'profile-claude-work',
           name: 'Claude Work',
-          vendor: 'claude-code',
+          harness: 'claude-code',
           command: '/opt/claude/bin/claude',
           authMode: 'account',
           configDir: '/tmp/claude-work-home',
@@ -2397,7 +2397,7 @@ Profile scoped body.
         cliProfile: {
           id: 'profile-claude-work',
           name: 'Claude Work',
-          vendor: 'claude-code',
+          harness: 'claude-code',
           authMode: 'account',
           configDir,
           createdAt: '2026-04-29T00:00:00.000Z',
@@ -2548,7 +2548,7 @@ describe('ClaudeCodeAdapter.getMemoryDir', () => {
         cliProfile: {
           id: 'profile-claude-work',
           name: 'Claude Work',
-          vendor: 'claude-code',
+          harness: 'claude-code',
           authMode: 'account',
           configDir,
           createdAt: '2026-04-29T00:00:00.000Z',

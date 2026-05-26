@@ -539,7 +539,7 @@ export async function processStream(
         );
         if (recoveryMsg && !isClosed()) emit({ type: 'assistant_message', message: recoveryMsg });
       } else if (event.type === 'external_session') {
-        // Vendor-agnostic: any backend that obtains its own session ID emits
+        // Harness-agnostic: any backend that obtains its own session ID emits
         // this so we can persist it onto the active SessionEntry and rehydrate
         // after a cockpit server restart. Not forwarded to the frontend.
         try {

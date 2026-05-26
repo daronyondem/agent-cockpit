@@ -25,7 +25,7 @@ PM2, and open first-run owner setup.
 
 ## Important Deployment Boundaries
 
-- Agent Cockpit runs on the same machine as the vendor CLIs.
+- Agent Cockpit runs on the same machine as the upstream CLIs.
 - The normal production path is a local server, not hosted SaaS.
 - The first owner account should be created before exposing the server. If it
   must be exposed first, configure `AUTH_SETUP_TOKEN`.

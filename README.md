@@ -66,7 +66,7 @@ data from the vendor interface you happen to use today.
 
 - You want a hosted SaaS with no local setup.
 - You only use one vendor and do not care about context portability.
-- You want Agent Cockpit to replace vendor CLIs. It wraps those CLIs; it does
+- You want Agent Cockpit to replace upstream CLIs. It wraps those CLIs; it does
   not reimplement them.
 - You want a multi-agent company or task-orchestration system. Agent Cockpit is
   a personal/local cockpit for interacting with AI agents you invoke.
@@ -155,7 +155,7 @@ This has three important consequences:
 - The CLI and the web interface must run on the same machine.
 - Remote access is your responsibility. Use a private network, tunnel, or
   reverse proxy you control.
-- The CLIs keep their normal vendor authentication. Agent Cockpit does not host
+- The CLIs keep their normal upstream authentication. Agent Cockpit does not host
   or proxy model inference.
 
 ## Prerequisites

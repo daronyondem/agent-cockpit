@@ -329,6 +329,34 @@ describe('DataMigrationService', () => {
     expect(checks.summary.status).toBe('warning');
   });
 
+  test('post-import checks normalize legacy CLI profile vendor fields for auth hints', async () => {
+    const dataRoot = path.join(tmpDir, 'data');
+    const configDir = path.join(dataRoot, 'cli-profiles', 'legacy-codex');
+    await fsp.mkdir(path.join(dataRoot, 'chat'), { recursive: true });
+    await fsp.mkdir(configDir, { recursive: true });
+    await fsp.writeFile(path.join(dataRoot, 'chat', 'settings.json'), JSON.stringify({
+      cliProfiles: [{
+        id: 'legacy-codex',
+        name: 'Legacy Codex',
+        vendor: 'codex',
+        authMode: 'account',
+        configDir,
+      }],
+    }));
+    const service = new DataMigrationService({
+      dataRoot,
+      appVersion: '0.0.0-test',
+      now: () => NOW,
+    });
+
+    const checks = await service.runPostImportChecks();
+
+    expect(checks.tools.cliProfiles).toHaveLength(1);
+    expect(checks.tools.cliProfiles[0].status).toBe('ok');
+    expect(checks.tools.cliProfiles[0].message).toContain('Legacy Codex (codex)');
+    expect(checks.tools.cliProfiles[0].message).not.toContain('undefined');
+  });
+
   test('post-import checks flag incomplete PGLite vector directories', async () => {
     const dataRoot = path.join(tmpDir, 'data');
     const workspaceRoot = path.join(dataRoot, 'chat', 'workspaces', 'storage-key');

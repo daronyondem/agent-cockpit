@@ -243,7 +243,7 @@ export interface AttachmentMeta {
  * conversation's artifact directory. Backends emit artifact source events
  * when they produce files/images outside the normal text stream; processStream
  * copies those bytes here and persists this descriptor on the assistant
- * message so every client can render the file without vendor-specific logic.
+ * message so every client can render the file without harness-specific logic.
  */
 export interface ConversationArtifact {
   /** Stored basename inside data/chat/artifacts/{conversationId}/. */
@@ -290,7 +290,7 @@ export interface ConversationEntry {
   backend: string;
   /**
    * Runtime CLI profile selected for this conversation. Phase 1 stores
-   * server-configured profiles that preserve the existing vendor behavior;
+   * server-configured profiles that preserve the existing harness behavior;
    * later phases resolve this ID to account/config/env-specific CLI runtime.
    */
   cliProfileId?: string;
@@ -348,7 +348,7 @@ export interface WorkspaceIndex {
   /**
    * Fingerprint of the last dismissed CLI instruction-file compatibility
    * warning. The fingerprint changes when detected instruction sources or
-   * missing vendor entrypoints change, so a stale dismissal does not hide a
+   * missing harness entrypoints change, so a stale dismissal does not hide a
    * newly-actionable mismatch.
    */
   instructionCompatibilityDismissedFingerprint?: string;
@@ -570,7 +570,7 @@ export interface ConversationListItem {
 
 // ── Settings ─────────────────────────────────────────────────────────────────
 
-export type CliVendor = 'codex' | 'claude-code' | 'kiro' | 'opencode';
+export type CliHarness = 'codex' | 'claude-code' | 'kiro' | 'opencode';
 export type CliAuthMode = 'server-configured' | 'account';
 export type CliCommunicationProtocol = 'standard' | 'interactive';
 
@@ -578,15 +578,15 @@ export type WorkspaceInstructionSourceId = 'agents' | 'claude' | 'kiro';
 
 export interface WorkspaceInstructionSourceStatus {
   id: WorkspaceInstructionSourceId;
-  vendor: CliVendor;
+  harness: CliHarness;
   label: string;
   expectedPath: string;
   present: boolean;
   paths: string[];
 }
 
-export interface WorkspaceInstructionVendorStatus {
-  vendor: CliVendor;
+export interface WorkspaceInstructionHarnessStatus {
+  harness: CliHarness;
   label: string;
   sourceId: WorkspaceInstructionSourceId;
   expectedPath: string;
@@ -594,7 +594,7 @@ export interface WorkspaceInstructionVendorStatus {
 }
 
 export interface WorkspaceInstructionPointerResult {
-  vendor: CliVendor;
+  harness: CliHarness;
   label: string;
   path: string;
 }
@@ -604,8 +604,8 @@ export interface WorkspaceInstructionCompatibilityStatus {
   workspaceHash: string;
   workspacePath: string;
   sources: WorkspaceInstructionSourceStatus[];
-  vendors: WorkspaceInstructionVendorStatus[];
-  missingVendors: WorkspaceInstructionVendorStatus[];
+  harnesses: WorkspaceInstructionHarnessStatus[];
+  missingHarnesses: WorkspaceInstructionHarnessStatus[];
   hasAnyInstructions: boolean;
   compatible: boolean;
   canCreatePointers: boolean;
@@ -618,7 +618,7 @@ export interface WorkspaceInstructionCompatibilityStatus {
 export interface CliProfile {
   id: string;
   name: string;
-  vendor: CliVendor;
+  harness: CliHarness;
   /** Claude Code only: how Agent Cockpit communicates with the shared Claude CLI. */
   protocol?: CliCommunicationProtocol;
   /** OpenCode only: provider choice for this logical profile. model is retained for legacy saved profiles; new UI selections happen in the composer. */
@@ -626,11 +626,11 @@ export interface CliProfile {
     provider?: string;
     model?: string;
   };
-  /** Optional executable override. When omitted, the vendor default command is used. */
+  /** Optional executable override. When omitted, the harness default command is used. */
   command?: string;
   /** Server-configured keeps current server-side CLI state; account means Cockpit owns setup for this profile. */
   authMode: CliAuthMode;
-  /** Optional vendor config/auth directory for account-isolated profiles. */
+  /** Optional harness config/auth directory for account-isolated profiles. */
   configDir?: string;
   /** Optional runtime environment overrides applied when spawning this profile's CLI. */
   env?: Record<string, string>;
@@ -1012,7 +1012,7 @@ export interface SessionRecoveryEvent {
 /**
  * Emitted by a backend adapter as soon as it obtains a backend-managed
  * session ID that the cockpit needs to persist on the active `SessionEntry`
- * so the session can be resumed after a cockpit server restart. Vendor-
+ * so the session can be resumed after a cockpit server restart. Harness-
  * agnostic: any backend that manages its own session IDs (ACP-based CLIs
  * like Kiro, hosted API sessions, etc.) can emit this. `processStream`
  * forwards it to `chatService.setExternalSessionId(convId, sessionId)`.
@@ -2122,7 +2122,7 @@ export type CliInstallMethod = 'npm-global' | 'self-update' | 'unknown' | 'missi
 
 export interface CliUpdateStatus {
   id: string;
-  vendor: CliVendor;
+  harness: CliHarness;
   label: string;
   command: string;
   resolvedPath: string | null;

@@ -25,7 +25,7 @@ claim the empty server.
 
 ## 3. Authenticate A Backend CLI
 
-Agent Cockpit uses the vendor CLIs already installed on the same machine. At
+Agent Cockpit uses the upstream CLIs already installed on the same machine. At
 least one of these should be installed and authenticated:
 
 | Backend | Command |

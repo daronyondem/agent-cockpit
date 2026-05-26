@@ -141,7 +141,7 @@ set the OpenCode command path explicitly in the CLI profile.
 Open Agent Cockpit and go to **Settings -> CLI Config**.
 
 1. Add or edit a CLI profile.
-2. Set the vendor to **OpenCode**.
+2. Set the harness to **OpenCode**.
 3. Set the OpenCode provider to `ollama`.
 4. Run **Check OpenCode**.
 5. Save settings.

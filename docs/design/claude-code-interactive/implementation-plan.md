@@ -127,43 +127,43 @@ Implement these rules:
 
 1. Keep the normal update mechanism available for `claude-code`.
 2. Do not present auto-update as a compatibility fix for `claude-code-interactive`.
-3. If any enabled profile or active conversation uses `claude-code-interactive`, the Claude CLI update row should show an additional caution that updating may make the interactive provider incompatible.
+3. If any enabled profile or active conversation uses `claude-code-interactive`, the Claude CLI update row should show an additional caution that updating may make the interactive protocol incompatible.
 4. After update, recompute compatibility status and show the newer-than-tested warning when applicable.
-5. The composer/provider UI should warn at send time if the selected provider is interactive and the installed version is not `supported`.
+5. The composer/profile UI should warn at send time if the selected profile protocol is interactive and the installed version is not `supported`.
 
 ## Backend Identity And Profile Model
 
-The current `CliVendor` union is:
+The current `CliHarness` union is:
 
 ```ts
-export type CliVendor = 'codex' | 'claude-code' | 'kiro';
+export type CliHarness = 'codex' | 'claude-code' | 'kiro';
 ```
 
-Do not blindly add `claude-code-interactive` as a physical vendor if that causes profile duplication. The better model is:
+Do not blindly add `claude-code-interactive` as a physical harness if that causes profile duplication. The better model is:
 
-- `CliVendor` remains the physical CLI/auth/config vendor where possible.
+- `CliHarness` remains the physical CLI/auth/config harness where possible.
 - A new backend id `claude-code-interactive` maps to Claude Code runtime profiles.
 - Conversation `backend` can be `claude-code-interactive`.
-- Conversation `cliProfileId` can point at a profile whose `vendor` is `claude-code`.
-- Runtime resolution must support a backend id that is not identical to profile vendor when the backend is a mode/provider built on the same CLI.
+- Conversation `cliProfileId` can point at a profile whose `harness` is `claude-code`.
+- Runtime resolution must support a backend id that is not identical to profile harness when the backend is a mode/protocol built on the same CLI.
 
 Implementation options:
 
-1. Introduce an explicit backend-to-profile-vendor mapping:
+1. Introduce an explicit backend-to-profile-harness mapping:
 
 ```ts
-export function cliVendorForBackend(backendId: string): CliVendor | undefined {
+export function cliHarnessForBackend(backendId: string): CliHarness | undefined {
   if (backendId === 'claude-code-interactive') return 'claude-code';
-  if (isCliVendor(backendId)) return backendId;
+  if (isCliHarness(backendId)) return backendId;
   return undefined;
 }
 ```
 
 2. Update `cliProfileIdForBackend(backend)` to use this mapping.
 3. Update `resolveCliProfileRuntime()` so fallback backend `claude-code-interactive` returns `backendId: 'claude-code-interactive'` while using the `server-configured-claude-code` profile/runtime when no explicit profile is selected.
-4. Update route checks that currently require `profile.vendor === backend` so they allow `profile.vendor === cliVendorForBackend(backend)`.
+4. Update route checks that currently require `profile.harness === backend` so they allow `profile.harness === cliHarnessForBackend(backend)`.
 
-Avoid duplicating Claude profiles as separate `claude-code-interactive` profiles. Users should not need to authenticate twice just because two providers share the same CLI.
+Avoid duplicating Claude profiles as separate `claude-code-interactive` profiles. Users should not need to authenticate twice just because two protocols share the same CLI.
 
 ## New And Changed Modules
 
@@ -394,14 +394,14 @@ Modify:
 - `src/routes/chat/statusRoutes.ts`
 - `src/contracts/chat.ts`
 - `src/contracts/responses.ts`
-- frontend provider/profile selection code in `web/AgentCockpitWeb/src/`
+- frontend profile selection code in `web/AgentCockpitWeb/src/`
 
 Plan:
 
-- Add backend-to-CLI-vendor mapping as described above.
+- Add backend-to-CLI-harness mapping as described above.
 - Keep server-configured Claude profile id as `server-configured-claude-code`.
 - Allow a conversation backend of `claude-code-interactive` to use a Claude Code profile.
-- Update validation that currently compares `backend === profile.vendor`.
+- Update validation that currently compares `backend === profile.harness`.
 - Ensure new conversations can be created with:
   - `{ backend: 'claude-code-interactive' }`
   - `{ backend: 'claude-code-interactive', cliProfileId: 'server-configured-claude-code' }`

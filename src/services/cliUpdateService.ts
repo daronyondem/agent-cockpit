@@ -19,7 +19,7 @@ import type {
   CliUpdateResult,
   CliUpdateStatus,
   CliUpdatesResponse,
-  CliVendor,
+  CliHarness,
   Settings,
   UpdateStep,
 } from '../types';
@@ -29,28 +29,28 @@ const EXEC_TIMEOUT_MS = 15_000;
 const UPDATE_TIMEOUT_MS = 120_000;
 const MAX_BUFFER = 2 * 1024 * 1024;
 
-const VENDOR_LABELS: Record<CliVendor, string> = {
+const HARNESS_LABELS: Record<CliHarness, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   kiro: 'Kiro',
   opencode: 'OpenCode',
 };
 
-const VENDOR_DEFAULT_COMMANDS: Record<CliVendor, string> = {
+const HARNESS_DEFAULT_COMMANDS: Record<CliHarness, string> = {
   'claude-code': 'claude',
   codex: 'codex',
   kiro: 'kiro-cli',
   opencode: 'opencode',
 };
 
-const VENDOR_NPM_PACKAGES: Partial<Record<CliVendor, string>> = {
+const HARNESS_NPM_PACKAGES: Partial<Record<CliHarness, string>> = {
   'claude-code': '@anthropic-ai/claude-code',
   codex: '@openai/codex',
 };
 
 interface CliRuntimeTarget extends CliCommandResolution {
   id: string;
-  vendor: CliVendor;
+  harness: CliHarness;
   command: string;
   env: NodeJS.ProcessEnv;
   profileIds: string[];
@@ -198,15 +198,15 @@ export class CliUpdateService {
   private _targetsFromSettings(settings: Settings): CliRuntimeTarget[] {
     const now = new Date().toISOString();
     const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
-    const defaultVendor = isCliVendorValue(settings.defaultBackend) ? settings.defaultBackend : null;
-    const withDefault = !defaultVendor || profiles.some((profile) => profile.id === serverConfiguredCliProfileId(defaultVendor))
+    const defaultHarness = isCliHarnessValue(settings.defaultBackend) ? settings.defaultBackend : null;
+    const withDefault = !defaultHarness || profiles.some((profile) => profile.id === serverConfiguredCliProfileId(defaultHarness))
       ? profiles
       : [
         ...profiles,
         {
-          id: serverConfiguredCliProfileId(defaultVendor),
-          name: `${VENDOR_LABELS[defaultVendor]} (Server Configured)`,
-          vendor: defaultVendor,
+          id: serverConfiguredCliProfileId(defaultHarness),
+          name: `${HARNESS_LABELS[defaultHarness]} (Server Configured)`,
+          harness: defaultHarness,
           authMode: 'server-configured' as const,
           createdAt: now,
           updatedAt: now,
@@ -215,14 +215,14 @@ export class CliUpdateService {
 
     const grouped = new Map<string, CliRuntimeTarget>();
     for (const profile of withDefault) {
-      if (!profile || profile.disabled || !isCliVendorValue(profile.vendor)) continue;
+      if (!profile || profile.disabled || !isCliHarnessValue(profile.harness)) continue;
       const runtime = this._runtimeForProfile(profile);
-      const key = this._targetKey(profile.vendor, runtime);
+      const key = this._targetKey(profile.harness, runtime);
       let target = grouped.get(key);
       if (!target) {
         target = {
           id: key,
-          vendor: profile.vendor,
+          harness: profile.harness,
           command: runtime.command,
           ...(runtime.argsPrefix ? { argsPrefix: runtime.argsPrefix } : {}),
           ...(runtime.windowsCmdShim ? { windowsCmdShim: runtime.windowsCmdShim } : {}),
@@ -237,46 +237,46 @@ export class CliUpdateService {
       target.profileNames.push(profile.name || profile.id);
     }
     return [...grouped.values()].sort((a, b) => {
-      const vendorOrder = a.vendor.localeCompare(b.vendor);
-      return vendorOrder || a.command.localeCompare(b.command);
+      const harnessOrder = a.harness.localeCompare(b.harness);
+      return harnessOrder || a.command.localeCompare(b.command);
     });
   }
 
   private _runtimeForProfile(profile: CliProfile): CliCommandResolution & { command: string; env: NodeJS.ProcessEnv } {
-    if (profile.vendor === 'codex') return resolveCodexCliRuntime(profile);
-    if (profile.vendor === 'claude-code') return resolveClaudeCliRuntime(profile);
-    if (profile.vendor === 'opencode') return resolveOpenCodeCliRuntime(profile);
+    if (profile.harness === 'codex') return resolveCodexCliRuntime(profile);
+    if (profile.harness === 'claude-code') return resolveClaudeCliRuntime(profile);
+    if (profile.harness === 'opencode') return resolveOpenCodeCliRuntime(profile);
     return {
-      command: VENDOR_DEFAULT_COMMANDS.kiro,
+      command: HARNESS_DEFAULT_COMMANDS.kiro,
       env: { ...process.env },
     };
   }
 
-  private _targetKey(vendor: CliVendor, runtime: CliCommandResolution & { command: string; env: NodeJS.ProcessEnv }): string {
+  private _targetKey(harness: CliHarness, runtime: CliCommandResolution & { command: string; env: NodeJS.ProcessEnv }): string {
     const hash = crypto.createHash('sha1').update(JSON.stringify({
-      vendor,
+      harness,
       command: runtime.command,
       argsPrefix: runtime.argsPrefix || [],
       windowsCmdShim: !!runtime.windowsCmdShim,
       PATH: runtime.env.PATH || '',
     })).digest('hex').slice(0, 12);
-    return `${vendor}:${hash}`;
+    return `${harness}:${hash}`;
   }
 
   private async _probeTarget(target: CliRuntimeTarget): Promise<CliUpdateStatus> {
     const base = this._emptyStatus(target);
     try {
-      const versionOut = await this._execTarget(target, this._versionArgs(target.vendor), EXEC_TIMEOUT_MS);
+      const versionOut = await this._execTarget(target, this._versionArgs(target.harness), EXEC_TIMEOUT_MS);
       const currentVersion = parseVersion(versionOut);
       const resolvedPath = await this._resolveCommand(target);
       const probe = await this._detectInstallMethod(target, resolvedPath);
       const updateCommand = this._updateCommand(target, probe);
       const latestVersion = await this._latestVersion(target, probe.installMethod);
-      const interactiveCompatibility = target.vendor === 'claude-code'
+      const interactiveCompatibility = target.harness === 'claude-code'
         ? [buildClaudeInteractiveCompatibilityStatus(target.displayCommand || target.command, currentVersion)]
         : undefined;
       const compatibilityMessage = interactiveCompatibility?.find((item) => item.severity === 'warning' || item.severity === 'error')?.message || null;
-      const updateWouldExceedInteractiveTested = target.vendor === 'claude-code'
+      const updateWouldExceedInteractiveTested = target.harness === 'claude-code'
         && isNewerVersion(latestVersion, CLAUDE_CODE_INTERACTIVE_TESTED_CLI_VERSION);
       const updateCaution = compatibilityMessage
         || (updateWouldExceedInteractiveTested
@@ -297,7 +297,7 @@ export class CliUpdateService {
       };
     } catch (err: unknown) {
       const message = (err as Error).message || String(err);
-      const interactiveCompatibility = target.vendor === 'claude-code'
+      const interactiveCompatibility = target.harness === 'claude-code'
         ? [buildClaudeInteractiveCompatibilityStatus(target.displayCommand || target.command, null, message)]
         : undefined;
       const updateCaution = interactiveCompatibility?.find((item) => item.severity === 'warning' || item.severity === 'error')?.message || null;
@@ -314,8 +314,8 @@ export class CliUpdateService {
   private _emptyStatus(target: CliRuntimeTarget): CliUpdateStatus {
     return {
       id: target.id,
-      vendor: target.vendor,
-      label: VENDOR_LABELS[target.vendor],
+      harness: target.harness,
+      label: HARNESS_LABELS[target.harness],
       command: target.displayCommand || target.command,
       resolvedPath: null,
       profileIds: target.profileIds,
@@ -332,12 +332,12 @@ export class CliUpdateService {
     };
   }
 
-  private _versionArgs(vendor: CliVendor): string[] {
-    return vendor === 'kiro' ? ['version'] : ['--version'];
+  private _versionArgs(harness: CliHarness): string[] {
+    return harness === 'kiro' ? ['version'] : ['--version'];
   }
 
   private async _detectInstallMethod(target: CliRuntimeTarget, resolvedPath: string | null): Promise<ProbeResult> {
-    const npmPackage = VENDOR_NPM_PACKAGES[target.vendor];
+    const npmPackage = HARNESS_NPM_PACKAGES[target.harness];
     if (npmPackage && resolvedPath) {
       const realResolved = await safeRealpath(resolvedPath);
       const inferredPrefix = inferNpmPrefixFromPackagePath(realResolved || resolvedPath, npmPackage);
@@ -353,7 +353,7 @@ export class CliUpdateService {
         }
       }
     }
-    if (target.vendor === 'kiro' || target.vendor === 'opencode') {
+    if (target.harness === 'kiro' || target.harness === 'opencode') {
       return { installMethod: 'self-update', resolvedPath };
     }
     return { installMethod: resolvedPath ? 'unknown' : 'missing', resolvedPath };
@@ -361,7 +361,7 @@ export class CliUpdateService {
 
   private async _latestVersion(target: CliRuntimeTarget, installMethod: CliInstallMethod): Promise<string | null> {
     if (installMethod !== 'npm-global') return null;
-    const npmPackage = VENDOR_NPM_PACKAGES[target.vendor];
+    const npmPackage = HARNESS_NPM_PACKAGES[target.harness];
     if (!npmPackage) return null;
     const npmCommand = process.platform === 'win32' ? windowsNpmCommand() : ['npm'];
     const out = await this._exec(npmCommand[0], [...npmCommand.slice(1), 'view', npmPackage, 'version'], target.env, EXEC_TIMEOUT_MS);
@@ -370,17 +370,17 @@ export class CliUpdateService {
 
   private _updateCommand(target: CliRuntimeTarget, probe: ProbeResult): string[] | null {
     if (probe.installMethod === 'npm-global') {
-      const npmPackage = VENDOR_NPM_PACKAGES[target.vendor];
+      const npmPackage = HARNESS_NPM_PACKAGES[target.harness];
       if (!npmPackage) return null;
       if (process.platform === 'win32' && probe.npmPrefix) {
         return [...windowsNpmCommand(), '--prefix', probe.npmPrefix, 'i', '-g', `${npmPackage}@latest`];
       }
       return ['npm', 'i', '-g', `${npmPackage}@latest`];
     }
-    if (target.vendor === 'kiro' && probe.installMethod === 'self-update') {
+    if (target.harness === 'kiro' && probe.installMethod === 'self-update') {
       return [target.command, ...(target.argsPrefix || []), 'update', '--non-interactive'];
     }
-    if (target.vendor === 'opencode' && probe.installMethod === 'self-update') {
+    if (target.harness === 'opencode' && probe.installMethod === 'self-update') {
       return [target.command, ...(target.argsPrefix || []), 'upgrade'];
     }
     return null;
@@ -438,8 +438,8 @@ export class CliUpdateService {
 
   private _repairWindowsCliToolWrapper(target: CliRuntimeTarget, current: CliUpdateStatus): UpdateStep | null {
     if (process.platform !== 'win32') return null;
-    if (target.vendor !== 'codex' && target.vendor !== 'claude-code') return null;
-    const npmPackage = VENDOR_NPM_PACKAGES[target.vendor];
+    if (target.harness !== 'codex' && target.harness !== 'claude-code') return null;
+    const npmPackage = HARNESS_NPM_PACKAGES[target.harness];
     if (!npmPackage || !current.resolvedPath) return null;
     const npmPrefix = inferNpmPrefixFromPackagePath(current.resolvedPath, npmPackage);
     const expectedPrefix = windowsCliToolsDirFromEnv(target.env);
@@ -448,7 +448,7 @@ export class CliUpdateService {
     const result = ensureWindowsCliToolWrappers({
       cliToolsDir: expectedPrefix,
       nodeExe: process.execPath,
-      vendors: [target.vendor],
+      harnesses: [target.harness],
     });
     if (result.updated.length === 0 && result.skipped.length === 0 && result.ok) return null;
     return {
@@ -463,7 +463,7 @@ export class CliUpdateService {
   }
 }
 
-function isCliVendorValue(value: unknown): value is CliVendor {
+function isCliHarnessValue(value: unknown): value is CliHarness {
   return value === 'codex' || value === 'claude-code' || value === 'kiro' || value === 'opencode';
 }
 

@@ -554,7 +554,7 @@ Body.
         {
           id: 'chat-codex-profile',
           name: 'Chat Codex',
-          vendor: 'codex',
+          harness: 'codex',
           authMode: 'account',
           createdAt: now,
           updatedAt: now,
@@ -562,7 +562,7 @@ Body.
         {
           id: 'memory-codex-profile',
           name: 'Memory Codex',
-          vendor: 'codex',
+          harness: 'codex',
           authMode: 'account',
           createdAt: now,
           updatedAt: now,

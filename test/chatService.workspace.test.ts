@@ -251,7 +251,7 @@ describe('getWorkspaceContextSettings / setWorkspaceContextSettings', () => {
     const profile = {
       id: 'profile-codex-context',
       name: 'Codex Context',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       configDir: '/tmp/codex-context',
       createdAt: '2026-05-07T00:00:00.000Z',
@@ -627,7 +627,7 @@ describe('workspace instruction compatibility', () => {
     return { dir, hash: workspaceHash(dir) };
   }
 
-  test('does not notify when no vendor instruction files exist', async () => {
+  test('does not notify when no harness instruction files exist', async () => {
     const ws = makeWorkspace('instr-none');
     await service.createConversation('Test', ws.dir);
 
@@ -638,7 +638,7 @@ describe('workspace instruction compatibility', () => {
     expect(status!.shouldNotify).toBe(false);
   });
 
-  test('notifies when AGENTS.md exists but vendor entrypoints are missing', async () => {
+  test('notifies when AGENTS.md exists but harness entrypoints are missing', async () => {
     const ws = makeWorkspace('instr-agents');
     fs.writeFileSync(path.join(ws.dir, 'AGENTS.md'), '# Agent Instructions\n');
     await service.createConversation('Test', ws.dir);
@@ -646,7 +646,7 @@ describe('workspace instruction compatibility', () => {
     const status = await service.getWorkspaceInstructionCompatibility(ws.hash);
     expect(status!.shouldNotify).toBe(true);
     expect(status!.primarySourceId).toBe('agents');
-    expect(status!.missingVendors.map(item => item.vendor).sort()).toEqual(['claude-code', 'kiro']);
+    expect(status!.missingHarnesses.map(item => item.harness).sort()).toEqual(['claude-code', 'kiro']);
   });
 
   test('creates missing pointers from AGENTS.md without overwriting existing files', async () => {
@@ -691,7 +691,7 @@ describe('workspace instruction compatibility', () => {
     const changed = await service.getWorkspaceInstructionCompatibility(ws.hash);
     expect(changed!.dismissed).toBe(false);
     expect(changed!.shouldNotify).toBe(true);
-    expect(changed!.missingVendors.map(item => item.vendor)).toEqual(['claude-code']);
+    expect(changed!.missingHarnesses.map(item => item.harness)).toEqual(['claude-code']);
   });
 });
 

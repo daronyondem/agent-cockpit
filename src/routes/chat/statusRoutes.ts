@@ -17,7 +17,7 @@ import { isCliProfileResolutionError, param, sendError } from './routeUtils';
 import { validateSettingsRequest, type VersionResponse } from '../../contracts/chat';
 import { validateUsagePricingOverridesRequest } from '../../contracts/usagePricing';
 import { isContractValidationError } from '../../contracts/validation';
-import { cliVendorForBackend } from '../../services/cliProfiles';
+import { cliHarnessForBackend } from '../../services/cliProfiles';
 
 export interface ChatStatusRoutesOptions {
   chatService: ChatService;
@@ -147,7 +147,7 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
       if (!cliProfileId) return res.json(claudePlanUsageService.getCached());
 
       const runtime = await chatService.resolveCliProfileRuntime(cliProfileId, 'claude-code');
-      if (cliVendorForBackend(runtime.backendId) !== 'claude-code') {
+      if (cliHarnessForBackend(runtime.backendId) !== 'claude-code') {
         return res.status(400).json({ error: `CLI profile backend ${runtime.backendId} is not claude-code` });
       }
       res.json(claudePlanUsageService.getCached(runtime.profile));
@@ -168,7 +168,7 @@ export function createChatStatusRouter(opts: ChatStatusRoutesOptions): express.R
       if (!cliProfileId) return res.json(codexPlanUsageService.getCached());
 
       const runtime = await chatService.resolveCliProfileRuntime(cliProfileId, 'codex');
-      if (cliVendorForBackend(runtime.backendId) !== 'codex') {
+      if (cliHarnessForBackend(runtime.backendId) !== 'codex') {
         return res.status(400).json({ error: `CLI profile backend ${runtime.backendId} is not codex` });
       }
       res.json(codexPlanUsageService.getCached(runtime.profile));

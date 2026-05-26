@@ -6,32 +6,32 @@ Status: Final implementation pass complete locally; not committed or pushed.
 
 ## Goal
 
-Add a global CLI Config settings section where users can create named CLI profiles for Codex, Claude Code, Kiro, and OpenCode. A profile represents the actual runnable CLI identity behind Agent Cockpit: vendor, executable, account/config home, runtime environment, auth state, and display name.
+Add a global CLI Config settings section where users can create named CLI profiles for Codex, Claude Code, Kiro, and OpenCode. A profile represents the actual runnable CLI identity behind Agent Cockpit: harness, executable, account/config home, runtime environment, auth state, and display name.
 
-The conversation picker should list CLI profiles, not raw backend vendors. Profiles use the vendor icon, but the visible name comes from the user.
+The conversation picker should list CLI profiles, not raw backend ids. Profiles use the harness icon, but the visible name comes from the user.
 
 ## Key Decisions
 
 - Profile selection is per conversation.
 - Existing conversations cannot switch profiles mid-session. Switching is allowed only before the first message or after session reset/new session.
-- The first migration creates server-configured profiles for every vendor already used by existing conversations.
+- The first migration creates server-configured profiles for every harness already used by existing conversations.
 - Account-based authentication should be launched from Agent Cockpit where possible.
 - Users can also choose Server Configured / I will configure it myself, where Cockpit assumes the server-side CLI is already configured.
 - Initial auth setup supports account-based auth and server-configured mode. API-key profile setup is not in the first scope.
-- Support all current vendors eventually: Codex, Claude Code, Kiro, and OpenCode.
+- Support all current harnesses eventually: Codex, Claude Code, Kiro, and OpenCode.
 - Kiro needs a research step because its multiple-account isolation mechanism is not yet confirmed.
-- OpenCode is a CLI harness vendor; DeepSeek, Groq, xAI/Grok, Gemini, OpenRouter, and similar APIs stay provider/model choices under OpenCode. The CLI profile stores provider; model selection stays in the composer or feature-specific processor settings.
+- OpenCode is a CLI harness; DeepSeek, Groq, xAI/Grok, Gemini, OpenRouter, and similar APIs stay provider/model choices under OpenCode. The CLI profile stores provider; model selection stays in the composer or feature-specific processor settings.
 
 ## Proposed Data Model
 
 ```ts
-type CliVendor = 'codex' | 'claude-code' | 'kiro' | 'opencode';
+type CliHarness = 'codex' | 'claude-code' | 'kiro' | 'opencode';
 type CliAuthMode = 'server-configured' | 'account';
 
 interface CliProfile {
   id: string;
   name: string;
-  vendor: CliVendor;
+  harness: CliHarness;
   command?: string;
   authMode: CliAuthMode;
   configDir?: string;
@@ -49,7 +49,7 @@ interface ConversationEntry {
 
 Keep `backend` during migration for compatibility, but new runtime resolution should go through `cliProfileId`.
 
-## Vendor Notes
+## Harness Notes
 
 ### Codex
 
@@ -90,8 +90,8 @@ Keep `backend` during migration for compatibility, but new runtime resolution sh
 On first run after this feature lands:
 
 1. Read all existing workspace conversation indexes.
-2. Collect backend vendors used by conversations.
-3. Create one server-configured CLI profile per vendor in use:
+2. Collect backend harnesses used by conversations.
+3. Create one server-configured CLI profile per harness in use:
    - `Claude Code (Server Configured)`
    - `Codex (Server Configured)`
    - `Kiro (Server Configured)`
@@ -104,10 +104,10 @@ On first run after this feature lands:
 
 1. User starts auth from Settings -> CLI Config.
 2. Server creates or verifies the profile config directory.
-3. Server spawns the vendor login command with profile env.
+3. Server spawns the harness login command with profile env.
 4. Frontend streams sanitized stdout/stderr/status.
 5. UI displays login URLs and device codes when emitted by the CLI.
-6. Server polls the vendor status command until authenticated, failed, canceled, or timed out.
+6. Server polls the harness status command until authenticated, failed, canceled, or timed out.
 7. Profile status updates in Settings.
 
 Required details:
@@ -115,7 +115,7 @@ Required details:
 - One auth job per profile at a time.
 - Auth jobs are cancelable.
 - Logs are redacted before browser delivery.
-- Errors must be vendor-specific and actionable.
+- Errors must be harness-specific and actionable.
 
 ## UI Plan
 
@@ -123,16 +123,16 @@ Global Settings gets a new CLI Config section.
 
 Profile list:
 
-- Vendor icon.
+- Harness icon.
 - Profile name.
-- Vendor name.
+- Harness name.
 - Auth/status summary.
 - Command path/status.
 - Actions: Test, Authenticate, Edit, Disable/Delete.
 
 Create profile flow:
 
-1. Choose vendor.
+1. Choose harness.
 2. Enter profile name.
 3. Select executable: default command or custom path.
 4. Select setup mode: account auth or server-configured.
@@ -144,8 +144,8 @@ Create profile flow:
 Conversation composer:
 
 - Replace raw backend picker with profile picker.
-- Show profile names and vendor icons.
-- Disable profile switching once the active session has messages or vendor session state.
+- Show profile names and harness icons.
+- Disable profile switching once the active session has messages or backend session state.
 
 Memory and KB settings:
 
@@ -155,12 +155,12 @@ Memory and KB settings:
 
 - Add profile persistence and validation.
 - Add migration for existing settings and conversations.
-- Add a profile resolver: `cliProfileId -> profile -> vendor adapter + runtime env`.
+- Add a profile resolver: `cliProfileId -> profile -> harness adapter + runtime env`.
 - Extend stream and one-shot options with profile runtime context.
 - Make adapters apply profile command/env consistently.
 - Make model discovery cache profile-aware.
 - Make plan usage cache profile-aware.
-- Make availability/auth check services vendor-specific but behind one profile API.
+- Make availability/auth check services harness-specific but behind one profile API.
 
 Potential endpoints:
 
@@ -176,7 +176,7 @@ Potential endpoints:
 
 ## Docs and ADR
 
-This needs an ADR because it changes a core architecture assumption: backend vendor and runnable CLI account/profile become separate concepts.
+This needs an ADR because it changes a core architecture assumption: backend id and runnable CLI account/profile become separate concepts.
 
 Update:
 
@@ -190,17 +190,17 @@ Update:
 ## Testing Plan
 
 - Settings/profile persistence and validation.
-- Migration from vendor-only conversations to server-configured profiles.
+- Migration from backend-only conversations to server-configured profiles.
 - Conversation creation stores `cliProfileId`.
-- Message send resolves profile to vendor adapter and runtime env.
-- Profile switching blocked for active sessions with messages/vendor ids.
+- Message send resolves profile to harness adapter and runtime env.
+- Profile switching blocked for active sessions with messages/backend ids.
 - Profile switching allowed before first message and after reset/new session.
 - Codex receives profile env for app-server, exec, model discovery, MCP collision reads, and plan usage.
 - Claude Code receives profile env for streaming, one-shots, memory paths, and plan usage.
 - Kiro behavior covered based on research outcome.
 - OpenCode receives profile command plus provider metadata; provider authentication remains self-configured in OpenCode, and model choice remains in the composer/processor model pickers.
 - Auth job lifecycle: start, output events, polling, cancellation, timeout, redaction.
-- Frontend profile picker renders names and vendor icons.
+- Frontend profile picker renders names and harness icons.
 
 ## Phased Work
 
@@ -218,13 +218,13 @@ Update:
 - GitHub issue #243 created.
 - Branch: `feat/cli-profiles-foundation`.
 - Added `src/services/cliProfiles.ts` with server-configured profile helpers.
-- Added `CliProfile`, `CliVendor`, `CliAuthMode`, `Settings.cliProfiles`, `Settings.defaultCliProfileId`, and optional conversation `cliProfileId` types.
+- Added `CliProfile`, `CliHarness`, `CliAuthMode`, `Settings.cliProfiles`, `Settings.defaultCliProfileId`, and optional conversation `cliProfileId` types.
 - `SettingsService.getSettings()` now synthesizes a server-configured CLI profile for the selected default backend.
-- `ChatService.initialize()` migrates vendor-only workspace indexes by adding deterministic `cliProfileId` values and ensuring matching server-configured profiles in settings.
+- `ChatService.initialize()` migrates backend-only workspace indexes by adding deterministic `cliProfileId` values and ensuring matching server-configured profiles in settings.
 - New conversations and backend changes now assign `cliProfileId` from the selected backend.
 - `SendMessageOptions` carries `cliProfileId` and the resolved `cliProfile` into adapters.
-- Phase 2 adds `resolveCliProfileRuntime()`, resolving `cliProfileId -> CliProfile.vendor -> backend adapter`.
-- New conversations can be created with `cliProfileId`; the profile vendor becomes the stored `backend`, and explicit backend/profile mismatches are rejected.
+- Phase 2 adds `resolveCliProfileRuntime()`, resolving `cliProfileId -> CliProfile.harness -> backend adapter`.
+- New conversations can be created with `cliProfileId`; the profile harness determines the stored `backend`, and explicit backend/profile mismatches are rejected.
 - Message send, reset memory capture/adapter cleanup, auto-title generation, session summary generation, and OCR now resolve the runtime backend from `cliProfileId` when present.
 - Profile switching through `POST /conversations/:id/message` is allowed only before the active session has messages; mid-session profile switches return `409`. Switching after reset remains possible because the new active session is empty.
 - Codex now applies profile runtime fields:
@@ -242,23 +242,23 @@ Update:
   - Claude plan usage caches are profile-aware and stored separately from the default server-configured cache.
 - Kiro research result: `kiro-cli` currently has device-flow login and account status commands, but no documented profile/config directory override. Empirical testing shows account isolation is possible only by changing `HOME`, which also changes unrelated filesystem behavior. We are not doing that. Kiro profiles are self-configured only for now, and Settings normalization strips Kiro `command`, `configDir`, and `env`.
 - OpenCode profiles are self-configured only in this pass. Settings preserves `opencode.provider`, strips profile-level OpenCode model defaults, the backend resolves `~/.opencode/bin/opencode` when PATH lacks it, metadata is discovered with `opencode models [provider] --verbose` plus a plain-command fallback, supported effort variants are passed to `opencode run --variant`, chat and one-shot calls use `opencode run --format json`, OpenCode `tool_use` JSON parts are mapped into Cockpit tool activity/outcome events, and Cockpit injects Memory/KB MCP servers through per-process `OPENCODE_CONFIG_CONTENT`. OpenCode has no confirmed native durable-memory directory for Cockpit to import/watch, so OpenCode workspace memory uses Cockpit's Memory MCP path rather than backend-native memory capture.
-- The V2 Settings screen now has a CLI Config tab for adding/editing profiles. It follows the Agent Cockpit v2 design handoff: header copy with enabled/total counter, accordion profile cards, enabled toggle/delete icon in each card header, account-only config/env fields in the expanded body, self-configured explanatory note, and a dashed bottom add row. It exposes profile name, vendor, setup mode, optional command/config directory/environment overrides for Codex and Claude Code, OpenCode provider selection populated from `opencode models`, and locks Kiro/OpenCode to self-configured mode.
-- CLI profile cards and the composer profile chip use the selected vendor's existing backend icon alongside the user-provided profile name.
+- The V2 Settings screen now has a CLI Config tab for adding/editing profiles. It follows the Agent Cockpit v2 design handoff: header copy with enabled/total counter, accordion profile cards, enabled toggle/delete icon in each card header, account-only config/env fields in the expanded body, self-configured explanatory note, and a dashed bottom add row. It exposes profile name, Harness, setup mode, optional command/config directory/environment overrides for Codex and Claude Code, OpenCode provider selection populated from `opencode models`, and locks Kiro/OpenCode to self-configured mode.
+- CLI profile cards and the composer profile chip use the selected harness's existing backend icon alongside the user-provided profile name.
 - Phase 7 adds `CliProfileAuthService` and chat routes for remote account auth:
   - `POST /api/chat/cli-profiles/:id/test`
   - `POST /api/chat/cli-profiles/:id/auth/start`
   - `GET /api/chat/cli-profiles/auth-jobs/:jobId`
   - `POST /api/chat/cli-profiles/auth-jobs/:jobId/cancel`
-  Codex account profiles run `codex login --device-auth` with `CODEX_HOME`; Claude Code account profiles run `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR`. OpenCode profiles expose status checks but not Cockpit-managed auth jobs. Missing account-profile `configDir` values are filled with deterministic directories under `data/cli-profiles/`. Check CLI runs the vendor status command and warms/reads profile-specific backend metadata when the adapter is registered, so model discovery is exercised during the check. Job stdout/stderr is redacted before being exposed to the browser. Auth jobs enforce a 15-minute timeout, reject duplicate running jobs for the same profile, and verify the vendor status command before marking a login-process exit as successful.
+  Codex account profiles run `codex login --device-auth` with `CODEX_HOME`; Claude Code account profiles run `claude auth login --claudeai` with `CLAUDE_CONFIG_DIR`. OpenCode profiles expose status checks but not Cockpit-managed auth jobs. Missing account-profile `configDir` values are filled with deterministic directories under `data/cli-profiles/`. Check CLI runs the harness status command and warms/reads profile-specific backend metadata when the adapter is registered, so model discovery is exercised during the check. Job stdout/stderr is redacted before being exposed to the browser. Auth jobs enforce a 15-minute timeout, reject duplicate running jobs for the same profile, and verify the harness status command before marking a login-process exit as successful.
 - The V2 Settings CLI Config account-profile cards now have an Account authentication panel with Check CLI, Authenticate, Cancel, status text, and a redacted log area for URLs/device codes emitted by the CLI.
 - The V2 topbar plan-usage tooltip now keys Claude Code and Codex account-limit snapshots by `cliProfileId`. Switching to a different Codex profile after reset clears the previous profile's account limits from the tooltip while the new profile cache loads, and Codex turn completion performs immediate plus delayed reads for the same profile key so the server-side refresh is observed after the `done` frame.
-- The V2 General tab now selects the default CLI profile when profiles exist, and saving a default profile keeps `defaultBackend` synchronized to the profile vendor.
+- The V2 General tab now selects the default CLI profile when profiles exist, and saving a default profile keeps `defaultBackend` synchronized to the profile harness.
 - New V2 conversations use `defaultCliProfileId` when present; the composer picker lists CLI profile names and sends `cliProfileId` with the next message. It falls back to the raw backend picker only when no profiles are available. Profile/backend switching is locked once the active session has messages; model and effort remain selectable.
 - `BaseBackendAdapter.getMetadata(options?)` is now async so adapters can return profile-specific metadata while preserving the static `/backends` registry. `GET /api/chat/cli-profiles/:profileId/metadata` resolves a profile and returns the selected adapter's profile-aware metadata.
-- Codex profile model catalogs are now discovered per profile runtime. Composer, General, Memory, and Knowledge Base model/effort pickers request profile metadata when a profile is selected, then fall back to vendor registry metadata until the profile catalog is available.
-- Memory and Knowledge Base settings now select CLI profiles (`memory.cliProfileId`, `ingestionCliProfileId`, `digestionCliProfileId`, `dreamingCliProfileId`) while keeping legacy `*CliBackend` fields aligned to the selected profile vendor for compatibility.
+- Codex profile model catalogs are now discovered per profile runtime. Composer, General, Memory, and Knowledge Base model/effort pickers request profile metadata when a profile is selected, then fall back to backend registry metadata until the profile catalog is available.
+- Memory and Knowledge Base settings now select CLI profiles (`memory.cliProfileId`, `ingestionCliProfileId`, `digestionCliProfileId`, `dreamingCliProfileId`) while keeping legacy `*CliBackend` fields aligned to the selected profile harness-derived backend for compatibility.
 - Memory MCP note formatting, post-session memory extraction, KB ingestion image conversion, KB digestion, and KB dreaming all resolve their configured CLI profile and pass `cliProfile` into one-shot backend calls, so account profiles use their isolated config/auth directories outside regular chat streams too.
-- ADR written: `docs/adr/0015-separate-cli-profiles-from-backend-vendors.md`.
+- ADRs written: `docs/adr/0015-separate-cli-profiles-from-backend-vendors.md` and `docs/adr/0079-use-harness-for-cli-profile-runtime-identity.md`.
 - Specs updated: data models, backend services, API endpoints, frontend, and testing.
 - Tests updated: `test/settingsService.test.ts`, `test/chatService.conversations.test.ts`, `test/chat.streaming.test.ts`, and `test/graceful-shutdown.test.ts`.
 - Phase 3 tests updated: `test/codexBackend.test.ts` and `test/codexPlanUsage.test.ts`.
@@ -319,7 +319,7 @@ Update:
     - `git diff --check` passed.
   - Issue #243 full-coverage auth pass:
     - `npm test -- test/chat.cliProfileAuth.test.ts --runInBand --forceExit` passed with 8 tests after adding timeout, duplicate-job, status-verification, and redaction coverage.
-    - Babel parser check passed for `public/v2/src/screens/settingsScreen.jsx` and `public/v2/src/shell.jsx` after adding vendor icons to profile UI.
+    - Babel parser check passed for `public/v2/src/screens/settingsScreen.jsx` and `public/v2/src/shell.jsx` after adding harness icons to profile UI.
     - `npm run typecheck` passed.
     - `npm test -- test/settingsService.test.ts test/chatService.conversations.test.ts test/chat.streaming.test.ts test/backends.test.ts test/claudePlanUsage.test.ts test/codexBackend.test.ts test/codexPlanUsage.test.ts test/chat.cliProfileAuth.test.ts test/planUsageStores.test.ts test/streamStore.test.ts test/memoryMcp.test.ts test/knowledgeBase.digest.test.ts test/knowledgeBase.dream.test.ts test/knowledgeBase.pageConversion.test.ts --runInBand --forceExit` passed with 568 tests.
     - `npm run adr:lint` passed.

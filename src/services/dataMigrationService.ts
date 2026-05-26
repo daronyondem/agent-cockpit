@@ -77,6 +77,10 @@ interface PendingImportRecord {
   manifest: DataExportManifest;
 }
 
+type PersistedCliProfile = CliProfile & {
+  vendor?: CliProfile['harness'];
+};
+
 export interface DataImportScheduleResult {
   importId: string;
   backupPath: string;
@@ -786,7 +790,7 @@ export class DataMigrationService {
   private async checkCliProfiles(): Promise<CheckStatus[]> {
     const settingsPath = path.join(this.dataRoot, 'chat', 'settings.json');
     const settings = readJsonIfExists(settingsPath) as Settings | null;
-    const profiles = Array.isArray(settings?.cliProfiles) ? settings!.cliProfiles : [];
+    const profiles = Array.isArray(settings?.cliProfiles) ? settings!.cliProfiles as PersistedCliProfile[] : [];
     if (profiles.length === 0) return [skipped('No CLI profiles configured')];
     return profiles.map(profile => checkCliProfile(profile, this.dataRoot));
   }
@@ -1401,10 +1405,12 @@ async function checkEmbedding(config: EmbeddingConfig): Promise<CheckStatus> {
     : warn(`Ollama embedding check failed for ${label}: ${result.error || 'unknown error'}`);
 }
 
-function checkCliProfile(profile: CliProfile, dataRoot: string): CheckStatus {
-  const label = `${profile.name || profile.id} (${profile.vendor})`;
+function checkCliProfile(profile: PersistedCliProfile, dataRoot: string): CheckStatus {
+  const harness = profile.harness || profile.vendor;
+  const label = `${profile.name || profile.id} (${harness || 'unknown harness'})`;
   if (profile.disabled) return skipped(`${label} is disabled`);
-  if (profile.vendor === 'kiro') return warn(`${label} uses system Kiro CLI auth outside Agent Cockpit; recheck on this machine.`);
+  if (!harness) return warn(`${label} is missing CLI harness; reconfigure this profile.`);
+  if (harness === 'kiro') return warn(`${label} uses system Kiro CLI auth outside Agent Cockpit; recheck on this machine.`);
   if (profile.authMode === 'account') {
     if (!profile.configDir) return warn(`${label} account profile has no configDir yet; re-auth may create one.`);
     const configDir = path.resolve(profile.configDir);

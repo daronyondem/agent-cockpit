@@ -66,8 +66,8 @@ export interface ClaudeCliRuntime extends CliCommandResolution {
 }
 
 export function resolveClaudeCliRuntime(profile?: CliProfile): ClaudeCliRuntime {
-  if (profile && profile.vendor !== 'claude-code') {
-    throw new Error(`CLI profile vendor ${profile.vendor} is not claude-code`);
+  if (profile && profile.harness !== 'claude-code') {
+    throw new Error(`CLI profile harness ${profile.harness} is not claude-code`);
   }
   const requestedCommand = profile?.command?.trim() || 'claude';
   const env: NodeJS.ProcessEnv = { ...process.env };

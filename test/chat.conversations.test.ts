@@ -421,7 +421,7 @@ describe('POST /conversations/:id/reset', () => {
     const deletedProfile: CliProfile = {
       id: 'profile-codex-deleted',
       name: 'Deleted Codex',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       createdAt: now,
       updatedAt: now,
@@ -452,7 +452,7 @@ describe('POST /conversations/:id/reset', () => {
     const deletedProfile: CliProfile = {
       id: 'profile-codex-deleted',
       name: 'Deleted Codex',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       createdAt: now,
       updatedAt: now,
@@ -460,7 +460,7 @@ describe('POST /conversations/:id/reset', () => {
     const fallbackProfile: CliProfile = {
       id: 'profile-claude-fallback',
       name: 'Fallback Claude',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       protocol: 'standard',
       authMode: 'server-configured',
       createdAt: now,

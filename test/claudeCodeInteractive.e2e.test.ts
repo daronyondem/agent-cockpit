@@ -28,7 +28,7 @@ function claudeProfile(configDir?: string): CliProfile {
   return {
     id: 'e2e-claude-code',
     name: 'Claude Code E2E',
-    vendor: 'claude-code',
+    harness: 'claude-code',
     protocol: 'interactive',
     authMode: 'server-configured',
     command: 'claude',

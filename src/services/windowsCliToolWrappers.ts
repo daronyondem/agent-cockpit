@@ -1,15 +1,15 @@
 import fs from 'fs';
 import path from 'path';
-import type { CliVendor, InstallNodeRuntime, InstallStatus } from '../types';
+import type { CliHarness, InstallNodeRuntime, InstallStatus } from '../types';
 
 const WINDOWS_CLI_TOOLS_DIR = 'cli-tools';
 
-type WrapperVendor = Extract<CliVendor, 'claude-code' | 'codex'>;
+type WrapperHarness = Extract<CliHarness, 'claude-code' | 'codex'>;
 
 interface EnsureWindowsCliToolWrappersOptions {
   cliToolsDir: string | null | undefined;
   nodeExe: string | null | undefined;
-  vendors?: WrapperVendor[];
+  harnesses?: WrapperHarness[];
   requireTargets?: boolean;
 }
 
@@ -29,7 +29,7 @@ interface WrapperSpec {
 
 export function ensureWindowsCliToolWrappersForInstall(
   install: Pick<InstallStatus, 'installDir' | 'nodeRuntime'>,
-  vendors?: WrapperVendor[],
+  harnesses?: WrapperHarness[],
   requireTargets = false,
 ): WindowsCliToolWrapperResult {
   const cliToolsDir = process.platform === 'win32' && install.installDir
@@ -38,7 +38,7 @@ export function ensureWindowsCliToolWrappersForInstall(
   return ensureWindowsCliToolWrappers({
     cliToolsDir,
     nodeExe: windowsPrivateNodeExe(install.nodeRuntime),
-    vendors,
+    harnesses,
     requireTargets,
   });
 }
@@ -58,14 +58,14 @@ export function ensureWindowsCliToolWrappers(options: EnsureWindowsCliToolWrappe
     return { ok: true, updated, skipped: ['missing-private-node'] };
   }
 
-  const vendors: WrapperVendor[] = options.vendors && options.vendors.length > 0
-    ? options.vendors
+  const harnesses: WrapperHarness[] = options.harnesses && options.harnesses.length > 0
+    ? options.harnesses
     : ['claude-code', 'codex'];
 
   try {
     fs.mkdirSync(cliToolsDir, { recursive: true });
-    for (const vendor of vendors) {
-      const spec = wrapperSpecForVendor(vendor, cliToolsDir, nodeExe);
+    for (const harness of harnesses) {
+      const spec = wrapperSpecForHarness(harness, cliToolsDir, nodeExe);
       if (!fs.existsSync(spec.targetPath)) {
         if (options.requireTargets) {
           return {
@@ -100,8 +100,8 @@ export function windowsPrivateNodeExe(nodeRuntime?: InstallNodeRuntime | null): 
   return fs.existsSync(nodeExe) ? nodeExe : null;
 }
 
-function wrapperSpecForVendor(vendor: WrapperVendor, cliToolsDir: string, nodeExe: string): WrapperSpec {
-  if (vendor === 'codex') {
+function wrapperSpecForHarness(harness: WrapperHarness, cliToolsDir: string, nodeExe: string): WrapperSpec {
+  if (harness === 'codex') {
     const targetPath = path.join(cliToolsDir, 'node_modules', '@openai', 'codex', 'bin', 'codex.js');
     return {
       commandName: 'codex',
