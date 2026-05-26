@@ -1039,7 +1039,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
           const protocol = protocolLabel(profile);
           const opencodeProvider = (profile.opencode && profile.opencode.provider) || '';
           const opencodeProviderId = isOpenCode ? String(opencodeProvider).trim().toLowerCase() : '';
-          const providerIconClass = opencodeProviderId === 'deepseek' || opencodeProviderId === 'opencode'
+          const providerIconClass = opencodeProviderId === 'deepseek' || opencodeProviderId === 'ollama' || opencodeProviderId === 'opencode'
             ? `cli-harness-icon cli-provider-icon cli-provider-${opencodeProviderId}`
             : null;
           const harnessIcon = providerIconClass ? null : backendIconFor(backends, backendIdForProfile(profile));

@@ -159,15 +159,18 @@ describe('frontend routes', () => {
     const appCss = readDesktopCss();
 
     expect(fs.existsSync(path.join(ROOT, 'public/icons/deepseek-logo.svg'))).toBe(true);
+    expect(fs.existsSync(path.join(ROOT, 'public/icons/ollama-logo.svg'))).toBe(true);
     expect(fs.existsSync(path.join(ROOT, 'public/icons/opencode-logo-light.svg'))).toBe(true);
     expect(fs.existsSync(path.join(ROOT, 'public/icons/opencode-logo-dark.svg'))).toBe(true);
     expect(shellStateSrc).toContain('profile.opencode && profile.opencode.provider');
     expect(shellStateSrc).toContain("provider === 'deepseek'");
+    expect(shellStateSrc).toContain("provider === 'ollama'");
     expect(shellStateSrc).toContain("provider === 'opencode'");
     expect(shellStateSrc).toContain('avatar-provider-${provider}');
     expect(shellStateSrc).toContain('export function assistantDisplayNameFor');
     expect(shellStateSrc).toContain('return providerLabel;');
     expect(appCss).toContain("url('/icons/deepseek-logo.svg')");
+    expect(appCss).toContain("url('/icons/ollama-logo.svg')");
     expect(appCss).toContain("url('/icons/opencode-logo-light.svg')");
     expect(appCss).toContain('#root[data-theme="dark"] .msg-agent .avatar.avatar-provider-opencode');
     expect(appCss).toContain("url('/icons/opencode-logo-dark.svg')");
@@ -180,6 +183,7 @@ describe('frontend routes', () => {
     expect(mobileChatScreenSrc).toContain('opencodeProviderLabel');
     expect(mobileChatScreenSrc).toContain('provider-avatar provider-${providerAvatar}');
     expect(mobileCss).toContain("url('/icons/deepseek-logo.svg')");
+    expect(mobileCss).toContain("url('/icons/ollama-logo.svg')");
     expect(mobileCss).toContain("url('/icons/opencode-logo-light.svg')");
   });
 
@@ -335,6 +339,7 @@ describe('frontend routes', () => {
     expect(settingsSrc).toContain('providerOptionsFromModels');
     expect(settingsSrc).toContain('cli-provider-${opencodeProviderId}');
     expect(appCss).toContain('.cli-harness-icon.cli-provider-deepseek');
+    expect(appCss).toContain('.cli-harness-icon.cli-provider-ollama');
     expect(appCss).toContain('.cli-harness-icon.cli-provider-opencode');
     expect(appCss).toContain('#root[data-theme="dark"] .cli-harness-icon.cli-provider-opencode');
     expect(settingsSrc).not.toContain('Composer models');

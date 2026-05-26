@@ -92,6 +92,7 @@ export function backendIdForProfile(profile?: { harness: string; protocol?: stri
 
 const OPENCODE_PROVIDER_LABELS: Record<string, string> = {
   deepseek: 'DeepSeek',
+  ollama: 'Ollama',
   opencode: 'OpenCode',
   openrouter: 'OpenRouter',
   groq: 'Groq',

@@ -104,7 +104,7 @@ agent-cockpit/
 ├── public/
 │   ├── favicon.svg
 │   ├── logo-*.svg                      # Brand assets used by login, sidebar, and assistant avatars
-│   ├── icons/*.svg                     # Source/reference icon assets, including provider avatars such as DeepSeek and OpenCode
+│   ├── icons/*.svg                     # Source/reference icon assets, including provider avatars such as DeepSeek, Ollama, and OpenCode
 │   ├── v2/                             # Retired Browser-Babel placeholders kept for ADR path stability
 │   ├── v2-built/                       # Ignored generated Vite output served at `/v2/`
 │   └── mobile-built/                   # Ignored generated mobile PWA output served at `/mobile/`

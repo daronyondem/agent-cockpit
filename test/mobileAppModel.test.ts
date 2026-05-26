@@ -175,6 +175,7 @@ describe('mobile app model helpers', () => {
     expect(model.backendIdForProfile(profiles[0])).toBe('codex');
     expect(model.profileForID(profiles, 'open-profile')).toBe(profiles[2]);
     expect(model.profileForID(profiles, 'missing')).toBeNull();
+    expect(model.opencodeProviderLabel('ollama')).toBe('Ollama');
     expect(model.opencodeProviderLabel('openrouter')).toBe('OpenRouter');
     expect(model.opencodeProviderLabel('custom-provider')).toBe('Custom Provider');
   });

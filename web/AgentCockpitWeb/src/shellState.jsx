@@ -141,6 +141,7 @@ function backendIconFor(backends, backendId){
 
 const OPENCODE_PROVIDER_LABELS = {
   deepseek: 'DeepSeek',
+  ollama: 'Ollama',
   opencode: 'OpenCode',
   openrouter: 'OpenRouter',
   groq: 'Groq',
@@ -190,7 +191,7 @@ export function AssistantAvatar({ backend, cliProfileId }){
     ? (profiles || []).find(p => p && p.id === cliProfileId)
     : null;
   const provider = profile ? String(profile.opencode && profile.opencode.provider || '').trim().toLowerCase() : '';
-  if (provider === 'deepseek' || provider === 'opencode') {
+  if (provider === 'deepseek' || provider === 'ollama' || provider === 'opencode') {
     return <span className={`avatar avatar-provider-${provider}`}/>;
   }
   const icon = backendIconFor(backends, backend);
