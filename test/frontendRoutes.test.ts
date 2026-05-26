@@ -360,9 +360,13 @@ describe('frontend routes', () => {
   test('composer profile picker recovers reset sessions with stale profile ids', () => {
     const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
     const storeSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/streamStore.js'), 'utf8');
+    const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
+    const mobileAppSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const mobileApiSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/api.ts'), 'utf8');
 
     expect(storeSrc).toContain('composerCliProfileId: freshSession ? (data.cliProfileId || null) : next.composerCliProfileId');
     expect(storeSrc).toContain('composerBackend: freshSession ? (data.backend || null) : next.composerBackend');
+    expect(storeSrc).toContain('if (opts && opts.cliProfileId) body.cliProfileId = opts.cliProfileId;');
     expect(composerSrc).toContain('const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;');
     expect(composerSrc).toContain('const canChangeProfile = !profileLocked || canRepairMissingProfile;');
     expect(composerSrc).toContain('canChangeProfile && activeProfiles.length === 1 ? activeProfiles[0] : null');
@@ -371,6 +375,11 @@ describe('frontend routes', () => {
     expect(composerSrc).toContain("title={canRepairMissingProfile ? 'Select replacement CLI profile'");
     expect(composerSrc).toContain("...(!selectedProfile ? [{ value: '', label: 'Select profile', disabled: true }] : [])");
     expect(composerSrc).toContain('disabled={!!o.disabled}');
+    expect(chatLiveSrc).toContain('const storedProfileMissing = profileLocked');
+    expect(chatLiveSrc).toContain('const success = await StreamStore.reset(convId, resetProfile ? {');
+    expect(mobileApiSrc).toContain('async resetConversation(conversationID: string, input: ResetConversationRequest = {})');
+    expect(mobileAppSrc).toContain('const storedProfileMissing = !!conversation.cliProfileId');
+    expect(mobileAppSrc).toContain('const response = await clientRef.current.resetConversation(conversation.id, resetProfile ? {');
   });
 
   test('desktop Usage settings separate reported and estimated cost with pricing override controls', () => {

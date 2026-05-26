@@ -20,7 +20,7 @@ import type {
   Settings,
   ThreadGoal,
 } from './types';
-import type { CreateConversationRequest, SetMessagePinnedRequest } from '../../../src/contracts/conversations';
+import type { CreateConversationRequest, ResetConversationRequest, SetMessagePinnedRequest } from '../../../src/contracts/conversations';
 import type {
   ExplorerCreateFileRequest,
   ExplorerMkdirRequest,
@@ -214,10 +214,10 @@ export class AgentCockpitAPI {
     });
   }
 
-  async resetConversation(conversationID: string): Promise<ResetSessionResponse> {
+  async resetConversation(conversationID: string, input: ResetConversationRequest = {}): Promise<ResetSessionResponse> {
     return this.request<ResetSessionResponse>('POST', `/api/chat/conversations/${encodeURIComponent(conversationID)}/reset`, {
       csrf: true,
-      body: {},
+      body: stripUndefined(input),
     });
   }
 

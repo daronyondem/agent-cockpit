@@ -31,6 +31,11 @@ export interface RenameConversationRequest {
   title: string;
 }
 
+export interface ResetConversationRequest {
+  cliProfileId?: string;
+  backend?: string;
+}
+
 export interface SetUnreadRequest {
   unread: boolean;
 }
@@ -79,6 +84,14 @@ export function validateCreateConversationRequest(body: unknown): ValidatedCreat
 export function validateRenameConversationRequest(body: unknown): RenameConversationRequest {
   const record = asRecord(body);
   return { title: requiredNonEmptyString(record, 'title', 'title is required') };
+}
+
+export function validateResetConversationRequest(body: unknown): ResetConversationRequest {
+  const record = body == null ? {} : asRecord(body);
+  return {
+    cliProfileId: optionalString(record, 'cliProfileId'),
+    backend: optionalString(record, 'backend'),
+  };
 }
 
 export function validateSetUnreadRequest(body: unknown): SetUnreadRequest {

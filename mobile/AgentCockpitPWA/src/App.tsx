@@ -1487,11 +1487,27 @@ export default function App() {
     if (!conversation || isStreaming || !window.confirm('Reset this session and start a fresh CLI session?')) {
       return;
     }
+    const storedProfileMissing = !!conversation.cliProfileId
+      && !availableProfiles.some((profile) => profile.id === conversation.cliProfileId);
+    let resetProfile = null;
+    if (storedProfileMissing) {
+      const backendMatches = availableProfiles.filter((profile) => backendIdForProfile(profile) === conversation.backend);
+      resetProfile = availableProfiles.find((profile) => profile.id === selectedCliProfileId)
+        || (backendMatches.length === 1 ? backendMatches[0] : null)
+        || (availableProfiles.length === 1 ? availableProfiles[0] : null);
+      if (!resetProfile) {
+        setErrorMessage('Choose a replacement CLI profile before resetting this conversation.');
+        return;
+      }
+    }
     try {
       setLoading(true);
       setErrorMessage(null);
       setActionsVisible(false);
-      const response = await clientRef.current.resetConversation(conversation.id);
+      const response = await clientRef.current.resetConversation(conversation.id, resetProfile ? {
+        cliProfileId: resetProfile.id,
+        backend: backendIdForProfile(resetProfile),
+      } : undefined);
       setActiveConversation(response.conversation);
       setConversations((items) =>
         items.map((item) =>

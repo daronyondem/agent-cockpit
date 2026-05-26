@@ -577,6 +577,24 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
 
   async function handleReset(anchor){
     if (streaming || sending) return;
+    const activeProfiles = Array.isArray(cliProfiles) ? cliProfiles.filter(p => p && !p.disabled) : [];
+    const storedProfileMissing = profileLocked
+      && !!conv.cliProfileId
+      && !activeProfiles.some(p => p.id === conv.cliProfileId);
+    let resetProfile = null;
+    if (storedProfileMissing) {
+      const backendMatches = activeProfiles.filter(p => backendIdForProfile(p) === conv.backend);
+      resetProfile = activeProfiles.find(p => p.id === state.composerCliProfileId)
+        || (backendMatches.length === 1 ? backendMatches[0] : null)
+        || (activeProfiles.length === 1 ? activeProfiles[0] : null);
+      if (!resetProfile) {
+        toast.error({
+          title: 'Choose a replacement CLI profile',
+          message: 'This conversation references a CLI profile that no longer exists.',
+        });
+        return;
+      }
+    }
     const ok = await dialog.confirm({
       anchor,
       title: 'Reset this conversation?',
@@ -585,7 +603,10 @@ export function ChatLive({ convId, onArchived, onDeleted, onRenamed, onOpenMemor
       cancelLabel: 'Cancel',
     });
     if (!ok) return;
-    const success = await StreamStore.reset(convId);
+    const success = await StreamStore.reset(convId, resetProfile ? {
+      cliProfileId: resetProfile.id,
+      backend: backendIdForProfile(resetProfile),
+    } : undefined);
     if (success) toast.success('Session reset');
   }
 

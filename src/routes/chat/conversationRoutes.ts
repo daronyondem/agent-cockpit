@@ -12,12 +12,13 @@ import { validateQueueUpdateRequest } from '../../contracts/chat';
 import {
   validateCreateConversationRequest,
   validateRenameConversationRequest,
+  validateResetConversationRequest,
   validateSetMessagePinnedRequest,
   validateSetUnreadRequest,
 } from '../../contracts/conversations';
 import { isContractValidationError } from '../../contracts/validation';
 import type { Request, Response } from '../../types';
-import { isCliProfileResolutionError, param } from './routeUtils';
+import { conversationHasMissingCliProfile, isCliProfileResolutionError, param } from './routeUtils';
 
 type CliRuntime = Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>> | null;
 type MessageWindowQuery = Parameters<ChatService['getConversationMessages']>[1];
@@ -404,6 +405,7 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
   // ── Reset session ──────────────────────────────────────────────────────────
   router.post('/conversations/:id/reset', csrfGuard, async (req: Request, res: Response) => {
     try {
+      const body = validateResetConversationRequest(req.body);
       const convId = param(req, 'id');
       if (hasInFlightTurn(convId)) {
         return res.status(409).json({ error: 'Cannot reset session while streaming' });
@@ -416,11 +418,28 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
       if (preConv) {
         try {
           endingRuntime = await chatService.resolveCliProfileRuntimeForSessionReset(preConv.cliProfileId, preConv.backend);
+          if (body.cliProfileId && body.cliProfileId !== endingRuntime.cliProfileId) {
+            return res.status(409).json({ error: 'Cannot switch CLI profile while resetting a session with a valid profile' });
+          }
+          if (body.backend && body.backend !== endingRuntime.backendId) {
+            return res.status(400).json({ error: `CLI profile backend ${endingRuntime.backendId} does not match requested backend ${body.backend}` });
+          }
         } catch (err: unknown) {
           if (isCliProfileResolutionError(err)) {
-            return res.status(400).json({ error: (err as Error).message });
+            if (!body.cliProfileId) {
+              return res.status(400).json({ error: (err as Error).message });
+            }
+            const canRepairMissingProfile = await conversationHasMissingCliProfile(chatService, preConv);
+            if (!canRepairMissingProfile) {
+              return res.status(409).json({ error: 'Cannot switch CLI profile while resetting a session with a valid profile' });
+            }
+            endingRuntime = await chatService.resolveCliProfileRuntime(body.cliProfileId, body.backend || preConv.backend);
+            if (body.backend && body.backend !== endingRuntime.backendId) {
+              return res.status(400).json({ error: `CLI profile backend ${endingRuntime.backendId} does not match requested backend ${body.backend}` });
+            }
+          } else {
+            throw err;
           }
-          throw err;
         }
       }
 
@@ -453,6 +472,9 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
 
       res.json(result);
     } catch (err: unknown) {
+      if (isContractValidationError(err)) {
+        return res.status(400).json({ error: err.message });
+      }
       if (isCliProfileResolutionError(err)) {
         return res.status(400).json({ error: (err as Error).message });
       }

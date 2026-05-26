@@ -2124,12 +2124,15 @@ import { reduceStreamFrame } from './stream/streamFrameReducer.ts';
     }
   }
 
-  async function reset(convId){
+  async function reset(convId, opts){
     const s = states.get(convId);
     if (!s || s.streaming || s.sending || s.resetting) return false;
     update(convId, { resetting: true });
     try {
-      await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/reset', { method: 'POST', body: {} });
+      const body = {};
+      if (opts && opts.cliProfileId) body.cliProfileId = opts.cliProfileId;
+      if (opts && opts.backend) body.backend = opts.backend;
+      await AgentApi.fetch('conversations/' + encodeURIComponent(convId) + '/reset', { method: 'POST', body });
       await refreshConversationFromServer(convId, null, true);
       update(convId, { resetting: false });
       return true;
