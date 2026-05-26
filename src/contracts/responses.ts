@@ -101,6 +101,19 @@ export interface StreamError {
   source?: 'backend' | 'transport' | 'abort' | 'server';
 }
 
+export interface SessionRecoveryMetadata {
+  backend: string;
+  reason: string;
+  previousNativeSessionId?: string | null;
+  newNativeSessionId?: string | null;
+  snapshotPath?: string | null;
+  sourceSessionPath?: string | null;
+  sourceSessionNumber?: number | null;
+  snapshotMessageCount?: number | null;
+  recoveryCount: number;
+  occurredAt: string;
+}
+
 export interface Message {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -112,6 +125,7 @@ export interface Message {
   contentBlocks?: ContentBlock[];
   streamError?: StreamError;
   goalEvent?: GoalEvent;
+  sessionRecovery?: SessionRecoveryMetadata;
   turn?: 'progress' | 'final';
   pinned?: boolean;
 }

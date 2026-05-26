@@ -104,6 +104,18 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
     return new Error(`Goal ${action} is not supported by ${label}`);
   }
 
+  function recoveryOptions(convId: string, backendId: string, messageLimit: number) {
+    return {
+      createSnapshot: ({ previousNativeSessionId, reason }: { previousNativeSessionId: string; reason: string }) =>
+        chatService.createSessionRecoverySnapshot(convId, {
+          backend: backendId,
+          previousNativeSessionId,
+          reason,
+          messageLimit,
+        }),
+    };
+  }
+
   async function persistGoalEventMessage(convId: string, backendId: string, goalEvent: GoalEvent) {
     const goalMessage = await chatService.addMessage(
       convId,
@@ -280,6 +292,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       }
 
       const isNewSession = conv.messages.length === 0;
+      const recoveryMessageLimit = conv.messages.length;
       const { systemPrompt, mcpServers } = await buildGoalRunEnvironment(convId, isNewSession);
       const refreshedConv = await chatService.getConversation(convId);
       if (await finalizePendingAbortIfRequested(convId, backendId, pendingMessageSend)) {
@@ -300,6 +313,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         workingDir: executionDir,
         systemPrompt,
         externalSessionId: conv.externalSessionId || null,
+        sessionRecovery: !isNewSession ? recoveryOptions(convId, backendId, recoveryMessageLimit) : undefined,
         model: model || conv.model || undefined,
         effort: effectiveEffort,
         serviceTier: effectiveServiceTier,
@@ -383,6 +397,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
       }
       conv = (await chatService.getConversation(convId))!;
       executionDir = conversationExecutionDir(conv);
+      const recoveryMessageLimit = conv.messages.length;
       const { systemPrompt, mcpServers } = await buildGoalRunEnvironment(convId, false);
       let resumedGoal: ThreadGoal | null = null;
       try {
@@ -414,6 +429,7 @@ export function createGoalRouter(opts: GoalRoutesOptions): express.Router {
         workingDir: executionDir,
         systemPrompt,
         externalSessionId: conv.externalSessionId || null,
+        sessionRecovery: recoveryOptions(convId, backendId, recoveryMessageLimit),
         model: conv.model || undefined,
         effort: conv.effort || undefined,
         serviceTier: conv.serviceTier || undefined,

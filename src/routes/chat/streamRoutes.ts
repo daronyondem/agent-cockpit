@@ -256,6 +256,7 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       serviceTier: conv.serviceTier || null,
       workingDir: executionDir,
     });
+    const recoveryMessageLimit = conv.messages.length;
     const userMsg = await chatService.addMessage(convId, 'user', content.trim(), backendId);
     await streamSupervisor.markPreparing(jobId, {
       userMessageId: userMsg?.id || null,
@@ -407,6 +408,16 @@ export function createStreamRouter(opts: StreamRoutesOptions): express.Router {
       workingDir: executionDir,
       systemPrompt,
       externalSessionId: conv.externalSessionId || null,
+      sessionRecovery: !isNewSession
+        ? {
+            createSnapshot: ({ previousNativeSessionId, reason }) => chatService.createSessionRecoverySnapshot(convId, {
+              backend: backendId,
+              previousNativeSessionId,
+              reason,
+              messageLimit: recoveryMessageLimit,
+            }),
+          }
+        : undefined,
       model: model || conv.model || undefined,
       effort: effectiveEffort,
       serviceTier: effectiveServiceTier,

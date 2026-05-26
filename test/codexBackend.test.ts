@@ -662,6 +662,96 @@ describe('CodexAdapter', () => {
     jest.dontMock('child_process');
   });
 
+  test('resume failure emits recovery notice and forces snapshot read in the fresh thread prompt', async () => {
+    let streamRef!: AsyncGenerator<any>;
+    let adapterRef!: { shutdown: () => void };
+    const writes: any[] = [];
+    const createSnapshot = jest.fn(async () => ({
+      snapshotPath: '/tmp/recovery/session-1-latest.json',
+      sourceSessionPath: '/tmp/recovery/session-1.json',
+      sourceSessionNumber: 1,
+      messageCount: 4,
+      capturedAt: '2026-05-25T00:00:00.000Z',
+      recoveryCount: 2,
+    }));
+
+    jest.isolateModules(() => {
+      installCodexAppServerMock((req, emit) => {
+        if (req.method === 'initialize') {
+          setImmediate(() => emit({ id: req.id, result: {} }));
+        } else if (req.method === 'thread/resume') {
+          setImmediate(() => emit({
+            id: req.id,
+            error: { code: -32000, message: 'no rollout found for thread-old' },
+          }));
+        } else if (req.method === 'thread/start') {
+          setImmediate(() => emit({ id: req.id, result: { thread: { id: 'thread-new' } } }));
+        } else if (req.method === 'turn/start') {
+          setImmediate(() => {
+            emit({ id: req.id, result: { turn: { id: 'turn-new' } } });
+            emit({
+              method: 'item/agentMessage/delta',
+              params: { threadId: 'thread-new', turnId: 'turn-new', itemId: 'msg-new', delta: 'recovered' },
+            });
+            emit({
+              method: 'turn/completed',
+              params: { threadId: 'thread-new', turn: { id: 'turn-new' } },
+            });
+          });
+        }
+      }, writes);
+      const { CodexAdapter: IsolatedAdapter } = require('../src/services/backends/codex');
+      const adapter = new IsolatedAdapter({ workingDir: '/tmp' });
+      adapterRef = adapter;
+      const { stream } = adapter.sendMessage('current question', {
+        sessionId: 'cockpit-session',
+        conversationId: 'conv-recovery',
+        isNewSession: false,
+        workingDir: '/tmp',
+        systemPrompt: '',
+        externalSessionId: 'thread-old',
+        sessionRecovery: { createSnapshot },
+      });
+      streamRef = stream;
+    });
+
+    const events: any[] = [];
+    for await (const event of streamRef) {
+      events.push(event);
+      if (event.type === 'done') break;
+    }
+
+    expect(createSnapshot).toHaveBeenCalledWith({
+      previousNativeSessionId: 'thread-old',
+      reason: 'no rollout found for thread-old',
+    });
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: 'session_recovery',
+        message: expect.stringContaining('Agent Cockpit recovered the conversation'),
+        metadata: expect.objectContaining({
+          backend: 'codex',
+          previousNativeSessionId: 'thread-old',
+          newNativeSessionId: 'thread-new',
+          snapshotPath: '/tmp/recovery/session-1-latest.json',
+          recoveryCount: 2,
+        }),
+      }),
+      { type: 'external_session', sessionId: 'thread-new' },
+      expect.objectContaining({ type: 'text', content: 'recovered' }),
+      { type: 'done' },
+    ]));
+
+    const turnStart = writes.find((entry) => entry.method === 'turn/start');
+    const promptText = turnStart.params.input[0].text;
+    expect(promptText).toContain('You MUST read the prior Agent Cockpit conversation snapshot before answering');
+    expect(promptText).toContain('/tmp/recovery/session-1-latest.json');
+    expect(promptText).toContain('current question');
+    expect(promptText).not.toContain('thread-old');
+    adapterRef.shutdown();
+    jest.dontMock('child_process');
+  });
+
   test('sendMessage forwards current-thread goal updates without taking over turn ownership', async () => {
     let streamRef!: AsyncGenerator<any>;
     let adapterRef!: { shutdown: () => void };

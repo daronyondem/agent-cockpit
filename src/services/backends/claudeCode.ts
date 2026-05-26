@@ -12,6 +12,11 @@ import {
   extractToolOutcome,
   extractUsage,
 } from './toolUtils';
+import {
+  buildNativeSessionRecovery,
+  buildSessionRecoveryEvent,
+  createRecoverySnapshot,
+} from './sessionRecovery';
 import type {
   BackendMetadata,
   SendMessageOptions,
@@ -483,6 +488,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     args.push('-p', message);
 
     let retryResumeAsNew = false;
+    let resumeMissingReason: string | null = null;
     try {
       const cwd = workingDir || this.workingDir || undefined;
       const invocation = buildCliCommandInvocation(runtime, args);
@@ -668,6 +674,7 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
             const errorMessage = filteredStderr || `Process exited with code ${code}`;
             if (!attemptIsNewSession && isClaudeResumeSessionMissing(errorMessage)) {
               retryResumeAsNew = true;
+              resumeMissingReason = errorMessage;
             } else {
               textQueue.push({ type: 'error', error: errorMessage });
             }
@@ -721,7 +728,26 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
     }
     if (retryResumeAsNew && !state.aborted) {
       console.warn(`[claudeCode] resume target ${sessionId} was not found; retrying as a new session`);
-      yield* this._createStreamAttempt(message, options, state, true);
+      const reason = resumeMissingReason || `No conversation found with session ID: ${sessionId}`;
+      let snapshot = null;
+      try {
+        snapshot = await createRecoverySnapshot(options, {
+          previousNativeSessionId: sessionId,
+          reason,
+        });
+      } catch (snapshotErr) {
+        console.warn(`[claudeCode] Failed to create session recovery snapshot for ${sessionId}: ${(snapshotErr as Error).message}`);
+      }
+      const recovery = buildNativeSessionRecovery({
+        backend: 'claude-code',
+        previousNativeSessionId: sessionId,
+        newNativeSessionId: sessionId,
+        reason,
+        snapshot,
+        currentPrompt: message,
+      });
+      yield buildSessionRecoveryEvent(recovery.metadata);
+      yield* this._createStreamAttempt(recovery.prompt, options, state, true);
     }
   }
 }

@@ -162,7 +162,9 @@ agent-cockpit/
     │   │   │   └── _dream_tmp/         # Ephemeral staging files for dream prompts (auto-cleaned after run)
     │   │   └── {convId}/
     │   │       ├── session-1.json      # Archived session
-    │   │       └── session-N.json      # Active session (updated every message)
+    │   │       ├── session-N.json      # Active session (updated every message)
+    │   │       └── session-recovery/   # Latest recovery snapshot per source session when a native CLI resume fails
+    │   │           └── session-N-latest.json
     │   ├── artifacts/{convId}/         # Per-conversation uploaded files and generated assistant artifacts
     │   ├── settings.json               # User settings, including CLI profile definitions
     │   ├── usage-ledger.json           # Daily per-backend token usage ledger
@@ -533,7 +535,7 @@ running `npm ci`.
 
 All mutable JSON files under `data/` are written with two primitives to survive concurrent access without corruption:
 
-- **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, usage ledger, memory `snapshot.json`, memory `state.json`), `UsagePricingStore` (`usage-pricing-overrides.json`), `SessionFinalizerQueue` (`session-finalizers.json`), `SettingsService`, `ClaudePlanUsageService`, `CodexPlanUsageService`, and `KiroPlanUsageService`.
+- **Atomic writes** — `src/utils/atomicWrite.ts` exports `atomicWriteFile(filePath, data, encoding='utf8')`. It writes to a sibling `.{base}.tmp.{pid}.{random}` file then calls `fs.rename` (POSIX-atomic), so readers always observe either the previous complete file or the new complete file — never a torn byte-interleaved mix. On rename failure the tmp file is removed. Used by `ChatService` (workspace `index.json`, session files, session-recovery snapshots, usage ledger, memory `snapshot.json`, memory `state.json`), `UsagePricingStore` (`usage-pricing-overrides.json`), `SessionFinalizerQueue` (`session-finalizers.json`), `SettingsService`, `ClaudePlanUsageService`, `CodexPlanUsageService`, and `KiroPlanUsageService`.
 - **Per-key mutex** — `src/utils/keyedMutex.ts` exports `KeyedMutex.run<T>(key, fn)`. Callers sharing a key are serialized FIFO; different keys run concurrently. `ChatService` holds one `_indexLock` keyed by canonical `workspaceId` for workspace index read-modify-write operations and one `_ledgerLock` keyed by the constant `'__usage_ledger__'` (wrapping ledger record/clear). Not reentrant — locked regions must not recursively acquire the same key.
 
 Together these guarantee that a workspace index always parses on disk and that concurrent mutators do not clobber each other's updates. `ChatService._buildLookupMap` also catches per-workspace `JSON.parse` failures at startup, logs them, and continues, so a single corrupt file cannot crash the server into a restart loop.
@@ -1061,10 +1063,61 @@ Detection is filesystem-based and read-only: `AGENTS.md` covers Codex, OpenCode,
                                 //   `budget_limited`, `cleared`, etc.) rendered by
                                 //   desktop and mobile as a goal timeline card rather
                                 //   than ordinary assistant/user dialogue.
+  sessionRecovery?: SessionRecoveryMetadata,
+                                // System only. Marks Agent Cockpit's friendly
+                                //   native-session recovery notice. The visible
+                                //   `content` is deliberately end-user friendly;
+                                //   this metadata carries debug details such as
+                                //   backend, previous/new native session ids, the
+                                //   snapshot path, reason, and recovery count.
   pinned?: boolean              // User-controlled pin marker. `true` marks the
                                 //   active-session message for the pinned strip
                                 //   and inline pinned styling. Omitted/absent is
                                 //   equivalent to unpinned.
+}
+```
+
+## Session Recovery Snapshot (`workspaces/{storageKey}/{convId}/session-recovery/session-N-latest.json`)
+
+When a backend reports that its native resumed session cannot be found, Agent Cockpit writes a refreshed snapshot of the prior Agent Cockpit transcript before starting a new native CLI session ([ADR-0078](adr/0078-recover-missing-native-sessions-from-snapshots.md)). The file is stable per source session (`session-N-latest.json`), so repeated recovery failures replace it with the latest complete prior discussion instead of creating unbounded historical copies.
+
+```javascript
+{
+  schemaVersion: 1,
+  type: 'agent-cockpit-session-recovery-snapshot',
+  capturedAt: string,
+  conversationId: string,
+  conversationTitle: string,
+  workspaceId: string,
+  workspacePath: string,
+  backend: string,                  // codex, claude-code, kiro, opencode, etc.
+  previousNativeSessionId: string,
+  reason: string,                   // Raw backend/CLI resume failure text
+  sourceSessionId: string,
+  sourceSessionNumber: number,
+  sourceSessionPath: string,
+  recoveryCount: number,            // Counts visible recovery notices in this Agent Cockpit session, plus this recovery
+  messageCount: number,
+  messages: Message[]               // Transcript prefix captured before the current failed turn is appended
+}
+```
+
+`processStream` persists the accompanying visible notice as a system `Message` with `sessionRecovery` metadata. The browser does not receive the internal `session_recovery` frame directly; it sees the persisted friendly system message through the normal `assistant_message` stream frame. The backend retry prompt contains a definitive instruction that the harness MUST read the snapshot path before answering the current user request.
+
+### SessionRecoveryMetadata
+
+```ts
+interface SessionRecoveryMetadata {
+  backend: string;
+  reason: string;
+  previousNativeSessionId?: string | null;
+  newNativeSessionId?: string | null;
+  snapshotPath?: string | null;
+  sourceSessionPath?: string | null;
+  sourceSessionNumber?: number | null;
+  snapshotMessageCount?: number | null;
+  recoveryCount: number;
+  occurredAt: string;
 }
 ```
 
@@ -2184,6 +2237,20 @@ interface KbStateUpdateEvent {
 interface ExternalSessionEvent {
   type: 'external_session';
   sessionId: string;  // Backend-managed session ID; opaque to the cockpit
+}
+
+/**
+ * Server-internal stream event emitted by a backend adapter after a persisted
+ * native session id cannot be resumed and the adapter is about to retry in a
+ * fresh native session. `processStream` consumes it, writes a friendly system
+ * message with `Message.sessionRecovery` metadata, forwards that message through
+ * the normal `assistant_message` browser frame, and does not forward this raw
+ * internal frame.
+ */
+interface SessionRecoveryEvent {
+  type: 'session_recovery';
+  message: string;                  // Friendly user-facing recovery notice
+  metadata: SessionRecoveryMetadata; // Debug details stored in session JSON
 }
 
 interface BackendRuntimeEvent {

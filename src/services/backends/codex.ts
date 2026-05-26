@@ -5,6 +5,13 @@ import fs from 'fs';
 import crypto from 'crypto';
 import { BaseBackendAdapter, type BackendCallOptions, type RunOneShotOptions } from './base';
 import { sanitizeSystemPrompt, extractToolOutcome, shortenPath } from './toolUtils';
+import {
+  buildHarnessRecoveryPrompt,
+  buildNativeSessionRecovery,
+  buildSessionRecoveryEvent,
+  createRecoverySnapshot,
+  type NativeSessionRecovery,
+} from './sessionRecovery';
 import { logger } from '../../utils/logger';
 import type {
   BackendMetadata,
@@ -1627,7 +1634,7 @@ export class CodexAdapter extends BaseBackendAdapter {
     entry: CodexProcessEntry,
     convId: string,
     options: SendMessageOptions,
-  ): Promise<{ threadId: string | null; externalSessionId?: string }> {
+  ): Promise<{ threadId: string | null; externalSessionId?: string; recovery?: NativeSessionRecovery }> {
     const { isNewSession, workingDir, systemPrompt, externalSessionId, model } = options;
     const cwd = workingDir || this.workingDir || os.homedir();
     let threadId = entry.threadId;
@@ -1674,7 +1681,17 @@ export class CodexAdapter extends BaseBackendAdapter {
         console.log(`[codex] Resumed thread ${threadId} for conv=${convId} (drained ${drained} notifications)`);
         return { threadId };
       } catch (err) {
-        console.warn(`[codex] Resume failed for ${externalSessionId}: ${(err as Error).message}. Starting fresh thread.`);
+        const reason = (err as Error).message;
+        console.warn(`[codex] Resume failed for ${externalSessionId}: ${reason}. Starting fresh thread.`);
+        let snapshot = null;
+        try {
+          snapshot = await createRecoverySnapshot(options, {
+            previousNativeSessionId: externalSessionId,
+            reason,
+          });
+        } catch (snapshotErr) {
+          console.warn(`[codex] Failed to create session recovery snapshot for ${externalSessionId}: ${(snapshotErr as Error).message}`);
+        }
         const startParams: Record<string, unknown> = {
           cwd,
           ...buildCodexThreadSecurityParams(this.approvalPolicy, this.sandbox),
@@ -1682,10 +1699,23 @@ export class CodexAdapter extends BaseBackendAdapter {
           persistExtendedHistory: false,
         };
         if (model) startParams.model = model;
+        const cleanPrompt = sanitizeSystemPrompt(systemPrompt);
+        if (cleanPrompt) startParams.developerInstructions = cleanPrompt;
         const result = await client.request('thread/start', startParams) as ThreadStartResult;
         threadId = result.thread.id;
         entry.threadId = threadId;
-        return { threadId, externalSessionId: threadId };
+        return {
+          threadId,
+          externalSessionId: threadId,
+          recovery: buildNativeSessionRecovery({
+            backend: 'codex',
+            previousNativeSessionId: externalSessionId,
+            newNativeSessionId: threadId,
+            reason,
+            snapshot,
+            currentPrompt: '',
+          }),
+        };
       }
     }
 
@@ -1701,6 +1731,7 @@ export class CodexAdapter extends BaseBackendAdapter {
     convId: string;
     threadId: string | null;
     externalSessionId?: string;
+    recovery?: NativeSessionRecovery;
   }> {
     const { sessionId, conversationId, mcpServers, cliProfile, serviceTier } = options;
     const convId = conversationId || sessionId;
@@ -1720,6 +1751,7 @@ export class CodexAdapter extends BaseBackendAdapter {
       convId,
       threadId: resolved.threadId,
       ...(resolved.externalSessionId ? { externalSessionId: resolved.externalSessionId } : {}),
+      ...(resolved.recovery ? { recovery: resolved.recovery } : {}),
     };
   }
 
@@ -1838,6 +1870,10 @@ export class CodexAdapter extends BaseBackendAdapter {
     }
 
     const { client, entry, convId, threadId } = ctx;
+    const recovery = ctx.recovery || null;
+    if (recovery) {
+      yield buildSessionRecoveryEvent(recovery.metadata);
+    }
     if (ctx.externalSessionId) {
       yield { type: 'external_session', sessionId: ctx.externalSessionId };
     }
@@ -1891,9 +1927,12 @@ export class CodexAdapter extends BaseBackendAdapter {
       };
 
       const activeObjective = normalizedGoal?.objective || goalPatch.objective || '';
+      const goalTurnPrompt = buildCodexGoalTurnPrompt(activeObjective);
       const userInput = [{
         type: 'text',
-        text: buildCodexGoalTurnPrompt(activeObjective),
+        text: recovery
+          ? buildHarnessRecoveryPrompt(recovery.metadata, goalTurnPrompt)
+          : goalTurnPrompt,
         text_elements: [],
       }];
       const modelCatalog = this._modelsFor(cliProfile);
@@ -2241,6 +2280,10 @@ export class CodexAdapter extends BaseBackendAdapter {
       // ── Resolve thread ───────────────────────────────────────────────
       const resolved = await this._resolveThread(client, entry, convId, options);
       const threadId = resolved.threadId;
+      const recovery = resolved.recovery || null;
+      if (recovery) {
+        yield buildSessionRecoveryEvent(recovery.metadata);
+      }
       if (resolved.externalSessionId) {
         yield { type: 'external_session', sessionId: resolved.externalSessionId };
       }
@@ -2264,12 +2307,15 @@ export class CodexAdapter extends BaseBackendAdapter {
       }
 
       // ── Build turn input ─────────────────────────────────────────────
-      const userInput = [{ type: 'text', text: message, text_elements: [] }];
+      const turnMessage = recovery
+        ? buildHarnessRecoveryPrompt(recovery.metadata, message)
+        : message;
+      const userInput = [{ type: 'text', text: turnMessage, text_elements: [] }];
       const modelCatalog = this._modelsFor(cliProfile);
       const turnParams = buildCodexTurnStartParams(threadId, userInput, model, effort, modelCatalog);
 
       // ── Send turn ────────────────────────────────────────────────────
-      console.log(`[codex] turn/start thread=${threadId} promptLen=${message.length}`);
+      console.log(`[codex] turn/start thread=${threadId} promptLen=${turnMessage.length}`);
 
       let turnEnded = false;
       let emittedRuntimeTurnId: string | null = null;

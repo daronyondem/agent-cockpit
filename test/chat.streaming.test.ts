@@ -5,6 +5,7 @@ import path from 'path';
 import { createChatRouterEnv, destroyChatRouterEnv, type ChatRouterEnv } from './helpers/chatEnv';
 import { MockBackendAdapter } from './helpers/mockBackendAdapter';
 import { processStream } from '../src/routes/chat';
+import { SESSION_RECOVERY_USER_MESSAGE } from '../src/services/backends/sessionRecovery';
 import type { BackendMetadata, StreamEvent } from '../src/types';
 
 class KiroMockBackend extends MockBackendAdapter {
@@ -1661,6 +1662,87 @@ describe('sendMessage options passthrough', () => {
     const events = await eventsPromise;
 
     expect(events.find((e: any) => e.type === 'external_session')).toBeUndefined();
+  });
+
+  test('session recovery persists a friendly system message with diagnostic metadata and refreshed snapshot', async () => {
+    const conv = await env.chatService.createConversation('Recovery Test', '/tmp/recovery-test');
+    env.mockBackend.setMockEvents([
+      { type: 'text', content: 'First response', streaming: true },
+      { type: 'done' },
+    ] as StreamEvent[]);
+
+    const ws1 = await env.connectWs(conv.id);
+    const eventsPromise1 = env.readWsEvents(ws1);
+    await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'First question',
+      backend: 'claude-code',
+    });
+    await eventsPromise1;
+
+    env.mockBackend.sendMessage = function(message: string, options: any) {
+      this._lastMessage = message;
+      this._lastOptions = options || null;
+      async function* stream() {
+        const snapshot = await options.sessionRecovery.createSnapshot({
+          previousNativeSessionId: 'native-old',
+          reason: 'session not found',
+        });
+        yield {
+          type: 'session_recovery',
+          message: SESSION_RECOVERY_USER_MESSAGE,
+          metadata: {
+            backend: 'claude-code',
+            reason: 'session not found',
+            previousNativeSessionId: 'native-old',
+            newNativeSessionId: 'native-new',
+            snapshotPath: snapshot.snapshotPath,
+            sourceSessionPath: snapshot.sourceSessionPath,
+            sourceSessionNumber: snapshot.sourceSessionNumber,
+            snapshotMessageCount: snapshot.messageCount,
+            recoveryCount: snapshot.recoveryCount,
+            occurredAt: '2026-05-25T00:00:00.000Z',
+          },
+        } as StreamEvent;
+        yield { type: 'text', content: 'Recovered response', streaming: true } as StreamEvent;
+        yield { type: 'done' } as StreamEvent;
+      }
+      return { stream: stream(), abort: () => {}, sendInput: () => {} };
+    };
+
+    const ws2 = await env.connectWs(conv.id);
+    const eventsPromise2 = env.readWsEvents(ws2);
+    await env.request('POST', `/api/chat/conversations/${conv.id}/message`, {
+      content: 'Current question',
+      backend: 'claude-code',
+    });
+    const events = await eventsPromise2;
+
+    expect(events.find((event: any) => event.type === 'session_recovery')).toBeUndefined();
+    const recoveryFrame = events.find((event: any) =>
+      event.type === 'assistant_message'
+      && event.message?.role === 'system'
+      && event.message?.sessionRecovery
+    );
+    expect(recoveryFrame?.message.content).toBe(SESSION_RECOVERY_USER_MESSAGE);
+    expect(recoveryFrame?.message.content).not.toContain('native-old');
+    expect(recoveryFrame?.message.content).not.toContain('session-recovery');
+    expect(recoveryFrame?.message.sessionRecovery).toMatchObject({
+      backend: 'claude-code',
+      reason: 'session not found',
+      previousNativeSessionId: 'native-old',
+      newNativeSessionId: 'native-new',
+      snapshotMessageCount: 2,
+      recoveryCount: 1,
+    });
+
+    const snapshotPath = recoveryFrame.message.sessionRecovery.snapshotPath;
+    expect(snapshotPath).toMatch(/session-recovery\/session-1-latest\.json$/);
+    const snapshot = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
+    expect(snapshot.messages.map((msg: any) => msg.content)).toEqual([
+      'First question',
+      'First response',
+    ]);
+    expect(snapshot.messages.map((msg: any) => msg.content)).not.toContain('Current question');
   });
 
   test('persisted externalSessionId flows back to the adapter on the next send', async () => {
