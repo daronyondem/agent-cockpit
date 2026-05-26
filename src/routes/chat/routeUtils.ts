@@ -19,7 +19,7 @@ export function queryStrings(value: unknown): string[] {
 
 export function isCliProfileResolutionError(err: unknown): boolean {
   const message = (err as Error).message || '';
-  return message.startsWith('CLI profile') || message.includes('CLI profile vendor');
+  return message.startsWith('CLI profile') || message.includes('CLI profile harness');
 }
 
 export async function conversationHasMissingCliProfile(

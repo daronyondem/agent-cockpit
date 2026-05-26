@@ -73,7 +73,7 @@ export type CurrentUser = CurrentUserResponse;
 export type CliProfile = {
   id: string;
   name: string;
-  vendor: string;
+  harness: string;
   protocol?: string;
   opencode?: {
     provider?: string;

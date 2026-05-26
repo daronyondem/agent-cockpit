@@ -505,7 +505,7 @@ test('respond() with mode:message clears pendingInteraction and sends as new mes
   expect(state.streaming).toBe(true);
 });
 
-test('send() posts selected CLI profile with its vendor backend', async () => {
+test('send() posts selected CLI profile with its harness backend', async () => {
   await openWs('c1');
   const Store = (window as any).StreamStore;
   const api = (global as any).AgentApi;

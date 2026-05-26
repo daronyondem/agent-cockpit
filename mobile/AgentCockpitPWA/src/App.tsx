@@ -1860,7 +1860,7 @@ export default function App() {
     setSelectedBackend(backendIdForProfile(profile));
     setSelectedModel(undefined);
     setSelectedEffort(undefined);
-    setSelectedServiceTier(profile?.vendor === 'codex' ? (selectedServiceTier || settings?.defaultServiceTier) : undefined);
+    setSelectedServiceTier(profile?.harness === 'codex' ? (selectedServiceTier || settings?.defaultServiceTier) : undefined);
   }
 
   function handleError(error: unknown) {

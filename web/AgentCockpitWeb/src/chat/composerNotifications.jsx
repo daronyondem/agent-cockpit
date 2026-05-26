@@ -106,8 +106,8 @@ function ComposerInstructionCompatibilityIcon({ workspaceHash, workspaceLabel, o
 
   if (!status || !status.shouldNotify) return null;
 
-  const coveredLabels = (status.vendors || []).filter(item => item.covered).map(item => item.label).join(', ') || 'None';
-  const missingLabels = (status.missingVendors || []).map(item => item.label).join(', ');
+  const coveredLabels = (status.harnesses || []).filter(item => item.covered).map(item => item.label).join(', ') || 'None';
+  const missingLabels = (status.missingHarnesses || []).map(item => item.label).join(', ');
   const presentSources = (status.sources || []).filter(source => source.present);
   const sourceLabel = presentSources.map(source => source.label).join(', ') || 'project instructions';
   const title = 'Instruction pointers needed';

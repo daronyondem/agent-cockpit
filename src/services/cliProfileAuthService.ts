@@ -22,7 +22,7 @@ export interface CliAuthJobSnapshot {
   id: string;
   profileId: string;
   profileName: string;
-  vendor: CliProfile['vendor'];
+  harness: CliProfile['harness'];
   status: CliAuthJobStatus;
   startedAt: string;
   updatedAt: string;
@@ -36,7 +36,7 @@ export interface CliAuthJobSnapshot {
 
 export interface CliAuthCheckResult {
   profileId: string;
-  vendor: CliProfile['vendor'];
+  harness: CliProfile['harness'];
   command: string;
   available: boolean;
   authenticated: boolean | null;
@@ -145,7 +145,7 @@ export class CliProfileAuthService {
         } catch (err: unknown) {
           return {
             profileId: profile.id,
-            vendor: profile.vendor,
+            harness: profile.harness,
             command: runtime.displayCommand || runtime.command,
             available: result.spawned,
             authenticated: false,
@@ -161,7 +161,7 @@ export class CliProfileAuthService {
         : status.error ? 'error' : 'ok';
       return {
         profileId: profile.id,
-        vendor: profile.vendor,
+        harness: profile.harness,
         command: runtime.displayCommand || runtime.command,
         available: result.spawned,
         authenticated: status.authenticated,
@@ -172,10 +172,10 @@ export class CliProfileAuthService {
       };
     } catch (err: unknown) {
       const message = (err as Error).message || String(err);
-      const unsupported = profile.vendor === 'kiro';
+      const unsupported = profile.harness === 'kiro';
       return {
         profileId: profile.id,
-        vendor: profile.vendor,
+        harness: profile.harness,
         command: profile.command || this._defaultCommand(profile),
         available: false,
         authenticated: null,
@@ -202,7 +202,7 @@ export class CliProfileAuthService {
       id: `auth-${Date.now().toString(36)}-${crypto.randomBytes(4).toString('hex')}`,
       profileId: profile.id,
       profileName: profile.name,
-      vendor: profile.vendor,
+      harness: profile.harness,
       status: 'running',
       startedAt: now,
       updatedAt: now,
@@ -211,7 +211,7 @@ export class CliProfileAuthService {
       events: [],
     };
 
-    this._addEvent(snapshot, 'info', `Starting ${this._vendorLabel(profile)} authentication.`);
+    this._addEvent(snapshot, 'info', `Starting ${this._harnessLabel(profile)} authentication.`);
     const invocation = buildCliCommandInvocation(runtime, args);
     const child = this._spawn(invocation.command, invocation.args, {
       env: runtime.env,
@@ -222,7 +222,7 @@ export class CliProfileAuthService {
       const entry = this._jobs.get(snapshot.id);
       if (!entry || entry.snapshot.status !== 'running') return;
       entry.snapshot.status = 'failed';
-      entry.snapshot.error = `${this._vendorLabel(profile)} authentication timed out. Start authentication again and complete the browser login before the code expires.`;
+      entry.snapshot.error = `${this._harnessLabel(profile)} authentication timed out. Start authentication again and complete the browser login before the code expires.`;
       entry.snapshot.updatedAt = new Date().toISOString();
       this._addEvent(entry.snapshot, 'error', entry.snapshot.error);
       entry.child?.kill('SIGTERM');
@@ -279,14 +279,14 @@ export class CliProfileAuthService {
   }
 
   private _assertSupported(profile: CliProfile): void {
-    if (profile.vendor !== 'codex' && profile.vendor !== 'claude-code' && profile.vendor !== 'opencode') {
+    if (profile.harness !== 'codex' && profile.harness !== 'claude-code' && profile.harness !== 'opencode') {
       throw new Error('CLI status checks are not supported for Kiro profiles yet.');
     }
   }
 
   private _assertCanAuth(profile: CliProfile): void {
-    if (profile.vendor !== 'codex' && profile.vendor !== 'claude-code') {
-      throw new Error(profile.vendor === 'opencode'
+    if (profile.harness !== 'codex' && profile.harness !== 'claude-code') {
+      throw new Error(profile.harness === 'opencode'
         ? 'Remote authentication is not supported for OpenCode profiles yet. Configure OpenCode with opencode auth login.'
         : 'Remote authentication is not supported for Kiro profiles yet.');
     }
@@ -299,9 +299,9 @@ export class CliProfileAuthService {
   }
 
   private async _runtimeFor(profile: CliProfile): Promise<CliAuthRuntime> {
-    const runtime = profile.vendor === 'codex'
+    const runtime = profile.harness === 'codex'
       ? resolveCodexCliRuntime(profile)
-      : profile.vendor === 'opencode'
+      : profile.harness === 'opencode'
         ? resolveOpenCodeCliRuntime(profile)
         : resolveClaudeCliRuntime(profile);
     if (runtime.configDir) {
@@ -311,25 +311,25 @@ export class CliProfileAuthService {
   }
 
   private _loginCommand(profile: CliProfile): { args: string[] } {
-    if (profile.vendor === 'codex') return { args: ['login', '--device-auth'] };
+    if (profile.harness === 'codex') return { args: ['login', '--device-auth'] };
     return { args: ['auth', 'login', '--claudeai'] };
   }
 
   private _statusCommand(profile: CliProfile): { args: string[] } {
-    if (profile.vendor === 'codex') return { args: ['login', 'status'] };
-    if (profile.vendor === 'opencode') return { args: ['--version'] };
+    if (profile.harness === 'codex') return { args: ['login', 'status'] };
+    if (profile.harness === 'opencode') return { args: ['--version'] };
     return { args: ['auth', 'status', '--json'] };
   }
 
   private _defaultCommand(profile: CliProfile): string {
-    if (profile.vendor === 'codex') return 'codex';
-    if (profile.vendor === 'claude-code') return 'claude';
-    if (profile.vendor === 'opencode') return 'opencode';
+    if (profile.harness === 'codex') return 'codex';
+    if (profile.harness === 'claude-code') return 'claude';
+    if (profile.harness === 'opencode') return 'opencode';
     return 'kiro-cli';
   }
 
-  private _vendorLabel(profile: CliProfile): string {
-    return profile.vendor === 'codex' ? 'Codex' : profile.vendor === 'claude-code' ? 'Claude Code' : profile.vendor === 'opencode' ? 'OpenCode' : 'Kiro';
+  private _harnessLabel(profile: CliProfile): string {
+    return profile.harness === 'codex' ? 'Codex' : profile.harness === 'claude-code' ? 'Claude Code' : profile.harness === 'opencode' ? 'OpenCode' : 'Kiro';
   }
 
   private _addEvent(snapshot: CliAuthJobSnapshot, type: CliAuthEventType, text: string): void {
@@ -379,14 +379,14 @@ export class CliProfileAuthService {
 
     if (code !== 0) {
       snapshot.status = 'failed';
-      snapshot.error = `${this._vendorLabel(profile)} auth exited with code ${code ?? 'unknown'}.`;
+      snapshot.error = `${this._harnessLabel(profile)} auth exited with code ${code ?? 'unknown'}.`;
       snapshot.updatedAt = new Date().toISOString();
       this._addEvent(snapshot, 'exit', snapshot.error);
       this._jobs.set(snapshot.id, { snapshot });
       return;
     }
 
-    this._addEvent(snapshot, 'info', `Verifying ${this._vendorLabel(profile)} authentication status.`);
+    this._addEvent(snapshot, 'info', `Verifying ${this._harnessLabel(profile)} authentication status.`);
     try {
       await this._pollAuthenticated(profile, runtime, statusArgs, snapshot);
       snapshot.status = 'succeeded';
@@ -426,11 +426,11 @@ export class CliProfileAuthService {
         if (onboardingOutput) this._addEvent(snapshot, 'info', onboardingOutput);
         return;
       }
-      lastOutput = output || status.error || `${this._vendorLabel(profile)} status exited with code ${result.code ?? 'unknown'}.`;
+      lastOutput = output || status.error || `${this._harnessLabel(profile)} status exited with code ${result.code ?? 'unknown'}.`;
       await this._sleep(this._statusPollIntervalMs);
     }
     throw new Error(
-      `${this._vendorLabel(profile)} authentication did not verify before timeout. ` +
+      `${this._harnessLabel(profile)} authentication did not verify before timeout. ` +
       (lastOutput || 'Start authentication again or run Check CLI for details.'),
     );
   }
@@ -500,7 +500,7 @@ export class CliProfileAuthService {
 function withoutSetupAuthHome(profile: CliProfile): CliProfile {
   if (!isSetupAccountCliProfile(profile)) return profile;
   const { configDir: _configDir, env, ...rest } = profile;
-  const nextEnv = stripSetupAuthHomeEnv(profile.vendor, env);
+  const nextEnv = stripSetupAuthHomeEnv(profile.harness, env);
   const changed = Boolean(configDirWasPresent(profile) || nextEnv !== env);
   if (!changed) return profile;
   return {
@@ -514,14 +514,14 @@ function configDirWasPresent(profile: CliProfile): boolean {
   return typeof profile.configDir === 'string' && profile.configDir.trim().length > 0;
 }
 
-function stripSetupAuthHomeEnv(vendor: CliProfile['vendor'], env: Record<string, string> | undefined): Record<string, string> | undefined {
+function stripSetupAuthHomeEnv(harness: CliProfile['harness'], env: Record<string, string> | undefined): Record<string, string> | undefined {
   if (!env) return env;
   const stripped: Record<string, string> = {};
   let changed = false;
   for (const [key, value] of Object.entries(env)) {
     const normalized = key.toUpperCase();
-    const remove = (vendor === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
-      || (vendor === 'codex' && normalized === 'CODEX_HOME');
+    const remove = (harness === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
+      || (harness === 'codex' && normalized === 'CODEX_HOME');
     if (remove) {
       changed = true;
       continue;
@@ -549,12 +549,12 @@ function interpretCliAuthStatus(
   exitCode: number | null,
   rawOutput: string,
 ): { authenticated: boolean | null; error?: string } {
-  if (profile.vendor === 'opencode') {
+  if (profile.harness === 'opencode') {
     return exitCode === 0
       ? { authenticated: null }
       : { authenticated: null, error: `OpenCode version check exited with code ${exitCode ?? 'unknown'}.` };
   }
-  if (profile.vendor !== 'claude-code') {
+  if (profile.harness !== 'claude-code') {
     return exitCode === 0
       ? { authenticated: true }
       : { authenticated: false, error: `CLI status exited with code ${exitCode ?? 'unknown'}.` };
@@ -594,7 +594,7 @@ async function ensureClaudeCodeWindowsOnboarding(
   rawOutput: string,
 ): Promise<string | null> {
   if (process.platform !== 'win32') return null;
-  if (profile.vendor !== 'claude-code') return null;
+  if (profile.harness !== 'claude-code') return null;
   if (runtime.configDir || envHasValue(runtime.env, 'CLAUDE_CONFIG_DIR')) return null;
   const status = parseClaudeAuthStatusJson(rawOutput);
   if (status?.loggedIn !== true) return null;

@@ -262,7 +262,7 @@ first and adding common per-user CLI install locations such as
 `~/.yarn/bin`, and macOS `/opt/homebrew/bin`. Generated `.env` and
 `ecosystem.config.js` always persist this runtime `PATH` so PM2, launchd
 resurrect, restart/update scripts, and backend CLI spawns can find CLIs
-installed by their own vendor installers even when the launchd environment does
+installed by their own upstream installers even when the launchd environment does
 not match an interactive shell. The installer records `nodeRuntime` ownership/version metadata in
 `install.json` so later production updates know whether Agent Cockpit may update
 that runtime. `--install-node` keeps this default behavior explicit;
@@ -376,7 +376,7 @@ then builds the persisted runtime `PATH` by keeping that private Node directory
 first and adding common per-user CLI install locations such as `~/.local/bin`,
 `~/.npm-global/bin`, `~/.npm/bin`, `~/.bun/bin`, and `~/.yarn/bin`. Generated
 `.env` and `ecosystem.config.js` always persist this runtime `PATH` so the
-PM2-managed server and restart/update scripts can find vendor-installed CLIs
+PM2-managed server and restart/update scripts can find upstream-installed CLIs
 without relying on an interactive shell PATH. The installer records `nodeRuntime` ownership/version metadata in
 `install.json` so later production updates know whether Agent Cockpit may update
 that runtime.

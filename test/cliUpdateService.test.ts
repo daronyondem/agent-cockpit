@@ -67,7 +67,7 @@ describe('CliUpdateService', () => {
       cliProfiles: [{
         id: 'server-configured-codex',
         name: 'Codex (Server Configured)',
-        vendor: 'codex',
+        harness: 'codex',
         authMode: 'server-configured',
         createdAt: '2026-05-04T00:00:00.000Z',
         updatedAt: '2026-05-04T00:00:00.000Z',
@@ -109,7 +109,7 @@ describe('CliUpdateService', () => {
     const status = await service.checkNow(async () => settings);
     expect(status.items).toHaveLength(1);
     expect(status.items[0]).toMatchObject({
-      vendor: 'codex',
+      harness: 'codex',
       command: 'codex',
       installMethod: 'npm-global',
       currentVersion: '0.125.0',
@@ -130,7 +130,7 @@ describe('CliUpdateService', () => {
       cliProfiles: [{
         id: 'profile-opencode-deepseek',
         name: 'DeepSeek',
-        vendor: 'opencode',
+        harness: 'opencode',
         authMode: 'server-configured',
         command: opencodeBin,
         opencode: { provider: 'deepseek' },
@@ -148,7 +148,7 @@ describe('CliUpdateService', () => {
 
     expect(status.items).toHaveLength(1);
     expect(status.items[0]).toMatchObject({
-      vendor: 'opencode',
+      harness: 'opencode',
       label: 'OpenCode',
       command: opencodeBin,
       resolvedPath: opencodeBin,
@@ -170,7 +170,7 @@ describe('CliUpdateService', () => {
       cliProfiles: [{
         id: 'server-configured-claude-code',
         name: 'Claude Code (Server Configured)',
-        vendor: 'claude-code',
+        harness: 'claude-code',
         authMode: 'server-configured',
         createdAt: '2026-05-04T00:00:00.000Z',
         updatedAt: '2026-05-04T00:00:00.000Z',
@@ -192,7 +192,7 @@ describe('CliUpdateService', () => {
     const status = await service.checkNow(async () => settings);
     expect(status.items).toHaveLength(1);
     expect(status.items[0]).toMatchObject({
-      vendor: 'claude-code',
+      harness: 'claude-code',
       currentVersion: '2.1.150',
       latestVersion: '2.1.151',
       interactiveCompatibility: [expect.objectContaining({
@@ -284,7 +284,7 @@ describe('CliUpdateService', () => {
 
       const checked = await service.checkNow(async () => settings);
       expect(checked.items[0]).toMatchObject({
-        vendor: 'codex',
+        harness: 'codex',
         installMethod: 'npm-global',
         resolvedPath: realCodexJs,
         currentVersion: '0.125.0',

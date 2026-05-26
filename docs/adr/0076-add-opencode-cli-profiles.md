@@ -65,11 +65,11 @@ affects:
 
 ## Context
 
-Agent Cockpit's CLI profile model treats a local harness as the runnable vendor.
-Before this decision, the supported vendors were Codex, Claude Code, and Kiro.
+Agent Cockpit's CLI profile model treats a local harness as the runnable CLI.
+Before this decision, the supported harnesses were Codex, Claude Code, and Kiro.
 Users also want to use DeepSeek, Groq, xAI/Grok, Gemini, OpenRouter, and other
 model APIs through OpenCode without turning each API provider into a separate
-Cockpit CLI vendor.
+Cockpit CLI harness.
 
 OpenCode already owns provider authentication and model routing. Its CLI exposes
 `opencode models <provider> --verbose` for discovery with provider effort
@@ -80,12 +80,12 @@ config/MCP overrides via `OPENCODE_CONFIG_CONTENT`.
 
 ## Decision
 
-Agent Cockpit adds `opencode` as a physical `CliVendor` and backend adapter.
+Agent Cockpit adds `opencode` as a physical `CliHarness` and backend adapter.
 DeepSeek, Groq, xAI/Grok, Gemini, and similar APIs remain OpenCode
 provider/model choices. The CLI profile stores the provider as optional
 `opencode.provider`; model selection stays in the chat composer or
 feature-specific processor model selectors. Providers do not become top-level
-Cockpit CLI vendors.
+Cockpit CLI harnesses.
 
 The first implementation supports self-configured OpenCode profiles. Cockpit
 launches the selected OpenCode CLI, discovers providers/models through OpenCode,
@@ -108,8 +108,8 @@ than backend-native memory import/watch.
 
 ## Alternatives Considered
 
-- **Model DeepSeek/Groq/Gemini as Cockpit CLI vendors**: Rejected because these
-  are API providers, not local harnesses. Adding them to `CliVendor` would blur
+- **Model DeepSeek/Groq/Gemini as Cockpit CLI harnesses**: Rejected because these
+  are API providers, not local harnesses. Adding them to `CliHarness` would blur
   the boundary between Cockpit-owned process adapters and OpenCode-owned provider
   routing.
 - **Require Cockpit-managed OpenCode provider credentials immediately**:
@@ -136,7 +136,7 @@ than backend-native memory import/watch.
   currently consumed by the adapter and may need expansion as richer events are
   mapped.
 - ~ OpenCode profiles use `AGENTS.md` as their instruction compatibility source,
-  matching vendor-neutral CLI guidance.
+  matching harness-neutral CLI guidance.
 
 ## References
 

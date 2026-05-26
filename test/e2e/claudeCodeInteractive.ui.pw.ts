@@ -493,7 +493,7 @@ async function ensureCcIntProfile(request: APIRequestContext): Promise<void> {
   const existing = profiles.find((profile: { id?: string }) => profile.id === profileId);
   if (
     existing
-    && existing.vendor === 'claude-code'
+    && existing.harness === 'claude-code'
     && existing.protocol === 'interactive'
     && settings.defaultCliProfileId === profileId
   ) {
@@ -512,7 +512,7 @@ async function ensureCcIntProfile(request: APIRequestContext): Promise<void> {
       {
         id: profileId,
         name: 'CC-Int',
-        vendor: 'claude-code',
+        harness: 'claude-code',
         protocol: 'interactive',
         authMode: 'server-configured',
         command: 'claude',

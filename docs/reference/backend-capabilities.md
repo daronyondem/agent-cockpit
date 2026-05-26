@@ -1,7 +1,7 @@
 # Backend Capabilities
 
 Agent Cockpit supports Claude Code, OpenAI Codex, Kiro, and OpenCode. The exact
-feature surface differs because each vendor CLI exposes different protocols and
+feature surface differs because each CLI harness exposes different protocols and
 metadata.
 
 The detailed comparison table lives in [BACKENDS.md](../../BACKENDS.md). This

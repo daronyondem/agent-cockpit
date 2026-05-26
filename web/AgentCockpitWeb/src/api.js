@@ -997,8 +997,8 @@
       }
       return data;
     }),
-    testSetupCliAuth: (vendor) => chatFetch(
-      'cli-profiles/setup-auth/' + encodeURIComponent(vendor) + '/test',
+    testSetupCliAuth: (harness) => chatFetch(
+      'cli-profiles/setup-auth/' + encodeURIComponent(harness) + '/test',
       { method: 'POST', body: {} },
     ).then(r => r.json()).then(data => {
       if (data && data.settings) {
@@ -1008,8 +1008,8 @@
       }
       return data;
     }),
-    startSetupCliAuth: (vendor) => chatFetch(
-      'cli-profiles/setup-auth/' + encodeURIComponent(vendor) + '/start',
+    startSetupCliAuth: (harness) => chatFetch(
+      'cli-profiles/setup-auth/' + encodeURIComponent(harness) + '/start',
       { method: 'POST', body: {} },
     ).then(r => r.json()).then(data => {
       if (data && data.settings) {

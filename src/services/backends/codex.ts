@@ -68,8 +68,8 @@ export interface CodexCliRuntime extends CliCommandResolution {
 }
 
 export function resolveCodexCliRuntime(profile?: CliProfile): CodexCliRuntime {
-  if (profile && profile.vendor !== 'codex') {
-    throw new Error(`CLI profile vendor ${profile.vendor} is not codex`);
+  if (profile && profile.harness !== 'codex') {
+    throw new Error(`CLI profile harness ${profile.harness} is not codex`);
   }
   const requestedCommand = profile?.command?.trim() || 'codex';
   const env: NodeJS.ProcessEnv = { ...process.env };

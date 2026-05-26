@@ -9,7 +9,7 @@ import { BackendInlineIcon, useBackendList, useCliProfileSettings, useConversati
 import { goalElapsedSeconds, goalStatusLabel, goalSupportsAction } from '../goalState.js';
 import { AttTray } from './attachments.jsx';
 import { QueueStack, SuspendedQueueBanner } from './queue.jsx';
-import { backendIdForProfile, CLAUDE_CODE_INTERACTIVE_BACKEND_ID, cliVendorForBackend, workspaceRefForConv } from './chatHelpers.js';
+import { backendIdForProfile, CLAUDE_CODE_INTERACTIVE_BACKEND_ID, cliHarnessForBackend, workspaceRefForConv } from './chatHelpers.js';
 import {
   ComposerCliUpdateIcon,
   ComposerInstructionCompatibilityIcon,
@@ -557,7 +557,7 @@ function ComposerPicks({ convId, backends, cliProfiles, composerCliProfileId, co
   const canRepairMissingProfile = profileLocked && !!composerCliProfileId && !exactProfile;
   const canChangeProfile = !profileLocked || canRepairMissingProfile;
   const selectedProfile = exactProfile
-    || (canChangeProfile && composerBackend ? activeProfiles.find(p => p.vendor === cliVendorForBackend(composerBackend)) : null)
+    || (canChangeProfile && composerBackend ? activeProfiles.find(p => p.harness === cliHarnessForBackend(composerBackend)) : null)
     || (canChangeProfile && activeProfiles.length === 1 ? activeProfiles[0] : null)
     || null;
   const effectiveBackendId = selectedProfile

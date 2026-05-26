@@ -25,7 +25,7 @@ describe('WorkspaceFeatureSettingsStore', () => {
     }, [{
       id: 'codex-work',
       name: 'Codex Work',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       createdAt: '2026-05-01T00:00:00.000Z',
       updatedAt: '2026-05-01T00:00:00.000Z',
@@ -45,7 +45,7 @@ describe('WorkspaceFeatureSettingsStore', () => {
     }, [{
       id: 'claude-interactive-work',
       name: 'Claude Interactive Work',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       protocol: 'interactive',
       authMode: 'account',
       createdAt: '2026-05-01T00:00:00.000Z',

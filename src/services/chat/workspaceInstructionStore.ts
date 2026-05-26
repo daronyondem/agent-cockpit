@@ -2,15 +2,15 @@ import fs from 'fs';
 import fsp from 'fs/promises';
 import path from 'path';
 import crypto from 'crypto';
-import { SUPPORTED_CLI_VENDORS } from '../cliProfiles';
+import { SUPPORTED_CLI_HARNESSES } from '../cliProfiles';
 import {
-  type CliVendor,
+  type CliHarness,
   type WorkspaceIndex,
   type WorkspaceInstructionCompatibilityStatus,
   type WorkspaceInstructionPointerResult,
   type WorkspaceInstructionSourceId,
   type WorkspaceInstructionSourceStatus,
-  type WorkspaceInstructionVendorStatus,
+  type WorkspaceInstructionHarnessStatus,
 } from '../../types';
 
 interface WorkspaceInstructionStoreDeps {
@@ -22,23 +22,23 @@ interface WorkspaceInstructionStoreDeps {
 const INSTRUCTION_SOURCE_ORDER: WorkspaceInstructionSourceId[] = ['agents', 'claude', 'kiro'];
 
 const INSTRUCTION_SOURCE_META: Record<WorkspaceInstructionSourceId, {
-  vendor: CliVendor;
+  harness: CliHarness;
   label: string;
   expectedPath: string;
 }> = {
-  agents: { vendor: 'codex', label: 'AGENTS.md', expectedPath: 'AGENTS.md' },
-  claude: { vendor: 'claude-code', label: 'CLAUDE.md', expectedPath: 'CLAUDE.md' },
-  kiro: { vendor: 'kiro', label: 'Kiro steering', expectedPath: '.kiro/steering/agents-md.md' },
+  agents: { harness: 'codex', label: 'AGENTS.md', expectedPath: 'AGENTS.md' },
+  claude: { harness: 'claude-code', label: 'CLAUDE.md', expectedPath: 'CLAUDE.md' },
+  kiro: { harness: 'kiro', label: 'Kiro steering', expectedPath: '.kiro/steering/agents-md.md' },
 };
 
-const INSTRUCTION_VENDOR_LABELS: Record<CliVendor, string> = {
+const INSTRUCTION_HARNESS_LABELS: Record<CliHarness, string> = {
   'claude-code': 'Claude Code',
   kiro: 'Kiro',
   codex: 'Codex',
   opencode: 'OpenCode',
 };
 
-const VENDOR_INSTRUCTION_SOURCE: Record<CliVendor, WorkspaceInstructionSourceId> = {
+const HARNESS_INSTRUCTION_SOURCE: Record<CliHarness, WorkspaceInstructionSourceId> = {
   codex: 'agents',
   'claude-code': 'claude',
   kiro: 'kiro',
@@ -92,13 +92,13 @@ async function listKiroSteeringFiles(workspacePath: string): Promise<string[]> {
 
 function instructionFingerprint(
   sources: WorkspaceInstructionSourceStatus[],
-  missingVendors: WorkspaceInstructionVendorStatus[],
+  missingHarnesses: WorkspaceInstructionHarnessStatus[],
 ): string {
   const payload = {
     sources: sources
       .filter(source => source.present)
       .map(source => ({ id: source.id, paths: source.paths })),
-    missingVendors: missingVendors.map(item => item.vendor),
+    missingHarnesses: missingHarnesses.map(item => item.harness),
   };
   return crypto.createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 16);
 }
@@ -202,27 +202,27 @@ export class WorkspaceInstructionStore {
         return { status, created };
       }
 
-      const missing = new Set(status.missingVendors.map(item => item.vendor));
+      const missing = new Set(status.missingHarnesses.map(item => item.harness));
       const workspacePath = index.workspacePath;
 
       if (missing.has('codex')) {
         const source = INSTRUCTION_SOURCE_META.agents;
         if (await writePointerFile(workspacePath, source.expectedPath, agentsPointerContent(status.sources))) {
-          created.push({ vendor: source.vendor, label: source.label, path: source.expectedPath });
+          created.push({ harness: source.harness, label: source.label, path: source.expectedPath });
         }
       }
 
       if (missing.has('claude-code')) {
         const source = INSTRUCTION_SOURCE_META.claude;
         if (await writePointerFile(workspacePath, source.expectedPath, claudePointerContent())) {
-          created.push({ vendor: source.vendor, label: source.label, path: source.expectedPath });
+          created.push({ harness: source.harness, label: source.label, path: source.expectedPath });
         }
       }
 
       if (missing.has('kiro')) {
         const source = INSTRUCTION_SOURCE_META.kiro;
         if (await writePointerFile(workspacePath, source.expectedPath, kiroPointerContent())) {
-          created.push({ vendor: source.vendor, label: source.label, path: source.expectedPath });
+          created.push({ harness: source.harness, label: source.label, path: source.expectedPath });
         }
       }
 
@@ -265,7 +265,7 @@ export class WorkspaceInstructionStore {
           : kiroPaths;
       return {
         id,
-        vendor: meta.vendor,
+        harness: meta.harness,
         label: meta.label,
         expectedPath: meta.expectedPath,
         present: paths.length > 0,
@@ -274,21 +274,21 @@ export class WorkspaceInstructionStore {
     });
 
     const bySource = new Map(sources.map(source => [source.id, source]));
-    const vendors: WorkspaceInstructionVendorStatus[] = SUPPORTED_CLI_VENDORS.map(vendor => {
-      const sourceId = VENDOR_INSTRUCTION_SOURCE[vendor];
+    const harnesses: WorkspaceInstructionHarnessStatus[] = SUPPORTED_CLI_HARNESSES.map(harness => {
+      const sourceId = HARNESS_INSTRUCTION_SOURCE[harness];
       const source = bySource.get(sourceId)!;
       return {
-        vendor,
-        label: INSTRUCTION_VENDOR_LABELS[vendor],
+        harness,
+        label: INSTRUCTION_HARNESS_LABELS[harness],
         sourceId,
         expectedPath: source.expectedPath,
         covered: source.present,
       };
     });
-    const missingVendors = vendors.filter(item => !item.covered);
+    const missingHarnesses = harnesses.filter(item => !item.covered);
     const hasAnyInstructions = sources.some(source => source.present);
-    const compatible = !hasAnyInstructions || missingVendors.length === 0;
-    const fingerprint = instructionFingerprint(sources, missingVendors);
+    const compatible = !hasAnyInstructions || missingHarnesses.length === 0;
+    const fingerprint = instructionFingerprint(sources, missingHarnesses);
     const dismissed = index.instructionCompatibilityDismissedFingerprint === fingerprint;
     const primarySource = sources.find(source => source.id === 'agents' && source.present)
       || sources.find(source => source.present)
@@ -299,14 +299,14 @@ export class WorkspaceInstructionStore {
       workspaceHash: hash,
       workspacePath,
       sources,
-      vendors,
-      missingVendors,
+      harnesses,
+      missingHarnesses,
       hasAnyInstructions,
       compatible,
-      canCreatePointers: hasAnyInstructions && missingVendors.length > 0,
+      canCreatePointers: hasAnyInstructions && missingHarnesses.length > 0,
       fingerprint,
       dismissed,
-      shouldNotify: hasAnyInstructions && missingVendors.length > 0 && !dismissed,
+      shouldNotify: hasAnyInstructions && missingHarnesses.length > 0 && !dismissed,
       primarySourceId: primarySource ? primarySource.id : null,
     };
   }

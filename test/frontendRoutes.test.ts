@@ -259,7 +259,7 @@ describe('frontend routes', () => {
     expect(apiSrc).toContain("chatFetch('install/doctor')");
     expect(apiSrc).toContain("chatFetch('install/welcome-complete', { method: 'POST'");
     expect(apiSrc).toContain("chatFetch('install/actions/' + encodeURIComponent(actionId) + '/run'");
-    expect(apiSrc).toContain("chatFetch(\n      'cli-profiles/setup-auth/' + encodeURIComponent(vendor) + '/start'");
+    expect(apiSrc).toContain("chatFetch(\n      'cli-profiles/setup-auth/' + encodeURIComponent(harness) + '/start'");
     expect(apiSrc).toContain('getInstallDoctor');
     expect(apiSrc).toContain('completeWelcome');
     expect(apiSrc).toContain('runInstallAction');
@@ -270,8 +270,8 @@ describe('frontend routes', () => {
     expect(welcomeSrc).toContain('AgentApi.getInstallDoctor()');
     expect(welcomeSrc).toContain('AgentApi.completeWelcome()');
     expect(welcomeSrc).toContain('AgentApi.runInstallAction(action.id)');
-    expect(welcomeSrc).toContain('AgentApi.settings.startSetupCliAuth(vendor)');
-    expect(welcomeSrc).toContain('AgentApi.settings.testSetupCliAuth(vendor)');
+    expect(welcomeSrc).toContain('AgentApi.settings.startSetupCliAuth(harness)');
+    expect(welcomeSrc).toContain('AgentApi.settings.testSetupCliAuth(harness)');
     expect(welcomeSrc).toContain('function WelcomeCliAuth');
     expect(appShellSrc).toContain('setInstallStatus(nextInstallStatus)');
     expect(appShellSrc).toContain("'welcomeCompletedAt' in nextInstallStatus");
@@ -334,19 +334,19 @@ describe('frontend routes', () => {
     expect(settingsSrc).toContain('AgentApi.settings.testOpenCodeDraftProfile(openCodeDraftProfile(profile))');
     expect(settingsSrc).toContain('providerOptionsFromModels');
     expect(settingsSrc).toContain('cli-provider-${opencodeProviderId}');
-    expect(appCss).toContain('.cli-vendor-icon.cli-provider-deepseek');
-    expect(appCss).toContain('.cli-vendor-icon.cli-provider-opencode');
-    expect(appCss).toContain('#root[data-theme="dark"] .cli-vendor-icon.cli-provider-opencode');
+    expect(appCss).toContain('.cli-harness-icon.cli-provider-deepseek');
+    expect(appCss).toContain('.cli-harness-icon.cli-provider-opencode');
+    expect(appCss).toContain('#root[data-theme="dark"] .cli-harness-icon.cli-provider-opencode');
     expect(settingsSrc).not.toContain('Composer models');
     expect(settingsSrc).not.toContain('preview composer models');
     expect(settingsSrc).not.toContain('the model is selected in the message composer');
-    expect(settingsSrc).toContain('usesGeneratedCliProfileName(current) ? defaultCliProfileName(vendor) : current.name');
+    expect(settingsSrc).toContain('usesGeneratedCliProfileName(current) ? defaultCliProfileName(harness) : current.name');
   });
 
-  test('instruction compatibility popover separates covered vendors from pointer needs', () => {
+  test('instruction compatibility popover separates covered harnesses from pointer needs', () => {
     const composerNotificationsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composerNotifications.jsx'), 'utf8');
 
-    expect(composerNotificationsSrc).toContain('const coveredLabels = (status.vendors || []).filter(item => item.covered)');
+    expect(composerNotificationsSrc).toContain('const coveredLabels = (status.harnesses || []).filter(item => item.covered)');
     expect(composerNotificationsSrc).toContain('<div className="tt-kv"><span>Covered</span>');
     expect(composerNotificationsSrc).toContain('<div className="tt-kv"><span>Needs pointers</span>');
     expect(composerNotificationsSrc).not.toContain('<div className="tt-kv"><span>Missing</span>');

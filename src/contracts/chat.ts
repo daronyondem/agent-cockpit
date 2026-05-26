@@ -104,7 +104,8 @@ function validateCliProfiles(value: unknown): void {
 function validateCliProfileRecord(record: Record<string, unknown>, label: string): void {
   optionalString(record, 'id', `${label} must have a string id`);
   optionalString(record, 'name', `${label} name must be a string`);
-  optionalString(record, 'vendor', `${label} vendor must be a string`);
+  optionalString(record, 'harness', `${label} harness must be a string`);
+  optionalString(record, 'vendor', `${label} legacy vendor must be a string`);
   optionalString(record, 'command', `${label} command must be a string`);
   optionalStringEnum(record, 'protocol', ['standard', 'interactive'], `${label} protocol must be standard or interactive`);
   if (record.opencode !== undefined) {

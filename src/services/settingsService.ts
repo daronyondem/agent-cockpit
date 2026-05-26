@@ -1,14 +1,14 @@
 import fsp from 'fs/promises';
 import path from 'path';
-import type { CliProfile, Settings } from '../types';
+import type { CliHarness, CliProfile, Settings } from '../types';
 import { atomicWriteFile } from '../utils/atomicWrite';
 import {
   backendForCliProfile,
   cliProtocolForBackend,
-  cliVendorForBackend,
+  cliHarnessForBackend,
   ensureServerConfiguredCliProfiles,
   isSetupAccountCliProfile,
-  isCliVendor,
+  isCliHarness,
   serverConfiguredCliProfileId,
 } from './cliProfiles';
 import {
@@ -22,6 +22,11 @@ interface PersistedSettings extends Settings {
   customInstructions?: { aboutUser?: string; responseStyle?: string };
   contextMap?: Settings['workspaceContext'];
 }
+
+type PersistedCliProfile = Partial<Omit<CliProfile, 'harness'>> & {
+  harness?: CliHarness;
+  vendor?: CliHarness;
+};
 
 export const DEFAULT_SETTINGS: Settings = {
   theme: 'system',
@@ -70,6 +75,11 @@ export class SettingsService {
         kb.cliConcurrency = kb.dreamingConcurrency;
       }
 
+      const harnessMigration = this._migrateLegacyCliProfileHarnesses(settings);
+      if (harnessMigration.changed) {
+        return this.saveSettings(harnessMigration.settings);
+      }
+
       const setupAuthHomeMigration = this._stripSetupProfileAuthHomes(settings);
       if (setupAuthHomeMigration.changed) {
         return this.saveSettings(setupAuthHomeMigration.settings);
@@ -106,9 +116,9 @@ export class SettingsService {
     const current = settings.defaultCliProfileId
       ? profiles.find((profile) => profile.id === settings.defaultCliProfileId)
       : undefined;
-    const defaultVendor = cliVendorForBackend(settings.defaultBackend);
+    const defaultHarness = cliHarnessForBackend(settings.defaultBackend);
     const selected = current
-      || (defaultVendor ? profiles.find((profile) => profile.vendor === defaultVendor) : undefined)
+      || (defaultHarness ? profiles.find((profile) => profile.harness === defaultHarness) : undefined)
       || profiles[0];
     if (!selected) return settings;
 
@@ -151,10 +161,23 @@ export class SettingsService {
     };
   }
 
+  private _migrateLegacyCliProfileHarnesses(settings: Settings): { settings: Settings; changed: boolean } {
+    if (!Array.isArray(settings.cliProfiles)) return { settings, changed: false };
+    let changed = false;
+    const cliProfiles = (settings.cliProfiles as unknown as PersistedCliProfile[]).map((profile) => {
+      if (!profile || typeof profile !== 'object') return profile;
+      const harness = profile.harness || profile.vendor;
+      const { vendor: _legacyVendor, ...rest } = profile;
+      if (_legacyVendor !== undefined || harness !== profile.harness) changed = true;
+      return harness ? { ...rest, harness } : rest;
+    });
+    return changed ? { settings: { ...settings, cliProfiles: cliProfiles as CliProfile[] }, changed } : { settings, changed: false };
+  }
+
   private _normalizeCliProfiles(settings: Settings): Settings {
     const now = new Date().toISOString();
     const profiles = Array.isArray(settings.cliProfiles)
-      ? settings.cliProfiles
+      ? (settings.cliProfiles as unknown as PersistedCliProfile[])
         .map((profile) => this._normalizeCliProfile(
           profile,
           now,
@@ -206,7 +229,7 @@ export class SettingsService {
         const env: Record<string, string> = {};
         let envChanged = false;
         for (const [key, value] of Object.entries(next.env)) {
-          if (isCliAuthHomeEnvKey(next.vendor, key)) {
+          if (isCliAuthHomeEnvKey(next.harness, key)) {
             envChanged = true;
             continue;
           }
@@ -310,11 +333,11 @@ export class SettingsService {
       return { backend };
     }
 
-    const vendor = cliVendorForBackend(backend);
-    if (vendor) {
-      const serverConfiguredId = serverConfiguredCliProfileId(vendor);
+    const harness = cliHarnessForBackend(backend);
+    if (harness) {
+      const serverConfiguredId = serverConfiguredCliProfileId(harness);
       const legacyProfile = profiles.find((profile) => profile.id === serverConfiguredId && !profile.disabled)
-        || profiles.find((profile) => profile.vendor === vendor && !profile.disabled);
+        || profiles.find((profile) => profile.harness === harness && !profile.disabled);
       if (legacyProfile) {
         return { profileId: legacyProfile.id, backend };
       }
@@ -323,21 +346,21 @@ export class SettingsService {
     return { backend };
   }
 
-  private _normalizeCliProfile(profile: CliProfile, now: string, defaultBackend?: string): CliProfile | null {
-    if (!profile || !isCliVendor(profile.vendor)) return null;
+  private _normalizeCliProfile(profile: PersistedCliProfile, now: string, defaultBackend?: string): CliProfile | null {
+    const harness = profile?.harness || profile?.vendor;
+    if (!profile || !isCliHarness(harness)) return null;
 
     const id = String(profile.id || '').trim();
     if (!id) return null;
 
-    const vendor = profile.vendor;
     const normalized: CliProfile = {
       id,
       name: String(profile.name || '').trim() || id,
-      vendor,
-      ...(vendor === 'claude-code'
-        ? { protocol: profile.protocol === 'interactive' ? 'interactive' : profile.protocol === 'standard' ? 'standard' : cliProtocolForBackend(defaultBackend, vendor) || 'standard' }
+      harness,
+      ...(harness === 'claude-code'
+        ? { protocol: profile.protocol === 'interactive' ? 'interactive' : profile.protocol === 'standard' ? 'standard' : cliProtocolForBackend(defaultBackend, harness) || 'standard' }
         : {}),
-      authMode: vendor === 'kiro' || vendor === 'opencode'
+      authMode: harness === 'kiro' || harness === 'opencode'
         ? 'server-configured'
         : profile.authMode === 'account' ? 'account' : 'server-configured',
       createdAt: typeof profile.createdAt === 'string' && profile.createdAt ? profile.createdAt : now,
@@ -345,9 +368,9 @@ export class SettingsService {
     };
 
     const command = profile.command?.trim();
-    if (command && vendor !== 'kiro') normalized.command = command;
+    if (command && harness !== 'kiro') normalized.command = command;
 
-    if (vendor === 'opencode' && profile.opencode && typeof profile.opencode === 'object') {
+    if (harness === 'opencode' && profile.opencode && typeof profile.opencode === 'object') {
       const provider = typeof profile.opencode.provider === 'string' ? profile.opencode.provider.trim() : '';
       if (provider) {
         normalized.opencode = { provider };
@@ -356,13 +379,13 @@ export class SettingsService {
 
     const isSetupAccount = isSetupAccountCliProfile(normalized);
     const configDir = profile.configDir?.trim();
-    if (configDir && vendor !== 'kiro' && vendor !== 'opencode' && !isSetupAccount) normalized.configDir = configDir;
+    if (configDir && harness !== 'kiro' && harness !== 'opencode' && !isSetupAccount) normalized.configDir = configDir;
 
-    if (profile.env && vendor !== 'kiro' && vendor !== 'opencode') {
+    if (profile.env && harness !== 'kiro' && harness !== 'opencode') {
       const env: Record<string, string> = {};
       for (const [key, value] of Object.entries(profile.env)) {
         if (!key || typeof value !== 'string') continue;
-        if (isSetupAccount && isCliAuthHomeEnvKey(vendor, key)) continue;
+        if (isSetupAccount && isCliAuthHomeEnvKey(harness, key)) continue;
         env[key] = value;
       }
       if (Object.keys(env).length > 0) normalized.env = env;
@@ -373,8 +396,8 @@ export class SettingsService {
   }
 }
 
-function isCliAuthHomeEnvKey(vendor: CliProfile['vendor'], key: string): boolean {
+function isCliAuthHomeEnvKey(harness: CliProfile['harness'], key: string): boolean {
   const normalized = key.toUpperCase();
-  return (vendor === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
-    || (vendor === 'codex' && normalized === 'CODEX_HOME');
+  return (harness === 'claude-code' && normalized === 'CLAUDE_CONFIG_DIR')
+    || (harness === 'codex' && normalized === 'CODEX_HOME');
 }

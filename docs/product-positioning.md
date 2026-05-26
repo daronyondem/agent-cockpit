@@ -64,12 +64,12 @@ setup.
 - **Not hosted SaaS.** There is no Agent Cockpit cloud account or central
   dashboard.
 - **Not a model provider.** It does not host, proxy, or resell inference.
-- **Not a CLI replacement.** It wraps vendor CLIs and relies on their installed
+- **Not a CLI replacement.** It wraps upstream CLIs and relies on their installed
   auth/runtime behavior.
 - **Not an autonomous company orchestration layer.** It is a personal/local
   cockpit for interacting with AI agents, not a business-control-plane system.
 - **Not zero setup.** The release installers reduce setup, but users still run
-  and secure a local server and authenticate the vendor CLIs they choose.
+  and secure a local server and authenticate the upstream CLIs they choose.
 
 ## Message Hierarchy
 
@@ -97,7 +97,7 @@ Use this order when public copy needs to be brief:
 ## Language Guidelines
 
 - Prefer direct user-facing phrases: "your machine", "your workspace",
-  "browser UI", "local CLI", "vendor CLIs", "owned context".
+  "browser UI", "local CLI", "upstream CLIs", "owned context".
 - Avoid provider-specific framing unless a section is backend-specific.
 - Avoid overclaiming setup simplicity. Say "installer-managed local server"
   rather than "zero setup".

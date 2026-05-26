@@ -159,7 +159,7 @@ tool is unavailable.
 - Usage pricing should stay provider-specific. Codex/OpenAI service tiers,
   Claude token/cache pricing, Kiro credits, and future CLIs should use focused
   calculators or provider context rather than one growing generic formula.
-- Claude Code Interactive is a separate provider path requiring real CLI
+- Claude Code Interactive is a separate protocol/backend path requiring real CLI
   compatibility checks when protocol behavior changes.
 - Do not auto-update Claude Code CLI as part of Claude Code Interactive
   compatibility work unless explicitly requested.
@@ -168,8 +168,12 @@ tool is unavailable.
   a newer issue exists, lower-version open support-validation issues should be
   closed with a comment referencing the current issue. Closed or unrelated
   GitHub search results must not receive comments or close attempts.
+- CLI profile runtime identity is called a harness, not a vendor. Persist
+  `CliProfile.harness` and use legacy `vendor` only as migration/backcompat
+  input. The Settings field label is **Harness**; composer selectors remain
+  **Profile** / **CLI Profile**.
 - Claude/Codex install/auth flows should promote a created account profile when
-  no default exists or when replacing that vendor's server-configured default.
+  no default exists or when replacing that harness's server-configured default.
 - Welcome setup auth for Claude/Codex should use the user's normal system CLI
   auth home, not a generated profile `configDir`, so terminal commands and
   Agent Cockpit share login state. Setup profiles must not retain `configDir`,

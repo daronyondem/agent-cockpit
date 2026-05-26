@@ -130,10 +130,42 @@ describe('settings', () => {
       expect.objectContaining({
         id: serverConfiguredCliProfileId('codex'),
         name: 'Codex (Server Configured)',
-        vendor: 'codex',
+        harness: 'codex',
         authMode: 'server-configured',
       }),
     ]);
+  });
+
+  test('migrates legacy CLI profile vendor fields to harness on read', async () => {
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, 'settings.json'), JSON.stringify({
+      theme: 'system',
+      sendBehavior: 'enter',
+      systemPrompt: '',
+      defaultCliProfileId: 'legacy-codex',
+      defaultBackend: 'codex',
+      cliProfiles: [{
+        id: 'legacy-codex',
+        name: 'Legacy Codex',
+        vendor: 'codex',
+        authMode: 'account',
+        configDir: '/tmp/legacy-codex',
+        createdAt: '2026-04-29T00:00:00.000Z',
+        updatedAt: '2026-04-29T00:00:00.000Z',
+      }],
+    }, null, 2));
+
+    const loaded = await service.getSettings();
+
+    expect(loaded.cliProfiles![0]).toEqual(expect.objectContaining({
+      id: 'legacy-codex',
+      harness: 'codex',
+    }));
+    expect((loaded.cliProfiles![0] as any).vendor).toBeUndefined();
+
+    const persisted = JSON.parse(fs.readFileSync(path.join(tmpDir, 'settings.json'), 'utf8'));
+    expect(persisted.cliProfiles[0].harness).toBe('codex');
+    expect(persisted.cliProfiles[0].vendor).toBeUndefined();
   });
 
   test('saving a default CLI profile keeps defaultBackend aligned', async () => {
@@ -141,7 +173,7 @@ describe('settings', () => {
     const profile = {
       id: 'profile-codex-work',
       name: 'Codex Work',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       configDir: '/tmp/codex-work',
       createdAt: '2026-04-29T00:00:00.000Z',
@@ -163,7 +195,7 @@ describe('settings', () => {
     const profile = {
       id: 'profile-codex-first',
       name: 'Codex First',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       configDir: '/tmp/codex-first',
       createdAt: '2026-04-29T00:00:00.000Z',
@@ -184,7 +216,7 @@ describe('settings', () => {
     const profile = {
       id: 'profile-claude-first',
       name: 'Claude First',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       authMode: 'account',
       configDir: '/tmp/claude-first',
       createdAt: '2026-04-29T00:00:00.000Z',
@@ -215,7 +247,7 @@ describe('settings', () => {
       cliProfiles: [{
         id: defaultProfileId,
         name: 'Claude Code (Server Configured)',
-        vendor: 'claude-code',
+        harness: 'claude-code',
         authMode: 'server-configured',
         createdAt: now,
         updatedAt: now,
@@ -235,7 +267,7 @@ describe('settings', () => {
         {
           id: 'profile-kiro-work',
           name: 'Kiro Work',
-          vendor: 'kiro',
+          harness: 'kiro',
           authMode: 'account',
           command: '/custom/kiro-cli',
           configDir: '/tmp/kiro-work',
@@ -262,7 +294,7 @@ describe('settings', () => {
         {
           id: 'profile-opencode-deepseek',
           name: 'OpenCode DeepSeek',
-          vendor: 'opencode',
+          harness: 'opencode',
           authMode: 'account',
           command: '/Users/test/.opencode/bin/opencode',
           configDir: '/tmp/opencode-account',
@@ -279,7 +311,7 @@ describe('settings', () => {
     } as any);
 
     const profile = saved.cliProfiles!.find((p) => p.id === 'profile-opencode-deepseek')!;
-    expect(profile.vendor).toBe('opencode');
+    expect(profile.harness).toBe('opencode');
     expect(profile.authMode).toBe('server-configured');
     expect(profile.protocol).toBeUndefined();
     expect(profile.command).toBe('/Users/test/.opencode/bin/opencode');
@@ -300,7 +332,7 @@ describe('settings', () => {
         {
           id: 'profile-claude-with-opencode',
           name: 'Claude',
-          vendor: 'claude-code',
+          harness: 'claude-code',
           authMode: 'server-configured',
           opencode: {
             provider: 'deepseek',
@@ -324,7 +356,7 @@ describe('settings', () => {
       cliProfiles: [{
         id: 'setup-claude-code-account',
         name: 'Claude Code Account',
-        vendor: 'claude-code',
+        harness: 'claude-code',
         authMode: 'account',
         protocol: 'standard',
         configDir: '/tmp/agent-cockpit-private-claude',
@@ -355,7 +387,7 @@ describe('settings', () => {
       cliProfiles: [{
         id: 'setup-codex-account',
         name: 'Codex Account',
-        vendor: 'codex',
+        harness: 'codex',
         authMode: 'account',
         configDir: '/tmp/agent-cockpit-private-codex',
         env: {
@@ -384,7 +416,7 @@ describe('settings', () => {
     const profile = {
       id: 'profile-codex-kb',
       name: 'Codex KB',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       configDir: '/tmp/codex-kb',
       createdAt: '2026-04-29T00:00:00.000Z',

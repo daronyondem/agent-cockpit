@@ -198,22 +198,22 @@ function activeWorkspaceCliProfiles(settings){
     : [];
 }
 
-function cliVendorForBackend(backendId){
+function cliHarnessForBackend(backendId){
   return backendId === 'claude-code-interactive' ? 'claude-code' : backendId;
 }
 
 function workspaceBackendIdForProfile(profile){
   if (!profile) return null;
-  if (profile.vendor === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
-  return profile.vendor;
+  if (profile.harness === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
+  return profile.harness;
 }
 
 function workspaceProfileForBackend(profiles, backendId){
   if (!backendId) return null;
-  const vendor = cliVendorForBackend(backendId);
+  const harness = cliHarnessForBackend(backendId);
   return profiles.find(p => workspaceBackendIdForProfile(p) === backendId)
-    || profiles.find(p => p.id === 'server-configured-' + vendor)
-    || profiles.find(p => p.vendor === vendor)
+    || profiles.find(p => p.id === 'server-configured-' + harness)
+    || profiles.find(p => p.harness === harness)
     || null;
 }
 

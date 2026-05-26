@@ -1885,7 +1885,7 @@ describe('sendMessage options passthrough', () => {
 // ── CLI profile runtime selection ───────────────────────────────────────────
 
 describe('CLI profile runtime selection', () => {
-  test('creates and sends through the selected profile vendor adapter', async () => {
+  test('creates and sends through the selected profile harness adapter', async () => {
     const kiroBackend = new KiroMockBackend();
     env.backendRegistry.register(kiroBackend);
     const settings = await env.chatService.getSettings();
@@ -1896,7 +1896,7 @@ describe('CLI profile runtime selection', () => {
         {
           id: 'profile-kiro-work',
           name: 'Kiro Work',
-          vendor: 'kiro',
+          harness: 'kiro',
           authMode: 'server-configured',
           createdAt: '2026-04-29T00:00:00.000Z',
           updatedAt: '2026-04-29T00:00:00.000Z',
@@ -1953,7 +1953,7 @@ describe('CLI profile runtime selection', () => {
         {
           id: 'profile-kiro-mismatch',
           name: 'Kiro Mismatch',
-          vendor: 'kiro',
+          harness: 'kiro',
           authMode: 'server-configured',
           createdAt: '2026-04-29T00:00:00.000Z',
           updatedAt: '2026-04-29T00:00:00.000Z',
@@ -2029,7 +2029,7 @@ describe('CLI profile runtime selection', () => {
         {
           id: 'profile-kiro-switch',
           name: 'Kiro Switch',
-          vendor: 'kiro',
+          harness: 'kiro',
           authMode: 'server-configured',
           createdAt: '2026-04-29T00:00:00.000Z',
           updatedAt: '2026-04-29T00:00:00.000Z',
@@ -2087,7 +2087,7 @@ describe('CLI profile runtime selection', () => {
         {
           id: 'profile-claude-repair',
           name: 'Claude Repair',
-          vendor: 'claude-code',
+          harness: 'claude-code',
           authMode: 'server-configured',
           createdAt: '2026-04-29T00:00:00.000Z',
           updatedAt: '2026-04-29T00:00:00.000Z',

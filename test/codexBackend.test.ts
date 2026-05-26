@@ -154,7 +154,7 @@ describe('CodexAdapter', () => {
     const runtime = resolveCodexCliRuntime({
       id: 'profile-codex-work',
       name: 'Codex Work',
-      vendor: 'codex',
+      harness: 'codex',
       command: '/opt/codex/bin/codex',
       authMode: 'account',
       configDir: '/tmp/codex-work-home',
@@ -259,11 +259,11 @@ describe('CodexAdapter', () => {
     expect(() => resolveCodexCliRuntime({
       id: 'profile-claude',
       name: 'Claude',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       authMode: 'server-configured',
       createdAt: '2026-04-29T00:00:00.000Z',
       updatedAt: '2026-04-29T00:00:00.000Z',
-    })).toThrow('CLI profile vendor claude-code is not codex');
+    })).toThrow('CLI profile harness claude-code is not codex');
   });
 
   test('metadata.models is populated immediately with fallback list', () => {
@@ -387,7 +387,7 @@ describe('CodexAdapter', () => {
         cliProfile: {
           id: 'profile-codex-models',
           name: 'Codex Models',
-          vendor: 'codex',
+          harness: 'codex',
           command: '/opt/codex/bin/codex',
           authMode: 'account',
           configDir: '/tmp/codex-models-home',
@@ -2528,7 +2528,7 @@ describe('CodexAdapter.runOneShot', () => {
         cliProfile: {
           id: 'profile-codex-work',
           name: 'Codex Work',
-          vendor: 'codex',
+          harness: 'codex',
           command: '/opt/codex/bin/codex',
           authMode: 'account',
           configDir: '/tmp/codex-work-home',

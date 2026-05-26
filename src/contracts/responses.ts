@@ -234,7 +234,7 @@ export interface CurrentUserResponse {
 export interface CliProfile {
   id: string;
   name: string;
-  vendor: 'codex' | 'claude-code' | 'kiro' | 'opencode';
+  harness: 'codex' | 'claude-code' | 'kiro' | 'opencode';
   protocol?: 'standard' | 'interactive';
   opencode?: {
     provider?: string;

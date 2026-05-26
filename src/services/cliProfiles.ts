@@ -1,67 +1,67 @@
-import type { CliCommunicationProtocol, CliProfile, CliVendor, Settings } from '../types';
+import type { CliCommunicationProtocol, CliHarness, CliProfile, Settings } from '../types';
 
-export const SUPPORTED_CLI_VENDORS: CliVendor[] = ['claude-code', 'kiro', 'codex', 'opencode'];
+export const SUPPORTED_CLI_HARNESSES: CliHarness[] = ['claude-code', 'kiro', 'codex', 'opencode'];
 export const CLAUDE_CODE_INTERACTIVE_BACKEND_ID = 'claude-code-interactive';
 export const CLAUDE_CODE_STANDARD_PROTOCOL: CliCommunicationProtocol = 'standard';
 export const CLAUDE_CODE_INTERACTIVE_PROTOCOL: CliCommunicationProtocol = 'interactive';
 
 const SERVER_CONFIGURED_PREFIX = 'server-configured';
 
-const VENDOR_LABELS: Record<CliVendor, string> = {
+const HARNESS_LABELS: Record<CliHarness, string> = {
   'claude-code': 'Claude Code',
   kiro: 'Kiro',
   codex: 'Codex',
   opencode: 'OpenCode',
 };
 
-export function isCliVendor(value: string | undefined | null): value is CliVendor {
-  return !!value && (SUPPORTED_CLI_VENDORS as string[]).includes(value);
+export function isCliHarness(value: string | undefined | null): value is CliHarness {
+  return !!value && (SUPPORTED_CLI_HARNESSES as string[]).includes(value);
 }
 
-export function cliVendorForBackend(backend: string | undefined | null): CliVendor | undefined {
+export function cliHarnessForBackend(backend: string | undefined | null): CliHarness | undefined {
   if (backend === CLAUDE_CODE_INTERACTIVE_BACKEND_ID) return 'claude-code';
-  return isCliVendor(backend) ? backend : undefined;
+  return isCliHarness(backend) ? backend : undefined;
 }
 
-export function backendUsesCliVendor(backend: string | undefined | null, vendor: CliVendor | undefined | null): boolean {
-  return !!vendor && cliVendorForBackend(backend) === vendor;
+export function backendUsesCliHarness(backend: string | undefined | null, harness: CliHarness | undefined | null): boolean {
+  return !!harness && cliHarnessForBackend(backend) === harness;
 }
 
 export function cliProtocolForBackend(
   backend: string | undefined | null,
-  vendor: CliVendor | undefined | null = cliVendorForBackend(backend),
+  harness: CliHarness | undefined | null = cliHarnessForBackend(backend),
 ): CliCommunicationProtocol | undefined {
-  if (vendor !== 'claude-code') return undefined;
+  if (harness !== 'claude-code') return undefined;
   return backend === CLAUDE_CODE_INTERACTIVE_BACKEND_ID
     ? CLAUDE_CODE_INTERACTIVE_PROTOCOL
     : CLAUDE_CODE_STANDARD_PROTOCOL;
 }
 
 export function backendForCliProfile(
-  profile: Pick<CliProfile, 'vendor' | 'protocol'> | undefined | null,
+  profile: Pick<CliProfile, 'harness' | 'protocol'> | undefined | null,
   fallbackBackend?: string | null,
 ): string {
   if (!profile) return fallbackBackend || '';
-  if (profile.vendor !== 'claude-code') return profile.vendor;
+  if (profile.harness !== 'claude-code') return profile.harness;
   if (profile.protocol === CLAUDE_CODE_INTERACTIVE_PROTOCOL) return CLAUDE_CODE_INTERACTIVE_BACKEND_ID;
   if (profile.protocol === CLAUDE_CODE_STANDARD_PROTOCOL) return 'claude-code';
-  return backendUsesCliVendor(fallbackBackend, 'claude-code') ? fallbackBackend! : 'claude-code';
+  return backendUsesCliHarness(fallbackBackend, 'claude-code') ? fallbackBackend! : 'claude-code';
 }
 
-export function serverConfiguredCliProfileId(vendor: CliVendor): string {
-  return `${SERVER_CONFIGURED_PREFIX}-${vendor}`;
+export function serverConfiguredCliProfileId(harness: CliHarness): string {
+  return `${SERVER_CONFIGURED_PREFIX}-${harness}`;
 }
 
-export function isSetupAccountCliProfile(profile: Pick<CliProfile, 'id' | 'vendor' | 'authMode'>): boolean {
+export function isSetupAccountCliProfile(profile: Pick<CliProfile, 'id' | 'harness' | 'authMode'>): boolean {
   if (profile.authMode !== 'account') return false;
-  if (profile.vendor !== 'claude-code' && profile.vendor !== 'codex') return false;
-  return profile.id === `setup-${profile.vendor}-account`
-    || profile.id.startsWith(`setup-${profile.vendor}-account-`);
+  if (profile.harness !== 'claude-code' && profile.harness !== 'codex') return false;
+  return profile.id === `setup-${profile.harness}-account`
+    || profile.id.startsWith(`setup-${profile.harness}-account-`);
 }
 
 export function cliProfileIdForBackend(backend: string | undefined | null): string | undefined {
-  const vendor = cliVendorForBackend(backend);
-  return vendor ? serverConfiguredCliProfileId(vendor) : undefined;
+  const harness = cliHarnessForBackend(backend);
+  return harness ? serverConfiguredCliProfileId(harness) : undefined;
 }
 
 export interface CliProfileRuntime {
@@ -71,18 +71,18 @@ export interface CliProfileRuntime {
 }
 
 export function createServerConfiguredCliProfile(
-  vendor: CliVendor,
+  harness: CliHarness,
   timestamp: string = new Date().toISOString(),
-  protocol: CliCommunicationProtocol | undefined = cliProtocolForBackend(vendor, vendor),
+  protocol: CliCommunicationProtocol | undefined = cliProtocolForBackend(harness, harness),
 ): CliProfile {
   return {
-    id: serverConfiguredCliProfileId(vendor),
-    name: `${VENDOR_LABELS[vendor]} (Server Configured)`,
-    vendor,
+    id: serverConfiguredCliProfileId(harness),
+    name: `${HARNESS_LABELS[harness]} (Server Configured)`,
+    harness,
     authMode: 'server-configured',
     createdAt: timestamp,
     updatedAt: timestamp,
-    ...(vendor === 'claude-code' ? { protocol: protocol || CLAUDE_CODE_STANDARD_PROTOCOL } : {}),
+    ...(harness === 'claude-code' ? { protocol: protocol || CLAUDE_CODE_STANDARD_PROTOCOL } : {}),
   };
 }
 
@@ -103,7 +103,7 @@ export function resolveCliProfileRuntime(
     }
     const legacyDefaultBackend = !fallbackBackend
       && requestedProfileId === settings.defaultCliProfileId
-      && backendUsesCliVendor(settings.defaultBackend, profile.vendor)
+      && backendUsesCliHarness(settings.defaultBackend, profile.harness)
       ? settings.defaultBackend
       : undefined;
     return {
@@ -135,27 +135,27 @@ export function resolveCliProfileRuntime(
 
 export function ensureServerConfiguredCliProfiles(
   settings: Settings,
-  vendors: Iterable<string | undefined | null>,
+  harnesses: Iterable<string | undefined | null>,
   timestamp: string = new Date().toISOString(),
 ): { settings: Settings; changed: boolean } {
   const profiles = Array.isArray(settings.cliProfiles) ? [...settings.cliProfiles] : [];
   const existingIds = new Set(profiles.map((profile) => profile.id));
   let changed = false;
 
-  for (const vendorValue of vendors) {
-    const vendor = cliVendorForBackend(vendorValue);
-    if (!vendor) continue;
-    const id = serverConfiguredCliProfileId(vendor);
+  for (const harnessValue of harnesses) {
+    const harness = cliHarnessForBackend(harnessValue);
+    if (!harness) continue;
+    const id = serverConfiguredCliProfileId(harness);
     if (existingIds.has(id)) continue;
-    profiles.push(createServerConfiguredCliProfile(vendor, timestamp, cliProtocolForBackend(vendorValue, vendor)));
+    profiles.push(createServerConfiguredCliProfile(harness, timestamp, cliProtocolForBackend(harnessValue, harness)));
     existingIds.add(id);
     changed = true;
   }
 
   let defaultCliProfileId = settings.defaultCliProfileId;
-  const defaultVendor = cliVendorForBackend(settings.defaultBackend);
-  if (!defaultCliProfileId && defaultVendor) {
-    const candidateId = serverConfiguredCliProfileId(defaultVendor);
+  const defaultHarness = cliHarnessForBackend(settings.defaultBackend);
+  if (!defaultCliProfileId && defaultHarness) {
+    const candidateId = serverConfiguredCliProfileId(defaultHarness);
     const candidate = profiles.find((profile) => profile.id === candidateId && !profile.disabled);
     if (candidate) {
       defaultCliProfileId = candidateId;

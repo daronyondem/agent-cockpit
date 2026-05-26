@@ -808,7 +808,7 @@ describe('CLI update routes', () => {
       getStatus: jest.fn(() => ({
         items: [{
           id: 'codex:abc',
-          vendor: 'codex',
+          harness: 'codex',
           label: 'Codex',
           command: 'codex',
           resolvedPath: '/usr/local/bin/codex',
@@ -835,7 +835,7 @@ describe('CLI update routes', () => {
     expect(res.status).toBe(200);
     expect(res.body.items[0]).toMatchObject({
       id: 'codex:abc',
-      vendor: 'codex',
+      harness: 'codex',
       updateAvailable: true,
     });
     expect(fakeCliUpdateService.getStatus).toHaveBeenCalled();
@@ -1947,7 +1947,7 @@ describe('Workspace instruction compatibility API', () => {
     const res = await env.request('GET', `/api/chat/workspaces/${hash}/instruction-compatibility`);
     expect(res.status).toBe(200);
     expect(res.body.status.shouldNotify).toBe(true);
-    expect(res.body.status.missingVendors.map((item: any) => item.vendor).sort()).toEqual(['claude-code', 'kiro']);
+    expect(res.body.status.missingHarnesses.map((item: any) => item.harness).sort()).toEqual(['claude-code', 'kiro']);
   });
 
   test('creates pointer files', async () => {

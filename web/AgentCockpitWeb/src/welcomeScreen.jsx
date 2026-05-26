@@ -13,8 +13,8 @@ export function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
   const [finishing, setFinishing] = React.useState(false);
   const [installingActionId, setInstallingActionId] = React.useState(null);
   const [installResults, setInstallResults] = React.useState({});
-  const [cliAuthBusyVendor, setCliAuthBusyVendor] = React.useState(null);
-  const [cliAuthByVendor, setCliAuthByVendor] = React.useState({});
+  const [cliAuthBusyHarness, setCliAuthBusyHarness] = React.useState(null);
+  const [cliAuthByHarness, setCliAuthByHarness] = React.useState({});
 
   const load = React.useCallback(async () => {
     setLoading(true);
@@ -75,71 +75,71 @@ export function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
     }
   }, []);
 
-  const setCliAuthState = React.useCallback((vendor, state) => {
-    setCliAuthByVendor(prev => ({ ...prev, [vendor]: state }));
+  const setCliAuthState = React.useCallback((harness, state) => {
+    setCliAuthByHarness(prev => ({ ...prev, [harness]: state }));
   }, []);
 
-  const pollSetupCliAuthJob = React.useCallback(async (vendor, jobId) => {
+  const pollSetupCliAuthJob = React.useCallback(async (harness, jobId) => {
     try {
       const response = await AgentApi.settings.getCliProfileAuthJob(jobId);
       const job = response.job;
-      setCliAuthState(vendor, { kind: 'job', status: job.status, job });
+      setCliAuthState(harness, { kind: 'job', status: job.status, job });
       if (job.status === 'running') {
-        window.setTimeout(() => pollSetupCliAuthJob(vendor, jobId), 1000);
+        window.setTimeout(() => pollSetupCliAuthJob(harness, jobId), 1000);
       }
     } catch (err) {
-      setCliAuthState(vendor, { kind: 'job', status: 'error', error: err.message || String(err) });
+      setCliAuthState(harness, { kind: 'job', status: 'error', error: err.message || String(err) });
     }
   }, [setCliAuthState]);
 
-  const onCheckCliAuth = React.useCallback(async (vendor) => {
-    if (!vendor || vendor === 'kiro' || cliAuthBusyVendor) return;
-    setCliAuthBusyVendor(vendor);
+  const onCheckCliAuth = React.useCallback(async (harness) => {
+    if (!harness || harness === 'kiro' || cliAuthBusyHarness) return;
+    setCliAuthBusyHarness(harness);
     setError(null);
-    setCliAuthState(vendor, { kind: 'check', status: 'running', message: 'Checking login...' });
+    setCliAuthState(harness, { kind: 'check', status: 'running', message: 'Checking login...' });
     try {
-      const response = await AgentApi.settings.testSetupCliAuth(vendor);
-      setCliAuthState(vendor, { kind: 'check', status: response.result.status, result: response.result, profile: response.profile });
+      const response = await AgentApi.settings.testSetupCliAuth(harness);
+      setCliAuthState(harness, { kind: 'check', status: response.result.status, result: response.result, profile: response.profile });
     } catch (err) {
-      setCliAuthState(vendor, { kind: 'check', status: 'error', error: err.message || String(err) });
+      setCliAuthState(harness, { kind: 'check', status: 'error', error: err.message || String(err) });
       setError(err.message || String(err));
     } finally {
-      setCliAuthBusyVendor(null);
+      setCliAuthBusyHarness(null);
     }
-  }, [cliAuthBusyVendor, setCliAuthState]);
+  }, [cliAuthBusyHarness, setCliAuthState]);
 
-  const onStartCliAuth = React.useCallback(async (vendor) => {
-    if (!vendor || vendor === 'kiro' || cliAuthBusyVendor) return;
-    setCliAuthBusyVendor(vendor);
+  const onStartCliAuth = React.useCallback(async (harness) => {
+    if (!harness || harness === 'kiro' || cliAuthBusyHarness) return;
+    setCliAuthBusyHarness(harness);
     setError(null);
-    setCliAuthState(vendor, { kind: 'job', status: 'running', message: 'Starting login...' });
+    setCliAuthState(harness, { kind: 'job', status: 'running', message: 'Starting login...' });
     try {
-      const response = await AgentApi.settings.startSetupCliAuth(vendor);
-      setCliAuthState(vendor, { kind: 'job', status: response.job.status, job: response.job, profile: response.profile });
-      pollSetupCliAuthJob(vendor, response.job.id);
+      const response = await AgentApi.settings.startSetupCliAuth(harness);
+      setCliAuthState(harness, { kind: 'job', status: response.job.status, job: response.job, profile: response.profile });
+      pollSetupCliAuthJob(harness, response.job.id);
     } catch (err) {
-      setCliAuthState(vendor, { kind: 'job', status: 'error', error: err.message || String(err) });
+      setCliAuthState(harness, { kind: 'job', status: 'error', error: err.message || String(err) });
       setError(err.message || String(err));
     } finally {
-      setCliAuthBusyVendor(null);
+      setCliAuthBusyHarness(null);
     }
-  }, [cliAuthBusyVendor, pollSetupCliAuthJob, setCliAuthState]);
+  }, [cliAuthBusyHarness, pollSetupCliAuthJob, setCliAuthState]);
 
-  const onCancelCliAuth = React.useCallback(async (vendor) => {
-    const state = cliAuthByVendor[vendor];
+  const onCancelCliAuth = React.useCallback(async (harness) => {
+    const state = cliAuthByHarness[harness];
     const jobId = state && state.job && state.job.id;
-    if (!jobId || cliAuthBusyVendor) return;
-    setCliAuthBusyVendor(vendor);
+    if (!jobId || cliAuthBusyHarness) return;
+    setCliAuthBusyHarness(harness);
     try {
       const response = await AgentApi.settings.cancelCliProfileAuth(jobId);
-      setCliAuthState(vendor, { kind: 'job', status: response.job.status, job: response.job });
+      setCliAuthState(harness, { kind: 'job', status: response.job.status, job: response.job });
     } catch (err) {
-      setCliAuthState(vendor, { kind: 'job', status: 'error', error: err.message || String(err) });
+      setCliAuthState(harness, { kind: 'job', status: 'error', error: err.message || String(err) });
       setError(err.message || String(err));
     } finally {
-      setCliAuthBusyVendor(null);
+      setCliAuthBusyHarness(null);
     }
-  }, [cliAuthByVendor, cliAuthBusyVendor, setCliAuthState]);
+  }, [cliAuthByHarness, cliAuthBusyHarness, setCliAuthState]);
 
   const checks = doctor && Array.isArray(doctor.checks) ? doctor.checks : [];
   const requiredChecks = checks.filter(item => item.required);
@@ -206,8 +206,8 @@ export function WelcomeScreen({ onDone, onOpenSettings, onNewConversation }){
                   onRunInstallAction={onRunInstallAction}
                   installingActionId={installingActionId}
                   installResults={installResults}
-                  cliAuthState={cliAuthByVendor[welcomeCliAuthVendor(item.id)]}
-                  cliAuthBusyVendor={cliAuthBusyVendor}
+                  cliAuthState={cliAuthByHarness[welcomeCliAuthHarness(item.id)]}
+                  cliAuthBusyHarness={cliAuthBusyHarness}
                   onCheckCliAuth={onCheckCliAuth}
                   onStartCliAuth={onStartCliAuth}
                   onCancelCliAuth={onCancelCliAuth}
@@ -266,7 +266,7 @@ function WelcomeDoctorLine({
   installingActionId,
   installResults,
   cliAuthState,
-  cliAuthBusyVendor,
+  cliAuthBusyHarness,
   onCheckCliAuth,
   onStartCliAuth,
   onCancelCliAuth,
@@ -275,7 +275,7 @@ function WelcomeDoctorLine({
   const results = Object.entries(installResults || {})
     .filter(([id, result]) => Boolean(result) && id.startsWith(item.id + ':'))
     .map(([id, result]) => ({ id, result }));
-  const authVendor = item.status === 'ok' ? welcomeCliAuthVendor(item.id) : null;
+  const authHarness = item.status === 'ok' ? welcomeCliAuthHarness(item.id) : null;
   return (
     <div className="welcome-doctor-item">
       <WelcomeLine
@@ -316,11 +316,11 @@ function WelcomeDoctorLine({
           <span>{installResultMessage(result)}</span>
         </div>
       ))}
-      {authVendor ? (
+      {authHarness ? (
         <WelcomeCliAuth
-          vendor={authVendor}
+          harness={authHarness}
           state={cliAuthState}
-          busyVendor={cliAuthBusyVendor}
+          busyHarness={cliAuthBusyHarness}
           onCheck={onCheckCliAuth}
           onStart={onStartCliAuth}
           onCancel={onCancelCliAuth}
@@ -330,8 +330,8 @@ function WelcomeDoctorLine({
   );
 }
 
-function WelcomeCliAuth({ vendor, state, busyVendor, onCheck, onStart, onCancel }){
-  if (vendor === 'kiro') {
+function WelcomeCliAuth({ harness, state, busyHarness, onCheck, onStart, onCancel }){
+  if (harness === 'kiro') {
     return (
       <div className="welcome-cli-auth-note">
         Kiro login is self-configured for now. Run <code>kiro-cli login</code> on the server, then refresh checks.
@@ -339,23 +339,23 @@ function WelcomeCliAuth({ vendor, state, busyVendor, onCheck, onStart, onCancel 
     );
   }
   const running = state && state.kind === 'job' && state.status === 'running';
-  const busy = busyVendor === vendor;
-  const disabled = Boolean(busyVendor) || running;
+  const busy = busyHarness === harness;
+  const disabled = Boolean(busyHarness) || running;
   return (
     <div className="welcome-cli-auth">
       <div className="welcome-cli-auth-head">
-        <b>{welcomeCliAuthLabel(vendor)} login</b>
+        <b>{welcomeCliAuthLabel(harness)} login</b>
         <span>{welcomeCliAuthStateLabel(state)}</span>
       </div>
       <div className="welcome-install-actions">
-        <button className="btn welcome-install-btn" type="button" disabled={disabled} onClick={() => onCheck && onCheck(vendor)}>
+        <button className="btn welcome-install-btn" type="button" disabled={disabled} onClick={() => onCheck && onCheck(harness)}>
           {Ico.search(12)} {busy ? 'Checking...' : 'Check login'}
         </button>
-        <button className="btn primary welcome-install-btn" type="button" disabled={disabled} onClick={() => onStart && onStart(vendor)}>
+        <button className="btn primary welcome-install-btn" type="button" disabled={disabled} onClick={() => onStart && onStart(harness)}>
           {Ico.key(12)} {busy ? 'Starting...' : 'Authenticate'}
         </button>
         {running ? (
-          <button className="btn ghost welcome-install-btn" type="button" disabled={Boolean(busyVendor)} onClick={() => onCancel && onCancel(vendor)}>
+          <button className="btn ghost welcome-install-btn" type="button" disabled={Boolean(busyHarness)} onClick={() => onCancel && onCancel(harness)}>
             Cancel
           </button>
         ) : null}
@@ -370,16 +370,16 @@ function WelcomeCliAuth({ vendor, state, busyVendor, onCheck, onStart, onCancel 
   );
 }
 
-function welcomeCliAuthVendor(checkId){
+function welcomeCliAuthHarness(checkId){
   if (checkId === 'claude-cli') return 'claude-code';
   if (checkId === 'codex-cli') return 'codex';
   if (checkId === 'kiro-cli') return 'kiro';
   return null;
 }
 
-function welcomeCliAuthLabel(vendor){
-  if (vendor === 'codex') return 'Codex';
-  if (vendor === 'claude-code') return 'Claude Code';
+function welcomeCliAuthLabel(harness){
+  if (harness === 'codex') return 'Codex';
+  if (harness === 'claude-code') return 'Claude Code';
   return 'Kiro';
 }
 

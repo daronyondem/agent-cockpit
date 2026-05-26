@@ -11,7 +11,7 @@ function opencodeProfile(overrides: Partial<CliProfile> = {}): CliProfile {
   return {
     id: 'profile-opencode',
     name: 'OpenCode DeepSeek',
-    vendor: 'opencode',
+    harness: 'opencode',
     authMode: 'server-configured',
     createdAt: now,
     updatedAt: now,

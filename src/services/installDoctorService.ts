@@ -93,8 +93,8 @@ function npmInstallCommand(pkg: string, install?: InstallStatus): string[] {
 
 function platformCliCommands(command: 'claude' | 'codex', install?: InstallStatus): string[][] {
   if (process.platform !== 'win32') return [[command]];
-  const vendor = command === 'claude' ? 'claude-code' : 'codex';
-  return windowsCliCommandCandidates(vendor, command, process.env, windowsCliCommandDirs(install))
+  const harness = command === 'claude' ? 'claude-code' : 'codex';
+  return windowsCliCommandCandidates(harness, command, process.env, windowsCliCommandDirs(install))
     .map(candidate => candidate.argsPrefix?.length
       ? [candidate.command, ...candidate.argsPrefix]
       : [candidate.command]);
@@ -631,15 +631,15 @@ export class InstallDoctorService {
 
   private repairWindowsCliToolWrappers(actionId: string) {
     if (process.platform !== 'win32') return null;
-    const vendor = actionId.startsWith('claude-cli:')
+    const harness = actionId.startsWith('claude-cli:')
       ? 'claude-code'
       : actionId.startsWith('codex-cli:')
         ? 'codex'
         : null;
-    if (!vendor) return null;
+    if (!harness) return null;
     return ensureWindowsCliToolWrappersForInstall(
       this.installStateService.getStatus(),
-      [vendor],
+      [harness],
       true,
     );
   }

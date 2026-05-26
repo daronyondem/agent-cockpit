@@ -69,7 +69,7 @@ describe('CLI profile auth endpoints', () => {
     await addProfile({
       id: 'profile-claude-auth',
       name: 'Claude Auth',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       authMode: 'account',
       command,
       createdAt: '2026-04-30T00:00:00.000Z',
@@ -98,7 +98,7 @@ describe('CLI profile auth endpoints', () => {
     await addProfile({
       id: 'profile-claude-logged-out',
       name: 'Claude Logged Out',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       authMode: 'account',
       command,
       createdAt: '2026-04-30T00:00:00.000Z',
@@ -125,7 +125,7 @@ describe('CLI profile auth endpoints', () => {
     await addProfile({
       id: 'profile-codex-auth',
       name: 'Codex Auth',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       command,
       createdAt: '2026-04-30T00:00:00.000Z',
@@ -171,7 +171,7 @@ describe('CLI profile auth endpoints', () => {
       const result = await service.checkProfile({
         id: 'profile-codex-win-auth',
         name: 'Codex Windows Auth',
-        vendor: 'codex',
+        harness: 'codex',
         authMode: 'account',
         configDir: path.join(env.tmpDir, 'codex-win-auth'),
         createdAt: '2026-04-30T00:00:00.000Z',
@@ -212,7 +212,7 @@ describe('CLI profile auth endpoints', () => {
     await addProfile({
       id: 'profile-opencode-deepseek',
       name: 'OpenCode DeepSeek',
-      vendor: 'opencode',
+      harness: 'opencode',
       authMode: 'server-configured',
       command,
       opencode: { provider: 'deepseek', model: 'deepseek/deepseek-chat' },
@@ -269,6 +269,8 @@ describe('CLI profile auth endpoints', () => {
       },
     });
     expect(metadata.status).toBe(200);
+    expect(metadata.body.profile.harness).toBe('opencode');
+    expect(metadata.body.profile.vendor).toBeUndefined();
     expect(metadata.body.backend.models.map((model: any) => model.id)).toEqual([
       'opencode/big-pickle',
       'deepseek/deepseek-chat',
@@ -293,11 +295,12 @@ describe('CLI profile auth endpoints', () => {
     expect(res.status).toBe(200);
     expect(res.body.profile).toEqual(expect.objectContaining({
       id: 'draft-opencode',
-      vendor: 'opencode',
+      harness: 'opencode',
       authMode: 'server-configured',
       command,
       opencode: { provider: 'deepseek' },
     }));
+    expect(res.body.profile.vendor).toBeUndefined();
     expect(res.body.profile.configDir).toBeUndefined();
     expect(res.body.profile.env).toBeUndefined();
     expect(res.body.result.status).toBe('ok');
@@ -320,7 +323,7 @@ describe('CLI profile auth endpoints', () => {
     const result = await service.checkProfile({
       id: 'profile-opencode-fail',
       name: 'OpenCode Fail',
-      vendor: 'opencode',
+      harness: 'opencode',
       authMode: 'server-configured',
       command,
       createdAt: '2026-05-24T00:00:00.000Z',
@@ -337,7 +340,7 @@ describe('CLI profile auth endpoints', () => {
     await addProfile({
       id: 'profile-kiro-auth',
       name: 'Kiro Auth',
-      vendor: 'kiro',
+      harness: 'kiro',
       authMode: 'server-configured',
       createdAt: '2026-04-30T00:00:00.000Z',
       updatedAt: '2026-04-30T00:00:00.000Z',
@@ -349,7 +352,7 @@ describe('CLI profile auth endpoints', () => {
     expect(res.body.error).toContain('Remote authentication is not supported for Kiro');
   });
 
-  test('setup auth creates an account profile and promotes the default vendor profile', async () => {
+  test('setup auth creates an account profile and promotes the default harness profile', async () => {
     const originalPath = process.env.PATH;
     writeExecutable('claude', [
       '#!/bin/sh',
@@ -368,7 +371,7 @@ describe('CLI profile auth endpoints', () => {
       expect(res.status).toBe(200);
       expect(res.body.profile).toEqual(expect.objectContaining({
         id: 'setup-claude-code-account',
-        vendor: 'claude-code',
+        harness: 'claude-code',
         authMode: 'account',
       }));
       expect(res.body.profile.configDir).toBeUndefined();
@@ -440,7 +443,7 @@ describe('CLI profile auth endpoints', () => {
     await addProfile({
       id: 'setup-claude-code-account',
       name: 'Claude Code Account',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       authMode: 'account',
       env: { CLAUDE_CONFIG_DIR: oldConfigDir },
       configDir: oldConfigDir,
@@ -488,7 +491,7 @@ describe('CLI profile auth endpoints', () => {
       cliProfiles: [{
         id: 'setup-claude-code-account',
         name: 'Claude Code Account',
-        vendor: 'claude-code',
+        harness: 'claude-code',
         authMode: 'account',
         protocol: 'standard',
         configDir: oldConfigDir,
@@ -536,7 +539,7 @@ describe('CLI profile auth endpoints', () => {
     await addProfile({
       id: 'existing-codex-account',
       name: 'Existing Codex Account',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       command,
       createdAt: '2026-04-30T00:00:00.000Z',
@@ -572,7 +575,7 @@ describe('CLI profile auth endpoints', () => {
     await addProfile({
       id: 'profile-codex-cancel',
       name: 'Codex Cancel',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       command,
       createdAt: '2026-04-30T00:00:00.000Z',
@@ -598,7 +601,7 @@ describe('CLI profile auth endpoints', () => {
     const profile = {
       id: 'profile-codex-duplicate',
       name: 'Codex Duplicate',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       command,
       configDir: path.join(env.tmpDir, 'codex-duplicate'),
@@ -631,7 +634,7 @@ describe('CLI profile auth endpoints', () => {
     const started = await service.startAuth({
       id: 'profile-codex-status-fail',
       name: 'Codex Status Fail',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       command,
       configDir: path.join(env.tmpDir, 'codex-status-fail'),
@@ -666,7 +669,7 @@ describe('CLI profile auth endpoints', () => {
     const started = await service.startAuth({
       id: 'profile-claude-status-false',
       name: 'Claude Status False',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       authMode: 'account',
       command,
       configDir: path.join(env.tmpDir, 'claude-status-false'),
@@ -697,7 +700,7 @@ describe('CLI profile auth endpoints', () => {
     const started = await service.startAuth({
       id: 'profile-codex-timeout',
       name: 'Codex Timeout',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       command,
       configDir: path.join(env.tmpDir, 'codex-timeout'),

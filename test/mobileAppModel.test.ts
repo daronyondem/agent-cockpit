@@ -164,9 +164,9 @@ describe('mobile app model helpers', () => {
 
   test('normalizes mobile backend profile and workspace identity helpers', () => {
     const profiles = [
-      { id: 'codex-profile', name: 'Codex', vendor: 'codex' },
-      { id: 'claude-profile', name: 'Claude Interactive', vendor: 'claude-code', protocol: 'interactive' },
-      { id: 'open-profile', name: 'OpenCode', vendor: 'opencode', opencode: { provider: 'openrouter' } },
+      { id: 'codex-profile', name: 'Codex', harness: 'codex' },
+      { id: 'claude-profile', name: 'Claude Interactive', harness: 'claude-code', protocol: 'interactive' },
+      { id: 'open-profile', name: 'OpenCode', harness: 'opencode', opencode: { provider: 'openrouter' } },
     ];
 
     expect(model.workspaceRef({ workspaceId: 'workspace-1', workspaceHash: 'legacy-hash' })).toBe('workspace-1');

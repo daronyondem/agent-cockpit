@@ -126,19 +126,19 @@ describe('createConversation', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: serverConfiguredCliProfileId('kiro'),
-          vendor: 'kiro',
+          harness: 'kiro',
           authMode: 'server-configured',
         }),
       ]),
     );
   });
 
-  test('creates with an explicit CLI profile and resolves its vendor backend', async () => {
+  test('creates with an explicit CLI profile and resolves its harness backend', async () => {
     const settings = await service.getSettings();
     const profile: CliProfile = {
       id: 'profile-kiro-work',
       name: 'Kiro Work',
-      vendor: 'kiro',
+      harness: 'kiro',
       authMode: 'server-configured',
       createdAt: '2026-04-29T00:00:00.000Z',
       updatedAt: '2026-04-29T00:00:00.000Z',
@@ -176,7 +176,7 @@ describe('createConversation', () => {
     const profile: CliProfile = {
       id: 'profile-kiro-mismatch',
       name: 'Kiro Mismatch',
-      vendor: 'kiro',
+      harness: 'kiro',
       authMode: 'server-configured',
       createdAt: '2026-04-29T00:00:00.000Z',
       updatedAt: '2026-04-29T00:00:00.000Z',
@@ -213,7 +213,7 @@ describe('createConversation', () => {
     const profile: CliProfile = {
       id: 'profile-codex-default',
       name: 'Codex Default',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       configDir: '/tmp/codex-default',
       createdAt: '2026-04-29T00:00:00.000Z',
@@ -236,7 +236,7 @@ describe('createConversation', () => {
     const profile: CliProfile = {
       id: 'profile-codex-runtime-default',
       name: 'Codex Runtime Default',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       configDir: '/tmp/codex-runtime-default',
       createdAt: '2026-04-29T00:00:00.000Z',
@@ -278,7 +278,7 @@ describe('createConversation', () => {
     const codexProfile = {
       id: serverConfiguredCliProfileId('codex'),
       name: 'Codex (Server Configured)',
-      vendor: 'codex' as const,
+      harness: 'codex' as const,
       authMode: 'server-configured' as const,
       createdAt: now,
       updatedAt: now,
@@ -325,7 +325,7 @@ describe('createConversation', () => {
     expect((await service.getConversation(conv.id))?.serviceTier).toBeUndefined();
   });
 
-  test('migrates existing vendor-only conversations to server-configured profiles on initialize', async () => {
+  test('migrates existing backend-only conversations to server-configured profiles on initialize', async () => {
     const migrateTmp = fs.mkdtempSync(path.join(os.tmpdir(), 'chatservice-cli-profile-migrate-'));
     try {
       const ws = '/tmp/cli-profile-migrate';
@@ -382,8 +382,8 @@ describe('createConversation', () => {
       const settings = await migrating.getSettings();
       expect(settings.cliProfiles).toEqual(
         expect.arrayContaining([
-          expect.objectContaining({ id: serverConfiguredCliProfileId('codex'), vendor: 'codex' }),
-          expect.objectContaining({ id: serverConfiguredCliProfileId('kiro'), vendor: 'kiro' }),
+          expect.objectContaining({ id: serverConfiguredCliProfileId('codex'), harness: 'codex' }),
+          expect.objectContaining({ id: serverConfiguredCliProfileId('kiro'), harness: 'kiro' }),
         ]),
       );
     } finally {
@@ -523,7 +523,7 @@ describe('listConversations', () => {
     const deletedProfile: CliProfile = {
       id: 'profile-codex-deleted',
       name: 'Deleted Codex',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       createdAt: now,
       updatedAt: now,
@@ -531,7 +531,7 @@ describe('listConversations', () => {
     const fallbackProfile: CliProfile = {
       id: 'profile-claude-fallback',
       name: 'Fallback Claude',
-      vendor: 'claude-code',
+      harness: 'claude-code',
       protocol: 'standard',
       authMode: 'server-configured',
       createdAt: now,
@@ -568,7 +568,7 @@ describe('listConversations', () => {
     const deletedProfile: CliProfile = {
       id: 'profile-codex-deleted',
       name: 'Deleted Codex',
-      vendor: 'codex',
+      harness: 'codex',
       authMode: 'account',
       createdAt: now,
       updatedAt: now,
@@ -933,7 +933,7 @@ describe('updateConversationCliProfile', () => {
     const profile: CliProfile = {
       id: 'profile-kiro-switch',
       name: 'Kiro Switch',
-      vendor: 'kiro',
+      harness: 'kiro',
       authMode: 'server-configured',
       createdAt: '2026-04-29T00:00:00.000Z',
       updatedAt: '2026-04-29T00:00:00.000Z',
@@ -951,12 +951,12 @@ describe('updateConversationCliProfile', () => {
     expect(loaded!.cliProfileId).toBe(profile.id);
   });
 
-  test('clears contextUsagePercentage when profile changes vendor', async () => {
+  test('clears contextUsagePercentage when profile changes harness', async () => {
     const settings = await service.getSettings();
     const profile: CliProfile = {
       id: 'profile-kiro-usage',
       name: 'Kiro Usage',
-      vendor: 'kiro',
+      harness: 'kiro',
       authMode: 'server-configured',
       createdAt: '2026-04-29T00:00:00.000Z',
       updatedAt: '2026-04-29T00:00:00.000Z',

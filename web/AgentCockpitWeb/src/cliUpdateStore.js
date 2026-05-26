@@ -89,7 +89,7 @@ const subs = new Set();
     return () => subs.delete(fn);
   }
 
-  function cliVendorForBackend(backendId){
+  function cliHarnessForBackend(backendId){
     return backendId === 'claude-code-interactive' ? 'claude-code' : backendId;
   }
 
@@ -100,10 +100,10 @@ const subs = new Set();
       if (byProfile) return byProfile;
     }
     if (backendId) {
-      const vendor = cliVendorForBackend(backendId);
-      const serverProfileId = 'server-configured-' + vendor;
+      const harness = cliHarnessForBackend(backendId);
+      const serverProfileId = 'server-configured-' + harness;
       return items.find(item => Array.isArray(item.profileIds) && item.profileIds.includes(serverProfileId))
-        || items.find(item => item.vendor === vendor)
+        || items.find(item => item.harness === harness)
         || null;
     }
     return null;

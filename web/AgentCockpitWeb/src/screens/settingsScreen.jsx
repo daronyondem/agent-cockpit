@@ -29,31 +29,31 @@ const SETTINGS_TABS = [
   { id: 'server',  label: 'Server' },
 ];
 
-const CLI_VENDOR_OPTIONS = [
+const CLI_HARNESS_OPTIONS = [
   { id: 'codex', label: 'Codex' },
   { id: 'claude-code', label: 'Claude Code' },
   { id: 'kiro', label: 'Kiro' },
   { id: 'opencode', label: 'OpenCode' },
 ];
 
-function cliVendorForBackend(backendId){
+function cliHarnessForBackend(backendId){
   return backendId === 'claude-code-interactive' ? 'claude-code' : backendId;
 }
 
 function backendIdForProfile(profile){
   if (!profile) return null;
-  if (profile.vendor === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
-  return profile.vendor;
+  if (profile.harness === 'claude-code' && profile.protocol === 'interactive') return 'claude-code-interactive';
+  return profile.harness;
 }
 
 function protocolLabel(profile){
-  if (!profile || profile.vendor !== 'claude-code') return null;
+  if (!profile || profile.harness !== 'claude-code') return null;
   return profile.protocol === 'interactive' ? 'Interactive' : 'Standard';
 }
 
-function cliVendorLabel(vendor){
-  const opt = CLI_VENDOR_OPTIONS.find(o => o.id === vendor);
-  return opt ? opt.label : (vendor || 'CLI');
+function cliHarnessLabel(harness){
+  const opt = CLI_HARNESS_OPTIONS.find(o => o.id === harness);
+  return opt ? opt.label : (harness || 'CLI');
 }
 
 function isServerConfiguredProfile(profile){
@@ -62,7 +62,7 @@ function isServerConfiguredProfile(profile){
 
 function normalizeUiProfile(profile){
   const next = { ...profile };
-  if (next.vendor === 'claude-code') {
+  if (next.harness === 'claude-code') {
     next.protocol = next.protocol === 'interactive' ? 'interactive' : 'standard';
   } else {
     delete next.protocol;
@@ -71,13 +71,13 @@ function normalizeUiProfile(profile){
     delete next.configDir;
     delete next.env;
   }
-  if (next.vendor === 'kiro') {
+  if (next.harness === 'kiro') {
     next.authMode = 'server-configured';
     delete next.command;
     delete next.configDir;
     delete next.env;
   }
-  if (next.vendor === 'opencode') {
+  if (next.harness === 'opencode') {
     next.authMode = 'server-configured';
     delete next.configDir;
     delete next.env;
@@ -90,23 +90,23 @@ function normalizeUiProfile(profile){
   return next;
 }
 
-function cliDefaultCommand(vendor){
-  return vendor === 'codex' ? 'codex' : vendor === 'kiro' ? 'kiro-cli' : vendor === 'opencode' ? 'opencode' : 'claude';
+function cliDefaultCommand(harness){
+  return harness === 'codex' ? 'codex' : harness === 'kiro' ? 'kiro-cli' : harness === 'opencode' ? 'opencode' : 'claude';
 }
 
-function defaultCliProfileName(vendor){
-  return `${cliVendorLabel(vendor)} Profile`;
+function defaultCliProfileName(harness){
+  return `${cliHarnessLabel(harness)} Profile`;
 }
 
 function usesGeneratedCliProfileName(profile){
   const name = String(profile && profile.name || '').trim();
-  return !name || name === defaultCliProfileName(profile.vendor);
+  return !name || name === defaultCliProfileName(profile.harness);
 }
 
-function cliSelfConfiguredHome(vendor){
-  if (vendor === 'codex') return '~/.codex';
-  if (vendor === 'claude-code') return '~/.claude';
-  if (vendor === 'opencode') return '~/.local/share/opencode and ~/.config/opencode';
+function cliSelfConfiguredHome(harness){
+  if (harness === 'codex') return '~/.codex';
+  if (harness === 'claude-code') return '~/.claude';
+  if (harness === 'opencode') return '~/.local/share/opencode and ~/.config/opencode';
   return 'the server Kiro CLI account';
 }
 
@@ -228,10 +228,10 @@ function activeCliProfiles(settings){
 }
 function profileForBackend(profiles, backendId){
   if (!backendId) return null;
-  const vendor = cliVendorForBackend(backendId);
+  const harness = cliHarnessForBackend(backendId);
   return profiles.find(p => backendIdForProfile(p) === backendId)
-    || profiles.find(p => p.id === 'server-configured-' + vendor)
-    || profiles.find(p => p.vendor === vendor)
+    || profiles.find(p => p.id === 'server-configured-' + harness)
+    || profiles.find(p => p.harness === harness)
     || null;
 }
 function profileForSetting(profiles, profileId, backendId, fallbackBackend){
@@ -733,10 +733,10 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
 
   const expandedProfile = profiles.find(profile => profile.id === expandedProfileId);
   React.useEffect(() => {
-    if (expandedProfile && expandedProfile.vendor === 'opencode') {
+    if (expandedProfile && expandedProfile.harness === 'opencode') {
       loadOpenCodeCatalog(expandedProfile);
     }
-  }, [expandedProfile && expandedProfile.id, expandedProfile && expandedProfile.vendor, expandedProfile && expandedProfile.command]);
+  }, [expandedProfile && expandedProfile.id, expandedProfile && expandedProfile.harness, expandedProfile && expandedProfile.command]);
 
   function patchProfile(id, updater){
     onPatch(prev => {
@@ -763,12 +763,12 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
 
   function addProfile(){
     const now = new Date().toISOString();
-    const vendor = 'claude-code';
-    const id = `profile-${vendor}-${Date.now().toString(36)}`;
+    const harness = 'claude-code';
+    const id = `profile-${harness}-${Date.now().toString(36)}`;
     const profile = {
       id,
-      name: defaultCliProfileName(vendor),
-      vendor,
+      name: defaultCliProfileName(harness),
+      harness,
       protocol: 'standard',
       authMode: 'server-configured',
       createdAt: now,
@@ -807,20 +807,20 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
     toggleExpanded(id);
   }
 
-  function onVendorChange(profile, vendor){
+  function onHarnessChange(profile, harness){
     setEnvErrorsById(prev => ({ ...prev, [profile.id]: '' }));
-    if (vendor === 'kiro' || vendor === 'opencode') {
+    if (harness === 'kiro' || harness === 'opencode') {
       setEnvTextById(prev => ({ ...prev, [profile.id]: '' }));
     }
     patchProfile(profile.id, current => {
       const next = {
-        vendor,
-        name: usesGeneratedCliProfileName(current) ? defaultCliProfileName(vendor) : current.name,
-        protocol: vendor === 'claude-code' ? (current.protocol || 'standard') : undefined,
-        authMode: (vendor === 'kiro' || vendor === 'opencode') ? 'server-configured' : current.authMode,
-        opencode: vendor === 'opencode' ? (current.opencode || {}) : undefined,
+        harness,
+        name: usesGeneratedCliProfileName(current) ? defaultCliProfileName(harness) : current.name,
+        protocol: harness === 'claude-code' ? (current.protocol || 'standard') : undefined,
+        authMode: (harness === 'kiro' || harness === 'opencode') ? 'server-configured' : current.authMode,
+        opencode: harness === 'opencode' ? (current.opencode || {}) : undefined,
       };
-      if (vendor === 'kiro' || vendor === 'opencode') {
+      if (harness === 'kiro' || harness === 'opencode') {
         next.command = undefined;
         next.configDir = undefined;
         next.env = undefined;
@@ -873,7 +873,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
 
   function openCodeDraftProfile(profile, includeProvider = true){
     const draft = normalizeUiProfile(profile);
-    if (draft.vendor !== 'opencode') return draft;
+    if (draft.harness !== 'opencode') return draft;
     const provider = includeProvider && draft.opencode && draft.opencode.provider
       ? String(draft.opencode.provider).trim()
       : '';
@@ -884,7 +884,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
   }
 
   async function loadOpenCodeCatalog(profile){
-    if (!profile || profile.vendor !== 'opencode') return;
+    if (!profile || profile.harness !== 'opencode') return;
     const profileId = profile.id;
     setOpenCodeCatalogById(prev => ({
       ...prev,
@@ -915,7 +915,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
     setProfileAuthBusy(profile.id, true);
     setProfileAuthState(profile.id, { kind: 'check', status: 'running', message: 'Checking CLI status…' });
     try {
-      const response = profile.vendor === 'opencode'
+      const response = profile.harness === 'opencode'
         ? await AgentApi.settings.testOpenCodeDraftProfile(openCodeDraftProfile(profile))
         : await (async () => {
             await onSave(null);
@@ -1025,8 +1025,8 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
         {profiles.length === 0 ? (
           <div className="settings-empty u-dim">No CLI profiles are configured yet.</div>
         ) : profiles.map(profile => {
-          const isKiro = profile.vendor === 'kiro';
-          const isOpenCode = profile.vendor === 'opencode';
+          const isKiro = profile.harness === 'kiro';
+          const isOpenCode = profile.harness === 'opencode';
           const isServerProfile = isServerConfiguredProfile(profile);
           const isAccount = !isKiro && !isOpenCode && profile.authMode === 'account';
           const expanded = expandedProfileId === profile.id;
@@ -1040,9 +1040,9 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
           const opencodeProvider = (profile.opencode && profile.opencode.provider) || '';
           const opencodeProviderId = isOpenCode ? String(opencodeProvider).trim().toLowerCase() : '';
           const providerIconClass = opencodeProviderId === 'deepseek' || opencodeProviderId === 'opencode'
-            ? `cli-vendor-icon cli-provider-icon cli-provider-${opencodeProviderId}`
+            ? `cli-harness-icon cli-provider-icon cli-provider-${opencodeProviderId}`
             : null;
-          const vendorIcon = providerIconClass ? null : backendIconFor(backends, backendIdForProfile(profile));
+          const harnessIcon = providerIconClass ? null : backendIconFor(backends, backendIdForProfile(profile));
           const opencodeCatalog = isOpenCode ? (opencodeCatalogById[profile.id] || {}) : {};
           const opencodeCatalogModels = opencodeCatalog.backend && Array.isArray(opencodeCatalog.backend.models)
             ? opencodeCatalog.backend.models
@@ -1064,11 +1064,11 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
                 <div className="cli-card-head-main">
                   <div className="cli-card-name">
                     <span className="chev" data-open={expanded ? 'true' : 'false'}>{Ico.chev(12)}</span>
-                    {providerIconClass ? <span className={providerIconClass} aria-hidden="true"/> : vendorIcon ? <span className="cli-vendor-icon" aria-hidden="true" dangerouslySetInnerHTML={{__html: vendorIcon}}/> : null}
+                    {providerIconClass ? <span className={providerIconClass} aria-hidden="true"/> : harnessIcon ? <span className="cli-harness-icon" aria-hidden="true" dangerouslySetInnerHTML={{__html: harnessIcon}}/> : null}
                     <b>{profile.name || profile.id}</b>
                   </div>
                   <div className="cli-card-meta u-mono">
-                    <span>{cliVendorLabel(profile.vendor)}</span>
+                    <span>{cliHarnessLabel(profile.harness)}</span>
                     {protocol ? (
                       <>
                         <span className="sep">·</span>
@@ -1122,19 +1122,19 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
                         onChange={(e) => patchProfile(profile.id, { name: e.target.value })}
                       />
                     </Field>
-                    <Field label="Vendor">
+                    <Field label="Harness">
                       <div className="settings-select-wrap">
                         <select
-                          value={profile.vendor}
+                          value={profile.harness}
                           disabled={isServerProfile}
-                          onChange={(e) => onVendorChange(profile, e.target.value)}
+                          onChange={(e) => onHarnessChange(profile, e.target.value)}
                         >
-                          {CLI_VENDOR_OPTIONS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
+                          {CLI_HARNESS_OPTIONS.map(v => <option key={v.id} value={v.id}>{v.label}</option>)}
                         </select>
                         {Ico.chevD(12)}
                       </div>
                     </Field>
-                    {profile.vendor === 'claude-code' ? (
+                    {profile.harness === 'claude-code' ? (
                       <Field label="Protocol" hint="Choose how Agent Cockpit talks to the Claude Code CLI.">
                         <div className="settings-select-wrap">
                           <select
@@ -1188,11 +1188,11 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
                       </div>
                     </Field>
                     {!isKiro ? (
-                      <Field label="Command" hint="Optional executable override. Leave blank for the vendor default.">
+                      <Field label="Command" hint="Optional executable override. Leave blank for the harness default.">
                         <input
                           className="inp u-mono"
                           value={profile.command || ''}
-                          placeholder={cliDefaultCommand(profile.vendor)}
+                          placeholder={cliDefaultCommand(profile.harness)}
                           onChange={(e) => patchProfile(profile.id, { command: e.target.value || undefined })}
                         />
                       </Field>
@@ -1201,11 +1201,11 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
 
                   {isAccount ? (
                     <>
-                      <Field label="Config directory" hint={profile.vendor === 'codex' ? 'Maps to CODEX_HOME at runtime.' : 'Maps to CLAUDE_CONFIG_DIR at runtime.'}>
+                      <Field label="Config directory" hint={profile.harness === 'codex' ? 'Maps to CODEX_HOME at runtime.' : 'Maps to CLAUDE_CONFIG_DIR at runtime.'}>
                         <input
                           className="inp u-mono"
                           value={profile.configDir || ''}
-                          placeholder={profile.vendor === 'codex' ? '/Users/server/.codex-account' : '/Users/server/.claude-account'}
+                          placeholder={profile.harness === 'codex' ? '/Users/server/.codex-account' : '/Users/server/.claude-account'}
                           onChange={(e) => patchProfile(profile.id, { configDir: e.target.value || undefined })}
                         />
                       </Field>
@@ -1223,7 +1223,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
                         <div className="cli-auth-head">
                           <div>
                             <b>Account authentication</b>
-                            <span className="u-dim">Runs the vendor login flow on the server with this profile's config directory.</span>
+                            <span className="u-dim">Runs the harness login flow on the server with this profile's config directory.</span>
                           </div>
                           <span className={`cli-auth-status ${authRunning ? 'running' : ''}`}>{authStateLabel(authState)}</span>
                         </div>
@@ -1263,7 +1263,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
                           ) : isOpenCode ? (
                             <>Configure OpenCode on the server with <code>opencode auth login</code>. This profile selects the OpenCode provider.</>
                           ) : (
-                            <>Self-configured profiles inherit the host's existing <code>{cliSelfConfiguredHome(profile.vendor)}</code> directory and shell environment. No directory or env overrides needed.</>
+                            <>Self-configured profiles inherit the host's existing <code>{cliSelfConfiguredHome(profile.harness)}</code> directory and shell environment. No directory or env overrides needed.</>
                           )}
                         </div>
                         {isOpenCode ? (
@@ -1290,7 +1290,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
         <button type="button" className="cli-add" onClick={addProfile}>
           {Ico.plus(14)}
           <span>Add CLI profile</span>
-          <span className="u-mono u-dim cli-add-hint">name · vendor · protocol · setup mode</span>
+          <span className="u-mono u-dim cli-add-hint">name · harness · protocol · setup mode</span>
         </button>
       </div>
 
