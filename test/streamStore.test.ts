@@ -577,6 +577,49 @@ test('reset() replaces stale composer profile selections with the reset conversa
   });
 });
 
+test('reset() posts an explicit replacement profile when provided', async () => {
+  const Store = (window as any).StreamStore;
+  const api = (global as any).AgentApi;
+  api.fetch.mockResolvedValueOnce(makeResponse({
+    id: 'c1',
+    cliProfileId: 'missing-profile',
+    backend: 'claude-code',
+    model: 'claude-sonnet-4-5',
+    effort: 'high',
+    serviceTier: null,
+    messages: [],
+    messageQueue: [],
+    sessionUsage: null,
+  }));
+  await Store.load('c1');
+  api.fetch.mockReset();
+  api.fetch
+    .mockResolvedValueOnce(makeResponse({ ok: true }))
+    .mockResolvedValueOnce(makeResponse({
+      id: 'c1',
+      cliProfileId: 'profile-claude-replacement',
+      backend: 'claude-code',
+      model: 'claude-sonnet-4-5',
+      effort: 'high',
+      serviceTier: null,
+      messages: [],
+      messageQueue: [],
+      sessionUsage: null,
+    }));
+
+  const ok = await Store.reset('c1', {
+    cliProfileId: 'profile-claude-replacement',
+    backend: 'claude-code',
+  });
+
+  expect(ok).toBe(true);
+  expect(api.fetch.mock.calls[0][0]).toBe('conversations/c1/reset');
+  expect(api.fetch.mock.calls[0][1].body).toEqual({
+    cliProfileId: 'profile-claude-replacement',
+    backend: 'claude-code',
+  });
+});
+
 test('replay_start wipes placeholder contentBlocks so replayed frames rebuild cleanly', async () => {
   const ws = await openWs('c1');
   const Store = (window as any).StreamStore;

@@ -489,6 +489,195 @@ describe('POST /conversations/:id/reset', () => {
     expect(res.body.newSessionNumber).toBe(2);
   });
 
+  test('keeps reset ambiguous without an explicit replacement when multiple profiles remain', async () => {
+    const now = '2026-05-22T00:00:00.000Z';
+    const deletedProfile: CliProfile = {
+      id: 'profile-codex-deleted',
+      name: 'Deleted Codex',
+      harness: 'codex',
+      authMode: 'account',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const claudeReplacement: CliProfile = {
+      id: 'profile-claude-replacement',
+      name: 'Claude Replacement',
+      harness: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const codexReplacement: CliProfile = {
+      id: 'profile-codex-replacement',
+      name: 'Codex Replacement',
+      harness: 'codex',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: deletedProfile.id,
+      cliProfiles: [deletedProfile, claudeReplacement, codexReplacement],
+    });
+    const conv = await env.chatService.createConversation('Ambiguous Reset', undefined, undefined, undefined, undefined, deletedProfile.id);
+    const saved = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...saved,
+      defaultCliProfileId: codexReplacement.id,
+      defaultBackend: 'codex',
+      cliProfiles: [claudeReplacement, codexReplacement],
+    });
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/reset`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Multiple CLI profiles are configured');
+  });
+
+  test('uses an explicit replacement profile when resetting a deleted-profile conversation with multiple profiles', async () => {
+    const now = '2026-05-22T00:00:00.000Z';
+    const deletedProfile: CliProfile = {
+      id: 'profile-codex-deleted',
+      name: 'Deleted Codex',
+      harness: 'codex',
+      authMode: 'account',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const claudeReplacement: CliProfile = {
+      id: 'profile-claude-replacement',
+      name: 'Claude Replacement',
+      harness: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const codexReplacement: CliProfile = {
+      id: 'profile-codex-replacement',
+      name: 'Codex Replacement',
+      harness: 'codex',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: deletedProfile.id,
+      cliProfiles: [deletedProfile, claudeReplacement, codexReplacement],
+    });
+    const conv = await env.chatService.createConversation('Explicit Profile Reset', undefined, undefined, undefined, undefined, deletedProfile.id);
+    const saved = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...saved,
+      defaultCliProfileId: codexReplacement.id,
+      defaultBackend: 'codex',
+      cliProfiles: [claudeReplacement, codexReplacement],
+    });
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {
+      cliProfileId: claudeReplacement.id,
+      backend: 'claude-code',
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.conversation.backend).toBe('claude-code');
+    expect(res.body.conversation.cliProfileId).toBe(claudeReplacement.id);
+    expect(res.body.newSessionNumber).toBe(2);
+  });
+
+  test('rejects an explicit reset replacement when the requested backend does not match the profile', async () => {
+    const now = '2026-05-22T00:00:00.000Z';
+    const deletedProfile: CliProfile = {
+      id: 'profile-codex-deleted',
+      name: 'Deleted Codex',
+      harness: 'codex',
+      authMode: 'account',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const claudeReplacement: CliProfile = {
+      id: 'profile-claude-replacement',
+      name: 'Claude Replacement',
+      harness: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const codexReplacement: CliProfile = {
+      id: 'profile-codex-replacement',
+      name: 'Codex Replacement',
+      harness: 'codex',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: deletedProfile.id,
+      cliProfiles: [deletedProfile, claudeReplacement, codexReplacement],
+    });
+    const conv = await env.chatService.createConversation('Mismatch Profile Reset', undefined, undefined, undefined, undefined, deletedProfile.id);
+    const saved = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...saved,
+      defaultCliProfileId: codexReplacement.id,
+      defaultBackend: 'codex',
+      cliProfiles: [claudeReplacement, codexReplacement],
+    });
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {
+      cliProfileId: claudeReplacement.id,
+      backend: 'codex',
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('CLI profile backend claude-code does not match requested backend codex');
+  });
+
+  test('rejects a reset replacement profile when the stored profile is still valid', async () => {
+    const now = '2026-05-22T00:00:00.000Z';
+    const currentProfile: CliProfile = {
+      id: 'profile-claude-current',
+      name: 'Current Claude',
+      harness: 'claude-code',
+      protocol: 'standard',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const replacementProfile: CliProfile = {
+      id: 'profile-codex-replacement',
+      name: 'Codex Replacement',
+      harness: 'codex',
+      authMode: 'server-configured',
+      createdAt: now,
+      updatedAt: now,
+    };
+    const settings = await env.chatService.getSettings();
+    await env.chatService.saveSettings({
+      ...settings,
+      defaultCliProfileId: currentProfile.id,
+      defaultBackend: 'claude-code',
+      cliProfiles: [currentProfile, replacementProfile],
+    });
+    const conv = await env.chatService.createConversation('Valid Profile Reset', undefined, undefined, undefined, undefined, currentProfile.id);
+
+    const res = await env.request('POST', `/api/chat/conversations/${conv.id}/reset`, {
+      cliProfileId: replacementProfile.id,
+      backend: 'codex',
+    });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('Cannot switch CLI profile while resetting a session with a valid profile');
+  });
+
   test('clears messages from the active session', async () => {
     const conv = await env.chatService.createConversation('Reset Clear');
     await env.chatService.addMessage(conv.id, 'user', 'Session 1 message', 'claude-code');
