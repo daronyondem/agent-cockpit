@@ -442,6 +442,21 @@ describe('frontend routes', () => {
     expect(appSrc).not.toContain("socket.onerror = () => setErrorMessage('Stream connection failed.')");
   });
 
+  test('mobile PWA recovers normal sends that race an active stream', () => {
+    const appSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/App.tsx'), 'utf8');
+    const mobileChatScreenSrc = readMobileChatScreen();
+
+    expect(appSrc).toContain('const sendInFlightRef = useRef(false)');
+    expect(appSrc).toContain('sendInFlightRef.current = true;');
+    expect(appSrc).toContain('sendInFlightRef.current = false;');
+    expect(appSrc).toContain('function isAlreadyStreamingError');
+    expect(appSrc).toMatch(/if \(isAlreadyStreamingError\(error\)\) \{\s*await recoverActiveStream\(conversation\.id\);\s*return \{ ok: false, reason: 'active-stream-recovered', error \};\s*\}/);
+    expect(appSrc).toContain('if (await recoverActiveStream(conversation.id, { onlyIfServerActive: true }))');
+    expect(appSrc).toContain('sendMessageNow(nextMessage, { clearComposer: false, restoreDraftOnFailure: false })');
+    expect(mobileChatScreenSrc).toContain('isSending: boolean;');
+    expect(mobileChatScreenSrc).toContain('props.isSending');
+  });
+
   test('desktop and mobile chat transcripts pause auto-follow when users scroll away', () => {
     const chatLiveSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/chatLive.jsx'), 'utf8');
     const webCssSrc = readDesktopCss();
