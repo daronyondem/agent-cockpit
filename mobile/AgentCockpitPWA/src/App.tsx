@@ -74,6 +74,15 @@ const STREAM_RECONNECT_MAX_MS = 15_000;
 
 type Screen = 'list' | 'chat';
 type SessionViewerState = { session: SessionHistoryItem; messages: Message[] };
+type SendMessageResult =
+  | { ok: true }
+  | { ok: false; reason: 'busy' | 'failed' | 'active-stream-recovered'; error?: unknown };
+
+function isAlreadyStreamingError(error: unknown): error is AgentAPIError {
+  return error instanceof AgentAPIError
+    && error.status === 409
+    && /conversation is already streaming/i.test(error.message);
+}
 
 export default function App() {
   useViewportHeightVar();
@@ -85,6 +94,7 @@ export default function App() {
   const streamReconnectAttemptsRef = useRef(0);
   const activeConversationRef = useRef<Conversation | null>(null);
   const isStreamingRef = useRef(false);
+  const sendInFlightRef = useRef(false);
   const goalUpdatedAtByConversationRef = useRef<Map<string, number>>(new Map());
   const goalStateRef = useRef<{ conversationID: string | null; goal: ThreadGoal | null; updatedAtMs: number | null }>({
     conversationID: null,
@@ -115,6 +125,7 @@ export default function App() {
   const [streamText, setStreamText] = useState('');
   const [showStreamPlaceholder, setShowStreamPlaceholder] = useState(false);
   const [isStreaming, setIsStreaming] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const [pendingInteraction, setPendingInteraction] = useState<PendingInteraction | null>(null);
   const [interactionAnswer, setInteractionAnswer] = useState('');
   const [pendingAttachments, setPendingAttachments] = useState<PendingAttachment[]>([]);
@@ -490,6 +501,9 @@ export default function App() {
   }
 
   async function sendDraft() {
+    if (sendInFlightRef.current) {
+      return;
+    }
     const content = draft.trim();
     const attachments = completedAttachmentMetas(pendingAttachments);
     if (pendingInteraction) {
@@ -569,13 +583,23 @@ export default function App() {
     return true;
   }
 
-  async function sendMessageNow(message: QueuedMessage) {
+  async function sendMessageNow(
+    message: QueuedMessage,
+    options: { clearComposer?: boolean; restoreDraftOnFailure?: boolean } = {},
+  ): Promise<SendMessageResult> {
     const conversation = activeConversation;
     if (!conversation) {
-      return;
+      return { ok: false, reason: 'busy' };
     }
+    if (sendInFlightRef.current) {
+      return { ok: false, reason: 'busy' };
+    }
+    sendInFlightRef.current = true;
+    setIsSending(true);
     const content = wireContent(message);
     const attachmentsSnapshot = pendingAttachments;
+    const clearComposer = options.clearComposer !== false;
+    const restoreDraftOnFailure = options.restoreDraftOnFailure !== false;
     const runtimeSelection = {
       backend: selectedBackendID || selectedBackend || conversation.backend || '',
       cliProfileId: selectedCliProfileId,
@@ -593,8 +617,11 @@ export default function App() {
       timestamp: new Date().toISOString(),
     };
     try {
-      setDraft('');
-      setPendingAttachments([]);
+      if (clearComposer) {
+        setDraft('');
+        setPendingAttachments([]);
+      }
+      setErrorMessage(null);
       setPendingInteraction(null);
       setStreamText('');
       setShowStreamPlaceholder(true);
@@ -632,9 +659,12 @@ export default function App() {
       } else {
         markStreamFinished(conversation.id);
       }
+      return { ok: true };
     } catch (error) {
-      setDraft(message.content);
-      setPendingAttachments(attachmentsSnapshot);
+      if (restoreDraftOnFailure) {
+        setDraft(message.content);
+        setPendingAttachments(attachmentsSnapshot);
+      }
       setActiveConversation((current) => {
         if (!current || current.id !== conversation.id) return current;
         const next = {
@@ -649,8 +679,19 @@ export default function App() {
         activeConversationRef.current = next;
         return next;
       });
+      if (isAlreadyStreamingError(error)) {
+        await recoverActiveStream(conversation.id);
+        return { ok: false, reason: 'active-stream-recovered', error };
+      }
+      if (await recoverActiveStream(conversation.id, { onlyIfServerActive: true })) {
+        return { ok: false, reason: 'active-stream-recovered', error };
+      }
       markStreamFinished(conversation.id);
       handleError(error);
+      return { ok: false, reason: 'failed', error };
+    } finally {
+      sendInFlightRef.current = false;
+      setIsSending(false);
     }
   }
 
@@ -820,6 +861,15 @@ export default function App() {
     }
   }
 
+  function setActiveConversationQueue(conversationID: string, queue: QueuedMessage[]) {
+    setActiveConversation((current) => {
+      if (!current || current.id !== conversationID) return current;
+      const next = { ...current, messageQueue: queue };
+      activeConversationRef.current = next;
+      return next;
+    });
+  }
+
   function closeStreamSocket() {
     const socket = socketRef.current;
     socketRef.current = null;
@@ -912,6 +962,29 @@ export default function App() {
       await refreshAfterStream(conversationID);
     } catch {
       scheduleStreamReconnect(conversationID);
+    }
+  }
+
+  async function recoverActiveStream(conversationID: string, options: { onlyIfServerActive?: boolean } = {}): Promise<boolean> {
+    try {
+      const streamIDs = await clientRef.current.getActiveStreams();
+      setActiveStreamIDs(streamIDs);
+      if (streamIDs.has(conversationID)) {
+        setErrorMessage(null);
+        startStream(conversationID);
+        return true;
+      }
+      if (!options.onlyIfServerActive) {
+        await refreshAfterStream(conversationID);
+      }
+      return false;
+    } catch {
+      if (options.onlyIfServerActive) {
+        return false;
+      }
+      setErrorMessage(null);
+      startStream(conversationID);
+      return true;
     }
   }
 
@@ -1128,17 +1201,21 @@ export default function App() {
 
   async function drainNextQueuedMessage(conversation: Conversation) {
     const queue = conversation.messageQueue || [];
-    if (isStreaming || pendingInteraction || !queue.length) {
+    if (isStreaming || pendingInteraction || sendInFlightRef.current || !queue.length) {
       return;
     }
     const [nextMessage, ...remaining] = queue;
     try {
       const savedQueue = await clientRef.current.saveQueue(conversation.id, remaining);
-      setActiveConversation({ ...conversation, messageQueue: savedQueue });
-      await sendMessageNow(nextMessage);
+      setActiveConversationQueue(conversation.id, savedQueue);
+      const result = await sendMessageNow(nextMessage, { clearComposer: false, restoreDraftOnFailure: false });
+      if (!result.ok) {
+        await clientRef.current.saveQueue(conversation.id, queue).catch(() => undefined);
+        setActiveConversationQueue(conversation.id, queue);
+      }
     } catch (error) {
       await clientRef.current.saveQueue(conversation.id, queue).catch(() => undefined);
-      setActiveConversation({ ...conversation, messageQueue: queue });
+      setActiveConversationQueue(conversation.id, queue);
       handleError(error);
     }
   }
@@ -1844,6 +1921,7 @@ export default function App() {
           streamText={streamText}
           showStreamPlaceholder={showStreamPlaceholder}
           isStreaming={isStreaming}
+          isSending={isSending}
           loading={loading}
           errorMessage={errorMessage}
           goal={goal}

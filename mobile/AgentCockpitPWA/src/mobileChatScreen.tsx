@@ -57,6 +57,7 @@ export function ChatScreen(props: {
   streamText: string;
   showStreamPlaceholder: boolean;
   isStreaming: boolean;
+  isSending: boolean;
   loading: boolean;
   errorMessage: string | null;
   goal: ThreadGoal | null;
@@ -196,6 +197,7 @@ export function ChatScreen(props: {
   const sendDisabled =
     (!props.draft.trim() && !completedAttachmentMetas(props.pendingAttachments).length) ||
     props.hasUploadingAttachments ||
+    props.isSending ||
     !!props.pendingInteraction ||
     (props.goalMode && props.isStreaming);
   const composerPlaceholder = props.goalMode
