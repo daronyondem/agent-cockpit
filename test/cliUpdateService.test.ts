@@ -182,10 +182,10 @@ describe('CliUpdateService', () => {
 
     const service = new CliUpdateService(tmpDir);
     mockExecFile((cmd, args) => {
-      if (cmd === 'claude' && args.join(' ') === '--version') return 'Claude Code 2.1.150';
+      if (cmd === 'claude' && args.join(' ') === '--version') return 'Claude Code 2.1.152';
       if (cmd === 'which' && args[0] === 'claude') return claudeBin;
       if (cmd === 'npm' && args.join(' ') === 'root -g') return npmRoot;
-      if (cmd === 'npm' && args.join(' ') === 'view @anthropic-ai/claude-code version') return '2.1.151';
+      if (cmd === 'npm' && args.join(' ') === 'view @anthropic-ai/claude-code version') return '2.1.153';
       return new Error(`unexpected command: ${cmd} ${args.join(' ')}`);
     });
 
@@ -193,11 +193,11 @@ describe('CliUpdateService', () => {
     expect(status.items).toHaveLength(1);
     expect(status.items[0]).toMatchObject({
       harness: 'claude-code',
-      currentVersion: '2.1.150',
-      latestVersion: '2.1.151',
+      currentVersion: '2.1.152',
+      latestVersion: '2.1.153',
       interactiveCompatibility: [expect.objectContaining({
         providerId: 'claude-code-interactive',
-        testedVersion: '2.1.150',
+        testedVersion: '2.1.152',
         status: 'supported',
       })],
       blocksAutoUpdate: false,
