@@ -3,7 +3,7 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
 import { AgentApi } from '../api.js';
-import { resolveConversationArtifactHref, resolveLocalFileHref } from '../fileLinks';
+import { resolveConversationArtifactHref, resolveLocalFileHref, resolveWorkspaceContextHref } from '../fileLinks';
 import { Ico } from '../icons.jsx';
 import hljs from '../syntaxHighlight.js';
 import { extractFileDeliveries, extractUploadedFiles } from './messageParsing';
@@ -172,6 +172,19 @@ function buildConversationArtifactDescriptor(ref, convId){
   };
 }
 
+function buildWorkspaceContextFileDescriptor(ref, convId){
+  if (!ref || !ref.filename || !convId) return null;
+  const basePath = 'conversations/' + encodeURIComponent(convId) + '/workspace-context-file?path=' + encodeURIComponent(ref.filePath);
+  return {
+    filename: ref.filename,
+    viewPath: basePath + '&mode=view',
+    imageUrl: null,
+    displayPath: ref.filePath,
+    line: ref.line || null,
+    column: ref.column || null,
+  };
+}
+
 export function GeneratedArtifact({ artifact }){
   const { convId, openFileViewer, openLightbox } = React.useContext(FileViewerContext);
   if (!artifact) return null;
@@ -300,6 +313,13 @@ export const TextSegment = React.memo(function TextSegment({ content }){
         if (descriptor && openFileViewer) {
           e.preventDefault();
           openFileViewer(descriptor);
+          return;
+        }
+        const workspaceContextRef = resolveWorkspaceContextHref(href);
+        const workspaceContextDescriptor = buildWorkspaceContextFileDescriptor(workspaceContextRef, convId);
+        if (workspaceContextDescriptor && openFileViewer) {
+          e.preventDefault();
+          openFileViewer(workspaceContextDescriptor);
         }
         return;
       }
@@ -319,9 +339,16 @@ export const TextSegment = React.memo(function TextSegment({ content }){
       }
       const ref = (executionDir ? resolveLocalFileHref(href, executionDir) : null)
         || (workingDir ? resolveLocalFileHref(href, workingDir) : null);
-      if (!ref) return;
+      const workspaceContextRef = ref ? null : resolveWorkspaceContextHref(href);
+      if (!ref && !workspaceContextRef) return;
       link.classList.add('local-file-link');
-      link.title = ref.line ? `Preview ${ref.filePath}:${ref.line}` : `Preview ${ref.filePath}`;
+      if (ref) {
+        link.title = ref.line ? `Preview ${ref.filePath}:${ref.line}` : `Preview ${ref.filePath}`;
+      } else {
+        link.title = workspaceContextRef.line
+          ? `Preview ${workspaceContextRef.relativePath}:${workspaceContextRef.line}`
+          : `Preview ${workspaceContextRef.relativePath}`;
+      }
     });
     root.addEventListener('click', onClick);
     return () => root.removeEventListener('click', onClick);

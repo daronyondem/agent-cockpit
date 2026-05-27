@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type MouseEvent } from 'react';
 import DOMPurify from 'dompurify';
 import { marked } from 'marked';
 import type { AgentCockpitAPI } from './api';
@@ -16,6 +16,7 @@ import {
   isClaudeBackend,
   lastTwoPathComponents,
   makeConversationArtifactReference,
+  makeConversationWorkspaceContextFileReference,
   opencodeProviderLabel,
   parseMessageFiles,
   profileForID,
@@ -652,11 +653,17 @@ export function MessageTextWithFiles(props: {
   const parsed = parseMessageFiles(props.content);
   const references = fileReferencesFromParsed(props.client, props.conversation, props.message.role, parsed);
   const renderAsMarkdown = props.message.role === 'assistant';
+  const openMarkdownLink = (href: string): boolean => {
+    const reference = makeConversationWorkspaceContextFileReference(props.client, props.conversation, href);
+    if (!reference) return false;
+    props.onOpenFile(reference);
+    return true;
+  };
   return (
     <div className="message-content">
       {parsed.text ? (
         renderAsMarkdown || props.thinking
-          ? <MarkdownContent content={parsed.text} className={props.thinking ? 'thinking' : undefined} />
+          ? <MarkdownContent content={parsed.text} className={props.thinking ? 'thinking' : undefined} onOpenLink={openMarkdownLink} />
           : <p className="plain-text">{parsed.text}</p>
       ) : null}
       {references.map((reference) => (
@@ -666,11 +673,21 @@ export function MessageTextWithFiles(props: {
   );
 }
 
-function MarkdownContent(props: { content: string; className?: string }) {
+function MarkdownContent(props: { content: string; className?: string; onOpenLink?: (href: string) => boolean }) {
   const html = useMemo(() => renderMarkdown(props.content), [props.content]);
+  const onClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!props.onOpenLink) return;
+    const target = event.target as HTMLElement | null;
+    const link = target?.closest?.('a[href]') as HTMLAnchorElement | null;
+    if (!link) return;
+    if (props.onOpenLink(link.getAttribute('href') || '')) {
+      event.preventDefault();
+    }
+  };
   return (
     <div
       className={['markdown-body', props.className].filter(Boolean).join(' ')}
+      onClick={onClick}
       dangerouslySetInnerHTML={{ __html: html }}
     />
   );

@@ -212,7 +212,25 @@ describe('frontend routes', () => {
     expect(workspaceSettingsSrc).toContain('Archived');
     expect(workspaceSettingsSrc).toContain('StreamStore.refreshLoadedConversations');
     expect(mobileApiSrc).toContain('conversationWorkspaceFileURL');
+    expect(mobileApiSrc).toContain('conversationWorkspaceContextFileURL');
     expect(mobileModelSrc).toContain('makeConversationWorkspaceFileReference');
+    expect(mobileModelSrc).toContain('makeConversationWorkspaceContextFileReference');
+  });
+
+  test('desktop chat previews Workspace Context markdown links as markdown', () => {
+    const messageContentSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/messageContent.jsx'), 'utf8');
+    const fileViewerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/fileViewerPanel.jsx'), 'utf8');
+    const mobileChatScreenSrc = readMobileChatScreen();
+    const mobileFileModalsSrc = fs.readFileSync(path.join(ROOT, 'mobile/AgentCockpitPWA/src/mobileFileModals.tsx'), 'utf8');
+
+    expect(messageContentSrc).toContain('resolveWorkspaceContextHref');
+    expect(messageContentSrc).toContain("'/workspace-context-file?path='");
+    expect(fileViewerSrc).toContain('function FileViewerMarkdown');
+    expect(fileViewerSrc).toContain('isMarkdownPreview(state.language, filename)');
+    expect(fileViewerSrc).toContain('dangerouslySetInnerHTML={{ __html: html }}');
+    expect(mobileChatScreenSrc).toContain('makeConversationWorkspaceContextFileReference');
+    expect(mobileFileModalsSrc).toContain('function MarkdownPreview');
+    expect(mobileFileModalsSrc).toContain("language === 'markdown'");
   });
 
   test('mobile PWA keeps iOS viewport and modal sheet content reachable', () => {

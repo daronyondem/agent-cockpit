@@ -1,4 +1,6 @@
-import type { RefObject } from 'react';
+import { useMemo, type RefObject } from 'react';
+import DOMPurify from 'dompurify';
+import { marked } from 'marked';
 import { formatBytes, type ExplorerUpload, type FilePreviewState } from './appModel';
 import { EditIcon, FilePlusIcon, FolderPlusIcon, ParentIcon, ResetIcon, TrashIcon, UploadIcon } from './mobileIcons';
 import { Button, ErrorBanner, Modal, ProgressBar } from './mobilePrimitives';
@@ -128,11 +130,31 @@ export function FilePreviewModal(props: {
       {props.loading ? <div className="mini-spinner" /> : null}
       {props.preview.error ? <ErrorBanner message={props.preview.error} /> : null}
       {props.preview.imageURL ? <img className="preview-image" src={props.preview.imageURL} alt={props.preview.title} /> : null}
-      {props.preview.content ? (
+      {props.preview.content && isMarkdownPreview(props.preview) ? (
+        <MarkdownPreview content={props.preview.truncated ? `Preview truncated.\n\n${props.preview.content}` : props.preview.content} />
+      ) : props.preview.content ? (
         <pre className="code-preview">{props.preview.truncated ? 'Preview truncated.\n\n' : ''}{props.preview.content}</pre>
       ) : null}
     </Modal>
   );
+}
+
+function MarkdownPreview(props: { content: string }) {
+  const html = useMemo(() => {
+    const raw = marked.parse(props.content || '', { breaks: true, gfm: true, async: false }) as string;
+    return DOMPurify.sanitize(raw);
+  }, [props.content]);
+  return <div className="markdown-body file-preview-markdown" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function isMarkdownPreview(preview: FilePreviewState): boolean {
+  const language = String(preview.language || '').toLowerCase();
+  const mimeType = String(preview.mimeType || '').toLowerCase();
+  return language === 'md'
+    || language === 'markdown'
+    || mimeType === 'text/markdown'
+    || /\.md$/i.test(preview.title || '')
+    || /\.md$/i.test(preview.path || '');
 }
 
 export function QueueEditorModal(props: {

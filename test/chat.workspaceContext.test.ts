@@ -53,6 +53,52 @@ describe('Workspace Context routes', () => {
     expect(convWithStatus.body.workspaceContext.contextDir).toContain('workspace-context');
   });
 
+  test('serves conversation-scoped Workspace Context markdown previews only for that workspace', async () => {
+    const workspacePath = path.join(env.tmpDir, 'workspace-context-chat-link');
+    await fsp.mkdir(workspacePath, { recursive: true });
+    const conv = await env.chatService.createConversation('Workspace Context Chat Link', workspacePath);
+    const hash = workspaceHash(workspacePath);
+    await env.chatService.setWorkspaceContextEnabled(hash, true);
+    await env.workspaceContextService.ensureWorkspace(hash);
+
+    const contextDir = env.workspaceContextService.getContextFilesDir(hash);
+    const contextFile = path.join(contextDir, 'projects.md');
+    await fsp.writeFile(contextFile, '# Projects\n\n- Render this as markdown.\n', 'utf8');
+
+    const preview = await env.request(
+      'GET',
+      `/api/chat/conversations/${conv.id}/workspace-context-file?path=${encodeURIComponent(contextFile)}&mode=view`,
+    );
+    expect(preview.status).toBe(200);
+    expect(preview.body).toMatchObject({
+      content: '# Projects\n\n- Render this as markdown.\n',
+      filename: 'projects.md',
+      language: 'markdown',
+    });
+    expect(preview.body.path).toContain('workspace-context');
+
+    const otherWorkspacePath = path.join(env.tmpDir, 'workspace-context-other-chat-link');
+    await fsp.mkdir(otherWorkspacePath, { recursive: true });
+    await env.chatService.createConversation('Other Workspace Context', otherWorkspacePath);
+    const otherHash = workspaceHash(otherWorkspacePath);
+    await env.chatService.setWorkspaceContextEnabled(otherHash, true);
+    await env.workspaceContextService.ensureWorkspace(otherHash);
+    const otherFile = path.join(env.workspaceContextService.getContextFilesDir(otherHash), 'projects.md');
+    await fsp.writeFile(otherFile, '# Other workspace\n', 'utf8');
+
+    const rejected = await env.request(
+      'GET',
+      `/api/chat/conversations/${conv.id}/workspace-context-file?path=${encodeURIComponent(otherFile)}&mode=view`,
+    );
+    expect(rejected.status).toBe(403);
+
+    const traversal = await env.request(
+      'GET',
+      `/api/chat/conversations/${conv.id}/workspace-context-file?path=${encodeURIComponent(`${contextDir}/../secret.md`)}&mode=view`,
+    );
+    expect(traversal.status).toBe(400);
+  });
+
   test('starts and stops manual scans through route controls', async () => {
     const workspacePath = path.join(env.tmpDir, 'workspace-context-stop');
     await fsp.mkdir(workspacePath, { recursive: true });

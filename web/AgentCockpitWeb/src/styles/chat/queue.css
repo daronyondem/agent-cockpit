@@ -219,6 +219,12 @@
   font-size: 12.5px;
   white-space: pre-wrap; word-break: break-word;
 }
+.file-viewer-markdown{
+  max-width: 100%;
+}
+.file-viewer-markdown pre{
+  overflow: auto;
+}
 .file-viewer-lines{
   white-space: pre;
   word-break: normal;

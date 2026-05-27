@@ -8,6 +8,12 @@ export interface ResolvedConversationArtifactHref extends ResolvedLocalFileHref 
   filename: string;
 }
 
+export interface ResolvedWorkspaceContextHref extends ResolvedLocalFileHref {
+  filename: string;
+  relativePath: string;
+  workspaceKey: string;
+}
+
 interface SplitLineSuffix {
   filePath: string;
   line: number | null;
@@ -114,6 +120,37 @@ export function resolveConversationArtifactHref(rawHref: unknown, convId: string
   };
 }
 
+export function resolveWorkspaceContextHref(rawHref: unknown): ResolvedWorkspaceContextHref | null {
+  const hrefPath = pathFromHref(rawHref);
+  if (!hrefPath || hasParentTraversal(hrefPath)) return null;
+  const parsed = splitLineSuffix(hrefPath);
+  if (!parsed.filePath || !parsed.filePath.startsWith('/')) return null;
+
+  const marker = '/data/chat/workspaces/';
+  const markerIndex = parsed.filePath.indexOf(marker);
+  if (markerIndex < 0) return null;
+
+  const rest = parsed.filePath.slice(markerIndex + marker.length);
+  const contextMarker = '/workspace-context/context/';
+  const contextIndex = rest.indexOf(contextMarker);
+  if (contextIndex <= 0) return null;
+
+  const workspaceKey = rest.slice(0, contextIndex);
+  const relativePath = rest.slice(contextIndex + contextMarker.length);
+  if (!workspaceKey || workspaceKey.includes('/') || workspaceKey.includes('\\')) return null;
+  if (!relativePath || relativePath.includes('\\') || relativePath.split('/').some(part => !part || part === '..')) return null;
+  if (!relativePath.toLowerCase().endsWith('.md')) return null;
+
+  return {
+    filePath: parsed.filePath,
+    filename: relativePath.split('/').pop() || relativePath,
+    relativePath,
+    workspaceKey,
+    line: parsed.line,
+    column: parsed.column,
+  };
+}
+
 export const _private = {
   pathFromHref,
   splitLineSuffix,
@@ -123,6 +160,7 @@ export const _private = {
 const FileLinkUtils = {
   resolveLocalFileHref,
   resolveConversationArtifactHref,
+  resolveWorkspaceContextHref,
   _private,
 };
 

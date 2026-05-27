@@ -1,4 +1,6 @@
 import React from 'react';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 
 import { AgentApi } from '../api.js';
 import { Ico } from '../icons.jsx';
@@ -35,6 +37,25 @@ function FileViewerCode({ content, language, line }){
       </code>
     </pre>
   );
+}
+
+function FileViewerMarkdown({ content }){
+  const html = React.useMemo(() => {
+    const raw = marked.parse(content || '', { breaks: true, gfm: true });
+    return DOMPurify.sanitize(raw);
+  }, [content]);
+  return (
+    <div
+      className="prose file-viewer-markdown"
+      dangerouslySetInnerHTML={{ __html: html }}
+    />
+  );
+}
+
+function isMarkdownPreview(language, filename){
+  const value = String(language || '').toLowerCase();
+  if (value === 'md' || value === 'markdown') return true;
+  return /\.md$/i.test(String(filename || ''));
 }
 
 export function FileViewerPanel({ filename, viewPath, imageUrl, displayPath, line, onClose }){
@@ -76,6 +97,8 @@ export function FileViewerPanel({ filename, viewPath, imageUrl, displayPath, lin
           <div className="u-dim" style={{padding:'12px'}}>Loading…</div>
         ) : state.error ? (
           <div className="u-err" style={{padding:'12px'}}>{state.error}</div>
+        ) : isMarkdownPreview(state.language, filename) ? (
+          <FileViewerMarkdown content={state.content}/>
         ) : (
           <FileViewerCode content={state.content} language={state.language} line={line}/>
         )}

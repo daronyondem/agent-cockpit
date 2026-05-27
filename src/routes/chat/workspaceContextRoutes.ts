@@ -1,4 +1,6 @@
 import express from 'express';
+import fs from 'fs';
+import path from 'path';
 import { csrfGuard } from '../../middleware/csrf';
 import type { ChatService } from '../../services/chatService';
 import type { WorkspaceContextService } from '../../services/workspaceContext/service';
@@ -12,6 +14,7 @@ import { logger } from '../../utils/logger';
 import { param } from './routeUtils';
 
 const log = logger.child({ module: 'workspace-context-routes' });
+const WORKSPACE_CONTEXT_VIEW_LIMIT_BYTES = 2 * 1024 * 1024;
 
 export interface WorkspaceContextRoutesOptions {
   chatService: ChatService;
@@ -22,6 +25,31 @@ export interface WorkspaceContextRoutesOptions {
 export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions): express.Router {
   const { chatService, workspaceContextService, emitFreshWorkspaceContextUpdate } = opts;
   const router = express.Router();
+
+  router.get('/conversations/:id/workspace-context-file', async (req: Request, res: Response) => {
+    try {
+      const convId = param(req, 'id');
+      const filePath = req.query.path as string | undefined;
+      const mode = (req.query.mode as string) || 'download';
+
+      if (!filePath) {
+        return res.status(400).json({ error: 'path query parameter is required' });
+      }
+
+      const conv = await chatService.getConversation(convId);
+      if (!conv || !conv.workspaceId) {
+        return res.status(404).json({ error: 'Conversation not found' });
+      }
+      if (!(await chatService.getWorkspaceContextEnabled(conv.workspaceId))) {
+        return res.status(403).json({ error: 'Workspace Context is disabled' });
+      }
+
+      const contextDir = workspaceContextService.getContextFilesDir(conv.workspaceId);
+      return serveWorkspaceContextFile(res, contextDir, filePath, mode);
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
 
   router.get('/workspaces/:workspaceId/workspace-context/settings', async (req: Request, res: Response) => {
     try {
@@ -208,4 +236,70 @@ export function createWorkspaceContextRouter(opts: WorkspaceContextRoutesOptions
   });
 
   return router;
+}
+
+function splitLineSuffix(filePath: string): { filePath: string; line: number | null; column: number | null } {
+  const value = String(filePath || '');
+  const columnMatch = value.match(/^(.*):([1-9]\d*):([1-9]\d*)$/);
+  if (columnMatch) return { filePath: columnMatch[1], line: Number(columnMatch[2]), column: Number(columnMatch[3]) };
+  const lineMatch = value.match(/^(.*):([1-9]\d*)$/);
+  if (lineMatch) return { filePath: lineMatch[1], line: Number(lineMatch[2]), column: null };
+  return { filePath: value, line: null, column: null };
+}
+
+function insideRoot(candidate: string, root: string): boolean {
+  return candidate === root || candidate.startsWith(root + path.sep);
+}
+
+function serveWorkspaceContextFile(res: Response, contextDir: string, requestedPath: string, mode: string) {
+  const parsed = splitLineSuffix(requestedPath);
+  const requested = parsed.filePath.replace(/\\/g, '/');
+  if (!requested || requested.split('/').some(part => part === '..')) {
+    return res.status(400).json({ error: 'Invalid path' });
+  }
+  if (!requested.toLowerCase().endsWith('.md')) {
+    return res.status(400).json({ error: 'Workspace Context previews only support markdown files' });
+  }
+
+  const root = path.resolve(contextDir);
+  const resolved = path.resolve(path.isAbsolute(requested) ? requested : path.join(root, requested));
+  if (!insideRoot(resolved, root)) {
+    return res.status(403).json({ error: 'Access denied: path is outside Workspace Context' });
+  }
+
+  let realRoot: string;
+  let realFile: string;
+  try {
+    realRoot = fs.realpathSync(root);
+    realFile = fs.realpathSync(resolved);
+  } catch {
+    return res.status(404).json({ error: 'File not found' });
+  }
+  if (!insideRoot(realFile, realRoot)) {
+    return res.status(403).json({ error: 'Access denied: path is outside Workspace Context' });
+  }
+
+  const stat = fs.statSync(realFile);
+  if (!stat.isFile()) {
+    return res.status(400).json({ error: 'Path is not a file' });
+  }
+
+  const filename = path.basename(realFile);
+  if (mode === 'view') {
+    if (stat.size > WORKSPACE_CONTEXT_VIEW_LIMIT_BYTES) {
+      return res.status(413).json({ error: 'File too large to view (max 2 MB). Use download instead.' });
+    }
+    return res.json({
+      content: fs.readFileSync(realFile, 'utf8'),
+      filename,
+      path: realFile,
+      language: 'markdown',
+      line: parsed.line,
+      column: parsed.column,
+    });
+  }
+
+  res.setHeader('Content-Disposition', `attachment; filename="${filename.replace(/"/g, '\\"')}"`);
+  res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
+  return fs.createReadStream(realFile).pipe(res);
 }

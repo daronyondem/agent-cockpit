@@ -146,6 +146,7 @@ export type FilePreviewResponse = {
   path?: string;
   filename?: string;
   content: string;
+  language?: string;
   mimeType?: string;
   size?: number;
   truncated?: boolean;

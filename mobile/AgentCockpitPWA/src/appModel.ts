@@ -69,6 +69,7 @@ export type FilePreviewState = {
   downloadURL: string;
   content?: string;
   imageURL?: string;
+  language?: string;
   mimeType?: string;
   truncated?: boolean;
   error?: string;
@@ -246,6 +247,20 @@ export function makeConversationWorkspaceFileReference(client: AgentCockpitAPI, 
   };
 }
 
+export function makeConversationWorkspaceContextFileReference(client: AgentCockpitAPI, conversation: Conversation, href: string): FileReference | null {
+  const resolved = workspaceContextPathFromHref(href);
+  if (!resolved) return null;
+  const title = basenameFromPath(resolved.filePath);
+  return {
+    id: `conversation-workspace-context:${conversation.id}:${resolved.filePath}`,
+    title,
+    path: resolved.filePath,
+    downloadURL: client.conversationWorkspaceContextFileURL(conversation.id, resolved.filePath, 'download'),
+    isImage: false,
+    fetchPreview: () => client.getConversationWorkspaceContextFilePreview(conversation.id, resolved.filePath),
+  };
+}
+
 export function makeExplorerFileReference(client: AgentCockpitAPI, workspaceId: string, path: string): FileReference {
   const title = basenameFromPath(path);
   return {
@@ -256,6 +271,44 @@ export function makeExplorerFileReference(client: AgentCockpitAPI, workspaceId: 
     isImage: isImageFileName(title),
     fetchPreview: () => client.getExplorerPreview(workspaceId, path),
   };
+}
+
+function workspaceContextPathFromHref(rawHref: string): { filePath: string } | null {
+  const href = String(rawHref || '').trim();
+  if (!href || href.startsWith('#') || (/^[a-z][a-z0-9+.-]*:/i.test(href) && !/^file:/i.test(href))) return null;
+  let pathname = href;
+  if (/^file:/i.test(href)) {
+    try {
+      pathname = new URL(href).pathname;
+    } catch {
+      return null;
+    }
+  }
+  if (!pathname.startsWith('/')) return null;
+  try {
+    pathname = decodeURIComponent(pathname);
+  } catch {
+    // Keep the original path if the model produced partially encoded text.
+  }
+  const parsed = splitLineSuffix(pathname);
+  if (parsed.split('/').some((part) => part === '..')) return null;
+  const marker = '/data/chat/workspaces/';
+  const markerIndex = parsed.indexOf(marker);
+  if (markerIndex < 0) return null;
+  const rest = parsed.slice(markerIndex + marker.length);
+  const contextMarker = '/workspace-context/context/';
+  const contextIndex = rest.indexOf(contextMarker);
+  if (contextIndex <= 0) return null;
+  const relativePath = rest.slice(contextIndex + contextMarker.length);
+  if (!relativePath || relativePath.includes('\\') || relativePath.split('/').some((part) => !part || part === '..')) return null;
+  if (!relativePath.toLowerCase().endsWith('.md')) return null;
+  return { filePath: parsed };
+}
+
+function splitLineSuffix(filePath: string): string {
+  return filePath
+    .replace(/:([1-9]\d*):([1-9]\d*)$/, '')
+    .replace(/:([1-9]\d*)$/, '');
 }
 
 export function conversationListItemFromConversation(conversation: Conversation): ConversationListItem {

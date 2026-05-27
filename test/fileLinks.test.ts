@@ -3,6 +3,7 @@
 const {
   resolveConversationArtifactHref,
   resolveLocalFileHref,
+  resolveWorkspaceContextHref,
 } = require('../web/AgentCockpitWeb/src/fileLinks.ts');
 
 describe('FileLinkUtils.resolveLocalFileHref', () => {
@@ -68,5 +69,39 @@ describe('FileLinkUtils.resolveConversationArtifactHref', () => {
     expect(resolveConversationArtifactHref('/Users/daronyondem/Sites/agent-cockpit/data/chat/artifacts/other/notes.txt', convId)).toBeNull();
     expect(resolveConversationArtifactHref(`/Users/daronyondem/Sites/agent-cockpit/data/chat/artifacts/${convId}/nested/notes.txt`, convId)).toBeNull();
     expect(resolveConversationArtifactHref(`/Users/daronyondem/Sites/agent-cockpit/data/chat/artifacts/${convId}/../secret.txt`, convId)).toBeNull();
+  });
+});
+
+describe('FileLinkUtils.resolveWorkspaceContextHref', () => {
+  const contextPath = '/Users/daronyondem/Library/Application Support/Agent Cockpit/data/chat/workspaces/5c8625d6cac54df6/workspace-context/context/aws.md';
+
+  test('resolves absolute Workspace Context markdown paths with line numbers', () => {
+    expect(resolveWorkspaceContextHref(`${contextPath}:42`)).toEqual({
+      filePath: contextPath,
+      filename: 'aws.md',
+      relativePath: 'aws.md',
+      workspaceKey: '5c8625d6cac54df6',
+      line: 42,
+      column: null,
+    });
+  });
+
+  test('resolves nested encoded file URLs with column numbers', () => {
+    const href = 'file:///Users/daronyondem/Library/Application%20Support/Agent%20Cockpit/data/chat/workspaces/5c8625d6cac54df6/workspace-context/context/accounts/AWS%20Notes.md:10:2';
+    expect(resolveWorkspaceContextHref(href)).toEqual({
+      filePath: '/Users/daronyondem/Library/Application Support/Agent Cockpit/data/chat/workspaces/5c8625d6cac54df6/workspace-context/context/accounts/AWS Notes.md',
+      filename: 'AWS Notes.md',
+      relativePath: 'accounts/AWS Notes.md',
+      workspaceKey: '5c8625d6cac54df6',
+      line: 10,
+      column: 2,
+    });
+  });
+
+  test('rejects non-context links, traversal, and non-markdown files', () => {
+    expect(resolveWorkspaceContextHref('https://example.com/aws.md')).toBeNull();
+    expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/context/aws.txt')).toBeNull();
+    expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/context/../secret.md')).toBeNull();
+    expect(resolveWorkspaceContextHref('/Users/daronyondem/data/chat/workspaces/5c8625d6cac54df6/workspace-context/runs/latest.md')).toBeNull();
   });
 });
