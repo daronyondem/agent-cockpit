@@ -1829,6 +1829,7 @@ export default function App() {
           path: preview.path || reference.path,
           downloadURL: reference.downloadURL,
           content: preview.content,
+          language: preview.language,
           mimeType: preview.mimeType || reference.mimeType,
           truncated: preview.truncated,
         });

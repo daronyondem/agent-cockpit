@@ -326,6 +326,7 @@ Workspace Context routes are mounted under `/api/chat` and are owned by
 | `POST` | `/workspaces/:workspaceId/workspace-context/repair-instructions` | Yes | Recreates generated files and reinstalls the `AGENTS.md` managed block. |
 | `GET` | `/workspaces/:workspaceId/workspace-context/files` | No | Lists markdown files under `workspace-context/context/` as `{ path, name, size, updatedAt }`. |
 | `GET` | `/workspaces/:workspaceId/workspace-context/files/*` | No | Reads a markdown file under `workspace-context/context/`. Traversal and non-markdown paths are rejected. Disabled workspaces return `403`. |
+| `GET` | `/conversations/:id/workspace-context-file` | No | Conversation-scoped preview/download endpoint for assistant Markdown links to Workspace Context files. Query params are `path` (absolute data-root path or context-relative `.md` path, with optional `:line[:column]`) and `mode=view\|download`. The route resolves the conversation workspace, requires Workspace Context to be enabled, serves only files under that workspace's `workspace-context/context/`, rejects traversal, symlink escapes, non-markdown files, and other workspaces, and returns `language:"markdown"` in preview JSON so the chat file viewer renders the file as Markdown. |
 | `DELETE` | `/workspaces/:workspaceId/workspace-context` | Yes | Clears the Workspace Context folder and run history, then repairs generated files/instructions. Enablement and settings remain. Active runs return `409`. |
 
 The Workspace Context settings and file GET routes set

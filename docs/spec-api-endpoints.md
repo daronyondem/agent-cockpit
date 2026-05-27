@@ -337,6 +337,24 @@ MB; `mode=download` streams the file. `400` for missing path or non-file
 targets, `403` for paths outside the conversation root, and `404` for unknown
 conversations or missing files.
 
+```
+GET /conversations/:id/workspace-context-file?path=<absolute-or-relative-md-path>&mode=view|download
+```
+Conversation-scoped Workspace Context file delivery. It resolves the
+conversation, derives that conversation's canonical workspace id, requires
+Workspace Context to be enabled for that workspace, and serves only `.md` files
+inside that workspace's `workspace-context/context/` directory. The `path`
+query may be the absolute data-root path emitted in assistant Markdown links or
+a path relative to the context directory; optional `:line` / `:line:column`
+suffixes are stripped before file access. `mode=view` returns
+`{ content, filename, path, language:"markdown", line?, column? }` JSON capped
+at 2 MB so desktop and mobile file preview panels render the file as Markdown.
+`mode=download` streams `text/markdown`. The route rejects traversal,
+non-markdown files, symlink escapes, and links into any other workspace's
+Workspace Context folder. `400` for missing/invalid/non-markdown paths, `403`
+for disabled Workspace Context or paths outside the conversation workspace's
+context root, and `404` for unknown conversations or missing files.
+
 ## 3.8.1 Workspace Worktree Isolation
 
 Optional Git worktree isolation is configured per workspace and is available
@@ -458,6 +476,7 @@ Per-workspace instructions appended to the global system prompt on new sessions.
 | POST | `/workspaces/:workspaceId/workspace-context/maintenance` | Yes | Starts a background `maintenance` run for an enabled workspace and returns immediately with `{ ok:true, started:true, source:'maintenance' }`. The processor receives the generated Workspace Context instructions, context folder, current time, run source, and current context markdown file paths. The maintenance prompt tells it to improve organization, deduplicate, preserve temporal/as-of information, and avoid scanning conversations or external sources unless explicitly listed. Disabled workspaces return `403`; already-running workspaces return `409` with the current display `state` and `files` so the screen can immediately show the active run. |
 | POST | `/workspaces/:workspaceId/workspace-context/scan/stop` | Yes | Stops the active Workspace Context run by aborting the active one-shot processor call when possible, records the run as `stopped`, emits `workspace_context_update`, and returns `{ ok:true, stopped:true }`. Returns `409` when no run is active. |
 | POST | `/workspaces/:workspaceId/workspace-context/repair-instructions` | Yes | Recreates generated Workspace Context files and reinstalls the managed `AGENTS.md` block. Returns `{ ok:true, state }`; `404` if workspace not found. |
+| GET | `/conversations/:id/workspace-context-file` | — | Conversation-scoped preview/download endpoint for Markdown links that point at `data/chat/workspaces/<storageKey>/workspace-context/context/*.md`. Query params: `path` (absolute data-root path or context-relative path, with optional `:line[:column]`) and `mode=view\|download`. Requires Workspace Context enabled on the conversation workspace, resolves the request against that workspace's context root, rejects traversal, symlink escapes, non-`.md` paths, and other workspaces, and returns `language:"markdown"` for `mode=view` so file previews render Markdown. |
 | GET | `/workspaces/:workspaceId/workspace-context/files` | — | Lists markdown files under `workspace-context/context/` as `{ path, name, size, updatedAt }`. Disabled workspaces return an empty list and the context directory path. |
 | GET | `/workspaces/:workspaceId/workspace-context/files/*` | — | Reads one markdown file from `workspace-context/context/`. The route rejects traversal and non-markdown paths. Disabled workspaces return `403`; missing files return `404`. |
 | DELETE | `/workspaces/:workspaceId/workspace-context` | Yes | Clears the Workspace Context folder and run history without changing `WorkspaceIndex.workspaceContextEnabled` or workspace settings, then recreates generated files and repairs instructions. Active runs return `409`; unknown workspaces return `404`. |
