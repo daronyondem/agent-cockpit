@@ -1,6 +1,6 @@
 {
   "name": "agent-cockpit",
-  "version": "0.4.105",
+  "version": "0.4.106",
   "private": true,
   "license": "Apache-2.0",
   "engines": {
