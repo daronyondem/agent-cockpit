@@ -1939,7 +1939,7 @@ export interface SendMessageOptions {
    * prompting the fresh native session.
    */
   sessionRecovery?: SessionRecoveryOptions;
-  /** Full model ID (e.g., 'claude-opus-4-7', 'claude-sonnet-4-6'). Backends that don't support model selection ignore this. */
+  /** Full model ID (e.g., 'claude-opus-4-8', 'claude-sonnet-4-6'). Backends that don't support model selection ignore this. */
   model?: string;
   /**
    * Adaptive reasoning effort level. Backends that don't support effort

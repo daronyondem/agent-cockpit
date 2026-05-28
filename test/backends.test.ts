@@ -190,7 +190,14 @@ describe('ClaudeCodeAdapter', () => {
     const meta = adapter.metadata;
     expect(meta.models).toBeDefined();
     expect(Array.isArray(meta.models)).toBe(true);
-    expect(meta.models!.length).toBe(4);
+    expect(meta.models!.length).toBe(5);
+
+    const opus48 = meta.models!.find(m => m.id === 'claude-opus-4-8');
+    expect(opus48).toBeDefined();
+    expect(opus48!.label).toBe('Opus 4.8');
+    expect(opus48!.family).toBe('opus');
+    expect(opus48!.costTier).toBe('high');
+    expect(opus48!.capabilities?.input?.image).toBe(true);
 
     const opus47 = meta.models!.find(m => m.id === 'claude-opus-4-7');
     expect(opus47).toBeDefined();
@@ -220,7 +227,10 @@ describe('ClaudeCodeAdapter', () => {
     const adapter = new ClaudeCodeAdapter({ workingDir: '/tmp' });
     const meta = adapter.metadata;
 
-    // Opus 4.7 is the only model that supports the new xhigh level
+    // Opus 4.8 and 4.7 support xhigh and max.
+    const opus48 = meta.models!.find(m => m.id === 'claude-opus-4-8');
+    expect(opus48!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+
     const opus47 = meta.models!.find(m => m.id === 'claude-opus-4-7');
     expect(opus47!.supportedEffortLevels).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
 
@@ -836,7 +846,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     expect(capturedArgs![idx + 1]).toBe('max');
   });
 
-  test('passes --effort xhigh only for Opus 4.7', async () => {
+  test('passes --effort xhigh for Opus 4.8', async () => {
     let capturedArgs: string[] | undefined;
     let streamRef: AsyncGenerator<any>;
     jest.isolateModules(() => {
@@ -861,7 +871,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
         isNewSession: true,
         workingDir: '/tmp',
         systemPrompt: '',
-        model: 'claude-opus-4-7',
+        model: 'claude-opus-4-8',
         effort: 'xhigh',
       });
       streamRef = stream;
@@ -877,7 +887,7 @@ describe('ClaudeCodeAdapter sendMessage', () => {
     expect(capturedArgs![idx + 1]).toBe('xhigh');
   });
 
-  test('drops --effort xhigh on Opus 4.6 (only 4.7 supports it)', async () => {
+  test('drops --effort xhigh on Opus 4.6', async () => {
     let capturedArgs: string[] | undefined;
     let streamRef: AsyncGenerator<any>;
     jest.isolateModules(() => {

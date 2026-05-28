@@ -96,6 +96,17 @@ describe('usage cost estimator', () => {
     expect(estimate.estimatedCostUsd).toBeCloseTo(22.05);
   });
 
+  test('uses current Opus 4.8 pricing instead of deprecated Opus 4 pricing', () => {
+    const estimate = estimateUsageCost({
+      backend: 'claude-code',
+      model: 'claude-opus-4-8',
+      usage: { ...baseUsage, inputTokens: 1_000_000, outputTokens: 1_000_000 },
+    });
+    expect(estimate.costSource).toBe('estimated');
+    expect(estimate.estimatedCostUsd).toBeCloseTo(30);
+    expect(estimate.costSnapshot?.pricingEntryId).toBe('anthropic-claude-opus-4.8-family');
+  });
+
   test('uses current Opus 4.6 pricing instead of deprecated Opus 4 pricing', () => {
     const estimate = estimateUsageCost({
       backend: 'claude-code',

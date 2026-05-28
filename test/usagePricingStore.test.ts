@@ -42,7 +42,7 @@ describe('UsagePricingStore', () => {
 
     expect(catalogs.overrides.entries).toEqual([overrideEntry]);
     expect(catalogs.effective.entries[0]).toEqual(overrideEntry);
-    expect(catalogs.effective.version).toMatch(/^2026-05-20\+user-overrides:/);
+    expect(catalogs.effective.version).toMatch(/^2026-05-28\+user-overrides:/);
 
     const reloaded = new UsagePricingStore(file);
     const reloadedCatalogs = await reloaded.getCatalogs();
