@@ -983,6 +983,16 @@ describe('frontend routes', () => {
     expect(kbBrowserSrc).toContain('awaiting Dream');
   });
 
+  test('kb pipeline warnings expose recovery actions', () => {
+    const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
+
+    expect(kbBrowserSrc).toContain('onOpenEmbeddingSettings={() => openSettingsSection');
+    expect(kbBrowserSrc).toContain("initialSection={settingsSection}");
+    expect(kbBrowserSrc).toContain("AgentApi.kb.rebuildVectorIndex(hash)");
+    expect(kbBrowserSrc).toContain("Rebuild Vector Index");
+    expect(kbBrowserSrc).toContain("Open Embedding Settings");
+  });
+
   test('kb entries and reflections use side readers instead of tab popups', () => {
     const kbBrowserSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/kbBrowser.jsx'), 'utf8');
     const cssSrc = readDesktopCss();

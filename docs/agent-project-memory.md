@@ -217,6 +217,9 @@ tool is unavailable.
 - Memory consolidation should precede vector/embedding work where applicable.
 - KB/media work should preserve current generated media if it already exists and
   avoid unnecessary churn.
+- KB vector coverage or vector-index health issues should use the targeted
+  vector-index rebuild path rather than full Re-Dream unless synthesis itself
+  needs to be rebuilt.
 - Welcome, Install Doctor, Settings, and KB upload checks should detect newly
   installed Pandoc/LibreOffice without requiring an Agent Cockpit restart.
 
