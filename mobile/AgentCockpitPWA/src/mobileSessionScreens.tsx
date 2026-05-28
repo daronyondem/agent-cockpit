@@ -121,6 +121,7 @@ function ReadOnlySessionMessage(props: {
 }) {
   const isUser = props.message.role === 'user';
   const isGoalEvent = !!props.message.goalEvent;
+  const isAgentCockpitSystemMessage = props.message.role === 'system' && !isGoalEvent;
   const isPinned = !!props.message.pinned;
   const [copied, setCopied] = useState<'text' | 'md' | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -148,13 +149,11 @@ function ReadOnlySessionMessage(props: {
               <span className="session-avatar goal" aria-hidden="true">G</span>
               <strong>Goal</strong>
             </>
-          ) : props.message.role === 'system' ? (
-            <>
-              <span className="session-avatar" aria-hidden="true">S</span>
-              <strong>System</strong>
-            </>
           ) : (
-            <AssistantIdentity backend={props.message.backend} backends={props.backends} />
+            <AssistantIdentity
+              backend={isAgentCockpitSystemMessage ? null : props.message.backend}
+              backends={props.backends}
+            />
           )}
           <span>· {formatTime(props.message.timestamp)}</span>
         </span>

@@ -454,6 +454,7 @@ function MobilePinStrip(props: {
   }
   const currentIndex = Math.min(Math.max(props.currentIndex, 0), props.messages.length - 1);
   const current = props.messages[currentIndex];
+  const sourceLabel = messageSourceLabel(current, props.backends, props.cliProfiles, props.cliProfileId);
   const previousIndex = (currentIndex - 1 + props.messages.length) % props.messages.length;
   const nextIndex = (currentIndex + 1) % props.messages.length;
   const select = (index: number) => {
@@ -469,7 +470,7 @@ function MobilePinStrip(props: {
       </button>
       <button className="pin-strip-item" onClick={() => select(currentIndex)}>
         <span className="pin-strip-source">
-          {current.role === 'user' ? 'You' : cliDisplayName(props.backends, props.cliProfiles, current.backend, props.cliProfileId)}
+          {sourceLabel}
         </span>
         <span>{displayMessagePreview(current.content).replace(/\s+/g, ' ').trim() || 'Pinned message'}</span>
       </button>
@@ -500,6 +501,18 @@ function cliDisplayName(
     if (providerLabel) return providerLabel;
   }
   return backends.find((item) => item.id === backend)?.label || backend;
+}
+
+function messageSourceLabel(
+  message: Message,
+  backends: BackendMetadata[],
+  cliProfiles: CliProfileSummary[] | undefined,
+  cliProfileId?: string | null,
+): string {
+  if (message.role === 'user') return 'You';
+  if (message.goalEvent) return 'Goal';
+  if (message.role === 'system') return 'Agent Cockpit';
+  return cliDisplayName(backends, cliProfiles, message.backend, cliProfileId);
 }
 
 export function AssistantIdentity(props: {
@@ -546,6 +559,7 @@ function MessageBubble(props: {
 }) {
   const isUser = props.message.role === 'user';
   const isGoalEvent = !!props.message.goalEvent;
+  const isAgentCockpitSystemMessage = props.message.role === 'system' && !isGoalEvent;
   const isPinned = !!props.message.pinned;
   const [copied, setCopied] = useState<'text' | 'md' | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -565,7 +579,7 @@ function MessageBubble(props: {
         <span className="message-author">
           {isUser ? <strong>You</strong> : isGoalEvent ? <strong>Goal</strong> : (
             <AssistantIdentity
-              backend={props.message.backend}
+              backend={isAgentCockpitSystemMessage ? null : props.message.backend}
               backends={props.backends}
               cliProfiles={props.cliProfiles}
               cliProfileId={props.conversation.cliProfileId}
