@@ -20,6 +20,19 @@ export interface KbVectorIndexRebuildResult {
   staleTopicsRemoved: number;
 }
 
+async function openVectorStoreForRebuild(
+  chatService: ChatService,
+  hash: string,
+  dimensions: number,
+) {
+  try {
+    return await chatService.getKbVectorStore(hash, dimensions);
+  } catch {
+    await chatService.resetKbVectorStore(hash);
+    return chatService.getKbVectorStore(hash, dimensions);
+  }
+}
+
 export async function rebuildKbVectorIndex(
   chatService: ChatService,
   hash: string,
@@ -40,7 +53,7 @@ export async function rebuildKbVectorIndex(
   }
 
   const resolved = resolveConfig(cfg);
-  const store = await chatService.getKbVectorStore(hash, resolved.dimensions);
+  const store = await openVectorStoreForRebuild(chatService, hash, resolved.dimensions);
   if (!store) {
     throw new KbVectorMaintenanceError('Vector store unavailable.', 500);
   }

@@ -30,6 +30,7 @@ describe('WorkspaceKnowledgeStore', () => {
     expect(store.convertedDir('workspace-1')).toBe(path.join(root, 'workspace-1', 'knowledge', 'converted'));
     expect(store.entriesDir('workspace-1')).toBe(path.join(root, 'workspace-1', 'knowledge', 'entries'));
     expect(store.synthesisDir('workspace-1')).toBe(path.join(root, 'workspace-1', 'knowledge', 'synthesis'));
+    expect(store.vectorDir('workspace-1')).toBe(path.join(root, 'workspace-1', 'knowledge', 'vectors'));
   });
 
   it('opens, caches, and closes workspace KB databases', async () => {
@@ -51,5 +52,19 @@ describe('WorkspaceKnowledgeStore', () => {
     expect(store.getDb('')).toBeNull();
     await expect(store.getVectorStore('')).resolves.toBeNull();
     await expect(store.closeVectorStore('workspace-1')).resolves.toBeUndefined();
+  });
+
+  it('resets only the derived vector store directory', async () => {
+    const vectorDir = store.vectorDir('workspace-1');
+    const rawDir = store.rawDir('workspace-1');
+    await fsp.mkdir(vectorDir, { recursive: true });
+    await fsp.mkdir(rawDir, { recursive: true });
+    await fsp.writeFile(path.join(vectorDir, 'PG_VERSION'), '17');
+    await fsp.writeFile(path.join(rawDir, 'source.md'), 'source');
+
+    await store.resetVectorStore('legacy-storage');
+
+    await expect(fsp.stat(vectorDir)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fsp.readFile(path.join(rawDir, 'source.md'), 'utf8')).resolves.toBe('source');
   });
 });

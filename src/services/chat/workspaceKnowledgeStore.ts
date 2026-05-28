@@ -45,6 +45,10 @@ export class WorkspaceKnowledgeStore {
     return path.join(this.knowledgeDir(hash), 'synthesis');
   }
 
+  vectorDir(hash: string): string {
+    return path.join(this.knowledgeDir(hash), 'vectors');
+  }
+
   getDb(hash: string): KbDatabase | null {
     if (!hash) return null;
     const workspaceId = this.deps.resolveWorkspaceId(hash) || hash;
@@ -103,5 +107,12 @@ export class WorkspaceKnowledgeStore {
       await this.closeVectorStore(hash);
     }
     this.vectorStores.clear();
+  }
+
+  async resetVectorStore(hash: string): Promise<void> {
+    if (!hash) return;
+    const workspaceId = this.deps.resolveWorkspaceId(hash) || hash;
+    await this.closeVectorStore(workspaceId);
+    await fs.promises.rm(this.vectorDir(workspaceId), { recursive: true, force: true });
   }
 }
