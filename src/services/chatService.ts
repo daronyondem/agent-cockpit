@@ -2905,6 +2905,11 @@ export class ChatService {
     return this._workspaceKnowledgeStore.getVectorStore(hash, dimensions);
   }
 
+  /** Drop the derived PGLite vector store so it can be recreated from SQLite KB state. */
+  async resetKbVectorStore(hash: string): Promise<void> {
+    await this._workspaceKnowledgeStore.resetVectorStore(hash);
+  }
+
   /** Close every cached vector store. Call during graceful shutdown. */
   async closeKbVectorStores(): Promise<void> {
     await this._workspaceKnowledgeStore.closeVectorStores();

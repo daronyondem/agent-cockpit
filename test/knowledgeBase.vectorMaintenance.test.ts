@@ -50,6 +50,7 @@ describe('rebuildKbVectorIndex', () => {
         dimensions: 3,
       }),
       getKbVectorStore: jest.fn().mockResolvedValue(store),
+      resetKbVectorStore: jest.fn().mockResolvedValue(undefined),
       ...overrides,
     };
     return { chatService, db, store };
@@ -91,5 +92,22 @@ describe('rebuildKbVectorIndex', () => {
         statusCode: 400,
       });
     expect(chatService.getKbVectorStore).not.toHaveBeenCalled();
+  });
+
+  test('resets and recreates the vector store when opening existing PGLite state fails', async () => {
+    const { chatService, store } = buildHarness();
+    chatService.getKbVectorStore = jest.fn()
+      .mockRejectedValueOnce(new Error('Aborted(). Build with -sASSERTIONS for more info.'))
+      .mockResolvedValueOnce(store);
+
+    const result = await rebuildKbVectorIndex(chatService as any, 'workspace-1');
+
+    expect(chatService.resetKbVectorStore).toHaveBeenCalledWith('workspace-1');
+    expect(chatService.getKbVectorStore).toHaveBeenNthCalledWith(1, 'workspace-1', 3);
+    expect(chatService.getKbVectorStore).toHaveBeenNthCalledWith(2, 'workspace-1', 3);
+    expect(store.upsertEntry).toHaveBeenCalledWith('entry-1', 'Entry One', 'First summary', [1, 0, 0]);
+    expect(store.upsertTopic).toHaveBeenCalledWith('topic-1', 'Topic One', 'Topic summary', [1, 0, 0]);
+    expect(result.entriesEmbedded).toBe(2);
+    expect(result.topicsEmbedded).toBe(1);
   });
 });
