@@ -671,13 +671,17 @@
     /* Per-workspace embedding configuration for the PGLite vector layer.
        getEmbeddingConfig returns { embeddingConfig: {model?, ollamaHost?, dimensions?} | null };
        setEmbeddingConfig PUTs the same shape and returns { embeddingConfig: <result> };
-       embeddingHealth POSTs to test Ollama reachability + model availability,
-       resolving to { ok: boolean, error?: string }. */
+       embeddingHealth POSTs to test Ollama reachability + model availability
+       and resolves to { ok: boolean, error?: string }; rebuildVectorIndex
+       POSTs current entries/topics back into the vector store. */
     getEmbeddingConfig: (hash) => kbFetch(hash, 'embedding-config').then(r => r.json()),
     setEmbeddingConfig: (hash, cfg) => kbFetch(hash, 'embedding-config', {
       method: 'PUT', body: cfg || {},
     }).then(r => r.json()),
     embeddingHealth: (hash) => kbFetch(hash, 'embedding-health', {
+      method: 'POST', body: {},
+    }).then(r => r.json()),
+    rebuildVectorIndex: (hash) => kbFetch(hash, 'vector-index/rebuild', {
       method: 'POST', body: {},
     }).then(r => r.json()),
     getGlossary: (hash) => kbFetch(hash, 'glossary').then(r => r.json()),

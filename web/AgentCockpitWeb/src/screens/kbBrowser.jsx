@@ -74,6 +74,7 @@ function KbImageLightbox({ src, alt, onClose }){
 
 export function KbBrowser({ hash, label, onClose }){
   const [tab, setTab] = React.useState('pipeline');
+  const [settingsSection, setSettingsSection] = React.useState('auto-dream');
   const [kbState, setKbState] = React.useState(null);
   const [kbErr, setKbErr] = React.useState(null);
   const mountedRef = React.useRef(false);
@@ -127,6 +128,16 @@ export function KbBrowser({ hash, label, onClose }){
     reflections: counters.reflectionCount || 0,
   } : null;
 
+  function openTab(nextTab){
+    if (nextTab === 'settings') setSettingsSection('auto-dream');
+    setTab(nextTab);
+  }
+
+  function openSettingsSection(section){
+    setSettingsSection(section || 'auto-dream');
+    setTab('settings');
+  }
+
   return (
     <div className="kb-shell">
       <div className="kb-top">
@@ -150,20 +161,28 @@ export function KbBrowser({ hash, label, onClose }){
       </div>
 
       <div className="kb-tabs">
-        <KbNavTab id="pipeline"    label="Pipeline"    active={tab} onClick={setTab}/>
-        <KbNavTab id="raw"         label="Raw"         active={tab} onClick={setTab} count={totals ? totals.raw : null}/>
-        <KbNavTab id="entries"     label="Entries"     active={tab} onClick={setTab} count={totals ? totals.entries : null}/>
-        <KbNavTab id="synthesis"   label="Synthesis"   active={tab} onClick={setTab}/>
-        <KbNavTab id="reflections" label="Reflections" active={tab} onClick={setTab}/>
-        <KbNavTab id="settings"    label="Settings"    active={tab} onClick={setTab}/>
+        <KbNavTab id="pipeline"    label="Pipeline"    active={tab} onClick={openTab}/>
+        <KbNavTab id="raw"         label="Raw"         active={tab} onClick={openTab} count={totals ? totals.raw : null}/>
+        <KbNavTab id="entries"     label="Entries"     active={tab} onClick={openTab} count={totals ? totals.entries : null}/>
+        <KbNavTab id="synthesis"   label="Synthesis"   active={tab} onClick={openTab}/>
+        <KbNavTab id="reflections" label="Reflections" active={tab} onClick={openTab}/>
+        <KbNavTab id="settings"    label="Settings"    active={tab} onClick={openTab}/>
       </div>
 
-      {tab === 'pipeline'    ? <KbPipelineTab kbState={kbState} onOpenRaw={() => setTab('raw')}/> : null}
+      {tab === 'pipeline'    ? (
+        <KbPipelineTab
+          hash={hash}
+          kbState={kbState}
+          onOpenRaw={() => setTab('raw')}
+          onOpenSynthesis={() => setTab('synthesis')}
+          onOpenEmbeddingSettings={() => openSettingsSection('embedding')}
+        />
+      ) : null}
       {tab === 'raw'         ? <KbRawTab hash={hash} kbState={kbState} onStateUpdate={setKbState}/> : null}
       {tab === 'entries'     ? <KbEntriesTab hash={hash}/> : null}
       {tab === 'synthesis'   ? <KbSynthesisTab hash={hash}/> : null}
       {tab === 'reflections' ? <KbReflectionsTab hash={hash}/> : null}
-      {tab === 'settings'    ? <KbSettingsTab hash={hash}/> : null}
+      {tab === 'settings'    ? <KbSettingsTab hash={hash} initialSection={settingsSection}/> : null}
     </div>
   );
 }
@@ -342,7 +361,9 @@ function KbPipeMeterCell({ label, value, sub, tone }){
   );
 }
 
-function KbPipelineTab({ kbState, onOpenRaw }){
+function KbPipelineTab({ hash, kbState, onOpenRaw, onOpenSynthesis, onOpenEmbeddingSettings }){
+  const toast = useToasts();
+  const [vectorRebuildBusy, setVectorRebuildBusy] = React.useState(false);
   const counters = (kbState && kbState.counters) || {};
   const rawByStatus = counters.rawByStatus || {};
   const failedByStage = counters.failedByStage || {};
@@ -453,7 +474,7 @@ function KbPipelineTab({ kbState, onOpenRaw }){
   const hasStructureWarning = convertedStageCount > 0 && documentCount === 0;
   const structureStatus = documentCount > 0 ? 'ok' : hasStructureWarning ? 'warn' : ingestingCount > 0 ? 'run' : 'idle';
   const structureSub = documentCount > 0 ? `${documentNodeCount} nodes parsed`
-    : hasStructureWarning ? 'needs backfill'
+    : hasStructureWarning ? 'open Raw Files to backfill'
     : 'no structure yet';
   const queryableTargetCount = entryCount + topicCount;
   const queryableStatus = queryableTargetCount > 0 ? 'ok' : 'idle';
@@ -468,6 +489,7 @@ function KbPipelineTab({ kbState, onOpenRaw }){
   const vectorCoverageKnown = entryEmbeddedCount !== null && topicEmbeddedCount !== null;
   const vectorTargetCount = (entryEmbeddedCount || 0) + (topicEmbeddedCount || 0);
   const hybridSearchReady = embeddingConfigured && !embeddingIndexError && vectorCoverageKnown && vectorTargetCount > 0;
+  const vectorRebuildReady = embeddingConfigured;
   const indexStatus = entryCount === 0 ? 'idle'
     : embeddingIndexError ? 'warn'
     : !embeddingConfigured ? 'ok'
@@ -478,8 +500,8 @@ function KbPipelineTab({ kbState, onOpenRaw }){
     ? (entryEmbeddedCount === null ? 'unknown' : `${Math.min(entryEmbeddedCount, entryCount)}/${entryCount}`)
     : entryCount;
   const indexUnit = embeddingConfigured && entryCount > 0 ? 'embedded' : 'searchable';
-  const indexSub = embeddingIndexError ? 'vector check failed'
-    : embeddingConfigured ? (entryEmbeddedCount === null ? 'vector coverage unknown' : 'keyword + vector')
+  const indexSub = embeddingIndexError ? 'rebuild vector index'
+    : embeddingConfigured ? (entryEmbeddedCount === null ? 'rebuild vector index' : entryEmbeddedCount >= entryCount ? 'keyword + vector' : 'rebuild vector index')
     : 'browser keyword only';
   const rankerStatus = queryableTargetCount === 0 ? 'idle'
     : embeddingIndexError ? 'warn'
@@ -491,24 +513,59 @@ function KbPipelineTab({ kbState, onOpenRaw }){
     : embeddingConfigured ? 'building'
     : 'off';
   const rankerSub = queryableTargetCount === 0 ? 'waiting for entries or topics'
-    : embeddingIndexError ? 'vector index unavailable'
+    : embeddingIndexError ? 'rebuild vector index'
     : hybridSearchReady ? `${vectorTargetCount} vector targets`
-    : embeddingConfigured ? 'waiting for vectors'
-    : 'embedding config required';
+    : !embeddingConfigured ? 'configure embeddings'
+    : vectorCoverageKnown ? 'rebuild vector index'
+    : 'rebuild vector index';
   const accessValue = queryableTargetCount === 0 ? 'idle' : hybridSearchReady ? 'ready' : 'limited';
-  const accessSub = hybridSearchReady ? 'KB search tools' : queryableTargetCount > 0 ? 'browser search only' : 'not queryable';
+  const accessSub = hybridSearchReady ? 'KB search tools'
+    : queryableTargetCount === 0 ? 'not queryable'
+    : !embeddingConfigured ? 'configure embeddings for tools'
+    : embeddingIndexError || !vectorCoverageKnown ? 'rebuild vector index for tools'
+    : 'rebuild vector index for tools';
   const hasSearchWarning = indexStatus === 'warn' || rankerStatus === 'warn';
+  const searchHealthValue = embeddingIndexError ? 'Embedding failed'
+    : !embeddingConfigured ? 'Embeddings off'
+    : !vectorCoverageKnown ? 'Vector check needed'
+    : 'Vectors incomplete';
+  const searchHealthSub = embeddingIndexError ? 'Rebuild vector index'
+    : !embeddingConfigured ? 'Configure embeddings'
+    : !vectorCoverageKnown ? 'Rebuild vector index'
+    : 'Rebuild vector index';
+  async function rebuildVectorIndex(){
+    if (vectorRebuildBusy) return;
+    setVectorRebuildBusy(true);
+    try {
+      const result = await AgentApi.kb.rebuildVectorIndex(hash);
+      const entries = result && Number.isFinite(result.entriesEmbedded) ? result.entriesEmbedded : 0;
+      const topics = result && Number.isFinite(result.topicsEmbedded) ? result.topicsEmbedded : 0;
+      toast.success({ title: 'Vector index rebuilt', message: `${entries} entries · ${topics} topics` });
+    } catch (err) {
+      toast.error('Vector rebuild failed: ' + (err.message || String(err)));
+    } finally {
+      setVectorRebuildBusy(false);
+    }
+  }
+  const searchAction = !embeddingConfigured
+    ? { label: 'Open Embedding Settings', onClick: onOpenEmbeddingSettings }
+    : { label: vectorRebuildBusy ? 'Rebuilding Vector Index…' : 'Rebuild Vector Index', onClick: rebuildVectorIndex, disabled: vectorRebuildBusy || !vectorRebuildReady };
   const healthValue = failedCount > 0 ? `${failedCount} failed`
     : staleReflectionCount > 0 ? `${staleReflectionCount} stale`
     : hasStructureWarning ? 'Structure needed'
-    : hasSearchWarning ? 'Search limited'
+    : hasSearchWarning ? searchHealthValue
     : 'All gates ok';
   const healthTone = failedCount > 0 ? 'err' : staleReflectionCount > 0 || hasStructureWarning || hasSearchWarning ? 'warn' : 'ok';
   const healthSub = failedCount > 0 ? 'Open Raw Files to retry'
-    : staleReflectionCount > 0 ? dreamActive ? (dreamPhase === 'reflection' ? 'Refreshing reflections' : 'Refreshing synthesis') : 'Reflections need refresh'
-    : hasStructureWarning ? 'Backfill structure'
-    : hasSearchWarning ? 'Index coverage incomplete'
+    : staleReflectionCount > 0 ? dreamActive ? (dreamPhase === 'reflection' ? 'Refreshing reflections' : 'Refreshing synthesis') : 'Open Synthesis'
+    : hasStructureWarning ? 'Open Raw Files to backfill'
+    : hasSearchWarning ? searchHealthSub
     : 'No blockers';
+  const pipelineAction = failedCount > 0 ? { label: 'Open Raw Files', onClick: onOpenRaw }
+    : staleReflectionCount > 0 ? { label: 'Open Synthesis', onClick: onOpenSynthesis }
+    : hasStructureWarning ? { label: 'Open Raw Files', onClick: onOpenRaw }
+    : hasSearchWarning ? searchAction
+    : { label: 'Open Raw Files', onClick: onOpenRaw };
 
   return (
     <div className="kb-pane kb-pipeline-pane">
@@ -683,7 +740,7 @@ function KbPipelineTab({ kbState, onOpenRaw }){
           <div className="pipe-meta u-mono u-dim">
             {pipelineActiveCount > 0 ? `${pipelineActiveCount} active` : 'Pipeline idle'} · {awaitingDigestCount} awaiting digest · {needsSynthesisCount} awaiting Dream · {failedCount} failed
           </div>
-          <button type="button" className="btn" onClick={onOpenRaw}>Open Raw Files</button>
+          <button type="button" className="btn" onClick={pipelineAction.onClick} disabled={!!pipelineAction.disabled}>{pipelineAction.label}</button>
         </div>
       </div>
     </div>
@@ -3225,11 +3282,14 @@ const KB_EMB_DEFAULTS = {
   ollamaHost: 'http://localhost:11434',
   dimensions: 768,
 };
-function KbSettingsTab({ hash }){
+function KbSettingsTab({ hash, initialSection = 'auto-dream' }){
   const dialog = useDialog();
   const toast = useToasts();
   const [loading, setLoading] = React.useState(true);
-  const [settingsSection, setSettingsSection] = React.useState('auto-dream');
+  const normalizedInitialSection = ['auto-dream', 'glossary', 'embedding'].includes(initialSection)
+    ? initialSection
+    : 'auto-dream';
+  const [settingsSection, setSettingsSection] = React.useState(normalizedInitialSection);
   const [autoDreamMode, setAutoDreamMode] = React.useState('off');
   const [autoDreamInterval, setAutoDreamInterval] = React.useState(24);
   const [autoDreamWindowStart, setAutoDreamWindowStart] = React.useState('02:00');
@@ -3246,6 +3306,10 @@ function KbSettingsTab({ hash }){
   const [saving, setSaving] = React.useState(false);
   // health: null | 'checking' | { ok: boolean, error?: string }
   const [health, setHealth] = React.useState(null);
+
+  React.useEffect(() => {
+    setSettingsSection(normalizedInitialSection);
+  }, [normalizedInitialSection]);
 
   React.useEffect(() => {
     let cancelled = false;

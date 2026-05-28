@@ -19,6 +19,7 @@ import { planDigestChunks } from '../../services/knowledgeBase/chunkPlanner';
 import { estimateSourceUnitTextLengths } from '../../services/knowledgeBase/sourceRange';
 import { getKbAutoDreamState, validateKbAutoDreamConfig } from '../../services/knowledgeBase/autoDream';
 import { checkOllamaHealth } from '../../services/knowledgeBase/embeddings';
+import { KbVectorMaintenanceError, rebuildKbVectorIndex } from '../../services/knowledgeBase/vectorMaintenance';
 import {
   validateKbAutoDigestRequest,
   validateKbEmbeddingConfigRequest,
@@ -465,6 +466,24 @@ export function createKbRouter(opts: KbRoutesOptions): express.Router {
       const result = await checkOllamaHealth(cfg);
       res.json(result);
     } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  router.post('/workspaces/:workspaceId/kb/vector-index/rebuild', csrfGuard, async (req: Request, res: Response) => {
+    try {
+      const hash = param(req, 'workspaceId');
+      const result = await rebuildKbVectorIndex(chatService, hash);
+      broadcastKbStateUpdate(hash, {
+        type: 'kb_state_update',
+        updatedAt: new Date().toISOString(),
+        changed: { entries: [], synthesis: true },
+      });
+      res.json({ ok: true, ...result });
+    } catch (err: unknown) {
+      if (err instanceof KbVectorMaintenanceError) {
+        return res.status(err.statusCode).json({ error: err.message });
+      }
       res.status(500).json({ error: (err as Error).message });
     }
   });
