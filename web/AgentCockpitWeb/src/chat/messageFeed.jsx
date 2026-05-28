@@ -12,6 +12,11 @@ import {
   shouldShowProcessing,
 } from './messageModel.js';
 import {
+  messageAuthorLabel,
+  messageAvatarBackend,
+  pinMessageSourceLabel,
+} from './messageIdentity.js';
+import {
   GeneratedArtifact,
   TextSegment,
   ThinkingBlock,
@@ -70,10 +75,7 @@ export function PinStrip({ messages, currentIndex, onSelect }){
 }
 
 function pinMessageSource(message){
-  if (!message) return 'Message';
-  if (message.role === 'user') return 'You';
-  if (message.role === 'system') return 'System';
-  return message.backend || 'Assistant';
+  return pinMessageSourceLabel(message);
 }
 
 function pinMessagePreview(message){
@@ -125,6 +127,8 @@ export const MessageBubble = React.memo(function MessageBubble({ message, cliPro
   const isUser = message.role === 'user';
   const isGoalEvent = !!message.goalEvent;
   const assistantName = useAssistantDisplayName(message.backend, cliProfileId);
+  const authorName = messageAuthorLabel(message, assistantName);
+  const avatarBackend = messageAvatarBackend(message);
   const contentRef = React.useRef(null);
   const [copied, setCopied] = React.useState(null);
   const hasContent = !!(message.content && message.content.trim());
@@ -163,7 +167,7 @@ export const MessageBubble = React.memo(function MessageBubble({ message, cliPro
       {isUser ? (
         <span className="avatar">DY</span>
       ) : (
-        <AssistantAvatar backend={message.backend} cliProfileId={cliProfileId}/>
+        <AssistantAvatar backend={avatarBackend} cliProfileId={cliProfileId}/>
       )}
       <div className="body">
         {isUser ? (
@@ -176,7 +180,7 @@ export const MessageBubble = React.memo(function MessageBubble({ message, cliPro
         ) : (
           <>
             <div className="head">
-              <span className="who">{isGoalEvent ? 'Goal' : assistantName}</span>
+              <span className="who">{authorName}</span>
               <span>·</span>
               <span>{isStreaming ? 'streaming…' : msgTime(message.timestamp)}</span>
               {isPinned ? <PinnedTag/> : null}

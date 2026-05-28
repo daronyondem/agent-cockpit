@@ -1102,7 +1102,7 @@ When a backend reports that its native resumed session cannot be found, Agent Co
 }
 ```
 
-`processStream` persists the accompanying visible notice as a system `Message` with `sessionRecovery` metadata. The browser does not receive the internal `session_recovery` frame directly; it sees the persisted friendly system message through the normal `assistant_message` stream frame. The backend retry prompt contains a definitive instruction that the harness MUST read the snapshot path before answering the current user request.
+`processStream` persists the accompanying visible notice as a system `Message` with `sessionRecovery` metadata. The browser does not receive the internal `session_recovery` frame directly; it sees the persisted friendly system message through the normal `assistant_message` stream frame. Desktop and mobile render this system-owned notice with the Agent Cockpit logo and name; the metadata still records the backend that triggered recovery. The backend retry prompt contains a definitive instruction that the harness MUST read the snapshot path before answering the current user request.
 
 ### SessionRecoveryMetadata
 

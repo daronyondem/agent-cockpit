@@ -177,7 +177,7 @@ describe('frontend routes', () => {
     expect(messageFeedSrc).toContain('const assistantName = useAssistantDisplayName(message.backend, cliProfileId);');
     expect(chatLiveSrc).toContain('const entryCliProfileId = entry.message.cliProfileId');
     expect(chatLiveSrc).toContain('|| (isEntryStreaming ? state.composerCliProfileId : null)');
-    expect(messageFeedSrc).toContain('<AssistantAvatar backend={message.backend} cliProfileId={cliProfileId}/>');
+    expect(messageFeedSrc).toContain('<AssistantAvatar backend={avatarBackend} cliProfileId={cliProfileId}/>');
     const mobileChatScreenSrc = readMobileChatScreen();
     const mobileCss = readMobileCss();
     expect(mobileChatScreenSrc).toContain('opencodeProviderLabel');
