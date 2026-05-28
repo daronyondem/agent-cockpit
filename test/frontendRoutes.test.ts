@@ -482,8 +482,12 @@ describe('frontend routes', () => {
     expect(appSrc).toContain('sendInFlightRef.current = true;');
     expect(appSrc).toContain('sendInFlightRef.current = false;');
     expect(appSrc).toContain('function isAlreadyStreamingError');
-    expect(appSrc).toMatch(/if \(isAlreadyStreamingError\(error\)\) \{\s*await recoverActiveStream\(conversation\.id\);\s*return \{ ok: false, reason: 'active-stream-recovered', error \};\s*\}/);
+    expect(appSrc).toContain('function rollbackOptimisticSend');
+    expect(appSrc).toContain('function reconcileRecoveredActiveSend');
+    expect(appSrc).toMatch(/if \(isAlreadyStreamingError\(error\)\) \{\s*rollbackOptimisticSend\(conversation, optimisticUserID, message, attachmentsSnapshot, restoreDraftOnFailure\);\s*await recoverActiveStream\(conversation\.id\);\s*return \{ ok: false, reason: 'active-stream-recovered', error \};\s*\}/);
     expect(appSrc).toContain('if (await recoverActiveStream(conversation.id, { onlyIfServerActive: true }))');
+    expect(appSrc).toContain('await reconcileRecoveredActiveSend(conversation.id, conversation.messages.length, content);');
+    expect(appSrc).toContain('return { ok: true };');
     expect(appSrc).toContain('sendMessageNow(nextMessage, { clearComposer: false, restoreDraftOnFailure: false })');
     expect(mobileChatScreenSrc).toContain('isSending: boolean;');
     expect(mobileChatScreenSrc).toContain('props.isSending');

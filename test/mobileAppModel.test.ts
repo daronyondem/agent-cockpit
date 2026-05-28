@@ -135,6 +135,52 @@ describe('mobile app model helpers', () => {
     expect(model.removeMessagesByID([pendingUser, assistantMessage], ['pending-user-1'])).toEqual([assistantMessage]);
   });
 
+  test('reconciles recovered mobile sends with the persisted user message when the server accepted the turn', () => {
+    const pendingUser = {
+      id: 'pending-user-1',
+      role: 'user',
+      content: 'Hello',
+      backend: 'codex',
+      timestamp: '2026-05-01T00:00:00.000Z',
+    };
+    const earlierUser = {
+      id: 'server-user-old',
+      role: 'user',
+      content: 'Hello',
+      backend: 'codex',
+      timestamp: '2026-05-01T00:00:01.000Z',
+    };
+    const serverUser = {
+      id: 'server-user-new',
+      role: 'user',
+      content: 'Hello',
+      backend: 'codex',
+      timestamp: '2026-05-01T00:00:02.000Z',
+    };
+    const assistantMessage = {
+      id: 'assistant-1',
+      role: 'assistant',
+      content: 'Working',
+      backend: 'codex',
+      timestamp: '2026-05-01T00:00:03.000Z',
+    };
+    const currentConversation = { id: 'conv-1', messages: [earlierUser, pendingUser] };
+    const serverConversation = { id: 'conv-1', messages: [earlierUser, serverUser, assistantMessage] };
+
+    expect(model.reconcileRecoveredSendConversation(
+      currentConversation,
+      serverConversation,
+      1,
+      'Hello',
+    )).toEqual(serverConversation);
+    expect(model.reconcileRecoveredSendConversation(
+      currentConversation,
+      { id: 'conv-1', messages: [earlierUser] },
+      1,
+      'Hello',
+    )).toBe(currentConversation);
+  });
+
   test('applies selected runtime metadata to optimistic mobile sends', () => {
     const conversation = {
       id: 'conv-1',

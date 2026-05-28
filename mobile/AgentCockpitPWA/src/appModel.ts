@@ -427,6 +427,23 @@ export function replaceMessageByID(messages: Message[], id: string, replacement:
   return replaced ? next : [...next, replacement];
 }
 
+export function reconcileRecoveredSendConversation<T extends Pick<Conversation, 'messages'>>(
+  currentConversation: T,
+  serverConversation: T,
+  previousMessageCount: number,
+  content: string,
+): T {
+  const expectedContent = content.trim();
+  const searchStart = Math.max(0, Math.min(previousMessageCount, serverConversation.messages.length));
+  const persistedUserMessage = serverConversation.messages
+    .slice(searchStart)
+    .find((message) => message.role === 'user' && message.content.trim() === expectedContent);
+  if (!persistedUserMessage) {
+    return currentConversation;
+  }
+  return serverConversation;
+}
+
 export function removeMessagesByID(messages: Message[], ids: string[]): Message[] {
   if (!ids.length) return messages;
   const blocked = new Set(ids);
