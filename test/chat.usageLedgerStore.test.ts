@@ -67,7 +67,7 @@ describe('UsageLedgerStore', () => {
     expect(record.usage.costSource).toBe('estimated');
     expect(record.usage.estimatedCostUsd).toBeCloseTo(17.5);
     expect(record.usage.costSnapshot).toMatchObject({
-      catalogVersion: '2026-05-20',
+      catalogVersion: '2026-05-28',
       pricedAt: '2026-05-20T00:00:00.000Z',
       provider: 'openai',
       model: 'gpt-5.4',

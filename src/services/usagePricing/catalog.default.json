@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "version": "2026-05-20",
+  "version": "2026-05-28",
   "currency": "USD",
   "entries": [
     {
@@ -117,6 +117,21 @@
         "input": 5,
         "cachedInput": 0.5,
         "output": 30
+      }
+    },
+    {
+      "id": "anthropic-claude-opus-4.8-family",
+      "provider": "anthropic",
+      "modelPattern": "claude-opus-4-8*",
+      "unit": "tokens",
+      "sourceUrl": "https://platform.claude.com/docs/en/about-claude/pricing",
+      "verifiedAt": "2026-05-28",
+      "effectiveDate": "2026-05-28",
+      "ratesPerMillion": {
+        "input": 5,
+        "cacheWrite": 6.25,
+        "cachedInput": 0.5,
+        "output": 25
       }
     },
     {

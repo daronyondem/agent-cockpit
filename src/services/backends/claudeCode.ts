@@ -142,10 +142,19 @@ export class ClaudeCodeAdapter extends BaseBackendAdapter {
       },
       models: [
         {
+          id: 'claude-opus-4-8',
+          label: 'Opus 4.8',
+          family: 'opus',
+          description: 'Latest Opus — most capable for complex reasoning and agentic coding',
+          costTier: 'high',
+          supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
+          capabilities: CLAUDE_MODEL_CAPABILITIES,
+        },
+        {
           id: 'claude-opus-4-7',
           label: 'Opus 4.7',
           family: 'opus',
-          description: 'Latest Opus — most capable, supports the new xhigh effort level',
+          description: 'Previous Opus — complex reasoning, architecture, nuanced tasks',
           costTier: 'high',
           supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
           capabilities: CLAUDE_MODEL_CAPABILITIES,
