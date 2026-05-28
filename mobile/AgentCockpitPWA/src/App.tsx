@@ -20,6 +20,7 @@ import {
   parentExplorerPath,
   patchConversationMessage,
   reconcileEffort,
+  reconcileRecoveredSendConversation,
   removeMessagesByID,
   replaceMessageByID,
   shouldApplyGoalSnapshot,
@@ -661,37 +662,72 @@ export default function App() {
       }
       return { ok: true };
     } catch (error) {
-      if (restoreDraftOnFailure) {
-        setDraft(message.content);
-        setPendingAttachments(attachmentsSnapshot);
-      }
-      setActiveConversation((current) => {
-        if (!current || current.id !== conversation.id) return current;
-        const next = {
-          ...current,
-          backend: conversation.backend,
-          cliProfileId: conversation.cliProfileId,
-          model: conversation.model,
-          effort: conversation.effort,
-          serviceTier: conversation.serviceTier,
-          messages: removeMessagesByID(current.messages, [optimisticUserID]),
-        };
-        activeConversationRef.current = next;
-        return next;
-      });
       if (isAlreadyStreamingError(error)) {
+        rollbackOptimisticSend(conversation, optimisticUserID, message, attachmentsSnapshot, restoreDraftOnFailure);
         await recoverActiveStream(conversation.id);
         return { ok: false, reason: 'active-stream-recovered', error };
       }
       if (await recoverActiveStream(conversation.id, { onlyIfServerActive: true })) {
-        return { ok: false, reason: 'active-stream-recovered', error };
+        await reconcileRecoveredActiveSend(conversation.id, conversation.messages.length, content);
+        return { ok: true };
       }
+      rollbackOptimisticSend(conversation, optimisticUserID, message, attachmentsSnapshot, restoreDraftOnFailure);
       markStreamFinished(conversation.id);
       handleError(error);
       return { ok: false, reason: 'failed', error };
     } finally {
       sendInFlightRef.current = false;
       setIsSending(false);
+    }
+  }
+
+  function rollbackOptimisticSend(
+    conversation: Conversation,
+    optimisticUserID: string,
+    message: QueuedMessage,
+    attachmentsSnapshot: PendingAttachment[],
+    restoreDraftOnFailure: boolean,
+  ) {
+    if (restoreDraftOnFailure) {
+      setDraft(message.content);
+      setPendingAttachments(attachmentsSnapshot);
+    }
+    setActiveConversation((current) => {
+      if (!current || current.id !== conversation.id) return current;
+      const next = {
+        ...current,
+        backend: conversation.backend,
+        cliProfileId: conversation.cliProfileId,
+        model: conversation.model,
+        effort: conversation.effort,
+        serviceTier: conversation.serviceTier,
+        messages: removeMessagesByID(current.messages, [optimisticUserID]),
+      };
+      activeConversationRef.current = next;
+      return next;
+    });
+  }
+
+  async function reconcileRecoveredActiveSend(
+    conversationID: string,
+    previousMessageCount: number,
+    content: string,
+  ) {
+    try {
+      const serverConversation = await clientRef.current.getConversation(conversationID);
+      setActiveConversation((current) => {
+        if (!current || current.id !== conversationID) return current;
+        const next = reconcileRecoveredSendConversation(
+          current,
+          serverConversation,
+          previousMessageCount,
+          content,
+        );
+        activeConversationRef.current = next;
+        return next;
+      });
+    } catch {
+      // Keep the optimistic user bubble visible until the post-stream refresh.
     }
   }
 
