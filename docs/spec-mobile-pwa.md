@@ -101,6 +101,7 @@ The PWA currently covers:
 - Backend metadata loading via `GET /api/chat/backends`.
 - Profile-specific backend metadata loading via `GET /api/chat/cli-profiles/:profileId/metadata`.
 - Active/archived conversation list via `GET /api/chat/conversations`.
+- Workspace-level archives are respected by the shared conversation-list contract: archived workspaces are excluded from the mobile active and archived conversation lists unless a caller explicitly asks for `includeArchivedWorkspaces`, which the PWA does not do. The PWA does not expose workspace archive management, remapping, file snapshot restore, or archived-data deletion; those remain desktop filesystem-management workflows.
 - Flat latest-first conversation list with a workspace select filter. `All conversations` is the default; choosing a workspace filters the list to that `workspaceId` without introducing collapsible workspace groups. Each card renders the workspace label in the header and keeps the timestamp in the footer beside message count/live status so the date appears only once.
 - Conversation-list previews strip uploaded-file/file-delivery wire markers. Attachment-only previews render as human labels such as `Attachment: IMG_3021.PNG` rather than exposing absolute artifact paths.
 - Active-stream summary hydration via `GET /api/chat/active-streams`.

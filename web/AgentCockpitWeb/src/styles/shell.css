@@ -19,6 +19,9 @@
 .cockpit.with-rail{
   grid-template-columns: var(--cockpit-sb-w, 260px) 1fr 320px;
 }
+.cockpit.global-settings-view{
+  grid-template-columns: minmax(0, 1fr);
+}
 
 /* ---------- sidebar ---------- */
 .sb{

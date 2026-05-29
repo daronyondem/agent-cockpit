@@ -3,7 +3,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { ChatService, WorkspaceLocationUpdateError } from '../src/services/chatService';
+import { ChatService, WorkspaceArchiveError, WorkspaceLocationUpdateError } from '../src/services/chatService';
 import { workspaceHash } from './helpers/workspace';
 
 
@@ -730,6 +730,222 @@ describe('listConversations includes workspaceHash', () => {
     const conv = list.find(c => c.workingDir === '/tmp/kb-on');
     expect(conv).toBeDefined();
     expect(conv!.workspaceKbEnabled).toBe(true);
+  });
+});
+
+describe('workspace archive lifecycle', () => {
+  test('archives a workspace, hides its conversations, and blocks new conversations until restore', async () => {
+    const workspacePath = path.join(tmpDir, 'archive-workspace');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const conv = await service.createConversation('Archive me', workspacePath);
+
+    const archived = await service.archiveWorkspace(conv.workspaceId, {
+      mode: 'history_only',
+      note: 'Done for now',
+    });
+
+    expect(archived).toMatchObject({
+      workspaceId: conv.workspaceId,
+      archived: true,
+      pathAvailable: true,
+      conversationCount: 1,
+      archive: {
+        mode: 'history_only',
+        note: 'Done for now',
+        finalLearningPass: { status: 'queued' },
+      },
+    });
+    expect(fs.existsSync(archived!.archive!.finalLearningPass!.summaryPath!)).toBe(true);
+
+    await expect(service.listConversations()).resolves.toEqual([]);
+    await expect(service.listConversations({ includeArchivedWorkspaces: true })).resolves.toHaveLength(1);
+    await expect(service.createConversation('New active chat', workspacePath)).rejects.toBeInstanceOf(WorkspaceArchiveError);
+
+    const restored = await service.restoreWorkspace(conv.workspaceId);
+    expect(restored?.archived).toBe(false);
+    await expect(service.listConversations()).resolves.toHaveLength(1);
+  });
+
+  test('requires archived workspaces with missing folders to be remapped before restore', async () => {
+    const workspacePath = path.join(tmpDir, 'archive-missing-original');
+    const remappedPath = path.join(tmpDir, 'archive-remapped');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    fs.mkdirSync(remappedPath, { recursive: true });
+    const conv = await service.createConversation('Archive missing', workspacePath);
+
+    await service.archiveWorkspace(conv.workspaceId, { mode: 'history_only' });
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+
+    const missing = await service.getWorkspaceSummary(conv.workspaceId);
+    expect(missing).toMatchObject({ archived: true, pathAvailable: false });
+    await expect(service.restoreWorkspace(conv.workspaceId)).rejects.toMatchObject({
+      code: 'workspace_path_unavailable',
+      status: 409,
+    });
+
+    const remapped = await service.updateWorkspaceLocation(conv.workspaceId, remappedPath);
+    expect(remapped?.workspacePath).toBe(remappedPath);
+    const restored = await service.restoreWorkspace(conv.workspaceId);
+    expect(restored).toMatchObject({ archived: false, workspacePath: remappedPath, pathAvailable: true });
+  });
+
+  test('scheduled workspace feature lists skip archived workspaces without disabling the feature flags', async () => {
+    const workspacePath = path.join(tmpDir, 'archive-scheduler-skip');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const conv = await service.createConversation('Archive scheduler', workspacePath);
+    await service.setWorkspaceMemoryEnabled(conv.workspaceId, true);
+    await service.setWorkspaceKbEnabled(conv.workspaceId, true);
+    await service.setWorkspaceContextEnabled(conv.workspaceId, true);
+
+    await expect(service.listMemoryEnabledWorkspaceHashes()).resolves.toContain(conv.workspaceId);
+    await expect(service.listKbEnabledWorkspaceHashes()).resolves.toContain(conv.workspaceId);
+    await expect(service.listWorkspaceContextEnabledWorkspaceHashes()).resolves.toContain(conv.workspaceId);
+
+    await service.archiveWorkspace(conv.workspaceId, { mode: 'history_only' });
+
+    await expect(service.getWorkspaceMemoryEnabled(conv.workspaceId)).resolves.toBe(true);
+    await expect(service.getWorkspaceKbEnabled(conv.workspaceId)).resolves.toBe(true);
+    await expect(service.getWorkspaceContextEnabled(conv.workspaceId)).resolves.toBe(true);
+    await expect(service.listMemoryEnabledWorkspaceHashes()).resolves.not.toContain(conv.workspaceId);
+    await expect(service.listKbEnabledWorkspaceHashes()).resolves.not.toContain(conv.workspaceId);
+    await expect(service.listWorkspaceContextEnabledWorkspaceHashes()).resolves.not.toContain(conv.workspaceId);
+  });
+
+  test('archives a verified file snapshot and restores it to a new mapped folder', async () => {
+    const workspacePath = path.join(tmpDir, 'archive-snapshot-original');
+    const restorePath = path.join(tmpDir, 'archive-snapshot-restored');
+    fs.mkdirSync(path.join(workspacePath, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(workspacePath, 'node_modules', 'pkg'), { recursive: true });
+    fs.writeFileSync(path.join(workspacePath, 'README.md'), '# Snapshot\n');
+    fs.writeFileSync(path.join(workspacePath, 'src', 'index.ts'), 'export const value = 1;\n');
+    fs.writeFileSync(path.join(workspacePath, 'node_modules', 'pkg', 'index.js'), 'module.exports = 1;\n');
+    const conv = await service.createConversation('Snapshot archive', workspacePath);
+
+    const estimate = await service.estimateWorkspaceSnapshot(conv.workspaceId, 'exclude_common');
+    expect(estimate).toMatchObject({
+      workspaceId: conv.workspaceId,
+      inclusionPolicy: 'exclude_common',
+      fileCount: 2,
+      excludedCount: 1,
+    });
+
+    const archived = await service.archiveWorkspace(conv.workspaceId, {
+      mode: 'file_snapshot',
+      snapshot: {
+        inclusionPolicy: 'exclude_common',
+        cleanupOriginal: 'keep',
+      },
+    });
+
+    expect(archived).toMatchObject({
+      archived: true,
+      archive: {
+        mode: 'file_snapshot',
+        snapshot: {
+          status: 'verified',
+          fileCount: 2,
+          inclusionPolicy: 'exclude_common',
+        },
+      },
+    });
+    expect(fs.existsSync(archived!.archive!.snapshot!.archivePath!)).toBe(true);
+    expect(fs.existsSync(archived!.archive!.snapshot!.manifestPath!)).toBe(true);
+
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+    const restored = await service.restoreWorkspaceFromSnapshot(conv.workspaceId, restorePath);
+    expect(restored).toMatchObject({
+      archived: false,
+      workspacePath: restorePath,
+      pathAvailable: true,
+    });
+    expect(fs.readFileSync(path.join(restorePath, 'README.md'), 'utf8')).toContain('# Snapshot');
+    expect(fs.readFileSync(path.join(restorePath, 'src', 'index.ts'), 'utf8')).toContain('value = 1');
+    expect(fs.existsSync(path.join(restorePath, 'node_modules'))).toBe(false);
+  });
+
+  test('can remove the original folder after a verified snapshot archive', async () => {
+    const workspacePath = path.join(tmpDir, 'archive-snapshot-delete-original');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    fs.writeFileSync(path.join(workspacePath, 'keep.txt'), 'snapshot me');
+    const conv = await service.createConversation('Snapshot delete original', workspacePath);
+
+    const archived = await service.archiveWorkspace(conv.workspaceId, {
+      mode: 'file_snapshot',
+      snapshot: {
+        inclusionPolicy: 'include_all',
+        cleanupOriginal: 'delete_permanently',
+        confirmDeleteOriginal: 'DELETE ORIGINAL',
+      },
+    });
+
+    expect(archived).toMatchObject({
+      archived: true,
+      pathAvailable: false,
+      archive: {
+        snapshot: { status: 'verified', fileCount: 1 },
+        originalCleanup: { mode: 'delete_permanently' },
+      },
+    });
+    expect(fs.existsSync(workspacePath)).toBe(false);
+    expect(fs.existsSync(archived!.archive!.snapshot!.archivePath!)).toBe(true);
+  });
+
+  test('refuses snapshot cleanup when the workspace folder is inside archive-owned storage', async () => {
+    const workspacePath = path.join(tmpDir, 'data', 'chat', 'restored-workspaces', 'archive-owned-workspace');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    fs.writeFileSync(path.join(workspacePath, 'keep.txt'), 'do not cleanup product storage');
+    const conv = await service.createConversation('Snapshot protected cleanup', workspacePath);
+
+    const archived = await service.archiveWorkspace(conv.workspaceId, {
+      mode: 'file_snapshot',
+      snapshot: {
+        inclusionPolicy: 'include_all',
+        cleanupOriginal: 'delete_permanently',
+        confirmDeleteOriginal: 'DELETE ORIGINAL',
+      },
+    });
+
+    expect(archived).toMatchObject({
+      archived: true,
+      pathAvailable: true,
+      archive: {
+        snapshot: { status: 'verified', fileCount: 1 },
+        originalCleanup: {
+          mode: 'delete_permanently',
+          error: expect.stringContaining('Agent Cockpit archive storage'),
+        },
+      },
+    });
+    expect(fs.existsSync(path.join(workspacePath, 'keep.txt'))).toBe(true);
+  });
+
+  test('deletes retained Agent Cockpit data only after workspace archival', async () => {
+    const workspacePath = path.join(tmpDir, 'archive-delete-data');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const conv = await service.createConversation('Delete archived data', workspacePath);
+
+    await expect(service.deleteArchivedWorkspaceData(conv.workspaceId)).rejects.toMatchObject({
+      code: 'workspace_not_archived',
+      status: 409,
+    });
+
+    const archived = await service.archiveWorkspace(conv.workspaceId, {
+      mode: 'file_snapshot',
+      snapshot: { inclusionPolicy: 'include_all', cleanupOriginal: 'move_to_trash' },
+    });
+    const storageKey = service.getWorkspaceStorageKey(conv.workspaceId)!;
+    const workspaceDataDir = path.join(tmpDir, 'data', 'chat', 'workspaces', storageKey);
+    const snapshotDir = path.join(tmpDir, 'data', 'chat', 'workspace-snapshots', conv.workspaceId);
+    const movedOriginal = archived!.archive!.originalCleanup!.movedTo!;
+    expect(fs.existsSync(workspaceDataDir)).toBe(true);
+    expect(fs.existsSync(snapshotDir)).toBe(true);
+    expect(fs.existsSync(movedOriginal)).toBe(true);
+
+    await expect(service.deleteArchivedWorkspaceData(conv.workspaceId)).resolves.toBe(true);
+    expect(fs.existsSync(workspaceDataDir)).toBe(false);
+    expect(fs.existsSync(snapshotDir)).toBe(false);
+    expect(fs.existsSync(movedOriginal)).toBe(false);
+    expect(service.getWorkspaceStorageKey(conv.workspaceId)).toBeNull();
   });
 });
 

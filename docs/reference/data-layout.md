@@ -17,6 +17,9 @@ data/
 │   │   ├── knowledge/
 │   │   ├── workspace-context/
 │   │   └── session-finalizers.json
+│   ├── workspace-snapshots/{workspaceId}/ # Optional verified ZIP snapshots for archived workspaces
+│   ├── workspace-trash/       # Product-owned moved originals from snapshot archive cleanup
+│   ├── restored-workspaces/   # Default extraction root for snapshot restores
 │   ├── stream-jobs.json
 │   ├── usage-ledger.json
 │   ├── artifacts/
@@ -43,6 +46,16 @@ Conversations, session files, memory, Knowledge Base artifacts, and Workspace
 Context state are scoped by stable workspace identity. `data/chat/workspaces.json`
 maps each immutable `workspaceId` to mutable path metadata and to the on-disk
 `storageKey`; legacy workspaces keep their original path hash as the storage key.
+
+Archived workspaces keep their Agent Cockpit-owned data under the same
+`workspaces/{storageKey}/` directory until the user restores or deletes the
+archive record. Optional file snapshots are stored under
+`workspace-snapshots/{workspaceId}/` as a ZIP plus a JSON manifest containing
+per-file SHA-256 checksums. Snapshot restores extract into an empty destination;
+when no destination is supplied the server uses `restored-workspaces/`. If
+snapshot archival moves the original folder instead of deleting it, the moved
+copy lives under `workspace-trash/` and is removed with the archived workspace
+record.
 
 ## Export And Import
 

@@ -138,7 +138,7 @@ set the OpenCode command path explicitly in the CLI profile.
 
 ## 4. Add An OpenCode Profile In Agent Cockpit
 
-Open Agent Cockpit and go to **Settings -> CLI Config**.
+Open Agent Cockpit and go to **Settings -> CLI Profiles**.
 
 1. Add or edit a CLI profile.
 2. Set the harness to **OpenCode**.

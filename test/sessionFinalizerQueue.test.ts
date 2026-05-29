@@ -87,6 +87,39 @@ describe('SessionFinalizerQueue', () => {
     expect(jobs).toHaveLength(2);
   });
 
+  test('uses optional identity keys to separate repeated lifecycle passes', async () => {
+    const terminal: SessionFinalizerJob[] = [];
+    queue = new SessionFinalizerQueue({
+      workspacesDir,
+      handleJob: async () => {},
+      onTerminalJob: async (job) => {
+        terminal.push(job);
+      },
+    });
+    await queue.start();
+
+    const first = await queue.enqueue({
+      workspaceHash: 'ws1',
+      conversationId: 'conv1',
+      sessionNumber: 2,
+      type: 'memory_extraction',
+      payload: { identityKey: 'archive:first' },
+    });
+    const second = await queue.enqueue({
+      workspaceHash: 'ws1',
+      conversationId: 'conv1',
+      sessionNumber: 2,
+      type: 'memory_extraction',
+      payload: { identityKey: 'archive:second' },
+    });
+    await queue.waitForIdle(1_000);
+
+    const jobs = await queue.listJobs('ws1');
+    expect(second.id).not.toBe(first.id);
+    expect(jobs).toHaveLength(2);
+    expect(terminal.map((job) => job.id).sort()).toEqual([first.id, second.id].sort());
+  });
+
   test('stores canonical workspace jobs under the resolved storage key', async () => {
     queue = new SessionFinalizerQueue({
       workspacesDir,

@@ -44,6 +44,7 @@ import { buildMemoryMcpAddendum } from './chat/memoryPrompt';
 import { createStreamRouter } from './chat/streamRoutes';
 import { createUploadRouter } from './chat/uploadRoutes';
 import { createWorkspaceInstructionRouter } from './chat/workspaceInstructionRoutes';
+import { createWorkspaceArchiveRouter } from './chat/workspaceArchiveRoutes';
 import { createWorkspaceLocationRouter } from './chat/workspaceLocationRoutes';
 import { createWorktreeIsolationRouter } from './chat/worktreeIsolationRoutes';
 import { clearGoalEvent, formatGoalEventMessage, goalEventDedupeKey, goalEventFromStatus, normalizeGoalSnapshot } from '../services/chat/goalEventMessages';
@@ -1026,10 +1027,34 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     }
   }
 
-  const sessionFinalizers = new SessionFinalizerQueue({
+  let sessionFinalizers: SessionFinalizerQueue;
+
+  async function updateWorkspaceArchiveFinalLearningStatus(job: SessionFinalizerJob): Promise<void> {
+    const workspaceId = readStringPayload(job, 'archiveFinalLearningWorkspaceId');
+    const identityKey = readStringPayload(job, 'identityKey');
+    if (!workspaceId || !identityKey) return;
+    const jobs = (await sessionFinalizers.listJobs(workspaceId)).filter((candidate) => (
+      readStringPayload(candidate, 'archiveFinalLearningWorkspaceId') === workspaceId
+      && readStringPayload(candidate, 'identityKey') === identityKey
+    ));
+    if (jobs.length === 0) return;
+    if (jobs.some((candidate) => (
+      candidate.status === 'pending'
+      || candidate.status === 'running'
+      || candidate.status === 'retrying'
+    ))) return;
+    const failed = jobs.find((candidate) => candidate.status === 'failed');
+    await chatService.completeWorkspaceArchiveFinalLearningPass(
+      workspaceId,
+      failed ? (failed.errorMessage || `Archive finalizer ${failed.type} failed`) : undefined,
+    );
+  }
+
+  sessionFinalizers = new SessionFinalizerQueue({
     workspacesDir: chatService.workspacesDir,
     resolveWorkspaceStorageKey: (workspaceRef) => chatService.getWorkspaceStorageKey(workspaceRef),
     handleJob: runSessionFinalizerJob,
+    onTerminalJob: updateWorkspaceArchiveFinalLearningStatus,
   });
   void sessionFinalizers.start().catch((err: unknown) => {
     log.warn('Session finalizer startup scan failed', { error: err });
@@ -1093,6 +1118,57 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     });
   }
 
+  async function enqueueWorkspaceArchiveFinalizers(workspaceId: string): Promise<void> {
+    const workspace = await chatService.getWorkspaceSummary(workspaceId);
+    const archivedAt = workspace?.archive?.archivedAt || new Date().toISOString();
+    const identityKey = `archive:${archivedAt}`;
+    const targets = await chatService.getWorkspaceArchiveFinalizerTargets(workspaceId);
+    let enqueued = 0;
+    const memoryEnabled = await chatService.getWorkspaceMemoryEnabled(workspaceId);
+    const workspaceContextEnabled = await chatService.getWorkspaceContextEnabled(workspaceId);
+    for (const target of targets) {
+      const runtime = target.backendId
+        ? {
+            backendId: target.backendId,
+            cliProfileId: target.cliProfileId || undefined,
+            profile: undefined,
+          } as Awaited<ReturnType<ChatService['resolveCliProfileRuntime']>>
+        : null;
+      if (memoryEnabled) {
+        await sessionFinalizers.enqueue({
+          workspaceHash: workspaceId,
+          conversationId: target.conversationId,
+          sessionNumber: target.sessionNumber,
+          type: 'memory_extraction',
+          payload: {
+            identityKey,
+            archiveFinalLearningWorkspaceId: workspaceId,
+            ...(runtime?.backendId ? { backendId: runtime.backendId } : {}),
+            ...(runtime?.cliProfileId ? { cliProfileId: runtime.cliProfileId } : {}),
+          },
+        });
+        enqueued += 1;
+      }
+      if (workspaceContextEnabled) {
+        await sessionFinalizers.enqueue({
+          workspaceHash: workspaceId,
+          conversationId: target.conversationId,
+          sessionNumber: target.sessionNumber,
+          type: 'workspace_context_conversation_final_pass',
+          payload: {
+            source: 'archive',
+            identityKey,
+            archiveFinalLearningWorkspaceId: workspaceId,
+          },
+        });
+        enqueued += 1;
+      }
+    }
+    if (enqueued === 0) {
+      await chatService.completeWorkspaceArchiveFinalLearningPass(workspaceId);
+    }
+  }
+
   function fingerprintMemoryFiles(snapshot: { files: Array<{ filename: string; content: string }> }): Map<string, string> {
     const fp = new Map<string, string>();
     for (const f of snapshot.files) {
@@ -1132,6 +1208,12 @@ export function createChatRouter({ chatService, backendRegistry, updateService, 
     enqueueWorkspaceContextFinalizer,
   }));
   router.use(createWorkspaceContextRouter({ chatService, workspaceContextService, emitFreshWorkspaceContextUpdate }));
+  router.use(createWorkspaceArchiveRouter({
+    chatService,
+    hasInFlightTurnForWorkspace,
+    isWorkspaceOperationRunning: (workspaceId) => workspaceContextService.isRunning(workspaceId),
+    enqueueWorkspaceArchiveFinalizers,
+  }));
   router.use(createWorkspaceLocationRouter({
     chatService,
     hasInFlightTurnForWorkspace,

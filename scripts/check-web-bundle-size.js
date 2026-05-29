@@ -8,7 +8,7 @@ const DEFAULT_BUILD_DIR = path.join(ROOT, 'public', 'v2-built');
 const KIB = 1024;
 
 const DEFAULT_BUDGETS = {
-  totalJs: 850 * KIB,
+  totalJs: 865 * KIB,
   totalCss: 230 * KIB,
   maxJsAsset: 230 * KIB,
   maxCssAsset: 230 * KIB,

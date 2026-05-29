@@ -26,8 +26,9 @@ interface ConversationLifecycleStoreDeps {
 export class ConversationLifecycleStore {
   constructor(private readonly deps: ConversationLifecycleStoreDeps) {}
 
-  async listConversations(opts?: { archived?: boolean }): Promise<ConversationListItem[]> {
+  async listConversations(opts?: { archived?: boolean; includeArchivedWorkspaces?: boolean }): Promise<ConversationListItem[]> {
     const wantArchived = opts?.archived === true;
+    const includeArchivedWorkspaces = opts?.includeArchivedWorkspaces === true;
     const convs: ConversationListItem[] = [];
     let dirs: string[];
     try {
@@ -41,6 +42,7 @@ export class ConversationLifecycleStore {
       if (storageKey.startsWith('.')) continue;
       const index = await this.deps.readWorkspaceIndex(storageKey);
       if (!index || !index.conversations) continue;
+      if (index.archive && !includeArchivedWorkspaces) continue;
       const workspaceId = index.workspaceId || this.deps.resolveWorkspaceId(storageKey) || storageKey;
       const legacyHash = this.deps.workspaceLegacyHashForRef(workspaceId);
       for (const conv of index.conversations) {

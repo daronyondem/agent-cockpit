@@ -214,7 +214,7 @@ export class WorkspaceFeatureSettingsStore {
     for (const hash of dirs) {
       if (hash.startsWith('.')) continue;
       const index = await this.readMigratedWorkspaceIndex(hash);
-      if (index && predicate(index)) hashes.push(index.workspaceId || hash);
+      if (index && !index.archive && predicate(index)) hashes.push(index.workspaceId || hash);
     }
     return hashes;
   }

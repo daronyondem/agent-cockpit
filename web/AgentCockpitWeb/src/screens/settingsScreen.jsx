@@ -7,26 +7,27 @@ import { useToasts } from '../toast.jsx';
 import { CliUpdateStore } from '../cliUpdateStore.js';
 
 const MigrationTab = React.lazy(() => import('./settingsMigrationTab.jsx').then(mod => ({ default: mod.MigrationTab })));
+const ArchivedWorkspacesPanel = React.lazy(() => import('./archivedWorkspaces.jsx').then(mod => ({ default: mod.ArchivedWorkspacesPanel })));
 
 /* SettingsScreen — full-screen V2 app settings page.
-   Mirrors the V1 layout (General / CLI Config / Memory / Knowledge Base /
-   Workspace Context / Security / Usage / Server) backed by `GET/PUT /settings` plus `GET /backends`,
+   Mirrors the V1 layout (General / CLI Profiles / Memory / Knowledge Base /
+   Workspace Context / Security / Usage & Cost / Archived Workspaces / Server)
+   backed by `GET/PUT /settings` plus `GET /backends`,
    auth/security endpoints, `GET /usage-stats` (+ DELETE), and `POST /server/restart`.
-   All form tabs share a single
-   in-memory `settings` object; clicking Save on any form tab POSTs the full
-   merged shape so the user doesn't have to remember to save from one specific
-   tab (V1 only had Save on General). */
+   All form tabs share a single in-memory `settings` object; the top-bar Save
+   button POSTs the full merged shape so changes across sections save together. */
 
 const SETTINGS_TABS = [
-  { id: 'general', label: 'General' },
-  { id: 'cli',     label: 'CLI Config' },
-  { id: 'memory',  label: 'Memory' },
-  { id: 'kb',      label: 'Knowledge Base' },
-  { id: 'workspaceContext', label: 'Workspace Context' },
-  { id: 'security', label: 'Security' },
-  { id: 'usage',   label: 'Usage' },
-  { id: 'migration', label: 'Migration' },
-  { id: 'server',  label: 'Server' },
+  { id: 'general', label: 'General', icon: Ico.settings },
+  { id: 'cli',     label: 'CLI Profiles', icon: Ico.terminal },
+  { id: 'memory',  label: 'Memory', icon: Ico.reflect },
+  { id: 'kb',      label: 'Knowledge Base', icon: Ico.book },
+  { id: 'workspaceContext', label: 'Workspace Context', icon: Ico.graph },
+  { id: 'security', label: 'Security', icon: Ico.key },
+  { id: 'usage',   label: 'Usage & Cost', icon: Ico.zap },
+  { id: 'migration', label: 'Migration', icon: Ico.download },
+  { id: 'archivedWorkspaces', label: 'Archived Workspaces', icon: Ico.archive },
+  { id: 'server',  label: 'Server', icon: Ico.globe },
 ];
 
 const CLI_HARNESS_OPTIONS = [
@@ -331,7 +332,7 @@ function Toggle({ checked, onChange, label }){
   );
 }
 
-export function SettingsScreen({ onClose, initialTab }){
+export function SettingsScreen({ onClose, initialTab, onOpenWorkspaceSettings }){
   const dialog = useDialog();
   const toast = useToasts();
   const [tab, setTab] = React.useState(() => SETTINGS_TABS.some(t => t.id === initialTab) ? initialTab : 'general');
@@ -341,6 +342,7 @@ export function SettingsScreen({ onClose, initialTab }){
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
+  const [cliValidationError, setCliValidationError] = React.useState('');
 
   React.useEffect(() => {
     let cancelled = false;
@@ -378,8 +380,14 @@ export function SettingsScreen({ onClose, initialTab }){
       .catch(() => {});
   }, [profileBackends]);
 
+  const canSave = !!settings && !loading && !saving && !cliValidationError;
+
   async function save(anchor){
     if (!settings) return;
+    if (cliValidationError) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Fix CLI profile settings', body: cliValidationError });
+      return;
+    }
     setSaving(true);
     try {
       const res = await AgentApi.settings.save(settings);
@@ -395,42 +403,61 @@ export function SettingsScreen({ onClose, initialTab }){
   }
 
   return (
-    <div className="settings-shell">
+    <div className="settings-shell settings-shell-global">
       <div className="settings-top">
         <div className="settings-title-block">
           <div className="settings-title">Settings</div>
           <div className="settings-subtitle u-dim">Global app preferences</div>
         </div>
-        <button type="button" className="btn" onClick={onClose}>Close</button>
+        <div className="settings-top-actions">
+          <button type="button" className="btn primary" disabled={!canSave} onClick={(e) => save(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>
+          <button type="button" className="btn" onClick={onClose}>Close</button>
+        </div>
       </div>
-      <div className="settings-tabs">
-        {SETTINGS_TABS.map(t => (
-          <div
-            key={t.id}
-            className={`settings-tab ${tab === t.id ? 'active' : ''}`}
-            onClick={() => setTab(t.id)}
-          >{t.label}</div>
-        ))}
-      </div>
-      <div className="settings-body">
-        {loading
-          ? <div className="u-dim" style={{padding:'16px'}}>Loading…</div>
-          : loadError
-            ? <div className="u-err" style={{padding:'16px'}}>{loadError}</div>
-            : tab === 'general' ? <GeneralTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
-            : tab === 'cli'     ? <CliProfilesTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
-            : tab === 'memory'  ? <SettingsMemoryTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
-            : tab === 'kb'      ? <SettingsKbTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
-            : tab === 'workspaceContext' ? <SettingsWorkspaceContextTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving}/>
-            : tab === 'security' ? <SecurityTab/>
-            : tab === 'usage'   ? <UsageTab/>
-            : tab === 'migration' ? (
-              <React.Suspense fallback={<div className="u-dim" style={{padding:'16px'}}>Loading migration...</div>}>
-                <MigrationTab/>
-              </React.Suspense>
-            )
-            : tab === 'server'  ? <ServerTab/>
-            : null}
+      <div className="settings-main-split">
+        <nav className="settings-side-nav" aria-label="Settings sections">
+          {SETTINGS_TABS.map(t => {
+            const Icon = t.icon || Ico.settings;
+            const active = tab === t.id;
+            return (
+              <button
+                key={t.id}
+                type="button"
+                className={`settings-side-nav-item ${active ? 'active' : ''}`}
+                aria-current={active ? 'page' : undefined}
+                onClick={() => setTab(t.id)}
+              >
+                <span className="settings-side-nav-icon">{Icon(13)}</span>
+                <span>{t.label}</span>
+              </button>
+            );
+          })}
+        </nav>
+        <div className="settings-body settings-body-global">
+          {loading
+            ? <div className="u-dim" style={{padding:'16px'}}>Loading…</div>
+            : loadError
+              ? <div className="u-err" style={{padding:'16px'}}>{loadError}</div>
+              : tab === 'general' ? <GeneralTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch}/>
+              : tab === 'cli'     ? <CliProfilesTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch} onSave={save} saving={saving} onValidationChange={setCliValidationError}/>
+              : tab === 'memory'  ? <SettingsMemoryTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch}/>
+              : tab === 'kb'      ? <SettingsKbTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch}/>
+              : tab === 'workspaceContext' ? <SettingsWorkspaceContextTab settings={settings} backends={backends} profileBackends={profileBackends} loadProfileBackend={loadProfileBackend} onPatch={patch}/>
+              : tab === 'security' ? <SecurityTab/>
+              : tab === 'usage'   ? <UsageTab/>
+              : tab === 'migration' ? (
+                <React.Suspense fallback={<div className="u-dim" style={{padding:'16px'}}>Loading migration...</div>}>
+                  <MigrationTab/>
+                </React.Suspense>
+              )
+              : tab === 'archivedWorkspaces' ? (
+                <React.Suspense fallback={<div className="u-dim" style={{padding:'16px'}}>Loading archived workspaces...</div>}>
+                  <ArchivedWorkspacesPanel onOpenWorkspaceSettings={onOpenWorkspaceSettings}/>
+                </React.Suspense>
+              )
+              : tab === 'server'  ? <ServerTab/>
+              : null}
+        </div>
       </div>
     </div>
   );
@@ -438,7 +465,7 @@ export function SettingsScreen({ onClose, initialTab }){
 
 /* ──────────────────── General tab ──────────────────── */
 
-function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
+function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const profiles = activeCliProfiles(settings);
   const selectedProfile = profiles.find(p => p.id === settings.defaultCliProfileId)
     || null;
@@ -554,14 +581,11 @@ function GeneralTab({ settings, backends, profileBackends, loadProfileBackend, o
           onChange={(e) => onPatch({ systemPrompt: e.target.value })}
         />
       </Field>
-      <div className="settings-actions">
-        <button className="btn primary" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>
-      </div>
     </div>
   );
 }
 
-/* ──────────────────── CLI Config tab ──────────────────── */
+/* ──────────────────── CLI Profiles tab ──────────────────── */
 
 function CliUpdatesPanel(){
   const toast = useToasts();
@@ -688,7 +712,7 @@ function CliUpdatesPanel(){
   );
 }
 
-function CliProfilesTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
+function CliProfilesTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving, onValidationChange }){
   const profiles = Array.isArray(settings.cliProfiles) ? settings.cliProfiles : [];
   const [expandedProfileId, setExpandedProfileId] = React.useState(() => (profiles[0] && profiles[0].id) || null);
   const [envTextById, setEnvTextById] = React.useState({});
@@ -703,6 +727,18 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
   React.useEffect(() => {
     return () => { mountedRef.current = false; };
   }, []);
+
+  React.useEffect(() => {
+    if (onValidationChange) {
+      onValidationChange(hasEnvErrors ? 'Fix environment JSON before saving.' : '');
+    }
+  }, [hasEnvErrors, onValidationChange]);
+
+  React.useEffect(() => {
+    return () => {
+      if (onValidationChange) onValidationChange('');
+    };
+  }, [onValidationChange]);
 
   React.useEffect(() => {
     setEnvTextById(prev => {
@@ -1007,7 +1043,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
     <div className="settings-form settings-form-wide">
       <div className="cli-pane-head">
         <div>
-          <h3 className="pane-title">CLI config profiles</h3>
+          <h3 className="pane-title">CLI Profiles</h3>
           <p className="cli-blurb">
             Profiles are named CLI runtimes used by new conversations. <b>Self-configured</b> profiles use CLI state already present on this server; <b>account profiles</b> use the directory and environment you provide here.
           </p>
@@ -1296,8 +1332,6 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
 
       <div className="pane-foot">
         <span className="u-dim u-mono" style={{fontSize:11}}>stored in global settings</span>
-        <span style={{flex:1}}/>
-        <button className="btn primary" disabled={saving || hasEnvErrors} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>
         {hasEnvErrors ? <span className="settings-field-hint u-err">Fix environment JSON before saving.</span> : null}
       </div>
     </div>
@@ -1306,7 +1340,7 @@ function CliProfilesTab({ settings, backends, profileBackends, loadProfileBacken
 
 /* ──────────────────── Memory tab ──────────────────── */
 
-function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
+function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const mem = settings.memory || {};
   const profiles = activeCliProfiles(settings);
   const fallbackBackend = settings.defaultBackend || '';
@@ -1406,16 +1440,13 @@ function SettingsMemoryTab({ settings, backends, profileBackends, loadProfileBac
           />
         </Field>
       ) : null}
-      <div className="settings-actions">
-        <button className="btn" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>
-      </div>
     </div>
   );
 }
 
 /* ──────────────────── Knowledge Base tab ──────────────────── */
 
-function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
+function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const kb = settings.knowledgeBase || {};
   const profiles = activeCliProfiles(settings);
   const fallbackBackend = settings.defaultBackend || '';
@@ -1691,16 +1722,13 @@ function SettingsKbTab({ settings, backends, profileBackends, loadProfileBackend
       />
       {convertWarning ? <div className="settings-warning u-err">{convertWarning}</div> : null}
 
-      <div className="settings-actions">
-        <button className="btn" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>
-      </div>
     </div>
   );
 }
 
 /* ──────────────────── Workspace Context tab ──────────────────── */
 
-function SettingsWorkspaceContextTab({ settings, backends, profileBackends, loadProfileBackend, onPatch, onSave, saving }){
+function SettingsWorkspaceContextTab({ settings, backends, profileBackends, loadProfileBackend, onPatch }){
   const workspaceContext = settings.workspaceContext || {};
   const profiles = activeCliProfiles(settings);
   const fallbackBackend = settings.defaultBackend || '';
@@ -1849,9 +1877,6 @@ function SettingsWorkspaceContextTab({ settings, backends, profileBackends, load
         />
       </Field>
 
-      <div className="settings-actions">
-        <button className="btn" disabled={saving} onClick={(e) => onSave(e.currentTarget)}>{saving ? 'Saving…' : 'Save'}</button>
-      </div>
     </div>
   );
 }
