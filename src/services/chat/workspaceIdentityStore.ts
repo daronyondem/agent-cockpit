@@ -214,6 +214,17 @@ export class WorkspaceIdentityStore {
     });
   }
 
+  async removeWorkspace(workspaceId: string): Promise<boolean> {
+    return this.lock.run(IDENTITY_LOCK_KEY, async () => {
+      const record = this.resolve(workspaceId);
+      if (!record) return false;
+      const records = [...this.byId.values()].filter(item => item.workspaceId !== record.workspaceId);
+      this.rebuildMaps(records);
+      await this.writeRegistry();
+      return true;
+    });
+  }
+
   list(): WorkspaceIdentityRecord[] {
     return [...this.byId.values()];
   }

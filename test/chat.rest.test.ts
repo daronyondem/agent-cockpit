@@ -1879,6 +1879,191 @@ describe('Workspace location API', () => {
   });
 });
 
+// ── Workspace archive API ───────────────────────────────────────────────────
+
+describe('Workspace archive API', () => {
+  test('archives, lists, and restores a workspace by workspace id', async () => {
+    const workspacePath = path.join(env.tmpDir, 'workspace-archive-api');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const conv = await env.chatService.createConversation('Workspace Archive API', workspacePath);
+
+    const archiveRes = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/archive`, {
+      mode: 'history_only',
+      note: 'API archive',
+    });
+    expect(archiveRes.status).toBe(200);
+    expect(archiveRes.body.workspace).toMatchObject({
+      workspaceId: conv.workspaceId,
+      archived: true,
+      archive: { mode: 'history_only', note: 'API archive' },
+    });
+
+    const activeConvs = await env.request('GET', '/api/chat/conversations');
+    expect(activeConvs.status).toBe(200);
+    expect(activeConvs.body.conversations).toEqual([]);
+
+    const archivedWorkspaces = await env.request('GET', '/api/chat/workspaces?archived=true');
+    expect(archivedWorkspaces.status).toBe(200);
+    expect(archivedWorkspaces.body.workspaces).toHaveLength(1);
+    expect(archivedWorkspaces.body.workspaces[0]).toMatchObject({
+      workspaceId: conv.workspaceId,
+      archived: true,
+      pathAvailable: true,
+    });
+
+    const restoreRes = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/restore`, {});
+    expect(restoreRes.status).toBe(200);
+    expect(restoreRes.body.workspace).toMatchObject({ workspaceId: conv.workspaceId, archived: false });
+  });
+
+  test('marks archive final learning complete when no workspace learning jobs are enabled', async () => {
+    const workspacePath = path.join(env.tmpDir, 'workspace-archive-no-finalizers-api');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const conv = await env.chatService.createConversation('Workspace Archive No Finalizers API', workspacePath);
+
+    const archiveRes = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/archive`, {
+      mode: 'history_only',
+    });
+
+    expect(archiveRes.status).toBe(200);
+    expect(archiveRes.body.workspace.archive.finalLearningPass).toMatchObject({
+      status: 'completed',
+    });
+  });
+
+  test('rejects invalid workspace archive payloads', async () => {
+    const workspacePath = path.join(env.tmpDir, 'workspace-archive-invalid-api');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const conv = await env.chatService.createConversation('Workspace Archive Invalid API', workspacePath);
+
+    const missingSnapshot = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/archive`, {
+      mode: 'file_snapshot',
+    });
+    expect(missingSnapshot.status).toBe(400);
+    expect(missingSnapshot.body.error).toContain('snapshot is required');
+
+    const unexpectedSnapshot = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/archive`, {
+      mode: 'history_only',
+      snapshot: { inclusionPolicy: 'include_all' },
+    });
+    expect(unexpectedSnapshot.status).toBe(400);
+    expect(unexpectedSnapshot.body.error).toContain('snapshot is only allowed');
+
+    const missingDeleteConfirmation = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/archive`, {
+      mode: 'file_snapshot',
+      snapshot: {
+        inclusionPolicy: 'include_all',
+        cleanupOriginal: 'delete_permanently',
+      },
+    });
+    expect(missingDeleteConfirmation.status).toBe(400);
+    expect(missingDeleteConfirmation.body.error).toContain('confirmDeleteOriginal');
+  });
+
+  test('requires remap before restoring an archived workspace with a missing folder', async () => {
+    const workspacePath = path.join(env.tmpDir, 'workspace-archive-missing-api');
+    const remappedPath = path.join(env.tmpDir, 'workspace-archive-remapped-api');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    fs.mkdirSync(remappedPath, { recursive: true });
+    const conv = await env.chatService.createConversation('Workspace Archive Missing API', workspacePath);
+
+    expect((await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/archive`, {
+      mode: 'history_only',
+    })).status).toBe(200);
+    fs.rmSync(workspacePath, { recursive: true, force: true });
+
+    const blockedRestore = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/restore`, {});
+    expect(blockedRestore.status).toBe(409);
+    expect(blockedRestore.body.code).toBe('workspace_path_unavailable');
+
+    const remap = await env.request('PUT', `/api/chat/workspaces/${conv.workspaceId}/location`, {
+      workspacePath: remappedPath,
+    });
+    expect(remap.status).toBe(200);
+
+    const restored = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/restore`, {});
+    expect(restored.status).toBe(200);
+    expect(restored.body.workspace).toMatchObject({
+      workspaceId: conv.workspaceId,
+      workspacePath: remappedPath,
+      archived: false,
+    });
+  });
+
+  test('estimates, snapshots, and restores workspace files through the archive API', async () => {
+    const workspacePath = path.join(env.tmpDir, 'workspace-archive-snapshot-api');
+    const restorePath = path.join(env.tmpDir, 'workspace-archive-snapshot-restored-api');
+    fs.mkdirSync(path.join(workspacePath, 'src'), { recursive: true });
+    fs.mkdirSync(path.join(workspacePath, 'node_modules'), { recursive: true });
+    fs.writeFileSync(path.join(workspacePath, 'src', 'app.js'), 'console.log("restore");\n');
+    fs.writeFileSync(path.join(workspacePath, 'node_modules', 'ignored.js'), 'ignored\n');
+    const conv = await env.chatService.createConversation('Workspace Snapshot API', workspacePath);
+
+    const estimate = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/snapshot/estimate`, {
+      inclusionPolicy: 'exclude_common',
+    });
+    expect(estimate.status).toBe(200);
+    expect(estimate.body.estimate).toMatchObject({
+      workspaceId: conv.workspaceId,
+      fileCount: 1,
+      excludedCount: 1,
+    });
+
+    const archiveRes = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/archive`, {
+      mode: 'file_snapshot',
+      snapshot: {
+        inclusionPolicy: 'exclude_common',
+        cleanupOriginal: 'delete_permanently',
+        confirmDeleteOriginal: 'DELETE ORIGINAL',
+      },
+    });
+    expect(archiveRes.status).toBe(200);
+    expect(archiveRes.body.workspace).toMatchObject({
+      archived: true,
+      pathAvailable: false,
+      archive: {
+        mode: 'file_snapshot',
+        snapshot: { status: 'verified', fileCount: 1 },
+      },
+    });
+    expect(fs.existsSync(workspacePath)).toBe(false);
+
+    const restored = await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/restore`, {
+      restoreFromSnapshot: true,
+      destinationPath: restorePath,
+    });
+    expect(restored.status).toBe(200);
+    expect(restored.body.workspace).toMatchObject({
+      workspaceId: conv.workspaceId,
+      workspacePath: restorePath,
+      archived: false,
+    });
+    expect(fs.readFileSync(path.join(restorePath, 'src', 'app.js'), 'utf8')).toContain('restore');
+    expect(fs.existsSync(path.join(restorePath, 'node_modules'))).toBe(false);
+  });
+
+  test('deletes retained archived workspace data through the archive API', async () => {
+    const workspacePath = path.join(env.tmpDir, 'workspace-archive-delete-data-api');
+    fs.mkdirSync(workspacePath, { recursive: true });
+    const conv = await env.chatService.createConversation('Workspace Delete Archived Data API', workspacePath);
+
+    const activeDelete = await env.request('DELETE', `/api/chat/workspaces/${conv.workspaceId}`);
+    expect(activeDelete.status).toBe(409);
+    expect(activeDelete.body.code).toBe('workspace_not_archived');
+
+    expect((await env.request('POST', `/api/chat/workspaces/${conv.workspaceId}/archive`, {
+      mode: 'history_only',
+    })).status).toBe(200);
+
+    const deleted = await env.request('DELETE', `/api/chat/workspaces/${conv.workspaceId}`);
+    expect(deleted.status).toBe(200);
+    expect(deleted.body.ok).toBe(true);
+
+    const after = await env.request('GET', `/api/chat/workspaces/${conv.workspaceId}/archive`);
+    expect(after.status).toBe(404);
+  });
+});
+
 // ── Workspace instructions API ─────────────────────────────────────────────
 
 describe('GET /workspaces/:hash/instructions', () => {

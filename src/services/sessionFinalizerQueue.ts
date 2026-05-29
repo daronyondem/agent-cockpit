@@ -46,6 +46,7 @@ export interface EnqueueSessionFinalizerJobInput {
 export interface SessionFinalizerQueueOptions {
   workspacesDir: string;
   handleJob: (job: SessionFinalizerJob) => Promise<void>;
+  onTerminalJob?: (job: SessionFinalizerJob) => Promise<void>;
   resolveWorkspaceStorageKey?: (workspaceRef: string) => string | null;
   logger?: Pick<Console, 'log' | 'warn' | 'error'>;
   concurrency?: number;
@@ -59,6 +60,7 @@ const DEFAULT_RETRY_DELAY_MS = 5_000;
 export class SessionFinalizerQueue {
   private readonly workspacesDir: string;
   private readonly handleJob: (job: SessionFinalizerJob) => Promise<void>;
+  private readonly onTerminalJob: ((job: SessionFinalizerJob) => Promise<void>) | null;
   private readonly resolveWorkspaceStorageKey: (workspaceRef: string) => string | null;
   private readonly logger: Pick<Console, 'log' | 'warn' | 'error'>;
   private readonly concurrency: number;
@@ -72,6 +74,7 @@ export class SessionFinalizerQueue {
   constructor(opts: SessionFinalizerQueueOptions) {
     this.workspacesDir = opts.workspacesDir;
     this.handleJob = opts.handleJob;
+    this.onTerminalJob = opts.onTerminalJob ?? null;
     this.resolveWorkspaceStorageKey = opts.resolveWorkspaceStorageKey ?? (() => null);
     this.logger = opts.logger ?? console;
     this.concurrency = Math.max(1, Math.min(4, Math.round(opts.concurrency ?? 1)));
@@ -170,8 +173,14 @@ export class SessionFinalizerQueue {
   private runClaimedJob(job: SessionFinalizerJob): void {
     this.activeJobs.add(job.id);
     this.handleJob(job)
-      .then(() => this.markCompleted(job))
-      .catch((err: unknown) => this.markFailed(job, (err as Error).message))
+      .then(async () => {
+        const completed = await this.markCompleted(job);
+        if (completed) await this.notifyTerminalJob(completed);
+      })
+      .catch(async (err: unknown) => {
+        const failed = await this.markFailed(job, (err as Error).message);
+        if (failed?.status === 'failed') await this.notifyTerminalJob(failed);
+      })
       .finally(() => {
         this.activeJobs.delete(job.id);
         this.schedule();
@@ -243,12 +252,12 @@ export class SessionFinalizerQueue {
     });
   }
 
-  private async markCompleted(job: SessionFinalizerJob): Promise<void> {
+  private async markCompleted(job: SessionFinalizerJob): Promise<SessionFinalizerJob | null> {
     const storageKey = this.workspaceStorageKey(job.workspaceHash);
-    await this.lock.run(storageKey, async () => {
+    return this.lock.run(storageKey, async () => {
       const store = await this.readStore(job.workspaceHash);
       const current = store.jobs.find((candidate) => candidate.id === job.id);
-      if (!current) return;
+      if (!current) return null;
       const now = new Date().toISOString();
       current.status = 'completed';
       current.completedAt = now;
@@ -256,15 +265,16 @@ export class SessionFinalizerQueue {
       delete current.nextAttemptAt;
       delete current.errorMessage;
       await this.writeStore(job.workspaceHash, store);
+      return { ...current, payload: current.payload ? { ...current.payload } : undefined };
     });
   }
 
-  private async markFailed(job: SessionFinalizerJob, errorMessage: string): Promise<void> {
+  private async markFailed(job: SessionFinalizerJob, errorMessage: string): Promise<SessionFinalizerJob | null> {
     const storageKey = this.workspaceStorageKey(job.workspaceHash);
-    await this.lock.run(storageKey, async () => {
+    return this.lock.run(storageKey, async () => {
       const store = await this.readStore(job.workspaceHash);
       const current = store.jobs.find((candidate) => candidate.id === job.id);
-      if (!current) return;
+      if (!current) return null;
       const now = new Date().toISOString();
       const shouldRetry = current.attempts < current.maxAttempts;
       current.status = shouldRetry ? 'retrying' : 'failed';
@@ -279,7 +289,17 @@ export class SessionFinalizerQueue {
       await this.writeStore(job.workspaceHash, store);
       this.logger.warn(`[session-finalizer] ${current.type} failed for conv=${current.conversationId} session=${current.sessionNumber}: ${errorMessage}`);
       if (shouldRetry) this.schedule(this.retryDelayMs);
+      return { ...current, payload: current.payload ? { ...current.payload } : undefined };
     });
+  }
+
+  private async notifyTerminalJob(job: SessionFinalizerJob): Promise<void> {
+    if (!this.onTerminalJob) return;
+    try {
+      await this.onTerminalJob(job);
+    } catch (err: unknown) {
+      this.logger.warn(`[session-finalizer] terminal job observer failed for job=${job.id}: ${(err as Error).message}`);
+    }
   }
 
   private async listWorkspaceHashes(): Promise<string[]> {
@@ -327,7 +347,8 @@ function jobIdentity(
   payload: Record<string, unknown> | undefined,
 ): string {
   const source = typeof payload?.source === 'string' ? payload.source : '';
-  return [type, source, conversationId, String(sessionNumber)].join(':');
+  const identityKey = typeof payload?.identityKey === 'string' ? payload.identityKey : '';
+  return [type, source, identityKey, conversationId, String(sessionNumber)].join(':');
 }
 
 function isSessionFinalizerJob(value: unknown): value is SessionFinalizerJob {

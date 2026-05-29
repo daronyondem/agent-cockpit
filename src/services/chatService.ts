@@ -97,6 +97,8 @@ import { UsagePricingStore } from './usagePricing/store';
 import type { UsagePricingEntry, UsagePricingResponse } from './usagePricing/types';
 import { ArtifactStore, type CreateConversationArtifactInput } from './chat/artifactStore';
 import { WorkspaceFeatureSettingsStore } from './chat/workspaceFeatureSettingsStore';
+import { WorkspaceArchiveStore, type WorkspaceArchiveFinalizerTarget } from './chat/workspaceArchiveStore';
+import { WorkspaceSnapshotService } from './chat/workspaceSnapshotService';
 import {
   WorkspaceIdentityPathConflictError,
   WorkspaceIdentityStore,
@@ -107,7 +109,13 @@ import {
   normalizeCheckout,
 } from './chat/worktreeIsolationService';
 import type { WorktreeIsolationStatusResponse } from '../contracts/worktreeIsolation';
-import type { WorkspaceLocationResponse } from '../contracts/workspaces';
+import type {
+  WorkspaceArchiveRequest,
+  WorkspaceLocationResponse,
+  WorkspaceSnapshotEstimateResponse,
+  WorkspaceSnapshotInclusionPolicy,
+  WorkspaceSummaryResponse,
+} from '../contracts/workspaces';
 
 const log = logger.child({ module: 'chat-service' });
 
@@ -121,6 +129,18 @@ export class WorkspaceLocationUpdateError extends Error {
   constructor(code: string, message: string, status = 400) {
     super(message);
     this.name = 'WorkspaceLocationUpdateError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+export class WorkspaceArchiveError extends Error {
+  readonly status: number;
+  readonly code: string;
+
+  constructor(code: string, message: string, status = 400) {
+    super(message);
+    this.name = 'WorkspaceArchiveError';
     this.code = code;
     this.status = status;
   }
@@ -386,6 +406,8 @@ export class ChatService {
   private _artifactStore: ArtifactStore;
   private _workspaceIdentityStore: WorkspaceIdentityStore;
   private _featureSettingsStore: WorkspaceFeatureSettingsStore;
+  private _workspaceArchiveStore: WorkspaceArchiveStore;
+  private _workspaceSnapshotService: WorkspaceSnapshotService;
   private _worktreeIsolation: WorktreeIsolationService;
   private _defaultWorkspace: string;
   private _backendRegistry: BackendRegistry | null;
@@ -484,6 +506,21 @@ export class ChatService {
       readWorkspaceIndex: (hash) => this._readWorkspaceIndex(hash),
       writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
       getSettings: () => this.getSettings(),
+    });
+    this._workspaceArchiveStore = new WorkspaceArchiveStore({
+      workspacesDir: this.workspacesDir,
+      indexLock: this._indexLock,
+      readWorkspaceIndex: (hash) => this._readWorkspaceIndex(hash),
+      writeWorkspaceIndex: (hash, index) => this._writeWorkspaceIndex(hash, index),
+      resolveWorkspaceId: (ref) => this._workspaceIdentityStore.resolveWorkspaceId(ref),
+      workspaceLegacyHashForRef: (ref) => this._workspaceLegacyHashForRef(ref),
+      getWorkspaceDir: (ref) => this._workspaceDir(ref),
+      previousPathsForRef: (ref) => [...(this._workspaceIdentityStore.resolve(ref)?.previousPaths || [])],
+    });
+    this._workspaceSnapshotService = new WorkspaceSnapshotService({
+      snapshotsDir: path.join(this.baseDir, 'workspace-snapshots'),
+      trashDir: path.join(this.baseDir, 'workspace-trash'),
+      restoredDir: path.join(this.baseDir, 'restored-workspaces'),
     });
 
     this._legacyConversationsDir = path.join(this.baseDir, 'conversations');
@@ -801,6 +838,13 @@ export class ChatService {
       if (!index) {
         index = { workspaceId, workspacePath, conversations: [] };
       }
+      if (index.archive) {
+        throw new WorkspaceArchiveError(
+          'workspace_archived',
+          'Workspace is archived. Restore it before creating new conversations.',
+          409,
+        );
+      }
       index.workspaceId = workspaceId;
 
       let checkout: ConversationCheckout | undefined;
@@ -965,7 +1009,7 @@ export class ChatService {
     };
   }
 
-  async listConversations(opts?: { archived?: boolean }): Promise<ConversationListItem[]> {
+  async listConversations(opts?: { archived?: boolean; includeArchivedWorkspaces?: boolean }): Promise<ConversationListItem[]> {
     return this._conversationLifecycleStore.listConversations(opts);
   }
 
@@ -1592,6 +1636,139 @@ export class ChatService {
     return index?.workspacePath || null;
   }
 
+  async listWorkspaces(opts?: { archived?: boolean; includeArchived?: boolean }): Promise<WorkspaceSummaryResponse[]> {
+    return this._workspaceArchiveStore.listWorkspaces(opts);
+  }
+
+  async getWorkspaceSummary(hash: string): Promise<WorkspaceSummaryResponse | null> {
+    return this._workspaceArchiveStore.getWorkspaceSummary(hash);
+  }
+
+  async isWorkspaceArchived(hash: string): Promise<boolean> {
+    return this._workspaceArchiveStore.isWorkspaceArchived(hash);
+  }
+
+  async archiveWorkspace(hash: string, request: WorkspaceArchiveRequest): Promise<WorkspaceSummaryResponse | null> {
+    const mode = request.mode || 'history_only';
+    if (mode === 'file_snapshot') {
+      const existing = await this.getWorkspaceSummary(hash);
+      if (!existing) return null;
+      if (existing.archived) return existing;
+      const snapshotRequest = request.snapshot || {};
+      const inclusionPolicy = snapshotRequest.inclusionPolicy || 'exclude_common';
+      const cleanupOriginal = snapshotRequest.cleanupOriginal || 'keep';
+      if (cleanupOriginal === 'delete_permanently' && snapshotRequest.confirmDeleteOriginal !== 'DELETE ORIGINAL') {
+        throw new WorkspaceArchiveError(
+          'delete_original_confirmation_required',
+          'confirmDeleteOriginal must be DELETE ORIGINAL when cleanupOriginal is delete_permanently',
+          400,
+        );
+      }
+      const snapshot = await this._workspaceSnapshotService.createSnapshot(existing.workspaceId, existing.workspacePath, inclusionPolicy);
+      let workspace = await this._workspaceArchiveStore.archiveWorkspace(existing.workspaceId, {
+        mode,
+        note: request.note,
+        snapshot,
+      });
+      const archivedSnapshotId = workspace?.archive?.snapshot?.id;
+      if (archivedSnapshotId !== snapshot.id) {
+        await this._workspaceSnapshotService.deleteSnapshot(snapshot);
+      }
+      if (cleanupOriginal !== 'keep' && archivedSnapshotId === snapshot.id) {
+        try {
+          const cleanup = await this._workspaceSnapshotService.cleanupOriginal(existing.workspaceId, existing.workspacePath, cleanupOriginal);
+          workspace = await this._workspaceArchiveStore.setOriginalCleanup(existing.workspaceId, {
+            mode: cleanupOriginal,
+            movedTo: cleanup.movedTo,
+          }) || workspace;
+        } catch (err: unknown) {
+          workspace = await this._workspaceArchiveStore.setOriginalCleanup(existing.workspaceId, {
+            mode: cleanupOriginal,
+            error: (err as Error).message,
+          }) || workspace;
+        }
+      }
+      return workspace;
+    }
+    return this._workspaceArchiveStore.archiveWorkspace(hash, {
+      mode,
+      note: request.note,
+    });
+  }
+
+  async estimateWorkspaceSnapshot(
+    hash: string,
+    inclusionPolicy: WorkspaceSnapshotInclusionPolicy,
+  ): Promise<WorkspaceSnapshotEstimateResponse | null> {
+    const summary = await this.getWorkspaceSummary(hash);
+    if (!summary) return null;
+    return this._workspaceSnapshotService.estimate(summary.workspaceId, summary.workspacePath, inclusionPolicy);
+  }
+
+  async completeWorkspaceArchiveFinalLearningPass(hash: string, error?: string): Promise<WorkspaceSummaryResponse | null> {
+    return this._workspaceArchiveStore.completeFinalLearningPass(hash, error);
+  }
+
+  async restoreWorkspace(hash: string): Promise<WorkspaceSummaryResponse | null> {
+    const summary = await this.getWorkspaceSummary(hash);
+    if (!summary) return null;
+    if (!summary.archived) return summary;
+    if (!summary.pathAvailable) {
+      throw new WorkspaceArchiveError(
+        'workspace_path_unavailable',
+        'Workspace folder is unavailable. Remap this archived workspace to an existing folder before restoring.',
+        409,
+      );
+    }
+    return this._workspaceArchiveStore.restoreWorkspace(summary.workspaceId);
+  }
+
+  async restoreWorkspaceFromSnapshot(hash: string, destinationPath?: string): Promise<WorkspaceSummaryResponse | null> {
+    const summary = await this.getWorkspaceSummary(hash);
+    if (!summary) return null;
+    if (!summary.archived) return summary;
+    const snapshot = summary.archive?.snapshot;
+    if (!snapshot) {
+      throw new WorkspaceArchiveError('snapshot_unavailable', 'Archived workspace does not have a file snapshot', 409);
+    }
+    const destination = destinationPath?.trim()
+      || this._workspaceSnapshotService.defaultRestoreDestination(summary.workspaceId, summary.workspacePath);
+    const restoredPath = await this._workspaceSnapshotService.restoreSnapshot(snapshot, destination);
+    await this.updateWorkspaceLocation(summary.workspaceId, restoredPath);
+    return this._workspaceArchiveStore.restoreWorkspace(summary.workspaceId);
+  }
+
+  async deleteArchivedWorkspaceData(hash: string): Promise<boolean> {
+    const workspaceId = this._workspaceIdForRef(hash);
+    return this._indexLock.run(workspaceId, async () => {
+      const index = await this._readWorkspaceIndex(workspaceId);
+      if (!index) return false;
+      if (!index.archive) {
+        throw new WorkspaceArchiveError(
+          'workspace_not_archived',
+          'Workspace must be archived before its retained data can be deleted.',
+          409,
+        );
+      }
+      const conversationIds = index.conversations.map((conv) => conv.id);
+      await fsp.rm(this._workspaceDir(workspaceId), { recursive: true, force: true });
+      await this._workspaceSnapshotService.deleteRetainedArtifacts(
+        workspaceId,
+        index.archive?.originalCleanup?.movedTo,
+      );
+      for (const convId of conversationIds) {
+        await fsp.rm(path.join(this.artifactsDir, convId), { recursive: true, force: true });
+        this._convWorkspaceMap.delete(convId);
+      }
+      await this._workspaceIdentityStore.removeWorkspace(workspaceId);
+      return true;
+    });
+  }
+
+  async getWorkspaceArchiveFinalizerTargets(hash: string): Promise<WorkspaceArchiveFinalizerTarget[]> {
+    return this._workspaceArchiveStore.getFinalizerTargets(hash);
+  }
+
   async getWorkspaceLocation(hash: string): Promise<WorkspaceLocationResponse | null> {
     const index = await this._readWorkspaceIndex(hash);
     if (!index) return null;
@@ -1629,7 +1806,7 @@ export class ChatService {
     return this._indexLock.run(workspaceId, async () => {
       const index = await this._readWorkspaceIndex(workspaceId);
       if (!index) return null;
-      if (index.worktreeIsolation?.enabled) {
+      if (index.worktreeIsolation?.enabled && !index.archive) {
         throw new WorkspaceLocationUpdateError(
           'worktree_isolation_enabled',
           'Disable Worktrees before changing the workspace location',
@@ -2604,7 +2781,7 @@ export class ChatService {
     for (const storageKey of dirs) {
       if (storageKey.startsWith('.')) continue;
       const index = await this._readWorkspaceIndex(storageKey);
-      if (index?.memoryEnabled) {
+      if (index?.memoryEnabled && !index.archive) {
         workspaceIds.push(index.workspaceId || this._workspaceIdentityStore.resolveWorkspaceId(storageKey) || storageKey);
       }
     }
@@ -3297,7 +3474,7 @@ export class ChatService {
 
   // ── Search ─────────────────────────────────────────────────────────────────
 
-  async searchConversations(query: string, opts?: { archived?: boolean }): Promise<ConversationListItem[]> {
+  async searchConversations(query: string, opts?: { archived?: boolean; includeArchivedWorkspaces?: boolean }): Promise<ConversationListItem[]> {
     if (!query) return this.listConversations(opts);
     const q = query.toLowerCase();
     const all = await this.listConversations(opts);

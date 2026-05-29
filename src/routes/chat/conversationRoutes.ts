@@ -180,7 +180,8 @@ export function createConversationRouter(opts: ConversationRoutesOptions): expre
     try {
       const q = (req.query.q as string) || '';
       const archived = req.query.archived === 'true';
-      const opts = { archived };
+      const includeArchivedWorkspaces = req.query.includeArchivedWorkspaces === 'true';
+      const opts = { archived, includeArchivedWorkspaces };
       const convs = q ? await chatService.searchConversations(q, opts) : await chatService.listConversations(opts);
       res.json({ conversations: convs });
     } catch (err: unknown) {

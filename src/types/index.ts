@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction, Express } from 'express';
+import type { WorkspaceArchiveMetadata } from '../contracts/workspaces';
 
 // ── Usage ────────────────────────────────────────────────────────────────────
 
@@ -344,6 +345,8 @@ export interface WorkspaceIndex {
   /** Stable workspace identity. Generated once and preserved across path moves. */
   workspaceId: string;
   workspacePath: string;
+  /** Workspace-level lifecycle archive metadata. Absent means active. */
+  archive?: WorkspaceArchiveMetadata;
   instructions?: string;
   /**
    * Fingerprint of the last dismissed CLI instruction-file compatibility

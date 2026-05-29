@@ -705,6 +705,33 @@
      respective pipelines for the workspace. Endpoints are scoped by the
      stable workspace reference from the conversation row. */
   const WorkspaceApi = {
+    list: (opts) => {
+      const params = new URLSearchParams();
+      if (opts && opts.archived === 'all') params.set('archived', 'all');
+      else if (opts && opts.archived === true) params.set('archived', 'true');
+      const qs = params.toString() ? '?' + params.toString() : '';
+      return chatFetch('workspaces' + qs, { cache: 'no-store' }).then(r => r.json());
+    },
+    getArchive: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/archive',
+      { cache: 'no-store' },
+    ).then(r => r.json()),
+    archive: (hash, body) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/archive',
+      { method: 'POST', body: body || {} },
+    ).then(r => r.json()),
+    estimateSnapshot: (hash, body) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/snapshot/estimate',
+      { method: 'POST', body: body || {} },
+    ).then(r => r.json()),
+    restore: (hash, body) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash) + '/restore',
+      { method: 'POST', body: body || {} },
+    ).then(r => r.json()),
+    deleteArchivedData: (hash) => chatFetch(
+      'workspaces/' + encodeURIComponent(hash),
+      { method: 'DELETE' },
+    ).then(r => r.json()),
     getLocation: (hash) => chatFetch(
       'workspaces/' + encodeURIComponent(hash) + '/location',
       { cache: 'no-store' },

@@ -415,40 +415,51 @@ export function App(){
     } catch {}
   }, []);
 
+  const globalSettingsOpen = !!settingsView;
+  const cockpitClassName = [
+    'cockpit',
+    sbOpen ? 'sb-open' : '',
+    globalSettingsOpen ? 'global-settings-view' : '',
+  ].filter(Boolean).join(' ');
+
   return (
-    <div className={"cockpit" + (sbOpen ? " sb-open" : "")}>
-      <Sidebar
-        activeId={activeConvId}
-        onSelect={onSelectConv}
-        onMarkUnread={onMarkUnread}
-        convStates={convStates}
-        onOpenKb={onOpenKb}
-        onOpenFiles={onOpenFiles}
-        onOpenSettings={onOpenSettings}
-        onOpenWorkspaceSettings={onOpenWorkspaceSettings}
-        onNewConversation={onNewConversation}
-        viewingArchive={viewingArchive}
-        onToggleArchive={onToggleArchive}
-        onRestore={onRestoreConv}
-        onSignOut={onSignOut}
-        onShowUpdate={onShowUpdate}
-        user={user}
-        showWelcomeAction={Boolean(installStatus && !installStatus.welcomeCompletedAt && !welcomeOpen)}
-        onOpenWelcome={onOpenWelcome}
-      />
-      <div className="sb-backdrop" onClick={() => setSbOpen(false)} aria-hidden="true"/>
-      <button
-        className="nav-hamb"
-        onClick={() => setSbOpen(v => !v)}
-        aria-label={sbOpen ? 'Close sidebar' : 'Open sidebar'}
-        title={sbOpen ? 'Close sidebar' : 'Open sidebar'}
-      >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <line x1="3" y1="6" x2="21" y2="6"/>
-          <line x1="3" y1="12" x2="21" y2="12"/>
-          <line x1="3" y1="18" x2="21" y2="18"/>
-        </svg>
-      </button>
+    <div className={cockpitClassName}>
+      {!globalSettingsOpen ? (
+        <>
+          <Sidebar
+            activeId={activeConvId}
+            onSelect={onSelectConv}
+            onMarkUnread={onMarkUnread}
+            convStates={convStates}
+            onOpenKb={onOpenKb}
+            onOpenFiles={onOpenFiles}
+            onOpenSettings={onOpenSettings}
+            onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+            onNewConversation={onNewConversation}
+            viewingArchive={viewingArchive}
+            onToggleArchive={onToggleArchive}
+            onRestore={onRestoreConv}
+            onSignOut={onSignOut}
+            onShowUpdate={onShowUpdate}
+            user={user}
+            showWelcomeAction={Boolean(installStatus && !installStatus.welcomeCompletedAt && !welcomeOpen)}
+            onOpenWelcome={onOpenWelcome}
+          />
+          <div className="sb-backdrop" onClick={() => setSbOpen(false)} aria-hidden="true"/>
+          <button
+            className="nav-hamb"
+            onClick={() => setSbOpen(v => !v)}
+            aria-label={sbOpen ? 'Close sidebar' : 'Open sidebar'}
+            title={sbOpen ? 'Close sidebar' : 'Open sidebar'}
+          >
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="3" y1="6" x2="21" y2="6"/>
+              <line x1="3" y1="12" x2="21" y2="12"/>
+              <line x1="3" y1="18" x2="21" y2="18"/>
+            </svg>
+          </button>
+        </>
+      ) : null}
       {welcomeOpen ? (
         <WelcomeScreen
           onDone={onWelcomeDone}
@@ -471,7 +482,11 @@ export function App(){
       ) : settingsView ? (
         <section className="main main-settings">
           <React.Suspense fallback={<ScreenLoading label="Loading settings..."/>}>
-            <SettingsScreen initialTab={settingsView.initialTab} onClose={() => setSettingsView(null)}/>
+            <SettingsScreen
+              initialTab={settingsView.initialTab}
+              onOpenWorkspaceSettings={onOpenWorkspaceSettings}
+              onClose={() => setSettingsView(null)}
+            />
           </React.Suspense>
         </section>
       ) : filesView ? (

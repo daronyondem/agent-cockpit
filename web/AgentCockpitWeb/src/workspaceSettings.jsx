@@ -30,10 +30,30 @@ const WS_SETTINGS_TABS = [
   { id: 'kb',           label: 'Knowledge Base' },
   { id: 'workspaceContext',   label: 'Workspace Context' },
   { id: 'worktrees',    label: 'Worktrees' },
+  { id: 'archive',      label: 'Archive' },
 ];
 
 const WORKSPACE_CONTEXT_SECTIONS = ['overview', 'processor', 'files', 'runs', 'danger'];
 const WORKSPACE_CONTEXT_RUNS_PAGE_SIZE = 5;
+const ARCHIVE_MODE_LABELS = {
+  history_only: 'Workspace Metadata and Conversations',
+  file_snapshot: 'Full Backup with Workspace Folder',
+};
+
+function archiveModeLabel(mode){
+  return ARCHIVE_MODE_LABELS[mode] || ARCHIVE_MODE_LABELS.history_only;
+}
+
+function originalCleanupHint(mode){
+  if (mode === 'delete_permanently') {
+    return 'After the backup is verified, delete the original workspace folder. This requires the exact DELETE ORIGINAL confirmation.';
+  }
+  return 'Leave the original workspace folder exactly where it is.';
+}
+
+function normalizeArchiveCleanupOriginal(mode){
+  return mode === 'delete_permanently' ? 'delete_permanently' : 'keep';
+}
 
 function workspaceContextRunsFromState(state){
   const runs = Array.isArray(state && state.runs) ? state.runs : [];
@@ -265,6 +285,16 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
   const [workspaceLocationDraft, setWorkspaceLocationDraft] = React.useState('');
   const [workspaceLocationDirty, setWorkspaceLocationDirty] = React.useState(false);
   const [workspaceLocationPickerOpen, setWorkspaceLocationPickerOpen] = React.useState(false);
+  const [archiveStatus, setArchiveStatus] = React.useState(null);
+  const [archiveBusy, setArchiveBusy] = React.useState(false);
+  const [archiveEstimate, setArchiveEstimate] = React.useState(null);
+  const [archiveForm, setArchiveForm] = React.useState({
+    mode: 'history_only',
+    note: '',
+    inclusionPolicy: 'exclude_common',
+    cleanupOriginal: 'keep',
+    confirmDeleteOriginal: '',
+  });
   const [memoryEnabled, setMemoryEnabled] = React.useState(false);
   const [memorySnapshot, setMemorySnapshot] = React.useState(null);
   const [memoryReviewSchedule, setMemoryReviewSchedule] = React.useState({ mode: 'off' });
@@ -329,6 +359,7 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
     setWorkspaceLocationDirty(false);
     Promise.all([
       AgentApi.workspace.getLocation(hash).catch(() => null),
+      AgentApi.workspace.getArchive(hash).catch(() => null),
       AgentApi.workspace.getInstructions(hash).catch(() => ({})),
       AgentApi.workspace.getMemory(hash).catch(() => ({})),
       AgentApi.workspace.getMemoryReviewSchedule(hash).catch(() => ({})),
@@ -337,10 +368,13 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       AgentApi.workspace.getWorktreeIsolation(hash).catch((err) => ({ available: false, enabled: false, blockers: [{ code: 'load_failed', message: err.message || String(err) }] })),
       AgentApi.settings.get().catch(() => ({})),
       AgentApi.settings.backends().catch(() => ({ backends: [] })),
-    ]).then(([locationRes, instrRes, memRes, reviewScheduleRes, kbRes, workspaceContextRes, worktreeRes, settingsRes, backendsRes]) => {
+    ]).then(([locationRes, archiveRes, instrRes, memRes, reviewScheduleRes, kbRes, workspaceContextRes, worktreeRes, settingsRes, backendsRes]) => {
       if (cancelled) return;
       setWorkspaceLocation(locationRes || null);
       setWorkspaceLocationDraft((locationRes && locationRes.workspacePath) || '');
+      setArchiveStatus((archiveRes && archiveRes.workspace) || null);
+      setArchiveEstimate(null);
+      setArchiveBusy(false);
       setInstructions(instrRes.instructions || '');
       setMemoryEnabled(!!memRes.enabled);
       setMemorySnapshot(memRes.snapshot || null);
@@ -500,6 +534,92 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       await dialog.alert({ anchor, variant: 'error', title: 'Location update failed', body: err.message || String(err) });
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function refreshArchiveStatus(){
+    const res = await AgentApi.workspace.getArchive(hash);
+    setArchiveStatus((res && res.workspace) || null);
+    return res && res.workspace;
+  }
+
+  function patchArchiveForm(patch){
+    setArchiveForm(prev => ({ ...prev, ...patch }));
+    if (patch.inclusionPolicy || patch.mode) setArchiveEstimate(null);
+  }
+
+  async function estimateWorkspaceSnapshot(anchor){
+    setArchiveBusy(true);
+    try {
+      const res = await AgentApi.workspace.estimateSnapshot(hash, { inclusionPolicy: archiveForm.inclusionPolicy });
+      setArchiveEstimate((res && res.estimate) || null);
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Backup estimate failed', body: err.message || String(err) });
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
+  async function archiveWorkspace(anchor){
+    const snapshotMode = archiveForm.mode === 'file_snapshot';
+    const cleanupOriginal = snapshotMode ? normalizeArchiveCleanupOriginal(archiveForm.cleanupOriginal) : 'keep';
+    const destructive = cleanupOriginal === 'delete_permanently';
+    const ok = await dialog.confirm({
+      anchor,
+      title: snapshotMode ? 'Archive With Full Backup' : 'Archive Workspace',
+      body: snapshotMode
+        ? (destructive
+          ? 'Create a verified backup of the workspace folder, archive the workspace, and delete the original folder after backup verification?'
+          : 'Create a verified backup of the workspace folder and archive the workspace while keeping the original folder in place?')
+        : 'Archive this workspace and pause background workspace processing?',
+      confirmLabel: 'Archive',
+      cancelLabel: 'Cancel',
+      destructive,
+    });
+    if (!ok) return;
+    setArchiveBusy(true);
+    try {
+      const body = {
+        mode: archiveForm.mode,
+        note: archiveForm.note,
+        ...(snapshotMode ? {
+          snapshot: {
+            inclusionPolicy: archiveForm.inclusionPolicy,
+            cleanupOriginal,
+            ...(archiveForm.confirmDeleteOriginal ? { confirmDeleteOriginal: archiveForm.confirmDeleteOriginal } : {}),
+          },
+        } : {}),
+      };
+      const res = await AgentApi.workspace.archive(hash, body);
+      setArchiveStatus((res && res.workspace) || null);
+      await StreamStore.refreshConvList().catch(() => {});
+      toast.success('Workspace archived');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Archive failed', body: err.message || String(err) });
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
+  async function restoreWorkspace(anchor){
+    const ok = await dialog.confirm({
+      anchor,
+      title: 'Restore Workspace',
+      body: 'Restore this workspace to the active workspace list?',
+      confirmLabel: 'Restore',
+      cancelLabel: 'Cancel',
+    });
+    if (!ok) return;
+    setArchiveBusy(true);
+    try {
+      const res = await AgentApi.workspace.restore(hash, {});
+      setArchiveStatus((res && res.workspace) || null);
+      await StreamStore.refreshConvList().catch(() => {});
+      toast.success('Workspace restored');
+    } catch (err) {
+      await dialog.alert({ anchor, variant: 'error', title: 'Restore failed', body: err.message || String(err) });
+    } finally {
+      setArchiveBusy(false);
     }
   }
 
@@ -921,6 +1041,18 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
             onToggle={toggleWorktreeIsolation}
             onRefresh={refreshWorktreeIsolation}
           />
+        ) : tab === 'archive' ? (
+          <ArchiveTab
+            status={archiveStatus}
+            form={archiveForm}
+            estimate={archiveEstimate}
+            busy={archiveBusy}
+            onPatch={patchArchiveForm}
+            onEstimate={estimateWorkspaceSnapshot}
+            onArchive={archiveWorkspace}
+            onRestore={restoreWorkspace}
+            onRefresh={refreshArchiveStatus}
+          />
         ) : null}
       </div>
       <FolderPicker
@@ -936,6 +1068,148 @@ export function WorkspaceSettingsPage({ hash, label, initialTab, initialWorkspac
       />
     </div>
   );
+}
+
+function ArchiveTab({ status, form, estimate, busy, onPatch, onEstimate, onArchive, onRestore, onRefresh }){
+  const archived = !!(status && status.archived);
+  const archive = (status && status.archive) || {};
+  const snapshot = archive.snapshot || null;
+  const cleanup = archive.originalCleanup || null;
+  return (
+    <div className="settings-form settings-form-wide ws-form ws-archive-form">
+      <section className="ws-archive-panel">
+        <div className="settings-card-head">
+          <div>
+            <h3>{archived ? 'Archived' : 'Active'}</h3>
+            <p className="u-dim">{(status && status.workspacePath) || ''}</p>
+          </div>
+          <span className={'ws-archive-pill ' + (status && status.pathAvailable ? 'ok' : 'warn')}>
+            {status && status.pathAvailable ? 'Folder available' : 'Folder missing'}
+          </span>
+        </div>
+        <div className="ws-archive-grid">
+          <ArchiveMetric label="Conversations" value={(status && status.conversationCount) || 0}/>
+          <ArchiveMetric label="Memory" value={status && status.memoryEnabled ? 'On' : 'Off'}/>
+          <ArchiveMetric label="KB" value={status && status.kbEnabled ? 'On' : 'Off'}/>
+          <ArchiveMetric label="Context" value={status && status.workspaceContextEnabled ? 'On' : 'Off'}/>
+        </div>
+        {archived ? (
+          <div className="archived-workspace-snapshot">
+            <span>{archiveModeLabel(archive.mode)}</span>
+            <span>{archive.archivedAt ? formatMemoryUpdateTime(archive.archivedAt) : ''}</span>
+            {snapshot ? <span>{formatArchiveBytes(snapshot.sizeBytes || 0)}</span> : null}
+            {cleanup ? <span>{cleanup.error ? `Cleanup failed: ${cleanup.error}` : `Cleanup: ${cleanup.mode}`}</span> : null}
+          </div>
+        ) : null}
+        <div className="settings-actions-row">
+          {archived ? (
+            <button type="button" className="btn primary" onClick={(e) => onRestore(e.currentTarget)} disabled={busy || !(status && status.pathAvailable)}>
+              {Ico.reset(14)} Restore
+            </button>
+          ) : (
+            <button type="button" className="btn primary" onClick={(e) => onArchive(e.currentTarget)} disabled={busy}>
+              {Ico.archive(14)} Archive
+            </button>
+          )}
+          <button type="button" className="btn" onClick={onRefresh} disabled={busy}>{Ico.reset(14)} Refresh</button>
+        </div>
+      </section>
+
+      {!archived ? (
+        <section className="ws-archive-panel">
+          <div className="settings-field">
+            <span className="settings-field-label">Archive type</span>
+            <div className="ws-archive-choice-grid" role="radiogroup" aria-label="Archive type">
+              <button
+                type="button"
+                className="ws-archive-choice"
+                aria-pressed={form.mode === 'history_only'}
+                onClick={() => onPatch({ mode: 'history_only' })}
+                disabled={busy}
+              >
+                <span>{ARCHIVE_MODE_LABELS.history_only}</span>
+                <small>Keep Agent Cockpit metadata, conversations, Memory, Knowledge Base, and Workspace Context. We leave the workspace folder in your file system as it is.</small>
+              </button>
+              <button
+                type="button"
+                className="ws-archive-choice"
+                aria-pressed={form.mode === 'file_snapshot'}
+                onClick={() => onPatch({ mode: 'file_snapshot' })}
+                disabled={busy}
+              >
+                <span>{ARCHIVE_MODE_LABELS.file_snapshot}</span>
+                <small>In addition to Workspace Metadata and Conversations, we add a verified backup of the current workspace folder into your archive.</small>
+              </button>
+            </div>
+          </div>
+
+          <label className="settings-field">
+            <span className="settings-field-label">Archive note</span>
+            <textarea rows={3} value={form.note} onChange={(e) => onPatch({ note: e.currentTarget.value })}/>
+          </label>
+
+          {form.mode === 'file_snapshot' ? (
+            <>
+              <div className="ws-archive-options">
+                <label className="settings-field">
+                  <span className="settings-field-label">Backup contents</span>
+                  <select value={form.inclusionPolicy} onChange={(e) => onPatch({ inclusionPolicy: e.currentTarget.value })}>
+                    <option value="exclude_common">Exclude common build folders</option>
+                    <option value="include_all">Include everything</option>
+                  </select>
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field-label">Original folder</span>
+                  <select value={normalizeArchiveCleanupOriginal(form.cleanupOriginal)} onChange={(e) => onPatch({ cleanupOriginal: e.currentTarget.value })}>
+                    <option value="keep">Keep original folder</option>
+                    <option value="delete_permanently">Delete original folder</option>
+                  </select>
+                  <span className="settings-field-hint u-dim">{originalCleanupHint(normalizeArchiveCleanupOriginal(form.cleanupOriginal))}</span>
+                </label>
+              </div>
+              {normalizeArchiveCleanupOriginal(form.cleanupOriginal) === 'delete_permanently' ? (
+                <label className="settings-field">
+                  <span className="settings-field-label">Delete confirmation</span>
+                  <input value={form.confirmDeleteOriginal} onChange={(e) => onPatch({ confirmDeleteOriginal: e.currentTarget.value })}/>
+                </label>
+              ) : null}
+              <div className="settings-actions-row">
+                <button type="button" className="btn" onClick={(e) => onEstimate(e.currentTarget)} disabled={busy}>
+                  {Ico.search(14)} Estimate backup
+                </button>
+              </div>
+              {estimate ? (
+                <div className="ws-archive-estimate">
+                  <span>{estimate.fileCount} files</span>
+                  <span>{estimate.directoryCount} folders</span>
+                  <span>{estimate.symlinkCount} links</span>
+                  <span>{estimate.excludedCount} excluded</span>
+                  <span>{formatArchiveBytes(estimate.sizeBytes || 0)}</span>
+                </div>
+              ) : null}
+            </>
+          ) : null}
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function ArchiveMetric({ label, value }){
+  return (
+    <div className="archived-workspace-metric">
+      <span className="u-dim">{label}</span>
+      <b>{value}</b>
+    </div>
+  );
+}
+
+function formatArchiveBytes(bytes){
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
 export function MemoryUpdateModal({ open, hash, label, update, onClose, onViewAll }){

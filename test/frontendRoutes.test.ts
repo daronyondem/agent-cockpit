@@ -337,6 +337,39 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.btn.primary:disabled');
   });
 
+  test('global Settings uses full-page left rail navigation and one top Save action', () => {
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
+    const cssSrc = readDesktopCss();
+
+    expect(appShellSrc).toContain('const globalSettingsOpen = !!settingsView;');
+    expect(appShellSrc).toContain("globalSettingsOpen ? 'global-settings-view' : ''");
+    expect(appShellSrc).toContain('{!globalSettingsOpen ? (');
+    expect(settingsSrc).toContain('className="settings-shell settings-shell-global"');
+    expect(settingsSrc).toContain('className="settings-main-split"');
+    expect(settingsSrc).toContain('className="settings-side-nav"');
+    expect(settingsSrc).toContain('settings-side-nav-item');
+    expect(settingsSrc).toContain('className="settings-top-actions"');
+    expect(settingsSrc).toContain('className="btn primary" disabled={!canSave} onClick={(e) => save(e.currentTarget)}');
+    expect(settingsSrc).toContain('const [cliValidationError, setCliValidationError]');
+    expect(settingsSrc).toContain('onValidationChange={setCliValidationError}');
+    expect(settingsSrc).not.toContain('onClick={(e) => onSave(e.currentTarget)}>{saving ? \'Saving…\' : \'Save\'}</button>');
+    expect(settingsSrc).toContain("label: 'CLI Profiles'");
+    expect(settingsSrc).toContain("label: 'Usage & Cost'");
+    expect(settingsSrc).toContain("label: 'Archived Workspaces'");
+    expect(settingsSrc).toContain('ArchivedWorkspacesPanel');
+    expect(settingsSrc).toContain('aria-current={active ?');
+    expect(workspaceSettingsSrc).toContain('className="settings-tabs"');
+    expect(cssSrc).toContain('.settings-main-split');
+    expect(cssSrc).toContain('.settings-side-nav');
+    expect(cssSrc).toContain('.settings-side-nav-item.active');
+    expect(cssSrc).toContain('.settings-top-actions');
+    expect(cssSrc).toContain('grid-template-columns: 230px minmax(0, 1fr);');
+    expect(cssSrc).toContain('.cockpit.global-settings-view');
+    expect(cssSrc).toContain('grid-template-columns: minmax(0, 1fr);');
+  });
+
   test('CLI profile settings allow deleting server-configured profiles', () => {
     const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
 
@@ -724,7 +757,7 @@ describe('frontend routes', () => {
     expect(apiSrc).not.toContain('getWorkspaceContextEntity');
     expect(apiSrc).not.toContain('WorkspaceContextCandidate');
 
-    expect(settingsSrc).toContain("{ id: 'workspaceContext', label: 'Workspace Context' }");
+    expect(settingsSrc).toContain("{ id: 'workspaceContext', label: 'Workspace Context', icon: Ico.graph }");
     expect(settingsSrc).toContain('function SettingsWorkspaceContextTab');
     expect(settingsSrc).toContain('Workspace Context CLI profile');
     expect(settingsSrc).toContain('Concurrent workspace scans');
@@ -800,6 +833,45 @@ describe('frontend routes', () => {
     expect(cssSrc).toContain('.composer-notif.state-workspace-context');
   });
 
+  test('desktop exposes workspace archive lifecycle controls', () => {
+    const apiSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/api.js'), 'utf8');
+    const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
+    const sidebarSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/primitives.jsx'), 'utf8');
+    const settingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/settingsScreen.jsx'), 'utf8');
+    const workspaceSettingsSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/workspaceSettings.jsx'), 'utf8');
+    const archivedWorkspacesSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/screens/archivedWorkspaces.jsx'), 'utf8');
+    const cssSrc = readDesktopCss();
+
+    expect(apiSrc).toContain('list: (opts) =>');
+    expect(apiSrc).toContain("'/snapshot/estimate'");
+    expect(apiSrc).toContain("'/restore'");
+    expect(apiSrc).toContain("'/archive'");
+    expect(apiSrc).toContain('deleteArchivedData');
+    expect(appShellSrc).not.toContain('ArchivedWorkspacesScreen');
+    expect(appShellSrc).not.toContain('archivedWorkspacesView');
+    expect(sidebarSrc).not.toContain('Archived workspaces');
+    expect(settingsSrc).toContain("{ id: 'archivedWorkspaces', label: 'Archived Workspaces', icon: Ico.archive }");
+    expect(settingsSrc).toContain('ArchivedWorkspacesPanel');
+    expect(settingsSrc).toContain('onOpenWorkspaceSettings={onOpenWorkspaceSettings}');
+    expect(workspaceSettingsSrc).toContain("{ id: 'archive',      label: 'Archive' }");
+    expect(workspaceSettingsSrc).toContain('function ArchiveTab');
+    expect(workspaceSettingsSrc).toContain('Archive With Full Backup');
+    expect(workspaceSettingsSrc).toContain('Estimate backup');
+    expect(workspaceSettingsSrc).toContain('Workspace Metadata and Conversations');
+    expect(workspaceSettingsSrc).toContain('Full Backup with Workspace Folder');
+    expect(workspaceSettingsSrc).toContain('Keep original folder');
+    expect(workspaceSettingsSrc).toContain('Delete original folder');
+    expect(workspaceSettingsSrc).not.toContain('Move into Agent Cockpit storage');
+    expect(workspaceSettingsSrc).not.toContain('runFinalLearningPass');
+    expect(archivedWorkspacesSrc).toContain('export function ArchivedWorkspacesPanel');
+    expect(archivedWorkspacesSrc).toContain('Restore backup');
+    expect(archivedWorkspacesSrc).toContain('Remap');
+    expect(archivedWorkspacesSrc).toContain('Delete data');
+    expect(cssSrc).toContain('.archived-workspace-list');
+    expect(cssSrc).toContain('.archived-workspaces-panel-head');
+    expect(cssSrc).toContain('.ws-archive-form');
+  });
+
   test('Memory Review has a dedicated page and composer notification action', () => {
     const appShellSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/appShell.jsx'), 'utf8');
     const composerSrc = fs.readFileSync(path.join(ROOT, 'web/AgentCockpitWeb/src/chat/composer.jsx'), 'utf8');
@@ -863,7 +935,7 @@ describe('frontend routes', () => {
     expect(apiSrc).toContain('computable: percent != null');
     expect(apiSrc).toContain("chatFetch(\n      'migration/import/confirm'");
     expect(apiSrc).toContain("chatFetch(`migration/checks${deep ? '?deep=true' : ''}`)");
-    expect(settingsSrc).toContain("{ id: 'migration', label: 'Migration' }");
+    expect(settingsSrc).toContain("{ id: 'migration', label: 'Migration', icon: Ico.download }");
     expect(settingsSrc).toContain("React.lazy(() => import('./settingsMigrationTab.jsx')");
     expect(migrationTabSrc).toContain('export function MigrationTab()');
     expect(migrationTabSrc).toContain("confirmation !== 'REPLACE'");

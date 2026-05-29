@@ -51,7 +51,7 @@ agent-cockpit/
 │   │   └── security.ts                 # Helmet CSP configuration
 │   ├── routes/
 │   │   ├── chat.ts                     # Chat API composition root and stream orchestration
-│   │   └── chat/                       # Focused chat route modules: status, CLI profile, conversation, stream, goal, upload, filesystem, instructions, explorer, Git changes, worktree isolation, memory, Workspace Context, KB, data migration, shared helpers
+│   │   └── chat/                       # Focused chat route modules: status, CLI profile, conversation, stream, goal, upload, filesystem, workspace archive/location, instructions, explorer, Git changes, worktree isolation, memory, Workspace Context, KB, data migration, shared helpers
 │   ├── utils/
 │   │   ├── atomicWrite.ts              # Atomic JSON/file write helper
 │   │   ├── keyedMutex.ts               # FIFO per-key async mutex
@@ -95,6 +95,8 @@ agent-cockpit/
 │       ├── chat/
 │       │   ├── attachments.ts          # Attachment/artifact metadata helpers used by ChatService
 │       │   ├── messageQueueStore.ts    # Private ChatService queue store + legacy queue normalization
+│       │   ├── workspaceArchiveStore.ts # Private ChatService workspace archive lifecycle/summary store
+│       │   ├── workspaceSnapshotService.ts # Verified ZIP snapshots, restore, and archive-owned file cleanup
 │       │   ├── worktreeIsolationService.ts # Private ChatService Git worktree lifecycle helper
 │       │   └── workspaceInstructionStore.ts # Private ChatService workspace instruction compatibility/pointer store
 │       ├── usagePricing/               # Built-in pricing JSON, validator, estimator, and override store
@@ -129,6 +131,7 @@ agent-cockpit/
     │   ├── workspaces/{storageKey}/    # Workspace-based storage; storageKey is usually the original path hash
     │   │   ├── index.json              # Source of truth: conversations + session metadata (includes `memoryEnabled`, `kbEnabled`, `workspaceContextEnabled`, and optional `worktreeIsolation`)
     │   │   ├── session-finalizers.json # Persisted background jobs for reset/archive finalizers
+    │   │   ├── archive/                # Workspace archive summaries, including final learning pass output
     │   │   ├── memory/                 # Per-workspace memory store (opt-in per workspace)
     │   │   │   ├── snapshot.json       # Merged snapshot: claude captures + notes (parsed metadata + content)
     │   │   │   ├── state.json          # Agent Cockpit sidecar lifecycle metadata keyed by memory filename
@@ -165,6 +168,9 @@ agent-cockpit/
     │   │       ├── session-N.json      # Active session (updated every message)
     │   │       └── session-recovery/   # Latest recovery snapshot per source session when a native CLI resume fails
     │   │           └── session-N-latest.json
+    │   ├── workspace-snapshots/{workspaceId}/ # Optional verified ZIP snapshots for archived workspaces
+    │   ├── workspace-trash/            # Product-owned moved originals from snapshot archive cleanup
+    │   ├── restored-workspaces/        # Default extraction root for snapshot restores
     │   ├── artifacts/{convId}/         # Per-conversation uploaded files and generated assistant artifacts
     │   ├── settings.json               # User settings, including CLI profile definitions
     │   ├── usage-ledger.json           # Daily per-backend token usage ledger
@@ -591,6 +597,36 @@ Together these guarantee that a workspace index always parses on disk and that c
     remoteBaseRef: string,           // Currently "origin/main"; fetched on enable and reset.
     enabledAt: string                // ISO 8601 timestamp.
   } | undefined,
+  archive: {                         // Present only while the workspace is archived.
+    archivedAt: string,              // ISO 8601 archive timestamp.
+    mode: 'history_only' | 'file_snapshot',
+    note?: string,                   // Optional user note shown in archive management UI.
+    finalLearningPass?: {
+      status: 'queued' | 'running' | 'completed' | 'failed',
+      startedAt?: string,
+      completedAt?: string,
+      error?: string,
+      summaryPath?: string           // Absolute path to archive/summary.md under workspace data.
+    },
+    snapshot?: {
+      id: string,
+      status: 'verified' | 'failed',
+      archivePath?: string,          // ZIP under data/chat/workspace-snapshots/{workspaceId}/
+      manifestPath?: string,         // JSON manifest beside the ZIP.
+      sizeBytes?: number,
+      fileCount?: number,
+      checksum?: string,             // SHA-256 of the ZIP.
+      inclusionPolicy?: 'exclude_common' | 'include_all',
+      createdAt?: string,
+      verifiedAt?: string,
+      error?: string
+    },
+    originalCleanup?: {
+      mode: 'keep' | 'move_to_trash' | 'delete_permanently',
+      movedTo?: string,              // Product-owned workspace-trash path when moved.
+      error?: string
+    }
+  } | undefined,
   conversations: [{
     id: string,                 // UUIDv4
     title: string,              // Auto-set from first user message (max 80 chars)
@@ -678,6 +714,41 @@ that conversation; response contracts expose it as `executionDir` while keeping
 `workingDir` set to the canonical workspace path. Current clients group by
 `workspaceId`; legacy clients/diagnostics may still read `workspaceHash`.
 
+When `archive` is present on the workspace index, the workspace is retired from
+active use but its Agent Cockpit-owned data remains in place. Normal
+conversation listing skips archived workspaces unless the caller explicitly
+opts into archived-workspace inclusion; creating new conversations in that
+workspace returns `workspace_archived`. Workspace Memory Review schedules,
+Knowledge Base auto-dream, and Workspace Context scheduled processing skip
+archived workspaces without clearing their enabled flags. Restoring a
+`history_only` archive requires `workspacePath` to exist; if the user deleted
+the folder, they must remap the archived workspace to an existing folder first.
+
+`file_snapshot` archives store a ZIP and manifest under
+`data/chat/workspace-snapshots/{workspaceId}/`. The manifest schema version is
+1 and records `workspaceId`, `originalPath`, `createdAt`, `inclusionPolicy`,
+one entry per included file/directory/symlink, and ZIP `{ path, sha256,
+sizeBytes }`. File entries include `sizeBytes`, `sha256`, mode, and mtime.
+Symlink entries record `linkTarget`; restore recreates only relative symlinks
+whose resolved target remains under the restore destination. ZIP extraction
+rejects empty, absolute, backslash-containing, null-byte, and traversal paths,
+requires an empty destination, extracts into a sibling staging directory,
+verifies the ZIP checksum against both manifest and workspace metadata, and
+hashes restored files before renaming the staging directory into place. Failed
+restores remove staging output instead of leaving partial files in the target.
+`exclude_common` skips dependency/build/cache segments such as
+`node_modules`, `dist`, `.next`, `.venv`, `coverage`, and `target`; `include_all`
+captures every regular file the server can read.
+
+Snapshot archive cleanup can leave the original folder in place, move it into
+`data/chat/workspace-trash/`, or delete it permanently. Permanent deletion
+requires the exact confirmation string `DELETE ORIGINAL`. Cleanup refuses to
+operate when the source path overlaps Agent Cockpit's snapshot/trash/restored
+storage roots, whether it is inside one of those roots, equal to one, or contains
+one. Deleting an archived workspace record removes the workspace data
+directory, snapshots, matching product-trash copies, conversation artifacts, and
+the identity-registry entry; it does not touch arbitrary external folders.
+
 ## Session Finalizer Store (`workspaces/{storageKey}/session-finalizers.json`)
 
 Persisted queue for post-reset/archive work that must survive process restarts but must not block the reset/archive HTTP response.
@@ -687,7 +758,7 @@ Persisted queue for post-reset/archive work that must survive process restarts b
   version: 1,
   jobs: Array<{
     id: string,
-    identity: string,          // type + payload.source + conversationId + sessionNumber
+    identity: string,          // type + payload.source + payload.identityKey + conversationId + sessionNumber
     workspaceHash: string,      // Legacy field name; current jobs store workspaceId here
     conversationId: string,
     sessionNumber: number,
@@ -704,13 +775,15 @@ Persisted queue for post-reset/archive work that must survive process restarts b
     payload?: {
       backendId?: string,
       cliProfileId?: string,
-      source?: 'session_reset' | 'archive'
+      source?: 'session_reset' | 'archive',
+      identityKey?: string,    // Optional lifecycle pass discriminator, e.g. archive:<archivedAt>
+      archiveFinalLearningWorkspaceId?: string
     }
   }>
 }
 ```
 
-`SessionFinalizerQueue.start()` converts leftover `running` jobs back to `pending` after restart. `enqueue()` de-duplicates by `identity`, persists the job, and schedules asynchronous processing. The reset route enqueues `session_summary`, `memory_extraction`, and a `workspace_context_conversation_final_pass` with source `session_reset`; archive enqueues only the Workspace Context finalizer with source `archive` when Workspace Context is enabled.
+`SessionFinalizerQueue.start()` converts leftover `running` jobs back to `pending` after restart. `enqueue()` de-duplicates by `identity`, persists the job, and schedules asynchronous processing. The reset route enqueues `session_summary`, `memory_extraction`, and a `workspace_context_conversation_final_pass` with source `session_reset`; workspace archive enqueues `memory_extraction` and `workspace_context_conversation_final_pass` jobs for each active-session target during the final learning pass when the corresponding workspace features are enabled. Archive final-learning jobs include an `identityKey` derived from the archive timestamp so a restored-and-rearchived workspace can run a fresh final-learning pass for the same conversation/session. When archive-tagged jobs reach terminal status, the route layer marks `archive.finalLearningPass.status` as `completed` after every job succeeds or `failed` after any terminal job fails; when no Memory or Workspace Context jobs are enabled, the pass completes immediately.
 
 ## Workspace Memory Store (`workspaces/{storageKey}/memory/`)
 
